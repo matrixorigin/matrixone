@@ -445,7 +445,7 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 		return err
 	}
 	if err = tbl.db.txn.WriteBatch(UPDATE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1, false); err != nil {
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1, false, false); err != nil {
 		return err
 	}
 	tbl.constraint = ct
@@ -524,7 +524,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false); err != nil {
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
 	}
 	packer, put := tbl.db.txn.engine.packerPool.Get()
@@ -733,7 +733,7 @@ func CopyBatch(ctx context.Context, proc *process.Process, bat *batch.Batch) *ba
 func (tbl *txnTable) writeDnPartition(ctx context.Context, bat *batch.Batch) error {
 	ibat := CopyBatch(ctx, tbl.db.txn.proc, bat)
 	if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false); err != nil {
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
 	}
 	return nil
@@ -882,6 +882,18 @@ func (tbl *txnTable) newReader(
 			inserts = append(inserts, entry.bat)
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.databaseId == catalog.MO_CATALOG_ID &&
+					entry.tableId == catalog.MO_TABLES_ID &&
+					entry.truncate {
+					continue
+				}
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					deletes[v] = 0
@@ -1157,6 +1169,11 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) error {
 	}
 
 	if tbl.logtailUpdated {
+		return nil
+	}
+
+	//if the table is truncated, skip sync logtail
+	if tbl.truncated {
 		return nil
 	}
 

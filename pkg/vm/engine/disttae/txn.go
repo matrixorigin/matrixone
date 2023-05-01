@@ -79,6 +79,9 @@ func (txn *Transaction) ReadOnly() bool {
 
 // Write used to write data to the transaction buffer
 // insert/delete/update all use this api
+// insertBatchHasRowId denotes the batch has Rowid when the typ is INSERT
+// truncate denotes the batch with typ DELETE on mo_tables is generated when Truncating
+// a table.
 func (txn *Transaction) WriteBatch(
 	typ int,
 	databaseId uint64,
@@ -88,11 +91,11 @@ func (txn *Transaction) WriteBatch(
 	bat *batch.Batch,
 	dnStore DNStore,
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
-	batchHasRowId bool,
-) error {
+	insertBatchHasRowId bool,
+	truncate bool) error {
 	txn.readOnly = false
 	bat.Cnt = 1
-	if typ == INSERT && !batchHasRowId {
+	if typ == INSERT && !insertBatchHasRowId {
 		txn.genBlock()
 		len := bat.Length()
 		vec := vector.NewVec(types.T_Rowid.ToType())
@@ -119,6 +122,7 @@ func (txn *Transaction) WriteBatch(
 		tableName:    tableName,
 		databaseName: databaseName,
 		dnStore:      dnStore,
+		truncate:     truncate,
 	})
 	txn.Unlock()
 	return nil
