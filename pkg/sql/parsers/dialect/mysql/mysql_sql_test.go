@@ -27,13 +27,8 @@ var (
 		input  string
 		output string
 	}{
-<<<<<<< HEAD
-		input:  "set @a = nextval('s1')",
-		output: "set @a = nextval('s1')",
-=======
 		input:  "select 3+2",
 		output: "select 3 + 2",
->>>>>>> main
 	}
 )
 

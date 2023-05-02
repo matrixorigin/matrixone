@@ -231,8 +231,6 @@ func (th *TxnHandler) CommitTxn() error {
 	if ses.tempTablestorage != nil {
 		txnCtx = context.WithValue(txnCtx, defines.TemporaryDN{}, ses.tempTablestorage)
 	}
-	//t, o := txnCtx.Deadline()
-	//fmt.Println("txnCtx", t, o)
 	storage := th.GetStorage()
 	ctx2, cancel := context.WithTimeout(
 		txnCtx,

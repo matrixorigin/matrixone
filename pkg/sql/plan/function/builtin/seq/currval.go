@@ -34,7 +34,7 @@ func Currval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	txn := proc.TxnOperator
 	if txn == nil {
-		panic("txn operator in Currval is nil")
+		return nil, moerr.NewInternalError(proc.Ctx, "Currval: txn operator is nil")
 	}
 	dbHandler, err := e.Database(proc.Ctx, proc.SessionInfo.Database, txn)
 	if err != nil {

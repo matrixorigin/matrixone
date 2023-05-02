@@ -163,8 +163,9 @@ create sequence seq_15;
 create sequence seq_16 increment 10 start with 20 no cycle;
 truncate table seq_table_01;
 prepare stmt1 from 'insert into seq_table_01 values(?)';
+-- ban the nextval in set expression
 set @a_var = nextval('seq_15');
--- pass case
+-- just pass case
 set @a_var = 1;
 execute stmt1 using @a_var;
 select * from seq_table_01;

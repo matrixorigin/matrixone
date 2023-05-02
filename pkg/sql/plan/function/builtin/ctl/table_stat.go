@@ -38,7 +38,7 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	tbls := vector.MustStrCol(vecs[1])
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if proc.TxnOperator == nil {
-		panic("txn operator in MoTableRows is nil")
+		return nil, moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
 	}
 	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
@@ -88,7 +88,7 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	tbls := vector.MustStrCol(vecs[1])
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if proc.TxnOperator == nil {
-		panic("txn operator in MoTableSize is nil")
+		return nil, moerr.NewInternalError(proc.Ctx, "MoTableSize: txn operator is nil")
 	}
 	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
@@ -161,7 +161,7 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if proc.TxnOperator == nil {
-		panic("txn operator in MoTableColMax is nil")
+		return nil, moerr.NewInternalError(proc.Ctx, "MoTableColMax: txn operator is nil")
 	}
 	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
@@ -229,7 +229,7 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if proc.TxnOperator == nil {
-		panic("txn operator in MoTableColMin is nil")
+		return nil, moerr.NewInternalError(proc.Ctx, "MoTableColMin: txn operator is nil")
 	}
 	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {

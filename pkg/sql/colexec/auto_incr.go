@@ -679,16 +679,17 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 			}
 			name := fmt.Sprintf("%d_%s", tableID, d.Attr.Name)
 			bat, _ := GetDeleteBatch(rel2, ctx, name, proc.Mp())
-			if bat != nil {
-				if err = rel2.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
-					bat.Clean(proc.Mp())
-					if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-						return err2
-					}
-					return err
-				}
-				bat.Clean(proc.Mp())
+			if bat == nil {
+				return moerr.NewInternalError(ctx, "the deleted batch is nil")
 			}
+			if err = rel2.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
+				bat.Clean(proc.Mp())
+				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+					return err2
+				}
+				return err
+			}
+			bat.Clean(proc.Mp())
 
 			// Delete the cache.
 			deleteAutoIncrCache(name, proc)
@@ -740,15 +741,14 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 
 			delName := fmt.Sprintf("%d_%s", oldTableID, d.Attr.Name)
 			bat, currentNum := GetDeleteBatch(autoRel, ctx, delName, proc.Mp())
-			if bat != nil {
-				if err = autoRel.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
-					bat.Clean(proc.Mp())
-					if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-						return err2
-					}
-					return err
+			if bat == nil {
+				return moerr.NewInternalError(ctx, "the deleted batch is nil")
+			}
+			if err = autoRel.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
+				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+					return err2
 				}
-				bat.Clean(proc.Mp())
+				return err
 			}
 
 			// Rename the old cache.
@@ -757,13 +757,11 @@ func MoveAutoIncrCol(eg engine.Engine, ctx context.Context, tblName string, db e
 			// In cache implementation no update needed.
 			bat2 := makeAutoIncrBatch(newName+d.Attr.Name, currentNum, 1, proc.Mp())
 			if err = autoRel.Write(ctx, bat2); err != nil {
-				bat2.Clean(proc.Mp())
 				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
 				}
 				return err
 			}
-			bat2.Clean(proc.Mp())
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
@@ -809,15 +807,14 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 			}
 			delName := fmt.Sprintf("%d_%s", tableID, d.Attr.Name)
 			bat, _ := GetDeleteBatch(autoRel, ctx, delName, proc.Mp())
-			if bat != nil {
-				if err = autoRel.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
-					bat.Clean(proc.Mp())
-					if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-						return err2
-					}
-					return err
+			if bat == nil {
+				return moerr.NewInternalError(ctx, "the deleted batch is nil")
+			}
+			if err = autoRel.Delete(ctx, bat, catalog.AutoIncrColumnNames[0]); err != nil {
+				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
+					return err2
 				}
-				bat.Clean(proc.Mp())
+				return err
 			}
 
 			// Delete the cache.
@@ -825,13 +822,11 @@ func ResetAutoInsrCol(eg engine.Engine, ctx context.Context, tblName string, db 
 
 			bat2 := makeAutoIncrBatch(name+d.Attr.Name, 0, 1, proc.Mp())
 			if err = autoRel.Write(ctx, bat2); err != nil {
-				bat2.Clean(proc.Mp())
 				if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
 					return err2
 				}
 				return err
 			}
-			bat2.Clean(proc.Mp())
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {

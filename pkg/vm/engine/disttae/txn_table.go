@@ -73,9 +73,6 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		if entry.tableId != tbl.tableId {
 			continue
 		}
-		if entry.typ == DELETE {
-			continue
-		}
 		writes = append(writes, entry)
 	}
 	tbl.db.txn.Unlock()
@@ -86,6 +83,18 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 			rows = rows + int64(entry.bat.Length())
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.databaseId == catalog.MO_CATALOG_ID &&
+					entry.tableId == catalog.MO_TABLES_ID &&
+					entry.truncate {
+					continue
+				}
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					deletes[v] = struct{}{}
@@ -1172,7 +1181,22 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) error {
 		return nil
 	}
 
-	//if the table is truncated, skip sync logtail
+	/*
+		if the table is truncated, skip sync logtail.
+
+		CORNER CASE 1:
+		create table t1(a int);
+		begin;
+		truncate t1; //table id changed. there is no new table id in DN.
+		select count(*) from t1; // sync logtail for the new id failed.
+
+		CORNER CASE 2:
+		create table t1(a int);
+		begin;
+		select count(*) from t1; // sync logtail for the old succeeded.
+		truncate t1; //table id changed. there is no new table id in DN.
+		select count(*) from t1; // not sync logtail this time.
+	*/
 	if tbl.truncated {
 		return nil
 	}

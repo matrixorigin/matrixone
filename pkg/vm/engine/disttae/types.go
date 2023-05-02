@@ -132,12 +132,19 @@ type Transaction struct {
 	databaseMap *sync.Map
 	// use to cache created table
 	createMap *sync.Map
-	// for deleted table
-	//CORNER CASE
-	//create table t1(a int);
-	//begin;
-	//drop table t1; // t1 does not exist
-	//select * from t1; // can not access t1
+	/*
+		for deleted table
+		CORNER CASE
+		create table t1(a int);
+		begin;
+		drop table t1; // t1 does not exist
+		select * from t1; // can not access t1
+		create table t2(a int); // new table
+		drop table t2;
+		create table t2(a int,b int); //new table
+		commit;
+		show tables; //no table t1; has table t2(a,b)
+	*/
 	deletedTableMap *sync.Map
 
 	deletedBlocks *deletedBlocks

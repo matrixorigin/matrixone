@@ -37,7 +37,7 @@ func handleFlush() handleFunc {
 			parameters := strings.Split(parameter, ".")
 			txnOp := proc.TxnOperator
 			if proc.TxnOperator == nil {
-				panic("txn operator handleFlush is nil")
+				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
 			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
 			if err != nil {

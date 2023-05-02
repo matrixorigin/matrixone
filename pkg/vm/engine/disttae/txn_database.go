@@ -173,29 +173,26 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		db.txn.deletedTableMap.Store(k, nil)
 		table := v.(*txnTable)
 		id = table.tableId
-		//this rowid is generated in the txnDatabase.Create function
 		rowid = table.rowid
-		//Even if the created table in the createMap, there is an
-		//INSERT entry in the CN workspace. We need add a DELETE
-		//entry in the CN workspace to tell the DN to delete the
-		//table.
-		//Example
-		//begin;
-		//create table t1;
-		//drop table t1;
-		//commit;
-		//If we do not add DELETE entry in workspace, there is
-		//a table t1 there after commit.
-
-		//save rowids of mo_columns
 		rowids = table.rowids
+		/*
+			Even if the created table in the createMap, there is an
+			INSERT entry in the CN workspace. We need add a DELETE
+			entry in the CN workspace to tell the DN to delete the
+			table.
+			CORNER CASE
+			begin;
+			create table t1;
+			drop table t1;
+			commit;
+			If we do not add DELETE entry in workspace, there is
+			a table t1 there after commit.
+		*/
 	} else if v, ok := db.txn.tableMap.Load(k); ok {
 		table := v.(*txnTable)
 		id = table.tableId
 		db.txn.tableMap.Delete(k)
-		//this rowid is from data DN
 		rowid = table.rowid
-		//save rowids of mo_columns
 		rowids = table.rowids
 	} else {
 		item := &cache.TableItem{
@@ -208,9 +205,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 			return moerr.GetOkExpectedEOB()
 		}
 		id = item.Id
-		//this rowid is from data DN
 		rowid = item.Rowid
-		//save rowids of mo_columns
 		rowids = item.Rowids
 	}
 	bat, err := genDropTableTuple(rowid, id, db.databaseId, name, db.databaseName, db.txn.proc.Mp())
@@ -226,7 +221,6 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 	}
 
 	//Add writeBatch(delete,mo_columns) to filter table in mo_columns.
-	//Dn will filter writeBatch(delete,mo_columns) just after writeBatch(delete,mo_tables).
 	//Every row in writeBatch(delete,mo_columns) needs rowid
 	for _, rid := range rowids {
 		bat, err = genDropColumnTuple(rid, db.txn.proc.Mp())
@@ -264,7 +258,6 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		txnTable := v.(*txnTable)
 		oldId = txnTable.tableId
 		txnTable.reset(newId)
-		//this rowid is generated in the txnDatabase.Create function
 		rowid = txnTable.rowid
 		txnTable.truncated = true
 	} else {
@@ -278,7 +271,6 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 			return 0, moerr.GetOkExpectedEOB()
 		}
 		oldId = item.Id
-		//this rowid is from data DN
 		rowid = item.Rowid
 	}
 	bat, err := genTruncateTableTuple(rowid, newId, db.databaseId,
@@ -364,7 +356,6 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 	}
 	tbl.primaryIdx = -1
 	tbl.clusterByIdx = -1
-	//TODO:record rowids for columns
 	tbl.rowids = make([]types.Rowid, len(cols))
 	for i, col := range cols {
 		tbl.rowids[i] = db.txn.genRowId()

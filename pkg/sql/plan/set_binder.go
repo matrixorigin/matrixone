@@ -40,6 +40,7 @@ var funcNeedsTxn = map[string]int{
     "mo_table_col_min": 0,
 }
 
+// BindExpr prohibits functions in set expr
 func (s *SetBinder) BindExpr(expr tree.Expr, i int32, b bool) (*plan.Expr, error) {
     switch exprImpl := expr.(type) {
     case *tree.FuncExpr:

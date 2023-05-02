@@ -42,7 +42,7 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 
 	txn := proc.TxnOperator
 	if txn == nil {
-		panic("txn operator in Nextval is nil")
+		return nil, moerr.NewInternalError(proc.Ctx, "Nextval: txn operator is nil")
 	}
 	// nextval is the real implementation of nextval function.
 	tblnames := vector.MustStrCol(vecs[0])

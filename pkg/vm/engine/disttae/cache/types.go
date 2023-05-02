@@ -88,7 +88,16 @@ type TableItem struct {
 	TableDef *plan.TableDef
 	Defs     []engine.TableDef
 	Rowid    types.Rowid
-	Rowids   []types.Rowid
+	/*
+		Rowids in mo_columns from replayed logtail.
+
+		CORNER CASE:
+		create table t1(a int);
+		begin;
+		drop table t1;
+		show tables; //no table t1. no item for t1 in mo_columns also.
+	*/
+	Rowids []types.Rowid
 
 	// table def
 	Kind        string
@@ -130,7 +139,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	isClusterBy     int8
-	rowid           types.Rowid //rowid in mo_columns
+	rowid           types.Rowid //rowid for a column in mo_columns
 }
 
 type columns []column

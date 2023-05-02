@@ -202,7 +202,6 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					if _, ok := p.deletes[rowIds[j]]; ok {
 						continue
 					}
-					//mo_tables, mo_columns 要删除行
 					if err := uf(vec, srcVec, int64(j)); err != nil {
 						return nil, err
 					}
@@ -249,7 +248,6 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				p.sourceBatchNameIndex[name] = i
 			}
 		}
-		//mo_tables,mo_columns 删除主键行
 		for i, name := range b.Attrs {
 			if name == catalog.Row_ID {
 				if err := vector.AppendFixed(b.Vecs[i], entry.RowID, false, mp); err != nil {

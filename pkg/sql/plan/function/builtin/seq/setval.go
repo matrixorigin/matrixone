@@ -40,7 +40,7 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	txn := proc.TxnOperator
 	if txn == nil {
-		panic("txn operator in Setval is nil")
+		return nil, moerr.NewInternalError(proc.Ctx, "Setval: txn operator is nil")
 	}
 
 	resultType := types.T_varchar.ToType()

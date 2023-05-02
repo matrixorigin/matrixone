@@ -62,7 +62,7 @@ func Handler(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 		func(ctx context.Context, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			txnOp := proc.TxnOperator
 			if txnOp == nil {
-				panic("txn operator in ctl is nil")
+				return nil, moerr.NewInternalError(ctx, "ctl: txn operator is nil")
 			}
 			op, ok := txnOp.(client.DebugableTxnOperator)
 			if !ok {

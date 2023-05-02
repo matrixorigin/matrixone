@@ -79,8 +79,9 @@ func (txn *Transaction) ReadOnly() bool {
 
 // Write used to write data to the transaction buffer
 // insert/delete/update all use this api
-// insertBatchHasRowId denotes the batch has Rowid when the typ is INSERT
-// truncate denotes the batch with typ DELETE on mo_tables is generated when Truncating
+// insertBatchHasRowId : it denotes the batch has Rowid when the typ is INSERT.
+// if typ is not INSERT, it is always false.
+// truncate : it denotes the batch with typ DELETE on mo_tables is generated when Truncating
 // a table.
 func (txn *Transaction) WriteBatch(
 	typ int,
