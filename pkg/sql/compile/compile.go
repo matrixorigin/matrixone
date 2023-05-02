@@ -886,7 +886,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		regs := make([]*process.WaitRegister, 0, mcpu)
 		for i := 0; i < mcpu; i++ {
 			scopes = append(scopes, &Scope{
-				Magic: Merge,
+				Magic:        Merge,
+				Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 			})
 			scopes[i].Proc = process.NewFromProc(rs.Proc, rs.Proc.Ctx, 1)
 			regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
