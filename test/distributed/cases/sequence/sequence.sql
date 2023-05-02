@@ -16,5 +16,6 @@ select * from t1;
 drop sequence s5;
 prepare stmt1 from 'insert into t1 values(?)';
 set @a_var = nextval('s2');
+set @a_var = 2;
 execute stmt1 using @a_var;
 select * from t1;

@@ -81,6 +81,14 @@ func IsCreateDropDatabase(stmt tree.Statement) bool {
 	return false
 }
 
+func IsCreateDropSequence(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.CreateSequence, *tree.DropSequence:
+		return true
+	}
+	return false
+}
+
 /*
 NeedToBeCommittedInActiveTransaction checks the statement that need to be committed
 in an active transaction.
@@ -93,7 +101,7 @@ func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}
-	return IsCreateDropDatabase(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
+	return IsCreateDropDatabase(stmt) || IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
 }
 
 /*
@@ -122,9 +130,9 @@ If it is Case4, Then
 func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
-	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable, *tree.CreateSequence:
+	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
 		return true, nil
-	case *tree.CreateDatabase: //Case1, Case3 above
+	case *tree.CreateDatabase, *tree.CreateSequence: //Case1, Case3 above
 		return !ses.OptionBitsIsSet(OPTION_BEGIN), nil
 		//dml statement
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement:
@@ -193,9 +201,9 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 				USE ROLE role;
 		*/
 		return !st.IsUseRole(), nil
-	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.DropSequence, *tree.TruncateTable:
+	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.TruncateTable:
 		return true, nil
-	case *tree.DropDatabase: //Case1, Case3 above
+	case *tree.DropDatabase, *tree.DropSequence: //Case1, Case3 above
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession() || !ses.OptionBitsIsSet(OPTION_BEGIN), nil
 	}

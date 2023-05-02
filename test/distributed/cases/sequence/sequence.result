@@ -30,6 +30,8 @@ drop sequence s5;
 no such sequence sequence.s5
 prepare stmt1 from 'insert into t1 values(?)';
 set @a_var = nextval('s2');
+invalid input: function nextval is not allowed in the set expression
+set @a_var = 2;
 execute stmt1 using @a_var;
 select * from t1;
 a
