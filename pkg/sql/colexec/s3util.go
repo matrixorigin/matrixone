@@ -139,7 +139,7 @@ func AllocS3Writer(tableDef *plan.TableDef) (*S3Writer, error) {
 	} else {
 		// Get Single Col pk index
 		for idx, colDef := range tableDef.Cols {
-			if colDef.Primary {
+			if colDef.Primary && !colDef.Hidden {
 				writer.sortIndex = idx
 				break
 			}

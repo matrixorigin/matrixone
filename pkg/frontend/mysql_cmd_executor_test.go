@@ -26,7 +26,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/cache"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -308,7 +307,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		cnt := 0
 		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
 		mockDbMeta.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-		eng.EXPECT().Database(ctx, gomock.Any(), gomock.Any()).DoAndReturn(
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 			func(ctx2 context.Context, db string, dump interface{}) (engine.Database, error) {
 				cnt++
 				if cnt == 1 {
@@ -808,7 +807,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		var eng engine.Engine
 		proc := &process.Process{}
 		InitGlobalSystemVariables(GSysVariables)
-		ses := &Session{sc: cache.New(), planCache: newPlanCache(1), gSysVars: GSysVariables}
+		ses := &Session{planCache: newPlanCache(1), gSysVars: GSysVariables}
 		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)

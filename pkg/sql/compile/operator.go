@@ -397,15 +397,12 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Insert:
 		t := sourceIns.Arg.(*insert.Argument)
 		res.Arg = &insert.Argument{
-			Engine:    t.Engine,
 			ToWriteS3: t.ToWriteS3,
 			InsertCtx: t.InsertCtx,
 		}
 	case vm.PreInsert:
 		t := sourceIns.Arg.(*preinsert.Argument)
 		res.Arg = &preinsert.Argument{
-			Ctx:        t.Ctx,
-			Eg:         t.Eg,
 			SchemaName: t.SchemaName,
 			TableDef:   t.TableDef,
 			Attrs:      t.Attrs,
@@ -419,7 +416,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			IBucket:      t.IBucket,
 			Nbucket:      t.Nbucket,
 			DeleteCtx:    t.DeleteCtx,
-			Engine:       t.Engine,
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 		}
@@ -466,7 +462,6 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 
 	return &deletion.Argument{
 		DeleteCtx: delCtx,
-		Engine:    eg,
 	}, nil
 }
 
@@ -503,7 +498,6 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 
 	return &preinsert.Argument{
 		Ctx:        proc.Ctx,
-		Eg:         eg,
 		HasAutoCol: preCtx.HasAutoCol,
 		SchemaName: schemaName,
 		TableDef:   preCtx.TableDef,
@@ -557,7 +551,6 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 
 	return &insert.Argument{
 		InsertCtx: newCtx,
-		Engine:    eg,
 	}, nil
 }
 

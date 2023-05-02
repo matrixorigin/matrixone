@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
@@ -52,6 +53,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
 )
+
+func createDropDatabaseErrorInfo() string {
+	return "CREATE/DROP of database is not supported in transactions"
+}
 
 func onlyCreateStatementErrorInfo() string {
 	return "Only CREATE of DDL is supported in transactions"
@@ -207,7 +212,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	var txn TxnOperator
 	var err error
 	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-		txn, err = handler.GetTxn()
+		_, txn, err = handler.GetTxn()
 		if err != nil {
 			logErrorf(ses.GetDebugString(), "RecordStatement. error:%v", err)
 		} else {
@@ -288,7 +293,7 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 	var txn TxnOperator
 	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-			txn, err = handler.GetTxn()
+			_, txn, err = handler.GetTxn()
 			if err != nil {
 				logErrorf(ses.GetDebugString(), "RecordStatementTxnID. error:%v", err)
 			} else {
@@ -422,15 +427,16 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 func doUse(ctx context.Context, ses *Session, db string) error {
 	defer RecordStatementTxnID(ctx, ses)
 	txnHandler := ses.GetTxnHandler()
+	var txnCtx context.Context
 	var txn TxnOperator
 	var err error
 	var dbMeta engine.Database
-	txn, err = txnHandler.GetTxn()
+	txnCtx, txn, err = txnHandler.GetTxn()
 	if err != nil {
 		return err
 	}
 	//TODO: check meta data
-	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(ctx, db, txn); err != nil {
+	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(txnCtx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
 	}
@@ -1025,9 +1031,7 @@ func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) 
 	if err != nil {
 		return nil, err
 	}
-	p := ses.GetCache().GetParser(dialect.MYSQL, st.Sql, v.(int64))
-	defer ses.GetCache().PutParser(p)
-	stmts, err := p.Parse(ctx)
+	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -1535,9 +1539,7 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 		if err != nil {
 			v = int64(1)
 		}
-		p := ses.GetCache().GetParser(dialect.MYSQL, sql, v.(int64))
-		defer ses.GetCache().PutParser(p)
-		stmts, err = p.Parse(proc.Ctx)
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64))
 		if err != nil {
 			return nil, err
 		}
@@ -2066,9 +2068,7 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 		if err != nil {
 			return nil, err
 		}
-		p := ses.GetCache().GetParser(dialect.MYSQL, sql, v.(int64))
-		defer ses.GetCache().PutParser(p)
-		stmts, err = p.Parse(proc.Ctx)
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64))
 		if err != nil {
 			return nil, err
 		}
@@ -2110,6 +2110,9 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
 	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
+	if ses.pu.SV.SkipCheckPrivilege {
+		return nil
+	}
 	if ses.skipCheckPrivilege() {
 		return nil
 	}
@@ -2145,6 +2148,9 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
 func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.pu.SV.SkipCheckPrivilege {
+		return nil
+	}
 	if ses.skipCheckPrivilege() {
 		return nil
 	}
@@ -2163,6 +2169,9 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
 func authenticateUserCanExecutePrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.pu.SV.SkipCheckPrivilege {
+		return nil
+	}
 	err := authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
 	if err != nil {
 		return err
@@ -2182,7 +2191,9 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 	}
 	if !can {
 		//is ddl statement
-		if IsDDL(stmt) {
+		if IsCreateDropDatabase(stmt) {
+			return moerr.NewInternalError(requestCtx, createDropDatabaseErrorInfo())
+		} else if IsDDL(stmt) {
 			return moerr.NewInternalError(requestCtx, onlyCreateStatementErrorInfo())
 		} else if IsAdministrativeStatement(stmt) {
 			return moerr.NewInternalError(requestCtx, administrativeCommandIsUnsupportedInTxnErrorInfo())
@@ -2316,7 +2327,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		requestCtx,
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
-		ses.GetTxnHandler().GetTxnOperator(),
+		nil,
 		pu.FileService,
 		pu.LockService,
 		ses.GetAutoIncrCacheManager())
@@ -3239,7 +3250,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		requestCtx,
 		ses.GetMemPool(),
 		pu.TxnClient,
-		ses.GetTxnHandler().GetTxnOperator(),
+		nil,
 		pu.FileService,
 		pu.LockService,
 		ses.GetAutoIncrCacheManager())

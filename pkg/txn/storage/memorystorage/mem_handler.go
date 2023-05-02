@@ -904,7 +904,7 @@ func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, r
 		if err := m.iterRelationAttributes(
 			tx, req.TableID,
 			func(_ ID, row *AttributeRow) error {
-				if row.IsHidden {
+				if row.IsHidden && !row.Primary {
 					return nil
 				}
 				attrRows = append(attrRows, row)

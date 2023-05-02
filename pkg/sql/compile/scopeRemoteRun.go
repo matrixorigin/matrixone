@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
-	"runtime"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
@@ -121,26 +120,29 @@ func CnServerMessageHandler(
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
-		var ch chan process.WrapCs
-		var ok bool
-		opUuid := receiver.messageUuid
-		for {
-			if ch, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
-				runtime.Gosched()
-			} else {
-				break
-			}
+		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		if err != nil {
+			return err
 		}
 
+		putCtx, putCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
+		defer putCancel()
 		doneCh := make(chan struct{})
 		info := process.WrapCs{
 			MsgId:  receiver.messageId,
-			Uid:    opUuid,
+			Uid:    receiver.messageUuid,
 			Cs:     receiver.clientSession,
 			DoneCh: doneCh,
 		}
-		ch <- info
-		<-doneCh
+
+		select {
+		case <-putCtx.Done():
+			return moerr.NewInternalErrorNoCtx("pass notify msg to dispatch operator timeout")
+		case <-opProc.Ctx.Done():
+			logutil.Errorf("dispatch operator context done")
+		case opProc.DispatchNotifyCh <- info:
+			<-doneCh
+		}
 		return nil
 
 	case pipeline.PipelineMessage:
@@ -152,7 +154,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
-		s = refactorScope(c, c.ctx, s)
+		s = refactorScope(c, s)
 
 		err = s.ParallelRun(c, s.IsRemote)
 		if err != nil {
@@ -251,7 +253,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}
 
 	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(c.ctx, s.NodeInfo.Addr)
+	sender, err := newMessageSenderOnClient(c.proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
 		return err
 	}
@@ -339,7 +341,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 	return procInfo.Marshal()
 }
 
-func refactorScope(c *Compile, _ context.Context, s *Scope) *Scope {
+func refactorScope(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,

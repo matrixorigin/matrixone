@@ -59,7 +59,6 @@ func FilterAndDelByRowId(proc *process.Process, bat *batch.Batch, idxList []int3
 }
 
 func FilterAndUpdateByRowId(
-	eg engine.Engine,
 	proc *process.Process,
 	bat *batch.Batch,
 	idxList [][]int32,
@@ -111,7 +110,7 @@ func FilterAndUpdateByRowId(
 
 			// fill auto incr column
 			if info.HasAutoCol {
-				if err = UpdateInsertBatch(eg, proc.Ctx, proc, tableDef.Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef.Name); err != nil {
+				if err = UpdateInsertBatch(proc, tableDef.Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef.Name); err != nil {
 					return 0, err
 				}
 			}

@@ -40,10 +40,15 @@ func newCompactBlockCmd(from, to *common.ID, txn txnif.AsyncTxn, id uint32) *com
 		id:   id,
 	}
 }
-func (cmd *compactBlockCmd) GetType() int16 { return CmdCompactBlock }
+func (cmd *compactBlockCmd) GetType() uint16 { return IOET_WALTxnCommand_Compact }
 func (cmd *compactBlockCmd) WriteTo(w io.Writer) (n int64, err error) {
-	typ := CmdCompactBlock
-	if _, err = w.Write(types.EncodeInt16(&typ)); err != nil {
+	typ := cmd.GetType()
+	if _, err = w.Write(types.EncodeUint16(&typ)); err != nil {
+		return
+	}
+	n = 2
+	ver := IOET_WALTxnCommand_Compact_CurrVer
+	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
 		return
 	}
 	n = 2
@@ -52,7 +57,7 @@ func (cmd *compactBlockCmd) WriteTo(w io.Writer) (n int64, err error) {
 func (cmd *compactBlockCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
-func (cmd *compactBlockCmd) Marshal() (buf []byte, err error) {
+func (cmd *compactBlockCmd) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = cmd.WriteTo(&bbuf); err != nil {
 		return
@@ -60,7 +65,7 @@ func (cmd *compactBlockCmd) Marshal() (buf []byte, err error) {
 	buf = bbuf.Bytes()
 	return
 }
-func (cmd *compactBlockCmd) Unmarshal(buf []byte) (err error) {
+func (cmd *compactBlockCmd) UnmarshalBinary(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
 	_, err = cmd.ReadFrom(bbuf)
 	return

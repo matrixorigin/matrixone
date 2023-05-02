@@ -309,6 +309,9 @@ type FrontendParameters struct {
 	// ProxyEnabled indicates that proxy module is enabled and something extra
 	// is needed, such as update the salt.
 	ProxyEnabled bool `toml:"proxy-enabled"`
+
+	// SkipCheckPrivilege denotes the privilege check should be passed.
+	SkipCheckPrivilege bool `toml:"skipCheckPrivilege"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -425,7 +428,7 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	}
 
 	if fp.AutoIncrCacheSize == 0 {
-		fp.AutoIncrCacheSize = 3000
+		fp.AutoIncrCacheSize = 3000000
 	}
 
 	if fp.LowerCaseTableNames == "" {

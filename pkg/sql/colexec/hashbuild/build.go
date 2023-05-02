@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,6 +34,7 @@ func Prepare(proc *process.Process, arg any) error {
 
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, false)
 	if ap.NeedHashMap {
 		if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 			return err
@@ -90,9 +90,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	var err error
 
 	for {
-		start := time.Now()
-		bat := <-proc.Reg.MergeReceivers[0].Ch
-		anal.WaitStop(start)
+		bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+		if err != nil {
+			return err
+		}
 
 		if bat == nil {
 			break

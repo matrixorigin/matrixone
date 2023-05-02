@@ -76,22 +76,19 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 
 	// update child table(which ref on delete cascade)
-	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.OnCascadeIdx, updateCtx.OnCascadeSource,
-		updateCtx.OnCascadeRef, updateCtx.OnCascadeTableDef, updateCtx.OnCascadeUpdateCol, nil, updateCtx.OnCascadeUniqueSource)
+	_, err = colexec.FilterAndUpdateByRowId(proc, bat, updateCtx.OnCascadeIdx, updateCtx.OnCascadeSource, updateCtx.OnCascadeRef, updateCtx.OnCascadeTableDef, updateCtx.OnCascadeUpdateCol, nil, updateCtx.OnCascadeUniqueSource)
 	if err != nil {
 		return false, err
 	}
 
 	// update child table(which ref on delete set null)
-	_, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.OnSetIdx, updateCtx.OnSetSource,
-		updateCtx.OnSetRef, updateCtx.OnSetTableDef, updateCtx.OnSetUpdateCol, nil, updateCtx.OnSetUniqueSource)
+	_, err = colexec.FilterAndUpdateByRowId(proc, bat, updateCtx.OnSetIdx, updateCtx.OnSetSource, updateCtx.OnSetRef, updateCtx.OnSetTableDef, updateCtx.OnSetUpdateCol, nil, updateCtx.OnSetUniqueSource)
 	if err != nil {
 		return false, err
 	}
 
 	// update origin table
-	affectedRows, err = colexec.FilterAndUpdateByRowId(p.Engine, proc, bat, updateCtx.Idxs, updateCtx.Source,
-		updateCtx.Ref, updateCtx.TableDefs, updateCtx.UpdateCol, updateCtx.ParentIdx, updateCtx.UniqueSource)
+	affectedRows, err = colexec.FilterAndUpdateByRowId(proc, bat, updateCtx.Idxs, updateCtx.Source, updateCtx.Ref, updateCtx.TableDefs, updateCtx.UpdateCol, updateCtx.ParentIdx, updateCtx.UniqueSource)
 	if err != nil {
 		return false, err
 	}

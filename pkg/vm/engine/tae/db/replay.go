@@ -15,12 +15,12 @@
 package db
 
 import (
-	"bytes"
 
 	//"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"sync"
 
@@ -94,8 +94,10 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 		return
 	}
 	idxCtx := store.NewIndex(lsn, 0, 0)
-	r := bytes.NewBuffer(payload)
-	txnCmd, _, err := txnbase.BuildCommandFrom(r)
+	head := objectio.DecodeIOEntryHeader(payload)
+	codec := objectio.GetIOEntryCodec(*head)
+	entry, err := codec.Decode(payload[4:])
+	txnCmd := entry.(*txnbase.TxnCmd)
 	if err != nil {
 		panic(err)
 	}
