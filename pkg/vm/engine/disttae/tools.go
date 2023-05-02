@@ -709,6 +709,16 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByDN{})
 	for _, e := range writes {
+		//SKIP update/delete on mo_columns
+		//there are update/delete entries on mo_columns just after one on mo_tables.
+		//case 1: (DELETE,MO_TABLES),(UPDATE/DELETE,MO_COLUMNS),(UPDATE/DELETE,MO_COLUMNS),...
+		//there is none update/delete entries on mo_columns just after one on mo_tables.
+		//case 2: (DELETE,MO_TABLES),...
+		if (e.typ == DELETE || e.typ == UPDATE) &&
+			e.databaseId == catalog.MO_DATABASE_ID &&
+			e.tableId == catalog.MO_COLUMNS_ID {
+			continue
+		}
 		if e.bat.Length() == 0 {
 			continue
 		}

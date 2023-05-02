@@ -84,25 +84,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 			return nil, nil, err
 		}
 		if e.EntryType == api.Entry_Delete {
-			rets := genDropOrTruncateTables(GenRows(bat))
-			//SKIP update/delete on mo_columns
-			//there are update/delete entries on mo_columns just after one on mo_tables.
-			//case 1: (DELETE,MO_TABLES),(UPDATE/DELETE,MO_COLUMNS),(UPDATE/DELETE,MO_COLUMNS),...
-			//                            j                          j                          j
-			//there is none update/delete entries on mo_columns just after one on mo_tables.
-			//case 2: (DELETE,MO_TABLES),...
-			//                            j
-			j := 1
-			for ; j < len(es); j++ {
-				entry := es[j]
-				if entry.TableId == MO_COLUMNS_ID &&
-					(entry.EntryType == api.Entry_Delete || entry.EntryType == api.Entry_Update) {
-				} else {
-					break
-				}
-			}
-			return rets, es[j:], nil
-			//return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
+			return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
 		} else if e.EntryType == api.Entry_Update {
 			return genUpdateConstraint(GenRows(bat)), es[1:], nil
 		}
