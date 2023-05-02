@@ -881,7 +881,22 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 		}
 		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
-		return []*Scope{rs}, nil
+		mcpu := rs.NodeInfo.Mcpu
+		scopes := make([]*Scope, 0, mcpu)
+		regs := make([]*process.WaitRegister, 0, mcpu)
+		for i := 0; i < mcpu; i++ {
+			scopes = append(scopes, &Scope{
+				Magic: Merge,
+			})
+			scopes[i].Proc = process.NewFromProc(rs.Proc, rs.Proc.Ctx, 1)
+			regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  vm.Dispatch,
+			Arg: constructDispatchLocal(false, regs),
+		})
+		scopes[0].PreScopes = append(scopes[0].PreScopes, rs)
+		return scopes, nil
 	case plan.Node_SINK:
 		receivers, ok := c.getStepRegs(step)
 		if !ok {
