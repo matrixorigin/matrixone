@@ -825,6 +825,27 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
+		dataScope := c.newMergeScope(ss)
+
+		dataScope.IsEnd = true
+		mcpu := dataScope.NodeInfo.Mcpu
+		scopes := make([]*Scope, 0, mcpu+1)
+		scopes = append(scopes, dataScope)
+		regs := make([]*process.WaitRegister, 0, mcpu)
+		for i := 1; i <= mcpu; i++ {
+			scopes = append(scopes, &Scope{
+				Magic:        Merge,
+				Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
+			})
+			scopes[i].Proc = process.NewFromProc(dataScope.Proc, c.ctx, 1)
+			regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
+		}
+
+		dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
+			Op:  vm.Dispatch,
+			Arg: constructDispatchLocal(false, regs),
+		})
+
 		insertArg, err := constructInsert(n, c.e, c.proc)
 		if err != nil {
 			return nil, err
@@ -837,11 +858,19 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		insertArg.ToWriteS3 = toWriteS3
 		mergeBlockIsEnd := insertArg.InsertCtx.IsEnd
+
+		resScope := &Scope{
+			Magic: Merge,
+			Proc:  c.proc,
+		}
 		if toWriteS3 {
 			insertArg.InsertCtx.IsEnd = false
 		}
-		for i := range ss {
-			ss[i].appendInstruction(vm.Instruction{
+		for i := range scopes {
+			if i == 0 {
+				continue
+			}
+			scopes[i].appendInstruction(vm.Instruction{
 				Op:      vm.Insert,
 				Idx:     c.anal.curr,
 				IsFirst: currentFirstFlag,
@@ -850,7 +879,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 
 		if toWriteS3 {
-			rs := c.newMergeScope(ss)
+			rs := c.newMergeScope(scopes)
 			rs.Magic = MergeInsert
 			rs.Instructions = append(rs.Instructions, vm.Instruction{
 				Op: vm.MergeBlock,
@@ -859,13 +888,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					IsEnd: mergeBlockIsEnd,
 				},
 			})
-			ss = []*Scope{rs}
+			resScope.PreScopes = append(resScope.PreScopes, rs)
+			resScope.PreScopes = append(resScope.PreScopes, scopes[0])
+		} else {
+			resScope.PreScopes = append(resScope.PreScopes, scopes...)
 		}
-		if !toWriteS3 {
-			ss = []*Scope{c.newMergeScope(ss)}
-		}
-		c.setAnalyzeCurrent(ss, curr)
-		return ss, nil
+		c.setAnalyzeCurrent([]*Scope{resScope}, curr)
+		return []*Scope{resScope}, nil
 	case plan.Node_FUNCTION_SCAN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -883,23 +912,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 		}
 		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
-		mcpu := rs.NodeInfo.Mcpu
-		scopes := make([]*Scope, 0, mcpu)
-		regs := make([]*process.WaitRegister, 0, mcpu)
-		for i := 0; i < mcpu; i++ {
-			scopes = append(scopes, &Scope{
-				Magic:        Merge,
-				Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
-			})
-			scopes[i].Proc = process.NewFromProc(rs.Proc, rs.Proc.Ctx, 1)
-			regs = append(regs, scopes[i].Proc.Reg.MergeReceivers...)
-		}
-		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(false, regs),
-		})
-		scopes[0].PreScopes = append(scopes[0].PreScopes, rs)
-		return scopes, nil
+		return []*Scope{rs}, nil
 	case plan.Node_SINK:
 		receivers, ok := c.getStepRegs(step)
 		if !ok {
