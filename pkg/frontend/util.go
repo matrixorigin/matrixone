@@ -271,7 +271,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // only support single value and unary minus
-func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interface{}, error) {
+func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.

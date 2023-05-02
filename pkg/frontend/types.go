@@ -124,23 +124,15 @@ func (icfl *InternalCmdFieldList) GetQueryType() string     { return tree.QueryT
 type ExecResult interface {
 	GetRowCount() uint64
 
-	GetColumnCount() uint64
-
 	GetString(ctx context.Context, rindex, cindex uint64) (string, error)
 
 	GetUint64(ctx context.Context, rindex, cindex uint64) (uint64, error)
 
 	GetInt64(ctx context.Context, rindex, cindex uint64) (int64, error)
-
-	GetValue(ctx context.Context, rindex uint64, cindex uint64) (interface{}, error)
 }
 
 func execResultArrayHasData(arr []ExecResult) bool {
 	return len(arr) != 0 && arr[0].GetRowCount() != 0
-}
-
-func execResultArrayHasOneRowOneCol(arr []ExecResult) bool {
-	return len(arr) == 1 && arr[0].GetRowCount() == 1 && arr[0].GetColumnCount() == 1
 }
 
 // BackgroundExec executes the sql in background session without network output.

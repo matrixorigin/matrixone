@@ -641,7 +641,6 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 					return err
 				}
 			}
-			//restriction:isolation_level
 		} else {
 			err = ses.SetUserDefinedVar(name, value)
 			if err != nil {
@@ -654,7 +653,7 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 		name := assign.Name
 		var value interface{}
 
-		value, err = GetSimpleExprValue(nil, assign.Value, ses)
+		value, err = GetSimpleExprValue(assign.Value, ses)
 		if err != nil {
 			return err
 		}
