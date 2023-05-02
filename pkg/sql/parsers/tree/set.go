@@ -54,7 +54,6 @@ func (node *VarAssignmentExpr) Format(ctx *FmtCtx) {
 	if node.Global {
 		ctx.WriteString("global ")
 	}
-	ctx.WriteByte('@')
 	ctx.WriteString(node.Name)
 	ctx.WriteString(" =")
 	if node.Value != nil {
