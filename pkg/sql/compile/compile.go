@@ -861,7 +861,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			})
 			ss = []*Scope{rs}
 		}
-
+		if !toWriteS3 {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
 	case plan.Node_FUNCTION_SCAN:

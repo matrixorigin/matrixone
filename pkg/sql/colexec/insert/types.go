@@ -63,3 +63,7 @@ func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 func (ap *Argument) AffectedRows() uint64 {
 	return ap.affectedRows
 }
+
+func (ap *Argument) GetAffectedRows() *uint64 {
+	return &ap.affectedRows
+}
