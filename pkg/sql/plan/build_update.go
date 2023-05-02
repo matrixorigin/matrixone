@@ -169,7 +169,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		}
 		for idx, col := range tableDef.Cols {
 			// row_id、compPrimaryKey、clusterByKey will not inserted from old data
-			if col.Hidden {
+			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
 			}
 			if offset, ok := updateColPosMap[col.Name]; ok {

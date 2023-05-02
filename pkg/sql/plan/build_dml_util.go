@@ -66,7 +66,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	lastNode := builder.qry.Nodes[lastNodeId]
 	newCols := make([]*ColDef, 0, len(updatePlanCtx.tableDef.Cols))
 	for _, col := range updatePlanCtx.tableDef.Cols {
-		if col.Hidden {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 			continue
 		}
 		newCols = append(newCols, col)
