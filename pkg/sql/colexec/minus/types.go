@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -28,13 +29,15 @@ const (
 )
 
 type Argument struct {
-	ctr container
+	ctr *container
 
 	// hash table bucket related information.
 	IBucket, NBucket uint64
 }
 
 type container struct {
+	colexec.ReceiverOperator
+
 	// operator execution stage.
 	state int
 

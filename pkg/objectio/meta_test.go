@@ -12,28 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mergeoffset
+package objectio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/assert"
+	"testing"
 )
 
-type container struct {
-	colexec.ReceiverOperator
-	seen uint64
-}
-
-type Argument struct {
-	// Offset records the offset number of mergeOffset operator
-	Offset uint64
-	// ctr contains the attributes needn't do serialization work
-	ctr *container
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.ctr != nil {
-		arg.ctr.FreeOperator(pipelineFailed)
+func TestBuildMetaData(t *testing.T) {
+	objectMeta := BuildMetaData(20, 30)
+	for i := uint16(0); i < 20; i++ {
+		blkMeta := objectMeta.GetBlockMeta(uint32(i))
+		assert.Equal(t, i, blkMeta.BlockHeader().Sequence())
+		assert.Equal(t, uint16(30), blkMeta.BlockHeader().ColumnCount())
 	}
 }

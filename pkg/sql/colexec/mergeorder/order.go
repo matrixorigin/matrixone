@@ -16,12 +16,9 @@ package mergeorder
 
 import (
 	"bytes"
-	"reflect"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -42,24 +39,15 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, true)
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
 
-	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
-	for i, mr := range proc.Reg.MergeReceivers {
-		ap.ctr.receiverListener[i] = reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(mr.Ch),
-		}
-	}
-	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
 	ap.ctr.compare0Index = make([]int32, len(ap.Fs))
 	ap.ctr.compare1Index = make([]int32, len(ap.Fs))
 	return nil
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
-	var bat *batch.Batch
-	var end bool
 	var err error
 
 	ap := arg.(*Argument)
@@ -72,25 +60,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	// save the unordered result in ctr.bat.
 	// save the ordered index list in ctr.finalSelectList
 	for {
-		start := time.Now()
-		bat, end, err = receiveBatch(proc, ctr)
-		if err != nil {
+		bat, end, err := ctr.ReceiveFromAllRegs(anal)
+		if err != nil || end {
 			break
-		}
-		anal.WaitStop(start)
-		if end {
-			break
-		}
-		if bat == nil {
-			continue
 		}
 
-		if bat.Length() == 0 {
-			bat.Clean(proc.Mp())
-			continue
-		}
 		anal.Input(bat, isFirst)
-
 		if err = mergeSort(proc, bat, ap, ctr, anal); err != nil {
 			break
 		}
@@ -121,26 +96,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	// free and return
 	ap.Free(proc, false)
 	return true, nil
-}
-
-// receiveBatch get a batch from receiver, return true if all batches have been got.
-func receiveBatch(proc *process.Process, ctr *container) (*batch.Batch, bool, error) {
-	if ctr.aliveMergeReceiver == 0 {
-		return nil, true, nil
-	}
-	chosen, value, ok := reflect.Select(ctr.receiverListener)
-	if !ok {
-		ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-		logutil.Errorf("pipeline closed unexpectedly")
-		return nil, true, nil
-	}
-	pointer := value.UnsafePointer()
-	bat := (*batch.Batch)(pointer)
-	if bat == nil {
-		ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-		ctr.aliveMergeReceiver--
-	}
-	return bat, false, nil
 }
 
 func mergeSort(proc *process.Process, bat2 *batch.Batch,

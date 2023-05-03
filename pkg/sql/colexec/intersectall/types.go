@@ -16,10 +16,13 @@ package intersectall
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type container struct {
+	colexec.ReceiverOperator
+
 	// operator state: Build, Probe or End
 	state int
 

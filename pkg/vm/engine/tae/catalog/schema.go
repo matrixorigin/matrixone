@@ -22,16 +22,14 @@ import (
 	"sort"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -39,12 +37,8 @@ func i82bool(v int8) bool {
 	return v == 1
 }
 
-const (
-	FakePKName = "__mo_fake_pk_col"
-)
-
 func IsFakePkName(name string) bool {
-	return name == FakePKName
+	return name == pkgcatalog.FakePrimaryKeyColName
 }
 
 type ColDef struct {
@@ -177,7 +171,7 @@ func (s *Schema) GetSingleSortKeyType() types.Type { return s.GetSingleSortKey()
 // Can't identify fake pk with column.flag. Column.flag is not ready in 0.8.0.
 // TODO: Use column.flag instead of column.name to idntify fake pk.
 func (s *Schema) getFakePrimaryKey() *ColDef {
-	idx, ok := s.NameIndex[FakePKName]
+	idx, ok := s.NameIndex[pkgcatalog.FakePrimaryKeyColName]
 	if !ok {
 		logutil.Infof("fake primary key not existed: %v", s.String())
 		panic("fake primary key not existed")
@@ -505,7 +499,7 @@ func (s *Schema) AppendFakePKCol() error {
 	typ := types.T_uint64.ToType()
 	typ.Width = 64
 	def := &ColDef{
-		Name:          FakePKName,
+		Name:          pkgcatalog.FakePrimaryKeyColName,
 		Type:          typ,
 		SortIdx:       -1,
 		NullAbility:   true,
@@ -662,7 +656,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		}
 		names[def.Name] = true
 		// Fake pk
-		if def.Name == FakePKName {
+		if IsFakePkName(def.Name) {
 			def.FakePK = true
 			def.SortKey = false
 			def.SortIdx = -1

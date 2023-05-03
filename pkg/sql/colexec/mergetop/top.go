@@ -18,13 +18,10 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
-	"reflect"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -45,6 +42,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, true)
 	if ap.Limit > 1024 {
 		ap.ctr.sels = make([]int64, 0, 1024)
 	} else {
@@ -52,14 +50,6 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
 
-	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
-	for i, mr := range proc.Reg.MergeReceivers {
-		ap.ctr.receiverListener[i] = reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(mr.Ch),
-		}
-	}
-	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
 	return nil
 }
 
@@ -95,29 +85,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
 	for {
-		if ctr.aliveMergeReceiver == 0 {
-			return false, nil
-		}
-
-		start := time.Now()
-		chosen, value, ok := reflect.Select(ctr.receiverListener)
-		if !ok {
-			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			logutil.Errorf("pipeline closed unexpectedly")
+		bat, end, err := ctr.ReceiveFromAllRegs(anal)
+		if err != nil {
 			return true, nil
 		}
-		anal.WaitStop(start)
-
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
-		if bat == nil {
-			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			ctr.aliveMergeReceiver--
-			continue
-		}
-
-		if bat.Length() == 0 {
-			continue
+		if end {
+			return false, nil
 		}
 
 		anal.Input(bat, isFirst)

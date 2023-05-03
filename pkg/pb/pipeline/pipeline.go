@@ -93,7 +93,7 @@ func (m *Message) SetProcData(data []byte) {
 func (m *Message) DebugString() string {
 	errInfo := "none"
 	if len(m.Err) > 0 {
-		me := moerr.Error{}
+		me := &moerr.Error{}
 		if err := me.UnmarshalBinary(m.Err); err != nil {
 			panic(err)
 		}

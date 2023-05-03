@@ -58,7 +58,7 @@ func TestPreInsertNormal(t *testing.T) {
 
 	proc := testutil.NewProc()
 	proc.TxnClient = txnClient
-	proc.Ctx = ctx
+	proc.SessionInfo.StorageEngine = eng
 	batch1 := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{3}),
@@ -71,7 +71,6 @@ func TestPreInsertNormal(t *testing.T) {
 	}
 	argument1 := Argument{
 		SchemaName: "testDb",
-
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
 				{Name: "int64_column", Typ: i64typ},
@@ -120,6 +119,7 @@ func TestPreInsertNullCheck(t *testing.T) {
 	proc := testutil.NewProc()
 	proc.TxnClient = txnClient
 	proc.Ctx = ctx
+	proc.SessionInfo.StorageEngine = eng
 	batch2 := &batch.Batch{
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
