@@ -16,6 +16,7 @@ rollback;
 set @@autocommit=on;
 
 --env prepare statement
+drop table if exists t5;
 drop table if exists dis_table_02;
 drop table if exists dis_table_03;
 
@@ -35,10 +36,15 @@ insert into dis_table_03 select 'bbb','2012-09-30';
 select * from dis_table_03;
 commit;
 
+drop table if exists dis_table_02;
+drop table if exists dis_table_03;
+
 begin;
 create table t1(a int);
+show tables;
 insert into t1 values (1);
 drop table t1;
+show tables;
 commit;
 
 create table t1(a int);
@@ -56,9 +62,11 @@ select * from t1;
 
 begin;
 create table t2(a int);
+show tables;
 insert into t2 values (1);
 truncate table t2;
 insert into t2 values (2);
 select * from t2;
 drop table t2;
+show tables;
 commit;

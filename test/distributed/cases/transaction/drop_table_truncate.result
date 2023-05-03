@@ -11,6 +11,7 @@ no such table drop_table_truncate.t5
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 rollback;
 set @@autocommit=on;
+drop table if exists t5;
 drop table if exists dis_table_02;
 drop table if exists dis_table_03;
 create table dis_table_02(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
@@ -32,10 +33,17 @@ select * from dis_table_03;
 b    c
 bbb    2012-09-30 00:00:00
 commit;
+drop table if exists dis_table_02;
+drop table if exists dis_table_03;
 begin;
 create table t1(a int);
+show tables;
+Tables_in_drop_table_truncate
+t1
 insert into t1 values (1);
 drop table t1;
+show tables;
+Tables_in_drop_table_truncate
 commit;
 create table t1(a int);
 begin;
@@ -55,6 +63,10 @@ select * from t1;
 a
 begin;
 create table t2(a int);
+show tables;
+Tables_in_drop_table_truncate
+t2
+t1
 insert into t2 values (1);
 truncate table t2;
 insert into t2 values (2);
@@ -62,4 +74,7 @@ select * from t2;
 a
 2
 drop table t2;
+show tables;
+Tables_in_drop_table_truncate
+t1
 commit;
