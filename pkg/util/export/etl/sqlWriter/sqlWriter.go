@@ -30,9 +30,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single query.
-// Default packet size limit for MySQL is 16MB, but we set it to 15MB to be safe.
-const MAX_CHUNK_SIZE = 1024 * 1024 * 10
+// MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
+const MAX_CHUNK_SIZE = 1024 * 1024 * 6
 
 //18331736
 
@@ -49,6 +48,7 @@ type BaseSqlWriter struct {
 type SqlWriter interface {
 	table.RowWriter
 	WriteRows(rows string, tbl *table.Table) (int, error)
+	WriteRowRecords(records [][]string, tbl *table.Table) (int, error)
 }
 
 func (sw *BaseSqlWriter) GetContent() string {
@@ -161,6 +161,10 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return sw.WriteRowRecords(records, tbl)
+}
+
+func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table) (int, error) {
 	db, dbErr := sw.initOrRefreshDBConn(false)
 	if dbErr != nil {
 		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(dbErr))
@@ -169,9 +173,9 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 
 	bulkCnt, bulkErr := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
 	if bulkErr != nil {
-		return 0, err
+		return 0, bulkErr
 	}
-	return bulkCnt, bulkErr
+	return bulkCnt, nil
 
 }
 
