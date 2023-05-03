@@ -1115,7 +1115,7 @@ func (tbl *txnTable) updateLocalState(
 			}
 			iter.Close()
 			if n > 1 {
-				primaryKeyVector := bat.Vecs[tbl.primaryIdx+1 /* skip the first row id column */ ]
+				primaryKeyVector := bat.Vecs[tbl.primaryIdx+1 /* skip the first row id column */]
 				nullableVec := memorytable.VectorAt(primaryKeyVector, idx)
 				return moerr.NewDuplicateEntry(
 					ctx,

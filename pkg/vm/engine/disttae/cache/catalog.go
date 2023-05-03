@@ -159,7 +159,28 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	var find bool
 	var ts timestamp.Timestamp
+	/**
+	In push mode.
+	It is necessary to distinguish the case create table/drop table
+	from truncate table.
 
+	CORNER CASE 1:
+	begin;
+	create table t1(a int);//table id x. catalog.insertTable(table id x)
+	insert into t1 values (1);
+	drop table t1; //same table id x. catalog.deleteTable(table id x)
+	commit;
+
+	CORNER CASE 2:
+	create table t1(a int); //table id x.
+	begin;
+	insert into t1 values (1);
+	-- @session:id=1{
+	truncate table t1;//insert table id y, then delete table id x. catalog.insertTable(table id y). catalog.deleteTable(table id x)
+	-- @session}
+	commit;
+	*/
+	var tableId uint64
 	cc.tables.data.Ascend(tbl, func(item *TableItem) bool {
 		if item.deleted && item.AccountId == tbl.AccountId &&
 			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name {
@@ -167,11 +188,12 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 				return false
 			}
 			ts = item.Ts
+			tableId = item.Id
 			return true
 		}
 		if !item.deleted && item.AccountId == tbl.AccountId &&
 			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name &&
-			(ts.IsEmpty() || ts.Equal(item.Ts)) {
+			(ts.IsEmpty() || ts.Equal(item.Ts) && tableId != item.Id) {
 			find = true
 			tbl.Id = item.Id
 			tbl.Defs = item.Defs
