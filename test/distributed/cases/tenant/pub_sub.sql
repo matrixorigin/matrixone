@@ -196,4 +196,6 @@ drop publication sys_pub_1;
 drop database sys_db_1;
 drop database sub2;
 
-create publication pub2 database mo_catalog account all;
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+create publication pub2 database mo_catalog account acc_idx;
+drop account acc_idx
