@@ -240,7 +240,8 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 		return -1, nil, nil, err
 	}
 	for i := 0; i < len(attrs); i++ {
-		if attrs[i].ClusterBy || attrs[i].Primary {
+		if attrs[i].ClusterBy ||
+			(attrs[i].Primary && !attrs[i].IsHidden) {
 			return i, attrs, tbl, err
 		}
 	}

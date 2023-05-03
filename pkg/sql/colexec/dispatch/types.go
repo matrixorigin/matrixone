@@ -40,11 +40,9 @@ type container struct {
 	remoteReceivers []*WrapperClientSession
 	// sendFunc is the rule you want to send batch
 	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error)
-}
 
-type Argument struct {
-	ctr *container
-
+	// isRemote specify it is a remote receiver or not
+	isRemote bool
 	// prepared specify waiting remote receiver ready or not
 	prepared bool
 
@@ -53,6 +51,10 @@ type Argument struct {
 	aliveRegCnt   int
 	localRegsCnt  int
 	remoteRegsCnt int
+}
+
+type Argument struct {
+	ctr *container
 
 	// FuncId means the sendFunc you want to call
 	FuncId int
@@ -63,8 +65,8 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.FuncId == SendToAllFunc {
-		if !arg.prepared {
+	if arg.ctr.isRemote {
+		if !arg.ctr.prepared {
 			arg.waitRemoteRegsReady(proc)
 		}
 		for _, r := range arg.ctr.remoteReceivers {
@@ -105,5 +107,4 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		}
 		close(arg.LocalRegs[i].Ch)
 	}
-
 }

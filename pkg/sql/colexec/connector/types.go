@@ -34,9 +34,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		}
 	}
 
-	select {
-	case arg.Reg.Ch <- nil:
-	case <-arg.Reg.Ctx.Done():
+	if !pipelineFailed {
+		select {
+		case arg.Reg.Ch <- nil:
+		case <-arg.Reg.Ctx.Done():
+		}
 	}
 	close(arg.Reg.Ch)
 }
