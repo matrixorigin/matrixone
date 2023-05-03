@@ -104,6 +104,11 @@ func (r *objectReaderV1) ReadMeta(
 	ctx context.Context,
 	m *mpool.MPool,
 ) (meta objectMetaV1, err error) {
+	v, _, ok := MetaCache.Get(r.name, false)
+	if ok {
+		meta = v.(ObjectMeta)
+		return
+	}
 	if r.withMetaCache {
 		cache := r.metaCache.Load()
 		if cache != nil {
@@ -117,6 +122,7 @@ func (r *objectReaderV1) ReadMeta(
 	if r.withMetaCache {
 		r.metaCache.Store(&meta)
 	}
+	MetaCache.Set(r.name, meta, int64(len(meta[:])), false)
 	return
 }
 
