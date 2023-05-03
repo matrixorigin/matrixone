@@ -2823,6 +2823,9 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	)
 
 	tenantInfo = ses.GetTenantInfo()
+	if tenantInfo != nil && accName == tenantInfo.GetTenant() {
+		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
+	}
 
 	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	//get pubAccountId from publication info
@@ -2928,10 +2931,8 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 		lowerAny                  any
 		lowerInt64                int64
 		accName, pubName, subName string
-		tenantInfo                *TenantInfo
 		ast                       []tree.Statement
 	)
-	tenantInfo = ses.GetTenantInfo()
 	lowerAny, err = ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
 		return nil, err
@@ -2946,9 +2947,6 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 	pubName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.Publication)
 	subName = string(ast[0].(*tree.CreateDatabase).Name)
 
-	if tenantInfo != nil && accName == tenantInfo.GetTenant() {
-		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
-	}
 	return checkSubscriptionValidCommon(ctx, ses, subName, accName, pubName)
 }
 
