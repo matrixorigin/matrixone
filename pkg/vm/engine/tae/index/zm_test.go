@@ -42,7 +42,7 @@ type testCase struct {
 }
 
 var testCases = []*testCase{
-	&testCase{
+	{
 		v1: makeZM(types.T_int64, int64(-10), int64(10)),
 		v2: makeZM(types.T_int32, int32(-10), int32(-10)),
 		expects: [][2]bool{
@@ -54,7 +54,7 @@ var testCases = []*testCase{
 		},
 		idx: 0,
 	},
-	&testCase{
+	{
 		v1: makeZM(types.T_int32, int32(-10), int32(10)),
 		v2: makeZM(types.T_int32, int32(5), int32(20)),
 		expects: [][2]bool{
@@ -68,7 +68,7 @@ var testCases = []*testCase{
 		},
 		idx: 1,
 	},
-	&testCase{
+	{
 		v1: makeZM(types.T_int16, int16(-10), int16(10)),
 		v2: makeZM(types.T_int16, int16(10), int16(20)),
 		expects: [][2]bool{
