@@ -35,7 +35,7 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 	Srv = &Server{
 		mp:            make(map[uint64]*process.WaitRegister),
 		hakeeper:      client,
-		uuidCsChanMap: UuidCsChanMap{mp: make(map[uuid.UUID]chan process.WrapCs)},
+		uuidCsChanMap: UuidProcMap{mp: make(map[uuid.UUID]*process.Process)},
 		cnSegmentMap:  CnSegmentMap{mp: make(map[string]int32)},
 	}
 	return Srv
@@ -56,7 +56,7 @@ func (srv *Server) RegistConnector(reg *process.WaitRegister) uint64 {
 	return srv.id
 }
 
-func (srv *Server) GetNotifyChByUuid(u uuid.UUID) (chan process.WrapCs, bool) {
+func (srv *Server) GetNotifyChByUuid(u uuid.UUID) (*process.Process, bool) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	p, ok := srv.uuidCsChanMap.mp[u]
@@ -66,10 +66,10 @@ func (srv *Server) GetNotifyChByUuid(u uuid.UUID) (chan process.WrapCs, bool) {
 	return p, true
 }
 
-func (srv *Server) PutNotifyChIntoUuidMap(u uuid.UUID, ch chan process.WrapCs) error {
+func (srv *Server) PutNotifyChIntoUuidMap(u uuid.UUID, p *process.Process) error {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
-	srv.uuidCsChanMap.mp[u] = ch
+	srv.uuidCsChanMap.mp[u] = p
 	return nil
 }
 

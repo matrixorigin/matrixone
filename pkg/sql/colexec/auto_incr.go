@@ -626,11 +626,6 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 	}
 	name := fmt.Sprintf("%d_", rel.GetTableID(ctx))
 
-	txn, err := NewTxn(eg, proc, ctx)
-	if err != nil {
-		return err
-	}
-
 	for _, attr := range cols {
 		if !attr.Typ.AutoIncr {
 			continue
@@ -638,24 +633,15 @@ func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 		var rel2 engine.Relation
 		// Essentially, temporary table is not an operation of a transaction.
 		// Therefore, it is not possible to fetch the temporary table through the function GetNewRelation
-		if dbName == defines.TEMPORARY_DBNAME {
-			rel2, err = db.Relation(ctx, catalog.AutoIncrTableName)
-		} else {
-			rel2, err = GetNewRelation(eg, dbName, catalog.AutoIncrTableName, txn, ctx)
-		}
+		rel2, err = db.Relation(ctx, catalog.AutoIncrTableName)
 		if err != nil {
 			return err
 		}
-		bat := makeAutoIncrBatch(name+attr.Name, 0, 1, proc.Mp())
+		proc.SetCacheForAutoCol(name + attr.Name)
+		bat := makeAutoIncrBatch(name+attr.Name, proc.Aicm.MaxSize, 1, proc.Mp())
 		if err = rel2.Write(ctx, bat); err != nil {
-			if err2 := RolllbackTxn(eg, txn, ctx); err2 != nil {
-				return err2
-			}
 			return err
 		}
-	}
-	if err = CommitTxn(eg, txn, ctx); err != nil {
-		return err
 	}
 	return nil
 }
