@@ -228,7 +228,7 @@ internal error: Only CREATE of DDL is supported in transactions
 drop table t_code_rule;
 internal error: Only CREATE of DDL is supported in transactions
 drop database atomic_1;
-internal error: Only CREATE of DDL is supported in transactions
+internal error: CREATE/DROP of database is not supported in transactions
 drop role role1,role2;
 internal error: administrative command is unsupported in transactions
 commit;

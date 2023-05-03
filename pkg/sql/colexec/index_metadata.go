@@ -16,6 +16,9 @@ package colexec
 
 import (
 	"context"
+	"strconv"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
-	"time"
 )
 
 const (
@@ -300,56 +301,59 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 			if err != nil {
 				return nil, err
 			}
-			for i, colName := range def.Pkey.Names {
-				err = vector.AppendFixed(vec_id, indexId, false, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendFixed(vec_table_id, tableId, false, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendFixed(vec_database_id, databaseId, false, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendBytes(vec_name, []byte("PRIMARY"), false, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendBytes(vec_type, []byte(INDEX_TYPE_PRIMARY), false, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendFixed(vec_visible, int8(1), false, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendFixed(vec_hidden, int8(0), false, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendBytes(vec_comment, []byte(""), false, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendBytes(vec_column_name, []byte(colName), false, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendFixed(vec_ordinal_position, uint32(i+1), false, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendBytes(vec_options, []byte(""), true, proc.Mp())
-				if err != nil {
-					return nil, err
-				}
-				err = vector.AppendBytes(vec_index_table, []byte(""), true, proc.Mp())
-				if err != nil {
-					return nil, err
+			if def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+				for i, colName := range def.Pkey.Names {
+					err = vector.AppendFixed(vec_id, indexId, false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendFixed(vec_table_id, tableId, false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendFixed(vec_database_id, databaseId, false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendBytes(vec_name, []byte("PRIMARY"), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendBytes(vec_type, []byte(INDEX_TYPE_PRIMARY), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendFixed(vec_visible, int8(1), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendFixed(vec_hidden, int8(0), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendBytes(vec_comment, []byte(""), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendBytes(vec_column_name, []byte(colName), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendFixed(vec_ordinal_position, uint32(i+1), false, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendBytes(vec_options, []byte(""), true, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
+					err = vector.AppendBytes(vec_index_table, []byte(""), true, proc.Mp())
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
+
 		}
 	}
 
