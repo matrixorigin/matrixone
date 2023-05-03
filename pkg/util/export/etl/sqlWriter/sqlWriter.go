@@ -31,7 +31,7 @@ import (
 )
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
-const MAX_CHUNK_SIZE = 1024 * 1024 * 6
+const MAX_CHUNK_SIZE = 1024 * 1024 * 10
 
 //18331736
 
@@ -156,6 +156,9 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
+	// thread safe for db
+	sw.dbMux.Lock()
+	defer sw.dbMux.Unlock()
 	r := csv.NewReader(strings.NewReader(rows))
 	records, err := r.ReadAll()
 	if err != nil {
