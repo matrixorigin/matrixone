@@ -6724,6 +6724,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if err != nil {
 			goto handleFailed
 		}
+
+		err = createSubscriptionDatabase(ctx, bh, newTenant, ses)
+		if err != nil {
+			goto handleFailed
+		}
 	}
 
 	err = bh.Exec(ctx, "commit;")
@@ -6731,7 +6736,6 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		goto handleFailed
 	}
 
-	createSubscriptionDatabase(ctx, bh, newTenant, ses)
 	return err
 handleFailed:
 	//ROLLBACK the transaction
@@ -6998,7 +7002,6 @@ func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenan
 	var err error
 	subscriptions := make([]string, 0)
 	//process the syspublications
-	//syspublications_value := ses.GetSysVar("syspublications")
 	_, syspublications_value, _ := ses.GetGlobalSysVars().GetGlobalSysVar("syspublications")
 	if syspublications, ok := syspublications_value.(string); ok {
 		if len(syspublications) == 0 {
@@ -7023,10 +7026,7 @@ func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenan
 	}
 	for _, sql := range sqls {
 		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
+		bh.Exec(ctx, sql)
 	}
 	return err
 }
