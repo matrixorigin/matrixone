@@ -6726,12 +6726,13 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		}
 	}
 
-	if !exists {
-		createSubscriptionDatabase(ctx, bh, newTenant, ses)
-	}
 	err = bh.Exec(ctx, "commit;")
 	if err != nil {
 		goto handleFailed
+	}
+
+	if !exists {
+		createSubscriptionDatabase(ctx, bh, newTenant, ses)
 	}
 
 	return err
