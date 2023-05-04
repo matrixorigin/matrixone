@@ -87,11 +87,11 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 			connectCtx: ctx,
 			gSysVars:   &gSys,
 		}
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldNotBeNil)
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -152,13 +152,13 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 			connectCtx: ctx,
 			gSysVars:   &gSys,
 		}
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.CommitTxn()
 		convey.So(err, convey.ShouldBeNil)
 		convey.ShouldEqual(timestamp.Timestamp{PhysicalTime: idx}, txn.ses.lastCommitTS)
 
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 
 		idx++
@@ -207,11 +207,11 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 			pu:         pu,
 			connectCtx: ctx,
 		}
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.RollbackTxn()
 		convey.So(err, convey.ShouldBeNil)
-		err = txn.NewTxn()
+		_, _, err = txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.RollbackTxn()
 		convey.So(err, convey.ShouldNotBeNil)
@@ -263,7 +263,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		err = ses.TxnCommit()
 		convey.So(err, convey.ShouldBeNil)
-		_, _ = ses.GetTxnHandler().GetTxn()
+		_, _, err = ses.GetTxnHandler().GetTxn()
 		convey.So(err, convey.ShouldBeNil)
 
 		err = ses.TxnCommit()

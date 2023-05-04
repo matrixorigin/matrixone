@@ -17,9 +17,11 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"regexp"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -1055,81 +1057,45 @@ func isMetaTable(name string) bool {
 	return metaTableMatchRegexp.MatchString(name)
 }
 
-func genBlockMetas(
-	ctx context.Context,
-	blockInfos []catalog.BlockInfo,
-	columnLength int,
-	fs fileservice.FileService,
-	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
-	{
-		mp := make(map[types.Blockid]catalog.BlockInfo) // block list
-		for i := range blockInfos {
-			if blk, ok := mp[blockInfos[i].BlockID]; ok {
-				if blk.CommitTs.Less(blockInfos[i].CommitTs) {
-					mp[blk.BlockID] = blockInfos[i]
-				}
-			} else {
-				mp[blockInfos[i].BlockID] = blockInfos[i]
-			}
-		}
-		blockInfos = blockInfos[:0]
-		for _, blk := range mp {
-			blockInfos = append(blockInfos, blk)
-		}
-	}
-
-	metas := make([]BlockMeta, len(blockInfos))
-
-	idxs := make([]uint16, columnLength)
-	for i := 0; i < columnLength; i++ {
-		idxs[i] = uint16(i)
-	}
-
-	for i, blockInfo := range blockInfos {
-		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(ctx, idxs, blockInfo, fs, m)
-		if err != nil {
-			if prefetch {
-				continue
-			}
-			return nil, err
-		}
-		metas[i] = BlockMeta{
-			Rows:    int64(rows),
-			Info:    blockInfos[i],
-			Zonemap: zm,
-		}
-	}
-	return metas, nil
-}
-
-func inBlockMap(blk BlockMeta, blockMap map[types.Blockid]bool) bool {
-	_, ok := blockMap[blk.Info.BlockID]
+func inBlockMap(blk catalog.BlockInfo, blockMap map[types.Blockid]bool) bool {
+	_, ok := blockMap[blk.BlockID]
 	return ok
 }
 
-func genModifedBlocks(ctx context.Context, deletes map[types.Blockid][]int, orgs, modfs []BlockMeta,
-	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
-	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
+func genModifedBlocks(ctx context.Context, deletes map[types.Blockid][]int, orgs, modfs []catalog.BlockInfo,
+	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) (blks []ModifyBlockMeta, err error) {
 
+	blks = make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
 	lenblks := len(modfs)
 	blockMap := make(map[types.Blockid]bool, lenblks)
 	for i := 0; i < lenblks; i++ {
-		blockMap[modfs[i].Info.BlockID] = true
+		blockMap[modfs[i].BlockID] = true
 	}
 
 	exprMono := plantool.CheckExprIsMonotonic(ctx, expr)
 	columnMap, columns, maxCol := plantool.GetColumnsByExpr(expr, tableDef)
+	var meta objectio.ObjectMeta
 	for i, blk := range orgs {
 		if !inBlockMap(blk, blockMap) {
-			if !exprMono || needRead(ctx, expr, blk, tableDef, columnMap, columns, maxCol, proc) {
+			location := blk.MetaLocation()
+			ok := true
+			if exprMono {
+				if !objectio.IsSameObjectLocVsMeta(location, meta) {
+					if meta, err = loadObjectMeta(ctx, location, proc.FileService, proc.Mp()); err != nil {
+						return
+					}
+				}
+				ok = needRead(ctx, expr, meta, blk, tableDef, columnMap, columns, maxCol, proc)
+			}
+			if ok {
 				blks = append(blks, ModifyBlockMeta{
 					meta:    orgs[i],
-					deletes: deletes[orgs[i].Info.BlockID],
+					deletes: deletes[orgs[i].BlockID],
 				})
 			}
 		}
 	}
-	return blks
+	return
 }
 
 func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {

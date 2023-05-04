@@ -25,7 +25,6 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,7 +36,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -46,58 +44,75 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func fetchZonemapAndRowsFromBlockInfo(
+func loadObjectMeta(
 	ctx context.Context,
-	idxs []uint16,
-	blockInfo catalog.BlockInfo,
+	location objectio.Location,
 	fs fileservice.FileService,
-	m *mpool.MPool) ([]Zonemap, uint32, error) {
-	zonemapList := make([]Zonemap, len(idxs))
-
-	// raed s3
-	reader, err := blockio.NewObjectReader(fs, blockInfo.MetaLocation())
+	m *mpool.MPool,
+) (meta objectio.ObjectMeta, err error) {
+	reader, err := blockio.NewObjectReader(fs, location)
 	if err != nil {
-		return nil, 0, err
+		return
 	}
-
-	obs, err := reader.LoadZoneMaps(ctx, idxs, blockInfo.MetaLocation().ID(), m)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	for i := range idxs {
-		bytes := obs[i].GetBuf()
-		copy(zonemapList[i][:], bytes[:])
-	}
-
-	return zonemapList, blockInfo.MetaLocation().Rows(), nil
+	return reader.LoadObjectMeta(ctx, m)
 }
 
-func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
-	dataLength := len(columns)
-	datas := make([][2]any, dataLength)
-	dataTypes := make([]uint8, dataLength)
-
-	for i := 0; i < dataLength; i++ {
-		idx := columns[i]
-		dataTypes[i] = uint8(tableDef.Cols[idx].Typ.Id)
-		typ := types.T(dataTypes[i]).ToType()
-
-		zm := index.NewZoneMap(typ)
-		err := zm.Unmarshal(meta.Zonemap[idx][:])
+func buildColumnZMVector(
+	zm objectio.ZoneMap,
+	mp *mpool.MPool,
+) (vec *vector.Vector, err error) {
+	t := zm.GetType().ToType()
+	vec = vector.NewVec(t)
+	defer func() {
 		if err != nil {
-			return nil, nil, err
+			vec.Free(mp)
 		}
-
-		min := zm.GetMin()
-		max := zm.GetMax()
-		if min == nil || max == nil {
-			return nil, nil, nil
-		}
-		datas[i] = [2]any{min, max}
+	}()
+	appendFn := vector.MakeAppendBytesFunc(vec)
+	if err = appendFn(zm.GetMinBuf(), false, mp); err != nil {
+		return
 	}
+	err = appendFn(zm.GetMaxBuf(), false, mp)
+	return
+}
 
-	return datas, dataTypes, nil
+func buildColumnsZMVectors(
+	meta objectio.ObjectMeta,
+	blknum int,
+	cols []int,
+	def *plan.TableDef,
+	mp *mpool.MPool,
+) (vecs []*vector.Vector, err error) {
+	toClean := false
+	vecs = make([]*vector.Vector, len(cols))
+	defer func() {
+		if toClean {
+			for i, vec := range vecs {
+				if vec != nil {
+					vec.Free(mp)
+					vecs[i] = nil
+				} else {
+					break
+				}
+			}
+			vecs = vecs[:0]
+		}
+	}()
+	var vec *vector.Vector
+	for i, colIdx := range cols {
+		zm := meta.GetColumnMeta(uint32(blknum), uint16(colIdx)).ZoneMap()
+		// colType := types.T(def.Cols[colIdx].Typ.Id)
+		if !zm.IsInited() {
+			toClean = true
+			return
+		}
+		if vec, err = buildColumnZMVector(zm, mp); err != nil {
+			toClean = true
+			return
+		}
+		vecs[i] = vec
+	}
+	return
 }
 
 func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {

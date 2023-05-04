@@ -170,10 +170,12 @@ func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID string) []int64 {
 	return offsets
 }
 
-func (b *deletedBlocks) removeBlockDeletedInfo(blockID string) {
+func (b *deletedBlocks) removeBlockDeletedInfos(ids []string) {
 	b.Lock()
 	defer b.Unlock()
-	delete(b.offsets, blockID)
+	for _, id := range ids {
+		delete(b.offsets, id)
+	}
 }
 
 func (b *deletedBlocks) iter(fn func(string, []int64) bool) {
@@ -239,8 +241,8 @@ type txnTable struct {
 	idxs              []uint16
 	_parts            []*PartitionState
 	modifiedBlocks    [][]ModifyBlockMeta
-	blockMetas        [][]BlockMeta
-	blockMetasUpdated bool
+	blockInfos        [][]catalog.BlockInfo
+	blockInfosUpdated bool
 	logtailUpdated    bool
 
 	primaryIdx   int // -1 means no primary key
@@ -389,7 +391,7 @@ func (z *Zonemap) Unmarshal(data []byte) error {
 }
 
 type ModifyBlockMeta struct {
-	meta    BlockMeta
+	meta    catalog.BlockInfo
 	deletes []int
 }
 

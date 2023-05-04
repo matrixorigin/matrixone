@@ -739,7 +739,8 @@ var (
 		"mo_indexes":                  0,
 		"mo_pubs":                     0,
 	}
-	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
+	createDbInformationSchemaSql = "create database information_schema;"
+	createAutoTableSql           = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
 	createMoIndexesSql = `create table mo_indexes(
@@ -6421,12 +6422,17 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) erro
 		return err
 	}
 
-	bh.Exec(ctx, createMoIndexesSql)
+	err = bh.Exec(ctx, createMoIndexesSql)
 	if err != nil {
 		return err
 	}
 
 	err = bh.Exec(ctx, createAutoTableSql)
+	if err != nil {
+		return err
+	}
+
+	err = bh.Exec(ctx, createDbInformationSchemaSql)
 	if err != nil {
 		return err
 	}
@@ -6443,11 +6449,6 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) erro
 
 	if !exists {
 		err = createTablesInMoCatalog(ctx, bh, tenant, pu)
-		if err != nil {
-			goto handleFailed
-		}
-
-		err = createTablesInInformationSchema(ctx, bh, tenant, pu)
 		if err != nil {
 			goto handleFailed
 		}
@@ -6689,6 +6690,21 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			return err
 		}
 
+		//create createDbSqls
+		createDbSqls := []string{
+			"create database " + motrace.SystemDBConst + ";",
+			"create database " + mometric.MetricDBConst + ";",
+			createDbInformationSchemaSql,
+			"create database mysql;",
+		}
+
+		for _, db := range createDbSqls {
+			err = bh.Exec(newTenantCtx, db)
+			if err != nil {
+				return err
+			}
+		}
+
 		err = bh.Exec(ctx, "begin;")
 		if err != nil {
 			goto handleFailed
@@ -6927,11 +6943,9 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 
 	var err error
 	sqls := make([]string, 0)
-	sqls = append(sqls, "create database "+motrace.SystemDBConst+";")
 	sqls = append(sqls, "use "+motrace.SystemDBConst+";")
 	traceTables := motrace.GetSchemaForAccount(ctx, newTenant.GetTenant())
 	sqls = append(sqls, traceTables...)
-	sqls = append(sqls, "create database "+mometric.MetricDBConst+";")
 	sqls = append(sqls, "use "+mometric.MetricDBConst+";")
 	metricTables := mometric.GetSchemaForAccount(ctx, newTenant.GetTenant())
 	sqls = append(sqls, metricTables...)
@@ -6959,10 +6973,8 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	var err error
 	sqls := make([]string, 0, len(sysview.InitInformationSchemaSysTables)+len(sysview.InitMysqlSysTables)+4)
 
-	sqls = append(sqls, "create database information_schema;")
 	sqls = append(sqls, "use information_schema;")
 	sqls = append(sqls, sysview.InitInformationSchemaSysTables...)
-	sqls = append(sqls, "create database mysql;")
 	sqls = append(sqls, "use mysql;")
 	sqls = append(sqls, sysview.InitMysqlSysTables...)
 

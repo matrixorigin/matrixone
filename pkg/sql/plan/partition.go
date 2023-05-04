@@ -17,9 +17,10 @@ package plan
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"go/constant"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -513,7 +514,7 @@ func checkPartitionKeys(ctx context.Context, nameByColRef map[[2]int32]string,
 		return nil
 	}
 
-	if tableDef.Pkey != nil {
+	if tableDef.Pkey != nil && !onlyHasHiddenPrimaryKey(tableDef) {
 		pKeys := make(map[string]int)
 		if dup, dupName := stringSliceToMap(tableDef.Pkey.Names, pKeys); dup {
 			return moerr.NewInvalidInput(ctx, "duplicate name %s", dupName)
@@ -649,12 +650,12 @@ func extractColFromExpr(nameByColRef map[[2]int32]string, expr *Expr, result map
 }
 
 func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDef, partitionDef *plan.PartitionByDef) error {
-	hasPrimaryKey := false
+	hasValidPrimaryKey := false
 	hasUniqueKey := false
 	var primaryKey *plan.PrimaryKeyDef
 
-	if tableDef.Pkey != nil {
-		hasPrimaryKey = true
+	if tableDef.Pkey != nil && !onlyHasHiddenPrimaryKey(tableDef) {
+		hasValidPrimaryKey = true
 		primaryKey = tableDef.Pkey
 	}
 
@@ -668,7 +669,7 @@ func handleEmptyKeyPartition(partitionBinder *PartitionBinder, tableDef *TableDe
 		}
 	}
 
-	if hasPrimaryKey {
+	if hasValidPrimaryKey {
 		//  Any columns used as the partitioning key must comprise part or all of the table's primary key, if the table has one.
 		// Where no column name is specified as the partitioning key, the table's primary key is used, if there is one.
 		pkcols := make(map[string]int)

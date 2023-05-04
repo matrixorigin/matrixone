@@ -14,18 +14,44 @@
 
 package txnentries
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+)
 
 const (
-	CmdCompactBlock int16 = 0x0200 + iota
-	CmdMergeBlocks
+	IOET_WALTxnCommand_Compact uint16 = 3006
+	IOET_WALTxnCommand_Merge   uint16 = 3007
+
+	IOET_WALTxnCommand_Compact_V1 uint16 = 1
+	IOET_WALTxnCommand_Merge_V1   uint16 = 1
+
+	IOET_WALTxnCommand_Compact_CurrVer = IOET_WALTxnCommand_Compact_V1
+	IOET_WALTxnCommand_Merge_CurrVer   = IOET_WALTxnCommand_Merge_V1
 )
 
 func init() {
-	txnif.RegisterCmdFactory(CmdCompactBlock, func(int16) txnif.TxnCmd {
-		return new(compactBlockCmd)
-	})
-	txnif.RegisterCmdFactory(CmdMergeBlocks, func(int16) txnif.TxnCmd {
-		return new(mergeBlocksCmd)
-	})
+
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Compact,
+			Version: IOET_WALTxnCommand_Compact_V1,
+		},
+		nil, func(b []byte) (any, error) {
+			cmd := new(compactBlockCmd)
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Merge,
+			Version: IOET_WALTxnCommand_Merge_V1,
+		},
+		nil,
+		func(b []byte) (any, error) {
+			cmd := new(mergeBlocksCmd)
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
 }

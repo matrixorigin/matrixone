@@ -443,6 +443,7 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 				Default:  attr.Attr.Default,
 				OnUpdate: attr.Attr.OnUpdate,
 				Comment:  attr.Attr.Comment,
+				Hidden:   attr.Attr.IsHidden,
 			})
 			i++
 		}
