@@ -157,6 +157,11 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
+
+	if tbl.Table == "rawlog" && len(rows) > MAX_CHUNK_SIZE {
+		return 0, errNotReady
+	}
+
 	sw.semaphore <- struct{}{}
 	defer func() {
 		// Release the semaphore
@@ -177,7 +182,6 @@ func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table) (
 		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(dbErr))
 		return 0, dbErr
 	}
-
 	bulkCnt, bulkErr := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
 	if bulkErr != nil {
 		return 0, bulkErr
