@@ -105,9 +105,9 @@ type IOEntry struct {
 
 	// when reading, if the ToObject field is not nil, the returning object will be set to this field
 	// caches may choose to cache this object instead of caching []byte
-	// Data, WriterForRead, ReadCloserForRead may be empty if Object is not null
-	// if ToObject is provided, caller should always read Object instead of Data, WriterForRead or ReadCloserForRead
-	Object any
+	// Data, WriterForRead, ReadCloserForRead may be empty if ObjectBytes is not null
+	// if ToObject is provided, caller should always read ObjectBytes instead of Data, WriterForRead or ReadCloserForRead
+	ObjectBytes any
 
 	// ToObject constructs an object from entry contents
 	// reader or data must not be retained after returns

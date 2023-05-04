@@ -214,7 +214,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				if err != nil {
 					return err
 				}
-				vector.Entries[i].Object = obj
+				vector.Entries[i].ObjectBytes = obj
 				vector.Entries[i].ObjectSize = size
 				if entry.Size > 0 && cr.N != entry.Size {
 					return moerr.NewUnexpectedEOFNoCtx(path.File)
@@ -262,7 +262,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 						if err != nil {
 							return err
 						}
-						vector.Entries[i].Object = obj
+						vector.Entries[i].ObjectBytes = obj
 						vector.Entries[i].ObjectSize = size
 						return nil
 					},

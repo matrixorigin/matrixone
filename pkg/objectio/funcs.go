@@ -44,7 +44,7 @@ func ReadExtent(
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
-	v = ioVec.Entries[0].Object
+	v = ioVec.Entries[0].ObjectBytes
 	return
 }
 

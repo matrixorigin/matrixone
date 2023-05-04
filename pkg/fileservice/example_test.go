@@ -68,7 +68,7 @@ func TestCacheWithRCExample(t *testing.T) {
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 
-	value := vec.Entries[0].Object.(*objcache.RCValue[int])
+	value := vec.Entries[0].ObjectBytes.(*objcache.RCValue[int])
 	assert.Equal(t, 42, value.Value)
 
 	value.IncRef()       // pin, cache will not evict this item
@@ -127,7 +127,7 @@ func TestCacheWithReleasableExample(t *testing.T) {
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 
-	value := vec.Entries[0].Object.(objcache.ReleasableValue[[]byte])
+	value := vec.Entries[0].ObjectBytes.(objcache.ReleasableValue[[]byte])
 	assert.Equal(t, []byte("42"), value.Value)
 
 }

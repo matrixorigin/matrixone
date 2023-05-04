@@ -68,7 +68,7 @@ type IOVectorCacheKey struct {
 	Size   int64
 }
 
-// ObjectCache caches IOEntry.Object
+// ObjectCache caches IOEntry.ObjectBytes
 type ObjectCache interface {
 	Set(key any, value any, size int64, preloading bool)
 	Get(key any, preloading bool) (value any, size int64, ok bool)

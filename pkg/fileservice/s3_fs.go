@@ -685,7 +685,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			}
 		}
 
-		// set Object field
+		// set ObjectBytes field
 		if err := entry.setObjectFromData(); err != nil {
 			return err
 		}

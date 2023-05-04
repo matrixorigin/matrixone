@@ -657,7 +657,7 @@ func testFileService(
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
 
-		m, ok := vec.Entries[0].Object.(api.Int64Map)
+		m, ok := vec.Entries[0].ObjectBytes.(api.Int64Map)
 		assert.True(t, ok)
 		assert.Equal(t, 1, len(m.M))
 		assert.Equal(t, int64(42), m.M[42])

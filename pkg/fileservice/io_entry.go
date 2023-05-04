@@ -146,7 +146,7 @@ func (e *IOEntry) setObjectFromData() error {
 	if err != nil {
 		return err
 	}
-	e.Object = obj
+	e.ObjectBytes = obj
 	e.ObjectSize = size
 	return nil
 }
