@@ -331,6 +331,8 @@ type blockMergeReader struct {
 	colIdxs  []uint16
 	colTypes []types.Type
 	colNulls []bool
+
+	tableName string
 }
 
 type mergeReader struct {
