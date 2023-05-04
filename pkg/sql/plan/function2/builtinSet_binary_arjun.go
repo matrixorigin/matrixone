@@ -381,7 +381,10 @@ func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrap
 					return err
 				}
 			} else {
-				res, _ := extractFromVarchar(v1str, function2Util.QuickBytesToStr(v2), p2scale)
+				res, err := extractFromVarchar(v1str, function2Util.QuickBytesToStr(v2), p2scale)
+				if err != nil {
+					return err
+				}
 				if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
 					return err
 				}
@@ -394,7 +397,9 @@ func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrap
 
 func extractFromVarchar(unit string, t string, scale int32) (string, error) {
 	var result string
-	if value, err := types.ParseDatetime(t, scale); err == nil {
+	if len(t) == 0 {
+		result = t
+	} else if value, err := types.ParseDatetime(t, scale); err == nil {
 		result, err = extractFromDatetime(unit, value)
 		if err != nil {
 			return "", err

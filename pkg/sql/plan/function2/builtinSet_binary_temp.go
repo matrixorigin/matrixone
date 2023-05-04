@@ -589,6 +589,7 @@ func CoalesceGeneral[T NormalType](ivecs []*vector.Vector, result vector.Functio
 	for i := range ivecs {
 		vecs[i] = vector.GenerateFunctionFixedTypeParameter[T](ivecs[i])
 	}
+	rs.TempSetType(ivecs[0].GetType().Oid.ToType())
 	var t T
 	for i := uint64(0); i < uint64(length); i++ {
 		isFill := false
@@ -808,6 +809,12 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	scale := ivecs[0].GetType().Scale
+	switch types.IntervalType(unit) {
+	case types.MicroSecond:
+		scale = 6
+	}
+	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := starts.GetValue(i)
 		v2, null2 := diffs.GetValue(i)
@@ -836,6 +843,7 @@ func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	var d types.Datetime
 	starts := vector.GenerateFunctionStrParameter(ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := starts.GetStrValue(i)
 		v2, null2 := diffs.GetValue(i)
@@ -863,6 +871,12 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	scale := ivecs[0].GetType().Scale
+	switch types.IntervalType(unit) {
+	case types.MicroSecond:
+		scale = 6
+	}
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := starts.GetValue(i)
 		v2, null2 := diffs.GetValue(i)
@@ -890,6 +904,12 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	scale := ivecs[0].GetType().Scale
+	switch types.IntervalType(unit) {
+	case types.MicroSecond:
+		scale = 6
+	}
+	rs.TempSetType(types.New(types.T_time, 0, scale))
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := starts.GetValue(i)
 		v2, null2 := diffs.GetValue(i)
@@ -908,10 +928,6 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			}
 		}
 	}
-	return nil
-}
-
-func Serial(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	return nil
 }
 
@@ -1218,6 +1234,12 @@ func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	scale := ivecs[0].GetType().Scale
+	switch types.IntervalType(unit) {
+	case types.MicroSecond:
+		scale = 6
+	}
+	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := starts.GetValue(i)
 		v2, null2 := diffs.GetValue(i)
@@ -1246,6 +1268,7 @@ func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	var d types.Datetime
 	starts := vector.GenerateFunctionStrParameter(ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := starts.GetStrValue(i)
 		v2, null2 := diffs.GetValue(i)
@@ -1273,6 +1296,12 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	scale := ivecs[0].GetType().Scale
+	switch types.IntervalType(unit) {
+	case types.MicroSecond:
+		scale = 6
+	}
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := starts.GetValue(i)
 		v2, null2 := diffs.GetValue(i)
