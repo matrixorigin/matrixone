@@ -863,6 +863,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				Arg: constructDispatchLocal(false, regs),
 			})
 			for i := range scopes {
+				insertArg, err := constructInsert(n, c.e, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				insertArg.InsertCtx.IsEnd = false
+				insertArg.ToWriteS3 = true
 				scopes[i].appendInstruction(vm.Instruction{
 					Op:      vm.Insert,
 					Idx:     c.anal.curr,
