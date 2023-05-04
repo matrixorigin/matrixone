@@ -63,6 +63,8 @@ Tables_in_truncate_table_3
 t2
 t1
 insert into t2 values (1,2),(2,3);
+truncate t1;
+truncate t1;
 commit;
 show tables;
 Tables_in_truncate_table_3

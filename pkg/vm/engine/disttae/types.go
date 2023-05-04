@@ -290,8 +290,8 @@ type txnTable struct {
 	rowid types.Rowid
 	//rowids in mo_columns
 	rowids []types.Rowid
-	//the table is truncated or not
-	truncated bool
+	//the old table id before truncate
+	oldTableId uint64
 }
 
 type column struct {

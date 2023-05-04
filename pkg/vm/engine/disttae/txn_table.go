@@ -230,6 +230,10 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 }
 
 func (tbl *txnTable) reset(newId uint64) {
+	//if the table is truncated first time, the table id is saved into the oldTableId
+	if tbl.oldTableId == 0 {
+		tbl.oldTableId = tbl.tableId
+	}
 	tbl.tableId = newId
 	tbl._parts = nil
 	tbl.blockInfos = nil
@@ -1181,8 +1185,10 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) error {
 		return nil
 	}
 
+	tableId := tbl.tableId
 	/*
-		if the table is truncated, skip sync logtail.
+		if the table is truncated once or more than once,
+		it is suitable to use the old table id to sync logtail.
 
 		CORNER CASE 1:
 		create table t1(a int);
@@ -1196,13 +1202,20 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) error {
 		select count(*) from t1; // sync logtail for the old succeeded.
 		truncate t1; //table id changed. there is no new table id in DN.
 		select count(*) from t1; // not sync logtail this time.
+
+		CORNER CASE 3:
+		create table t1(a int);
+		begin;
+		truncate t1; //table id changed. there is no new table id in DN.
+		truncate t1; //table id changed. there is no new table id in DN.
+		select count(*) from t1; // sync logtail for the new id failed.
 	*/
-	if tbl.truncated {
-		return nil
+	if tbl.oldTableId != 0 {
+		tableId = tbl.oldTableId
 	}
 
 	if tbl.db.txn.engine.UsePushModelOrNot() {
-		if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+		if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return err
 		}
 		err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
@@ -1211,7 +1224,7 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) error {
 		}
 	} else {
 		if err := tbl.db.txn.engine.UpdateOfPull(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
-			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+			tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return err
 		}
 	}

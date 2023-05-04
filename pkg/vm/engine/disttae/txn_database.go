@@ -259,7 +259,6 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		oldId = txnTable.tableId
 		txnTable.reset(newId)
 		rowid = txnTable.rowid
-		txnTable.truncated = true
 	} else {
 		item := &cache.TableItem{
 			Name:       name,

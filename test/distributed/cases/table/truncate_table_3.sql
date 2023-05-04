@@ -36,6 +36,8 @@ create table t2(a int,b int);
 --t1,t2
 show tables;
 insert into t2 values (1,2),(2,3);
+truncate t1;
+truncate t1;
 commit;
 show tables;
 select count(*) from t1;
