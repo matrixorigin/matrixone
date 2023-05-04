@@ -186,11 +186,12 @@ func (d *DiskCache) Update(
 		return nil
 	}
 
-	var numOpen, numStat, numError int64
+	var numOpen, numStat, numError, numWrite int64
 	defer func() {
 		perfcounter.Update(ctx, func(set *perfcounter.CounterSet) {
 			set.FileService.Cache.Disk.OpenFile.Add(numOpen)
 			set.FileService.Cache.Disk.StatFile.Add(numStat)
+			set.FileService.Cache.Disk.WriteFile.Add(numWrite)
 			set.FileService.Cache.Disk.Error.Add(numError)
 		})
 	}()
@@ -265,6 +266,7 @@ func (d *DiskCache) Update(
 			numError++
 			continue // ignore error
 		}
+		numWrite++
 
 		d.triggerEvict(ctx, int64(n))
 
@@ -380,6 +382,7 @@ func (d *DiskCache) evict(ctx context.Context) {
 		if err := os.Remove(path); err != nil {
 			continue // ignore
 		}
+		d.fileExists.Delete(path)
 		sumSize -= size
 		numDeleted++
 		bytesDeleted += size
