@@ -639,7 +639,7 @@ func testFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToObject: func(r io.Reader, data []byte) (any, int64, error) {
+					ToObject: func(r io.Reader, data []byte) ([]byte, int64, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {

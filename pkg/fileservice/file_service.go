@@ -107,7 +107,7 @@ type IOEntry struct {
 	// caches may choose to cache this object instead of caching []byte
 	// Data, WriterForRead, ReadCloserForRead may be empty if ObjectBytes is not null
 	// if ToObject is provided, caller should always read ObjectBytes instead of Data, WriterForRead or ReadCloserForRead
-	ObjectBytes any
+	ObjectBytes []byte
 
 	// ToObject constructs an object from entry contents
 	// reader or data must not be retained after returns
@@ -116,7 +116,7 @@ type IOEntry struct {
 	// if data is empty, the io.Reader must be fully read before returning nil error
 	// return an *RC value to make the object pinnable
 	// cache implementations should not evict an *RC value with non-zero reference
-	ToObject func(reader io.Reader, data []byte) (object any, objectSize int64, err error)
+	ToObject func(reader io.Reader, data []byte) (object []byte, objectSize int64, err error)
 
 	// ObjectSize indicates the memory bytes to hold the object
 	// set from ToObject returning value
