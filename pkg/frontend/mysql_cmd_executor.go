@@ -677,6 +677,14 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 					return err
 				}
 			}
+		} else if name == "syspublications" {
+			if !ses.GetTenantInfo().IsSysTenant() {
+				return moerr.NewInternalError(ses.GetRequestContext(), "only system account can set system variable syspublications")
+			}
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
+			}
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value)
 			if err != nil {
@@ -2524,7 +2532,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				return err
 			}
-			if st.SubscriptionOption != nil && !ses.GetTenantInfo().IsAdminRole() {
+			if st.SubscriptionOption != nil && ses.GetTenantInfo() != nil && !ses.GetTenantInfo().IsAdminRole() {
 				err = moerr.NewInternalError(proc.Ctx, "only admin can create subscription")
 				return err
 			}
