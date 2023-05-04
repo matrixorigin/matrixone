@@ -958,12 +958,13 @@ func (tbl *txnTable) newReader(
 	if readerNumber == 1 {
 		for i := range blks {
 			readers = append(readers, &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{blks[i]},
+				fs:        fs,
+				ts:        ts,
+				ctx:       ctx,
+				tableDef:  tbl.tableDef,
+				sels:      make([]int64, 0, 1024),
+				blks:      []ModifyBlockMeta{blks[i]},
+				tableName: tbl.tableName,
 			})
 		}
 		return []engine.Reader{&mergeReader{readers}}, nil
@@ -972,12 +973,13 @@ func (tbl *txnTable) newReader(
 	if len(blks) < readerNumber-1 {
 		for i := range blks {
 			readers[i+1] = &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{blks[i]},
+				fs:        fs,
+				ts:        ts,
+				ctx:       ctx,
+				tableDef:  tbl.tableDef,
+				sels:      make([]int64, 0, 1024),
+				blks:      []ModifyBlockMeta{blks[i]},
+				tableName: tbl.tableName,
 			}
 		}
 		for j := len(blks) + 1; j < readerNumber; j++ {
@@ -993,21 +995,23 @@ func (tbl *txnTable) newReader(
 	for i := 1; i < readerNumber; i++ {
 		if i == readerNumber-1 {
 			readers[i] = &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				blks:     blks[(i-1)*step:],
-				sels:     make([]int64, 0, 1024),
+				fs:        fs,
+				ts:        ts,
+				ctx:       ctx,
+				tableDef:  tbl.tableDef,
+				blks:      blks[(i-1)*step:],
+				sels:      make([]int64, 0, 1024),
+				tableName: tbl.tableName,
 			}
 		} else {
 			readers[i] = &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				blks:     blks[(i-1)*step : i*step],
-				sels:     make([]int64, 0, 1024),
+				fs:        fs,
+				ts:        ts,
+				ctx:       ctx,
+				tableDef:  tbl.tableDef,
+				blks:      blks[(i-1)*step : i*step],
+				sels:      make([]int64, 0, 1024),
+				tableName: tbl.tableName,
 			}
 		}
 	}

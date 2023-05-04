@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -187,7 +188,9 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 		r.sels = append(r.sels, int64(i))
 	}
 	bat.Shrink(r.sels)
-
+	if r.tableName == "t_delete" {
+		fmt.Println("t_delete blcok io read : I read rows: ", bat.Length())
+	}
 	logutil.Debug(testutil.OperatorCatchBatch("block merge reader", bat))
 	return bat, nil
 }
