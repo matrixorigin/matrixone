@@ -984,7 +984,7 @@ func (catalog *Catalog) txnGetNodeByName(
 	if node == nil {
 		return nil, moerr.NewBadDBNoCtx(name)
 	}
-	return node.TxnGetNodeLocked(txn)
+	return node.TxnGetNodeLocked(txn, "")
 }
 
 func (catalog *Catalog) GetDBEntryByName(

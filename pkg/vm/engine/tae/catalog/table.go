@@ -35,9 +35,9 @@ import (
 
 type TableDataFactory = func(meta *TableEntry) data.Table
 
-func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn txnif.TxnReader) (visible, dropped bool) {
+func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn txnif.TxnReader) (visible, dropped bool, name string) {
 	table := n.GetPayload()
-	visible, dropped = table.GetVisibility(txn)
+	visible, dropped, name = table.GetVisibilityAndName(txn)
 	return
 }
 
@@ -508,7 +508,7 @@ func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	return
 }
 
-func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, newSchema *Schema, err error) {
+func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.AsyncTxn, req *apipb.AlterTableReq) (isNewNode bool, newSchema *Schema, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
@@ -528,6 +528,12 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return
 	}
+	if req.Kind == apipb.AlterKind_RenameTable {
+		rename := req.GetRenameTable()
+		// udpate name index in db entry
+		err = entry.db.RenameTableInTxn(rename.OldName, rename.NewName, entry.ID, txn, isNewNode)
+		// TODO(aptend) update fullname?
+	}
 	if isNewNode {
 		node.BaseNode.Schema.Version += 1
 	}
@@ -545,4 +551,27 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 		},
 	}
 	entry.Insert(node)
+}
+
+func (entry *TableEntry) GetVisibilityAndName(txn txnif.TxnReader) (visible, dropped bool, name string) {
+	entry.RLock()
+	defer entry.RUnlock()
+	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		entry.RUnlock()
+		txnToWait.GetTxnState(true)
+		entry.RLock()
+	}
+	un := entry.GetVisibleNode(txn)
+	if un == nil {
+		return
+	}
+	visible = true
+	if un.IsSameTxn(txn) {
+		dropped = un.HasDropIntent()
+	} else {
+		dropped = un.HasDropCommitted()
+	}
+	name = un.BaseNode.Schema.Name
+	return
 }

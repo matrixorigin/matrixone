@@ -52,7 +52,7 @@ func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	return AccessInfoSize, nil
 }
 
-func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], txn txnif.TxnReader) (visible, dropped bool) {
+func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], txn txnif.TxnReader) (visible, dropped bool, name string) {
 	db := n.GetPayload()
 	visible, dropped = db.GetVisibility(txn)
 	return
@@ -297,7 +297,7 @@ func (e *DBEntry) txnGetNodeByName(
 	if node == nil {
 		return nil, moerr.GetOkExpectedEOB()
 	}
-	return node.TxnGetNodeLocked(txn)
+	return node.TxnGetNodeLocked(txn, name)
 }
 
 func (e *DBEntry) TxnGetTableEntryByName(name string, txn txnif.AsyncTxn) (entry *TableEntry, err error) {
@@ -395,6 +395,58 @@ func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn
 	return created, err
 }
 
+func (e *DBEntry) RenameTableInTxn(old, new string, tid uint64, txn txnif.AsyncTxn, first bool) error {
+	tbl, err := e.TxnGetTableEntryByName(new, txn)
+	// if err is not nil, txn can see the name, it is used
+	if err == nil {
+		return moerr.GetOkExpectedDup()
+	}
+	e.Lock()
+	defer e.Unlock()
+
+	accId := txn.GetTenantID()
+	if !first {
+		e.removeNameIndexLocked(genTblFullName(accId, old), tid)
+	}
+	// make sure every name node has up to one table id. check case alter A -> B -> A
+	if tbl != nil && tbl.ID == tid {
+		e.removeNameIndexLocked(genTblFullName(accId, new), tid)
+	}
+	e.addNameIndexLocked(genTblFullName(accId, new), tid)
+
+	return nil
+}
+
+func (e *DBEntry) addNameIndexLocked(fullname string, tid uint64) {
+	node := e.nameNodes[fullname]
+	if node == nil {
+		nn := newNodeList(e.GetItemNodeByIDLocked,
+			tableVisibilityFn[*TableEntry],
+			&e.nodesMu,
+			fullname)
+		e.nameNodes[fullname] = nn
+		nn.CreateNode(tid)
+	} else {
+		node.CreateNode(tid)
+	}
+}
+
+func (e *DBEntry) removeNameIndexLocked(fullname string, tid uint64) {
+	nn := e.nameNodes[fullname]
+	if nn == nil {
+		return
+	}
+	if _, empty := nn.DeleteNode(tid); empty {
+		delete(e.nameNodes, fullname)
+	}
+}
+
+func (e *DBEntry) RollbackRenameTable(fullname string, tid uint64) {
+	e.Lock()
+	defer e.Unlock()
+	e.removeNameIndexLocked(fullname, tid)
+}
+
 func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	defer func() {
 		if err == nil {
@@ -452,12 +504,11 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 
 		nn.CreateNode(table.ID)
 	} else {
-		node := nn.GetNode()
 		if !skipDedup {
-			record := node.GetPayload()
-			err = record.PrepareAdd(txn)
-			if err != nil {
-				return
+			exist, _ := nn.TxnGetNodeLocked(txn, table.GetLastestSchema().Name)
+			if exist != nil {
+				// name is used
+				return moerr.GetOkExpectedDup()
 			}
 		}
 		n := e.link.Insert(table)
