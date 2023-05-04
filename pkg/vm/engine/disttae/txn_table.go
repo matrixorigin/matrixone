@@ -951,6 +951,7 @@ func (tbl *txnTable) newReader(
 		s3FileService:   fs,
 		procMPool:       txn.proc.GetMPool(),
 		deletedBlocks:   txn.deletedBlocks,
+		tableName:       tbl.tableName,
 	}
 	readers[0] = partReader
 
