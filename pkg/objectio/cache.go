@@ -57,7 +57,7 @@ func LoadObjectMetaByExtent(
 	return
 }
 
-func LoadObjectMeta(ctx context.Context, location *Location, fs fileservice.FileService) (ObjectMeta, error) {
+func FastLoadObjectMeta(ctx context.Context, location *Location, fs fileservice.FileService) (ObjectMeta, error) {
 	extent := location.Extent()
 	name := location.Name()
 	return LoadObjectMetaByExtent(ctx, &name, &extent, true, fs)
