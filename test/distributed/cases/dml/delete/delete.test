@@ -193,7 +193,7 @@ create table temp(a int);
 insert into temp select * from generate_series(1,8192) g;
 create table t_delete(a int);
 insert into t_delete select * from temp;
-insert into t_delete select * from t;
+insert into t_delete select * from t_delete;
 insert into t_delete select * from t_delete;
 insert into t_delete select * from t_delete;
 insert into t_delete select * from t_delete;
