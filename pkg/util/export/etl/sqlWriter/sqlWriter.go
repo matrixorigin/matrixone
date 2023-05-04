@@ -174,9 +174,6 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 }
 
 func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error) {
-	if tbl.Table == "rawlog" {
-		return 0, nil
-	}
 
 	if is_merge {
 		return 0, nil
