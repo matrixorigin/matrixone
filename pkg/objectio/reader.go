@@ -111,8 +111,16 @@ func (r *objectReaderV1) ReadMeta(
 			return
 		}
 	}
-	if meta, err = ReadObjectMeta(ctx, r.name, r.metaExt, r.noLRUCache, r.fs); err != nil {
-		return
+	if r.oname != nil {
+		// read table data block
+		if meta, err = LoadObjectMetaByExtent(ctx, r.oname, r.metaExt, r.noLRUCache, r.fs); err != nil {
+			return
+		}
+	} else {
+		// read gc/ckp/etl ... data
+		if meta, err = ReadObjectMeta(ctx, r.name, r.metaExt, r.noLRUCache, r.fs); err != nil {
+			return
+		}
 	}
 	if r.withMetaCache {
 		r.metaCache.Store(&meta)
