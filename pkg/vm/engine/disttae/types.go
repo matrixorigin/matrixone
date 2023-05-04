@@ -260,7 +260,6 @@ type txnTable struct {
 	writes []Entry
 	// offset of the writes in workspace
 	writesOffset int
-	skipBlocks   map[types.Blockid]uint8
 
 	// localState stores uncommitted data
 	localState *PartitionState
