@@ -171,6 +171,61 @@ func AllocS3Writer(tableDef *plan.TableDef) (*S3Writer, error) {
 	return writer, nil
 }
 
+// AllocPartitionS3Writer Alloc S3 writers for partitioned table.
+func AllocPartitionS3Writer(tableDef *plan.TableDef) ([]*S3Writer, error) {
+	partitionNum := len(tableDef.Partition.PartitionTableNames)
+	writers := make([]*S3Writer, partitionNum)
+	for i := range writers {
+		writers[i] = &S3Writer{
+			sortIndex: -1,
+			pk:        make(map[string]struct{}),
+			idx:       int16(i), // This value is aligned with the partition number
+			sels:      make([]int64, options.DefaultBlockMaxRows),
+		}
+		for j := 0; j < int(options.DefaultBlockMaxRows); j++ {
+			writers[i].sels[j] = int64(j)
+		}
+		writers[i].ResetMetaLocBat()
+
+		if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+			// the serialized cpk col is located in the last of the bat.vecs
+			writers[i].sortIndex = len(tableDef.Cols)
+		} else {
+			// Get Single Col pk index
+			for idx, colDef := range tableDef.Cols {
+				if colDef.Primary {
+					writers[i].sortIndex = idx
+					break
+				}
+			}
+			if tableDef.ClusterBy != nil {
+				if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+					// the serialized clusterby col is located in the last of the bat.vecs
+					writers[i].sortIndex = len(tableDef.Cols)
+				} else {
+					for idx, colDef := range tableDef.Cols {
+						if colDef.Name == tableDef.ClusterBy.Name {
+							writers[i].sortIndex = idx
+						}
+					}
+				}
+			}
+		}
+		// get Primary
+		for _, def := range tableDef.Cols {
+			if def.Primary {
+				writers[i].pk[def.Name] = struct{}{}
+			}
+		}
+
+		// Check whether the composite primary key column is included
+		if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+			writers[i].pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
+		}
+	}
+	return writers, nil
+}
+
 func (w *S3Writer) ResetMetaLocBat() {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on

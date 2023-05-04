@@ -16,6 +16,8 @@ package insert
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync/atomic"
 	"time"
 
@@ -35,11 +37,21 @@ func Prepare(_ *process.Process, arg any) error {
 	ap.ctr = new(container)
 	ap.ctr.state = Process
 	if ap.ToWriteS3 {
-		s3Writer, err := colexec.AllocS3Writer(ap.InsertCtx.TableDef)
-		if err != nil {
-			return err
+		// If the target is partition table, just only apply writers for all partitioned sub tables
+		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+			s3Writers, err := colexec.AllocPartitionS3Writer(ap.InsertCtx.TableDef)
+			if err != nil {
+				return err
+			}
+			ap.ctr.partitionS3Writers = s3Writers
+		} else {
+			// If the target is not partition table, you only need to operate the main table
+			s3Writer, err := colexec.AllocS3Writer(ap.InsertCtx.TableDef)
+			if err != nil {
+				return err
+			}
+			ap.ctr.s3Writer = s3Writer
 		}
-		ap.ctr.s3Writer = s3Writer
 	}
 	return nil
 }
@@ -53,19 +65,36 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	s3Writer := ap.ctr.s3Writer
+
 	bat := proc.InputBatch()
 	if bat == nil {
 		if ap.ToWriteS3 {
-			// handle the last Batch that batchSize less than DefaultBlockMaxRows
-			// for more info, refer to the comments about reSizeBatch
-			if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
-				ap.ctr.state = End
-				return false, err
-			}
-			err := s3Writer.Output(proc)
-			if err != nil {
-				return false, err
+			// If the target is partition table
+			if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+				for _, writer := range ap.ctr.partitionS3Writers {
+					if err := writer.WriteS3CacheBatch(proc); err != nil {
+						ap.ctr.state = End
+						return false, err
+					}
+				}
+
+				if err := collectAndOutput(proc, ap.ctr.partitionS3Writers); err != nil {
+					ap.ctr.state = End
+					return false, err
+				}
+			} else {
+				// Normal non partition table
+				s3Writer := ap.ctr.s3Writer
+				// handle the last Batch that batchSize less than DefaultBlockMaxRows
+				// for more info, refer to the comments about reSizeBatch
+				if err := s3Writer.WriteS3CacheBatch(proc); err != nil {
+					ap.ctr.state = End
+					return false, err
+				}
+				err := s3Writer.Output(proc)
+				if err != nil {
+					return false, err
+				}
 			}
 		}
 		return true, nil
@@ -78,14 +107,40 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	insertCtx := ap.InsertCtx
 
 	if ap.ToWriteS3 {
-		// write to s3.
-		if err := s3Writer.WriteS3Batch(bat, proc); err != nil {
-			ap.ctr.state = End
-			return false, err
-		}
-		err := s3Writer.Output(proc)
-		if err != nil {
-			return false, err
+		// If the target is partition table
+		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
+			insertBatches, err := colexec.GroupByPartitionForInsert(proc, bat, ap.InsertCtx.Attrs, ap.InsertCtx.PartitionIndexInBatch, len(ap.InsertCtx.PartitionTableIDs))
+			if err != nil {
+				return false, err
+			}
+
+			// write partition data to s3.
+			for pidx, writer := range ap.ctr.partitionS3Writers {
+				if err = writer.WriteS3Batch(insertBatches[pidx], proc); err != nil {
+					ap.ctr.state = End
+					return false, err
+				}
+			}
+
+			for _, writer := range ap.ctr.partitionS3Writers {
+				err = writer.Output(proc)
+				if err != nil {
+					ap.ctr.state = End
+					return false, err
+				}
+			}
+		} else {
+			// Normal non partition table
+			s3Writer := ap.ctr.s3Writer
+			// write to s3.
+			if err := s3Writer.WriteS3Batch(bat, proc); err != nil {
+				ap.ctr.state = End
+				return false, err
+			}
+			err := s3Writer.Output(proc)
+			if err != nil {
+				return false, err
+			}
 		}
 	} else {
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
@@ -132,6 +187,25 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	affectedRows := uint64(bat.Vecs[0].Length())
 	atomic.AddUint64(&ap.affectedRows, affectedRows)
 	return false, nil
+}
+
+// Collect all partition subtables' s3writers  metaLoc information and output it
+func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err error) {
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
+	res := batch.NewWithSize(len(attrs))
+	res.SetAttributes(attrs)
+	res.Vecs[0] = vector.NewVec(types.T_int16.ToType())
+	res.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	for _, w := range s3Writers {
+		//deep copy.
+		res, err = res.Append(proc.Ctx, proc.GetMPool(), w.GetMetaLocBat())
+		if err != nil {
+			return
+		}
+		res.Zs = append(res.Zs, w.GetMetaLocBat().Zs...)
+	}
+	proc.SetInputBatch(res)
+	return
 }
 
 func analyze(proc *process.Process, idx int) func() {

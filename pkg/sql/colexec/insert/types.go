@@ -27,8 +27,9 @@ const (
 )
 
 type container struct {
-	state    int
-	s3Writer *colexec.S3Writer
+	state              int
+	s3Writer           *colexec.S3Writer
+	partitionS3Writers []*colexec.S3Writer // The array is aligned with the partition number array
 }
 
 type Argument struct {
@@ -57,6 +58,14 @@ func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ap.ctr.s3Writer != nil {
 		ap.ctr.s3Writer.Free(proc)
 		ap.ctr.s3Writer = nil
+	}
+
+	// Free the partition table S3writer object resources
+	if ap.ctr.partitionS3Writers != nil {
+		for _, writer := range ap.ctr.partitionS3Writers {
+			writer.Free(proc)
+		}
+		ap.ctr.partitionS3Writers = nil
 	}
 }
 
