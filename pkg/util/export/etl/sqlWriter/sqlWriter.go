@@ -232,8 +232,8 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 			sw.db.Close()
 		}
 		sw.db = db
-		sw.db.SetMaxOpenConns(5)
-		sw.db.SetMaxIdleConns(5)
+		sw.db.SetMaxOpenConns(3)
+		sw.db.SetMaxIdleConns(3)
 		sw.address = dbAddress
 		return nil
 	}
