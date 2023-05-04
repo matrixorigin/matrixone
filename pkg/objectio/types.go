@@ -16,9 +16,6 @@ package objectio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -98,18 +95,4 @@ type Reader interface {
 	ReadAllMeta(ctx context.Context, m *mpool.MPool) (ObjectMeta, error)
 
 	GetObject() *Object
-}
-
-type CacheConfig struct {
-	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
-}
-
-var MetaCache *lruobjcache.LRU
-
-func init() {
-	MetaCache = lruobjcache.New(256 * 1024 * 1024)
-}
-
-func SetMetaCache(cache *lruobjcache.LRU) {
-	MetaCache = cache
 }

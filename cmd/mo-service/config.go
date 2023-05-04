@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"hash/fnv"
 	"math"
@@ -164,10 +163,9 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func (c *Config) setMetaCache() {
+func (c *Config) initMetaCache() {
 	if c.MetaCache.MemoryCapacity > 0 {
-		MetaCache := lruobjcache.New(int64(c.MetaCache.MemoryCapacity))
-		objectio.SetMetaCache(MetaCache)
+		objectio.InitMetaCache(int64(c.MetaCache.MemoryCapacity))
 	}
 }
 

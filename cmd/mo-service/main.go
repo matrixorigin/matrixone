@@ -160,7 +160,6 @@ func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, gl
 		return err
 	}
 
-	cfg.setMetaCache()
 	switch st {
 	case metadata.ServiceType_CN:
 		return startCNService(cfg, stopper, fs, globalCounterSet)
@@ -186,6 +185,7 @@ func startCNService(
 	}
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
+		cfg.initMetaCache()
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
 			&c,
@@ -233,6 +233,7 @@ func startDNService(
 	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
+		cfg.initMetaCache()
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(
 			&c,
