@@ -157,7 +157,7 @@ func (cleaner *DiskCleaner) replay() error {
 	if !minMergedStart.IsEmpty() {
 		readDirs = append(readDirs, fullGCFile)
 	}
-	logutil.Infof("minMergedEnd is %v", minMergedEnd.ToString())
+	logutil.Debugf("minMergedEnd is %v", minMergedEnd.ToString())
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.GCFullExt {

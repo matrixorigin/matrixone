@@ -2036,7 +2036,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
 	expectedLen := len(ranges)
-	logutil.Infof("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
+	logutil.Debugf("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	// If ranges == 0, dont know what type of table is this
 	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {

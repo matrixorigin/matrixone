@@ -20,7 +20,6 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type ClosedInterval struct {
@@ -46,7 +45,7 @@ func (i *ClosedInterval) Append(id uint64) error {
 		return nil
 	}
 	if id != i.End+1 {
-		logutil.Infof("invalid interval %v %v", i, id)
+		// logutil.Debugf("invalid interval %v %v", i, id)
 		return moerr.NewInternalErrorNoCtx("invalid interval")
 	}
 	i.End = id
