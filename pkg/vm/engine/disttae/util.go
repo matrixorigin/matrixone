@@ -49,7 +49,7 @@ func loadObjectMeta(
 	fs fileservice.FileService,
 	m *mpool.MPool,
 ) (meta objectio.ObjectMeta, err error) {
-	return objectio.FastLoadObjectMeta(ctx,&location,fs)
+	return objectio.FastLoadObjectMeta(ctx, &location, fs)
 }
 
 func buildColumnZMVector(
