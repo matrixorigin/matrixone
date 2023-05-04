@@ -71,7 +71,8 @@ func GetSQLWriterDBAddressFunc() func(context.Context) (string, error) {
 func NewSqlWriter(ctx context.Context) *BaseSqlWriter {
 	once.Do(func() {
 		sqlWriter.Store(&BaseSqlWriter{
-			ctx: ctx,
+			ctx:       ctx,
+			semaphore: make(chan struct{}, 3),
 		})
 	})
 	return sqlWriter.Load().(*BaseSqlWriter)

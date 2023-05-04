@@ -31,7 +31,7 @@ import (
 )
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
-const MAX_CHUNK_SIZE = 1024 * 1024 * 10
+const MAX_CHUNK_SIZE = 1024 * 1024 * 15
 
 //18331736
 
@@ -39,10 +39,11 @@ var _ SqlWriter = (*BaseSqlWriter)(nil)
 
 // BaseSqlWriter SqlWriter is a writer that writes data to a SQL database.
 type BaseSqlWriter struct {
-	db      *sql.DB
-	address string
-	ctx     context.Context
-	dbMux   sync.Mutex
+	db        *sql.DB
+	address   string
+	ctx       context.Context
+	dbMux     sync.Mutex
+	semaphore chan struct{}
 }
 
 type SqlWriter interface {
@@ -156,9 +157,12 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
-	// thread safe for db
-	sw.dbMux.Lock()
-	defer sw.dbMux.Unlock()
+	sw.semaphore <- struct{}{}
+	defer func() {
+		// Release the semaphore
+		<-sw.semaphore
+	}()
+
 	r := csv.NewReader(strings.NewReader(rows))
 	records, err := r.ReadAll()
 	if err != nil {
