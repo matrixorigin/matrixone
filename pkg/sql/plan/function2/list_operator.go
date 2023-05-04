@@ -339,18 +339,37 @@ var supportedOperators = []FuncNew{
 		functionId: LIKE,
 		class:      plan.Function_STRICT,
 		layout:     BINARY_LOGICAL_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 2 {
-				if inputs[0].Oid.IsMySQLString() && inputs[1].Oid.IsMySQLString() {
-					return newCheckResultWithSuccess(0)
-				}
-			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		},
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				args: []types.T{
+					types.T_char,
+					types.T_char,
+				},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().likeFn,
+			},
+			{
+				overloadId: 1,
+				args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+				},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				NewOp: newOpBuiltInRegexp().likeFn,
+			},
+			{
+				overloadId: 2,
+				args: []types.T{
+					types.T_text,
+					types.T_text,
+				},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},

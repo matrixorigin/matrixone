@@ -271,7 +271,7 @@ func generalBin[T binT](ivecs []*vector.Vector, result vector.FunctionResultWrap
 		} else {
 			val, err := cb(v, proc)
 			if err != nil {
-				return err
+				return moerr.NewInvalidInput(proc.Ctx, "The input value is out of range")
 			}
 			if err := rs.AppendBytes([]byte(val), false); err != nil {
 				return err

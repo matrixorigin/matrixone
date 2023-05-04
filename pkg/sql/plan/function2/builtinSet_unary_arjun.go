@@ -248,7 +248,7 @@ func oct[T constraints.Unsigned | constraints.Signed](val T) (types.Decimal128, 
 	return types.ParseDecimal128(fmt.Sprintf("%o", _val), 38, 0)
 }
 
-func OctFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func OctFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	ivec := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
 	rs := vector.MustFunctionResult[types.Decimal128](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -261,7 +261,7 @@ func OctFloat[T constraints.Float](ivecs []*vector.Vector, result vector.Functio
 		} else {
 			res, err := octFloat(v)
 			if err != nil {
-				return err
+				return moerr.NewInternalError(proc.Ctx, "the input value is out of integer range")
 			}
 			if err := rs.Append(res, false); err != nil {
 				return err

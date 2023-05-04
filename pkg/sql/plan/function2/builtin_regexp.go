@@ -890,6 +890,7 @@ func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, oc
 	if !ok {
 		reg, err = regexp.Compile(pat)
 		if err != nil {
+			pat = "[" + pat + "]"
 			return "", moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 		}
 		rs.mp[pat] = reg
@@ -940,6 +941,7 @@ func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64,
 	if !ok {
 		reg, err = regexp.Compile(pat)
 		if err != nil {
+			pat = "[" + pat + "]"
 			return 0, moerr.NewInvalidArgNoCtx("regexp_instr have invalid regexp pattern arg", pat)
 		}
 		rs.mp[pat] = reg
