@@ -556,7 +556,7 @@ type SliceCache struct {
 }
 
 func (c *SliceCache) Flush(writer *sqlWriter.BaseSqlWriter, tbl *table.Table) error {
-	_, err := writer.WriteRowRecords(c.m, tbl)
+	_, err := writer.WriteRowRecords(c.m, tbl, true)
 	c.Reset()
 	return err
 }
@@ -729,7 +729,7 @@ func InitMerge(ctx context.Context, SV *config.ObservabilityParameters) error {
 	filesize := SV.MergeMaxFileSize
 	ext := SV.MergedExtension
 	if mergeCycle > 0 {
-		err = InitCronExpr(ctx, 1*time.Minute)
+		err = InitCronExpr(ctx, 5*time.Minute)
 		if err != nil {
 			return err
 		}

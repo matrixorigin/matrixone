@@ -30,7 +30,7 @@ import (
 )
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
-const MAX_CHUNK_SIZE = 1024 * 1024 * 9
+const MAX_CHUNK_SIZE = 1024 * 1024 * 4
 
 const PACKET_TOO_LARGE = "packet for query is too large"
 
@@ -48,7 +48,7 @@ type BaseSqlWriter struct {
 type SqlWriter interface {
 	table.RowWriter
 	WriteRows(rows string, tbl *table.Table) (int, error)
-	WriteRowRecords(records [][]string, tbl *table.Table) (int, error)
+	WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error)
 }
 
 func (sw *BaseSqlWriter) GetContent() string {
@@ -61,6 +61,7 @@ func (sw *BaseSqlWriter) WriteRow(row *table.Row) error {
 func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
 
 	sb := strings.Builder{}
+	defer sb.Reset()
 	sb.WriteString("INSERT INTO")
 	sb.WriteString(" `" + tbl.Database + "`." + tbl.Table + " ")
 	sb.WriteString("VALUES ")
@@ -111,12 +112,14 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	baseStr := fmt.Sprintf("INSERT INTO `%s`.`%s` ", tbl.Database, tbl.Table)
 
 	sb := strings.Builder{}
+	defer sb.Reset()
 	sb.WriteString("VALUES ")
-	// write values
+
 	for idx, row := range records {
 		if len(row) == 0 {
 			continue
 		}
+
 		sb.WriteString("(")
 		for i, field := range row {
 			if i != 0 {
@@ -128,9 +131,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 				escapedJSON, _ := json.Marshal(js)
 				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
 			} else {
-				// escape single quote and backslash
 				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
-				// truncate string if it's too long caused by escape for varchar
 				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
 					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
 				} else {
@@ -138,9 +139,10 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 				}
 			}
 		}
+		sb.WriteString(")")
+
 		if sb.Len() >= maxLen || idx == len(records)-1 {
-			sb.WriteString(");")
-			stmt := baseStr + sb.String()
+			stmt := baseStr + sb.String() + ";"
 			_, err := db.Exec(stmt)
 			if err != nil {
 				return 0, err
@@ -148,52 +150,64 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 			sb.Reset()
 			sb.WriteString("VALUES ")
 		} else {
-			sb.WriteString("),")
+			sb.WriteString(",")
 		}
 	}
+
 	return len(records), nil
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 
-	sw.semaphore <- struct{}{}
-	defer func() {
-		// Release the semaphore
-		<-sw.semaphore
-	}()
+	//sw.semaphore <- struct{}{}
+	//defer func() {
+	//	// Release the semaphore
+	//	<-sw.semaphore
+	//}()
 
 	r := csv.NewReader(strings.NewReader(rows))
 	records, err := r.ReadAll()
 	if err != nil {
 		return 0, err
 	}
-	return sw.WriteRowRecords(records, tbl)
+	return sw.WriteRowRecords(records, tbl, false)
 }
 
-func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table) (int, error) {
+func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error) {
+	if tbl.Table == "rawlog" {
+		return 0, nil
+	}
+
+	if is_merge {
+		return 0, nil
+	}
 	var err error
+	var cnt int
+	var stmt string
 	db, err := sw.initOrRefreshDBConn(false)
 	if err != nil {
 		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(err))
 		return 0, err
 	}
-	stmt, cnt, err := generateInsertStatement(records, tbl)
+	stmt, cnt, err = generateInsertStatement(records, tbl)
 	if err != nil {
 		return 0, err
 
 	}
 
-	_, err = db.Exec(stmt)
-	if err != nil {
-		if tbl.Table == "statement_info" && strings.Contains(err.Error(), PACKET_TOO_LARGE) {
-			bulkCnt, err := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
+	if len(stmt) < 16*1024*1024 {
+		_, err = db.Exec(stmt)
+	} else {
+		if tbl.Table == "statement_info" || is_merge {
+			cnt, err = bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
 			if err != nil {
 				return 0, err
 			}
-			return bulkCnt, nil
+			return cnt, nil
 		}
-		return 0, err
+		return cnt, nil
 	}
+
 	return cnt, err
 }
 
