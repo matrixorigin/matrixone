@@ -20,7 +20,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -33,7 +32,7 @@ import (
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 9
 
-//18331736
+const PACKET_TOO_LARGE = "packet for query is too large"
 
 var _ SqlWriter = (*BaseSqlWriter)(nil)
 
@@ -144,7 +143,6 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 			stmt := baseStr + sb.String()
 			_, err := db.Exec(stmt)
 			if err != nil {
-				logutil.Info("bulk insert failed", zap.String("table", tbl.Table), zap.String("len", strconv.Itoa(len(stmt))), zap.Error(err))
 				return 0, err
 			}
 			sb.Reset()
@@ -157,10 +155,6 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
-
-	if tbl.Table == "rawlog" && len(rows) > MAX_CHUNK_SIZE {
-		return 0, errNotReady
-	}
 
 	sw.semaphore <- struct{}{}
 	defer func() {
@@ -177,17 +171,30 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 }
 
 func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table) (int, error) {
-	db, dbErr := sw.initOrRefreshDBConn(false)
-	if dbErr != nil {
-		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(dbErr))
-		return 0, dbErr
+	var err error
+	db, err := sw.initOrRefreshDBConn(false)
+	if err != nil {
+		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(err))
+		return 0, err
 	}
-	bulkCnt, bulkErr := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
-	if bulkErr != nil {
-		return 0, bulkErr
-	}
-	return bulkCnt, nil
+	stmt, cnt, err := generateInsertStatement(records, tbl)
+	if err != nil {
+		return 0, err
 
+	}
+
+	_, err = db.Exec(stmt)
+	if err != nil {
+		if tbl.Table == "statement_info" && strings.Contains(err.Error(), PACKET_TOO_LARGE) {
+			bulkCnt, err := bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
+			if err != nil {
+				return 0, err
+			}
+			return bulkCnt, nil
+		}
+		return 0, err
+	}
+	return cnt, err
 }
 
 func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
