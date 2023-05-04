@@ -258,7 +258,7 @@ create table temp(a int);
 insert into temp select * from generate_series(1,8192) g;
 create table t_delete(a int);
 insert into t_delete select * from temp;
-insert into t_delete select * from t;
+insert into t_delete select * from t_delete;
 insert into t_delete select * from t_delete;
 insert into t_delete select * from t_delete;
 insert into t_delete select * from t_delete;
@@ -270,5 +270,7 @@ begin;
 insert into t_delete select * from t_delete;
 delete from t_delete where a > 1;
 select count(*) from t_delete;
+count(*)
+512
 rollback;
 drop database if exists test;
