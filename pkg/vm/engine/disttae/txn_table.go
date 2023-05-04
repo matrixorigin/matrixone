@@ -876,19 +876,16 @@ func (tbl *txnTable) newReader(
 			}
 		}
 	}
-	// get append block deletes rowids
-	non_append_block := make(map[string]bool)
+	// get all blocks in disk
+	meta_blocks := make(map[string]bool)
 	if len(tbl.blockInfos) > 0 {
 		for _, blk := range tbl.blockInfos[0] {
-			// append non_append_block
-			if !blk.EntryState {
-				non_append_block[string(blk.BlockID[:])] = true
-			}
+			meta_blocks[string(blk.BlockID[:])] = true
 		}
 	}
 
 	for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-		if !non_append_block[blkId] {
+		if !meta_blocks[blkId] {
 			tbl.LoadDeletesForBlock(blkId, nil, deletes)
 		}
 	}
