@@ -133,7 +133,6 @@ func (w *objectWriterV1) prepareObjectMeta(objectMeta ObjectMeta, offset uint32)
 	blockIndex := BuildBlockIndex(blockCount)
 	blockIndex.SetBlockCount(blockCount)
 	length += blockIndex.Length()
-	blockIndex.SetBlockCount(blockCount)
 	for i, block := range w.blocks {
 		n := uint32(len(block.meta))
 		blockIndex.SetBlockMetaPos(uint32(i), length, n)

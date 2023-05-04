@@ -49,6 +49,10 @@ func (s *ObjectNameShort) Num() uint16 {
 	return types.DecodeUint16(s[SegmentIdSize:])
 }
 
+func (s *ObjectNameShort) Equal(o []byte) bool {
+	return bytes.Equal(s[:], o)
+}
+
 func (o ObjectName) String() string {
 	return string(o[NameStringOff : NameStringOff+NameStringLen])
 }

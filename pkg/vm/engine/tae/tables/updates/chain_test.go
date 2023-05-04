@@ -15,7 +15,6 @@
 package updates
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -137,18 +136,15 @@ func TestDeleteChain1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, cmd)
 
-	var w bytes.Buffer
-	_, err = cmd.WriteTo(&w)
+	buf, err := cmd.MarshalBinary()
 	assert.Nil(t, err)
 
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-
-	cmd2, _, err := txnbase.BuildCommandFrom(r)
+	vcmd, err := txnbase.BuildCommandFrom(buf)
 	assert.Nil(t, err)
-	assert.Equal(t, txnbase.CmdDelete, cmd2.GetType())
-	assert.Equal(t, txnbase.CmdDelete, cmd2.(*UpdateCmd).cmdType)
-	assert.True(t, cmd2.(*UpdateCmd).delete.mask.Equals(merged.mask))
+	cmd2 := vcmd.(*UpdateCmd)
+	assert.Equal(t, IOET_WALTxnCommand_DeleteNode, cmd2.GetType())
+	assert.Equal(t, IOET_WALTxnCommand_DeleteNode, cmd2.cmdType)
+	assert.True(t, cmd2.delete.mask.Equals(merged.mask))
 }
 
 func TestDeleteChain2(t *testing.T) {

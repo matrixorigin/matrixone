@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"hash/fnv"
 	"math"
 	"net"
@@ -106,6 +107,9 @@ type Config struct {
 		// Memory memory usage limit, see mpool for details
 		Memory tomlutil.ByteSize `toml:"memory"`
 	}
+
+	// MetaCache the config for objectio metacache
+	MetaCache objectio.CacheConfig `toml:"metacache"`
 }
 
 func parseConfigFromFile(file string, cfg any) error {
@@ -157,6 +161,12 @@ func (c *Config) validate() error {
 		c.Limit.Memory = tomlutil.ByteSize(defaultMemoryLimit)
 	}
 	return nil
+}
+
+func (c *Config) initMetaCache() {
+	if c.MetaCache.MemoryCapacity > 0 {
+		objectio.InitMetaCache(int64(c.MetaCache.MemoryCapacity))
+	}
 }
 
 func (c *Config) createFileService(defaultName string, perfCounterSet *perfcounter.CounterSet, serviceType metadata.ServiceType, nodeUUID string) (*fileservice.FileServices, error) {

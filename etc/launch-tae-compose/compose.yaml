@@ -21,7 +21,7 @@ services:
   cn-0:
     container_name: cn-0
     <<: *mo-common
-    entrypoint: ["/mo-service", "-cfg", "/config/cn-0.toml"]
+    entrypoint: ["/mo-service", "-debug-http", ":12345", "-cfg", "/config/cn-0.toml"]
     profiles:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
@@ -30,6 +30,7 @@ services:
     ports:
       - "6001:6001"
       - "6002"
+      - "12345:12345"
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
@@ -39,12 +40,13 @@ services:
   cn-1:
     container_name: cn-1
     <<: *mo-common
-    entrypoint: ["/mo-service", "-cfg", "/config/cn-1.toml"]
+    entrypoint: ["/mo-service", "-debug-http", ":12345", "-cfg", "/config/cn-1.toml"]
     depends_on:
       - dn
     ports:
       - "7001:6001"
       - "6002"
+      - "22345:12345"
     profiles:
       - launch-tae-multi-CN-tae-DN
     environment:
@@ -56,7 +58,7 @@ services:
   dn:
     container_name: dn
     <<: *mo-common
-    entrypoint: ["/mo-service", "-cfg", "/config/dn.toml"]
+    entrypoint: ["/mo-service", "-debug-http", ":12345", "-cfg", "/config/dn.toml"]
     profiles:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
@@ -76,7 +78,7 @@ services:
     profiles:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
-    entrypoint: ["/mo-service", "-cfg", "/config/log.toml"]
+    entrypoint: ["/mo-service", "-debug-http", ":12345", "-cfg", "/config/log.toml"]
     depends_on:
       - createbuckets
     ports:
