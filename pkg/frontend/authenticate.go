@@ -710,6 +710,14 @@ var (
 		"system":             0,
 		"system_metrics":     0,
 	}
+	sysDatabases = map[string]int8{
+		"mo_catalog":         0,
+		"information_schema": 0,
+		"system":             0,
+		"system_metrics":     0,
+		"mo_task":            0,
+		"mysql":              0,
+	}
 	sysWantedTables = map[string]int8{
 		"mo_user":                     0,
 		"mo_account":                  0,
@@ -3037,13 +3045,19 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		accountList = strings.Join(accts, ",")
 	}
 
+	pubDb := string(cp.Database)
+
+	if _, ok := sysDatabases[pubDb]; ok {
+		return moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", pubDb)
+	}
+
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
 	}
 	bh.ClearExecResultSet()
 
-	sql, err = getSqlForGetDbIdAndType(ctx, string(cp.Database), true)
+	sql, err = getSqlForGetDbIdAndType(ctx, pubDb, true)
 	if err != nil {
 		goto handleFailed
 	}
@@ -3072,7 +3086,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		goto handleFailed
 	}
 	bh.ClearExecResultSet()
-	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), string(cp.Database), datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
+	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
 	if err != nil {
 		goto handleFailed
 	}
