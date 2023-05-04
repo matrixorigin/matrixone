@@ -751,7 +751,7 @@ func applyArithmetic(v1, v2, res *ZM, op byte, scale1, scale2 int32) (ok bool) {
 		UpdateZM(res, types.EncodeDatetime(&maxv))
 	case types.T_decimal64:
 		var minv, maxv types.Decimal64
-		newScale := scale1
+		var newScale int32
 		var err error
 		switch op {
 		case '+':
@@ -805,7 +805,7 @@ func applyArithmetic(v1, v2, res *ZM, op byte, scale1, scale2 int32) (ok bool) {
 		UpdateZM(res, types.EncodeDecimal64(&minv))
 		UpdateZM(res, types.EncodeDecimal64(&maxv))
 	case types.T_decimal128:
-		newScale := scale1
+		var newScale int32
 		var (
 			err        error
 			minv, maxv types.Decimal128
@@ -943,7 +943,7 @@ func MustZMToVector(zm *ZM, m *mpool.MPool) (vec *vector.Vector) {
 	var err error
 	if vec, err = ZMToVector(zm, m); err != nil {
 		t := zm.GetType().ToType()
-		// TODO: decimal
+		t.Scale = zm.GetScale()
 		vec = vector.NewConstNull(t, 2, m)
 	}
 	return vec
@@ -953,7 +953,7 @@ func MustZMToVector(zm *ZM, m *mpool.MPool) (vec *vector.Vector) {
 // if zm is of type varlen and truncated, the max value is null
 func ZMToVector(zm *ZM, m *mpool.MPool) (vec *vector.Vector, err error) {
 	t := zm.GetType().ToType()
-	// TODO: decimal to handle scale
+	t.Scale = zm.GetScale()
 	if !zm.IsInited() {
 		vec = vector.NewConstNull(t, 2, m)
 		return
