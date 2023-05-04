@@ -30,7 +30,7 @@ var metaCache *lruobjcache.LRU
 var onceInit sync.Once
 
 func init() {
-	metaCache = lruobjcache.New(256 * 1024 * 1024)
+	metaCache = lruobjcache.New(512 * 1024 * 1024)
 }
 
 func InitMetaCache(size int64) {

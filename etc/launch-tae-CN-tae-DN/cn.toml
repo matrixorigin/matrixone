@@ -12,7 +12,7 @@ service-addresses = [
 ]
 
 [metacache]
-memory-capacity = "256MB"
+memory-capacity = "512MB"
 
 [[fileservice]]
 name = "LOCAL"
