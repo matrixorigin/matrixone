@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -53,6 +54,8 @@ type evalVector struct {
 // we will give more one bool type vector as a marker col
 // so if you use mark join result, remember to get the last vector,that's what you want
 type container struct {
+	colexec.ReceiverOperator
+
 	// here, we will have three states:
 	// Build：we will use the right table to build a hashtable
 	// Probe: we will use the left table data to probe the hashtable

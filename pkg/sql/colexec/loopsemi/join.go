@@ -16,7 +16,6 @@ package loopsemi
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,6 +30,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, false)
 	return nil
 }
 
@@ -49,9 +49,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			ctr.state = Probe
 
 		case Probe:
-			start := time.Now()
-			bat := <-proc.Reg.MergeReceivers[0].Ch
-			anal.WaitStop(start)
+			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			if err != nil {
+				return false, err
+			}
 
 			if bat == nil {
 				ctr.state = End
@@ -65,7 +66,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				proc.PutBatch(bat)
 				continue
 			}
-			err := ctr.probe(bat, ap, proc, anal, isFirst, isLast)
+			err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			proc.PutBatch(bat)
 			return false, err
 
@@ -78,9 +79,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	start := time.Now()
-	bat := <-proc.Reg.MergeReceivers[1].Ch
-	anal.WaitStop(start)
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	if err != nil {
+		return err
+	}
 
 	if bat != nil {
 		ctr.bat = bat

@@ -16,7 +16,6 @@ package single
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +33,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, false)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
@@ -61,9 +61,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			ctr.state = Probe
 
 		case Probe:
-			start := time.Now()
-			bat := <-proc.Reg.MergeReceivers[0].Ch
-			anal.WaitStop(start)
+			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			if err != nil {
+				return false, err
+			}
 
 			if bat == nil {
 				ctr.state = End
@@ -95,9 +96,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	start := time.Now()
-	bat := <-proc.Reg.MergeReceivers[1].Ch
-	anal.WaitStop(start)
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	if err != nil {
+		return err
+	}
 
 	if bat != nil {
 		ctr.bat = bat

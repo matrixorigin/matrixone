@@ -150,7 +150,8 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 			} else {
 				// Get Single Col pk index
 				for idx, colDef := range tableDef.Cols {
-					if colDef.Primary {
+					if colDef.Primary &&
+						!colDef.Hidden {
 						writers[i].sortIndex = idx
 						break
 					}

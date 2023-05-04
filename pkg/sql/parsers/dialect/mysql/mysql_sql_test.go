@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select 2",
-		output: "select 2",
+		input:  "select 3+2",
+		output: "select 3 + 2",
 	}
 )
 
@@ -2093,6 +2093,19 @@ var (
 		{
 			input:  "alter table t1 add constraint foreign key (col4) references dept(deptno)",
 			output: "alter table t1 add foreign key (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 comment 'abc'",
+			output: "alter table t1 comment = abc",
+		},
+		{
+			input: "alter table t1 rename to t2",
+		},
+		{
+			input: "alter table t1 add column a int, add column b int",
+		},
+		{
+			input: "alter table t1 drop column a, drop column b",
 		},
 		{
 			input: "create publication pub1 database db1",

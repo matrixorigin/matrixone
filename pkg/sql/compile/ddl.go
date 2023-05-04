@@ -497,7 +497,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 
 	var addColIdx int
 	var dropColIdx int
-	var constraint [][]byte
+	constraint := make([][]byte, 0)
 	for _, kind := range alterKind {
 		var req *api.AlterTableReq
 		switch kind {

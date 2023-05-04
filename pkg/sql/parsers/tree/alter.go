@@ -289,6 +289,7 @@ type AlterAddCol struct {
 
 func (node *AlterAddCol) Format(ctx *FmtCtx) {
 	ctx.WriteString("add column ")
+	node.Column.Format(ctx)
 }
 
 type AccountsSetOption struct {

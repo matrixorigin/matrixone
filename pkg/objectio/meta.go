@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"bytes"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -65,6 +66,10 @@ func (o objectMetaV1) GetBlockMeta(id uint32) BlockObject {
 
 func (o objectMetaV1) GetColumnMeta(blk uint32, col uint16) ColumnMeta {
 	return o.GetBlockMeta(blk).ColumnMeta(col)
+}
+
+func (o objectMetaV1) IsEmpty() bool {
+	return len(o) == 0
 }
 
 const (
@@ -205,6 +210,10 @@ func (bh BlockHeader) SetBlockID(id *Blockid) {
 	copy(bh[blockIDOff:blockIDOff+blockIDLen], id[:])
 }
 
+func (bh BlockHeader) ShortName() *ObjectNameShort {
+	return (*ObjectNameShort)(unsafe.Pointer(&bh[blockIDOff]))
+}
+
 func (bh BlockHeader) Sequence() uint16 {
 	return types.DecodeUint16(bh[rowsOff-sequenceLen : rowsOff])
 }
@@ -316,4 +325,43 @@ type Footer struct {
 
 func (f Footer) Marshal() []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&f)), FooterSize)
+}
+
+func IsSameObjectLocVsMeta(location Location, meta ObjectMeta) bool {
+	if len(location) == 0 || len(meta) == 0 {
+		return false
+	}
+	return location.ShortName().Equal(meta.BlockHeader().ShortName()[:])
+}
+
+func IsSameObjectLocVsShort(location Location, short *ObjectNameShort) bool {
+	if len(location) == 0 || short == nil {
+		return false
+	}
+	return location.ShortName().Equal(short[:])
+}
+
+func BuildMetaData(blkCount, colCount uint16) objectMetaV1 {
+	var meta bytes.Buffer
+	length := uint32(0)
+	objectMeta := BuildObjectMeta(colCount)
+	objectMeta.BlockHeader().SetColumnCount(colCount)
+	objectMeta.BlockHeader().SetSequence(blkCount)
+	length += objectMeta.Length()
+	blockIndex := BuildBlockIndex(uint32(blkCount))
+	blockIndex.SetBlockCount(uint32(blkCount))
+	length += blockIndex.Length()
+	var blkMetaBuf bytes.Buffer
+	for i := uint16(0); i < blkCount; i++ {
+		blkMeta := NewBlock(colCount)
+		blkMeta.BlockHeader().SetSequence(i)
+		n := uint32(len(blkMeta))
+		blockIndex.SetBlockMetaPos(uint32(i), length, n)
+		length += n
+		blkMetaBuf.Write(blkMeta)
+	}
+	meta.Write(objectMeta)
+	meta.Write(blockIndex)
+	meta.Write(blkMetaBuf.Bytes())
+	return meta.Bytes()
 }

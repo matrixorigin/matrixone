@@ -62,23 +62,6 @@ func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
 	}
 }
 
-func (l *Lexer) Parse(ctx context.Context) ([]tree.Statement, error) {
-	if yyParse(l) != 0 {
-		return nil, l.scanner.LastError
-	}
-	if len(l.stmts) == 0 {
-		return nil, moerr.NewParseError(ctx, "Query was empty")
-	}
-	return l.stmts, nil
-}
-
-func (l *Lexer) Reset(dialectType dialect.DialectType, sql string, lower int64) {
-	l.lower = lower
-	l.stmts = l.stmts[:0]
-	l.paramIndex = 0
-	l.scanner.Reset(sql)
-}
-
 func (l *Lexer) GetParamIndex() int {
 	l.paramIndex = l.paramIndex + 1
 	return l.paramIndex
