@@ -72,7 +72,7 @@ func NewSqlWriter(ctx context.Context) *BaseSqlWriter {
 	once.Do(func() {
 		sqlWriter.Store(&BaseSqlWriter{
 			ctx:       ctx,
-			semaphore: make(chan struct{}, 3),
+			semaphore: make(chan struct{}, 5),
 		})
 	})
 	return sqlWriter.Load().(*BaseSqlWriter)
