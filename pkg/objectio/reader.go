@@ -201,7 +201,7 @@ func (r *objectReaderV1) ReadExtent(
 	if err != nil {
 		return nil, err
 	}
-	return v.([]byte), nil
+	return v, nil
 }
 
 func (r *objectReaderV1) ReadMultiBlocks(
@@ -245,7 +245,7 @@ func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Head
 	if err != nil {
 		return
 	}
-	h = Header(v.([]byte))
+	h = Header(v)
 	return
 }
 

@@ -50,21 +50,25 @@ func constructorFactory(size int64, algo uint8, _ bool) CacheConstructor {
 		}
 		buf, size, err := fn()
 		if err != nil {
-			return nil, 0, err
+			return buf, size, err
 		}
 		return buf, size, nil
 	}
 }
 
-func Decode(buf []byte, size int64, err error) (any, int64, error) {
+func Decode(buf []byte, noHeaderHint bool) (any, error) {
+	if noHeaderHint {
+		return buf, nil
+	}
+
 	header := DecodeIOEntryHeader(buf)
 	codec := GetIOEntryCodec(*header)
 	if codec.NoUnmarshal() {
-		return buf[IOEntryHeaderSize:], size, err
+		return buf[IOEntryHeaderSize:], nil
 	}
 	v, err := codec.Decode(buf[IOEntryHeaderSize:])
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	return v, size, nil
+	return v, nil
 }

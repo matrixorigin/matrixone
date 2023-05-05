@@ -29,7 +29,7 @@ func ReadExtent(
 	noHeaderHint bool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
-) (v any, err error) {
+) (v []byte, err error) {
 	ioVec := &fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 1),
@@ -55,7 +55,7 @@ func ReadBloomFilter(
 	noLRUCache bool,
 	fs fileservice.FileService,
 ) (filters []StaticFilter, err error) {
-	var v any
+	var v []byte
 	if v, err = ReadExtent(
 		ctx,
 		name,
@@ -66,7 +66,14 @@ func ReadBloomFilter(
 		constructorFactory); err != nil {
 		return
 	}
-	filters = v.([]StaticFilter)
+
+	var obj any
+	obj, err = Decode(v, false)
+	if err != nil {
+		return
+	}
+
+	filters = obj.([]StaticFilter)
 	return
 }
 
@@ -88,11 +95,11 @@ func ReadObjectMeta(
 	noLRUCache bool,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
-	var v any
+	var v []byte
 	if v, err = ReadExtent(ctx, name, extent, noLRUCache, false, fs, constructorFactory); err != nil {
 		return
 	}
-	meta = ObjectMeta(v.([]byte))
+	meta = ObjectMeta(v)
 	return
 }
 
