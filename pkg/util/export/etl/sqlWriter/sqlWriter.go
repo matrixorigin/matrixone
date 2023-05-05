@@ -192,7 +192,7 @@ func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, i
 
 	}
 
-	if len(stmt) < 16*1024*1024 {
+	if len(stmt) < 3*1024*1024 && tbl.Table != "rawlog" {
 		_, err = db.Exec(stmt)
 	} else {
 		if tbl.Table == "statement_info" || is_merge {
