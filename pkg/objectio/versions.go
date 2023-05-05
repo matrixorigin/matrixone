@@ -17,7 +17,6 @@ package objectio
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type ObjectWriter = objectWriterV1
@@ -66,20 +65,5 @@ func DecodeColumnDataV1(buf []byte) (ioe any, err error) {
 }
 
 func DecodeBloomFilterV1(buf []byte) (ioe any, err error) {
-	indexes := make([]StaticFilter, 0)
-	bf := BloomFilter(buf)
-	count := bf.BlockCount()
-	for i := uint32(0); i < count; i++ {
-		buf := bf.GetBloomFilter(i)
-		if len(buf) == 0 {
-			indexes = append(indexes, nil)
-			continue
-		}
-		index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
-		if err != nil {
-			return nil, err
-		}
-		indexes = append(indexes, index)
-	}
-	return indexes, nil
+	return BloomFilter(buf), nil
 }
