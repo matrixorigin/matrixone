@@ -210,6 +210,16 @@ func setTargetScaleFromSource(source, target *types.Type) {
 	}
 }
 
+func setMaxScaleFromSource(t *types.Type, source []types.Type) {
+	for i := range source {
+		if source[i].Oid == t.Oid {
+			if source[i].Scale > t.Scale {
+				t.Scale = source[i].Scale
+			}
+		}
+	}
+}
+
 func initFixed1() {
 	// cast [0] + [1] ==> [2] + [3]
 	ru := [][4]types.T{

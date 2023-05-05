@@ -101,6 +101,9 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			if cost < minCost {
 				minCost = cost
 				retType = rett.ToType()
+				if retType.Oid.IsDecimal() {
+					setMaxScaleFromSource(&retType, source)
+				}
 			}
 		}
 		if minCost == math.MaxInt32 {
@@ -334,6 +337,9 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			if cost < minCost {
 				minCost = cost
 				retType = rett.ToType()
+				if retType.Oid.IsDecimal() {
+					setMaxScaleFromSource(&retType, source)
+				}
 			}
 		}
 

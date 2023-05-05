@@ -1467,28 +1467,36 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 13,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					ret := types.T_datetime.ToType()
+					setMaxScaleFromSource(&ret, parameters)
+					return ret
 				},
 				NewOp: CoalesceGeneral[types.Datetime],
 			},
 			{
 				overloadId: 14,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_timestamp.ToType()
+					ret := types.T_timestamp.ToType()
+					setMaxScaleFromSource(&ret, parameters)
+					return ret
 				},
 				NewOp: CoalesceGeneral[types.Timestamp],
 			},
 			{
 				overloadId: 15,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal64.ToType()
+					ret := types.T_decimal64.ToType()
+					setMaxScaleFromSource(&ret, parameters)
+					return ret
 				},
 				NewOp: CoalesceGeneral[types.Decimal64],
 			},
 			{
 				overloadId: 16,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					ret := types.T_decimal128.ToType()
+					setMaxScaleFromSource(&ret, parameters)
+					return ret
 				},
 				NewOp: CoalesceGeneral[types.Decimal128],
 			},

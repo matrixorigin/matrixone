@@ -423,6 +423,9 @@ func (txn *Transaction) genRowId() types.Rowid {
 
 // needRead determine if a block needs to be read
 func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
+	// TODO(CMS): I just removed the codes here. And will rewrite it tomorrow.
+	return true
+
 	var err error
 	if expr == nil {
 		return true
