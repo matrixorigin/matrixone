@@ -193,7 +193,7 @@ func (r *objectReaderV1) ReadAllBF(
 	bf := BloomFilter(buf)
 	count := bf.BlockCount()
 	for i := uint32(0); i < count; i++ {
-		buf := bf.GetBloomFilter(i)
+		buf = bf.GetBloomFilter(i)
 		if len(buf) == 0 {
 			indexes = append(indexes, nil)
 			continue

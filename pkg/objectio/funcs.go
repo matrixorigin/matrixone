@@ -66,7 +66,7 @@ func ReadBloomFilter(
 		constructorFactory); err != nil {
 		return
 	}
-	filters = v.(BloomFilter)
+	filters = v.([]byte)
 	return
 }
 
