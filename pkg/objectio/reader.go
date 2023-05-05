@@ -245,7 +245,14 @@ func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Head
 	if err != nil {
 		return
 	}
-	h = Header(v)
+
+	var obj any
+	obj, err = Decode(v, true)
+	if err != nil {
+		return
+	}
+
+	h = Header(obj.([]byte))
 	return
 }
 
