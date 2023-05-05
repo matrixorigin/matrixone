@@ -188,6 +188,7 @@ func (r *objectReaderV1) ReadAllBF(
 func (r *objectReaderV1) ReadExtent(
 	ctx context.Context,
 	extent Extent,
+	noHeaderHint bool,
 ) ([]byte, error) {
 	v, err := ReadExtent(
 		ctx,
@@ -199,7 +200,14 @@ func (r *objectReaderV1) ReadExtent(
 	if err != nil {
 		return nil, err
 	}
-	return v, nil
+
+	var obj any
+	obj, err = Decode(v, noHeaderHint)
+	if err != nil {
+		return nil, err
+	}
+
+	return obj.([]byte), nil
 }
 
 func (r *objectReaderV1) ReadMultiBlocks(

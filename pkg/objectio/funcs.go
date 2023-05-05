@@ -97,7 +97,14 @@ func ReadObjectMeta(
 	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, constructorFactory); err != nil {
 		return
 	}
-	meta = ObjectMeta(v)
+
+	var obj any
+	obj, err = Decode(v, false)
+	if err != nil {
+		return
+	}
+
+	meta = ObjectMeta(obj.([]byte))
 	return
 }
 
