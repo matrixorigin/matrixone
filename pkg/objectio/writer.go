@@ -155,7 +155,12 @@ func (w *objectWriterV1) prepareObjectMeta(objectMeta ObjectMeta, offset uint32)
 
 func (w *objectWriterV1) prepareBlockMeta(offset uint32) uint32 {
 	maxIndex := w.getMaxIndex()
+	var off, size, oSize uint32
 	for idx := uint16(0); idx < maxIndex; idx++ {
+		off = offset
+		size = 0
+		oSize = 0
+		alg := uint8(0)
 		for i, block := range w.blocks {
 			if block.meta.BlockHeader().ColumnCount() <= idx {
 				continue
@@ -164,7 +169,17 @@ func (w *objectWriterV1) prepareBlockMeta(offset uint32) uint32 {
 			location.SetOffset(offset)
 			w.blocks[i].meta.ColumnMeta(uint16(idx)).setLocation(location)
 			offset += location.Length()
+			size += location.Length()
+			oSize += location.OriginSize()
+			alg = location.Alg()
 		}
+		if uint16(len(w.colmeta)) <= idx {
+			continue
+		}
+		w.colmeta[idx].Location().SetAlg(alg)
+		w.colmeta[idx].Location().SetOffset(off)
+		w.colmeta[idx].Location().SetLength(size)
+		w.colmeta[idx].Location().SetOriginSize(oSize)
 	}
 	return offset
 }
