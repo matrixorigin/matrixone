@@ -31,6 +31,7 @@ type BfReader struct {
 	reader     *blockio.BlockReader
 	typ        types.T
 	indexCache model.LRUCache
+	blockID    *types.Blockid
 }
 
 func NewBfReader(
@@ -38,6 +39,7 @@ func NewBfReader(
 	metaLoc objectio.Location,
 	indexCache model.LRUCache,
 	fs *objectio.ObjectFS,
+	blockID *types.Blockid,
 ) *BfReader {
 	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 
@@ -46,11 +48,12 @@ func NewBfReader(
 		bfKey:      metaLoc,
 		reader:     reader,
 		typ:        typ,
+		blockID:    blockID,
 	}
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	v, ok := r.indexCache.Get(r.bfKey.ID())
+	v, ok := r.indexCache.Get(*r.blockID)
 	if ok {
 		return v.(objectio.StaticFilter), nil
 	}
@@ -58,7 +61,7 @@ func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.indexCache.Set(r.bfKey.ID(), v, int64(size))
+	r.indexCache.Set(*r.blockID, v, int64(size))
 	return v.(objectio.StaticFilter), nil
 }
 
