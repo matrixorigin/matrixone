@@ -56,12 +56,7 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 	}
 }
 
-func Decode(buf []byte, noHeaderHint bool) (any, error) {
-	if noHeaderHint {
-		// this case applies for Header & ObjectMeta
-		return buf, nil
-	}
-
+func Decode(buf []byte) (any, error) {
 	header := DecodeIOEntryHeader(buf)
 	codec := GetIOEntryCodec(*header)
 	if codec.NoUnmarshal() {

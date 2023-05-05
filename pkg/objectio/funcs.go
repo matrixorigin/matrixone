@@ -66,7 +66,7 @@ func ReadBloomFilter(
 	}
 
 	var obj any
-	obj, err = Decode(v, false)
+	obj, err = Decode(v)
 	if err != nil {
 		return
 	}
@@ -99,7 +99,7 @@ func ReadObjectMeta(
 	}
 
 	var obj any
-	obj, err = Decode(v, false)
+	obj, err = Decode(v)
 	if err != nil {
 		return
 	}

@@ -210,7 +210,6 @@ func (r *objectReaderV1) ReadAllBF(
 func (r *objectReaderV1) ReadExtent(
 	ctx context.Context,
 	extent Extent,
-	noHeaderHint bool,
 ) ([]byte, error) {
 	v, err := ReadExtent(
 		ctx,
@@ -224,7 +223,7 @@ func (r *objectReaderV1) ReadExtent(
 	}
 
 	var obj any
-	obj, err = Decode(v, noHeaderHint)
+	obj, err = Decode(v)
 	if err != nil {
 		return nil, err
 	}
@@ -273,14 +272,7 @@ func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Head
 	if err != nil {
 		return
 	}
-
-	var obj any
-	obj, err = Decode(v, true)
-	if err != nil {
-		return
-	}
-
-	h = Header(obj.([]byte))
+	h = Header(v)
 	return
 }
 
