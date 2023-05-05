@@ -58,18 +58,30 @@ var rightmost_one_pos_8 = [256]uint8{
 
 func New(n int) *Bitmap {
 	return &Bitmap{
-		len:  int64(n),
-		data: make([]uint64, (n-1)/64+1),
+		emptyFlag: kEmptyFlagEmpty,
+		len:       int64(n),
+		data:      make([]uint64, (n-1)/64+1),
 	}
+}
+
+// init a bitmap with size
+func (bm *Bitmap) InitWithSize(n int) {
+	bm.emptyFlag = kEmptyFlagEmpty
+	bm.len = int64(n)
+	bm.data = make([]uint64, (n-1)/64+1)
 }
 
 func (n *Bitmap) Clone() *Bitmap {
 	var ret Bitmap
-	ret.len = n.len
-	ret.emptyFlag = n.emptyFlag
-	ret.data = make([]uint64, len(n.data))
-	copy(ret.data, n.data)
+	ret.Init(n)
 	return &ret
+}
+
+func (n *Bitmap) Init(bm *Bitmap) {
+	n.len = bm.len
+	n.emptyFlag = bm.emptyFlag
+	n.data = make([]uint64, len(bm.data))
+	copy(n.data, bm.data)
 }
 
 func (n *Bitmap) Iterator() Iterator {
@@ -150,8 +162,26 @@ func (itr *BitmapIterator) Next() uint64 {
 	return pos
 }
 
+// reset and free underlying array
+func (n *Bitmap) Free() {
+	n.len = 0
+	n.emptyFlag = 1
+	n.data = nil
+}
+
+// reset the Bitmap, reset length but not resizing the underlying array.
+func (n *Bitmap) Reset() {
+	n.len = 0
+	n.emptyFlag = 1
+	n.data = n.data[:0]
+}
+
+// Clear all bits in the Bitmap, not resetting length.
 func (n *Bitmap) Clear() {
-	n.data = make([]uint64, (n.len-1)/64+1)
+	// clear all bits in bitmap
+	for i := 0; i < len(n.data); i++ {
+		n.data[i] = 0
+	}
 	n.emptyFlag = 1
 }
 
@@ -164,7 +194,7 @@ func (n *Bitmap) Size() int {
 }
 
 func (n *Bitmap) Ptr() *uint64 {
-	if n == nil {
+	if n == nil || len(n.data) == 0 {
 		return nil
 	}
 	return &n.data[0]
@@ -227,6 +257,7 @@ func (n *Bitmap) AddRange(start, end uint64) {
 	i, j := start>>6, (end-1)>>6
 	if i == j {
 		n.data[i] |= (^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) & 0x3F))
+		n.emptyFlag = kEmptyFlagNotEmpty
 		return
 	}
 	n.data[i] |= (^uint64(0) << uint(start&0x3F))
@@ -235,8 +266,7 @@ func (n *Bitmap) AddRange(start, end uint64) {
 	}
 	n.data[j] |= (^uint64(0) >> (uint(-end) & 0x3F))
 
-	n.emptyFlag = -1 //after addRange operation, must be not empty
-
+	n.emptyFlag = kEmptyFlagNotEmpty
 }
 
 func (n *Bitmap) RemoveRange(start, end uint64) {
@@ -310,11 +340,18 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 	if int(n.len) >= size {
 		return
 	}
+
+	oldCap := len(n.data)
 	newCap := (size + 63) / 64
 	if newCap > cap(n.data) {
 		data := make([]uint64, newCap)
 		copy(data, n.data)
 		n.data = data
+	} else {
+		n.data = n.data[:newCap]
+		for ; oldCap < newCap; oldCap++ {
+			n.data[oldCap] = 0
+		}
 	}
 	n.len = int64(size)
 }
@@ -331,7 +368,7 @@ func (n *Bitmap) Filter(sels []int64) *Bitmap {
 
 func (n *Bitmap) Count() int {
 	var cnt int
-	if n.emptyFlag == 1 { //must be empty
+	if n.emptyFlag == kEmptyFlagEmpty { //must be empty
 		return 0
 	}
 	for i := 0; i < len(n.data); i++ {
@@ -346,7 +383,10 @@ func (n *Bitmap) Count() int {
 }
 
 func (n *Bitmap) ToArray() []uint64 {
-	var rows []uint64
+	rows := []uint64{}
+	if n.IsEmpty() {
+		return rows
+	}
 	itr := n.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()

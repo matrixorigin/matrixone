@@ -296,7 +296,7 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 		nulls.Add(deleteRows, uint64(row))
 	}
 	var rows []int64
-	itr := deleteRows.Np.Iterator()
+	itr := deleteRows.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
 		rows = append(rows, int64(r))

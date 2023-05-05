@@ -641,7 +641,7 @@ func TestReadDirSymlink(t *testing.T) {
 	assert.Equal(t, pathWant1, files1[0])
 }
 
-func Test_fliterByAccountAndFilename(t *testing.T) {
+func Test_filterByAccountAndFilename(t *testing.T) {
 	type args struct {
 		node     *plan.Node
 		proc     *process.Process

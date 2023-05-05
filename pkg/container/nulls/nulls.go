@@ -18,169 +18,153 @@
 package nulls
 
 import (
-	"fmt"
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 )
 
 type Nulls struct {
-	Np *bitmap.Bitmap
+	np bitmap.Bitmap
+}
+
+func (nsp *Nulls) InitWithSize(n int) {
+	nsp.np.InitWithSize(n)
+}
+
+func NewWithSize(n int) *Nulls {
+	var nsp Nulls
+	nsp.InitWithSize(n)
+	return &nsp
+}
+
+func (nsp *Nulls) Init(other *Nulls) {
+	nsp.np.Init(&other.np)
+}
+
+func (nsp *Nulls) SetBitmap(bm *bitmap.Bitmap) {
+	nsp.np = *bm
 }
 
 func (nsp *Nulls) Clone() *Nulls {
-	if nsp == nil {
-		return nil
-	}
-	if nsp.Np == nil {
-		return &Nulls{Np: nil}
-	}
-	return &Nulls{
-		Np: nsp.Np.Clone(),
-	}
+	var n Nulls
+	n.SetBitmap(nsp.np.Clone())
+	return &n
 }
 
 // Or performs union operation on Nulls nsp,m and store the result in r
 func Or(nsp, m, r *Nulls) {
-	if Ptr(nsp) == nil && Ptr(m) == nil {
-		r.Np = nil
+	if nsp.IsEmpty() && m.IsEmpty() {
+		r.Reset()
 		return
 	}
 
-	r.Np = bitmap.New(0)
-	if Ptr(nsp) != nil {
-		r.Np.Or(nsp.Np)
+	if !nsp.IsEmpty() {
+		r.np.Or(&nsp.np)
 	}
-	if Ptr(m) != nil {
-		r.Np.Or(m.Np)
-	}
-}
-
-func Reset(nsp *Nulls) {
-	if nsp.Np != nil {
-		nsp.Np.Clear()
+	if !m.IsEmpty() {
+		r.np.Or(&m.np)
 	}
 }
 
-func NewWithSize(size int) *Nulls {
-	return &Nulls{
-		Np: bitmap.New(size),
-	}
+func (nsp *Nulls) Free() {
+	nsp.np.Free()
+}
+
+func (nsp *Nulls) Reset() {
+	nsp.np.Reset()
+}
+
+func (nsp *Nulls) Clear() {
+	nsp.np.Clear()
 }
 
 func Build(size int, rows ...uint64) *Nulls {
-	nsp := NewWithSize(size)
-	Add(nsp, rows...)
-	return nsp
+	var nsp Nulls
+	nsp.Build(size, rows...)
+	return &nsp
 }
 
-// XXX this is so broken,
-func New(nsp *Nulls, size int) {
-	nsp.Np = bitmap.New(size)
+func (nsp *Nulls) Build(size int, rows ...uint64) {
+	nsp.InitWithSize(size)
+	Add(nsp, rows...)
 }
 
 // Any returns true if any bit in the Nulls is set, otherwise it will return false.
 func Any(nsp *Nulls) bool {
-	if nsp == nil || nsp.Np == nil {
-		return false
-	}
-	return !nsp.Np.IsEmpty()
+	return !nsp.IsEmpty()
 }
 
-func Ptr(nsp *Nulls) *uint64 {
+func (nsp *Nulls) IsEmpty() bool {
 	if nsp == nil {
-		return nil
+		return true
 	}
-	return nsp.Np.Ptr()
+	return nsp.np.IsEmpty()
 }
 
 // Size estimates the memory usage of the Nulls.
 func Size(nsp *Nulls) int {
-	if nsp.Np == nil {
+	if nsp == nil {
 		return 0
 	}
-	return int(nsp.Np.Size())
-}
-
-// Length returns the number of integers contained in the Nulls
-func Length(nsp *Nulls) int {
-	if nsp == nil || nsp.Np == nil {
-		return 0
-	}
-	return int(nsp.Np.Count())
-}
-
-func String(nsp *Nulls) string {
-	if nsp.Np == nil {
-		return "[]"
-	}
-	return fmt.Sprintf("%v", nsp.Np.ToArray())
+	return int(nsp.np.Size())
 }
 
 func TryExpand(nsp *Nulls, size int) {
-	if nsp.Np == nil {
-		nsp.Np = bitmap.New(size)
-		return
-	}
-	nsp.Np.TryExpandWithSize(size)
+	nsp.np.TryExpandWithSize(size)
 }
 
 // Contains returns true if the integer is contained in the Nulls
 func Contains(nsp *Nulls, row uint64) bool {
-	return nsp != nil && nsp.Np != nil && nsp.Np.Contains(row)
+	return nsp.Contains(row)
 }
 
+// Add adds the integer to the Nulls
+// Note: rows must be in ascending order
 func Add(nsp *Nulls, rows ...uint64) {
 	if len(rows) == 0 {
 		return
 	}
-	if nsp == nil {
-		nsp = &Nulls{}
-	}
 	TryExpand(nsp, int(rows[len(rows)-1])+1)
-	nsp.Np.AddMany(rows)
+	nsp.np.AddMany(rows)
 }
 
+// Why do we have this two conventions?
+func (n *Nulls) AddRange(start, end uint64) {
+	AddRange(n, start, end)
+}
 func AddRange(nsp *Nulls, start, end uint64) {
 	TryExpand(nsp, int(end+1))
-	nsp.Np.AddRange(start, end)
+	nsp.np.AddRange(start, end)
 }
 
 func Del(nsp *Nulls, rows ...uint64) {
-	if nsp.Np == nil {
-		return
-	}
-	for _, row := range rows {
-		nsp.Np.Remove(row)
+	if !nsp.np.IsEmpty() {
+		for _, row := range rows {
+			nsp.np.Remove(row)
+		}
 	}
 }
 
 // Set performs union operation on Nulls nsp,m and store the result in nsp
+// XXX: It is a union, not set!
 func Set(nsp, m *Nulls) {
-	if m != nil && m.Np != nil {
-		if nsp.Np == nil {
-			nsp.Np = bitmap.New(0)
-		}
-		nsp.Np.Or(m.Np)
+	if !m.IsEmpty() {
+		nsp.np.Or(&m.np)
 	}
 }
 
 // FilterCount returns the number count that appears in both nsp and sel
 func FilterCount(nsp *Nulls, sels []int64) int {
-	var cnt int
+	if nsp.IsEmpty() || len(sels) == 0 {
+		return 0
+	}
 
-	if nsp.Np == nil {
-		return cnt
-	}
-	if len(sels) == 0 {
-		return cnt
-	}
-	var sp []uint64
-	if len(sels) > 0 {
-		sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
-	}
-	for _, sel := range sp {
-		if nsp.Np.Contains(sel) {
+	var cnt int
+	// WTF is this?   cannt we just use sels directly with a correct type?
+	// var sp []uint64
+	// if len(sels) > 0 {
+	// sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
+	// }
+	for _, sel := range sels {
+		if nsp.Contains(uint64(sel)) {
 			cnt++
 		}
 	}
@@ -188,46 +172,38 @@ func FilterCount(nsp *Nulls, sels []int64) int {
 }
 
 func RemoveRange(nsp *Nulls, start, end uint64) {
-	if nsp.Np != nil {
-		nsp.Np.RemoveRange(start, end)
+	if !nsp.IsEmpty() {
+		nsp.np.RemoveRange(start, end)
 	}
 }
 
 // Range adds the numbers in nsp starting at start and ending at end to m.
 // `bias` represents the starting offset used for the Range Output
-// Return the result
-func Range(nsp *Nulls, start, end, bias uint64, m *Nulls) *Nulls {
-	switch {
-	case nsp.Np == nil && m.Np == nil:
-	case nsp.Np != nil && m.Np == nil:
-		m.Np = bitmap.New(int(end + 1 - bias))
+func Range(nsp *Nulls, start, end, bias uint64, m *Nulls) {
+	if !nsp.IsEmpty() {
+		m.InitWithSize(int(end + 1 - bias))
 		for ; start < end; start++ {
-			if nsp.Np.Contains(start) {
-				m.Np.Add(start - bias)
-			}
-		}
-	case nsp.Np != nil && m.Np != nil:
-		m.Np = bitmap.New(int(end + 1 - bias))
-		for ; start < end; start++ {
-			if nsp.Np.Contains(start) {
-				m.Np.Add(start - bias)
+			if nsp.np.Contains(start) {
+				m.np.Add(start - bias)
 			}
 		}
 	}
-	return m
 }
 
-func Filter(nsp *Nulls, sels []int64, negate bool) *Nulls {
-	if nsp == nil || nsp.Np == nil || len(sels) == 0 {
-		return nsp
+func Filter(nsp *Nulls, sels []int64, negate bool) {
+	if nsp.IsEmpty() || len(sels) == 0 {
+		return
 	}
 
 	if negate {
-		oldLen := nsp.Np.Len()
+		// create a new bitmap
+		oldLen := nsp.np.Len()
 		np := bitmap.New(oldLen)
+
+		// iterate over the old bitmap and set the new bitmap
 		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < oldLen; oldIdx++ {
 			if oldIdx != int(sel) {
-				if nsp.Np.Contains(uint64(oldIdx)) {
+				if nsp.np.Contains(uint64(oldIdx)) {
 					np.Add(uint64(newIdx))
 				}
 				newIdx++
@@ -235,7 +211,7 @@ func Filter(nsp *Nulls, sels []int64, negate bool) *Nulls {
 				selIdx++
 				if selIdx >= len(sels) {
 					for idx := oldIdx + 1; idx < oldLen; idx++ {
-						if nsp.Np.Contains(uint64(idx)) {
+						if nsp.np.Contains(uint64(idx)) {
 							np.Add(uint64(newIdx))
 						}
 						newIdx++
@@ -245,100 +221,126 @@ func Filter(nsp *Nulls, sels []int64, negate bool) *Nulls {
 				sel = sels[selIdx]
 			}
 		}
-		nsp.Np = np
-		return nsp
+		nsp.SetBitmap(np)
 	} else {
 		np := bitmap.New(len(sels))
-		upperLimit := int64(nsp.Np.Len())
+		upperLimit := int64(nsp.np.Len())
 		for i, sel := range sels {
 			if sel >= upperLimit {
 				continue
 			}
-			if nsp.Np.Contains(uint64(sel)) {
+			if nsp.np.Contains(uint64(sel)) {
 				np.Add(uint64(i))
 			}
 		}
-		nsp.Np = np
-		return nsp
+		nsp.SetBitmap(np)
 	}
 }
 
 func (nsp *Nulls) Any() bool {
-	if nsp == nil || nsp.Np == nil {
-		return false
-	}
-	return !nsp.Np.IsEmpty()
+	return !nsp.IsEmpty()
 }
 
 func (nsp *Nulls) Set(row uint64) {
 	TryExpand(nsp, int(row)+1)
-	nsp.Np.Add(row)
+	nsp.np.Add(row)
+}
+
+func (nsp *Nulls) Unset(row uint64) {
+	if !nsp.IsEmpty() {
+		nsp.np.Remove(row)
+	}
 }
 
 func (nsp *Nulls) Contains(row uint64) bool {
-	return nsp != nil && nsp.Np != nil && nsp.Np.Contains(row)
+	return !nsp.IsEmpty() && nsp.np.Contains(row)
+}
+
+func Count(nsp *Nulls) int {
+	return nsp.Count()
 }
 
 func (nsp *Nulls) Count() int {
-	if nsp == nil || nsp.Np == nil {
+	if nsp.IsEmpty() {
 		return 0
 	}
-	return nsp.Np.Count()
+	return nsp.np.Count()
 }
 
+// XXX: Show marshals bitmap, copies data.
 func (nsp *Nulls) Show() ([]byte, error) {
-	if nsp == nil || nsp.Np == nil {
+	if nsp.Count() == 0 {
 		return nil, nil
 	}
-	return nsp.Np.Marshal(), nil
+	return nsp.np.Marshal(), nil
 }
 
+// XXX: Read unmarshals, copies data.
 func (nsp *Nulls) Read(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
-	nsp.Np = bitmap.New(0)
-	nsp.Np.Unmarshal(data)
+	nsp.np.Unmarshal(data)
 	return nil
 }
 
 func (nsp *Nulls) Or(m *Nulls) *Nulls {
-	switch {
-	case m == nil:
-		return nsp
-	case m.Np == nil:
-		return nsp
-	case nsp.Np == nil && m.Np != nil:
-		return m
-	default:
-		nsp.Np.Or(m.Np)
+	if m.IsEmpty() {
 		return nsp
 	}
+	if nsp.IsEmpty() {
+		return m
+	}
+
+	nsp.np.Or(&m.np)
+	return nsp
 }
 
 func (nsp *Nulls) IsSame(m *Nulls) bool {
-	switch {
-	case nsp == nil && m == nil:
+	if nsp == m {
 		return true
-	case nsp.Np == nil && m.Np == nil:
+	}
+	if nsp.IsEmpty() && m.IsEmpty() {
 		return true
-	case nsp.Np != nil && m.Np != nil:
-		return nsp.Np.IsSame(m.Np)
-	default:
+	}
+	if nsp.IsEmpty() != m.IsEmpty() {
 		return false
 	}
+	return nsp.np.IsSame(&m.np)
 }
 
 func (nsp *Nulls) ToArray() []uint64 {
-	if nsp.Np == nil {
-		return []uint64{}
+	if nsp == nil {
+		return nil
 	}
-	return nsp.Np.ToArray()
+	return nsp.np.ToArray()
 }
 
-func (nsp *Nulls) GetCardinality() int {
-	if nsp.Np == nil {
-		return 0
+func String(nsp *Nulls) string {
+	return nsp.String()
+}
+
+func (nsp *Nulls) String() string {
+	if nsp == nil {
+		return "[]"
 	}
-	return nsp.Np.Count()
+	return nsp.np.String()
+}
+
+func (nsp *Nulls) Ptr() *uint64 {
+	return nsp.np.Ptr()
+}
+
+func Ptr(nsp *Nulls) *uint64 {
+	if nsp == nil {
+		return nil
+	}
+	return nsp.np.Ptr()
+}
+
+func (nsp *Nulls) Iterator() bitmap.Iterator {
+	if nsp == nil {
+		return nil
+	}
+	return nsp.np.Iterator()
 }

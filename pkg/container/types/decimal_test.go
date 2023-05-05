@@ -71,7 +71,7 @@ func TestDecimal128Float(t *testing.T) {
 	z, _ := Decimal128FromFloat64(y, 38, 7)
 	x, _ = x.Scale(-23)
 	if x != z {
-		panic("DecimalFloat wrong")
+		panic(fmt.Sprintf("TestDecimal128Float, %v, %v, %v", x, y, z))
 	}
 }
 

@@ -17,8 +17,8 @@ package vector
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -65,12 +65,12 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionP
 			scalarValue:  cols[0],
 		}
 	}
-	if v.GetNulls() != nil && v.GetNulls().Np != nil && v.GetNulls().Np.Len() > 0 {
+	if nulls.Any(v.GetNulls()) {
 		return &FunctionParameterNormal[T]{
 			typ:          *t,
 			sourceVector: v,
 			values:       cols,
-			nullMap:      v.GetNulls().Np,
+			nullMap:      v.GetNulls(),
 		}
 	}
 	return &FunctionParameterWithoutNull[T]{
@@ -97,13 +97,13 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 			scalarStr:    cols[0].GetByteSlice(v.area),
 		}
 	}
-	if v.GetNulls() != nil && v.GetNulls().Np != nil && v.GetNulls().Np.Len() > 0 {
+	if !v.GetNulls().IsEmpty() {
 		return &FunctionParameterNormal[types.Varlena]{
 			typ:          *t,
 			sourceVector: v,
 			strValues:    cols,
 			area:         v.area,
-			nullMap:      v.GetNulls().Np,
+			nullMap:      v.GetNulls(),
 		}
 	}
 	return &FunctionParameterWithoutNull[types.Varlena]{
@@ -122,7 +122,7 @@ type FunctionParameterNormal[T types.FixedSizeT] struct {
 	values       []T
 	strValues    []types.Varlena
 	area         []byte
-	nullMap      *bitmap.Bitmap
+	nullMap      *nulls.Nulls
 }
 
 func (p *FunctionParameterNormal[T]) GetType() types.Type {

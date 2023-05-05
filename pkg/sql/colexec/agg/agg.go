@@ -258,7 +258,9 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		a.vs = nil
 		a.es = nil
 	}()
-	nsp := nulls.NewWithSize(len(a.es))
+
+	var nsp nulls.Nulls
+	nsp.InitWithSize(len(a.es))
 	if !a.isCount {
 		for i, e := range a.es {
 			if e {
@@ -274,7 +276,7 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 			vec.Free(m)
 			return nil, err
 		}
-		vec.SetNulls(nsp)
+		vec.SetNulls(&nsp)
 		return vec, nil
 	}
 	vec := vector.NewVec(a.otyp)
@@ -282,7 +284,7 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		vec.Free(m)
 		return nil, err
 	}
-	vec.SetNulls(nsp)
+	vec.SetNulls(&nsp)
 	return vec, nil
 }
 

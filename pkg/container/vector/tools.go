@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -247,12 +246,10 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	} else {
 		rvec.class = FLAT
 	}
-	rvec.nsp = &nulls.Nulls{}
-	if err := rvec.nsp.Read(vec.Nsp); err != nil {
+	if err := rvec.GetNulls().Read(vec.Nsp); err != nil {
 		return nil, err
 	}
 	if rvec.IsConst() && rvec.nsp.Contains(0) {
-		rvec.nsp = &nulls.Nulls{}
 		return rvec, nil
 	}
 	rvec.data = vec.Data
@@ -548,7 +545,7 @@ func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) b
 	if vec1.IsConstNull() || vec2.IsConstNull() {
 		return true
 	}
-	if nulls.Any(vec1.nsp) || nulls.Any(vec2.nsp) {
+	if vec1.HasNulls() || vec2.HasNulls() {
 		return true
 	}
 	cols1 := MustFixedCol[T](vec1)
@@ -562,7 +559,9 @@ func runStrCompareCheckAnyResultIsTrue(vec1, vec2 *Vector, fn compFn[string]) bo
 	if vec1.IsConstNull() || vec2.IsConstNull() {
 		return true
 	}
-	if nulls.Any(vec1.nsp) || nulls.Any(vec2.nsp) {
+
+	// well, this is strange.
+	if vec1.HasNulls() || vec2.HasNulls() {
 		return true
 	}
 

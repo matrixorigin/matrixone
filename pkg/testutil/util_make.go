@@ -127,9 +127,11 @@ var (
 
 	MakeDateVector = func(values []string, nsp []uint64) *vector.Vector {
 		ds := make([]types.Date, len(values))
-		ns := nulls.Build(len(values), nsp...)
+		var ns nulls.Nulls
+		nulls.Add(&ns, nsp...)
+
 		for i, s := range values {
-			if nulls.Contains(ns, uint64(i)) {
+			if nulls.Contains(&ns, uint64(i)) {
 				continue
 			}
 			d, err := types.ParseDateCast(s)
@@ -140,7 +142,7 @@ var (
 		}
 		vec := vector.NewVec(types.T_date.ToType())
 		vector.AppendFixedList(vec, ds, nil, TestUtilMp)
-		vec.SetNulls(ns)
+		vec.SetNulls(&ns)
 		return vec
 	}
 

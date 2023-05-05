@@ -147,8 +147,8 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 		if err != nil {
 			panic(err)
 		}
-		if vec.GetNulls().Np != nil && vec.GetNulls().Np.Contains(uint64(row)) {
-			vec.GetNulls().Np.Remove(uint64(row))
+		if vec.GetNulls().Contains(uint64(row)) {
+			vec.GetNulls().Unset(uint64(row))
 		}
 	}
 }
@@ -161,9 +161,7 @@ func GenericUpdateBytes(vec *movec.Vector, row uint32, v any, isNull bool) {
 		if err != nil {
 			panic(err)
 		}
-		if vec.GetNulls().Np != nil && vec.GetNulls().Np.Contains(uint64(row)) {
-			vec.GetNulls().Np.Remove(uint64(row))
-		}
+		vec.GetNulls().Unset(uint64(row))
 	}
 }
 
@@ -300,7 +298,7 @@ func ForeachVectorWindow(
 	}
 	switch typ.Oid {
 	case types.T_bool:
-		return ForeachWindowFixed[bool](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -308,7 +306,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_int8:
-		return ForeachWindowFixed[int8](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -316,7 +314,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_int16:
-		return ForeachWindowFixed[int16](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -324,7 +322,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_int32:
-		return ForeachWindowFixed[int32](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -332,7 +330,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_int64:
-		return ForeachWindowFixed[int64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -340,7 +338,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_uint8:
-		return ForeachWindowFixed[uint8](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -348,7 +346,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_uint16:
-		return ForeachWindowFixed[uint16](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -356,7 +354,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_uint32:
-		return ForeachWindowFixed[uint32](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -364,7 +362,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_uint64:
-		return ForeachWindowFixed[uint64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -372,7 +370,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_decimal64:
-		return ForeachWindowFixed[types.Decimal64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -380,7 +378,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_decimal128:
-		return ForeachWindowFixed[types.Decimal128](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -388,7 +386,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_decimal256:
-		return ForeachWindowFixed[types.Decimal256](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -396,7 +394,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_float32:
-		return ForeachWindowFixed[float32](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -404,7 +402,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_float64:
-		return ForeachWindowFixed[float64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -412,7 +410,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_timestamp:
-		return ForeachWindowFixed[types.Timestamp](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -420,7 +418,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_date:
-		return ForeachWindowFixed[types.Date](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -428,7 +426,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_time:
-		return ForeachWindowFixed[types.Time](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -436,7 +434,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_datetime:
-		return ForeachWindowFixed[types.Datetime](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -444,7 +442,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_TS:
-		return ForeachWindowFixed[types.TS](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -452,7 +450,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_Blockid:
-		return ForeachWindowFixed[types.Blockid](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -460,7 +458,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_uuid:
-		return ForeachWindowFixed[types.Uuid](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -468,7 +466,7 @@ func ForeachVectorWindow(
 			nil,
 			sel)
 	case types.T_Rowid:
-		return ForeachWindowFixed[types.Rowid](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
