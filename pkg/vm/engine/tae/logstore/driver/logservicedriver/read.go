@@ -61,7 +61,7 @@ func (d *LogServiceDriver) Read(drlsn uint64) (*entry.Entry, error) {
 		d.readSmallBatchFromLogService(lsn)
 		r, err = d.readFromCache(lsn)
 		if err != nil {
-			logutil.Infof("try read %d", lsn)
+			logutil.Debugf("try read %d", lsn)
 			panic(err)
 		}
 		d.readMu.Unlock()

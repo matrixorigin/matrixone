@@ -415,7 +415,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		// wait for HAKeeper to repair the Log & HAKeeper shards
 		dnRepaired := false
 		for i := 0; i < 5000; i++ {
-			testLogger.Info(fmt.Sprintf("iteration %d", i))
+			testLogger.Debug(fmt.Sprintf("iteration %d", i))
 			tn := func() (bool, error) {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
@@ -469,11 +469,11 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 						break
 					}
 				}
-				testLogger.Info(fmt.Sprintf("dnRepaired %t, logRepaired %t", dnRepaired, logRepaired))
+				testLogger.Debug(fmt.Sprintf("dnRepaired %t, logRepaired %t", dnRepaired, logRepaired))
 				if !logRepaired || !dnRepaired {
 					return false, nil
 				} else {
-					testLogger.Info(fmt.Sprintf("repair completed, i: %d", i))
+					testLogger.Debug(fmt.Sprintf("repair completed, i: %d", i))
 					return true, nil
 				}
 			}
@@ -791,7 +791,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 
 		cnUUID2 := uuid.New().String()
 		for i := 0; i < 1000; i++ {
-			testLogger.Info(fmt.Sprintf("iteration %d", i))
+			testLogger.Debug(fmt.Sprintf("iteration %d", i))
 			tn := func() bool {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
