@@ -309,7 +309,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 		hasDeletes := len(deletes) > 0
 		for _, blk := range blocks {
 			tbl.skipBlocks[blk.BlockID] = 0
-			ok := true
+			need := true
 			if exprMono {
 				location := blk.MetaLocation()
 				if !objectio.IsSameObjectLocVsMeta(location, meta) {
@@ -317,19 +317,21 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 						return
 					}
 				}
-				ok = needRead(ctx, expr, meta, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc)
+				need = needRead(ctx, expr, meta, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc)
 			}
 
-			if ok {
-				if hasDeletes {
-					if rows, ok := deletes[blk.BlockID]; ok {
-						mblks = append(mblks, ModifyBlockMeta{blk, rows})
-					} else {
-						ranges = append(ranges, blockInfoMarshal(blk))
-					}
+			if !need {
+				continue
+			}
+
+			if hasDeletes {
+				if rows, ok := deletes[blk.BlockID]; ok {
+					mblks = append(mblks, ModifyBlockMeta{blk, rows})
 				} else {
 					ranges = append(ranges, blockInfoMarshal(blk))
 				}
+			} else {
+				ranges = append(ranges, blockInfoMarshal(blk))
 			}
 		}
 		tbl.modifiedBlocks[i] = mblks
