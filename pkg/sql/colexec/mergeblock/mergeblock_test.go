@@ -52,7 +52,7 @@ func TestMergeBlock(t *testing.T) {
 	batch1 := &batch.Batch{
 		Attrs: []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc},
 		Vecs: []*vector.Vector{
-			testutil.MakeInt16Vector([]int16{0, 1, 2}, nil),
+			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil),
 			testutil.MakeTextVector([]string{loc1.String(), loc2.String(), loc3.String()}, nil),
 		},
 		Zs: []int64{1, 1, 1},
@@ -67,7 +67,7 @@ func TestMergeBlock(t *testing.T) {
 	Prepare(proc, &argument1)
 	_, err := Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
-	require.Equal(t, uint64(15), argument1.affectedRows)
+	require.Equal(t, uint64(15*3), argument1.affectedRows)
 	// Check Tbl
 	{
 		result := argument1.Tbl.(*mockRelation).result
@@ -79,7 +79,7 @@ func TestMergeBlock(t *testing.T) {
 		// check vector
 		require.Equal(t, 1, len(result.Vecs))
 		for i, vec := range result.Vecs {
-			require.Equal(t, 1, vec.Length(), fmt.Sprintf("column number: %d", i))
+			require.Equal(t, 3, vec.Length(), fmt.Sprintf("column number: %d", i))
 		}
 	}
 	// Check UniqueTables

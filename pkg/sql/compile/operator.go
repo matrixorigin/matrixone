@@ -479,7 +479,8 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	preCtx := n.PreInsertCtx
 	schemaName := preCtx.Ref.SchemaName
 
-	var attrs []string
+	//var attrs []string
+	attrs := make([]string, 0)
 	for _, col := range preCtx.TableDef.Cols {
 		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 			continue
