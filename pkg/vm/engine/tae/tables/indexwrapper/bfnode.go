@@ -58,7 +58,7 @@ func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.indexCache.Set(r.reader.GetName(), v, int64(size))
+	r.indexCache.Set(r.bfKey.ID(), v, int64(size))
 	return v.(objectio.StaticFilter), nil
 }
 
