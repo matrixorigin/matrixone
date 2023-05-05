@@ -103,11 +103,6 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 			if _, ok := deletes[entry.RowID]; ok {
 				continue
 			}
-			if tbl.skipBlocks != nil {
-				if _, ok := tbl.skipBlocks[entry.BlockID]; ok {
-					continue
-				}
-			}
 			rows++
 		}
 		iter.Close()
@@ -252,7 +247,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
-	tbl.skipBlocks = make(map[types.Blockid]uint8)
 	if len(tbl.blockInfos) == 0 {
 		return
 	}
@@ -310,7 +304,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 		}
 		var meta objectio.ObjectMeta
 		for _, blk := range blks {
-			tbl.skipBlocks[blk.BlockID] = 0
 			ok := true
 			if exprMono {
 				location := blk.MetaLocation()
@@ -944,7 +937,6 @@ func (tbl *txnTable) newReader(
 		typsMap:         mp,
 		inserts:         inserts,
 		deletes:         deletes,
-		skipBlocks:      tbl.skipBlocks,
 		iter:            iter,
 		colIdxMp:        colIdxMp,
 		extendId2s3File: make(map[string]int),
