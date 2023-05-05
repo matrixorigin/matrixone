@@ -255,7 +255,7 @@ func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper
 				return err
 			}
 		} else {
-			if v1 == float64(1) || v2 == float64(1) {
+			if v1 == float64(1) {
 				return moerr.NewInvalidArg(proc.Ctx, "log base", 1)
 			}
 			tempV1, err := momath.Ln(v1)

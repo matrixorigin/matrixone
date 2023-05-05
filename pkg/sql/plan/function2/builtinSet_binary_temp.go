@@ -688,10 +688,10 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			if null {
 				continue
 			}
-			if len(str) > 0 {
+			str += string(v)
+			if j < len(vecs)-1 {
 				str += string(sp)
 			}
-			str += string(v)
 			allNull = false
 		}
 		if allNull {
@@ -1561,7 +1561,7 @@ func splitDecimalToIntAndFrac(f float64) (int64, int64) {
 func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	vs := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-
+	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 	var d types.Datetime
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
@@ -1696,7 +1696,7 @@ func getSliceFromRight(s string, offset int64) string {
 	return string(substrRune)
 }
 
-func SubStringWith2Args[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func SubStringWith2Args[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
@@ -1711,7 +1711,10 @@ func SubStringWith2Args[T number](ivecs []*vector.Vector, result vector.Function
 			}
 		} else {
 			var r string
-			start := int64(s)
+			start, err := castConstAsInt64(proc.Ctx, *ivecs[1].GetType(), s)
+			if err != nil {
+				return err
+			}
 			if start > 0 {
 				r = getSliceFromLeft(string(v), start-1)
 			} else if start < 0 {
@@ -1765,7 +1768,44 @@ func getSliceFromRightWithLength(s string, offset int64, length int64) string {
 	return getSliceOffsetLen(s, -offset, length)
 }
 
-func SubStringWith3Args[T1, T2 number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
+func castConstAsInt64[T number](ctx context.Context, typ types.Type, val T) (int64, error) {
+	var r int64
+	switch typ.Oid {
+	case types.T_uint8:
+		r = int64(val)
+	case types.T_uint16:
+		r = int64(val)
+	case types.T_uint32:
+		r = int64(val)
+	case types.T_uint64:
+		tmp := uint64(val)
+		if tmp > uint64(math.MaxInt64) {
+			return 0, moerr.NewInvalidArg(ctx, "function substring(str, start, lenth)", val)
+		}
+		r = int64(val)
+	case types.T_int8:
+		r = int64(val)
+	case types.T_int16:
+		r = int64(val)
+	case types.T_int32:
+		r = int64(val)
+	case types.T_int64:
+		r = int64(val)
+	case types.T_float32:
+		r = int64(val)
+	case types.T_float64:
+		tmp := float64(val)
+		if tmp > float64(math.MaxInt64) {
+			return 0, moerr.NewInvalidArg(ctx, "function substring(str, start, lenth)", val)
+		}
+		r = int64(val)
+	default:
+		panic("castConstAsInt64 failed, unknown type")
+	}
+	return r, nil
+}
+
+func SubStringWith3Args[T1, T2 number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	starts := vector.GenerateFunctionFixedTypeParameter[T1](ivecs[1])
@@ -1782,8 +1822,14 @@ func SubStringWith3Args[T1, T2 number](ivecs []*vector.Vector, result vector.Fun
 			}
 		} else {
 			var r string
-			start := int64(s)
-			lt := int64(l)
+			start, err := castConstAsInt64(proc.Ctx, *ivecs[1].GetType(), s)
+			if err != nil {
+				return err
+			}
+			lt, err := castConstAsInt64(proc.Ctx, *ivecs[2].GetType(), l)
+			if err != nil {
+				return err
+			}
 			if start > 0 {
 				r = getSliceFromLeftWithLength(string(v), start-1, lt)
 			} else if start < 0 {

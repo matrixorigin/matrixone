@@ -743,70 +743,6 @@ func jsonExtractCheckFn(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func JsonExtract(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-
-	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
-	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[types.Varlena](result)
-
-	for i := uint64(0); i < uint64(length); i++ {
-
-		jsonVec := ivecs[0]
-		var fn computeFn
-		switch jsonVec.GetType().Oid {
-		case types.T_json:
-			fn = computeJson
-		default:
-			fn = computeString
-		}
-
-		// Json Bytes
-		jsonBytes, jIsNull := p1.GetStrValue(i)
-		if jIsNull {
-			err = rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Path Bytes
-		pathBytes, pIsNull := p2.GetStrValue(i)
-		if pIsNull {
-			err = rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		p, err := types.ParseStringToPath(string(pathBytes))
-		if err != nil {
-			return err
-		}
-
-		paths := make([]*bytejson.Path, 1)
-		paths[0] = &p
-		out, err := fn(jsonBytes, paths)
-		if err != nil {
-			return err
-		}
-		if out.IsNull() {
-			err = rs.AppendBytes(nil, true)
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		dt, _ := out.Marshal()
-		err = rs.AppendBytes(dt, false)
-		if err != nil {
-			return err
-		}
-
-	}
-	return nil
-}
-
 type computeFn func([]byte, []*bytejson.Path) (*bytejson.ByteJson, error)
 
 func computeJson(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, error) {
@@ -819,6 +755,71 @@ func computeString(json []byte, paths []*bytejson.Path) (*bytejson.ByteJson, err
 		return nil, err
 	}
 	return bj.Query(paths), nil
+}
+
+func JsonExtract(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	jsonVec := parameters[0]
+	var fn computeFn
+	switch jsonVec.GetType().Oid {
+	case types.T_json:
+		fn = computeJson
+	default:
+		fn = computeString
+	}
+	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
+	pathWrapers := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters)-1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	paths := make([]*bytejson.Path, len(parameters)-1)
+	for i := 0; i < len(parameters)-1; i++ {
+		pathWrapers[i] = vector.GenerateFunctionStrParameter(parameters[i+1])
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		jsonBytes, jIsNull := jsonWrapper.GetStrValue(i)
+		if jIsNull {
+			err := rs.AppendBytes(nil, true)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		skip := false
+		for j := 0; j < len(parameters)-1; j++ {
+			pathBytes, pIsNull := pathWrapers[j].GetStrValue(i)
+			if pIsNull {
+				skip = true
+				break
+			}
+			p, err := types.ParseStringToPath(string(pathBytes))
+			if err != nil {
+				return err
+			}
+			paths[j] = &p
+		}
+		if skip {
+			err := rs.AppendBytes(nil, true)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		out, err := fn(jsonBytes, paths)
+		if err != nil {
+			return err
+		}
+		if out.IsNull() {
+			err := rs.AppendBytes(nil, true)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		dt, _ := out.Marshal()
+		err = rs.AppendBytes(dt, false)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SPLIT PART
