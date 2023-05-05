@@ -459,7 +459,7 @@ var (
 		types.New(types.T_uint32, 0, 0),     // account_id
 		types.New(types.T_int8, 0, 0),       // partitioned
 		types.New(types.T_blob, 0, 0),       // partition_info
-		types.New(types.T_blob, 0, 0),       // viewdef
+		types.New(types.T_varchar, 5000, 0), // viewdef
 		types.New(types.T_varchar, 5000, 0), // constraint
 		types.New(types.T_uint32, 0, 0),     // schema_version
 	}
