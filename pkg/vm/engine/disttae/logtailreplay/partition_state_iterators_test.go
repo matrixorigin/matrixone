@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package logtailreplay
 
 import (
 	"context"
@@ -104,7 +104,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	// primary key iter
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
-		bs := encodePrimaryKey(int64(i), packer)
+		bs := EncodePrimaryKey(int64(i), packer)
 		iter := state.NewPrimaryKeyIter(ts, bs)
 		n := 0
 		for iter.Next() {

@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -30,14 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
@@ -1045,57 +1041,6 @@ func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
 
 func genMetaTableName(id uint64) string {
 	return fmt.Sprintf("_%v_meta", id)
-}
-
-var metaTableMatchRegexp *regexp.Regexp
-
-func init() {
-	metaTableMatchRegexp, _ = regexp.Compile(`\_\d+\_meta`)
-}
-
-func isMetaTable(name string) bool {
-	return metaTableMatchRegexp.MatchString(name)
-}
-
-func inBlockMap(blk catalog.BlockInfo, blockMap map[types.Blockid]bool) bool {
-	_, ok := blockMap[blk.BlockID]
-	return ok
-}
-
-func genModifedBlocks(ctx context.Context, deletes map[types.Blockid][]int, orgs, modfs []catalog.BlockInfo,
-	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) (blks []ModifyBlockMeta, err error) {
-
-	blks = make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
-	lenblks := len(modfs)
-	blockMap := make(map[types.Blockid]bool, lenblks)
-	for i := 0; i < lenblks; i++ {
-		blockMap[modfs[i].BlockID] = true
-	}
-
-	exprMono := plantool.CheckExprIsMonotonic(ctx, expr)
-	columnMap, columns, maxCol := plantool.GetColumnsByExpr(expr, tableDef)
-	var meta objectio.ObjectMeta
-	for i, blk := range orgs {
-		if !inBlockMap(blk, blockMap) {
-			location := blk.MetaLocation()
-			ok := true
-			if exprMono {
-				if !objectio.IsSameObjectLocVsMeta(location, meta) {
-					if meta, err = loadObjectMeta(ctx, location, proc.FileService, proc.Mp()); err != nil {
-						return
-					}
-				}
-				ok = needRead(ctx, expr, meta, blk, tableDef, columnMap, columns, maxCol, proc)
-			}
-			if ok {
-				blks = append(blks, ModifyBlockMeta{
-					meta:    orgs[i],
-					deletes: deletes[orgs[i].BlockID],
-				})
-			}
-		}
-	}
-	return
 }
 
 func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {

@@ -109,7 +109,7 @@ func BlockReadInner(
 			return nil, err
 		}
 		deleteRows = mergeDeleteRows(deleteRows, recordDeletes(deleteBatch, ts))
-		logutil.Infof(
+		logutil.Debugf(
 			"blockread %s read delete %d: base %s filter out %v\n",
 			info.BlockID.String(), deleteBatch.Length(), ts.ToString(), len(deleteRows))
 	}
@@ -246,7 +246,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 				deleteRows = append(deleteRows, int64(i))
 			}
 		}
-		logutil.Infof(
+		logutil.Debugf(
 			"blockread %s scan filter cost %v: base %s filter out %v\n ",
 			info.BlockID.String(), time.Since(t0), ts.ToString(), len(deleteRows))
 		return nil

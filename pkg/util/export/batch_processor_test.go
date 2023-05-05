@@ -89,7 +89,7 @@ func (s *dummyBuffer) Add(item batchpipe.HasName) {
 	if s.signal != nil {
 		val := int(*item.(*Num))
 		length := len(s.arr)
-		logutil.Infof("accept: %v, len: %d", *item.(*Num), length)
+		logutil.Debugf("accept: %v, len: %d", *item.(*Num), length)
 		if (val <= 3 && val != length) && (val-3) != length {
 			panic(moerr.NewInternalError(ctx, "len not rignt, elem: %d, len: %d", val, length))
 		}
@@ -99,7 +99,7 @@ func (s *dummyBuffer) Add(item batchpipe.HasName) {
 func (s *dummyBuffer) Reset() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	logutil.Infof("buffer reset, stack: %+v", stack.Callers(0))
+	logutil.Debugf("buffer reset, stack: %+v", stack.Callers(0))
 	s.arr = s.arr[0:0]
 }
 func (s *dummyBuffer) IsEmpty() bool {
@@ -113,7 +113,7 @@ func (s *dummyBuffer) ShouldFlush() bool {
 	length := len(s.arr)
 	should := length >= 3
 	if should {
-		logutil.Infof("buffer shouldFlush: %v", should)
+		logutil.Debugf("buffer shouldFlush: %v", should)
 	}
 	return should
 }
@@ -127,7 +127,7 @@ func (s *dummyBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 		return ""
 	}
 
-	logutil.Infof("GetBatch, len: %d", len(s.arr))
+	logutil.Debugf("GetBatch, len: %d", len(s.arr))
 	buf.Reset()
 	for _, item := range s.arr {
 		s, ok := item.(*Num)
@@ -138,11 +138,11 @@ func (s *dummyBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf("%d", *s))
 		buf.WriteString("),")
 	}
-	logutil.Infof("GetBatch: %s", buf.String())
+	logutil.Debugf("GetBatch: %s", buf.String())
 	if waitGetBatchFinish != nil {
-		logutil.Infof("wait BatchFinish")
+		logutil.Debugf("wait BatchFinish")
 		waitGetBatchFinish()
-		logutil.Infof("wait BatchFinish, Done")
+		logutil.Debugf("wait BatchFinish, Done")
 	}
 	return string(buf.Next(buf.Len() - 1))
 }
