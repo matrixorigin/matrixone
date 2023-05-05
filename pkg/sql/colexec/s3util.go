@@ -147,7 +147,7 @@ func AllocS3Writer(tableDef *plan.TableDef) (*S3Writer, error) {
 		if tableDef.ClusterBy != nil {
 			if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 				// the serialized clusterby col is located in the last of the bat.vecs
-				writer.sortIndex = len(tableDef.Cols)
+				writer.sortIndex = len(tableDef.Cols) - 1
 			} else {
 				for idx, colDef := range tableDef.Cols {
 					if colDef.Name == tableDef.ClusterBy.Name {
