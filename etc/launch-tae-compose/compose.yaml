@@ -15,7 +15,13 @@ x-mo-common: &mo-common
       - ../../test:/test
     restart: on-failure
     tty: true
-
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
+      nproc:
+        soft: 200000
+        hard: 200000
 
 services:
   cn-0:
