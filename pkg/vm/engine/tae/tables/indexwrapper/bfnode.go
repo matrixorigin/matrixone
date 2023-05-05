@@ -53,15 +53,28 @@ func NewBfReader(
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	v, ok := r.indexCache.Get(*r.blockID)
+	bs, ok := r.indexCache.Get(*r.blockID)
 	if ok {
-		return v.(objectio.StaticFilter), nil
+
+		var obj any
+		obj, err := objectio.Decode(bs, false)
+		if err != nil {
+			return nil, err
+		}
+		return obj.(objectio.StaticFilter), nil
 	}
+
 	v, size, err := r.reader.LoadOneBF(context.Background(), r.bfKey.ID())
 	if err != nil {
 		return nil, err
 	}
-	r.indexCache.Set(*r.blockID, v, int64(size))
+
+	bs, err = v.Marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	r.indexCache.Set(*r.blockID, bs, int64(size))
 	return v.(objectio.StaticFilter), nil
 }
 
