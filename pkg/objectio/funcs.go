@@ -26,7 +26,6 @@ func ReadExtent(
 	name string,
 	extent *Extent,
 	noLRUCache bool,
-	noHeaderHint bool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
 ) (v []byte, err error) {
@@ -39,7 +38,7 @@ func ReadExtent(
 	ioVec.Entries[0] = fileservice.IOEntry{
 		Offset:   int64(extent.Offset()),
 		Size:     int64(extent.Length()),
-		ToObject: factory(int64(extent.OriginSize()), extent.Alg(), noHeaderHint),
+		ToObject: factory(int64(extent.OriginSize()), extent.Alg()),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
@@ -61,7 +60,6 @@ func ReadBloomFilter(
 		name,
 		extent,
 		noLRUCache,
-		false,
 		fs,
 		constructorFactory); err != nil {
 		return
@@ -96,7 +94,7 @@ func ReadObjectMeta(
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
 	var v []byte
-	if v, err = ReadExtent(ctx, name, extent, noLRUCache, false, fs, constructorFactory); err != nil {
+	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, constructorFactory); err != nil {
 		return
 	}
 	meta = ObjectMeta(v)
@@ -123,7 +121,7 @@ func ReadOneBlockWithMeta(
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 			Offset:   int64(ext.Offset()),
 			Size:     int64(ext.Length()),
-			ToObject: factory(int64(ext.OriginSize()), ext.Alg(), false),
+			ToObject: factory(int64(ext.OriginSize()), ext.Alg()),
 		})
 	}
 	err = fs.Read(ctx, ioVec)
@@ -151,7 +149,7 @@ func ReadMultiBlocksWithMeta(
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
 
-				ToObject: factory(int64(col.Location().OriginSize()), col.Location().Alg(), false),
+				ToObject: factory(int64(col.Location().OriginSize()), col.Location().Alg()),
 			})
 		}
 	}
@@ -183,7 +181,7 @@ func ReadAllBlocksWithMeta(
 				Offset: int64(ext.Offset()),
 				Size:   int64(ext.Length()),
 
-				ToObject: factory(int64(ext.OriginSize()), ext.Alg(), false),
+				ToObject: factory(int64(ext.OriginSize()), ext.Alg()),
 			})
 		}
 	}

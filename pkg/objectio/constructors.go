@@ -21,10 +21,10 @@ import (
 )
 
 type CacheConstructor = func(r io.Reader, buf []byte) ([]byte, int64, error)
-type CacheConstructorFactory = func(size int64, algo uint8, noHeaderHint bool) CacheConstructor
+type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
 // use this to replace all other constructors
-func constructorFactory(size int64, algo uint8, _ bool) CacheConstructor {
+func constructorFactory(size int64, algo uint8) CacheConstructor {
 	return func(reader io.Reader, data []byte) ([]byte, int64, error) {
 		fn := func() ([]byte, int64, error) {
 			var err error
