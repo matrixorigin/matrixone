@@ -52,8 +52,9 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 
 	defer proc.PutBatch(bat)
 	newBat := batch.NewWithSize(len(arg.Attrs))
-	newBat.Attrs = arg.Attrs
+	newBat.Attrs = make([]string, 0, len(arg.Attrs))
 	for idx := range arg.Attrs {
+		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
 		newBat.SetVector(int32(idx), vector.NewVec(*bat.GetVector(int32(idx)).GetType()))
 	}
 	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
