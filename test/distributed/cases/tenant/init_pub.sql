@@ -11,3 +11,10 @@ show subscriptions;
 drop account acc_idx;
 drop publication sys_pub_1;
 drop database sys_db_1;
+
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+-- @session:id=2&user=acc_idx:root&password=123456
+create database db7;
+-- @session
+create publication pubname7 database db7 account acc_idx;
+drop account acc_idx;
