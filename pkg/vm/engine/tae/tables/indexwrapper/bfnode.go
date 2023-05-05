@@ -51,16 +51,25 @@ func NewBfReader(
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
 	// return r.reader.LoadOneBF(context.Background(), r.bfKey.ID())
-	v, ok := r.indexCache.Get(r.reader.GetName())
+	bs, ok := r.indexCache.Get(r.reader.GetName())
 	if ok {
-		return v.([]objectio.StaticFilter)[r.bfKey.ID()], nil
+		var obj any
+		obj, err := objectio.Decode(bs, false)
+		if err != nil {
+			return nil, err
+		}
+		return obj.([]objectio.StaticFilter)[r.bfKey.ID()], nil
 	}
+
+	var v []objectio.StaticFilter
 	v, size, err := r.reader.LoadAllBF(context.Background())
 	if err != nil {
 		return nil, err
 	}
+
+	// TODO: @Jiangwei Kindly create a BF.encodeFn to convert []objectio.StaticFilter to []bytes
 	r.indexCache.Set(r.reader.GetName(), v, int64(size))
-	return v.([]objectio.StaticFilter)[r.bfKey.ID()], nil
+	return v[r.bfKey.ID()], nil
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
