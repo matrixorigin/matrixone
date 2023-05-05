@@ -178,7 +178,7 @@ func TestBuildColumnVector(t *testing.T) {
 	vector.AppendFixed[int32](vec, 9, false, mp)
 	vector.AppendFixed[int32](vec, maxv, false, mp)
 
-	zm := objectio.NewZM(vec.GetType().Oid)
+	zm := objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 	zm.Update(minv)
 	zm.Update(maxv)
 	t.Log(zm.String())
@@ -192,7 +192,7 @@ func TestBuildColumnVector(t *testing.T) {
 
 func BenchmarkBuildColumnZMVector(b *testing.B) {
 	mp := mpool.MustNewZero()
-	zm := objectio.NewZM(types.T_int64)
+	zm := objectio.NewZM(types.T_int64, 0)
 	zm.Update(int64(-100))
 	zm.Update(int64(99))
 
