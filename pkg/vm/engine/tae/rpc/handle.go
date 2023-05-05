@@ -427,12 +427,11 @@ func (h *Handle) EvaluateTxnRequest(
 	for _, e := range txnCtx.reqs {
 		if r, ok := e.(*db.WriteReq); ok {
 			if r.FileName != "" {
-				if r.Type == db.EntryDelete {
-					//start to load deleted row ids
-					err = h.prefetch(ctx, r)
-					if err != nil {
-						return
-					}
+				// for delete req, start to load deleted row ids
+				// for insert req, start to load s3 objects for dedup
+				err = h.prefetch(ctx, r)
+				if err != nil {
+					return
 				}
 			}
 		}
