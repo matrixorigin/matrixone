@@ -354,7 +354,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 					Extern:          t.Es.Extern,
 				},
 				ExParam: external.ExParam{
-					Filter: t.Es.Filter,
+					Filter: &external.FilterParam{
+						FilterExpr: t.Es.Filter.FilterExpr,
+					},
 					Fileparam: &external.ExFileparam{
 						End:       t.Es.Fileparam.End,
 						FileCnt:   t.Es.Fileparam.FileCnt,
