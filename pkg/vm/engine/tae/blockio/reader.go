@@ -191,7 +191,7 @@ func (r *BlockReader) LoadZoneMap(
 func (r *BlockReader) LoadOneBF(
 	ctx context.Context,
 	blk uint16,
-) (objectio.StaticFilter, error) {
+) (objectio.StaticFilter, uint32, error) {
 	return r.reader.ReadOneBF(ctx, blk)
 }
 
