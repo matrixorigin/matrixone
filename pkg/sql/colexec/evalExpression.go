@@ -98,9 +98,6 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			return nil, err
 		}
 
-		// TODO: IF all parameters here were constant. and this function can be folded.
-		// 	there is a better way to convert it as a FixedVectorExpressionExecutor.
-
 		executor := &FunctionExpressionExecutor{}
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		if err = executor.Init(proc.Mp(), len(t.F.Args), typ, overload.NewOp); err != nil {
@@ -114,10 +111,46 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			}
 			executor.SetParameter(i, subExecutor)
 		}
+
+		// IF all parameters here were constant. and this function can be folded.
+		// 	there is a better way to convert it as a FixedVectorExpressionExecutor.
+		if !overload.CannotFold() && !overload.IsRealTimeRelated() && ifAllArgsAreConstant(executor) {
+			for i := range executor.parameterExecutor {
+				executor.parameterResults[i] = executor.parameterExecutor[i].(*FixedVectorExpressionExecutor).resultVector
+				executor.parameterResults[i].SetLength(1)
+			}
+			err = executor.evalFn(executor.parameterResults, executor.resultVector, proc, 1)
+			if err == nil {
+				result := executor.resultVector.GetResultVector()
+				fixed := &FixedVectorExpressionExecutor{
+					m: proc.Mp(),
+				}
+				if result.IsConst() && !result.IsConstNull() {
+					fixed.resultVector, err = result.Dup(proc.Mp())
+				} else {
+					fixed.resultVector = result.ToConst(0, 1, proc.Mp())
+				}
+
+				executor.Free()
+				return fixed, err
+			}
+			executor.Free()
+			return nil, err
+		}
+
 		return executor, nil
 	}
 
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", expr))
+}
+
+func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {
+	for _, paramE := range executor.parameterExecutor {
+		if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // EvaluateExprWithoutExecutor can evaluate an expression without make an executor by developer.
@@ -202,6 +235,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	typ := expr.resultVector.GetResultVector().GetType()
 	expr.resultVector.GetResultVector().Reset(*typ)
 
+	if expr.resultVector.GetResultVector().Length() < batches[0].Length() {
+		if err = expr.resultVector.GetResultVector().PreExtend(batches[0].Length(), expr.m); err != nil {
+			return nil, err
+		}
+	}
 	if err = expr.evalFn(
 		expr.parameterResults, expr.resultVector, proc, batches[0].Length()); err != nil {
 		return nil, err

@@ -2325,7 +2325,6 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		}
 		if tmp.IsConstNull() || tmp.GetNulls().Contains(0) {
 			vector.AppendFixed(vec, 0, true, proc.Mp())
-			tmp.Free(proc.Mp())
 			continue
 		}
 		switch typ.Oid {
@@ -2370,7 +2369,6 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		default:
 			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", exprs[i]))
 		}
-		tmp.Free(proc.Mp())
 	}
 	return vec, nil
 }

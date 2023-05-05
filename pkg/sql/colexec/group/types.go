@@ -115,7 +115,9 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 
 func (ctr *container) cleanAggVectors() {
 	for i := range ctr.aggVecs {
-		ctr.aggVecs[i].executor.Free()
+		if ctr.aggVecs[i].executor != nil {
+			ctr.aggVecs[i].executor.Free()
+		}
 		ctr.aggVecs[i].vec = nil
 	}
 }

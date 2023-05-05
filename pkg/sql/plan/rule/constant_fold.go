@@ -291,18 +291,12 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 			},
 		}
 	case types.T_decimal64:
-		if !transAll {
-			return nil
-		}
 		return &plan.Const{
 			Value: &plan.Const_Decimal64Val{
 				Decimal64Val: &plan.Decimal64{A: int64(vector.MustFixedCol[types.Decimal64](vec)[0])},
 			},
 		}
 	case types.T_decimal128:
-		if !transAll {
-			return nil
-		}
 		decimalValue := &plan.Decimal128{}
 		decimalValue.A = int64(vector.MustFixedCol[types.Decimal128](vec)[0].B0_63)
 		decimalValue.B = int64(vector.MustFixedCol[types.Decimal128](vec)[0].B64_127)
