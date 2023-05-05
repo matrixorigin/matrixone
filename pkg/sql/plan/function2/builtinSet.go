@@ -356,18 +356,18 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 }
 
 const (
-	ZeroDate   = "0001-01-01"
 	formatMask = "%Y/%m/%d"
 	regexpMask = `\d{1,4}/\d{1,2}/\d{1,2}`
 )
 
 // MOLogDate parse 'YYYY/MM/DD' date from input string.
 // return '0001-01-01' if input string not container 'YYYY/MM/DD' substr, until DateParse Function support return NULL for invalid date string.
-func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Date](result)
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 
 	op := newOpBuiltInRegexp()
+	generalTime := NewGeneralTime()
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
 		if null {
@@ -384,13 +384,19 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 			if err = rs.Append(0, true); err != nil {
 				return err
 			}
-		}
-		val, err := types.ParseDateCast(parsedInput)
-		if err != nil {
-			return err
-		}
-		if err = rs.Append(val, false); err != nil {
-			return err
+		} else {
+			generalTime.ResetTime()
+			success := coreStrToDate(proc.Ctx, generalTime, parsedInput, formatMask)
+			if success && types.ValidDate(int32(generalTime.year), generalTime.month, generalTime.day) {
+				val := types.DateFromCalendar(int32(generalTime.year), generalTime.month, generalTime.day)
+				if err = rs.Append(val, false); err != nil {
+					return err
+				}
+			} else {
+				if err = rs.Append(0, true); err != nil {
+					return err
+				}
+			}
 		}
 	}
 
