@@ -54,7 +54,7 @@ func LoadObjectMetaByExtent(
 			return
 		}
 
-		meta = obj.(ObjectMeta)
+		meta = ObjectMeta(obj.([]byte))
 		return
 	}
 	if meta, err = ReadObjectMeta(ctx, name.String(), extent, noLRUCache, fs); err != nil {
