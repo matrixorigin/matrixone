@@ -11,11 +11,11 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package mergeblock
 
 import (
 	"bytes"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -59,7 +59,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 
 	var insertBatch *batch.Batch
-	var affectedRows uint64
 	// If the target is a partition table
 	if len(ap.PartitionSources) > 0 {
 		// 'i' aligns with partition number
@@ -92,7 +91,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 
 			for _, bat := range ap.container.mp2[i] {
-				affectedRows = affectedRows + uint64(bat.Length())
 				// batches in mp2 will be deeply copied into txn's workspace.
 				if err = ap.PartitionSources[i].Write(proc.Ctx, bat); err != nil {
 					return false, err
@@ -151,7 +149,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 		for _, bat := range ap.container.mp2[0] {
 			//batches in mp2 will be deeply copied into txn's workspace.
-			affectedRows = affectedRows + uint64(bat.Length())
 			if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
 				return false, err
 			}
@@ -180,12 +177,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	if ap.IsEnd {
 		proc.SetInputBatch(nil)
+		bat.Clean(proc.GetMPool())
 	} else {
 		proc.SetInputBatch(insertBatch)
 	}
 
 	//ap.container.mp2[0] = ap.container.mp2[0][:0]
-
-	atomic.AddUint64(&ap.affectedRows, affectedRows)
 	return false, nil
 }

@@ -78,16 +78,12 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 
 func (s *Scope) DropDatabase(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
-	for i := range s.PreScopes {
-		switch s.PreScopes[i].Magic {
+	for _, scope := range s.PreScopes {
+		switch scope.Magic {
 		case Merge:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.MergeRun(c)
-			}(s.PreScopes[i])
+			go func(s *Scope) {
+				errChan <- s.MergeRun(c)
+			}(scope)
 		}
 	}
 
