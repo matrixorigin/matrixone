@@ -65,7 +65,7 @@ type mathMultiFun[T mathMultiT] func(T, int64) T
 func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, cb mathMultiFun[T]) (err error) {
 	digits := int64(0)
 	if len(ivecs) > 1 {
-		if !ivecs[1].IsConst() || ivecs[1].GetType().Oid != types.T_int64 {
+		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
 			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
 		}
 		digits = vector.MustFixedCol[int64](ivecs[1])[0]

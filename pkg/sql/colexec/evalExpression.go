@@ -433,12 +433,17 @@ func MinDup(proc *process.Process, bat *batch.Batch) (dupSize int, err error) {
 	dupedVectors := make([]*vector.Vector, 0, len(bat.Vecs))
 	for i, oldVec := range bat.Vecs {
 		if duped[i] < 0 {
-			newVec, err := oldVec.Dup(proc.Mp())
-			if err != nil {
-				for j := range dupedVectors {
-					dupedVectors[j].Free(proc.Mp())
+			newVec := (*vector.Vector)(nil)
+			if oldVec.GetType().Oid == types.T_any {
+				newVec = vector.NewConstNull(types.T_any.ToType(), oldVec.Length(), proc.Mp())
+			} else {
+				newVec, err = oldVec.Dup(proc.Mp())
+				if err != nil {
+					for j := range dupedVectors {
+						dupedVectors[j].Free(proc.Mp())
+					}
+					return 0, err
 				}
-				return 0, err
 			}
 			dupSize += newVec.Size()
 
