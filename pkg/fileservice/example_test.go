@@ -48,7 +48,7 @@ package fileservice
 //			{
 //				Offset: 0,
 //				Size:   2,
-//				ToObject: func(_ io.Reader, data []byte) (any, int64, error) {
+//				ToObjectBytes: func(_ io.Reader, data []byte) (any, int64, error) {
 //					i, err := strconv.Atoi(string(data))
 //					assert.Nil(t, err)
 //					return objcache.NewRCValue(i), 8, nil
@@ -103,7 +103,7 @@ package fileservice
 //			{
 //				Offset: 0,
 //				Size:   2,
-//				ToObject: func(_ io.Reader, data []byte) (any, int64, error) {
+//				ToObjectBytes: func(_ io.Reader, data []byte) (any, int64, error) {
 //					// allocs from pool
 //					copied, put := pool.Get()
 //					copied = copied[:copy(copied, data)]

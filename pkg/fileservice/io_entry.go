@@ -136,13 +136,13 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 }
 
 func (e *IOEntry) setObjectFromData() error {
-	if e.ToObject == nil {
+	if e.ToObjectBytes == nil {
 		return nil
 	}
 	if len(e.Data) == 0 {
 		return nil
 	}
-	obj, size, err := e.ToObject(bytes.NewReader(e.Data), e.Data)
+	obj, size, err := e.ToObjectBytes(bytes.NewReader(e.Data), e.Data)
 	if err != nil {
 		return err
 	}

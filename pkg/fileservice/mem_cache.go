@@ -108,7 +108,7 @@ func (m *MemCache) Read(
 		if entry.done {
 			continue
 		}
-		if entry.ToObject == nil {
+		if entry.ToObjectBytes == nil {
 			continue
 		}
 		key := IOVectorCacheKey{

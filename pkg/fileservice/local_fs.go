@@ -356,12 +356,12 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
 
-			if entry.ToObject != nil {
+			if entry.ToObjectBytes != nil {
 				r = io.TeeReader(r, entry.WriterForRead)
 				cr := &countingReader{
 					R: r,
 				}
-				obj, size, err := entry.ToObject(cr, nil)
+				obj, size, err := entry.ToObjectBytes(cr, nil)
 				if err != nil {
 					return err
 				}
@@ -402,7 +402,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
 
-			if entry.ToObject == nil {
+			if entry.ToObjectBytes == nil {
 				*entry.ReadCloserForRead = &readCloser{
 					r:         r,
 					closeFunc: file.Close,
@@ -414,7 +414,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer file.Close()
-						obj, size, err := entry.ToObject(buf, buf.Bytes())
+						obj, size, err := entry.ToObjectBytes(buf, buf.Bytes())
 						if err != nil {
 							return err
 						}

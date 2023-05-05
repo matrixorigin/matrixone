@@ -36,9 +36,9 @@ func ReadExtent(
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{
-		Offset:   int64(extent.Offset()),
-		Size:     int64(extent.Length()),
-		ToObject: factory(int64(extent.OriginSize()), extent.Alg()),
+		Offset:        int64(extent.Offset()),
+		Size:          int64(extent.Length()),
+		ToObjectBytes: factory(int64(extent.OriginSize()), extent.Alg()),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
@@ -119,9 +119,9 @@ func ReadOneBlockWithMeta(
 		col := meta.GetColumnMeta(uint32(blk), col)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-			Offset:   int64(ext.Offset()),
-			Size:     int64(ext.Length()),
-			ToObject: factory(int64(ext.OriginSize()), ext.Alg()),
+			Offset:        int64(ext.Offset()),
+			Size:          int64(ext.Length()),
+			ToObjectBytes: factory(int64(ext.OriginSize()), ext.Alg()),
 		})
 	}
 	err = fs.Read(ctx, ioVec)
@@ -149,7 +149,7 @@ func ReadMultiBlocksWithMeta(
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
 
-				ToObject: factory(int64(col.Location().OriginSize()), col.Location().Alg()),
+				ToObjectBytes: factory(int64(col.Location().OriginSize()), col.Location().Alg()),
 			})
 		}
 	}
@@ -181,7 +181,7 @@ func ReadAllBlocksWithMeta(
 				Offset: int64(ext.Offset()),
 				Size:   int64(ext.Length()),
 
-				ToObject: factory(int64(ext.OriginSize()), ext.Alg()),
+				ToObjectBytes: factory(int64(ext.OriginSize()), ext.Alg()),
 			})
 		}
 	}
