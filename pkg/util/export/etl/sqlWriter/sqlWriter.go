@@ -109,11 +109,10 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 		return 0, nil
 	}
 
-	baseStr := fmt.Sprintf("INSERT INTO `%s`.`%s` ", tbl.Database, tbl.Table)
+	baseStr := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
 
 	sb := strings.Builder{}
 	defer sb.Reset()
-	sb.WriteString("VALUES ")
 
 	for idx, row := range records {
 		if len(row) == 0 {
@@ -148,7 +147,6 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 				return 0, err
 			}
 			sb.Reset()
-			sb.WriteString("VALUES ")
 		} else {
 			sb.WriteString(",")
 		}
@@ -159,11 +157,15 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 
-	//sw.semaphore <- struct{}{}
-	//defer func() {
-	//	// Release the semaphore
-	//	<-sw.semaphore
-	//}()
+	sw.semaphore <- struct{}{}
+	defer func() {
+		// Release the semaphore
+		<-sw.semaphore
+	}()
+
+	if tbl.Table == "rawlog" && len(rows) > 4*1024*1024 {
+		return 0, fmt.Errorf("rawlog log")
+	}
 
 	r := csv.NewReader(strings.NewReader(rows))
 	records, err := r.ReadAll()
@@ -174,38 +176,30 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 }
 
 func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error) {
-
 	if is_merge {
 		return 0, nil
 	}
 	var err error
 	var cnt int
-	var stmt string
+	//var stmt string
 	db, err := sw.initOrRefreshDBConn(false)
 	if err != nil {
 		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(err))
 		return 0, err
 	}
-	stmt, cnt, err = generateInsertStatement(records, tbl)
+	//stmt, cnt, err = generateInsertStatement(records, tbl)
+	//if err != nil {
+	//	return 0, err
+	//
+	//}
+
+	cnt, err = bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
+		logutil.Error("sqlWriter bulk insert failed", zap.String("address", sw.address), zap.Error(err))
+
 		return 0, err
-
 	}
-
-	if len(stmt) < 3*1024*1024 && tbl.Table != "rawlog" {
-		_, err = db.Exec(stmt)
-	} else {
-		if tbl.Table == "statement_info" || is_merge {
-			cnt, err = bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
-			if err != nil {
-				return 0, err
-			}
-			return cnt, nil
-		}
-		return cnt, nil
-	}
-
-	return cnt, err
+	return cnt, nil
 }
 
 func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
