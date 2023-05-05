@@ -176,8 +176,8 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	return 0, nil
 }
 
-func (tbl *txnTable) LoadDeletesForBlock(blockID string, deleteBlockId map[types.Blockid][]int, deletesRowId map[types.Rowid]uint8) error {
-	for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[blockID] {
+func (tbl *txnTable) LoadDeletesForBlock(blockID *types.Blockid, deleteBlockId map[types.Blockid][]int, deletesRowId map[types.Rowid]uint8) error {
+	for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blockID] {
 		vs := vector.MustStrCol(bat.GetVector(0))
 		for _, metalLoc := range vs {
 			location, err := blockio.EncodeLocationFromString(metalLoc)
@@ -281,7 +281,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 				}
 				iter.Close()
 				// DN flush deletes rowids block
-				if err = tbl.LoadDeletesForBlock(string(blockID[:]), deletes, nil); err != nil {
+				if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
 					return
 				}
 			}
@@ -535,7 +535,7 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 // |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | DN Blcok
 // |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
 func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
-	blkId, typ_str := name[:len(name)-2], string(name[len(name)-1])
+	blkId, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])
 	typ, err := strconv.ParseInt(typ_str, 10, 64)
 	if err != nil {
 		return err
@@ -552,7 +552,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.dnStores[0]); err != nil {
 			return err
 		}
-		tbl.db.txn.blockId_dn_delete_metaLoc_batch[blkId] = append(tbl.db.txn.blockId_dn_delete_metaLoc_batch[blkId], copBat)
+		tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId] = append(tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId], copBat)
 	case deletion.CNBlockOffset:
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
 		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
@@ -560,7 +560,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		tbl.writeDnPartition(tbl.db.txn.proc.Ctx, bat)
 	case deletion.RawBatchOffset:
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
-		entry_bat := tbl.db.txn.blockId_raw_batch[blkId]
+		entry_bat := tbl.db.txn.blockId_raw_batch[*blkId]
 		entry_bat.AntiShrink(vs)
 		// reset rowId offset
 		rowIds := vector.MustFixedCol[types.Rowid](entry_bat.GetVector(0))
@@ -581,17 +581,16 @@ func (tbl *txnTable) compaction() error {
 		return err
 	}
 
-	var deletedIDs []string
+	var deletedIDs []*types.Blockid
 	defer tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
-	tbl.db.txn.deletedBlocks.iter(func(id string, deleteOffsets []int64) bool {
-		blkId := types.Blockid(*(*[20]byte)([]byte(id)))
-		pos := tbl.db.txn.cnBlkId_Pos[string(blkId[:])]
+	tbl.db.txn.deletedBlocks.iter(func(id *types.Blockid, deleteOffsets []int64) bool {
+		pos := tbl.db.txn.cnBlkId_Pos[*id]
 		// just do compaction for current txnTable
 		entry := tbl.db.txn.writes[pos.idx]
 		if !(entry.databaseId == tbl.db.databaseId && entry.tableId == tbl.tableId) {
 			return true
 		}
-		delete(tbl.db.txn.cnBlkId_Pos, string(blkId[:]))
+		delete(tbl.db.txn.cnBlkId_Pos, *id)
 		deletedIDs = append(deletedIDs, id)
 		if len(deleteOffsets) == 0 {
 			return true
@@ -877,19 +876,19 @@ func (tbl *txnTable) newReader(
 		}
 	}
 	// get append block deletes rowids
-	non_append_block := make(map[string]bool)
+	non_append_block := make(map[types.Blockid]bool)
 	if len(tbl.blockInfos) > 0 {
 		for _, blk := range tbl.blockInfos[0] {
 			// append non_append_block
 			if !blk.EntryState {
-				non_append_block[string(blk.BlockID[:])] = true
+				non_append_block[blk.BlockID] = true
 			}
 		}
 	}
 
 	for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
 		if !non_append_block[blkId] {
-			tbl.LoadDeletesForBlock(blkId, nil, deletes)
+			tbl.LoadDeletesForBlock(&blkId, nil, deletes)
 		}
 	}
 	readers := make([]engine.Reader, readerNumber)
