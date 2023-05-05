@@ -16,7 +16,6 @@ package indexwrapper
 
 import (
 	"context"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -55,13 +54,11 @@ func NewBfReader(
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
 	bs, ok := r.indexCache.Get(*r.blockID)
 	if ok {
-
-		var obj any
-		obj, err := objectio.Decode(bs, true)
+		bf, err := index.DecodeBloomFilter(bs)
 		if err != nil {
 			return nil, err
 		}
-		return obj.(objectio.StaticFilter), nil
+		return bf, nil
 	}
 
 	v, size, err := r.reader.LoadOneBF(context.Background(), r.bfKey.ID())
