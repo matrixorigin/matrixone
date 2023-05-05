@@ -217,7 +217,7 @@ func (catalog *Catalog) ReplayCmd(
 }
 
 func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode, *DBNode], idx *wal.Index, observer wal.ReplayObserver) {
-	catalog.OnReplayDBID(cmd.DBID)
+	catalog.OnReplayDBID(cmd.ID.DbID)
 	var err error
 	un := cmd.mvccNode
 	un.SetLogIndex(idx)
@@ -227,10 +227,10 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 		}
 	}
 
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
+	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
 		db = NewReplayDBEntry()
-		db.ID = cmd.DBID
+		db.ID = cmd.ID.DbID
 		db.catalog = catalog
 		db.DBNode = cmd.node
 		db.Insert(un)
@@ -341,7 +341,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 	// 	}
 	// 	return
 	// }
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
+	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
 		panic(err)
 	}
@@ -495,13 +495,13 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	observer wal.ReplayObserver) {
 	catalog.OnReplaySegmentID(cmd.node.SortHint)
 
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
+	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
 		panic(err)
 	}
 	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
 	if err != nil {
-		logutil.Infof("tbl %d-%d", cmd.DBID, cmd.ID.TableID)
+		logutil.Infof("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
 		logutil.Info(catalog.SimplePPString(3))
 		panic(err)
 	}
@@ -645,7 +645,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	observer wal.ReplayObserver) {
 	// catalog.OnReplayBlockID(cmd.ID.BlockID)
 	prepareTS := cmd.GetTs()
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
+	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
 		panic(err)
 	}

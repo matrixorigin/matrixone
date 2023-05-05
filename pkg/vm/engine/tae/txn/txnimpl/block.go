@@ -164,7 +164,7 @@ func (blk *txnBlock) getDBID() uint64 {
 }
 
 func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
-	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end, dt)
+	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end, dt)
 }
 
 func (blk *txnBlock) GetMetaLoc() (metaLoc objectio.Location) {
@@ -175,15 +175,13 @@ func (blk *txnBlock) GetDeltaLoc() (deltaloc objectio.Location) {
 }
 func (blk *txnBlock) UpdateMetaLoc(metaLoc objectio.Location) (err error) {
 	blkID := blk.Fingerprint()
-	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
-	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaLoc)
+	err = blk.Txn.GetStore().UpdateMetaLoc(blkID, metaLoc)
 	return
 }
 
 func (blk *txnBlock) UpdateDeltaLoc(deltaloc objectio.Location) (err error) {
 	blkID := blk.Fingerprint()
-	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
-	err = blk.Txn.GetStore().UpdateDeltaLoc(dbid, blkID, deltaloc)
+	err = blk.Txn.GetStore().UpdateDeltaLoc(blkID, deltaloc)
 	return
 }
 

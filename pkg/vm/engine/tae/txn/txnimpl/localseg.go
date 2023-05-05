@@ -143,8 +143,7 @@ func (seg *localSegment) ApplyAppend() (err error) {
 			ctx.start,
 			ctx.count,
 			uint32(destOff),
-			ctx.count,
-			seg.table.entry.GetDB().ID, id)
+			ctx.count, id)
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)

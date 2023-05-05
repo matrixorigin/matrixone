@@ -364,6 +364,7 @@ func (entry *SegmentEntry) ReplayAddEntryLocked(block *BlockEntry) {
 
 func (entry *SegmentEntry) AsCommonID() *common.ID {
 	id := &common.ID{
+		DbID:    entry.GetTable().GetDB().ID,
 		TableID: entry.GetTable().ID,
 	}
 	id.SetSegmentID(&entry.ID)

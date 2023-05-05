@@ -201,6 +201,7 @@ func (entry *BlockEntry) StringWithLevelLocked(level common.PPLevel) string {
 
 func (entry *BlockEntry) AsCommonID() *common.ID {
 	return &common.ID{
+		DbID:    entry.GetSegment().GetTable().GetDB().ID,
 		TableID: entry.GetSegment().GetTable().ID,
 		BlockID: entry.ID,
 	}
