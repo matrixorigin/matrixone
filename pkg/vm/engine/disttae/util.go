@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -42,15 +41,6 @@ const (
 	HASH_VALUE_FUN string = "hash_value"
 	MAX_RANGE_SIZE int64  = 200
 )
-
-func loadObjectMeta(
-	ctx context.Context,
-	location objectio.Location,
-	fs fileservice.FileService,
-	m *mpool.MPool,
-) (meta objectio.ObjectMeta, err error) {
-	return objectio.FastLoadObjectMeta(ctx, &location, fs)
-}
 
 func buildColumnZMVector(
 	zm objectio.ZoneMap,

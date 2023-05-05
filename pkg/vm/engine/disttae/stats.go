@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -54,7 +55,8 @@ func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.B
 
 	var init bool
 	for i := range objs {
-		if objectMeta, err = loadObjectMeta(ctx, objs[i].MetaLocation(), proc.FileService, proc.Mp()); err != nil {
+		location := objs[i].MetaLocation()
+		if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
 			return nil, err
 		}
 		if !init {
@@ -107,7 +109,7 @@ func CalcStats(ctx context.Context, blocks [][]catalog.BlockInfo, expr *plan.Exp
 			ok := true
 			if exprMono {
 				if !objectio.IsSameObjectLocVsMeta(location, meta) {
-					if meta, err = loadObjectMeta(ctx, location, proc.FileService, proc.Mp()); err != nil {
+					if meta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
 						return
 					}
 				}
