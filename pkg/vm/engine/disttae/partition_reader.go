@@ -194,6 +194,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			if len(deletes) != 0 {
 				rbat.AntiShrink(deletes)
 			}
+			logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[s3]", rbat))
 			return rbat, nil
 		} else {
@@ -222,6 +223,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 			}
 			b.SetZs(bat.Length(), p.procMPool)
+			logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
 			return b, nil
 		}

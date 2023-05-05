@@ -156,6 +156,7 @@ func getTableAutoIncrCol(engineDefs []engine.TableDef, tableName string) (bool, 
 				OnUpdate:  attr.Attr.OnUpdate,
 				Comment:   attr.Attr.Comment,
 				ClusterBy: attr.Attr.ClusterBy,
+				Seqnum:    uint32(attr.Attr.Seqnum),
 			}
 			return true, autoIncrCol
 		}
