@@ -81,7 +81,7 @@ func (w *StoreImpl) makeFuzzyCheckpointEntry(gid uint32, indexes []*Index) (ckpE
 		}},
 	}
 	ckpEntry = entry.GetBase()
-	ckpEntry.SetType(entry.ETCheckpoint)
+	ckpEntry.SetType(entry.IOET_WALEntry_Checkpoint)
 	ckpEntry.SetInfo(info)
 	return
 }
@@ -111,7 +111,7 @@ func (w *StoreImpl) makeRangeCheckpointEntry(gid uint32, start, end uint64) (ckp
 		}},
 	}
 	ckpEntry = entry.GetBase()
-	ckpEntry.SetType(entry.ETCheckpoint)
+	ckpEntry.SetType(entry.IOET_WALEntry_Checkpoint)
 	ckpEntry.SetInfo(info)
 	return
 }

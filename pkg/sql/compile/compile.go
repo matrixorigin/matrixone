@@ -871,6 +871,9 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
 	if param.Local {
+		if param.Parallel {
+			return nil, moerr.NewInvalidInput(ctx, "load local do not support parallel mode")
+		}
 		mcpu = 1
 	}
 	if err != nil {
@@ -1860,9 +1863,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	})
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
-	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[0]
-
-	remoteReceivRegInfosTransplant(s, rs, 0, 0)
+	regTransplant(s, rs, 0, 0)
 	return rs
 }
 
@@ -1882,15 +1883,14 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	})
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
-	rs.Proc.Reg.MergeReceivers[0] = s.Proc.Reg.MergeReceivers[1]
-
-	remoteReceivRegInfosTransplant(s, rs, 1, 0)
+	regTransplant(s, rs, 1, 0)
 	return rs
 }
 
 // Transplant the source's RemoteReceivRegInfos which index equal to sourceIdx to
 // target with new index targetIdx
-func remoteReceivRegInfosTransplant(source, target *Scope, sourceIdx, targetIdx int) {
+func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
+	target.Proc.Reg.MergeReceivers[targetIdx] = source.Proc.Reg.MergeReceivers[sourceIdx]
 	i := 0
 	for i < len(source.RemoteReceivRegInfos) {
 		op := &source.RemoteReceivRegInfos[i]

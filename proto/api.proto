@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright 2021 Matrix Origin
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
- 
+
 syntax = "proto3";
 package api;
 
@@ -21,36 +21,35 @@ import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "timestamp.proto";
 import "plan.proto";
 
-
-option go_package = "github.com/matrixorigin/matrixone/pkg/pb/api";
+option go_package            = "github.com/matrixorigin/matrixone/pkg/pb/api";
 option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 enum OpCode {
-    Nop = 0;
+    Nop          = 0;
     OpGetLogTail = 1000;
-    OpWrite = 1001;
-    OpPreCommit = 1002;
+    OpWrite      = 1001;
+    OpPreCommit  = 1002;
 }
 
 message Vector {
-    bytes data = 1;
-    plan.Type  type = 2;
-    bool  nullable = 3;
-    bytes nsp = 4;
-    bool is_const = 5;
-    uint32 len = 6;
-    bytes area = 7;
+    bytes data     = 1;
+    plan.Type type = 2;
+    bool nullable  = 3;
+    bytes nsp      = 4;
+    bool is_const  = 5;
+    uint32 len     = 6;
+    bytes area     = 7;
 };
 
 message Batch {
     repeated string attrs = 1;
-    repeated Vector vecs = 2;
+    repeated Vector vecs  = 2;
 };
 
 message TableID {
-    uint64 db_id  = 1; 
-    uint64 tb_id  = 2;
+    uint64 db_id        = 1;
+    uint64 tb_id        = 2;
     uint64 partition_id = 3;
 }
 
@@ -58,33 +57,34 @@ message TableID {
 message SyncLogTailReq {
     timestamp.Timestamp cn_have = 1;
     timestamp.Timestamp cn_want = 2;
-    TableID   table = 3;
+    TableID table               = 3;
 };
 
 message SyncLogTailResp {
-  // ckp_location is a checkpoint location list.
-  // How to get checkpoint data on S3 by the ckp_location ,
-  // pls ref to disttae/logtail.go/consumeLogTail function.
-  string     ckp_location = 1;
-  // commands is log tail for a system or user table,
-  // pls ref to tae/logtail/handle.go/HandleSyncLogTailReq function.
-  repeated Entry commands = 2;
+    // ckp_location is a checkpoint location list.
+    // How to get checkpoint data on S3 by the ckp_location ,
+    // pls ref to disttae/logtail.go/consumeLogTail function.
+    string ckp_location = 1;
+    // commands is log tail for a system or user table,
+    // pls ref to tae/logtail/handle.go/HandleSyncLogTailReq function.
+    repeated Entry commands = 2;
 };
 
-//How to parse and handle PrecommiWriteCmd , pls ref to tae/rpc/handle.go/HandlePreCommit function
+// How to parse and handle PrecommiWriteCmd , pls ref to
+// tae/rpc/handle.go/HandlePreCommit function
 message PrecommitWriteCmd {
     repeated Entry entry_list = 1;
 };
 
 // CN--->DN, DDL
-// create database test: 
+// create database test:
 //      Entry {
 //          entry_type = Insert
 //          table_id = 0
 //          database_id = 0
 //          table_name = mo_database
 //          database_name = mo_catalog
-//          file_name = "" 
+//          file_name = ""
 //          bat = "test, 0, ..."
 //      }
 // drop database test:
@@ -94,11 +94,11 @@ message PrecommitWriteCmd {
 //          database_id = 0
 //          table_name = mo_database
 //          database_name = mo_catalog
-//          file_name = "" 
+//          file_name = ""
 //          bat= "test, 0, ..."
 //      }
 
-// create a user table: 
+// create a user table:
 //  insert entry into mo_tables and ...;
 //      Entry {
 //          entry_type = Insert
@@ -106,11 +106,11 @@ message PrecommitWriteCmd {
 //          database_id =  0
 //          table_name =  mo_tables
 //          database_name = mo_catalog
-//          file_name = "" 
+//          file_name = ""
 //          bat.attrs = {"relid", "relname", "reldatabase", ...}
 //      }
 
-// drop table: 
+// drop table:
 //  delete entry from mo_tables and ...;
 //      Entry {
 //          entry_type = delete
@@ -118,7 +118,7 @@ message PrecommitWriteCmd {
 //          database_id = 0
 //          table_name =  mo_tables
 //          database_name = mo_catalog
-//          file_name = "" 
+//          file_name = ""
 //          bat.attrs = {"relid", "relname",...}
 //      }
 
@@ -134,8 +134,8 @@ message PrecommitWriteCmd {
 //          file_name = "s3 file name"
 //
 //          //  bat holds meta locations for many blocks.
-//          //  "meta_loc" : the location of block data which contains BF and ZM index and be sorted by primary key.
-//          bat.attrs = {"meta_loc"}
+//          //  "meta_loc" : the location of block data which contains BF and ZM
+//          index and be sorted by primary key. bat.attrs = {"meta_loc"}
 //      }
 
 // deletes/updates involves many rows need to write S3.
@@ -153,31 +153,28 @@ message PrecommitWriteCmd {
 //          bat.attrs = {"delta_loc"}
 //      }
 
-
 //  DML:
 // append a batch of data into table;
 //            Entry {
-    //          entry_type = Insert
-    //          table_id =  tid
-    //          database_id = dbId
-    //          table_name =  xxx
-    //          database_name = xxx
-    //          file_name = "" 
-    //          bat.attrs = {"primary column value",  "column1 value", ...}
-    //      }
-
+//          entry_type = Insert
+//          table_id =  tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = ""
+//          bat.attrs = {"primary column value",  "column1 value", ...}
+//      }
 
 //  delete batch of data from table;
 //            Entry {
-    //          entry_type = Delete
-    //          table_id =  tid
-    //          database_id = dbId
-    //          table_name =  xxx
-    //          database_name = xxx
-    //          file_name = ""
-    //          bat.attrs = {"rowid"}
-    //      }
-
+//          entry_type = Delete
+//          table_id =  tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = ""
+//          bat.attrs = {"rowid"}
+//      }
 
 message Entry {
     enum EntryType {
@@ -186,14 +183,14 @@ message Entry {
         Update = 2;
     }
     EntryType entry_type = 1;
-    uint64    table_id = 2;
-    uint64    database_id = 3;
-    string    table_name = 4;
-    string    database_name = 5;
-    string    file_name = 6;
-    Batch     bat = 7;
-    //whether DN do the PK uniqueness check against txn's workspace or not.
-    int32     pk_check_by_dn = 8;
+    uint64 table_id      = 2;
+    uint64 database_id   = 3;
+    string table_name    = 4;
+    string database_name = 5;
+    string file_name     = 6;
+    Batch bat            = 7;
+    // whether DN do the PK uniqueness check against txn's workspace or not.
+    int32 pk_check_by_dn = 8;
 };
 
 // There are two kinds of checkpoint: delta checkpoint and base checkpoint,
@@ -203,49 +200,46 @@ message Entry {
 // CatalogCkp contains information about database and tables in the system,and
 // MetadataCkp contains information about blocks.
 message Checkpoint {
-    //min_ts DN is the lower bounds of the checkpoint
-    // CN maybe don't care about it.
+    // min_ts DN is the lower bounds of the checkpoint
+    //  CN maybe don't care about it.
     timestamp.Timestamp min_ts = 1;
-    //max_ts is the upper bounds of the checkpoint.
-    // CN maybe don't care about it.
+    // max_ts is the upper bounds of the checkpoint.
+    //  CN maybe don't care about it.
     timestamp.Timestamp max_ts = 2;
-    Batch      bat   = 3;
-
+    Batch bat                  = 3;
 };
 // catalog checkpoint:
-// one Batch represents a table, such as : mo_databases, mo_tables, mo_columns,... etc.
-// knowing more about system tables, pls ref to pkg/vm/engine/tae/catalog/model.go
+// one Batch represents a table, such as : mo_databases, mo_tables,
+// mo_columns,... etc. knowing more about system tables, pls ref to
+// pkg/vm/engine/tae/catalog/model.go
 message CatalogCkp {
-   timestamp.Timestamp min_ts = 1;
-   timestamp.Timestamp max_ts = 2;
-   Batch      bat   = 3;
+    timestamp.Timestamp min_ts = 1;
+    timestamp.Timestamp max_ts = 2;
+    Batch bat                  = 3;
 };
 
-//metadata checkpoint:
-// Batch is a batch of block metadata for a table,  
-// one row of Batch represents a block meta data.
-// TODO::
-// knowing more about block meta data , pls ref to ...
+// metadata checkpoint:
+//  Batch is a batch of block metadata for a table,
+//  one row of Batch represents a block meta data.
+//  TODO::
+//  knowing more about block meta data , pls ref to ...
 message MetadataCkp {
     timestamp.Timestamp min_ts = 1;
     timestamp.Timestamp max_ts = 2;
-    //block meta data for a table;
-    Batch      bat = 3;
+    // block meta data for a table;
+    Batch bat = 3;
 };
-
-
 
 // For AlterTable
 
 enum AlterKind {
-    Invalid = 0;
-    AddColumn = 1;
-    DropColumn = 2;
-    RenameTable = 3;
-    UpdateComment = 4;
+    Invalid          = 0;
+    AddColumn        = 1;
+    DropColumn       = 2;
+    RenameTable      = 3;
+    UpdateComment    = 4;
     UpdateConstraint = 5;
 }
-
 
 message AlterTableConstraint {
     bytes constraints = 1;
@@ -261,25 +255,31 @@ message AlterTableRenameTable {
 }
 
 message AlterTableAddColumn {
-    plan.ColDef column = 1;
-    int32 insert_position = 2; // if the position can be found in the schema, the column will be added to the last
+    plan.ColDef column    = 1;
+    int32 insert_position = 2;  // if the position can be found in the schema,
+                                // the column will be added to the last
 }
 
 message AlterTableDropColumn {
-    uint32 logical_idx = 1;
-    uint32 sequence_num = 2; // used to double check
+    uint32 logical_idx  = 1;
+    uint32 sequence_num = 2;  // used to double check
 }
 
 message AlterTableReq {
     uint64 table_id = 1;
-    uint64 db_id = 2;
-    AlterKind kind = 3;
+    uint64 db_id    = 2;
+    AlterKind kind  = 3;
 
     oneof operation {
-        AlterTableAddColumn add_column = 4;
-        AlterTableDropColumn drop_column = 5;
+        AlterTableAddColumn add_column     = 4;
+        AlterTableDropColumn drop_column   = 5;
         AlterTableRenameTable rename_table = 6;
-        AlterTableComment update_comment = 7;
-        AlterTableConstraint update_cstr = 8;
+        AlterTableComment update_comment   = 7;
+        AlterTableConstraint update_cstr   = 8;
     }
+}
+
+// Int64Map mainly used in unit test
+message Int64Map {
+    map<int64, int64> m = 1;
 }

@@ -183,6 +183,10 @@ type Session struct {
 
 	sqlHelper *SqlHelper
 
+	rm *RoutineManager
+
+	rt *Routine
+
 	// when starting a transaction in session, the snapshot ts of the transaction
 	// is to get a DN push to CN to get the maximum commitTS. but there is a problem,
 	// when the last transaction ends and the next one starts, it is possible that the
@@ -190,6 +194,30 @@ type Session struct {
 	// least the commit of the last transaction log of the previous transaction arrives.
 	lastCommitTS timestamp.Timestamp
 	upstream     *Session
+}
+
+func (ses *Session) setRoutineManager(rm *RoutineManager) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.rm = rm
+}
+
+func (ses *Session) getRoutineManager() *RoutineManager {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.rm
+}
+
+func (ses *Session) setRoutine(rt *Routine) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.rt = rt
+}
+
+func (ses *Session) getRoutin() *Routine {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.rt
 }
 
 func (ses *Session) SetSeqLastValue(proc *process.Process) {
@@ -1103,6 +1131,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	var tenantID int64
 	var userID int64
 	var pwd, accountStatus string
+	var accountVersion uint64
 	var pwdBytes []byte
 	var isSpecial bool
 	var specialAccount *TenantInfo
@@ -1159,6 +1188,12 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 
 	//account status
 	accountStatus, err = rsset[0].GetString(sysTenantCtx, 0, 2)
+	if err != nil {
+		return nil, err
+	}
+
+	//account version
+	accountVersion, err = rsset[0].GetUint64(sysTenantCtx, 0, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -1292,7 +1327,8 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 		tenant.SetDefaultRole(defaultRole)
 	}
-
+	// record the id :routine pair in RoutineManager
+	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutin(), accountVersion)
 	logInfo(sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)

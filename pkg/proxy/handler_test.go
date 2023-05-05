@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -81,16 +82,19 @@ func newTestProxyHandler(t *testing.T) *testProxyHandler {
 func TestHandler_Handle(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
+	temp := os.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(listenAddr))
 	cfg := Config{
-		ListenAddress:     "127.0.0.1:40019",
+		ListenAddress:     "unix://" + listenAddr,
 		RebalanceDisabled: true,
 	}
-	cfg.HAKeeper.ClientConfig.ServiceAddresses = []string{"127.0.0.1:8000"}
 	hc := &mockHAKeeperClient{}
-	addr := "127.0.0.1:48090"
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	hc.updateCN(cn1.uuid, cn1.addr, map[string]metadata.LabelList{})
 	// start backend server.
@@ -111,7 +115,7 @@ func TestHandler_Handle(t *testing.T) {
 	err = s.Start()
 	require.NoError(t, err)
 
-	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/db1", cfg.ListenAddress))
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", listenAddr))
 	// connect to server.
 	require.NoError(t, err)
 	require.NotNil(t, db)
@@ -147,16 +151,19 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 	t.Skip("ssl is not supported")
 	defer leaktest.AfterTest(t)()
 
+	temp := os.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(listenAddr))
 	cfg := Config{
-		ListenAddress:     "127.0.0.1:40029",
+		ListenAddress:     "unix://" + listenAddr,
 		RebalanceDisabled: true,
 	}
-	cfg.HAKeeper.ClientConfig.ServiceAddresses = []string{"127.0.0.1:8020"}
 	hc := &mockHAKeeperClient{}
-	addr := "127.0.0.1:48091"
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	hc.updateCN(cn1.uuid, cn1.addr, map[string]metadata.LabelList{})
 	// start backend server.
@@ -219,7 +226,7 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 	require.NoError(t, err)
 
 	db, err := sql.Open("mysql",
-		fmt.Sprintf("dump:111@tcp(%s)/db1?tls=custom", cfg.ListenAddress))
+		fmt.Sprintf("dump:111@unix(%s)/db1?tls=custom", listenAddr))
 	// connect to server.
 	require.NoError(t, err)
 	require.NotNil(t, db)
@@ -236,16 +243,19 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 func TestHandler_HandleEventKillQuery(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
+	temp := os.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(listenAddr))
 	cfg := Config{
-		ListenAddress:     "127.0.0.1:40019",
+		ListenAddress:     "unix://" + listenAddr,
 		RebalanceDisabled: true,
 	}
-	cfg.HAKeeper.ClientConfig.ServiceAddresses = []string{"127.0.0.1:8000"}
 	hc := &mockHAKeeperClient{}
-	addr := "127.0.0.1:48190"
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	hc.updateCN(cn1.uuid, cn1.addr, map[string]metadata.LabelList{})
 	// start backend server.
@@ -266,7 +276,7 @@ func TestHandler_HandleEventKillQuery(t *testing.T) {
 	err = s.Start()
 	require.NoError(t, err)
 
-	db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/db1", cfg.ListenAddress))
+	db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", listenAddr))
 	// connect to server.
 	require.NoError(t, err)
 	require.NotNil(t, db1)
@@ -277,7 +287,7 @@ func TestHandler_HandleEventKillQuery(t *testing.T) {
 	require.NoError(t, err)
 	connID, _ := res.LastInsertId() // fake connection id
 
-	db2, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/db1", cfg.ListenAddress))
+	db2, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", listenAddr))
 	// connect to server.
 	require.NoError(t, err)
 	require.NotNil(t, db2)
@@ -297,16 +307,19 @@ func TestHandler_HandleEventKillQuery(t *testing.T) {
 func TestHandler_HandleEventSetVar(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
+	temp := os.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(listenAddr))
 	cfg := Config{
-		ListenAddress:     "127.0.0.1:40020",
+		ListenAddress:     "unix://" + listenAddr,
 		RebalanceDisabled: true,
 	}
-	cfg.HAKeeper.ClientConfig.ServiceAddresses = []string{"127.0.0.1:8000"}
 	hc := &mockHAKeeperClient{}
-	addr := "127.0.0.1:48190"
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	hc.updateCN(cn1.uuid, cn1.addr, map[string]metadata.LabelList{})
 	// start backend server.
@@ -327,7 +340,7 @@ func TestHandler_HandleEventSetVar(t *testing.T) {
 	err = s.Start()
 	require.NoError(t, err)
 
-	db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(%s)/db1", cfg.ListenAddress))
+	db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", listenAddr))
 	// connect to server.
 	require.NoError(t, err)
 	require.NotNil(t, db1)

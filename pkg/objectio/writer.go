@@ -133,7 +133,6 @@ func (w *objectWriterV1) prepareObjectMeta(objectMeta ObjectMeta, offset uint32)
 	blockIndex := BuildBlockIndex(blockCount)
 	blockIndex.SetBlockCount(blockCount)
 	length += blockIndex.Length()
-	blockIndex.SetBlockCount(blockCount)
 	for i, block := range w.blocks {
 		n := uint32(len(block.meta))
 		blockIndex.SetBlockMetaPos(uint32(i), length, n)
@@ -379,6 +378,7 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch) error
 		block.data = append(block.data, data)
 		blockMeta.ColumnMeta(uint16(i)).setLocation(ext)
 		blockMeta.ColumnMeta(uint16(i)).setDataType(uint8(vec.GetType().Oid))
+		blockMeta.ColumnMeta(uint16(i)).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
 	}
 	w.blocks = append(w.blocks, block)
 	w.lastId++

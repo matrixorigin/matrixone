@@ -105,7 +105,11 @@ a    b    c
 2    aaaa    2020-09-08 00:00:00
 start transaction ;
 create database dis_db_01;
+internal error: CREATE/DROP of database is not supported in transactions
 use dis_db_01;
+invalid database dis_db_01
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+begin;
 create table dis_table_04(a int);
 insert into dis_table_04 values (4);
 create table dis_table_04(a int);
@@ -198,6 +202,7 @@ aaaa    2020-09-08 00:00:00
 vvv    2000-09-08 00:00:00
 begin ;
 create database dis_db_02;
+internal error: CREATE/DROP of database is not supported in transactions
 rollback ;
 commit;
 w-w conflict

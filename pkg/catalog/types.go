@@ -18,11 +18,11 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -33,6 +33,10 @@ const (
 	PrefixIndexTableName = "__mo_index_"
 	// Compound primary key column name, which is a hidden column
 	CPrimaryKeyColName = "__mo_cpkey_col"
+	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
+	// is added, which will not be sorted or used for any other purpose, but will only be used to add
+	// locks to the Lock operator in pessimistic transaction mode.
+	FakePrimaryKeyColName = "__mo_fake_pk_col"
 	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
 	IndexTableIndexColName   = "__mo_index_idx_col"
 	IndexTablePrimaryColName = "__mo_index_pri_col"
@@ -153,7 +157,7 @@ const (
 	SystemSequenceRel     = "S"
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
-	SystemExternalRel     = "e"
+	SystemExternalRel     = plan.SystemExternalRel
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"
@@ -244,12 +248,53 @@ const (
 	BLOCKMETA_SEGID_IDX      = 6
 )
 
+type ObjectLocation [objectio.LocationLen]byte
+
+// ProtoSize is used by gogoproto.
+func (m *ObjectLocation) ProtoSize() int {
+	return objectio.LocationLen
+}
+
+// MarshalTo is used by gogoproto.
+func (m *ObjectLocation) MarshalTo(data []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(data[:size])
+}
+
+// MarshalToSizedBuffer is used by gogoproto.
+func (m *ObjectLocation) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < m.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, m[:])
+	return n, nil
+}
+
+// Marshal is used by gogoproto.
+func (m *ObjectLocation) Marshal() ([]byte, error) {
+	data := make([]byte, m.ProtoSize())
+	n, err := m.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], err
+}
+
+// Unmarshal is used by gogoproto.
+func (m *ObjectLocation) Unmarshal(data []byte) error {
+	if len(data) < m.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(m[:], data)
+	return nil
+}
+
 type BlockInfo struct {
 	BlockID    types.Blockid
 	EntryState bool
 	Sorted     bool
-	MetaLoc    [objectio.LocationLen]byte
-	DeltaLoc   [objectio.LocationLen]byte
+	MetaLoc    ObjectLocation
+	DeltaLoc   ObjectLocation
 	CommitTs   types.TS
 	SegmentID  types.Uuid
 }

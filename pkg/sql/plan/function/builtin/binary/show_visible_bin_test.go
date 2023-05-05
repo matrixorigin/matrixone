@@ -28,7 +28,7 @@ import (
 func TestShowVisibleBin(t *testing.T) {
 	var out *vector.Vector
 	tp := types.T_varchar.ToType()
-	buf, err := types.Encode(tp)
+	buf, err := types.Encode(&tp)
 	require.NoError(t, err)
 	require.NotNil(t, buf)
 	toCode := typNormal

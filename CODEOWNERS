@@ -78,7 +78,7 @@
 /pkg/fileservice @reusee
 
 # pkg/frontend @daviszhen
-/pkg/frontend @daviszhen
+/pkg/frontend @daviszhen @jianwan0214 @qingxinhome
 
 # pkg/hakeeper
 /pkg/hakeeper @zhangxu19830126 @w-zr

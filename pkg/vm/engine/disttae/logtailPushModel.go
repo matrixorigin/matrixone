@@ -43,6 +43,9 @@ const (
 	// we assume that client has lost connect to server and will start a reconnect.
 	maxTimeToWaitServerResponse = 60 * time.Second
 
+	// once we reconnect dn failed. we will retry after time retryReconnect.
+	retryReconnect = 20 * time.Millisecond
+
 	// max number of subscribe request we allowed per second.
 	maxSubscribeRequestPerSecond = 10000
 
@@ -311,19 +314,23 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 				r.close()
 			}
 			logutil.Infof("start to reconnect to dn log tail service")
-			dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-			if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
-				logutil.Error("rebuild the cn log tail client failed.")
-				reconnectErr <- err
+			for {
+				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
+				if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
+					logutil.Error("rebuild the cn log tail client failed.")
+					time.Sleep(retryReconnect)
+					continue
+				}
+
+				// once we reconnect succeed, should clean partition here.
+				e.cleanMemoryTable()
+
+				go func() {
+					err := client.firstTimeConnectToLogTailServer(context.TODO())
+					reconnectErr <- err
+				}()
+				break
 			}
-
-			// once we reconnect succeed, should clean partition here.
-			e.cleanMemoryTable()
-
-			go func() {
-				err := client.firstTimeConnectToLogTailServer(context.TODO())
-				reconnectErr <- err
-			}()
 		}
 	}()
 }
@@ -336,29 +343,28 @@ func (client *pushClient) unusedTableGCTicker() {
 			<-ticker.C
 
 			t := time.Now()
-			if t.After(time.Time{}.Add(unsubscribeTimer)) {
-				client.subscribed.mutex.Lock()
+			client.subscribed.mutex.Lock()
 
-				shouldClean := t.Add(-unsubscribeTimer)
-				for k, v := range client.subscribed.m {
-					if ifShouldNotDistribute(k.db, k.tbl) {
-						// never unsubscribe the mo_databases, mo_tables, mo_columns.
-						continue
-					}
-					if !v.isDeleting && !v.latestTime.After(shouldClean) {
-						if err := client.unsubscribeTable(ctx, api.TableID{DbId: k.db, TbId: k.tbl}); err == nil {
-							logutil.Infof("sign tbl[dbId: %d, tblId: %d] unsubscribing", k.db, k.tbl)
-							client.subscribed.m[k] = tableSubscribeStatus{
-								isDeleting: true,
-								latestTime: v.latestTime,
-							}
-							continue
+			shouldClean := t.Add(-unsubscribeTimer)
+			for k, v := range client.subscribed.m {
+				if ifShouldNotDistribute(k.db, k.tbl) {
+					// never unsubscribe the mo_databases, mo_tables, mo_columns.
+					continue
+				}
+				if !v.isDeleting && !v.latestTime.After(shouldClean) {
+					if err := client.unsubscribeTable(ctx, api.TableID{DbId: k.db, TbId: k.tbl}); err == nil {
+						logutil.Infof("sign tbl[dbId: %d, tblId: %d] unsubscribing", k.db, k.tbl)
+						client.subscribed.m[k] = tableSubscribeStatus{
+							isDeleting: true,
+							latestTime: v.latestTime,
 						}
-						logutil.Errorf("sign tbl[dbId: %d, tblId: %d] unsubscribing failed", k.db, k.tbl)
+						continue
+					} else {
+						logutil.Errorf("sign tbl[dbId: %d, tblId: %d] unsubscribing failed, err : %s", k.db, k.tbl, err.Error())
 					}
 				}
-				client.subscribed.mutex.Unlock()
 			}
+			client.subscribed.mutex.Unlock()
 		}
 	}()
 }
@@ -436,10 +442,22 @@ type syncLogTailTimestamp struct {
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
 	r.timestampWaiter = timestampWaiter
 	r.ready.Store(false)
-	r.tList = make([]struct {
-		time timestamp.Timestamp
-		sync.RWMutex
-	}, parallelNums+1)
+	if len(r.tList) == 0 {
+		r.tList = make([]struct {
+			time timestamp.Timestamp
+			sync.RWMutex
+		}, parallelNums+1)
+	} else {
+		for i := range r.tList {
+			r.tList[i].Lock()
+		}
+		for i := range r.tList {
+			r.tList[i].time = timestamp.Timestamp{}
+		}
+		for i := range r.tList {
+			r.tList[i].Unlock()
+		}
+	}
 }
 
 func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
@@ -482,6 +500,10 @@ type logTailSubscriber struct {
 	lockUnSubscriber chan func(ctx context.Context, id api.TableID) error
 }
 
+func clientIsPreparing(context.Context, api.TableID) error {
+	return moerr.NewInternalErrorNoCtx("log tail client is not ready")
+}
+
 type logTailSubscriberResponse struct {
 	response *service.LogtailResponse
 	err      error
@@ -518,9 +540,10 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	// XXX we assume that we have only 1 dn now.
 	s.dnNodeID = 0
 
-	stream, err := newRpcStreamToDnLogTailService(serviceAddr)
-	if err != nil {
-		return err
+	// close the old stream
+	oldClient := s.logTailClient
+	if oldClient != nil {
+		_ = oldClient.Close()
 	}
 
 	// if channel is not nil here, it's most likely called by reconnect process.
@@ -531,25 +554,32 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	} else {
 		<-s.lockSubscriber
 	}
+	s.lockSubscriber <- clientIsPreparing
+
 	if s.lockUnSubscriber == nil {
 		s.lockUnSubscriber = make(chan func(context.Context, api.TableID) error, 1)
 	} else {
 		<-s.lockUnSubscriber
 	}
+	s.lockUnSubscriber <- clientIsPreparing
+
+	stream, err := newRpcStreamToDnLogTailService(serviceAddr)
+	if err != nil {
+		return err
+	}
 
 	// new the log tail client.
-	oldClient := s.logTailClient
 	s.logTailClient, err = service.NewLogtailClient(stream,
 		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
 	if err != nil {
-		s.lockSubscriber, s.lockUnSubscriber = nil, nil
+		return err
 	}
+	<-s.lockSubscriber
+	<-s.lockUnSubscriber
+
 	s.lockSubscriber <- s.subscribeTable
 	s.lockUnSubscriber <- s.unSubscribeTable
-	if oldClient != nil {
-		_ = oldClient.Close()
-	}
-	return err
+	return nil
 }
 
 // can't call this method directly.

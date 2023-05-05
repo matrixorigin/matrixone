@@ -23,6 +23,96 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBlockidMarshalAndUnmarshal(t *testing.T) {
+	var blockid Blockid
+	for i := 0; i < len(blockid); i++ {
+		blockid[i] = byte(i)
+	}
+
+	data, err := blockid.Marshal()
+	require.NoError(t, err)
+
+	var ret Blockid
+	err = ret.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, blockid, ret)
+}
+
+func TestUuidMarshalAndUnmarshal(t *testing.T) {
+	var uuid Uuid
+	for i := 0; i < len(uuid); i++ {
+		uuid[i] = byte(i)
+	}
+
+	data, err := uuid.Marshal()
+	require.NoError(t, err)
+
+	var ret Uuid
+	err = ret.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, uuid, ret)
+}
+
+func TestTSMarshalAndUnmarshal(t *testing.T) {
+	var ts TS
+	for i := 0; i < len(ts); i++ {
+		ts[i] = byte(i)
+	}
+
+	data, err := ts.Marshal()
+	require.NoError(t, err)
+
+	var ret TS
+	err = ret.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, ts, ret)
+}
+
+func TestDecimal64MarshalAndUnmarshal(t *testing.T) {
+	d := Decimal64(100)
+	data, err := d.Marshal()
+	require.NoError(t, err)
+
+	var ret Decimal64
+	err = ret.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, d, ret)
+}
+
+func TestDecimal128MarshalAndUnmarshal(t *testing.T) {
+	d := Decimal128{B0_63: 1, B64_127: 100}
+	data, err := d.Marshal()
+	require.NoError(t, err)
+
+	var ret Decimal128
+	err = ret.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, d, ret)
+}
+
+func TestTypeMarshalAndUnmarshal(t *testing.T) {
+	typ := Type{
+		Oid:     T(1),
+		Charset: 2,
+		dummy1:  3,
+		dummy2:  4,
+		Size:    5,
+		Width:   6,
+		Scale:   -1,
+	}
+
+	size := typ.ProtoSize()
+	data := make([]byte, size)
+	n, err := typ.MarshalTo(data)
+	require.NoError(t, err)
+	require.Equal(t, size, n)
+
+	var ret Type
+	err = ret.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, typ, ret)
+}
+
 func TestType_String(t *testing.T) {
 	myType := T_int64.ToType()
 	require.Equal(t, "BIGINT", myType.String())
