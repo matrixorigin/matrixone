@@ -473,21 +473,227 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	switch astExpr.Op {
 	case tree.EQUAL:
 		op = "="
+		switch leftexpr := astExpr.Left.(type) {
+		case *tree.Tuple:
+			switch rightexpr := astExpr.Right.(type) {
+			case *tree.Tuple:
+				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
+					var expr1, expr2 *plan.Expr
+					var err error
+					for i := 1; i < len(leftexpr.Exprs); i++ {
+						if i == 1 {
+							expr1, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[0], rightexpr.Exprs[0]}, depth)
+							if err != nil {
+								return nil, err
+							}
+						}
+						expr2, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						expr1, err = bindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+					}
+					return expr1, nil
+				} else {
+					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+				}
+			}
+		}
 
 	case tree.LESS_THAN:
 		op = "<"
+		switch leftexpr := astExpr.Left.(type) {
+		case *tree.Tuple:
+			switch rightexpr := astExpr.Right.(type) {
+			case *tree.Tuple:
+				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
+					var expr1, expr2 *plan.Expr
+					var err error
+					for i := len(leftexpr.Exprs) - 2; i >= 0; i-- {
+						if i == len(leftexpr.Exprs)-2 {
+							expr1, err = b.bindFuncExprImplByAstExpr("<", []tree.Expr{leftexpr.Exprs[i+1], rightexpr.Exprs[i+1]}, depth)
+							if err != nil {
+								return nil, err
+							}
+						}
+						expr2, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						expr1, err = bindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+						expr2, err = b.bindFuncExprImplByAstExpr("<", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						expr1, err = bindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+					}
+					return expr1, nil
+				} else {
+					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+				}
+			}
+		}
 
 	case tree.LESS_THAN_EQUAL:
 		op = "<="
+		switch leftexpr := astExpr.Left.(type) {
+		case *tree.Tuple:
+			switch rightexpr := astExpr.Right.(type) {
+			case *tree.Tuple:
+				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
+					var expr1, expr2 *plan.Expr
+					var err error
+					for i := len(leftexpr.Exprs) - 2; i >= 0; i-- {
+						if i == len(leftexpr.Exprs)-2 {
+							expr1, err = b.bindFuncExprImplByAstExpr("<=", []tree.Expr{leftexpr.Exprs[i+1], rightexpr.Exprs[i+1]}, depth)
+							if err != nil {
+								return nil, err
+							}
+						}
+						expr2, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						expr1, err = bindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+						expr2, err = b.bindFuncExprImplByAstExpr("<", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						expr1, err = bindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+					}
+					return expr1, nil
+				} else {
+					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+				}
+			}
+		}
 
 	case tree.GREAT_THAN:
 		op = ">"
+		switch leftexpr := astExpr.Left.(type) {
+		case *tree.Tuple:
+			switch rightexpr := astExpr.Right.(type) {
+			case *tree.Tuple:
+				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
+					var expr1, expr2 *plan.Expr
+					var err error
+					for i := len(leftexpr.Exprs) - 2; i >= 0; i-- {
+						if i == len(leftexpr.Exprs)-2 {
+							expr1, err = b.bindFuncExprImplByAstExpr(">", []tree.Expr{leftexpr.Exprs[i+1], rightexpr.Exprs[i+1]}, depth)
+							if err != nil {
+								return nil, err
+							}
+						}
+						expr2, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						expr1, err = bindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+						expr2, err = b.bindFuncExprImplByAstExpr(">", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						expr1, err = bindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+					}
+					return expr1, nil
+				} else {
+					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+				}
+			}
+		}
 
 	case tree.GREAT_THAN_EQUAL:
 		op = ">="
+		switch leftexpr := astExpr.Left.(type) {
+		case *tree.Tuple:
+			switch rightexpr := astExpr.Right.(type) {
+			case *tree.Tuple:
+				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
+					var expr1, expr2 *plan.Expr
+					var err error
+					for i := len(leftexpr.Exprs) - 2; i >= 0; i-- {
+						if i == len(leftexpr.Exprs)-2 {
+							expr1, err = b.bindFuncExprImplByAstExpr(">=", []tree.Expr{leftexpr.Exprs[i+1], rightexpr.Exprs[i+1]}, depth)
+							if err != nil {
+								return nil, err
+							}
+						}
+						expr2, err = b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						expr1, err = bindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+						expr2, err = b.bindFuncExprImplByAstExpr(">", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						expr1, err = bindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+					}
+					return expr1, nil
+				} else {
+					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+				}
+			}
+		}
 
 	case tree.NOT_EQUAL:
 		op = "<>"
+		switch leftexpr := astExpr.Left.(type) {
+		case *tree.Tuple:
+			switch rightexpr := astExpr.Right.(type) {
+			case *tree.Tuple:
+				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
+					var expr1, expr2 *plan.Expr
+					var err error
+					for i := 1; i < len(leftexpr.Exprs); i++ {
+						if i == 1 {
+							expr1, err = b.bindFuncExprImplByAstExpr("<>", []tree.Expr{leftexpr.Exprs[0], rightexpr.Exprs[0]}, depth)
+							if err != nil {
+								return nil, err
+							}
+						}
+						expr2, err = b.bindFuncExprImplByAstExpr("<>", []tree.Expr{leftexpr.Exprs[i], rightexpr.Exprs[i]}, depth)
+						if err != nil {
+							return nil, err
+						}
+						expr1, err = bindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{expr1, expr2})
+						if err != nil {
+							return nil, err
+						}
+					}
+					return expr1, nil
+				} else {
+					return nil, moerr.NewInvalidInput(b.GetContext(), "two tuples have different length(%v,%v)", len(leftexpr.Exprs), len(rightexpr.Exprs))
+				}
+			}
+		}
 
 	case tree.LIKE:
 		op = "like"
