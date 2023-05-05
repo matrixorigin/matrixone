@@ -1330,40 +1330,78 @@ type number interface {
 }
 
 // XXX confused check rule.
-func filedCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) > 1 {
-		requiredType := make([]types.T, len(inputs))
-		doubleIndex := -1 // index of overload which require all `double` type as parameters.
+//func filedCheck(overloads []overload, inputs []types.Type) checkResult {
+//	if len(inputs) > 1 {
+//		requiredType := make([]types.T, len(inputs))
+//		doubleIndex := -1 // index of overload which require all `double` type as parameters.
+//
+//		for i, over := range overloads {
+//			for _, t := range over.args {
+//				for j := range requiredType {
+//					if t == types.T_float64 {
+//						doubleIndex = i
+//					}
+//					requiredType[j] = t
+//				}
+//				if sta, _ := tryToMatch(inputs, requiredType); sta == matchDirectly {
+//					return newCheckResultWithSuccess(i)
+//				}
+//			}
+//		}
+//
+//		// try to convert all arguments to be double.
+//		if doubleIndex != -1 {
+//			for i := range requiredType {
+//				requiredType[i] = types.T_float64
+//			}
+//			if sta, _ := tryToMatch(inputs, requiredType); sta == matchByCast {
+//				castTypes := make([]types.Type, len(inputs))
+//				for j := range castTypes {
+//					castTypes[j] = types.T_float64.ToType()
+//				}
+//				return newCheckResultWithCast(doubleIndex, castTypes)
+//			}
+//		}
+//	}
+//	return newCheckResultWithFailure(failedFunctionParametersWrong)
+//}
 
-		for i, over := range overloads {
-			for _, t := range over.args {
-				for j := range requiredType {
-					if t == types.T_float64 {
-						doubleIndex = i
-					}
-					requiredType[j] = t
-				}
-				if sta, _ := tryToMatch(inputs, requiredType); sta == matchDirectly {
-					return newCheckResultWithSuccess(i)
-				}
+func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
+	tc := func(inputs []types.Type, t types.T) bool {
+		for _, input := range inputs {
+			if input.Oid != t && input.Oid != types.T_any {
+				return false
 			}
 		}
-
-		// try to convert all arguments to be double.
-		if doubleIndex != -1 {
-			for i := range requiredType {
-				requiredType[i] = types.T_float64
-			}
-			if sta, _ := tryToMatch(inputs, requiredType); sta == matchByCast {
-				castTypes := make([]types.Type, len(inputs))
-				for j := range castTypes {
-					castTypes[j] = types.T_float64.ToType()
-				}
-				return newCheckResultWithCast(doubleIndex, castTypes)
+		return true
+	}
+	if len(inputs) < 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	returnType := [...]types.T{types.T_varchar, types.T_char, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64}
+	for i, r := range returnType {
+		if tc(inputs, r) {
+			if i < 2 {
+				return newCheckResultWithSuccess(0)
+			} else {
+				return newCheckResultWithSuccess(i - 1)
 			}
 		}
 	}
-	return newCheckResultWithFailure(failedFunctionParametersWrong)
+	castTypes := make([]types.T, len(inputs))
+	targetTypes := make([]types.Type, len(inputs))
+	for j := 0; j < len(inputs); j++ {
+		castTypes[j] = types.T_float64
+		targetTypes[j] = types.T_float64.ToType()
+	}
+	c, _ := tryToMatch(inputs, castTypes)
+	if c == matchFailed {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if c == matchByCast {
+		return newCheckResultWithCast(10, targetTypes)
+	}
+	return newCheckResultWithSuccess(10)
 }
 
 func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
@@ -1424,7 +1462,7 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 				continue
 			}
 
-			if string(v1) == string(v2) {
+			if strings.ToLower(string(v1)) == strings.ToLower(string(v2)) {
 				nums[i] = uint64(j)
 			}
 

@@ -295,7 +295,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: FIELD,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    filedCheck,
+		checkFn:    fieldCheck,
 
 		Overloads: []overload{
 			{
