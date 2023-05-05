@@ -223,7 +223,8 @@ func (n *persistedNode) init() {
 			n.bnode.indexCache,
 			n.bnode.fs,
 			n.bnode.meta.GetMetaLoc(),
-			schema.ColDefs[i]); err != nil {
+			schema.ColDefs[i],
+			&n.bnode.meta.ID); err != nil {
 			panic(err)
 		}
 		n.indexes[i] = index
