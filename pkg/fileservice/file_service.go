@@ -103,13 +103,12 @@ type IOEntry struct {
 	// if number of bytes is unknown, set Size field to -1
 	ReaderForWrite io.Reader
 
-	// when reading, if the ToObjectBytes field is not nil, the returning object will be set to this field
-	// caches may choose to cache this object instead of caching []byte
+	// When reading, if the ToObjectBytes field is not nil, the returning object's byte slice will be set to this field
 	// Data, WriterForRead, ReadCloserForRead may be empty if ObjectBytes is not null
 	// if ToObjectBytes is provided, caller should always read ObjectBytes instead of Data, WriterForRead or ReadCloserForRead
 	ObjectBytes []byte
 
-	// ToObjectBytes constructs an object from entry contents
+	// ToObjectBytes constructs an object byte slice from entry contents
 	// reader or data must not be retained after returns
 	// reader always contains entry contents
 	// data may contains entry contents if available
