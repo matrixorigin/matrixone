@@ -258,7 +258,7 @@ func (w *S3Writer) Output(proc *process.Process) error {
 		bat.SetVector(int32(i), vec)
 	}
 	bat.Zs = append(bat.Zs, w.metaLocBat.Zs...)
-
+	w.ResetMetaLocBat()
 	proc.SetInputBatch(bat)
 	return nil
 }

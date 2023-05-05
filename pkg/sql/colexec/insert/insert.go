@@ -203,6 +203,7 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 			return
 		}
 		res.Zs = append(res.Zs, w.GetMetaLocBat().Zs...)
+		w.ResetMetaLocBat()
 	}
 	proc.SetInputBatch(res)
 	return
