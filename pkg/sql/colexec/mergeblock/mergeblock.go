@@ -15,6 +15,8 @@ package mergeblock
 
 import (
 	"bytes"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -55,46 +57,135 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 		}()
 	}
-	// handle origin/main table.
-	if ap.container.mp[0].Length() > 0 {
-		//batches in mp will be deeply copied into txn's workspace.
-		if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
-			return false, err
-		}
-	}
 
 	var insertBatch *batch.Batch
-	for _, bat := range ap.container.mp2[0] {
-		//batches in mp2 will be deeply copied into txn's workspace.
-		if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
-			return false, err
+	var affectedRows uint64
+	// If the target is a partition table
+	if len(ap.PartitionSources) > 0 {
+		// 'i' aligns with partition number
+		for i := range ap.PartitionSources {
+			if ap.container.mp[i].Length() > 0 {
+				// batches in mp will be deeply copied into txn's workspace.
+				if err = ap.PartitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
+					return false, err
+				}
+
+				if !ap.IsEnd {
+					if insertBatch == nil {
+						insertBatch = batch.NewWithSize(len(bat.Attrs))
+						insertBatch.SetAttributes(bat.Attrs)
+						for i := range bat.Attrs {
+							vec := vector.NewVec(*bat.Vecs[i].GetType())
+							if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+								return false, err
+							}
+							insertBatch.SetVector(int32(i), vec)
+							insertBatch.Zs = append(insertBatch.Zs, bat.Zs...)
+						}
+					} else {
+						_, err := insertBatch.Append(proc.Ctx, proc.GetMPool(), bat)
+						if err != nil {
+							return false, err
+						}
+					}
+				}
+			}
+
+			for _, bat := range ap.container.mp2[i] {
+				affectedRows = affectedRows + uint64(bat.Length())
+				// batches in mp2 will be deeply copied into txn's workspace.
+				if err = ap.PartitionSources[i].Write(proc.Ctx, bat); err != nil {
+					return false, err
+				}
+
+				if !ap.IsEnd {
+					if insertBatch == nil {
+						insertBatch = batch.NewWithSize(len(bat.Attrs))
+						insertBatch.SetAttributes(bat.Attrs)
+						for i := range bat.Attrs {
+							vec := vector.NewVec(*bat.Vecs[i].GetType())
+							if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+								return false, err
+							}
+							insertBatch.SetVector(int32(i), vec)
+							insertBatch.Zs = append(insertBatch.Zs, bat.Zs...)
+						}
+					} else {
+						_, err := insertBatch.Append(proc.Ctx, proc.GetMPool(), bat)
+						if err != nil {
+							return false, err
+						}
+					}
+				}
+
+			}
+			ap.container.mp2[i] = ap.container.mp2[i][:0]
 		}
-		if !ap.IsEnd {
-			if insertBatch == nil {
-				insertBatch = batch.NewWithSize(len(bat.Attrs))
-				insertBatch.SetAttributes(bat.Attrs)
-				for i := range bat.Attrs {
-					vec := vector.NewVec(*bat.Vecs[i].GetType())
-					if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+	} else {
+		// handle origin/main table.
+		if ap.container.mp[0].Length() > 0 {
+			//batches in mp will be deeply copied into txn's workspace.
+			if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
+				return false, err
+			}
+			if !ap.IsEnd {
+				if insertBatch == nil {
+					insertBatch = batch.NewWithSize(len(bat.Attrs))
+					insertBatch.SetAttributes(bat.Attrs)
+					for i := range bat.Attrs {
+						vec := vector.NewVec(*bat.Vecs[i].GetType())
+						if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+							return false, err
+						}
+						insertBatch.SetVector(int32(i), vec)
+						insertBatch.Zs = append(insertBatch.Zs, bat.Zs...)
+					}
+				} else {
+					_, err := insertBatch.Append(proc.Ctx, proc.GetMPool(), bat)
+					if err != nil {
 						return false, err
 					}
-					insertBatch.SetVector(int32(i), vec)
-					insertBatch.Zs = append(insertBatch.Zs, bat.Zs...)
-				}
-			} else {
-				_, err := insertBatch.Append(proc.Ctx, proc.GetMPool(), bat)
-				if err != nil {
-					return false, err
 				}
 			}
 		}
+
+		for _, bat := range ap.container.mp2[0] {
+			//batches in mp2 will be deeply copied into txn's workspace.
+			affectedRows = affectedRows + uint64(bat.Length())
+			if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
+				return false, err
+			}
+			if !ap.IsEnd {
+				if insertBatch == nil {
+					insertBatch = batch.NewWithSize(len(bat.Attrs))
+					insertBatch.SetAttributes(bat.Attrs)
+					for i := range bat.Attrs {
+						vec := vector.NewVec(*bat.Vecs[i].GetType())
+						if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+							return false, err
+						}
+						insertBatch.SetVector(int32(i), vec)
+						insertBatch.Zs = append(insertBatch.Zs, bat.Zs...)
+					}
+				} else {
+					_, err := insertBatch.Append(proc.Ctx, proc.GetMPool(), bat)
+					if err != nil {
+						return false, err
+					}
+				}
+			}
+		}
+		ap.container.mp2[0] = ap.container.mp2[0][:0]
 	}
+
 	if ap.IsEnd {
 		proc.SetInputBatch(nil)
 	} else {
 		proc.SetInputBatch(insertBatch)
 	}
 
-	ap.container.mp2[0] = ap.container.mp2[0][:0]
+	//ap.container.mp2[0] = ap.container.mp2[0][:0]
+
+	atomic.AddUint64(&ap.affectedRows, affectedRows)
 	return false, nil
 }
