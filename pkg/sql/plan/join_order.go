@@ -28,7 +28,6 @@ type joinEdge struct {
 
 type joinVertex struct {
 	node     *plan.Node
-	pks      []int32
 	children map[int32]any
 	parent   int32
 	joined   bool
@@ -334,13 +333,6 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 		}
 
 		if node.NodeType == plan.Node_TABLE_SCAN {
-			binding := builder.ctxByNode[node.NodeId].bindingByTag[node.BindingTags[0]]
-			pkDef := builder.compCtx.GetPrimaryKeyDef(node.ObjRef.SchemaName, node.ObjRef.ObjName)
-			pks := make([]int32, len(pkDef))
-			for i, pk := range pkDef {
-				pks[i] = binding.FindColumn(pk.Name)
-			}
-			vertices[i].pks = pks
 			tag2Vert[node.BindingTags[0]] = int32(i)
 		} else if len(node.BindingTags) > 0 {
 			for _, tag := range node.BindingTags {
@@ -389,7 +381,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 			leftParent := vertices[leftId].parent
 			if leftParent == -1 || compareStats(vertices[rightId].node.Stats, vertices[leftParent].node.Stats) {
-				if containsAllPKs(edge.leftCols, vertices[leftId].pks) || isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
+				if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
 					if vertices[rightId].parent != leftId {
 						vertices[leftId].parent = rightId
 						vertices[rightId].children[leftId] = nil
@@ -398,7 +390,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			}
 			rightParent := vertices[rightId].parent
 			if rightParent == -1 || compareStats(vertices[leftId].node.Stats, vertices[rightParent].node.Stats) {
-				if containsAllPKs(edge.rightCols, vertices[rightId].pks) || isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
+				if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
 					if vertices[leftId].parent != rightId {
 						vertices[rightId].parent = leftId
 						vertices[leftId].children[rightId] = nil
