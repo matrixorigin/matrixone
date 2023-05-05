@@ -32,7 +32,7 @@ type mutableIndex struct {
 func NewPkMutableIndex(typ types.Type) *mutableIndex {
 	return &mutableIndex{
 		art:     index.NewSimpleARTMap(),
-		zonemap: index.NewZM(typ.Oid),
+		zonemap: index.NewZM(typ.Oid, typ.Scale),
 	}
 }
 
@@ -151,7 +151,7 @@ type nonPkMutIndex struct {
 
 func NewMutableIndex(typ types.Type) *nonPkMutIndex {
 	return &nonPkMutIndex{
-		zonemap: index.NewZM(typ.Oid),
+		zonemap: index.NewZM(typ.Oid, typ.Scale),
 	}
 }
 

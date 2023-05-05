@@ -90,7 +90,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		// set col distinct value
 		block.MustGetColumn(uint16(i)).SetNdv(ndv)
 		// Build ZM
-		zm := index.NewZM(vec.GetType().Oid)
+		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 		if err = index.BatchUpdateZM(zm, columnData); err != nil {
 			return nil, err
 		}
