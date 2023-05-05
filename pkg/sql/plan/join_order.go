@@ -436,17 +436,6 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 	}
 }
 
-func containsHighNDVCol(cols, highNDVCols []int32) bool {
-	for _, i := range cols {
-		for _, j := range highNDVCols {
-			if i == j {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func containsAllPKs(cols, pks []int32) bool {
 	if len(pks) == 0 {
 		return false

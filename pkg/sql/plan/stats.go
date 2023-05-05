@@ -181,10 +181,7 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 	for i := range cols {
 		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
 	}
-	if totalNDV > s.TableCnt*0.95 {
-		return true
-	}
-	return false
+	return totalNDV > s.TableCnt*0.95
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
