@@ -65,7 +65,7 @@ func (sc *StatsInfoMap) NeedUpdate(currentBlockNum int) bool {
 	if sc.BlockNumber == 0 || sc.BlockNumber != currentBlockNum {
 		return true
 	}
-	return true
+	return false
 }
 
 func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
