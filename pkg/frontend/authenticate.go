@@ -1333,14 +1333,6 @@ func getSqlForPubInfoForSub(ctx context.Context, pubName string, check bool) (st
 	return fmt.Sprintf(getPubInfoForSubFormat, pubName), nil
 }
 
-func getSqlForGetDbName(ctx context.Context, dbName string) (string, error) {
-	err := inputNameIsInvalid(ctx, dbName)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(getDbName, dbName), nil
-}
-
 func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
 	err := inputNameIsInvalid(ctx, tenant)
 	if err != nil {

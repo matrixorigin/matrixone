@@ -44,7 +44,6 @@ var (
 	errorConvertFromStringToDoubleFailed = moerr.NewInternalError(context.Background(), "convert from string to the system variable double type failed")
 	errorConvertFromStringToEnumFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable enum type failed")
 	errorConvertFromStringToSetFailed    = moerr.NewInternalError(context.Background(), "convert from string to the system variable set type failed")
-	errorConvertFromStringToStringFailed = moerr.NewInternalError(context.Background(), "convert from string to the system variable string type failed")
 	errorConvertFromStringToNullFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable null type failed")
 )
 
@@ -249,7 +248,7 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 		return nil, errorConvertFromStringToBoolFailed
 	}
 	if convertVal != 1 && convertVal != 0 {
-
+		return nil, errorConvertFromStringToBoolFailed
 	}
 	return int8(convertVal), nil
 }
