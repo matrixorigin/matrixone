@@ -67,8 +67,12 @@ func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
 		return nil, err
 	}
 
-	// TODO: @Jiangwei Kindly create a BF.encodeFn to convert []objectio.StaticFilter to []bytes
-	r.indexCache.Set(r.reader.GetName(), v, int64(size))
+	// TODO: @Jiangwei Kindly create a BF.EncodeBloomFilterV1 to convert []objectio.StaticFilter to []bytes
+	bs, err = objectio.EncodeBloomFilterV1(v)
+	if err != nil {
+		return nil, err
+	}
+	r.indexCache.Set(r.reader.GetName(), bs, int64(size))
 	return v[r.bfKey.ID()], nil
 }
 
