@@ -188,14 +188,12 @@ func (r *objectReaderV1) ReadAllBF(
 func (r *objectReaderV1) ReadExtent(
 	ctx context.Context,
 	extent Extent,
-	noHeaderHint bool,
 ) ([]byte, error) {
 	v, err := ReadExtent(
 		ctx,
 		r.name,
 		&extent,
 		r.noLRUCache,
-		noHeaderHint,
 		r.fs,
 		constructorFactory)
 	if err != nil {
@@ -241,7 +239,7 @@ func (r *objectReaderV1) ReadAllMeta(
 
 func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header, err error) {
 	ext := NewExtent(0, 0, HeaderSize, HeaderSize)
-	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, true, r.fs, constructorFactory)
+	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, r.fs, constructorFactory)
 	if err != nil {
 		return
 	}
