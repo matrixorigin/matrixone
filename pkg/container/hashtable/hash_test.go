@@ -16,10 +16,9 @@ package hashtable
 
 import (
 	//"fmt"
-	"runtime"
-	"testing"
 
-	"golang.org/x/sys/cpu"
+	"reflect"
+	"testing"
 )
 
 var data = [][]byte{
@@ -141,16 +140,9 @@ var golden = [][3]uint64{
 }
 
 func TestHashFn(t *testing.T) {
-	switch runtime.GOARCH {
-	case "amd64":
-		if !cpu.X86.HasAES {
-			return
-		}
-	case "arm64":
-		if !cpu.ARM64.HasAES {
-			return
-		}
-	default:
+	fp1 := reflect.ValueOf(BytesBatchGenHashStates)
+	fp2 := reflect.ValueOf(aesBytesBatchGenHashStates)
+	if fp1.Pointer() != fp2.Pointer() {
 		return
 	}
 
@@ -169,6 +161,5 @@ func TestHashFn(t *testing.T) {
 				golden[i][0], golden[i][1], golden[i][2])
 
 		}
-		//fmt.Printf("{0x%016x, 0x%016x, 0x%016x}\n", states[i][0], states[i][1], states[i][2])
 	}
 }

@@ -97,7 +97,6 @@ use sub1;
 show tables;
 Tables_in_sub1
 sys_tbl_1
-v1
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -118,7 +117,7 @@ a
 3
 show table_number from sub1;
 Number of tables in sub1
-2
+1
 show column_number from sys_tbl_1;
 Number of columns in sys_tbl_1
 2
@@ -141,7 +140,6 @@ use sub1;
 show tables;
 Tables_in_sub1
 sys_tbl_1
-v1
 desc sys_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        

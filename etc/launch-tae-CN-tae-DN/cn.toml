@@ -11,6 +11,9 @@ service-addresses = [
   "127.0.0.1:32001",
 ]
 
+[metacache]
+memory-capacity = "512MB"
+
 [[fileservice]]
 name = "LOCAL"
 backend = "DISK"

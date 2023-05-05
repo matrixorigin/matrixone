@@ -185,6 +185,7 @@ func startCNService(
 	}
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
+		cfg.initMetaCache()
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
 			&c,
@@ -232,6 +233,7 @@ func startDNService(
 	}
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		ctx = perfcounter.WithCounterSet(ctx, perfCounterSet)
+		cfg.initMetaCache()
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(
 			&c,
