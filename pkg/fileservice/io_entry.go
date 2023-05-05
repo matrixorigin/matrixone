@@ -135,7 +135,7 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 	}
 }
 
-func (e *IOEntry) setObjectFromData() error {
+func (e *IOEntry) setObjectBytesFromData() error {
 	if e.ToObjectBytes == nil {
 		return nil
 	}
@@ -170,7 +170,7 @@ func (e *IOEntry) ReadFromOSFile(file *os.File) error {
 	if e.ReadCloserForRead != nil {
 		*e.ReadCloserForRead = io.NopCloser(bytes.NewReader(data))
 	}
-	if err := e.setObjectFromData(); err != nil {
+	if err := e.setObjectBytesFromData(); err != nil {
 		return err
 	}
 

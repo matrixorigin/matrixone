@@ -461,7 +461,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setObjectFromData(); err != nil {
+			if err := entry.setObjectBytesFromData(); err != nil {
 				return err
 			}
 
