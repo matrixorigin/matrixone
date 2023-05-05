@@ -65,11 +65,15 @@ func (sc *StatsInfoMap) NeedUpdate(currentBlockNum int) bool {
 	if sc.BlockNumber == 0 || sc.BlockNumber != currentBlockNum {
 		return true
 	}
-	return true
+	return false
 }
 
 func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
 	if sc == nil {
+		return NewStatsInfoMap()
+	}
+	switch tableID {
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return NewStatsInfoMap()
 	}
 	if s, ok := (sc.cachePool)[tableID]; ok {
