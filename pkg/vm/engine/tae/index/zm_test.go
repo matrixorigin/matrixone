@@ -43,8 +43,8 @@ type testCase struct {
 
 var testCases = []*testCase{
 	{
-		v1: makeZM(types.T_int64, int64(-10), int64(10)),
-		v2: makeZM(types.T_int32, int32(-10), int32(-10)),
+		v1: makeZM(types.T_int64, 0, int64(-10), int64(10)),
+		v2: makeZM(types.T_int32, 0, int32(-10), int32(-10)),
 		expects: [][2]bool{
 			{false, false}, {false, false}, {false, false}, {false, false},
 			{false, false}, {false, false}, {false, false},
@@ -55,37 +55,65 @@ var testCases = []*testCase{
 		idx: 0,
 	},
 	{
-		v1: makeZM(types.T_int32, int32(-10), int32(10)),
-		v2: makeZM(types.T_int32, int32(5), int32(20)),
+		v1: makeZM(types.T_int32, 0, int32(-10), int32(10)),
+		v2: makeZM(types.T_int32, 0, int32(5), int32(20)),
 		expects: [][2]bool{
 			{true, true}, {true, true}, {true, true}, {true, true},
 			{true, true}, {false, false}, {false, false},
 		},
 		arithExpects: []*testArithRes{
-			{makeZM(types.T_int32, int32(-5), int32(30)), true},
-			{makeZM(types.T_int32, int32(-30), int32(5)), true},
-			{makeZM(types.T_int32, int32(-200), int32(200)), true},
+			{makeZM(types.T_int32, 0, int32(-5), int32(30)), true},
+			{makeZM(types.T_int32, 0, int32(-30), int32(5)), true},
+			{makeZM(types.T_int32, 0, int32(-200), int32(200)), true},
 		},
 		idx: 1,
 	},
 	{
-		v1: makeZM(types.T_int16, int16(-10), int16(10)),
-		v2: makeZM(types.T_int16, int16(10), int16(20)),
+		v1: makeZM(types.T_int16, 0, int16(-10), int16(10)),
+		v2: makeZM(types.T_int16, 0, int16(10), int16(20)),
 		expects: [][2]bool{
 			{false, true}, {true, true}, {true, true}, {true, true},
 			{true, true}, {false, false}, {false, false},
 		},
 		arithExpects: []*testArithRes{
-			{makeZM(types.T_int16, int16(0), int16(30)), true},
-			{makeZM(types.T_int16, int16(-30), int16(0)), true},
-			{makeZM(types.T_int16, int16(-200), int16(200)), true},
+			{makeZM(types.T_int16, 0, int16(0), int16(30)), true},
+			{makeZM(types.T_int16, 0, int16(-30), int16(0)), true},
+			{makeZM(types.T_int16, 0, int16(-200), int16(200)), true},
 		},
 		idx: 2,
 	},
+	{
+		v1: makeZM(types.T_decimal128, 5, types.Decimal128{B0_63: 3, B64_127: 0}, types.Decimal128{B0_63: 20, B64_127: 0}),
+		v2: makeZM(types.T_decimal128, 8, types.Decimal128{B0_63: 1, B64_127: 0}, types.Decimal128{B0_63: 4, B64_127: 0}),
+		expects: [][2]bool{
+			{true, true}, {false, true}, {true, true}, {false, true},
+			{false, true}, {false, false}, {false, false},
+		},
+		arithExpects: []*testArithRes{
+			{makeZM(types.T_decimal128, 8, types.Decimal128{B0_63: 3001, B64_127: 0}, types.Decimal128{B0_63: 20004, B64_127: 0}), true},
+			{makeZM(types.T_decimal128, 8, types.Decimal128{B0_63: 2996, B64_127: 0}, types.Decimal128{B0_63: 19999, B64_127: 0}), true},
+			{makeZM(types.T_decimal128, 12, types.Decimal128{B0_63: 0, B64_127: 0}, types.Decimal128{B0_63: 8, B64_127: 0}), true},
+		},
+		idx: 3,
+	},
+	{
+		v1: makeZM(types.T_decimal64, 5, types.Decimal64(3), types.Decimal64(20)),
+		v2: makeZM(types.T_decimal64, 8, types.Decimal64(1), types.Decimal64(4)),
+		expects: [][2]bool{
+			{true, true}, {false, true}, {true, true}, {false, true},
+			{false, true}, {false, false}, {false, false},
+		},
+		arithExpects: []*testArithRes{
+			{makeZM(types.T_decimal64, 8, types.Decimal64(3001), types.Decimal64(20004)), true},
+			{makeZM(types.T_decimal64, 8, types.Decimal64(2996), types.Decimal64(19999)), true},
+			{makeZM(types.T_decimal64, 12, types.Decimal64(3), types.Decimal64(80)), true},
+		},
+		idx: 4,
+	},
 }
 
-func makeZM(t types.T, minv, maxv any) ZM {
-	zm := NewZM(t)
+func makeZM(t types.T, scale int32, minv, maxv any) ZM {
+	zm := NewZM(t, scale)
 	zm.Update(minv)
 	zm.Update(maxv)
 	return *zm
@@ -124,7 +152,7 @@ func runArith(tc *testCase) []*testArithRes {
 }
 
 func TestZMOp(t *testing.T) {
-	for _, tc := range testCases[2:3] {
+	for _, tc := range testCases[0:5] {
 		res1 := runCompare(tc)
 		for i := range tc.expects {
 			require.Equalf(t, tc.expects[i], res1[i], "[%d]compare-%d", tc.idx, i)
@@ -146,7 +174,7 @@ func TestZMOp(t *testing.T) {
 
 func TestVectorZM(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
-	zm := NewZM(types.T_uint32)
+	zm := NewZM(types.T_uint32, 0)
 	zm.Update(uint32(12))
 	zm.Update(uint32(22))
 
@@ -162,7 +190,7 @@ func TestVectorZM(t *testing.T) {
 	require.Equal(t, zm, zm2)
 	vec.Free(m)
 
-	zm = NewZM(types.T_char)
+	zm = NewZM(types.T_char, 0)
 	zm.Update([]byte("abc"))
 	zm.Update([]byte("xyz"))
 
@@ -196,7 +224,7 @@ func TestVectorZM(t *testing.T) {
 
 	vec.Free(m)
 
-	zm = NewZM(types.T_uint16)
+	zm = NewZM(types.T_uint16, 0)
 	vec, err = ZMToVector(zm, m)
 
 	require.NoError(t, err)
@@ -212,7 +240,7 @@ func TestVectorZM(t *testing.T) {
 }
 
 func TestZMNull(t *testing.T) {
-	zm := NewZM(types.T_int64)
+	zm := NewZM(types.T_int64, 0)
 	x := zm.GetMin()
 	require.Nil(t, x)
 	y := zm.GetMax()
@@ -291,7 +319,7 @@ func BenchmarkZM(b *testing.B) {
 		bs = append(bs, vec.Get(i).([]byte))
 	}
 
-	zm := NewZM(vec.GetType().Oid)
+	zm := NewZM(vec.GetType().Oid, 0)
 	b.Run("build-bytes-zm", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -312,7 +340,7 @@ func BenchmarkZM(b *testing.B) {
 		vs = append(vs, vec.Get(i).(float64))
 	}
 
-	zm = NewZM(vec.GetType().Oid)
+	zm = NewZM(vec.GetType().Oid, 0)
 	b.Run("build-f64-zm", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
