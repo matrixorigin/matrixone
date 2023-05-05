@@ -19,7 +19,7 @@ import (
 	"testing"
 )
 
-func TestLRURefCount(t *testing.T) {
+func TestLRU(t *testing.T) {
 	l := New(1)
 
 	l.Set(1, []byte{42}, 1, false)
@@ -28,6 +28,11 @@ func TestLRURefCount(t *testing.T) {
 	_, ok = l.kv[2]
 	assert.False(t, ok)
 
+	l.Set(2, []byte{42}, 1, false)
+	_, ok = l.kv[1]
+	assert.False(t, ok)
+	_, ok = l.kv[2]
+	assert.True(t, ok)
 }
 
 func BenchmarkLRUSet(b *testing.B) {
