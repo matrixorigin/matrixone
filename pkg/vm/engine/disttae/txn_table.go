@@ -256,7 +256,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range tbl.dnList {
 		blocks := tbl.blockInfos[i]
-		blks := make([]catalog.BlockInfo, 0, len(blocks))
 		deletes := make(map[types.Blockid][]int)
 		if len(blocks) > 0 {
 			ts := tbl.db.txn.meta.SnapshotTS
@@ -296,15 +295,14 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 					}
 				}
 			}
-			for i := range blocks {
-				if _, ok := deletes[blocks[i].BlockID]; !ok {
-					blks = append(blks, blocks[i])
-				}
-			}
 		}
-		var meta objectio.ObjectMeta
-		for _, blk := range blks {
-			ok := true
+		var (
+			meta  objectio.ObjectMeta
+			mblks []ModifyBlockMeta
+		)
+		hasDeletes := len(deletes) > 0
+		for _, blk := range blocks {
+			need := true
 			if exprMono {
 				location := blk.MetaLocation()
 				if !objectio.IsSameObjectLocVsMeta(location, meta) {
@@ -312,23 +310,22 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 						return
 					}
 				}
-				ok = needRead(ctx, expr, meta, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc)
+				need = needRead(ctx, expr, meta, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc)
 			}
 
-			if ok {
+			if !need {
+				continue
+			}
+
+			if hasDeletes {
+				if rows, ok := deletes[blk.BlockID]; ok {
+					mblks = append(mblks, ModifyBlockMeta{blk, rows})
+				} else {
+					ranges = append(ranges, blockInfoMarshal(blk))
+				}
+			} else {
 				ranges = append(ranges, blockInfoMarshal(blk))
 			}
-		}
-		var mblks []ModifyBlockMeta
-		if mblks, err = genModifedBlocks(
-			ctx,
-			deletes,
-			tbl.blockInfos[i],
-			blks,
-			expr,
-			tbl.getTableDef(),
-			tbl.db.txn.proc); err != nil {
-			return
 		}
 		tbl.modifiedBlocks[i] = mblks
 	}
