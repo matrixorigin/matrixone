@@ -184,6 +184,70 @@ func CompareDecimal128(x Decimal128, y Decimal128) int64 {
 	return int64(x.Compare(y))
 }
 
+func CompareDecimal64WithScale(x, y Decimal64, scale1, scale2 int32) int64 {
+	if x.Sign() != y.Sign() {
+		if x.Sign() {
+			return -1
+		} else {
+			return 1
+		}
+	}
+	var err error
+	if scale1 < scale2 {
+		x, err = x.Scale(scale2 - scale1)
+		if err != nil {
+			if x.Sign() {
+				return -1
+			} else {
+				return 1
+			}
+		}
+		return int64(x.Compare(y))
+	} else {
+		y, err = y.Scale(scale1 - scale2)
+		if err != nil {
+			if x.Sign() {
+				return 1
+			} else {
+				return -1
+			}
+		}
+		return int64(x.Compare(y))
+	}
+}
+
+func CompareDecimal128WithScale(x, y Decimal128, scale1, scale2 int32) int64 {
+	if x.Sign() != y.Sign() {
+		if x.Sign() {
+			return -1
+		} else {
+			return 1
+		}
+	}
+	var err error
+	if scale1 < scale2 {
+		x, err = x.Scale(scale2 - scale1)
+		if err != nil {
+			if x.Sign() {
+				return -1
+			} else {
+				return 1
+			}
+		}
+		return int64(x.Compare(y))
+	} else {
+		y, err = y.Scale(scale1 - scale2)
+		if err != nil {
+			if x.Sign() {
+				return 1
+			} else {
+				return -1
+			}
+		}
+		return int64(x.Compare(y))
+	}
+}
+
 func CompareDecimal256(x Decimal256, y Decimal256) int64 {
 	return int64(x.Compare(y))
 }
