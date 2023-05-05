@@ -14,78 +14,49 @@
 
 package lruobjcache
 
-//func TestLRUReleasable(t *testing.T) {
-//	l := New(1)
-//	n := 0
-//
-//	val := objcache.NewReleasableValue(1, func() {
-//		n++
-//	})
-//	l.Set(1, val, 1, false)
-//
-//	l.Set(2, 42, 1, false)
-//	assert.Equal(t, 1, n)
-//}
-//
-//func TestLRURefCount(t *testing.T) {
-//	l := New(1)
-//
-//	r := objcache.NewRCValue(42)
-//	r.IncRef()
-//	l.Set(1, r, 1, false)
-//	_, ok := l.kv[1]
-//	assert.True(t, ok)
-//
-//	l.Set(2, 42, 1, false)
-//	_, ok = l.kv[1]
-//	assert.True(t, ok)
-//	_, ok = l.kv[2]
-//	assert.False(t, ok)
-//
-//	r.DecRef()
-//	l.Set(2, 42, 1, false)
-//	_, ok = l.kv[1]
-//	assert.False(t, ok)
-//	_, ok = l.kv[2]
-//	assert.True(t, ok)
-//
-//	r2 := objcache.NewRCValue(42)
-//	r2.IncRef()
-//	l.Set(3, r2, 1, false)
-//	_, ok = l.kv[3]
-//	assert.True(t, ok)
-//	_, ok = l.kv[2]
-//	assert.False(t, ok)
-//
-//}
-//
-//func BenchmarkLRUSet(b *testing.B) {
-//	const capacity = 1024
-//	l := New(capacity)
-//	for i := 0; i < b.N; i++ {
-//		l.Set(i%capacity, i, 1, false)
-//	}
-//}
-//
-//func BenchmarkLRUParallelSet(b *testing.B) {
-//	const capacity = 1024
-//	l := New(capacity)
-//	b.RunParallel(func(pb *testing.PB) {
-//		for i := 0; pb.Next(); i++ {
-//			l.Set(i%capacity, i, 1, false)
-//		}
-//	})
-//}
-//
-//func BenchmarkLRUParallelSetOrGet(b *testing.B) {
-//	const capacity = 1024
-//	l := New(capacity)
-//	b.RunParallel(func(pb *testing.PB) {
-//		for i := 0; pb.Next(); i++ {
-//			l.Set(i%capacity, i, 1, false)
-//			if i%2 == 0 {
-//				l.Get(i%capacity, false)
-//			}
-//		}
-//	})
-//}
+import (
+	"github.com/stretchr/testify/assert"
+	"testing"
+)
+
+func TestLRURefCount(t *testing.T) {
+	l := New(1)
+
+	l.Set(1, []byte{42}, 1, false)
+	_, ok := l.kv[1]
+	assert.True(t, ok)
+	_, ok = l.kv[2]
+	assert.False(t, ok)
+
+}
+
+func BenchmarkLRUSet(b *testing.B) {
+	const capacity = 1024
+	l := New(capacity)
+	for i := 0; i < b.N; i++ {
+		l.Set(i%capacity, []byte{byte(i)}, 1, false)
+	}
+}
+
+func BenchmarkLRUParallelSet(b *testing.B) {
+	const capacity = 1024
+	l := New(capacity)
+	b.RunParallel(func(pb *testing.PB) {
+		for i := 0; pb.Next(); i++ {
+			l.Set(i%capacity, []byte{byte(i)}, 1, false)
+		}
+	})
+}
+
+func BenchmarkLRUParallelSetOrGet(b *testing.B) {
+	const capacity = 1024
+	l := New(capacity)
+	b.RunParallel(func(pb *testing.PB) {
+		for i := 0; pb.Next(); i++ {
+			l.Set(i%capacity, []byte{byte(i)}, 1, false)
+			if i%2 == 0 {
+				l.Get(i%capacity, false)
+			}
+		}
+	})
+}
