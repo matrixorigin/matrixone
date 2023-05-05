@@ -135,7 +135,7 @@ func AllocS3Writer(tableDef *plan.TableDef) (*S3Writer, error) {
 
 	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 		// the serialized cpk col is located in the last of the bat.vecs
-		writer.sortIndex = len(tableDef.Cols)
+		writer.sortIndex = len(tableDef.Cols) - 1
 	} else {
 		// Get Single Col pk index
 		for idx, colDef := range tableDef.Cols {
