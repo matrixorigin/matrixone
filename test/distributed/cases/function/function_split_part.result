@@ -197,14 +197,14 @@ null
 SELECT substring(split_part(s1,delim,count1),1,5) FROM split_part_01;
 substring(split_part(s1, delim, count1), 1, 5)
 com
-
-
+null
+null
 73290
-
-
-
-
-
+null
+null
+null
+null
+null
 SELECT REVERSE(split_part(s1,delim,3)) FROM split_part_01;
 reverse(split_part(s1, delim, 3))
 nc

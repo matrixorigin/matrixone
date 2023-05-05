@@ -682,16 +682,18 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			continue
 		}
 		allNull := true
+		canSp := false
 		var str string
 		for j := 1; j < len(vecs); j++ {
 			v, null := vecs[j].GetStrValue(i)
 			if null {
 				continue
 			}
-			str += string(v)
-			if j < len(vecs)-1 {
+			if canSp {
 				str += string(sp)
 			}
+			canSp = true
+			str += string(v)
 			allNull = false
 		}
 		if allNull {
@@ -1880,11 +1882,37 @@ func subStrIndex(str, delim string, count int64) (string, error) {
 	return strings.Join(subPartions, delim), nil
 }
 
+func getCount[T number](typ types.Type, val T) int64 {
+	var r int64
+	switch typ.Oid {
+	case types.T_float64:
+		v := float64(val)
+		if v > float64(math.MaxInt64) {
+			r = math.MaxInt64
+		} else if v < float64(math.MinInt64) {
+			r = math.MinInt64
+		} else {
+			r = int64(v)
+		}
+	case types.T_uint64:
+		v := uint64(val)
+		if v > uint64(math.MaxInt64) {
+			r = math.MaxInt64
+		} else {
+			r = int64(v)
+		}
+	default:
+		r = int64(val)
+	}
+	return r
+}
+
 func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
 	delims := vector.GenerateFunctionStrParameter(ivecs[1])
 	counts := vector.GenerateFunctionFixedTypeParameter[T](ivecs[2])
+	typ := counts.GetType()
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null1 := vs.GetStrValue(i)
@@ -1896,7 +1924,7 @@ func SubStrIndex[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 				return err
 			}
 		} else {
-			r, err := subStrIndex(string(v), string(d), int64(c))
+			r, err := subStrIndex(string(v), string(d), getCount(typ, c))
 			if err != nil {
 				return err
 			}

@@ -72,7 +72,7 @@ mid(str1, d1, 3)
 
 
 
-
+null
 
 SELECT mid(str1, d1, d2) FROM mid_01;
 mid(str1, d1, d2)
@@ -97,7 +97,7 @@ length(mid(str1, abs(d1), d2))
 0
 SELECT empty(mid(str1, d1, d2)) FROM mid_01 WHERE ABS(d2) = 3;
 empty(mid(str1, d1, d2))
-true
+null
 SELECT mid(str1, d1, d2) FROM mid_01;
 mid(str1, d1, d2)
 
@@ -188,8 +188,8 @@ empty(mid(s, 1, 2))
 false
 true
 false
-true
-true
+null
+null
 false
 false
 SELECT LENGTH(mid(s, -1, 7281979 % 2)) FROM mid_02;
