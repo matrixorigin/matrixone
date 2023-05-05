@@ -51,6 +51,7 @@ type FileServiceCounterSet struct {
 			SetFileContent   stats.Counter
 			OpenFile         stats.Counter
 			StatFile         stats.Counter
+			WriteFile        stats.Counter
 			Error            stats.Counter
 			Evict            stats.Counter
 			EvictPending     stats.Counter
