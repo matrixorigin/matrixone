@@ -57,7 +57,7 @@ func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
 	if ok {
 
 		var obj any
-		obj, err := objectio.Decode(bs, false)
+		obj, err := objectio.Decode(bs, true)
 		if err != nil {
 			return nil, err
 		}
@@ -75,7 +75,7 @@ func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
 	}
 
 	r.indexCache.Set(*r.blockID, bs, int64(size))
-	return v.(objectio.StaticFilter), nil
+	return v, nil
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
