@@ -116,10 +116,10 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, size, ok := m.objCache.Get(key, vector.Preloading)
+		bs, size, ok := m.objCache.Get(key, vector.Preloading)
 		numRead++
 		if ok {
-			vector.Entries[i].ObjectBytes = obj
+			vector.Entries[i].ObjectBytes = bs
 			vector.Entries[i].ObjectSize = size
 			vector.Entries[i].done = true
 			numHit++

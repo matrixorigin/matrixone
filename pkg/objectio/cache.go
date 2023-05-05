@@ -47,8 +47,6 @@ func LoadObjectMetaByExtent(
 	fs fileservice.FileService) (meta ObjectMeta, err error) {
 	v, _, ok := metaCache.Get(*name.Short(), false)
 	if ok {
-
-		// TODO: Should it be true?
 		var obj any
 		obj, err = Decode(v, true)
 		if err != nil {

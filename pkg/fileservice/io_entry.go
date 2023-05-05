@@ -142,11 +142,11 @@ func (e *IOEntry) setObjectBytesFromData() error {
 	if len(e.Data) == 0 {
 		return nil
 	}
-	obj, size, err := e.ToObjectBytes(bytes.NewReader(e.Data), e.Data)
+	bs, size, err := e.ToObjectBytes(bytes.NewReader(e.Data), e.Data)
 	if err != nil {
 		return err
 	}
-	e.ObjectBytes = obj
+	e.ObjectBytes = bs
 	e.ObjectSize = size
 	return nil
 }
