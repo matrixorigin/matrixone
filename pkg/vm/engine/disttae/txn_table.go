@@ -256,11 +256,11 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range tbl.dnList {
 		blocks := tbl.blockInfos[i]
-		blks := make([]catalog.BlockInfo, 0, len(blocks))
 		deletes := make(map[types.Blockid][]int)
 		if len(blocks) > 0 {
 			ts := tbl.db.txn.meta.SnapshotTS
 			ids := make([]types.Blockid, len(blocks))
+			appendIds := make([]types.Blockid, len(blocks))
 			for i := range blocks {
 				// if cn can see a appendable block, this block must contain all updates
 				// in cache, no need to do merge read, BlockRead will filter out
@@ -268,10 +268,15 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 				if !blocks[i].EntryState {
 					if blocks[i].CommitTs.ToTimestamp().Less(ts) { // hack
 						ids[i] = blocks[i].BlockID
+					} else {
+						appendIds = append(appendIds, blocks[i].BlockID)
 					}
 				}
 			}
-
+			// non-append -> flush-deletes -- yes
+			// non-append -> raw-deletes  -- yes
+			// append     -> raw-deletes -- yes
+			// append     -> flush-deletes -- yes
 			for _, blockID := range ids {
 				ts := types.TimestampToTS(ts)
 				iter := parts[i].NewRowsIter(ts, &blockID, true)
@@ -296,15 +301,22 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 					}
 				}
 			}
-			for i := range blocks {
-				if _, ok := deletes[blocks[i].BlockID]; !ok {
-					blks = append(blks, blocks[i])
+			// add append-block flush-deletes
+			for _, blockID := range appendIds {
+				// DN flush deletes rowids block
+				if err = tbl.LoadDeletesForBlock(string(blockID[:]), deletes, nil); err != nil {
+					return
 				}
 			}
 		}
-		var meta objectio.ObjectMeta
-		for _, blk := range blks {
-			ok := true
+
+		var (
+			meta  objectio.ObjectMeta
+			mblks []ModifyBlockMeta
+		)
+		hasDeletes := len(deletes) > 0
+		for _, blk := range blocks {
+			need := true
 			if exprMono {
 				location := blk.MetaLocation()
 				if !objectio.IsSameObjectLocVsMeta(location, meta) {
@@ -312,23 +324,22 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 						return
 					}
 				}
-				ok = needRead(ctx, expr, meta, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc)
+				need = needRead(ctx, expr, meta, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc)
 			}
 
-			if ok {
+			if !need {
+				continue
+			}
+
+			if hasDeletes {
+				if rows, ok := deletes[blk.BlockID]; ok {
+					mblks = append(mblks, ModifyBlockMeta{blk, rows})
+				} else {
+					ranges = append(ranges, blockInfoMarshal(blk))
+				}
+			} else {
 				ranges = append(ranges, blockInfoMarshal(blk))
 			}
-		}
-		var mblks []ModifyBlockMeta
-		if mblks, err = genModifedBlocks(
-			ctx,
-			deletes,
-			tbl.blockInfos[i],
-			blks,
-			expr,
-			tbl.getTableDef(),
-			tbl.db.txn.proc); err != nil {
-			return
 		}
 		tbl.modifiedBlocks[i] = mblks
 	}
@@ -879,22 +890,37 @@ func (tbl *txnTable) newReader(
 			}
 		}
 	}
-	// get append block deletes rowids
-	non_append_block := make(map[string]bool)
+	// get all blocks in disk
+	meta_blocks := make(map[string]bool)
 	if len(tbl.blockInfos) > 0 {
 		for _, blk := range tbl.blockInfos[0] {
-			// append non_append_block
-			if !blk.EntryState {
-				non_append_block[string(blk.BlockID[:])] = true
-			}
+			meta_blocks[string(blk.BlockID[:])] = true
 		}
 	}
 
 	for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-		if !non_append_block[blkId] {
+		if !meta_blocks[blkId] {
 			tbl.LoadDeletesForBlock(blkId, nil, deletes)
 		}
 	}
+
+	// add add rawBatchRowId deletes info
+	for _, entry := range tbl.writes {
+		// rawBatch detele rowId for memory Dn block
+		if entry.typ == DELETE && entry.fileName == "" {
+			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+			if len(vs) == 0 {
+				continue
+			}
+			blkId := vs[0].GetBlockid()
+			if !meta_blocks[string(blkId[:])] {
+				for _, v := range vs {
+					deletes[v] = 0
+				}
+			}
+		}
+	}
+
 	readers := make([]engine.Reader, readerNumber)
 
 	mp := make(map[string]types.Type)

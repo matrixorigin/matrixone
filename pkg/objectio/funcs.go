@@ -53,7 +53,7 @@ func ReadBloomFilter(
 	extent *Extent,
 	noLRUCache bool,
 	fs fileservice.FileService,
-) (filters []StaticFilter, err error) {
+) (filters BloomFilter, err error) {
 	var v []byte
 	if v, err = ReadExtent(
 		ctx,
@@ -71,7 +71,7 @@ func ReadBloomFilter(
 		return
 	}
 
-	filters = obj.([]StaticFilter)
+	filters = obj.([]byte)
 	return
 }
 

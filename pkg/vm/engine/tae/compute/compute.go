@@ -261,3 +261,31 @@ func GetOrderedMinAndMax[T types.OrderedT](vs ...T) (minv, maxv T) {
 	}
 	return
 }
+
+func GetDecimal64MinAndMax(vs []types.Decimal64) (minv, maxv types.Decimal64) {
+	minv = vs[0]
+	maxv = vs[0]
+	for _, v := range vs[1:] {
+		if types.CompareDecimal64(v, minv) < 0 {
+			minv = v
+		}
+		if types.CompareDecimal64(v, maxv) > 0 {
+			maxv = v
+		}
+	}
+	return
+}
+
+func GetDecimal128MinAndMax(vs []types.Decimal128) (minv, maxv types.Decimal128) {
+	minv = vs[0]
+	maxv = vs[0]
+	for _, v := range vs[1:] {
+		if types.CompareDecimal128(v, minv) < 0 {
+			minv = v
+		}
+		if types.CompareDecimal128(v, maxv) > 0 {
+			maxv = v
+		}
+	}
+	return
+}

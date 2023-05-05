@@ -31,6 +31,7 @@ type BfReader struct {
 	reader     *blockio.BlockReader
 	typ        types.T
 	indexCache model.LRUCache
+	blockID    *types.Blockid
 }
 
 func NewBfReader(
@@ -38,6 +39,7 @@ func NewBfReader(
 	metaLoc objectio.Location,
 	indexCache model.LRUCache,
 	fs *objectio.ObjectFS,
+	blockID *types.Blockid,
 ) *BfReader {
 	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 
@@ -46,34 +48,34 @@ func NewBfReader(
 		bfKey:      metaLoc,
 		reader:     reader,
 		typ:        typ,
+		blockID:    blockID,
 	}
 }
 
 func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	// return r.reader.LoadOneBF(context.Background(), r.bfKey.ID())
-	bs, ok := r.indexCache.Get(r.reader.GetName())
+	bs, ok := r.indexCache.Get(*r.blockID)
 	if ok {
+
 		var obj any
 		obj, err := objectio.Decode(bs, false)
 		if err != nil {
 			return nil, err
 		}
-		return obj.([]objectio.StaticFilter)[r.bfKey.ID()], nil
+		return obj.(objectio.StaticFilter), nil
 	}
 
-	var v []objectio.StaticFilter
-	v, size, err := r.reader.LoadAllBF(context.Background())
+	v, size, err := r.reader.LoadOneBF(context.Background(), r.bfKey.ID())
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: @Jiangwei Kindly create a BF.EncodeBloomFilterV1 to convert []objectio.StaticFilter to []bytes
-	bs, err = objectio.EncodeBloomFilterV1(v)
+	bs, err = v.Marshal()
 	if err != nil {
 		return nil, err
 	}
-	r.indexCache.Set(r.reader.GetName(), bs, int64(size))
-	return v[r.bfKey.ID()], nil
+
+	r.indexCache.Set(*r.blockID, bs, int64(size))
+	return v.(objectio.StaticFilter), nil
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
