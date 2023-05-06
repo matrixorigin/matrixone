@@ -93,12 +93,7 @@ func (s *CNState) UpdateLabel(label CNStoreLabel) {
 	if !ok {
 		return
 	}
-	for k, v := range label.Labels {
-		storeInfo.Labels[k] = v
-		if label.Operation == DeleteLabel {
-			delete(storeInfo.Labels, k)
-		}
-	}
+	storeInfo.Labels = label.Labels
 	s.Stores[label.UUID] = storeInfo
 }
 
