@@ -100,6 +100,8 @@ type txnTable struct {
 	schema       *catalog.Schema
 	logs         []wal.LogEntry
 
+	dedupedSegmentHint uint64
+
 	txnEntries *txnEntries
 	csnStart   uint32
 
@@ -863,6 +865,15 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	}
 	return
 }
+func (tbl *txnTable) updateDedupedSegmentHint(hint uint64) {
+	if tbl.dedupedSegmentHint == 0 {
+		tbl.dedupedSegmentHint = hint
+		return
+	}
+	if tbl.dedupedSegmentHint > hint {
+		tbl.dedupedSegmentHint = hint
+	}
+}
 
 // DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
@@ -870,8 +881,13 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	h := newRelation(tbl)
 	it := newRelationBlockItOnSnap(h)
+	maxSegmentHint := uint64(0)
 	for it.Valid() {
 		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		segmentHint := blk.GetSegment().SortHint
+		if segmentHint > maxSegmentHint {
+			maxSegmentHint = segmentHint
+		}
 		blkData := blk.GetBlockData()
 		if blkData == nil {
 			it.Next()
@@ -891,6 +907,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 		}
 		it.Next()
 	}
+	tbl.updateDedupedSegmentHint(maxSegmentHint)
 	return
 }
 
@@ -959,6 +976,9 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload()
+		if seg.SortHint < tbl.dedupedSegmentHint {
+			break
+		}
 		{
 			seg.RLock()
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
