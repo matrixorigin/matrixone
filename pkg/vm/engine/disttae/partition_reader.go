@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
@@ -37,7 +38,7 @@ type PartitionReader struct {
 	inserts              []*batch.Batch
 	deletes              map[types.Rowid]uint8
 	skipBlocks           map[types.Blockid]uint8
-	iter                 partitionStateIter
+	iter                 logtailreplay.PartitionStateIter
 	sourceBatchNameIndex map[string]int
 
 	// the following attributes are used to support cn2s3

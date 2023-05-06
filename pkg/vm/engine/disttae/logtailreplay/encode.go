@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package logtailreplay
 
 import (
 	"fmt"
@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func encodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]byte) {
+func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]byte) {
 	packer.Reset()
 
 	if vec.IsConstNull() {
@@ -203,7 +203,7 @@ func encodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 	return
 }
 
-func encodePrimaryKey(v any, packer *types.Packer) []byte {
+func EncodePrimaryKey(v any, packer *types.Packer) []byte {
 	packer.Reset()
 
 	switch v := v.(type) {
