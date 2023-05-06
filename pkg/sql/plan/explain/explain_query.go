@@ -44,7 +44,7 @@ func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataB
 	}
 
 	for index, rootNodeID := range e.QueryPlan.Steps {
-		logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
+		logutil.Debugf("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
 			buffer: buffer,
 			offset: 0,

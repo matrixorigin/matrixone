@@ -57,11 +57,11 @@ import (
 	"go.uber.org/zap"
 )
 
-func PrintScope(prefix []byte, ss []*Scope) {
+func DebugPrintScope(prefix []byte, ss []*Scope) {
 	for _, s := range ss {
-		PrintScope(append(prefix, '\t'), s.PreScopes)
+		DebugPrintScope(append(prefix, '\t'), s.PreScopes)
 		p := pipeline.NewMerge(s.Instructions, nil)
-		logutil.Infof("%s:%v %v", prefix, s.Magic, p)
+		logutil.Debugf("%s:%v %v", prefix, s.Magic, p)
 	}
 }
 
