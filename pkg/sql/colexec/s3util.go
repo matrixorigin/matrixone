@@ -155,7 +155,7 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 					writers[i].seqnums = append(writers[i].seqnums, uint16(colDef.Seqnum))
 				}
 			}
-			logutil.Infof("allocate s3write tbl: %s-%d, seqnums: %v", tableDef.TblId, tableDef.Name, writers[i].seqnums)
+			logutil.Infof("allocate s3write tbl: %d-%s, seqnums: %v", tableDef.TblId, tableDef.Name, writers[i].seqnums)
 			if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 				// the serialized cpk col is located in the last of the bat.vecs
 				writers[i].sortIndex = len(tableDef.Cols)
