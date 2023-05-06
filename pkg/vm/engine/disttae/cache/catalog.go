@@ -158,6 +158,8 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 }
 
 func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
+	var find bool
+	var ts timestamp.Timestamp
 	/**
 	In push mode.
 	It is necessary to distinguish the case create table/drop table
@@ -189,31 +191,77 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 
 	To be clear that the TableItem in catalogCache is sorted by the table id.
 	*/
+	var tableId uint64
 	deleted := make(map[uint64]bool)
 	inserted := make(map[uint64]*TableItem)
-
-	//collect all deleted and inserted items
 	cc.tables.data.Ascend(tbl, func(item *TableItem) bool {
-		if item.AccountId == tbl.AccountId &&
+		if item.deleted && item.AccountId == tbl.AccountId &&
 			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name {
-			if item.deleted {
-				deleted[item.Id] = true
-			} else {
+			if !ts.IsEmpty() {
+				//if it is the truncate operation, we collect deleteTable together.
+				if item.Ts.Equal(ts) {
+					deleted[item.Id] = true
+					return true
+				} else {
+					return false
+				}
+			}
+			ts = item.Ts
+			tableId = item.Id
+			deleted[item.Id] = true
+			return true
+		}
+		if !item.deleted && item.AccountId == tbl.AccountId &&
+			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name &&
+			(ts.IsEmpty() || ts.Equal(item.Ts) && tableId != item.Id) {
+			//if it is the truncate operation, we collect insertTable together first.
+			if !ts.IsEmpty() && ts.Equal(item.Ts) && tableId != item.Id {
 				inserted[item.Id] = item
+				return true
+			} else {
+				find = true
+				tbl.Id = item.Id
+				tbl.Defs = item.Defs
+				tbl.Kind = item.Kind
+				tbl.Comment = item.Comment
+				tbl.ViewDef = item.ViewDef
+				tbl.TableDef = item.TableDef
+				tbl.Constraint = item.Constraint
+				tbl.Partitioned = item.Partitioned
+				tbl.Partition = item.Partition
+				tbl.CreateSql = item.CreateSql
+				tbl.PrimaryIdx = item.PrimaryIdx
+				tbl.ClusterByIdx = item.ClusterByIdx
+				copy(tbl.Rowid[:], item.Rowid[:])
+				tbl.Rowids = make([]types.Rowid, len(item.Rowids))
+				for i, rowid := range item.Rowids {
+					copy(tbl.Rowids[i][:], rowid[:])
+				}
+				return false
 			}
 		}
-		return true
+		if find {
+			return false
+		}
+		return false
 	})
 
-	//remove deleted item
+	if find {
+		return true
+	}
+
+	//handle truncate operation independently
+	//remove deleted item from inserted item
 	for rowid := range deleted {
 		delete(inserted, rowid)
 	}
 
+	//if there is no inserted item, it means that the table is deleted.
 	if len(inserted) == 0 {
 		return false
 	}
 
+	//if there is more one inserted item, it means that it is wrong
 	if len(inserted) > 1 {
 		panic(fmt.Sprintf("account %d database %d has multiple tables %s",
 			tbl.AccountId, tbl.DatabaseId, tbl.Name))
