@@ -131,17 +131,12 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			for j := 0; j < columnCount; j++ {
 				fromVec := insertBatch.Vecs[j]
 				toVec := newBatch.Vecs[j+columnCount]
-				toVec2 := insertBatch.Vecs[j+columnCount]
 				err := toVec.Copy(fromVec, 0, int64(oldConflictIdx), proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-				err = toVec2.Copy(fromVec, 0, int64(oldConflictIdx), proc.Mp())
-				if err != nil {
-					return nil, err
-				}
 			}
-			newBatch, err := updateOldBatch(newBatch, oldConflictIdx, insertBatch, updateExpr, proc, columnCount, attrs)
+			newBatch, err := updateOldBatch(newBatch, updateExpr, proc, columnCount, attrs)
 			if err != nil {
 				return nil, err
 			}
@@ -159,13 +154,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			if len(oldRowIdVec) == 0 || originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
 				insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 			} else {
-				// append row_id to deleteBatch
-				// err := vector.AppendFixed(delRowIdVec, oldRowIdVec[i], false, proc.GetMPool())
-				// if err != nil {
-				// 	return nil, err
-				// }
-
-				newBatch, err := updateOldBatch(newBatch, i, originBatch, updateExpr, proc, columnCount, attrs)
+				newBatch, err := updateOldBatch(newBatch, updateExpr, proc, columnCount, attrs)
 				if err != nil {
 					return nil, err
 				}
@@ -176,46 +165,43 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				if conflictIdx > -1 {
 					return nil, moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
 				} else {
-					// append batch to updateBatch
+					// append batch to insertBatch
 					insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 				}
 			}
 		}
 	}
 
-	// delete old data
-	// if delRowIdVec.Length() > 0 {
-	// 	deleteBatch := batch.New(true, []string{catalog.Row_ID})
-	// 	deleteBatch.SetZs(delRowIdVec.Length(), proc.Mp())
-	// 	deleteBatch.SetVector(0, delRowIdVec)
-
-	// 	// delete origin rows
-	// 	err := insertArg.Source.Delete(proc.Ctx, deleteBatch, catalog.Row_ID)
+	// make return batch like update statement
+	// updateAttrs := make([]string, 0, len(originBatch.Vecs))
+	// vecs := make([]*vector.Vector, 0, len(originBatch.Vecs))
+	// for i := columnCount; i < len(attrs); i++ {
+	// 	updateAttrs = append(updateAttrs, attrs[i])
+	// 	fromVec := insertBatch.Vecs[i]
+	// 	vec := vector.NewVec(*fromVec.GetType())
+	// 	err := vec.UnionMulti(fromVec, 0, fromVec.Length(), proc.GetMPool())
 	// 	if err != nil {
-	// 		deleteBatch.Clean(proc.Mp())
 	// 		return nil, err
 	// 	}
-
-	// 	// delete unique table rows
-	// 	if len(insertArg.IdxIdx) > 0 {
-	// 		// when refactor finish, we use these code:
-	// 		// deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID, catalog.IndexTableIndexColName})
-	// 		// deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
-	// 		// deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
-	// 		// deleteUniqueBatch.SetVector(1, delUniquePkVec)
-	// 		deleteUniqueBatch := batch.New(true, []string{catalog.Row_ID})
-	// 		deleteUniqueBatch.SetZs(delUniqueRowIdVec.Length(), proc.Mp())
-	// 		deleteUniqueBatch.SetVector(0, delUniqueRowIdVec)
-
-	// 		err := insertArg.UniqueSource[0].Delete(proc.Ctx, deleteUniqueBatch, catalog.Row_ID)
-	// 		if err != nil {
-	// 			deleteUniqueBatch.Clean(proc.Mp())
-	// 			return nil, err
-	// 		}
-	// 	}
+	// 	vecs = append(vecs, vec)
 	// }
-
-	// make return batch like update statement
+	// for i := 0; i < columnCount; i++ {
+	// 	updateAttrs = append(updateAttrs, attrs[i])
+	// 	fromVec := insertBatch.Vecs[i]
+	// 	vec := vector.NewVec(*fromVec.GetType())
+	// 	err := vec.UnionMulti(fromVec, 0, fromVec.Length(), proc.GetMPool())
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	vecs = append(vecs, vec)
+	// }
+	// updateBatch := batch.NewWithSize(len(updateAttrs))
+	// updateBatch.Attrs = updateAttrs
+	// for i, vec := range vecs {
+	// 	updateBatch.SetVector(int32(i), vec)
+	// }
+	// updateBatch.Zs = append(updateBatch.Zs, insertBatch.Zs...)
+	// insertBatch.Clean(proc.GetMPool())
 
 	return insertBatch, nil
 
@@ -251,38 +237,66 @@ func fetchOneRowAsBatch(idx int, originBatch *batch.Batch, proc *process.Process
 	return newBatch, nil
 }
 
-func updateOldBatch(evalBatch *batch.Batch, rowIdx int, oldBatch *batch.Batch, updateExpr map[string]*plan.Expr, proc *process.Process, columnCount int, attrs []string) (*batch.Batch, error) {
-	// evalBatch, err := fetchOneRowAsBatch(rowIdx, oldBatch, proc, attrs)
-	// if err != nil {
-	// 	return nil, err
-	// }
+func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, proc *process.Process, columnCount int, attrs []string) (*batch.Batch, error) {
 	var originVec *vector.Vector
 	newBatch := batch.NewWithSize(len(attrs))
 	newBatch.Attrs = attrs
 	for i, attr := range newBatch.Attrs {
-		if expr, exists := updateExpr[attr]; exists && i < columnCount {
-			runExpr := plan2.DeepCopyExpr(expr)
-			resetColPos(runExpr, columnCount)
-			newVec, err := colexec.EvalExpr(evalBatch, proc, runExpr)
-			if err != nil {
-				newBatch.Clean(proc.Mp())
-				return nil, err
-			}
-			newBatch.SetVector(int32(i), newVec)
-		} else {
-			if i < columnCount {
-				originVec = oldBatch.Vecs[i+columnCount]
+		if i < columnCount {
+			// update insert cols
+			if expr, exists := updateExpr[attr]; exists {
+				runExpr := plan2.DeepCopyExpr(expr)
+				resetColPos(runExpr, columnCount)
+				newVec, err := colexec.EvalExpr(evalBatch, proc, runExpr)
+				if err != nil {
+					newBatch.Clean(proc.Mp())
+					return nil, err
+				}
+				newBatch.SetVector(int32(i), newVec)
 			} else {
-				originVec = oldBatch.Vecs[i]
+				originVec = evalBatch.Vecs[i+columnCount]
+				newVec := vector.NewVec(*originVec.GetType())
+				err := newVec.UnionOne(originVec, int64(0), proc.Mp())
+				if err != nil {
+					newBatch.Clean(proc.Mp())
+					return nil, err
+				}
+				newBatch.SetVector(int32(i), newVec)
 			}
+		} else {
+			// keep old cols
+			originVec = evalBatch.Vecs[i]
 			newVec := vector.NewVec(*originVec.GetType())
-			err := newVec.UnionOne(originVec, int64(rowIdx), proc.Mp())
+			err := newVec.UnionOne(originVec, int64(0), proc.Mp())
 			if err != nil {
 				newBatch.Clean(proc.Mp())
 				return nil, err
 			}
 			newBatch.SetVector(int32(i), newVec)
 		}
+		// if expr, exists := updateExpr[attr]; exists && i < columnCount {
+		// 	runExpr := plan2.DeepCopyExpr(expr)
+		// 	resetColPos(runExpr, columnCount)
+		// 	newVec, err := colexec.EvalExpr(evalBatch, proc, runExpr)
+		// 	if err != nil {
+		// 		newBatch.Clean(proc.Mp())
+		// 		return nil, err
+		// 	}
+		// 	newBatch.SetVector(int32(i), newVec)
+		// } else {
+		// 	if i < columnCount {
+		// 		originVec = oldBatch.Vecs[i+columnCount]
+		// 	} else {
+		// 		originVec = oldBatch.Vecs[i]
+		// 	}
+		// 	newVec := vector.NewVec(*originVec.GetType())
+		// 	err := newVec.UnionOne(originVec, int64(rowIdx), proc.Mp())
+		// 	if err != nil {
+		// 		newBatch.Clean(proc.Mp())
+		// 		return nil, err
+		// 	}
+		// 	newBatch.SetVector(int32(i), newVec)
+		// }
 	}
 	newBatch.SetZs(1, proc.Mp())
 

@@ -257,6 +257,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "sink", nil
 	case plan.Node_SINK_SCAN:
 		return "sink_scan", nil
+	case plan.Node_ON_DUPLICATE_KEY:
+		return "on_duplicate_key", nil
 	default:
 		return "", moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}

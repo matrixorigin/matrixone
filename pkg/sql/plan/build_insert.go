@@ -63,52 +63,58 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	objRef := tblInfo.objRef[0]
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
 		// append on duplicate key node
-		var dupProjection []*Expr
-		updateColLength := 0
-		rowIdPos := -1
-		for _, col := range tableDef.Cols {
-			dupProjection = append(dupProjection, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: -1,
-						ColPos: int32(updateColLength),
-						Name:   col.Name,
-					},
-				},
-			})
-			if col.Name == catalog.Row_ID {
-				rowIdPos = updateColLength
-			}
-			updateColLength++
-		}
-		var insertColPos []int
-		for _, col := range tableDef.Cols {
-			if col.Name == catalog.Row_ID {
-				continue
-			}
-			idx := len(dupProjection)
-			insertColPos = append(insertColPos, idx)
-			dupProjection = append(dupProjection, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: -1,
-						ColPos: int32(idx),
-						Name:   col.Name,
-					},
-				},
-			})
-		}
-		projectNode := &Node{
+		dupProjection := getProjectionByLastNode(builder, lastNodeId)
+		onDuplicateKeyNode := &Node{
 			NodeType:    plan.Node_ON_DUPLICATE_KEY,
 			Children:    []int32{lastNodeId},
 			ProjectList: dupProjection,
 			OnDuplicateKey: &plan.OnDuplicateKeyCtx{
-				TableDef:        tableDef,
+				TableDef:        DeepCopyTableDef(tableDef),
 				OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
 				OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
 			},
+		}
+		lastNodeId = builder.appendNode(onDuplicateKeyNode, bindCtx)
+
+		// append project node to make batch like update logic, not insert
+		updateColLength := len(tableDef.Cols)
+		projectProjection := make([]*Expr, updateColLength*2+1)
+		var insertColPos []int
+		for i, col := range tableDef.Cols {
+			projectProjection[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(i + updateColLength),
+						Name:   col.Name,
+					},
+				},
+			}
+			projectProjection[i+updateColLength+1] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(i),
+						Name:   col.Name,
+					},
+				},
+			}
+			insertColPos = append(insertColPos, updateColLength+i+1)
+		}
+		rowIdPos := updateColLength
+		projectProjection[updateColLength] = &plan.Expr{
+			Typ: dupProjection[len(dupProjection)-1].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					ColPos: int32(len(dupProjection) - 1),
+					Name:   catalog.Row_ID,
+				},
+			},
+		}
+		projectNode := &Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeId},
+			ProjectList: projectProjection,
 		}
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 
@@ -117,6 +123,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		sourceStep = builder.appendStep(lastNodeId)
 
 		// append plans like update
+		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
 		updateBindCtx := NewBindContext(builder, nil)
 		upPlanCtx := &dmlPlanCtx{
 			objRef:          objRef,

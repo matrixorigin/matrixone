@@ -189,7 +189,7 @@ func AllocPartitionS3Writer(tableDef *plan.TableDef) ([]*S3Writer, error) {
 
 		if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 			// the serialized cpk col is located in the last of the bat.vecs
-			writers[i].sortIndex = len(tableDef.Cols)
+			writers[i].sortIndex = len(tableDef.Cols) - 1
 		} else {
 			// Get Single Col pk index
 			for idx, colDef := range tableDef.Cols {
@@ -201,7 +201,7 @@ func AllocPartitionS3Writer(tableDef *plan.TableDef) ([]*S3Writer, error) {
 			if tableDef.ClusterBy != nil {
 				if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 					// the serialized clusterby col is located in the last of the bat.vecs
-					writers[i].sortIndex = len(tableDef.Cols)
+					writers[i].sortIndex = len(tableDef.Cols) - 1
 				} else {
 					for idx, colDef := range tableDef.Cols {
 						if colDef.Name == tableDef.ClusterBy.Name {
