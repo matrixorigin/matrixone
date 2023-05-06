@@ -43,7 +43,7 @@ import (
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
-	HandleNotifyTimeout = 300 * time.Second
+	HandleNotifyTimeout = 60 * time.Second
 )
 
 // cnInformation records service information to help handle messages.
@@ -78,8 +78,8 @@ type messageSenderOnClient struct {
 }
 
 func newMessageSenderOnClient(
-	ctx context.Context, toAddr string) (messageSenderOnClient, error) {
-	var sender = messageSenderOnClient{}
+	ctx context.Context, toAddr string) (*messageSenderOnClient, error) {
+	var sender = new(messageSenderOnClient)
 
 	streamSender, err := cnclient.GetStreamSender(toAddr)
 	if err != nil {
@@ -143,17 +143,10 @@ func (sender *messageSenderOnClient) send(
 }
 
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
-	var err error
-	if sender.receiveCh == nil {
-		sender.receiveCh, err = sender.streamSender.Receive()
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	select {
 	case <-sender.ctx.Done():
-		return nil, moerr.NewRPCTimeout(sender.ctx)
+		logutil.Errorf("sender ctx done during receive")
+		return nil, nil
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
 			// ch close
@@ -432,7 +425,10 @@ outter:
 	for {
 		select {
 		case <-getCtx.Done():
-			return nil, moerr.NewInternalErrorNoCtx("get dispatch process by uuid failed")
+			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
+		case <-receiver.ctx.Done():
+			logutil.Errorf("receiver conctx done during get dispatch process")
+			return nil, nil
 		default:
 			if opProc, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
 				runtime.Gosched()

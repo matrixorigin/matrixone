@@ -1862,7 +1862,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		Arg: constructDispatchLocal(false, extraRegisters(ss, 0)),
 	})
 	rs.IsEnd = true
-	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
+	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
 	regTransplant(s, rs, 0, 0)
 	return rs
 }
@@ -1882,7 +1882,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		Arg: constructDispatchLocal(true, extraRegisters(ss, 1)),
 	})
 	rs.IsEnd = true
-	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
+	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
 	regTransplant(s, rs, 1, 0)
 	return rs
 }
