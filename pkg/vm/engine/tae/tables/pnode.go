@@ -73,8 +73,7 @@ func (node *persistedNode) init() {
 			node.block.indexCache,
 			node.block.fs,
 			metaloc,
-			schema.ColDefs[i],
-			&node.block.meta.ID); err != nil {
+			schema.ColDefs[i]); err != nil {
 			panic(err)
 		}
 		node.indexes[i] = index
