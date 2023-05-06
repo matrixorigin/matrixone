@@ -49,7 +49,7 @@ func NewBfReader(
 }
 
 func (r *BfReader) getBloomFilter() (objectio.BloomFilter, error) {
-	var v any
+	var v []byte
 	var size uint32
 	var err error
 	v, ok := r.indexCache.Get(*r.bfKey.ShortName())
@@ -58,10 +58,10 @@ func (r *BfReader) getBloomFilter() (objectio.BloomFilter, error) {
 		if err != nil {
 			return nil, err
 		}
-		r.indexCache.Set(*r.bfKey.ShortName(), v.([]byte), int64(size))
+		r.indexCache.Set(*r.bfKey.ShortName(), v, int64(size))
 	}
 
-	return v.(objectio.BloomFilter), nil
+	return objectio.BloomFilter(v), nil
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
