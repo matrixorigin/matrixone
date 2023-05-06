@@ -88,7 +88,7 @@ select (null,null,2893.323) = ()
 drop table if exists row01;
 create table row01(col1 char, col2 varchar(20));
 insert into row01 values('a',' uc32qr3');
-insert into row01 values('b',' 09920011 ');
+insert into row01 values('b',' 09920011');
 insert into row01 values('c','3ru82q ijf');
 insert into row01 values(null,'e&*(&  &&');
 select * from row01;
