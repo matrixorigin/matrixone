@@ -235,6 +235,10 @@ type FuncNew struct {
 	layout FuncExplainLayout
 }
 
+type executeLogicOfOverload func(parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process, length int) error
+
 // an overload of a function.
 // stores all information about execution logic.
 type overload struct {
@@ -254,9 +258,7 @@ type overload struct {
 	retType func(parameters []types.Type) types.Type
 
 	// the execution logic.
-	NewOp func(parameters []*vector.Vector,
-		result vector.FunctionResultWrapper,
-		proc *process.Process, length int) error
+	newOp func() executeLogicOfOverload
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them, and if so, we will record the special id of it.
@@ -285,6 +287,11 @@ func (ov *overload) IsAgg() bool {
 
 func (ov *overload) GetSpecialId() int {
 	return ov.specialId
+}
+
+func (ov *overload) GetExecuteMethod() executeLogicOfOverload {
+	f := ov.newOp
+	return f()
 }
 
 func (ov *overload) IsWin() bool {

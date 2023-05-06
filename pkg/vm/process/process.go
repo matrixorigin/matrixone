@@ -163,7 +163,10 @@ func (proc *Process) GetAnalyze(idx int) Analyze {
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
 	vec := vector.NewVec(typ)
-	vec.PreExtend(nele, proc.Mp())
+	err := vec.PreExtend(nele, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
 	vec.SetLength(nele)
 	if nsp != nil {
 		nulls.Set(vec.GetNulls(), nsp)

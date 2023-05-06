@@ -100,7 +100,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 		executor := &FunctionExpressionExecutor{}
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		if err = executor.Init(proc.Mp(), len(t.F.Args), typ, overload.NewOp); err != nil {
+		if err = executor.Init(proc.Mp(), len(t.F.Args), typ, overload.GetExecuteMethod()); err != nil {
 			return nil, err
 		}
 
@@ -116,9 +116,13 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		// 	there is a better way to convert it as a FixedVectorExpressionExecutor.
 		if !overload.CannotFold() && !overload.IsRealTimeRelated() && ifAllArgsAreConstant(executor) {
 			for i := range executor.parameterExecutor {
-				executor.parameterResults[i] = executor.parameterExecutor[i].(*FixedVectorExpressionExecutor).resultVector
-				executor.parameterResults[i].SetLength(1)
+				fixExe := executor.parameterExecutor[i].(*FixedVectorExpressionExecutor)
+				executor.parameterResults[i] = fixExe.resultVector
+				if !fixExe.fixed {
+					executor.parameterResults[i].SetLength(1)
+				}
 			}
+
 			err = executor.evalFn(executor.parameterResults, executor.resultVector, proc, 1)
 			if err == nil {
 				result := executor.resultVector.GetResultVector()
