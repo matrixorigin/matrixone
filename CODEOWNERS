@@ -152,6 +152,7 @@
 /pkg/vm @nnsgmsone @XuPeng-SH 
 /pkg/vm/engine @nnsgmsone
 /pkg/vm/engine/disttae @nnsgmsone
+/pkg/vm/engine/disttae/logtailreplay @reusee
 /pkg/vm/engine/tae @XuPeng-SH 
 /pkg/vm/engine/memoryengine @reusee
 

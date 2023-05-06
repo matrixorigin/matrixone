@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package logtailreplay
 
 import (
 	"bytes"
@@ -23,14 +23,13 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/tidwall/btree"
@@ -190,13 +189,13 @@ func (p *PartitionState) HandleLogtailEntry(
 ) {
 	switch entry.EntryType {
 	case api.Entry_Insert:
-		if isMetaTable(entry.TableName) {
+		if IsMetaTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else {
 			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex, packer)
 		}
 	case api.Entry_Delete:
-		if isMetaTable(entry.TableName) {
+		if IsMetaTable(entry.TableName) {
 			p.HandleMetadataDelete(ctx, entry.Bat)
 		} else {
 			p.HandleRowsDelete(ctx, entry.Bat)
@@ -226,7 +225,7 @@ func (p *PartitionState) HandleRowsInsert(
 		panic(err)
 	}
 	if primaryKeyIndex >= 0 {
-		primaryKeys = encodePrimaryKeyVector(
+		primaryKeys = EncodePrimaryKeyVector(
 			batch.Vecs[2+primaryKeyIndex],
 			packer,
 		)
