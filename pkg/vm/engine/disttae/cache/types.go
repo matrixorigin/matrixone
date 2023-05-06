@@ -225,3 +225,24 @@ func databaseItemRowidLess(a, b *DatabaseItem) bool {
 func tableItemRowidLess(a, b *TableItem) bool {
 	return bytes.Compare(a.Rowid[:], b.Rowid[:]) < 0
 }
+
+//copyTableItem copies src to dst
+func copyTableItem(dst, src *TableItem) {
+	dst.Id = src.Id
+	dst.Defs = src.Defs
+	dst.Kind = src.Kind
+	dst.Comment = src.Comment
+	dst.ViewDef = src.ViewDef
+	dst.TableDef = src.TableDef
+	dst.Constraint = src.Constraint
+	dst.Partitioned = src.Partitioned
+	dst.Partition = src.Partition
+	dst.CreateSql = src.CreateSql
+	dst.PrimaryIdx = src.PrimaryIdx
+	dst.ClusterByIdx = src.ClusterByIdx
+	copy(dst.Rowid[:], src.Rowid[:])
+	dst.Rowids = make([]types.Rowid, len(src.Rowids))
+	for i, rowid := range src.Rowids {
+		copy(dst.Rowids[i][:], rowid[:])
+	}
+}
