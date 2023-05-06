@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -759,22 +758,6 @@ func getBinarySearchFuncByPkValue[T compareT](typ types.T, v T) func(*vector.Vec
 	default:
 		return nil
 	}
-}
-
-func mustVectorFromProto(v *api.Vector) *vector.Vector {
-	ret, err := vector.ProtoVectorToVector(v)
-	if err != nil {
-		panic(err)
-	}
-	return ret
-}
-
-func mustVectorToProto(v *vector.Vector) *api.Vector {
-	ret, err := vector.VectorToProtoVector(v)
-	if err != nil {
-		panic(err)
-	}
-	return ret
 }
 
 func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {

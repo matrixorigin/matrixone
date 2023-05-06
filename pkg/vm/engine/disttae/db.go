@@ -16,7 +16,9 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,25 +37,25 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	defer put()
 
 	{
-		parts := make(Partitions, len(e.dnMap))
+		parts := make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
 	}
 
 	{
-		parts := make(Partitions, len(e.dnMap))
+		parts := make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
 	}
 
 	{
-		parts := make(Partitions, len(e.dnMap))
+		parts := make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
 	}
@@ -260,14 +262,14 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	return nil
 }
 
-func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
+func (e *Engine) getPartitions(databaseId, tableId uint64) logtailreplay.Partitions {
 	e.Lock()
 	defer e.Unlock()
 	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		parts = make(Partitions, len(e.dnMap))
+		parts = make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
@@ -280,10 +282,8 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 	for _, part := range parts {
 
 		select {
-		case <-part.lock:
-			defer func() {
-				part.lock <- struct{}{}
-			}()
+		case <-part.Lock():
+			defer part.Unlock()
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -326,9 +326,9 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 	e.Lock()
 	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		parts = make(Partitions, len(e.dnMap))
+		parts = make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
@@ -338,10 +338,9 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 		part := parts[e.dnMap[dn.ServiceID]]
 
 		select {
-		case <-part.lock:
-			if part.ts.Greater(ts) ||
-				part.ts.Equal(ts) {
-				part.lock <- struct{}{}
+		case <-part.Lock():
+			if part.TS.Greater(ts) || part.TS.Equal(ts) {
+				part.Unlock()
 				return nil
 			}
 		case <-ctx.Done():
@@ -350,14 +349,14 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 
 		if err := updatePartitionOfPull(
 			primaryIdx, tbl, ctx, op, e, part, dn,
-			genSyncLogTailReq(part.ts, ts, databaseId, tableId),
+			genSyncLogTailReq(part.TS, ts, databaseId, tableId),
 		); err != nil {
-			part.lock <- struct{}{}
+			part.Unlock()
 			return err
 		}
 
-		part.ts = ts
-		part.lock <- struct{}{}
+		part.TS = ts
+		part.Unlock()
 	}
 
 	return nil

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -36,7 +37,7 @@ func updatePartitionOfPull(
 	ctx context.Context,
 	op client.TxnOperator,
 	engine *Engine,
-	partition *Partition,
+	partition *logtailreplay.Partition,
 	dn DNStore,
 	req api.SyncLogTailReq,
 ) error {
@@ -87,7 +88,7 @@ func consumeLogTailOfPull(
 	tbl *txnTable,
 	ctx context.Context,
 	engine *Engine,
-	state *PartitionState,
+	state *logtailreplay.PartitionState,
 	logTail *api.SyncLogTailResp,
 ) (err error) {
 	logutil.Debugf("consumeLogTailOfPull table %d %s", tbl.tableId, tbl.tableName)
