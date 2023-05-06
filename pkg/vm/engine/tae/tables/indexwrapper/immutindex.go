@@ -17,7 +17,6 @@ package indexwrapper
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -114,7 +113,6 @@ func (index *immutableIndex) ReadFrom(
 	fs *objectio.ObjectFS,
 	location objectio.Location,
 	colDef *catalog.ColDef,
-	blockID *types.Blockid,
 ) (err error) {
 	index.zmReader = NewZmReader(
 		fs,
@@ -127,7 +125,6 @@ func (index *immutableIndex) ReadFrom(
 			location,
 			indexCache,
 			fs,
-			blockID,
 		)
 	}
 	return
