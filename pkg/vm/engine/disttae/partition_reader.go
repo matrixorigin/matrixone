@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
@@ -37,7 +38,7 @@ type PartitionReader struct {
 	inserts              []*batch.Batch
 	deletes              map[types.Rowid]uint8
 	skipBlocks           map[types.Blockid]uint8
-	iter                 partitionStateIter
+	iter                 logtailreplay.PartitionStateIter
 	sourceBatchNameIndex map[string]int
 
 	// the following attributes are used to support cn2s3
@@ -194,6 +195,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			if len(deletes) != 0 {
 				rbat.AntiShrink(deletes)
 			}
+			logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[s3]", rbat))
 			return rbat, nil
 		} else {
@@ -222,6 +224,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 			}
 			b.SetZs(bat.Length(), p.procMPool)
+			logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
 			return b, nil
 		}

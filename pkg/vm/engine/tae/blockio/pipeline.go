@@ -315,12 +315,12 @@ func (p *IoPipeline) onFetch(jobs ...any) {
 func (p *IoPipeline) schedulerPrefetch(job *tasks.Job) {
 	if err := p.prefetch.scheduler.Schedule(job); err != nil {
 		job.DoneWithErr(err)
-		logutil.Infof("err is %v", err.Error())
+		logutil.Debugf("err is %v", err.Error())
 		putJob(job)
 	} else {
 		if _, err := p.waitQ.Enqueue(job); err != nil {
 			job.DoneWithErr(err)
-			logutil.Infof("err is %v", err.Error())
+			logutil.Debugf("err is %v", err.Error())
 			putJob(job)
 		}
 	}

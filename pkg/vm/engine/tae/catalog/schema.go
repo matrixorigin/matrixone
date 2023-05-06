@@ -191,7 +191,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Extra.ColumnChanged = true
 		s.removeDroppedName(newcol.Name)
 		s.Extra.NextColSeqnum += 1
-		s.Finalize(true) // rebuild sortkey
+		return s.Finalize(true) // rebuild sortkey
 	case apipb.AlterKind_DropColumn:
 		drop := req.GetDropColumn()
 		coldef := s.ColDefs[drop.LogicalIdx]
@@ -213,7 +213,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 		s.Extra.DroppedAttrs = append(s.Extra.DroppedAttrs, coldef.Name)
 		s.Extra.ColumnChanged = true
-		s.Finalize(true)
+		return s.Finalize(true)
 	case apipb.AlterKind_RenameTable:
 		rename := req.GetRenameTable()
 		if rename.OldName != s.Name {
@@ -256,7 +256,8 @@ func (s *Schema) GetSingleSortKeyType() types.Type { return s.GetSingleSortKey()
 func (s *Schema) getFakePrimaryKey() *ColDef {
 	idx, ok := s.NameMap[pkgcatalog.FakePrimaryKeyColName]
 	if !ok {
-		logutil.Infof("fake primary key not existed: %v", s.String())
+		// should just call logutil.Fatal
+		logutil.Debugf("fake primary key not existed: %v", s.String())
 		panic("fake primary key not existed")
 	}
 	return s.ColDefs[idx]

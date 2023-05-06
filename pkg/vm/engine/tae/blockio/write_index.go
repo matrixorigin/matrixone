@@ -52,7 +52,7 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 	}
 
 	if b.zms[idx] == nil {
-		b.zms[idx] = index.NewZM(vec.GetType().Oid)
+		b.zms[idx] = index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 	}
 	if b.sks[idx] == nil {
 		b.sks[idx] = hll.New()

@@ -152,7 +152,7 @@ func (r *runner) GCByTS(ctx context.Context, ts types.TS) error {
 			r.gcTS.Store(ts)
 		}
 	}
-	logutil.Infof("GC %v", ts.ToString())
+	logutil.Debugf("GC %v", ts.ToString())
 	r.gcCheckpointQueue.Enqueue(struct{}{})
 	return nil
 }
