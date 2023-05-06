@@ -226,7 +226,7 @@ func tableItemRowidLess(a, b *TableItem) bool {
 	return bytes.Compare(a.Rowid[:], b.Rowid[:]) < 0
 }
 
-//copyTableItem copies src to dst
+// copyTableItem copies src to dst
 func copyTableItem(dst, src *TableItem) {
 	dst.Id = src.Id
 	dst.Defs = src.Defs
