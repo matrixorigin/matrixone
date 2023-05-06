@@ -52,18 +52,15 @@ func (r *BfReader) getBloomFilter() (objectio.BloomFilter, error) {
 	var v any
 	var size uint32
 	var err error
-	bs, ok := r.indexCache.Get(*r.bfKey.ShortName())
+	v, ok := r.indexCache.Get(*r.bfKey.ShortName())
 	if !ok {
 		v, size, err = r.reader.LoadAllBF(context.Background())
 		if err != nil {
 			return nil, err
 		}
-		bs, err = v.(objectio.BloomFilter).Marshal()
-		if err != nil {
-			return nil, err
-		}
-		r.indexCache.Set(*r.bfKey.ShortName(), bs, int64(size))
+		r.indexCache.Set(*r.bfKey.ShortName(), v.([]byte), int64(size))
 	}
+
 	return v.(objectio.BloomFilter), nil
 }
 
