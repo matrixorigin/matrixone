@@ -710,6 +710,14 @@ var (
 		"system":             0,
 		"system_metrics":     0,
 	}
+	sysDatabases = map[string]int8{
+		"mo_catalog":         0,
+		"information_schema": 0,
+		"system":             0,
+		"system_metrics":     0,
+		"mo_task":            0,
+		"mysql":              0,
+	}
 	sysWantedTables = map[string]int8{
 		"mo_user":                     0,
 		"mo_account":                  0,
@@ -1271,7 +1279,7 @@ const (
 
 	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
 
-	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
+	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
 	updatePubInfoFormat         = `update mo_catalog.mo_pubs set all_account = %t,account_list = '%s',comment = '%s' where pub_name = '%s';`
@@ -1602,14 +1610,14 @@ func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId i
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
 }
-func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool) (string, error) {
+func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool, account_id uint64) (string, error) {
 	if checkNameValid {
 		err := inputNameIsInvalid(ctx, dbName)
 		if err != nil {
 			return "", err
 		}
 	}
-	return fmt.Sprintf(getDbIdAndTypFormat, dbName), nil
+	return fmt.Sprintf(getDbIdAndTypFormat, dbName, account_id), nil
 }
 
 func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable, allAccount bool, tableList, accountList string, owner, creator uint32, comment string, checkNameValid bool) (string, error) {
@@ -2850,7 +2858,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		err = moerr.NewInternalError(newCtx, "there is no publication account %s", accName)
 		goto handleFailed
 	}
 	accId, err = erArray[0].GetInt64(newCtx, 0, 0)
@@ -2902,7 +2910,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	if err != nil {
 		goto handleFailed
 	}
-	if !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
+	if tenantInfo != nil && !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
 		err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 		goto handleFailed
 	}
@@ -3035,13 +3043,19 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		accountList = strings.Join(accts, ",")
 	}
 
+	pubDb := string(cp.Database)
+
+	if _, ok := sysDatabases[pubDb]; ok {
+		return moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", pubDb)
+	}
+
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
 	}
 	bh.ClearExecResultSet()
 
-	sql, err = getSqlForGetDbIdAndType(ctx, string(cp.Database), true)
+	sql, err = getSqlForGetDbIdAndType(ctx, pubDb, true, uint64(tenantInfo.TenantID))
 	if err != nil {
 		goto handleFailed
 	}
@@ -3070,7 +3084,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		goto handleFailed
 	}
 	bh.ClearExecResultSet()
-	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), string(cp.Database), datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
+	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
 	if err != nil {
 		goto handleFailed
 	}
@@ -6728,6 +6742,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	if err != nil {
 		goto handleFailed
 	}
+
+	if !exists {
+		createSubscriptionDatabase(ctx, bh, newTenant, ses)
+	}
+
 	return err
 handleFailed:
 	//ROLLBACK the transaction
@@ -6976,6 +6995,46 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	sqls = append(sqls, "use mysql;")
 	sqls = append(sqls, sysview.InitMysqlSysTables...)
 
+	for _, sql := range sqls {
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+// create subscription database
+func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo, ses *Session) error {
+	ctx, span := trace.Debug(ctx, "createSubscriptionDatabase")
+	defer span.End()
+
+	var err error
+	subscriptions := make([]string, 0)
+	//process the syspublications
+	_, syspublications_value, _ := ses.GetGlobalSysVars().GetGlobalSysVar("syspublications")
+	if syspublications, ok := syspublications_value.(string); ok {
+		if len(syspublications) == 0 {
+			return err
+		}
+		subscriptions = strings.Split(syspublications, ",")
+	}
+	// if no subscriptions, return
+	if len(subscriptions) == 0 {
+		return err
+	}
+
+	//with new tenant
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
+
+	createSubscriptionFormat := `create database %s from sys publication %s;`
+	sqls := make([]string, 0, len(subscriptions))
+	for _, subscription := range subscriptions {
+		sqls = append(sqls, fmt.Sprintf(createSubscriptionFormat, subscription, subscription))
+	}
 	for _, sql := range sqls {
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)

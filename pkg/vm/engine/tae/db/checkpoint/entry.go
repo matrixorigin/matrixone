@@ -205,12 +205,12 @@ func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, 
 func (e *CheckpointEntry) GCMetadata(fs *objectio.ObjectFS) error {
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, e.start, e.end)
 	err := fs.Delete(name)
-	logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
+	logutil.Debugf("GC checkpoint metadata %v, err %v", e.String(), err)
 	return err
 }
 
 func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
 	err := fs.Delete(e.location.Name().String())
-	defer logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
+	defer logutil.Debugf("GC checkpoint metadata %v, err %v", e.String(), err)
 	return err
 }
