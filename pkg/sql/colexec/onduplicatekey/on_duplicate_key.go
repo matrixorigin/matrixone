@@ -292,7 +292,12 @@ func updateOldBatch(evalBatch *batch.Batch, rowIdx int, oldBatch *batch.Batch, u
 				newBatch.Clean(proc.Mp())
 				return nil, err
 			}
-			newBatch.SetVector(int32(i), newVec)
+			nv, err := newVec.Dup(proc.Mp())
+			executor.Free()
+			if err != nil {
+				return nil, err
+			}
+			newBatch.SetVector(int32(i), nv)
 		} else {
 			if i < columnCount {
 				originVec = oldBatch.Vecs[i+columnCount]
