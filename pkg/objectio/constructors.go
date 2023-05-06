@@ -20,12 +20,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 )
 
-type CacheConstructor = func(r io.Reader, buf []byte) (any, int64, error)
-type CacheConstructorFactory = func(size int64, algo uint8, noHeaderHint bool) CacheConstructor
+type CacheConstructor = func(r io.Reader, buf []byte) ([]byte, int64, error)
+type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
 
 // use this to replace all other constructors
-func constructorFactory(size int64, algo uint8, noHeaderHint bool) CacheConstructor {
-	return func(reader io.Reader, data []byte) (any, int64, error) {
+func constructorFactory(size int64, algo uint8) CacheConstructor {
+	return func(reader io.Reader, data []byte) ([]byte, int64, error) {
 		fn := func() ([]byte, int64, error) {
 			var err error
 			if len(data) == 0 {
@@ -49,19 +49,22 @@ func constructorFactory(size int64, algo uint8, noHeaderHint bool) CacheConstruc
 			return decompressed, int64(len(decompressed)), nil
 		}
 		buf, size, err := fn()
-		if noHeaderHint || err != nil {
+		if err != nil {
 			return buf, size, err
 		}
-
-		header := DecodeIOEntryHeader(buf)
-		codec := GetIOEntryCodec(*header)
-		if codec.NoUnmarshal() {
-			return buf[IOEntryHeaderSize:], size, err
-		}
-		v, err := codec.Decode(buf[IOEntryHeaderSize:])
-		if err != nil {
-			return nil, 0, err
-		}
-		return v, size, nil
+		return buf, size, nil
 	}
+}
+
+func Decode(buf []byte) (any, error) {
+	header := DecodeIOEntryHeader(buf)
+	codec := GetIOEntryCodec(*header)
+	if codec.NoUnmarshal() {
+		return buf[IOEntryHeaderSize:], nil
+	}
+	v, err := codec.Decode(buf[IOEntryHeaderSize:])
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
 }
