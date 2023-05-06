@@ -656,8 +656,7 @@ func TestHandleUpdateCNLabel(t *testing.T) {
 	uuid := "uuid1"
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	label := pb.CNStoreLabel{
-		UUID:      uuid,
-		Operation: pb.SetLabel,
+		UUID: uuid,
 		Labels: map[string]metadata.LabelList{
 			"account": {Labels: []string{"a", "b"}},
 			"role":    {Labels: []string{"1", "2"}},
@@ -686,8 +685,7 @@ func TestHandleUpdateCNLabel(t *testing.T) {
 	assert.Equal(t, 1, len(s.Stores))
 
 	label = pb.CNStoreLabel{
-		UUID:      uuid,
-		Operation: pb.SetLabel,
+		UUID: uuid,
 		Labels: map[string]metadata.LabelList{
 			"account": {Labels: []string{"a", "b"}},
 			"role":    {Labels: []string{"1", "2"}},
@@ -709,10 +707,9 @@ func TestHandleUpdateCNLabel(t *testing.T) {
 	assert.Equal(t, labels.Labels, []string{"1", "2"})
 
 	label = pb.CNStoreLabel{
-		UUID:      uuid,
-		Operation: pb.DeleteLabel,
+		UUID: uuid,
 		Labels: map[string]metadata.LabelList{
-			"account": {Labels: []string{"a", "b"}},
+			"role": {Labels: []string{"1", "2"}},
 		},
 	}
 	cmd = GetUpdateCNLabelCmd(label)
