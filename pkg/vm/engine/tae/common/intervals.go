@@ -198,12 +198,12 @@ func (intervals *ClosedIntervals) ReadFrom(r io.Reader) (n int64, err error) {
 // Equal is for test
 func (intervals *ClosedIntervals) Equal(o *ClosedIntervals) bool {
 	if len(intervals.Intervals) != len(o.Intervals) {
-		logutil.Infof("%v\n%v", intervals.Intervals, o.Intervals)
+		logutil.Debugf("%v\n%v", intervals.Intervals, o.Intervals)
 		return false
 	}
 	for i, interval := range intervals.Intervals {
 		if interval.Start != o.Intervals[i].Start || interval.End != o.Intervals[i].End {
-			logutil.Infof("%v\n%v", intervals.Intervals, o.Intervals)
+			logutil.Debugf("%v\n%v", intervals.Intervals, o.Intervals)
 			return false
 		}
 	}
