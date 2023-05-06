@@ -220,23 +220,7 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 				return true
 			} else {
 				find = true
-				tbl.Id = item.Id
-				tbl.Defs = item.Defs
-				tbl.Kind = item.Kind
-				tbl.Comment = item.Comment
-				tbl.ViewDef = item.ViewDef
-				tbl.TableDef = item.TableDef
-				tbl.Constraint = item.Constraint
-				tbl.Partitioned = item.Partitioned
-				tbl.Partition = item.Partition
-				tbl.CreateSql = item.CreateSql
-				tbl.PrimaryIdx = item.PrimaryIdx
-				tbl.ClusterByIdx = item.ClusterByIdx
-				copy(tbl.Rowid[:], item.Rowid[:])
-				tbl.Rowids = make([]types.Rowid, len(item.Rowids))
-				for i, rowid := range item.Rowids {
-					copy(tbl.Rowids[i][:], rowid[:])
-				}
+				copyTableItem(tbl, item)
 				return false
 			}
 		}
@@ -261,7 +245,7 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 		return false
 	}
 
-	//if there is more one inserted item, it means that it is wrong
+	//if there is more than one inserted item, it means that it is wrong
 	if len(inserted) > 1 {
 		panic(fmt.Sprintf("account %d database %d has multiple tables %s",
 			tbl.AccountId, tbl.DatabaseId, tbl.Name))
@@ -269,23 +253,7 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 
 	//get item
 	for _, item := range inserted {
-		tbl.Id = item.Id
-		tbl.Defs = item.Defs
-		tbl.Kind = item.Kind
-		tbl.Comment = item.Comment
-		tbl.ViewDef = item.ViewDef
-		tbl.TableDef = item.TableDef
-		tbl.Constraint = item.Constraint
-		tbl.Partitioned = item.Partitioned
-		tbl.Partition = item.Partition
-		tbl.CreateSql = item.CreateSql
-		tbl.PrimaryIdx = item.PrimaryIdx
-		tbl.ClusterByIdx = item.ClusterByIdx
-		copy(tbl.Rowid[:], item.Rowid[:])
-		tbl.Rowids = make([]types.Rowid, len(item.Rowids))
-		for i, rowid := range item.Rowids {
-			copy(tbl.Rowids[i][:], rowid[:])
-		}
+		copyTableItem(tbl, item)
 	}
 
 	return true
