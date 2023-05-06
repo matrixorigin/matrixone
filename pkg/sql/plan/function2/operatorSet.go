@@ -406,17 +406,9 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 	p3 := vector.GenerateFunctionFixedTypeParameter[T](vecs[2])
 
 	rs := vector.MustFunctionResult[T](result)
-	var dfv T
 	for i := uint64(0); i < uint64(length); i++ {
 		b, null := p1.GetValue(i)
-		if null {
-			if err := rs.Append(dfv, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if b {
+		if !null && b {
 			if err := rs.Append(p2.GetValue(i)); err != nil {
 				return err
 			}
@@ -437,14 +429,7 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		b, null := p1.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if b {
+		if !null && b {
 			if err := rs.AppendBytes(p2.GetStrValue(i)); err != nil {
 				return err
 			}
