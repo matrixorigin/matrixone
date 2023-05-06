@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,42 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package logtailreplay
 
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func BenchmarkPartitionState(b *testing.B) {
-	partition := NewPartition()
-	end := make(chan struct{})
-	defer func() {
-		close(end)
-	}()
-
-	// concurrent writer
-	go func() {
-		for {
-			select {
-			case <-end:
-				return
-			default:
-			}
-			state, end := partition.MutateState()
-			_ = state
-			end()
-		}
-	}()
-
+func BenchmarkEncode(b *testing.B) {
+	pool := mpool.MustNewZero()
+	packer := types.NewPacker(pool)
 	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			state := partition.state.Load()
-			iter := state.NewRowsIter(types.BuildTS(0, 0), nil, false)
-			iter.Close()
-		}
-	})
-
+	for i := 0; i < b.N; i++ {
+		EncodePrimaryKey(int64(i), packer)
+	}
+	b.StopTimer()
+	packer.FreeMem()
+	b.StartTimer()
 }

@@ -33,6 +33,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -221,7 +222,7 @@ func (tbl *txnTable) reset(newId uint64) {
 	tbl.blockInfos = nil
 	tbl.modifiedBlocks = nil
 	tbl.blockInfosUpdated = false
-	tbl.localState = NewPartitionState(true)
+	tbl.localState = logtailreplay.NewPartitionState(true)
 }
 
 // return all unmodified blocks
@@ -263,6 +264,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 		if len(blocks) > 0 {
 			ts := tbl.db.txn.meta.SnapshotTS
 			ids := make([]types.Blockid, len(blocks))
+			appendIds := make([]types.Blockid, len(blocks))
 			for i := range blocks {
 				// if cn can see a appendable block, this block must contain all updates
 				// in cache, no need to do merge read, BlockRead will filter out
@@ -271,9 +273,14 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 					if blocks[i].CommitTs.ToTimestamp().Less(ts) { // hack
 						ids[i] = blocks[i].BlockID
 					}
+				} else {
+					appendIds = append(appendIds, blocks[i].BlockID)
 				}
 			}
-
+			// non-append -> flush-deletes -- yes
+			// non-append -> raw-deletes  -- yes
+			// append     -> raw-deletes -- yes
+			// append     -> flush-deletes -- yes
 			for _, blockID := range ids {
 				ts := types.TimestampToTS(ts)
 				iter := parts[i].NewRowsIter(ts, &blockID, true)
@@ -298,7 +305,15 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 					}
 				}
 			}
+			// add append-block flush-deletes
+			for _, blockID := range appendIds {
+				// DN flush deletes rowids block
+				if err = tbl.LoadDeletesForBlock(string(blockID[:]), deletes, nil); err != nil {
+					return
+				}
+			}
 		}
+
 		var (
 			meta  objectio.ObjectMeta
 			mblks []ModifyBlockMeta
@@ -791,7 +806,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		if ok {
 			packer, put := tbl.db.txn.engine.packerPool.Get()
 			defer put()
-			encodedPrimaryKey = encodePrimaryKey(v, packer)
+			encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
 		}
 	}
 
@@ -887,22 +902,37 @@ func (tbl *txnTable) newReader(
 			}
 		}
 	}
-	// get append block deletes rowids
-	non_append_block := make(map[string]bool)
+	// get all blocks in disk
+	meta_blocks := make(map[string]bool)
 	if len(tbl.blockInfos) > 0 {
 		for _, blk := range tbl.blockInfos[0] {
-			// append non_append_block
-			if !blk.EntryState {
-				non_append_block[string(blk.BlockID[:])] = true
-			}
+			meta_blocks[string(blk.BlockID[:])] = true
 		}
 	}
 
 	for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-		if !non_append_block[blkId] {
+		if !meta_blocks[blkId] {
 			tbl.LoadDeletesForBlock(blkId, nil, deletes)
 		}
 	}
+
+	// add add rawBatchRowId deletes info
+	for _, entry := range tbl.writes {
+		// rawBatch detele rowId for memory Dn block
+		if entry.typ == DELETE && entry.fileName == "" {
+			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+			if len(vs) == 0 {
+				continue
+			}
+			blkId := vs[0].GetBlockid()
+			if !meta_blocks[string(blkId[:])] {
+				for _, v := range vs {
+					deletes[v] = 0
+				}
+			}
+		}
+	}
+
 	readers := make([]engine.Reader, readerNumber)
 
 	seqnumMp := make(map[string]int)
@@ -925,7 +955,7 @@ func (tbl *txnTable) newReader(
 		return nil, err
 	}
 
-	var iter partitionStateIter
+	var iter logtailreplay.PartitionStateIter
 	if len(encodedPrimaryKey) > 0 {
 		iter = parts[partitionIndex].NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
@@ -1040,7 +1070,7 @@ func (tbl *txnTable) updateLocalState(
 	}
 
 	if tbl.localState == nil {
-		tbl.localState = NewPartitionState(true)
+		tbl.localState = logtailreplay.NewPartitionState(true)
 	}
 
 	// make a logtail compatible batch
@@ -1119,7 +1149,7 @@ func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 	return tbl.localTS
 }
 
-func (tbl *txnTable) getParts(ctx context.Context) ([]*PartitionState, error) {
+func (tbl *txnTable) getParts(ctx context.Context) ([]*logtailreplay.PartitionState, error) {
 	if tbl._parts == nil {
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return nil, err

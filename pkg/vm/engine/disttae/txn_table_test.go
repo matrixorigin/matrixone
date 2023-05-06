@@ -174,9 +174,9 @@ func TestBuildColumnVector(t *testing.T) {
 	vector.AppendFixed[int32](vec, 2, false, mp)
 	vector.AppendFixed[int32](vec, -2, false, mp)
 	vector.AppendFixed[int32](vec, 3, false, mp)
-	vector.AppendFixed[int32](vec, minv, false, mp)
+	vector.AppendFixed(vec, minv, false, mp)
 	vector.AppendFixed[int32](vec, 9, false, mp)
-	vector.AppendFixed[int32](vec, maxv, false, mp)
+	vector.AppendFixed(vec, maxv, false, mp)
 
 	zm := objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 	zm.Update(minv)
