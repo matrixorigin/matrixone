@@ -31,8 +31,8 @@ import (
 
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
-	procTimeout           = time.Second * 10000
-	waitNotifyTimeout     = time.Second * 60
+	procTimeout           = 10000 * time.Second
+	waitNotifyTimeout     = 45 * time.Second
 
 	// send to all reg functions
 	SendToAllLocalFunc = iota
@@ -87,7 +87,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			arg.waitRemoteRegsReady(proc)
 		}
 		for _, r := range arg.ctr.remoteReceivers {
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
 			_ = cancel
 			message := cnclient.AcquireMessage()
 			{
