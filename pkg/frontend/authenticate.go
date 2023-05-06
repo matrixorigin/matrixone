@@ -741,6 +741,7 @@ var (
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
+	createAutoTableSqlNew        = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableNameNew)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
 	createMoIndexesSql = `create table mo_indexes(
@@ -6428,6 +6429,11 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) erro
 	}
 
 	err = bh.Exec(ctx, createAutoTableSql)
+	if err != nil {
+		return err
+	}
+
+	err = bh.Exec(ctx, createAutoTableSqlNew)
 	if err != nil {
 		return err
 	}
