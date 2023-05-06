@@ -28,12 +28,15 @@ import (
 
 const FuseFilterError = "too many iterations, you probably have duplicate keys"
 
-func DecodeBloomFilter(data []byte) (StaticFilter, error) {
-	sf := binaryFuseFilter{}
+func DecodeBloomFilter(sf StaticFilter, data []byte) error {
 	if err := sf.Unmarshal(data); err != nil {
-		return nil, err
+		return err
 	}
-	return &sf, nil
+	return nil
+}
+
+func NewEmptyBinaryFuseFilter() StaticFilter {
+	return &binaryFuseFilter{}
 }
 
 type StaticFilter interface {
