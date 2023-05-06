@@ -19,7 +19,6 @@ import (
 	"math"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -463,15 +462,6 @@ func needRead(
 	}
 
 	return ifNeed
-}
-
-func blockInfoMarshal(meta catalog.BlockInfo) []byte {
-	sz := unsafe.Sizeof(meta)
-	return unsafe.Slice((*byte)(unsafe.Pointer(&meta)), sz)
-}
-
-func BlockInfoUnmarshal(data []byte) *catalog.BlockInfo {
-	return (*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
 }
 
 /* used by multi-dn

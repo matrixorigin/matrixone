@@ -467,7 +467,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	rds := make([]engine.Reader, num)
 	blks := make([]*catalog.BlockInfo, len(ranges))
 	for i := range ranges {
-		blks[i] = BlockInfoUnmarshal(ranges[i])
+		blks[i] = catalog.DecodeBlockInfo(ranges[i])
 		blks[i].EntryState = false
 	}
 	if len(ranges) < num || len(ranges) == 1 {

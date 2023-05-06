@@ -353,10 +353,10 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 				if rows, ok := deletes[blk.BlockID]; ok {
 					mblks = append(mblks, ModifyBlockMeta{blk, rows})
 				} else {
-					ranges = append(ranges, blockInfoMarshal(blk))
+					ranges = append(ranges, catalog.EncodeBlockInfo(blk))
 				}
 			} else {
-				ranges = append(ranges, blockInfoMarshal(blk))
+				ranges = append(ranges, catalog.EncodeBlockInfo(blk))
 			}
 		}
 		tbl.modifiedBlocks[i] = mblks
@@ -848,7 +848,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 	rds := make([]engine.Reader, num)
 	blks := make([]*catalog.BlockInfo, len(ranges))
 	for i := range ranges {
-		blks[i] = BlockInfoUnmarshal(ranges[i])
+		blks[i] = catalog.DecodeBlockInfo(ranges[i])
 	}
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
