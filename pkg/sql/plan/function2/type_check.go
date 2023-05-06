@@ -23,6 +23,7 @@ import (
 // 1. Plus Sub Multi
 // 2. Equal NotEqual
 // 3. >= > < <=
+// 4. Mod
 func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]
 	if check.cast {
@@ -47,8 +48,8 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 }
 
 // a fixed type cast rule for
-//  1. Div IntegerDiv
-//  2. Mod
+//  1. Div
+//  2. IntegerDiv
 func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	check := fixedBinaryCastRule2[s1.Oid][s2.Oid]
 	if check.cast {
@@ -217,6 +218,23 @@ func setMaxScaleFromSource(t *types.Type, source []types.Type) {
 				t.Scale = source[i].Scale
 			}
 		}
+	}
+}
+
+func setMaxScaleForAll(source []types.Type) {
+	maxScale := int32(math.MinInt32)
+	maxWidth := int32(math.MinInt32)
+	for _, t := range source {
+		if t.Scale > maxScale {
+			maxScale = t.Scale
+		}
+		if t.Width > maxWidth {
+			maxWidth = t.Width
+		}
+	}
+	for k := range source {
+		source[k].Scale = maxScale
+		source[k].Width = maxWidth
 	}
 }
 

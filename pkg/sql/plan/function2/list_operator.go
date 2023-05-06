@@ -1171,7 +1171,7 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
+				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if modOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
@@ -1545,6 +1545,7 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -1554,6 +1555,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 1,
+				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_char.ToType()
 				},
@@ -1563,6 +1565,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 2,
+				args:       []types.T{types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int8.ToType()
 				},
@@ -1572,6 +1575,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 3,
+				args:       []types.T{types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int16.ToType()
 				},
@@ -1581,6 +1585,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 4,
+				args:       []types.T{types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int32.ToType()
 				},
@@ -1590,6 +1595,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 5,
+				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -1599,6 +1605,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 6,
+				args:       []types.T{types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
@@ -1608,6 +1615,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 7,
+				args:       []types.T{types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint16.ToType()
 				},
@@ -1616,6 +1624,7 @@ var supportedOperators = []FuncNew{
 				},
 			}, {
 				overloadId: 8,
+				args:       []types.T{types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint32.ToType()
 				},
@@ -1625,6 +1634,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 9,
+				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -1634,6 +1644,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 10,
+				args:       []types.T{types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float32.ToType()
 				},
@@ -1643,6 +1654,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 11,
+				args:       []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
@@ -1652,6 +1664,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 12,
+				args:       []types.T{types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -1661,10 +1674,9 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 13,
+				args:       []types.T{types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					ret := types.T_datetime.ToType()
-					setMaxScaleFromSource(&ret, parameters)
-					return ret
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Datetime]
@@ -1672,6 +1684,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 14,
+				args:       []types.T{types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
 					ret := types.T_timestamp.ToType()
 					setMaxScaleFromSource(&ret, parameters)
@@ -1683,10 +1696,9 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 15,
+				args:       []types.T{types.T_decimal64},
 				retType: func(parameters []types.Type) types.Type {
-					ret := types.T_decimal64.ToType()
-					setMaxScaleFromSource(&ret, parameters)
-					return ret
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Decimal64]
@@ -1694,10 +1706,9 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 16,
+				args:       []types.T{types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
-					ret := types.T_decimal128.ToType()
-					setMaxScaleFromSource(&ret, parameters)
-					return ret
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Decimal128]
@@ -1705,6 +1716,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 17,
+				args:       []types.T{types.T_date},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_date.ToType()
 				},
@@ -1714,6 +1726,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 18,
+				args:       []types.T{types.T_uuid},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uuid.ToType()
 				},
@@ -1723,6 +1736,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 19,
+				args:       []types.T{types.T_time},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_time.ToType()
 				},
@@ -1732,6 +1746,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 20,
+				args:       []types.T{types.T_json},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_json.ToType()
 				},
@@ -1741,6 +1756,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 21,
+				args:       []types.T{types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
@@ -1750,6 +1766,7 @@ var supportedOperators = []FuncNew{
 			},
 			{
 				overloadId: 22,
+				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},

@@ -547,7 +547,7 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 		minCost := math.MaxInt
 		overloadRequire := make([]types.T, len(inputs))
 		for i, over := range overloads {
-			requireOid := over.retType(nil).Oid
+			requireOid := over.args[0]
 			for j := range overloadRequire {
 				overloadRequire[j] = requireOid
 			}
@@ -577,6 +577,10 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				setTargetScaleFromSource(&inputs[i], &castType[i])
 			}
 		}
+
+		if minOid.IsDecimal() || minOid.IsDateRelate() {
+			setMaxScaleForAll(castType)
+		}
 		return newCheckResultWithCast(minIndex, castType)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -584,12 +588,10 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 
 func CoalesceGeneral[T NormalType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[T](result)
-	rs.TempSetType(*ivecs[0].GetType())
 	vecs := make([]vector.FunctionParameterWrapper[T], len(ivecs))
 	for i := range ivecs {
 		vecs[i] = vector.GenerateFunctionFixedTypeParameter[T](ivecs[i])
 	}
-	rs.TempSetType(ivecs[0].GetType().Oid.ToType())
 	var t T
 	for i := uint64(0); i < uint64(length); i++ {
 		isFill := false
