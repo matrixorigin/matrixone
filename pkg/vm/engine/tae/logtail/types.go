@@ -35,7 +35,6 @@ const (
 )
 
 const (
-	SnapshotAttr_SegID   = catalog.SnapshotAttr_SegID
 	SnapshotAttr_TID     = catalog.SnapshotAttr_TID
 	SnapshotAttr_DBID    = catalog.SnapshotAttr_DBID
 	SegmentAttr_ID       = catalog.SegmentAttr_ID
@@ -46,7 +45,6 @@ const (
 	// Low priority, because replay from ckp will keep the create sequence
 	SnapshotAttr_BlockMaxRow               = catalog.SnapshotAttr_BlockMaxRow
 	SnapshotAttr_SegmentMaxBlock           = catalog.SnapshotAttr_SegmentMaxBlock
-	SnapshotMetaAttr_Tid                   = "table_id"
 	SnapshotMetaAttr_BlockInsertBatchStart = "block_insert_batch_start"
 	SnapshotMetaAttr_BlockInsertBatchEnd   = "block_insert_batch_end"
 	SnapshotMetaAttr_BlockDeleteBatchStart = "block_delete_batch_start"
@@ -168,7 +166,6 @@ var (
 		txnbase.SnapshotAttr_LogIndex_Size,
 		SnapshotAttr_DBID,
 		SnapshotAttr_TID,
-		SnapshotAttr_SegID,
 		pkgcatalog.BlockMeta_MetaLoc,
 		pkgcatalog.BlockMeta_DeltaLoc,
 	}
@@ -181,12 +178,11 @@ var (
 		types.New(types.T_uint32, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
-		types.New(types.T_uuid, 0, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
 	MetaSchemaAttr = []string{
-		SnapshotMetaAttr_Tid,
+		SnapshotAttr_TID,
 		SnapshotMetaAttr_BlockInsertBatchStart,
 		SnapshotMetaAttr_BlockInsertBatchEnd,
 		SnapshotMetaAttr_BlockDeleteBatchStart,

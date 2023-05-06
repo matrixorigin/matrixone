@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -65,8 +66,8 @@ func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 func (checker *warChecker) CacheGet(
 	dbID uint64,
 	tableID uint64,
-	segmentID types.Uuid,
-	blockID types.Blockid) (block *catalog.BlockEntry, err error) {
+	segmentID *types.Segmentid,
+	blockID *objectio.Blockid) (block *catalog.BlockEntry, err error) {
 	block = checker.cacheGet(blockID)
 	if block != nil {
 		return
@@ -94,8 +95,8 @@ func (checker *warChecker) CacheGet(
 func (checker *warChecker) InsertByID(
 	dbID uint64,
 	tableID uint64,
-	segmentID types.Uuid,
-	blockID types.Blockid) {
+	segmentID *types.Segmentid,
+	blockID *objectio.Blockid) {
 	block, err := checker.CacheGet(dbID, tableID, segmentID, blockID)
 	if err != nil {
 		panic(err)
@@ -103,8 +104,8 @@ func (checker *warChecker) InsertByID(
 	checker.Insert(block)
 }
 
-func (checker *warChecker) cacheGet(id types.Blockid) *catalog.BlockEntry {
-	return checker.cache[id]
+func (checker *warChecker) cacheGet(id *objectio.Blockid) *catalog.BlockEntry {
+	return checker.cache[*id]
 }
 func (checker *warChecker) Cache(block *catalog.BlockEntry) {
 	checker.cache[block.ID] = block
