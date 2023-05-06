@@ -298,6 +298,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		PreInsertCtx:    DeepCopyPreInsertCtx(node.PreInsertCtx),
 		PreInsertUkCtx:  DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
 		PreDeleteCtx:    DeepCopyPreDeleteCtx(node.PreDeleteCtx),
+		OnDuplicateKey:  DeepCopyOnDupliateKeyCtx(node.OnDuplicateKey),
 	}
 
 	copy(newNode.Children, node.Children)

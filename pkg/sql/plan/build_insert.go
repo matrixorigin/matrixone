@@ -140,6 +140,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 			return nil, err
 		}
 
+		query.StmtType = plan.Query_UPDATE
 	} else {
 		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId)
 		if err != nil {
