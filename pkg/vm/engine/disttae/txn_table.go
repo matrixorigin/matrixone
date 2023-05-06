@@ -33,6 +33,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -218,7 +219,7 @@ func (tbl *txnTable) reset(newId uint64) {
 	tbl.blockInfos = nil
 	tbl.modifiedBlocks = nil
 	tbl.blockInfosUpdated = false
-	tbl.localState = NewPartitionState(true)
+	tbl.localState = logtailreplay.NewPartitionState(true)
 }
 
 // return all unmodified blocks
@@ -794,7 +795,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		if ok {
 			packer, put := tbl.db.txn.engine.packerPool.Get()
 			defer put()
-			encodedPrimaryKey = encodePrimaryKey(v, packer)
+			encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
 		}
 	}
 
@@ -945,7 +946,7 @@ func (tbl *txnTable) newReader(
 		return nil, err
 	}
 
-	var iter partitionStateIter
+	var iter logtailreplay.PartitionStateIter
 	if len(encodedPrimaryKey) > 0 {
 		iter = parts[partitionIndex].NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
@@ -1060,7 +1061,7 @@ func (tbl *txnTable) updateLocalState(
 	}
 
 	if tbl.localState == nil {
-		tbl.localState = NewPartitionState(true)
+		tbl.localState = logtailreplay.NewPartitionState(true)
 	}
 
 	// make a logtail compatible batch
@@ -1138,7 +1139,7 @@ func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 	return tbl.localTS
 }
 
-func (tbl *txnTable) getParts(ctx context.Context) ([]*PartitionState, error) {
+func (tbl *txnTable) getParts(ctx context.Context) ([]*logtailreplay.PartitionState, error) {
 	if tbl._parts == nil {
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return nil, err
