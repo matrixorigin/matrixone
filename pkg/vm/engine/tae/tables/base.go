@@ -220,7 +220,9 @@ func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) 
 	if location.IsEmpty() {
 		return
 	}
+	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
 	return LoadPersistedDeletes(
+		pkName,
 		blk.fs,
 		location)
 }
@@ -233,7 +235,7 @@ func (blk *baseBlock) FillPersistedDeletes(
 		return nil
 	}
 	for i := 0; i < deletes.Length(); i++ {
-		abort := deletes.Vecs[2].Get(i).(bool)
+		abort := deletes.Vecs[3].Get(i).(bool)
 		if abort {
 			continue
 		}
@@ -486,6 +488,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 		pkVec.Append(v, false)
 		return nil
 	}, deletes)
+	// batch: rowID, ts, pkVec, abort
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)
 	bat.AddVector(catalog.AttrCommitTs, ts)
