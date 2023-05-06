@@ -206,7 +206,7 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	})
 
 	//remove deleted item
-	for rowid, _ := range deleted {
+	for rowid := range deleted {
 		delete(inserted, rowid)
 	}
 
