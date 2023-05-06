@@ -2855,7 +2855,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		err = moerr.NewInternalError(newCtx, "there is no publication account %s", accName)
 		goto handleFailed
 	}
 	accId, err = erArray[0].GetInt64(newCtx, 0, 0)
