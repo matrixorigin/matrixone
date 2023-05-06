@@ -23,6 +23,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 func groupBlocksToObjectsForStats(blocks [][]catalog.BlockInfo) []*catalog.BlockInfo {
@@ -42,10 +43,10 @@ func groupBlocksToObjectsForStats(blocks [][]catalog.BlockInfo) []*catalog.Block
 }
 
 // get ndv, minval , maxval, datatype from zonemap
-func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.BlockInfo, blockNumTotal int, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
+func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.BlockInfo, tableCnt float64, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
 
 	lenCols := len(columns)
-	info := plan2.NewInfoFromZoneMap(lenCols, blockNumTotal)
+	info := plan2.NewInfoFromZoneMap(lenCols)
 
 	var err error
 	var objectMeta objectio.ObjectMeta
@@ -72,21 +73,21 @@ func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.B
 				if !zm.IsInited() {
 					continue
 				}
-				//update zm
 				index.UpdateZM(&info.ColumnZMs[idx], zm.GetMaxBuf())
 				index.UpdateZM(&info.ColumnZMs[idx], zm.GetMinBuf())
-				//update ndv
-				ndv := float64(objColMeta.Ndv())
-				if ndv > info.ColumnNDVs[idx] {
-					info.ColumnNDVs[idx] = ndv
-				}
-				rate := ndv / 20000
-				if rate > 1 {
-					rate = 1
-				}
-				info.ColumnNDVs[idx] += float64(objColMeta.Ndv()) * rate
+				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 			}
 		}
+	}
+
+	//adjust ndv
+	lenobjs := float64(len(objs))
+	for idx := range columns {
+		rate := info.ColumnNDVs[idx] / tableCnt
+		if rate > 1 {
+			rate = 1
+		}
+		info.ColumnNDVs[idx] /= math.Pow(lenobjs, (1 - rate))
 	}
 	return info, nil
 }
@@ -127,7 +128,7 @@ func CalcStats(ctx context.Context, blocks [][]catalog.BlockInfo, expr *plan.Exp
 
 	columns = plan2.MakeAllColumns(tableDef)
 	if s.NeedUpdate(blockNumTotal) {
-		info, err := getInfoFromZoneMap(ctx, columns, blocks, blockNumTotal, tableDef, proc)
+		info, err := getInfoFromZoneMap(ctx, columns, blocks, float64(tableCnt), tableDef, proc)
 		if err != nil {
 			return plan2.DefaultStats(), nil
 		}
