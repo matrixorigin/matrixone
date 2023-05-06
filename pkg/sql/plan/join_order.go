@@ -380,26 +380,30 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			edgeMap[[2]int32{leftId, rightId}] = edge
 
 			leftParent := vertices[leftId].parent
-			if leftParent == -1 || compareStats(vertices[rightId].node.Stats, vertices[leftParent].node.Stats) {
-				if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
+			if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
+				if leftParent == -1 || shouldChangeParent(vertices[leftId].node.Stats, vertices[leftParent].node.Stats, vertices[rightId].node.Stats) {
 					if vertices[rightId].parent != leftId {
 						vertices[leftId].parent = rightId
-						vertices[rightId].children[leftId] = nil
 					}
 				}
 			}
 			rightParent := vertices[rightId].parent
-			if rightParent == -1 || compareStats(vertices[leftId].node.Stats, vertices[rightParent].node.Stats) {
-				if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
+			if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
+				if rightParent == -1 || shouldChangeParent(vertices[rightId].node.Stats, vertices[rightParent].node.Stats, vertices[leftId].node.Stats) {
 					if vertices[leftId].parent != rightId {
 						vertices[rightId].parent = leftId
-						vertices[leftId].children[rightId] = nil
 					}
 				}
 			}
 		}
 	}
 
+	for i := range vertices {
+		parent := vertices[i].parent
+		if parent != -1 {
+			vertices[parent].children[int32(i)] = nil
+		}
+	}
 	return vertices
 }
 
