@@ -268,7 +268,7 @@ func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 		return nil, err
 	}
 
-	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, nil, deltaloc.ID(), nil)
+	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2,3}, nil, deltaloc.ID(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +282,7 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 	// record visible delete rows
 	deleteRows := nulls.NewWithSize(0)
 	for i := 0; i < deleteBatch.Vecs[0].Length(); i++ {
-		if vector.GetFixedAt[bool](deleteBatch.Vecs[2], i) {
+		if vector.GetFixedAt[bool](deleteBatch.Vecs[3], i) {
 			continue
 		}
 		if vector.GetFixedAt[types.TS](deleteBatch.Vecs[1], i).Greater(ts) {
