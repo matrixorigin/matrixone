@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 	"fmt"
+	"runtime/trace"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -973,70 +974,72 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
-	segIt := tbl.entry.MakeSegmentIt(false)
-	for segIt.Valid() {
-		seg := segIt.Get().GetPayload()
-		if seg.SortHint < tbl.dedupedSegmentHint {
-			break
-		}
-		{
-			seg.RLock()
-			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
-			//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
-			//if needwait {
-			//	seg.RUnlock()
-			//	txnToWait.GetTxnState(true)
-			//	seg.RLock()
-			//}
-			shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
-			seg.RUnlock()
-			if shouldSkip {
+	trace.WithRegion(context.Background(), "DoPrecommitDedupByPK", func() {
+		segIt := tbl.entry.MakeSegmentIt(false)
+		for segIt.Valid() {
+			seg := segIt.Get().GetPayload()
+			if seg.SortHint < tbl.dedupedSegmentHint {
+				break
+			}
+			{
+				seg.RLock()
+				//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
+				//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+				//if needwait {
+				//	seg.RUnlock()
+				//	txnToWait.GetTxnState(true)
+				//	seg.RLock()
+				//}
+				shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
+				seg.RUnlock()
+				if shouldSkip {
+					segIt.Next()
+					continue
+				}
+			}
+			segData := seg.GetSegmentData()
+			// TODO: Add a new batch dedup method later
+			if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				return
+			}
+			if err == nil {
 				segIt.Next()
 				continue
 			}
-		}
-		segData := seg.GetSegmentData()
-		// TODO: Add a new batch dedup method later
-		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			return
-		}
-		if err == nil {
+			var shouldSkip bool
+			err = nil
+			blkIt := seg.MakeBlockIt(false)
+			for blkIt.Valid() {
+				blk := blkIt.Get().GetPayload()
+				{
+					blk.RLock()
+					shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
+					blk.RUnlock()
+					if shouldSkip {
+						blkIt.Next()
+						continue
+					}
+				}
+				blkData := blk.GetBlockData()
+				var rowmask *roaring.Bitmap
+				if len(tbl.deleteNodes) > 0 {
+					if tbl.store.warChecker.HasConflict(blk.ID) {
+						continue
+					}
+					fp := blk.AsCommonID()
+					deleteNode := tbl.deleteNodes[*fp]
+					if deleteNode != nil {
+						rowmask = deleteNode.GetRowMaskRefLocked()
+					}
+				}
+				if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true); err != nil {
+					return
+				}
+				blkIt.Next()
+			}
 			segIt.Next()
-			continue
 		}
-		var shouldSkip bool
-		err = nil
-		blkIt := seg.MakeBlockIt(false)
-		for blkIt.Valid() {
-			blk := blkIt.Get().GetPayload()
-			{
-				blk.RLock()
-				shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
-				blk.RUnlock()
-				if shouldSkip {
-					blkIt.Next()
-					continue
-				}
-			}
-			blkData := blk.GetBlockData()
-			var rowmask *roaring.Bitmap
-			if len(tbl.deleteNodes) > 0 {
-				if tbl.store.warChecker.HasConflict(blk.ID) {
-					continue
-				}
-				fp := blk.AsCommonID()
-				deleteNode := tbl.deleteNodes[*fp]
-				if deleteNode != nil {
-					rowmask = deleteNode.GetRowMaskRefLocked()
-				}
-			}
-			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true); err != nil {
-				return
-			}
-			blkIt.Next()
-		}
-		segIt.Next()
-	}
+	})
 	return
 }
 
