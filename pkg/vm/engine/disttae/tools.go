@@ -17,9 +17,10 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"regexp"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,14 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
@@ -1043,93 +1041,6 @@ func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
 
 func genMetaTableName(id uint64) string {
 	return fmt.Sprintf("_%v_meta", id)
-}
-
-var metaTableMatchRegexp *regexp.Regexp
-
-func init() {
-	metaTableMatchRegexp, _ = regexp.Compile(`\_\d+\_meta`)
-}
-
-func isMetaTable(name string) bool {
-	return metaTableMatchRegexp.MatchString(name)
-}
-
-func genBlockMetas(
-	ctx context.Context,
-	blockInfos []catalog.BlockInfo,
-	columnLength int,
-	fs fileservice.FileService,
-	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
-	{
-		mp := make(map[types.Blockid]catalog.BlockInfo) // block list
-		for i := range blockInfos {
-			if blk, ok := mp[blockInfos[i].BlockID]; ok {
-				if blk.CommitTs.Less(blockInfos[i].CommitTs) {
-					mp[blk.BlockID] = blockInfos[i]
-				}
-			} else {
-				mp[blockInfos[i].BlockID] = blockInfos[i]
-			}
-		}
-		blockInfos = blockInfos[:0]
-		for _, blk := range mp {
-			blockInfos = append(blockInfos, blk)
-		}
-	}
-
-	metas := make([]BlockMeta, len(blockInfos))
-
-	idxs := make([]uint16, columnLength)
-	for i := 0; i < columnLength; i++ {
-		idxs[i] = uint16(i)
-	}
-
-	for i, blockInfo := range blockInfos {
-		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(ctx, idxs, blockInfo, fs, m)
-		if err != nil {
-			if prefetch {
-				continue
-			}
-			return nil, err
-		}
-		metas[i] = BlockMeta{
-			Rows:    int64(rows),
-			Info:    blockInfos[i],
-			Zonemap: zm,
-		}
-	}
-	return metas, nil
-}
-
-func inBlockMap(blk BlockMeta, blockMap map[types.Blockid]bool) bool {
-	_, ok := blockMap[blk.Info.BlockID]
-	return ok
-}
-
-func genModifedBlocks(ctx context.Context, deletes map[types.Blockid][]int, orgs, modfs []BlockMeta,
-	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
-	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
-
-	lenblks := len(modfs)
-	blockMap := make(map[types.Blockid]bool, lenblks)
-	for i := 0; i < lenblks; i++ {
-		blockMap[modfs[i].Info.BlockID] = true
-	}
-
-	exprMono := plantool.CheckExprIsMonotonic(ctx, expr)
-	columnMap, columns, maxCol := plantool.GetColumnsByExpr(expr, tableDef)
-	for i, blk := range orgs {
-		if !inBlockMap(blk, blockMap) {
-			if !exprMono || needRead(ctx, expr, blk, tableDef, columnMap, columns, maxCol, proc) {
-				blks = append(blks, ModifyBlockMeta{
-					meta:    orgs[i],
-					deletes: deletes[orgs[i].Info.BlockID],
-				})
-			}
-		}
-	}
-	return blks
 }
 
 func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {

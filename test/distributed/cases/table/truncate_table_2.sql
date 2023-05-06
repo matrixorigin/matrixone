@@ -36,6 +36,7 @@ create table trun_table_01(clo1 tinyint AUTO_INCREMENT,clo2 smallint not null,cl
 insert into trun_table_01 values (1,-2,3,56,9,8,10,50,99.0,82.99,'yellllow','1999-11-11','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,23.98430943,'tttext','{"a": "3","b": [0,1,2]}');
 select * from trun_table_01;
 
+-- @bvt:issue#9124
 create temporary table trun_table_02(clo1 tinyint AUTO_INCREMENT,clo2 smallint not null,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255) default 'style',col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 json,primary key(clo3,col12),unique key uk1 (col16),key k1 (clo1));
 insert into trun_table_02 values (1,-2,3,56,9,8,10,50,99.0,82.99,'yellllow','1999-11-11','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,23.98430943,'tttext','{"a": "3","b": [0,1,2]}');
 insert into trun_table_02 values (2,-2,90,56,9,8,10,50,99.0,82.99,'yellllow','2011-01-21','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,98.23,'tttext','{"a": "3","b": [0,1,2]}');
@@ -48,23 +49,24 @@ delete from trun_table_02 where clo1=1;
 insert into trun_table_02 values (3,-2,100,56,9,8,10,50,99.0,82.99,'yellllow','2021-01-21','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,23.98430943,'tttext','{"a": "3","b": [0,1,2]}');
 insert into trun_table_02 values (4,-2,102,56,9,8,10,50,99.0,82.99,'yellllow','2022-10-11','1999-11-11 12:00:00','2010-11-11 11:00:00.00',false,2.43,'tttext','{"a": "3","b": [0,1,2]}');
 select * from trun_table_02;
--- @bvt:issue#7133
+
 delete from trun_table_02 where clo1=3;
 select * from trun_table_02;
--- @bvt:issue
+
 truncate table trun_table_02;
 select * from trun_table_02;
 insert into trun_table_02 select * from trun_table_01;
 select * from trun_table_02;
--- @bvt:issue#7133
+
 update trun_table_02 set clo3=90 where clo1=1;
 select * from trun_table_02;
 update trun_table_02 set clo3=90, col12='1992-11-01' where clo1=1;
 select * from trun_table_02;
--- @bvt:issue
+
 truncate table trun_table_02;
 select * from trun_table_02;
 drop table trun_table_02;
+-- @bvt:issue
 
 create external table trun_table_03(clo1 tinyint AUTO_INCREMENT,clo2 smallint not null,clo3 int,clo4 bigint,clo5 tinyint unsigned,clo6 smallint unsigned,clo7 int unsigned,clo8 bigint unsigned,col9 float,col10 double,col11 varchar(255) default 'style',col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 json)infile{"filepath"='$resources/external_table_file/trun_table.csv'} fields terminated by '|' lines terminated by '\n';
 select * from  trun_table_03;

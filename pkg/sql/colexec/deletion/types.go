@@ -68,7 +68,6 @@ type Argument struct {
 	Ts           uint64
 	DeleteCtx    *DeleteCtx
 	AffectedRows uint64
-	Engine       engine.Engine
 
 	// for delete filter below
 	// mp[segmentName] = 1 => txnWorkSpace,mp[segmentName] = 2 => CN Block

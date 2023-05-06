@@ -144,22 +144,23 @@ col1    col2
 1    c
 2    d
 3    e
-begin;
 create database s_db_1;
+begin;
 use s_db_1;
 create table test_13(col1 int primary key,col2 varchar(25));
 rollback;
+drop database s_db_1;
 use s_db_1;
 invalid database s_db_1
 select * from test_13;
 SQL parser error: table "test_13" does not exist
-start transaction ;
 create database s_db_1;
+start transaction ;
 use s_db_1;
 create table test_13(col1 int primary key,col2 varchar(25));
 create database s_db_1;
+database s_db_1 already exists
 commit;
-w-w conflict
 drop database s_db_1;
 begin;
 use atomicity;

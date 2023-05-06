@@ -141,7 +141,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 		return nil, nil
 	}
 	defer func() { r.blks = r.blks[1:] }()
-	info := &r.blks[0].meta.Info
+	info := &r.blks[0].meta
 
 	if len(cols) != len(r.colIdxs) {
 		if len(r.colIdxs) == 0 {

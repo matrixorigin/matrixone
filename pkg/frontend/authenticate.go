@@ -710,6 +710,14 @@ var (
 		"system":             0,
 		"system_metrics":     0,
 	}
+	sysDatabases = map[string]int8{
+		"mo_catalog":         0,
+		"information_schema": 0,
+		"system":             0,
+		"system_metrics":     0,
+		"mo_task":            0,
+		"mysql":              0,
+	}
 	sysWantedTables = map[string]int8{
 		"mo_user":                     0,
 		"mo_account":                  0,
@@ -739,7 +747,8 @@ var (
 		"mo_indexes":                  0,
 		"mo_pubs":                     0,
 	}
-	createAutoTableSql = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
+	createDbInformationSchemaSql = "create database information_schema;"
+	createAutoTableSql           = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
 	createMoIndexesSql = `create table mo_indexes(
@@ -1270,7 +1279,7 @@ const (
 
 	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
 
-	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
+	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
 	updatePubInfoFormat         = `update mo_catalog.mo_pubs set all_account = %t,account_list = '%s',comment = '%s' where pub_name = '%s';`
@@ -1601,14 +1610,14 @@ func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId i
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
 }
-func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool) (string, error) {
+func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool, account_id uint64) (string, error) {
 	if checkNameValid {
 		err := inputNameIsInvalid(ctx, dbName)
 		if err != nil {
 			return "", err
 		}
 	}
-	return fmt.Sprintf(getDbIdAndTypFormat, dbName), nil
+	return fmt.Sprintf(getDbIdAndTypFormat, dbName, account_id), nil
 }
 
 func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable, allAccount bool, tableList, accountList string, owner, creator uint32, comment string, checkNameValid bool) (string, error) {
@@ -2822,6 +2831,9 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	)
 
 	tenantInfo = ses.GetTenantInfo()
+	if tenantInfo != nil && accName == tenantInfo.GetTenant() {
+		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
+	}
 
 	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	//get pubAccountId from publication info
@@ -2846,7 +2858,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		err = moerr.NewInternalError(newCtx, "there is no publication account %s", accName)
 		goto handleFailed
 	}
 	accId, err = erArray[0].GetInt64(newCtx, 0, 0)
@@ -2898,7 +2910,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	if err != nil {
 		goto handleFailed
 	}
-	if !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
+	if tenantInfo != nil && !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
 		err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 		goto handleFailed
 	}
@@ -2927,10 +2939,8 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 		lowerAny                  any
 		lowerInt64                int64
 		accName, pubName, subName string
-		tenantInfo                *TenantInfo
 		ast                       []tree.Statement
 	)
-	tenantInfo = ses.GetTenantInfo()
 	lowerAny, err = ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
 		return nil, err
@@ -2945,9 +2955,6 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 	pubName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.Publication)
 	subName = string(ast[0].(*tree.CreateDatabase).Name)
 
-	if tenantInfo != nil && accName == tenantInfo.GetTenant() {
-		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
-	}
 	return checkSubscriptionValidCommon(ctx, ses, subName, accName, pubName)
 }
 
@@ -3036,13 +3043,19 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		accountList = strings.Join(accts, ",")
 	}
 
+	pubDb := string(cp.Database)
+
+	if _, ok := sysDatabases[pubDb]; ok {
+		return moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", pubDb)
+	}
+
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
 	}
 	bh.ClearExecResultSet()
 
-	sql, err = getSqlForGetDbIdAndType(ctx, string(cp.Database), true)
+	sql, err = getSqlForGetDbIdAndType(ctx, pubDb, true, uint64(tenantInfo.TenantID))
 	if err != nil {
 		goto handleFailed
 	}
@@ -3071,7 +3084,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		goto handleFailed
 	}
 	bh.ClearExecResultSet()
-	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), string(cp.Database), datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
+	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
 	if err != nil {
 		goto handleFailed
 	}
@@ -6421,12 +6434,17 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) erro
 		return err
 	}
 
-	bh.Exec(ctx, createMoIndexesSql)
+	err = bh.Exec(ctx, createMoIndexesSql)
 	if err != nil {
 		return err
 	}
 
 	err = bh.Exec(ctx, createAutoTableSql)
+	if err != nil {
+		return err
+	}
+
+	err = bh.Exec(ctx, createDbInformationSchemaSql)
 	if err != nil {
 		return err
 	}
@@ -6443,11 +6461,6 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) erro
 
 	if !exists {
 		err = createTablesInMoCatalog(ctx, bh, tenant, pu)
-		if err != nil {
-			goto handleFailed
-		}
-
-		err = createTablesInInformationSchema(ctx, bh, tenant, pu)
 		if err != nil {
 			goto handleFailed
 		}
@@ -6689,6 +6702,21 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			return err
 		}
 
+		//create createDbSqls
+		createDbSqls := []string{
+			"create database " + motrace.SystemDBConst + ";",
+			"create database " + mometric.MetricDBConst + ";",
+			createDbInformationSchemaSql,
+			"create database mysql;",
+		}
+
+		for _, db := range createDbSqls {
+			err = bh.Exec(newTenantCtx, db)
+			if err != nil {
+				return err
+			}
+		}
+
 		err = bh.Exec(ctx, "begin;")
 		if err != nil {
 			goto handleFailed
@@ -6714,6 +6742,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	if err != nil {
 		goto handleFailed
 	}
+
+	if !exists {
+		createSubscriptionDatabase(ctx, bh, newTenant, ses)
+	}
+
 	return err
 handleFailed:
 	//ROLLBACK the transaction
@@ -6927,11 +6960,9 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 
 	var err error
 	sqls := make([]string, 0)
-	sqls = append(sqls, "create database "+motrace.SystemDBConst+";")
 	sqls = append(sqls, "use "+motrace.SystemDBConst+";")
 	traceTables := motrace.GetSchemaForAccount(ctx, newTenant.GetTenant())
 	sqls = append(sqls, traceTables...)
-	sqls = append(sqls, "create database "+mometric.MetricDBConst+";")
 	sqls = append(sqls, "use "+mometric.MetricDBConst+";")
 	metricTables := mometric.GetSchemaForAccount(ctx, newTenant.GetTenant())
 	sqls = append(sqls, metricTables...)
@@ -6959,13 +6990,51 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	var err error
 	sqls := make([]string, 0, len(sysview.InitInformationSchemaSysTables)+len(sysview.InitMysqlSysTables)+4)
 
-	sqls = append(sqls, "create database information_schema;")
 	sqls = append(sqls, "use information_schema;")
 	sqls = append(sqls, sysview.InitInformationSchemaSysTables...)
-	sqls = append(sqls, "create database mysql;")
 	sqls = append(sqls, "use mysql;")
 	sqls = append(sqls, sysview.InitMysqlSysTables...)
 
+	for _, sql := range sqls {
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+// create subscription database
+func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo, ses *Session) error {
+	ctx, span := trace.Debug(ctx, "createSubscriptionDatabase")
+	defer span.End()
+
+	var err error
+	subscriptions := make([]string, 0)
+	//process the syspublications
+	_, syspublications_value, _ := ses.GetGlobalSysVars().GetGlobalSysVar("syspublications")
+	if syspublications, ok := syspublications_value.(string); ok {
+		if len(syspublications) == 0 {
+			return err
+		}
+		subscriptions = strings.Split(syspublications, ",")
+	}
+	// if no subscriptions, return
+	if len(subscriptions) == 0 {
+		return err
+	}
+
+	//with new tenant
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
+
+	createSubscriptionFormat := `create database %s from sys publication %s;`
+	sqls := make([]string, 0, len(subscriptions))
+	for _, subscription := range subscriptions {
+		sqls = append(sqls, fmt.Sprintf(createSubscriptionFormat, subscription, subscription))
+	}
 	for _, sql := range sqls {
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)

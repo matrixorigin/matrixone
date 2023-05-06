@@ -109,11 +109,11 @@ func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) 
 		store.txn.GetCommitTS(),
 	)
 	var buf []byte
-	if buf, err = cmd.Marshal(); err != nil {
+	if buf, err = cmd.MarshalBinary(); err != nil {
 		return
 	}
 	logEntry = entry.GetBase()
-	logEntry.SetType(ETTxnState)
+	logEntry.SetType(IOET_WALEntry_TxnRecord)
 	if err = logEntry.SetPayload(buf); err != nil {
 		return
 	}

@@ -192,7 +192,7 @@ func (catalog *Catalog) ReplayCmd(
 	idxCtx *wal.Index,
 	observer wal.ReplayObserver) {
 	switch txncmd.GetType() {
-	case txnbase.CmdComposed:
+	case txnbase.IOET_WALTxnCommand_Composed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
 		idxCtx.Size = cmds.CmdSize
 		for i, cmds := range cmds.Cmds {
@@ -200,16 +200,16 @@ func (catalog *Catalog) ReplayCmd(
 			idx.CSN = uint32(i)
 			catalog.ReplayCmd(cmds, dataFactory, idx, observer)
 		}
-	case CmdUpdateDatabase:
+	case IOET_WALTxnCommand_Database:
 		cmd := txncmd.(*EntryCommand[*EmptyMVCCNode, *DBNode])
 		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer)
-	case CmdUpdateTable:
+	case IOET_WALTxnCommand_Table:
 		cmd := txncmd.(*EntryCommand[*TableMVCCNode, *TableNode])
 		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer)
-	case CmdUpdateSegment:
+	case IOET_WALTxnCommand_Segment:
 		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *SegmentNode])
 		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer)
-	case CmdUpdateBlock:
+	case IOET_WALTxnCommand_Block:
 		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *BlockNode])
 		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer)
 	default:

@@ -54,6 +54,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+func createDropDatabaseErrorInfo() string {
+	return "CREATE/DROP of database is not supported in transactions"
+}
+
 func onlyCreateStatementErrorInfo() string {
 	return "Only CREATE of DDL is supported in transactions"
 }
@@ -208,7 +212,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	var txn TxnOperator
 	var err error
 	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-		txn, err = handler.GetTxn()
+		_, txn, err = handler.GetTxn()
 		if err != nil {
 			logErrorf(ses.GetDebugString(), "RecordStatement. error:%v", err)
 		} else {
@@ -289,7 +293,7 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
 	var txn TxnOperator
 	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {
 		if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-			txn, err = handler.GetTxn()
+			_, txn, err = handler.GetTxn()
 			if err != nil {
 				logErrorf(ses.GetDebugString(), "RecordStatementTxnID. error:%v", err)
 			} else {
@@ -404,7 +408,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
 	ses.sentRows.Add(int64(n))
-	logInfof(ses.GetDebugString(), "rowCount %v \n"+
+	logDebugf(ses.GetDebugString(), "rowCount %v \n"+
 		"time of getDataFromPipeline : %s \n"+
 		"processBatchTime %v \n"+
 		"row2colTime %v \n"+
@@ -423,15 +427,16 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 func doUse(ctx context.Context, ses *Session, db string) error {
 	defer RecordStatementTxnID(ctx, ses)
 	txnHandler := ses.GetTxnHandler()
+	var txnCtx context.Context
 	var txn TxnOperator
 	var err error
 	var dbMeta engine.Database
-	txn, err = txnHandler.GetTxn()
+	txnCtx, txn, err = txnHandler.GetTxn()
 	if err != nil {
 		return err
 	}
 	//TODO: check meta data
-	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(ctx, db, txn); err != nil {
+	if dbMeta, err = ses.GetParameterUnit().StorageEngine.Database(txnCtx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
 	}
@@ -671,6 +676,14 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 				if err != nil {
 					return err
 				}
+			}
+		} else if name == "syspublications" {
+			if !ses.GetTenantInfo().IsSysTenant() {
+				return moerr.NewInternalError(ses.GetRequestContext(), "only system account can set system variable syspublications")
+			}
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
 			}
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value)
@@ -2105,6 +2118,9 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
 	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
+	if ses.pu.SV.SkipCheckPrivilege {
+		return nil
+	}
 	if ses.skipCheckPrivilege() {
 		return nil
 	}
@@ -2140,6 +2156,9 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
 func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.pu.SV.SkipCheckPrivilege {
+		return nil
+	}
 	if ses.skipCheckPrivilege() {
 		return nil
 	}
@@ -2158,6 +2177,9 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
 func authenticateUserCanExecutePrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	if ses.pu.SV.SkipCheckPrivilege {
+		return nil
+	}
 	err := authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
 	if err != nil {
 		return err
@@ -2177,7 +2199,9 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 	}
 	if !can {
 		//is ddl statement
-		if IsDDL(stmt) {
+		if IsCreateDropDatabase(stmt) {
+			return moerr.NewInternalError(requestCtx, createDropDatabaseErrorInfo())
+		} else if IsDDL(stmt) {
 			return moerr.NewInternalError(requestCtx, onlyCreateStatementErrorInfo())
 		} else if IsAdministrativeStatement(stmt) {
 			return moerr.NewInternalError(requestCtx, administrativeCommandIsUnsupportedInTxnErrorInfo())
@@ -2311,7 +2335,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		requestCtx,
 		ses.GetMemPool(),
 		ses.GetTxnHandler().GetTxnClient(),
-		ses.GetTxnHandler().GetTxnOperator(),
+		nil,
 		pu.FileService,
 		pu.LockService,
 		ses.GetAutoIncrCacheManager())
@@ -2508,7 +2532,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				return err
 			}
-			if st.SubscriptionOption != nil && !ses.GetTenantInfo().IsAdminRole() {
+			if st.SubscriptionOption != nil && ses.GetTenantInfo() != nil && !ses.GetTenantInfo().IsAdminRole() {
 				err = moerr.NewInternalError(proc.Ctx, "only admin can create subscription")
 				return err
 			}
@@ -2795,7 +2819,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 		runner = ret.(ComputationRunner)
 
-		logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		// only log if build time is longer than 1s
+		if time.Since(cmpBegin) > time.Second {
+			logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		}
 
 		mrs = ses.GetMysqlResultSet()
 		// cw.Compile might rewrite sql, here we fetch the latest version
@@ -2884,7 +2911,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				}
 			}
 
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			// only log if run time is longer than 1s
+			if time.Since(runBegin) > time.Second {
+				logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
 
 			/*
 				Step 3: Say goodbye
@@ -2959,7 +2989,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				}
 			}
 
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			// only log if run time is longer than 1s
+			if time.Since(runBegin) > time.Second {
+				logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
 
 			rspLen = cw.GetAffectedRows()
 			echoTime := time.Now()
@@ -3019,7 +3052,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			// only log if run time is longer than 1s
+			if time.Since(runBegin) > time.Second {
+				logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
 
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
 				queryPlan := cwft.plan
@@ -3234,7 +3270,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		requestCtx,
 		ses.GetMemPool(),
 		pu.TxnClient,
-		ses.GetTxnHandler().GetTxnOperator(),
+		nil,
 		pu.FileService,
 		pu.LockService,
 		ses.GetAutoIncrCacheManager())

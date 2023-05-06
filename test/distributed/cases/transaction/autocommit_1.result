@@ -249,6 +249,7 @@ select @@autocommit;
 drop database if exists test_xx;
 begin;
 create database test_xx;
+internal error: CREATE/DROP of database is not supported in transactions
 SET @@session.autocommit=1;
 internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
@@ -272,16 +273,19 @@ SELECT @@session.autocommit;
 commit;
 show databases like 'test_xx';
 Database
-test_xx
 commit;
 drop database test_xx;
+Can't drop database 'test_xx'; database doesn't exist
 drop database if exists db;
 begin;
 create database db;
+internal error: CREATE/DROP of database is not supported in transactions
 show databases like 'db';
 Database
-db
 use db;
+invalid database db
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+begin;
 create table table3(a int, b int);
 insert into table3 values (2000, 3000);
 create view view_table3 as select * from table3;
@@ -299,10 +303,12 @@ SQL parser error: table "view_table3" does not exist
 drop database if exists db;
 begin;
 create database db;
+internal error: CREATE/DROP of database is not supported in transactions
 show databases like 'db';
 Database
-db
 use db;
+invalid database db
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 create table table3(a int, b int);
 insert into table3 values (2000, 3000);
 insert into table3 values (10, 10);
