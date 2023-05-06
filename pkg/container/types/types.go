@@ -237,6 +237,9 @@ func (ts *TS) Unmarshal(data []byte) error {
 // Rowid
 type Rowid [RowidSize]byte
 
+// Segmentid
+type Segmentid = Uuid
+
 // Blockid
 type Blockid [BlockidSize]byte
 
