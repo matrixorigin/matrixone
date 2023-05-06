@@ -169,7 +169,8 @@ func (r *objectReaderV1) ReadOneBF(
 		return
 	}
 	buf := bfs.GetBloomFilter(uint32(blk))
-	bf, err = index.DecodeBloomFilter(buf)
+	bf = index.NewEmptyBinaryFuseFilter()
+	err = index.DecodeBloomFilter(bf, buf)
 	if err != nil {
 		return
 	}
@@ -179,7 +180,7 @@ func (r *objectReaderV1) ReadOneBF(
 
 func (r *objectReaderV1) ReadAllBF(
 	ctx context.Context,
-) (bfs []StaticFilter, size uint32, err error) {
+) (bfs BloomFilter, size uint32, err error) {
 	var meta objectMetaV1
 	var buf []byte
 	if meta, err = r.ReadMeta(ctx, nil); err != nil {
@@ -189,22 +190,7 @@ func (r *objectReaderV1) ReadAllBF(
 	if buf, err = ReadBloomFilter(ctx, r.name, &extent, r.noLRUCache, r.fs); err != nil {
 		return
 	}
-	indexes := make([]StaticFilter, 0)
-	bf := BloomFilter(buf)
-	count := bf.BlockCount()
-	for i := uint32(0); i < count; i++ {
-		buf = bf.GetBloomFilter(i)
-		if len(buf) == 0 {
-			indexes = append(indexes, nil)
-			continue
-		}
-		index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
-		if err != nil {
-			return nil, 0, err
-		}
-		indexes = append(indexes, index)
-	}
-	return indexes, extent.OriginSize(), nil
+	return buf, extent.OriginSize(), nil
 }
 
 func (r *objectReaderV1) ReadExtent(
