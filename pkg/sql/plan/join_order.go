@@ -395,10 +395,10 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 				if rightParent == -1 || shouldChangeParent(vertices[rightId].node.Stats, vertices[rightParent].node.Stats, vertices[leftId].node.Stats) {
 					if vertices[leftId].parent != rightId {
 						vertices[rightId].parent = leftId
+					} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
+						vertices[rightId].parent = leftId
+						vertices[leftId].parent = -1
 					}
-				} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
-					vertices[rightId].parent = leftId
-					vertices[leftId].parent = -1
 				}
 			}
 		}
