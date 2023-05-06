@@ -125,7 +125,10 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		goto handleRet
 	}
 
-	logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+	// only log if time of compile is longer than 1s
+	if time.Since(cmpBegin) > time.Second {
+		logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+	}
 
 	err = stmtExec.ResponseBeforeExec(ctx, ses)
 	if err != nil {
@@ -139,7 +142,10 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		goto handleRet
 	}
 
-	logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+	// only log if time of run is longer than 1s
+	if time.Since(runBegin) > time.Second {
+		logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+	}
 
 	_ = stmtExec.RecordExecPlan(ctx)
 

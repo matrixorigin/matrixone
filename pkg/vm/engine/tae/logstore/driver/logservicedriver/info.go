@@ -194,7 +194,7 @@ func (info *driverInfo) logAppend(appender *driverAppender) {
 		panic(fmt.Sprintf("logic err, expect %d, min is %d", info.syncing+1, interval.GetMin()))
 	}
 	if len(interval.Intervals) != 1 {
-		logutil.Infof("interval is %v", interval)
+		logutil.Debugf("interval is %v", interval)
 		panic("logic err")
 	}
 	info.syncing = interval.GetMax()

@@ -98,7 +98,7 @@ func (bs *baseStore) onTruncate(batch ...any) {
 	}
 	version, err := bs.retryGetVersionByGLSN(lsn)
 	if err != nil {
-		logutil.Infof("get %d", lsn)
+		logutil.Debugf("get %d", lsn)
 		panic(err)
 	}
 	if version-1 <= bs.truncatedVersion {

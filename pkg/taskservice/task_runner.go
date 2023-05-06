@@ -250,14 +250,14 @@ func (r *taskRunner) RegisterExecutor(code task.TaskCode, executor TaskExecutor)
 }
 
 func (r *taskRunner) fetch(ctx context.Context) {
-	r.logger.Info("fetch task started")
+	r.logger.Debug("fetch task started")
 	timer := time.NewTimer(r.options.fetchInterval)
 	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			r.logger.Info("fetch task stopped")
+			r.logger.Debug("fetch task stopped")
 			return
 		case <-timer.C:
 			if !taskFrameworkDisabled() {
@@ -312,12 +312,12 @@ func (r *taskRunner) addToWait(ctx context.Context, task task.Task) bool {
 }
 
 func (r *taskRunner) dispatch(ctx context.Context) {
-	r.logger.Info("dispatch task started")
+	r.logger.Debug("dispatch task started")
 
 	for {
 		select {
 		case <-ctx.Done():
-			r.logger.Info("dispatch task stopped")
+			r.logger.Debug("dispatch task stopped")
 			return
 		case task := <-r.waitTasksC:
 			if !taskFrameworkDisabled() {
@@ -328,7 +328,7 @@ func (r *taskRunner) dispatch(ctx context.Context) {
 }
 
 func (r *taskRunner) retry(ctx context.Context) {
-	r.logger.Info("retry task started")
+	r.logger.Debug("retry task started")
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 
@@ -336,7 +336,7 @@ func (r *taskRunner) retry(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			r.logger.Info("retry task stopped")
+			r.logger.Debug("retry task stopped")
 			return
 		case <-timer.C:
 			if !taskFrameworkDisabled() {
@@ -455,12 +455,12 @@ func (r *taskRunner) releaseParallel() {
 }
 
 func (r *taskRunner) done(ctx context.Context) {
-	r.logger.Info("done task started")
+	r.logger.Debug("done task started")
 
 	for {
 		select {
 		case <-ctx.Done():
-			r.logger.Info("done task stopped")
+			r.logger.Debug("done task stopped")
 			return
 		case task := <-r.doneC:
 			if !taskFrameworkDisabled() {
@@ -493,14 +493,14 @@ func (r *taskRunner) doTaskDone(ctx context.Context, rt runningTask) bool {
 }
 
 func (r *taskRunner) heartbeat(ctx context.Context) {
-	r.logger.Info("heartbeat task started")
+	r.logger.Debug("heartbeat task started")
 	timer := time.NewTimer(r.options.heartbeatInterval)
 	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			r.logger.Info("heartbeat task stopped")
+			r.logger.Debug("heartbeat task stopped")
 			return
 		case <-timer.C:
 			if !taskFrameworkDisabled() {
