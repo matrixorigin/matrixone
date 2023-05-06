@@ -287,7 +287,7 @@ type TxnStore interface {
 		rotateTable func(dbName, tblName string, dbid, tid uint64),
 		visitMetadata func(block any),
 		visitAppend func(bat any),
-		visitDelete func(deletes []uint32, prefix []byte))
+		visitDelete func(deletes DeleteNode))
 	GetTransactionType() TxnType
 }
 

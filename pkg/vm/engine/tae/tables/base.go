@@ -103,6 +103,18 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
+func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
+		blk.RLock()
+		defer blk.RUnlock()
+		return node.MustMNode().Foreach(colIdx, op, sels)
+	} else {
+		return node.MustPNode().Foreach(blk.meta.GetSchema(), colIdx, op, sels)
+	}
+}
+
 func (blk *baseBlock) TryUpgrade() (err error) {
 	node := blk.node.Load()
 	if node.IsPersisted() {
@@ -463,13 +475,21 @@ func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 func (blk *baseBlock) CollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	rowID, ts, abort, abortedMap := blk.mvcc.CollectDelete(start, end)
+	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDelete(start, end)
 	if rowID == nil {
 		return
 	}
+	pkDef := blk.meta.GetSchema().GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	pkIdx := pkDef.Idx
+	blk.Foreach(pkIdx, func(v any, isNull bool, row int) error {
+		pkVec.Append(v, false)
+		return nil
+	}, deletes)
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)
 	bat.AddVector(catalog.AttrCommitTs, ts)
+	bat.AddVector(pkDef.Name, pkVec)
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abort)
 	} else {
