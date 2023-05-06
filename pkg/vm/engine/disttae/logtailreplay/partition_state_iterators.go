@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package logtailreplay
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 	"github.com/tidwall/btree"
 )
 
-type partitionStateIter interface {
+type PartitionStateIter interface {
 	Next() bool
 	Close() error
 	Entry() RowEntry

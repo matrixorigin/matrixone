@@ -395,8 +395,8 @@ func TestNonAppendableBlock(t *testing.T) {
 		blk, err := seg.CreateNonAppendableBlock(nil)
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		uuid, _ := types.BuildUuid()
-		name := objectio.BuildObjectName(uuid, 0)
+		sid := objectio.NewSegmentid()
+		name := objectio.BuildObjectName(sid, 0)
 		writer, err := blockio.NewBlockWriterNew(dataBlk.GetFs().Service, name)
 		assert.Nil(t, err)
 		_, err = writer.WriteBatch(containers.ToCNBatch(bat))
@@ -526,7 +526,7 @@ func TestCompactBlock1(t *testing.T) {
 		filter.Val = v
 		id, _, err := rel.GetByFilter(filter)
 		assert.Nil(t, err)
-		seg, _ := rel.GetSegment(id.SegmentID)
+		seg, _ := rel.GetSegment(id.SegmentID())
 		block, err := seg.GetBlock(id.BlockID)
 		assert.Nil(t, err)
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
@@ -562,7 +562,7 @@ func TestCompactBlock1(t *testing.T) {
 		var maxTs types.TS
 		{
 			txn, rel := getDefaultRelation(t, db, schema.Name)
-			seg, err := rel.GetSegment(id.SegmentID)
+			seg, err := rel.GetSegment(id.SegmentID())
 			assert.Nil(t, err)
 			blk, err := seg.GetBlock(id.BlockID)
 			assert.Nil(t, err)
@@ -648,8 +648,8 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	//read new non-appendable block data and check
 	{
 		txn, rel := getRelation(t, 0, db, "db", schema.Name)
-		assert.Equal(t, newBlockFp2.SegmentID, newBlockFp1.SegmentID)
-		seg, err := rel.GetSegment(newBlockFp1.SegmentID)
+		assert.True(t, newBlockFp2.SegmentID().Eq(*newBlockFp1.SegmentID()))
+		seg, err := rel.GetSegment(newBlockFp1.SegmentID())
 		assert.Nil(t, err)
 		blk1, err := seg.GetBlock(newBlockFp1.BlockID)
 		assert.Nil(t, err)
@@ -785,7 +785,7 @@ func TestCompactBlock2(t *testing.T) {
 		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 		txn, rel := getDefaultRelation(t, db, schema.Name)
 		t.Log(rel.SimplePPString(common.PPL1))
-		seg, err := rel.GetSegment(newBlockFp.SegmentID)
+		seg, err := rel.GetSegment(newBlockFp.SegmentID())
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
@@ -801,7 +801,7 @@ func TestCompactBlock2(t *testing.T) {
 		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 		txn, rel := getDefaultRelation(t, db, schema.Name)
 		t.Log(rel.SimplePPString(common.PPL1))
-		seg, err := rel.GetSegment(newBlockFp.SegmentID)
+		seg, err := rel.GetSegment(newBlockFp.SegmentID())
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
@@ -816,7 +816,7 @@ func TestCompactBlock2(t *testing.T) {
 	{
 		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 		txn, rel := getDefaultRelation(t, db, schema.Name)
-		seg, err := rel.GetSegment(newBlockFp.SegmentID)
+		seg, err := rel.GetSegment(newBlockFp.SegmentID())
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
@@ -843,7 +843,7 @@ func TestCompactBlock2(t *testing.T) {
 		newBlockFp = task.GetNewBlock().Fingerprint()
 		{
 			txn, rel := getDefaultRelation(t, db, schema.Name)
-			seg, err := rel.GetSegment(newBlockFp.SegmentID)
+			seg, err := rel.GetSegment(newBlockFp.SegmentID())
 			assert.NoError(t, err)
 			blk, err := seg.GetBlock(newBlockFp.BlockID)
 			assert.NoError(t, err)
@@ -857,7 +857,7 @@ func TestCompactBlock2(t *testing.T) {
 		txn, rel := getDefaultRelation(t, db, schema.Name)
 		t.Log(rel.SimplePPString(common.PPL1))
 		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
-		seg, err := rel.GetSegment(newBlockFp.SegmentID)
+		seg, err := rel.GetSegment(newBlockFp.SegmentID())
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
@@ -869,7 +869,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Equal(t, bat.Vecs[0].Length()-2, view.Length())
 
 		txn2, rel2 := getDefaultRelation(t, db, schema.Name)
-		seg2, err := rel2.GetSegment(newBlockFp.SegmentID)
+		seg2, err := rel2.GetSegment(newBlockFp.SegmentID())
 		assert.NoError(t, err)
 		blk2, err := seg2.GetBlock(newBlockFp.BlockID)
 		assert.NoError(t, err)
@@ -1080,7 +1080,7 @@ func TestRollback1(t *testing.T) {
 	assert.Equal(t, segCnt, 1)
 
 	txn, rel = getDefaultRelation(t, db, schema.Name)
-	seg, err = rel.GetSegment(segMeta.ID)
+	seg, err = rel.GetSegment(&segMeta.ID)
 	assert.Nil(t, err)
 	_, err = seg.CreateBlock(false)
 	assert.Nil(t, err)
@@ -2321,7 +2321,7 @@ func TestMergeblocks2(t *testing.T) {
 
 		segIt := rel.MakeSegmentIt()
 		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
-		segHandle, err := rel.GetSegment(seg.ID)
+		segHandle, err := rel.GetSegment(&seg.ID)
 		assert.NoError(t, err)
 
 		var metas []*catalog.BlockEntry
@@ -2403,7 +2403,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 
 		segIt := rel.MakeSegmentIt()
 		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
-		segHandle, err := rel.GetSegment(seg.ID)
+		segHandle, err := rel.GetSegment(&seg.ID)
 		assert.NoError(t, err)
 
 		var metas []*catalog.BlockEntry

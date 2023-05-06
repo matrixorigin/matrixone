@@ -61,7 +61,7 @@ func (t *delSegTask) Execute() (err error) {
 		return
 	}
 	for _, entry := range t.delSegs {
-		if err = rel.SoftDeleteSegment(entry.ID); err != nil {
+		if err = rel.SoftDeleteSegment(&entry.ID); err != nil {
 			return
 		}
 	}

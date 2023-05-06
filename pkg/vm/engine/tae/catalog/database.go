@@ -255,7 +255,11 @@ func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) strin
 	}
 	return w.String()
 }
-
+func (e *DBEntry) AsCommonID() *common.ID {
+	return &common.ID{
+		DbID: e.ID,
+	}
+}
 func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) {
 	e.RLock()
 	table, err := e.GetTableEntryByID(id.TableID)
@@ -263,11 +267,11 @@ func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) 
 	if err != nil {
 		return
 	}
-	seg, err := table.GetSegmentByID(id.SegmentID)
+	seg, err := table.GetSegmentByID(id.SegmentID())
 	if err != nil {
 		return
 	}
-	blk, err = seg.GetBlockEntryByID(id.BlockID)
+	blk, err = seg.GetBlockEntryByID(&id.BlockID)
 	return
 }
 

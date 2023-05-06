@@ -207,7 +207,7 @@ func (r *BlockReader) LoadOneBF(
 
 func (r *BlockReader) LoadAllBF(
 	ctx context.Context,
-) ([]objectio.StaticFilter, uint32, error) {
+) (objectio.BloomFilter, uint32, error) {
 	return r.reader.ReadAllBF(ctx)
 }
 

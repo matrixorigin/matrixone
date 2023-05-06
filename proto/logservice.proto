@@ -226,6 +226,7 @@ message CNStoreLabel {
   // UUID is the uuid of the CN store.
   string UUID = 1;
   // Operation is the CN label operation.
+  // TODO(volgariver6): Unused field.
   CNLabelOp Operation = 2;
   // Labels is the labels of the CN store.
   map<string, metadata.LabelList> Labels = 3 [(gogoproto.nullable) = false];
