@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -157,8 +158,6 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 }
 
 func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
-	var find bool
-	var ts timestamp.Timestamp
 	/**
 	In push mode.
 	It is necessary to distinguish the case create table/drop table
@@ -179,43 +178,69 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	truncate table t1;//insert table id y, then delete table id x. catalog.insertTable(table id y). catalog.deleteTable(table id x)
 	-- @session}
 	commit;
+
+	CORNER CASE 3:
+	create table t1(a int); //table id x.
+	begin;
+	truncate t1;//table id x changed to x1
+	truncate t1;//table id x1 changed to x2
+	truncate t1;//table id x2 changed to x3
+	commit;//catalog.insertTable(table id x1,x2,x3). catalog.deleteTable(table id x,x1,x2)
+
+	To be clear that the TableItem in catalogCache is sorted by the table id.
 	*/
-	var tableId uint64
+	deleted := make(map[uint64]bool)
+	inserted := make(map[uint64]*TableItem)
+
+	//collect all deleted and inserted items
 	cc.tables.data.Ascend(tbl, func(item *TableItem) bool {
-		if item.deleted && item.AccountId == tbl.AccountId &&
+		if item.AccountId == tbl.AccountId &&
 			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name {
-			if !ts.IsEmpty() {
-				return false
-			}
-			ts = item.Ts
-			tableId = item.Id
-			return true
-		}
-		if !item.deleted && item.AccountId == tbl.AccountId &&
-			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name &&
-			(ts.IsEmpty() || ts.Equal(item.Ts) && tableId != item.Id) {
-			find = true
-			tbl.Id = item.Id
-			tbl.Defs = item.Defs
-			tbl.Kind = item.Kind
-			tbl.Comment = item.Comment
-			tbl.ViewDef = item.ViewDef
-			tbl.TableDef = item.TableDef
-			tbl.Constraint = item.Constraint
-			tbl.Partitioned = item.Partitioned
-			tbl.Partition = item.Partition
-			tbl.CreateSql = item.CreateSql
-			tbl.PrimaryIdx = item.PrimaryIdx
-			tbl.ClusterByIdx = item.ClusterByIdx
-			copy(tbl.Rowid[:], item.Rowid[:])
-			tbl.Rowids = make([]types.Rowid, len(item.Rowids))
-			for i, rowid := range item.Rowids {
-				copy(tbl.Rowids[i][:], rowid[:])
+			if item.deleted {
+				deleted[item.Id] = true
+			} else {
+				inserted[item.Id] = item
 			}
 		}
-		return false
+		return true
 	})
-	return find
+
+	//remove deleted item
+	for rowid, _ := range deleted {
+		delete(inserted, rowid)
+	}
+
+	if len(inserted) == 0 {
+		return false
+	}
+
+	if len(inserted) > 1 {
+		panic(fmt.Sprintf("account %d database %d has multiple tables %s",
+			tbl.AccountId, tbl.DatabaseId, tbl.Name))
+	}
+
+	//get item
+	for _, item := range inserted {
+		tbl.Id = item.Id
+		tbl.Defs = item.Defs
+		tbl.Kind = item.Kind
+		tbl.Comment = item.Comment
+		tbl.ViewDef = item.ViewDef
+		tbl.TableDef = item.TableDef
+		tbl.Constraint = item.Constraint
+		tbl.Partitioned = item.Partitioned
+		tbl.Partition = item.Partition
+		tbl.CreateSql = item.CreateSql
+		tbl.PrimaryIdx = item.PrimaryIdx
+		tbl.ClusterByIdx = item.ClusterByIdx
+		copy(tbl.Rowid[:], item.Rowid[:])
+		tbl.Rowids = make([]types.Rowid, len(item.Rowids))
+		for i, rowid := range item.Rowids {
+			copy(tbl.Rowids[i][:], rowid[:])
+		}
+	}
+
+	return true
 }
 
 func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
@@ -321,6 +346,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_COLUMNS_ACCOUNT_ID_IDX + MO_OFF))
 	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX + MO_OFF))
 	tableNames := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF))
+	tableIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX + MO_OFF))
 	// get columns info
 	names := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATTNAME_IDX + MO_OFF))
 	comments := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_COMMENT_IDX + MO_OFF))
@@ -339,12 +365,14 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		key.Name = tableNames[i]
 		key.DatabaseId = databaseIds[i]
 		key.Ts = timestamps[i].ToTimestamp()
+		key.Id = tableIds[i]
 		tblKey.Name = key.Name
 		tblKey.AccountId = key.AccountId
 		tblKey.DatabaseId = key.DatabaseId
 		tblKey.NodeId = key.Ts.NodeID
 		tblKey.LogicalTime = key.Ts.LogicalTime
 		tblKey.PhysicalTime = uint64(key.Ts.PhysicalTime)
+		tblKey.Id = tableIds[i]
 		if _, ok := cc.tables.data.Get(key); ok {
 			col := column{
 				num:             nums[i],
@@ -374,6 +402,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 			PhysicalTime: int64(k.PhysicalTime),
 			LogicalTime:  k.LogicalTime,
 		}
+		key.Id = k.Id
 		item, _ := cc.tables.data.Get(key)
 		defs := make([]engine.TableDef, 0, len(cols))
 		defs = append(defs, genTableDefOfComment(item.Comment))
