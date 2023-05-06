@@ -12,15 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package logtailreplay
 
 import (
 	"bytes"
 	"context"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
+
+type Partitions []*Partition
+
+// a partition corresponds to a dn
+type Partition struct {
+	lock  chan struct{}
+	state atomic.Pointer[PartitionState]
+	TS    timestamp.Timestamp // last updated timestamp
+}
 
 func NewPartition() *Partition {
 	lock := make(chan struct{}, 1)
@@ -58,4 +68,12 @@ func (p Partitions) Snapshot() []*PartitionState {
 		ret = append(ret, partition.state.Load())
 	}
 	return ret
+}
+
+func (p *Partition) Lock() <-chan struct{} {
+	return p.lock
+}
+
+func (p *Partition) Unlock() {
+	p.lock <- struct{}{}
 }
