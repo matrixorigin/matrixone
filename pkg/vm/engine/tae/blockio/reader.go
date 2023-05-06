@@ -191,13 +191,13 @@ func (r *BlockReader) LoadZoneMap(
 func (r *BlockReader) LoadOneBF(
 	ctx context.Context,
 	blk uint16,
-) (objectio.StaticFilter, error) {
+) (objectio.StaticFilter, uint32, error) {
 	return r.reader.ReadOneBF(ctx, blk)
 }
 
 func (r *BlockReader) LoadAllBF(
 	ctx context.Context,
-) ([]objectio.StaticFilter, uint32, error) {
+) (objectio.BloomFilter, uint32, error) {
 	return r.reader.ReadAllBF(ctx)
 }
 

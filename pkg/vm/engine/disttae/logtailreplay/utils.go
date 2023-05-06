@@ -12,23 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package logtailreplay
 
 import (
-	"testing"
+	"regexp"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-func BenchmarkEncode(b *testing.B) {
-	pool := mpool.MustNewZero()
-	packer := types.NewPacker(pool)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		encodePrimaryKey(int64(i), packer)
+var metaTableMatchRegexp = regexp.MustCompile(`\_\d+\_meta`)
+
+func IsMetaTable(name string) bool {
+	return metaTableMatchRegexp.MatchString(name)
+}
+
+func mustVectorFromProto(v *api.Vector) *vector.Vector {
+	ret, err := vector.ProtoVectorToVector(v)
+	if err != nil {
+		panic(err)
 	}
-	b.StopTimer()
-	packer.FreeMem()
-	b.StartTimer()
+	return ret
+}
+
+func mustVectorToProto(v *vector.Vector) *api.Vector {
+	ret, err := vector.VectorToProtoVector(v)
+	if err != nil {
+		panic(err)
+	}
+	return ret
 }

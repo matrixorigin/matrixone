@@ -11,3 +11,8 @@ sys_pub_1    sys
 drop account acc_idx;
 drop publication sys_pub_1;
 drop database sys_db_1;
+create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
+create database db7;
+create publication pubname7 database db7 account acc_idx;
+internal error: database 'db7' does not exist
+drop account acc_idx;

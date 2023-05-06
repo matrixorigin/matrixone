@@ -1279,7 +1279,7 @@ const (
 
 	getConfiguationByDbName = `select json_unquote(json_extract(configuration,'%s')) from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s";`
 
-	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s';`
+	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
 	updatePubInfoFormat         = `update mo_catalog.mo_pubs set all_account = %t,account_list = '%s',comment = '%s' where pub_name = '%s';`
@@ -1610,14 +1610,14 @@ func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId i
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
 }
-func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool) (string, error) {
+func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool, account_id uint64) (string, error) {
 	if checkNameValid {
 		err := inputNameIsInvalid(ctx, dbName)
 		if err != nil {
 			return "", err
 		}
 	}
-	return fmt.Sprintf(getDbIdAndTypFormat, dbName), nil
+	return fmt.Sprintf(getDbIdAndTypFormat, dbName, account_id), nil
 }
 
 func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable, allAccount bool, tableList, accountList string, owner, creator uint32, comment string, checkNameValid bool) (string, error) {
@@ -2831,6 +2831,9 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	)
 
 	tenantInfo = ses.GetTenantInfo()
+	if tenantInfo != nil && accName == tenantInfo.GetTenant() {
+		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
+	}
 
 	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	//get pubAccountId from publication info
@@ -2855,7 +2858,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	}
 
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(newCtx, "there is no publication %s", pubName)
+		err = moerr.NewInternalError(newCtx, "there is no publication account %s", accName)
 		goto handleFailed
 	}
 	accId, err = erArray[0].GetInt64(newCtx, 0, 0)
@@ -2936,10 +2939,8 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 		lowerAny                  any
 		lowerInt64                int64
 		accName, pubName, subName string
-		tenantInfo                *TenantInfo
 		ast                       []tree.Statement
 	)
-	tenantInfo = ses.GetTenantInfo()
 	lowerAny, err = ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
 		return nil, err
@@ -2954,9 +2955,6 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 	pubName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.Publication)
 	subName = string(ast[0].(*tree.CreateDatabase).Name)
 
-	if tenantInfo != nil && accName == tenantInfo.GetTenant() {
-		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
-	}
 	return checkSubscriptionValidCommon(ctx, ses, subName, accName, pubName)
 }
 
@@ -3057,7 +3055,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	}
 	bh.ClearExecResultSet()
 
-	sql, err = getSqlForGetDbIdAndType(ctx, pubDb, true)
+	sql, err = getSqlForGetDbIdAndType(ctx, pubDb, true, uint64(tenantInfo.TenantID))
 	if err != nil {
 		goto handleFailed
 	}
