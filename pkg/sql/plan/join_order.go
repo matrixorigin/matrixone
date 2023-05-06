@@ -384,6 +384,9 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 				if leftParent == -1 || shouldChangeParent(vertices[leftId].node.Stats, vertices[leftParent].node.Stats, vertices[rightId].node.Stats) {
 					if vertices[rightId].parent != leftId {
 						vertices[leftId].parent = rightId
+					} else if vertices[leftId].node.Stats.Outcnt < vertices[rightId].node.Stats.Outcnt {
+						vertices[leftId].parent = rightId
+						vertices[rightId].parent = -1
 					}
 				}
 			}
@@ -393,6 +396,9 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 					if vertices[leftId].parent != rightId {
 						vertices[rightId].parent = leftId
 					}
+				} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
+					vertices[rightId].parent = leftId
+					vertices[leftId].parent = -1
 				}
 			}
 		}
