@@ -253,8 +253,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 	}
 	tbl.modifiedBlocks = make([][]ModifyBlockMeta, len(tbl.blockInfos))
 
-	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
-	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range tbl.dnList {
 		blocks := tbl.blockInfos[i]
 		deletes := make(map[types.Blockid][]int)
@@ -312,20 +310,39 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 		}
 
 		var (
-			meta  objectio.ObjectMeta
-			mblks []ModifyBlockMeta
+			isMonoExpr bool
+			meta       objectio.ObjectMeta
+			mblks      []ModifyBlockMeta
+			columnMap  map[int]int
+			defCols    []int
+			exprCols   []int
+			maxCol     int
 		)
+
 		hasDeletes := len(deletes) > 0
+
+		// check if expr is monotonic, if so, we can skip evaluating expr for each block
+		if isMonoExpr = plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr); isMonoExpr {
+			columnMap, defCols, exprCols, maxCol = plan2.GetColumnsByExpr(expr, tbl.getTableDef())
+		}
+
 		for _, blk := range blocks {
 			need := true
-			if exprMono {
+
+			// if expr is monotonic, we can skip evaluating expr for each block
+			if isMonoExpr {
 				location := blk.MetaLocation()
+
+				// if the blk is from a new object, we need to load the meta
+				// meta is load only for each object
 				if !objectio.IsSameObjectLocVsMeta(location, meta) {
 					if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
 						return
 					}
 				}
-				need = needRead(ctx, expr, meta, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc)
+
+				// eval filter expr on the block
+				need = needRead(ctx, expr, meta, blk, tbl.getTableDef(), columnMap, defCols, exprCols, maxCol, tbl.db.txn.proc)
 			}
 
 			if !need {
