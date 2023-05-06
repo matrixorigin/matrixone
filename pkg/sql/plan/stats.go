@@ -511,7 +511,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      output,
-				Cost:        input,
+				Cost:        input + output,
 				HashmapSize: output,
 				Selectivity: 1,
 			}
@@ -600,8 +600,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 			//if there is non monotonic filters
 			if num > 0 {
-				node.Stats.Selectivity *= 0.15
-				node.Stats.Outcnt *= 0.15
+				node.Stats.Selectivity *= 0.13
+				node.Stats.Outcnt *= 0.13
 			}
 		}
 
@@ -661,9 +661,6 @@ func DefaultStats() *plan.Stats {
 	return stats
 }
 
-// If the RHS cardinality is larger than the LHS by this ratio, we build on left and probe on right
-const kLeftRightRatio = 1.3
-
 func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
@@ -690,7 +687,7 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*kLeftRightRatio < rightChild.Stats.Outcnt {
+		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
 			node.BuildOnLeft = true
 		}
 	}
