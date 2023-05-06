@@ -191,7 +191,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Extra.ColumnChanged = true
 		s.removeDroppedName(newcol.Name)
 		s.Extra.NextColSeqnum += 1
-		s.Finalize(true) // rebuild sortkey
+		return s.Finalize(true) // rebuild sortkey
 	case apipb.AlterKind_DropColumn:
 		drop := req.GetDropColumn()
 		coldef := s.ColDefs[drop.LogicalIdx]
@@ -213,7 +213,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 		s.Extra.DroppedAttrs = append(s.Extra.DroppedAttrs, coldef.Name)
 		s.Extra.ColumnChanged = true
-		s.Finalize(true)
+		return s.Finalize(true)
 	default:
 		return moerr.NewNYINoCtx("unsupported alter kind: %v", req.Kind)
 	}
