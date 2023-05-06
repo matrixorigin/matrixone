@@ -326,7 +326,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	// set tableDef
-	applyIndexFunc, err := buildTableDefs(stmt, ctx, createTable)
+	err := buildTableDefs(stmt, ctx, createTable)
 	if err != nil {
 		return nil, err
 	}
@@ -446,10 +446,6 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			}})
 	}
 
-	if err := applyIndexFunc(maybeAddPrimaryKey(stmt, createTable)); err != nil {
-		return nil, err
-	}
-
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	bindContext := NewBindContext(builder, nil)
 
@@ -561,7 +557,7 @@ func buildPartitionByClause(ctx context.Context, partitionBinder *PartitionBinde
 	return builder.build(ctx, partitionBinder, stmt, tableDef)
 }
 
-func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) (func(*ColDef) error, error) {
+func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) error {
 	var primaryKeys []string
 	var indexs []string
 	colMap := make(map[string]*ColDef)
@@ -572,12 +568,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		case *tree.ColumnTableDef:
 			colType, err := getTypeFromAst(ctx.GetContext(), def.Type)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
 				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
 				if colType.GetWidth() > types.MaxStringSize {
-					return nil, moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
+					return moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
 				}
 			}
 			var pks []string
@@ -587,24 +583,24 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				switch attribute := attr.(type) {
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
 					if colType.GetId() == int32(types.T_blob) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
+						return moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
 					}
 					if colType.GetId() == int32(types.T_text) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
+						return moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
 					}
 					if colType.GetId() == int32(types.T_json) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", def.Name.Parts[0]))
 					}
 					pks = append(pks, def.Name.Parts[0])
 				case *tree.AttributeComment:
 					comment = attribute.CMT.String()
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-						return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", def.Name.Parts[0])
+						return moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", def.Name.Parts[0])
 					}
 				case *tree.AttributeAutoIncrement:
 					auto_incr = true
 					if !operator.IsInteger(types.T(colType.GetId())) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
+						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
@@ -620,26 +616,26 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 			if len(pks) > 0 {
 				if len(primaryKeys) > 0 {
-					return nil, moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
+					return moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
 				}
 				primaryKeys = pks
 			}
 
 			defaultValue, err := buildDefaultExpr(def, colType, ctx.GetProcess())
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if auto_incr && defaultValue.Expr != nil {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", def.Name.Parts[0])
+				return moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", def.Name.Parts[0])
 			}
 
 			onUpdateExpr, err := buildOnUpdate(def, colType, ctx.GetProcess())
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			if !checkTableColumnNameValid(def.Name.Parts[0]) {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", def.Name.Parts[0])
+				return moerr.NewInvalidInput(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", def.Name.Parts[0])
 			}
 
 			colType.AutoIncr = auto_incr
@@ -655,13 +651,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
+				return moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
 			}
 			pksMap := map[string]bool{}
 			for _, key := range def.KeyParts {
 				name := key.ColName.Parts[0] // name of primary key column
 				if _, ok := pksMap[name]; ok {
-					return nil, moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name '%s' in primary key", name)
+					return moerr.NewInvalidInput(ctx.GetContext(), "duplicate column name '%s' in primary key", name)
 				}
 				primaryKeys = append(primaryKeys, name)
 				pksMap[name] = true
@@ -683,7 +679,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		case *tree.ForeignKey:
 			fkData, err := getForeignKeyData(ctx, createTable.TableDef, def)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			createTable.FkDbs = append(createTable.FkDbs, fkData.DbName)
 			createTable.FkTables = append(createTable.FkTables, fkData.TableName)
@@ -692,20 +688,20 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		case *tree.CheckIndex, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
-			return nil, moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
+			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		default:
-			return nil, moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
+			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		}
 	}
 
 	//add cluster table attribute
 	if stmt.IsClusterTable {
 		if _, ok := colMap[util.GetClusterTableAttributeName()]; ok {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
+			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
 		}
 		colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
 		if err != nil {
-			return nil, err
+			return err
 		}
 		colDef := &ColDef{
 			Name:    util.GetClusterTableAttributeName(),
@@ -734,10 +730,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	pkeyName := ""
+	// If the primary key is explicitly defined in the ddl statement
 	if len(primaryKeys) > 0 {
 		for _, primaryKey := range primaryKeys {
 			if _, ok := colMap[primaryKey]; !ok {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
+				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", primaryKey)
 			}
 		}
 		if len(primaryKeys) == 1 {
@@ -771,22 +768,64 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			colMap[primaryKey].Default.NullAbility = false
 			colMap[primaryKey].NotNull = true
 		}
+	} else {
+		// If table does not have a explicit primary key in the ddl statement, a new hidden primary key column will be add,
+		// which will not be sorted or used for any other purpose, but will only be used to add
+		// locks to the Lock operator in pessimistic transaction mode.
+		if !createTable.IsSystemExternalRel() {
+			pkeyName = catalog.FakePrimaryKeyColName
+			colDef := &ColDef{
+				ColId:  uint64(len(createTable.TableDef.Cols)),
+				Name:   pkeyName,
+				Hidden: true,
+				Typ: &Type{
+					Id:       int32(types.T_uint64),
+					AutoIncr: true,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+				NotNull: true,
+				Primary: true,
+			}
+
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
+			colMap[pkeyName] = colDef
+
+			createTable.TableDef.Pkey = &PrimaryKeyDef{
+				Names:       []string{pkeyName},
+				PkeyColName: pkeyName,
+			}
+
+			idx := len(createTable.TableDef.Cols) - 1
+			// FIXME: due to the special treatment of insert and update for composite primary key, cluster-by, the
+			// hidden primary key cannot be placed in the last column, otherwise it will cause the columns sent to
+			// tae will not match the definition of schema, resulting in panic.
+			if createTable.TableDef.ClusterBy != nil &&
+				len(stmt.ClusterByOption.ColumnList) > 1 {
+				// we must swap hide pk and cluster_by
+				createTable.TableDef.Cols[idx-1], createTable.TableDef.Cols[idx] = createTable.TableDef.Cols[idx], createTable.TableDef.Cols[idx-1]
+				idx = idx - 1
+			}
+		}
 	}
 
 	//handle cluster by keys
 	if stmt.ClusterByOption != nil {
 		if stmt.Temporary {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "cluster by with temporary table is not support")
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with temporary table is not support")
 		}
 		if len(primaryKeys) > 0 {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
+			return moerr.NewNotSupported(ctx.GetContext(), "cluster by with primary key is not support")
 		}
 		lenClusterBy := len(stmt.ClusterByOption.ColumnList)
 		var clusterByKeys []string
 		for i := 0; i < lenClusterBy; i++ {
 			colName := stmt.ClusterByOption.ColumnList[i].Parts[0]
 			if _, ok := colMap[colName]; !ok {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", colName)
+				return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' doesn't exist in table", colName)
 			}
 			clusterByKeys = append(clusterByKeys, colName)
 		}
@@ -813,48 +852,39 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// for example, the text type don't support index
 	for _, str := range indexs {
 		if _, ok := colMap[str]; !ok {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", str)
+			return moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", str)
 		}
 		if colMap[str].Typ.Id == int32(types.T_blob) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
 		}
 		if colMap[str].Typ.Id == int32(types.T_text) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
 		}
 		if colMap[str].Typ.Id == int32(types.T_json) {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
+			return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
 		}
 	}
 
-	// we must lazy apply unique index, because later may add fake pk
-	// into tabledef.
-	return func(fakeCol *ColDef) error {
-		if fakeCol != nil {
-			pkeyName = fakeCol.Name
-			colMap[fakeCol.Name] = fakeCol
-		}
+	// check Constraint Name (include index/ unique)
+	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	if err != nil {
+		return err
+	}
 
-		// check Constraint Name (include index/ unique)
-		err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	// build index table
+	if len(uniqueIndexInfos) != 0 {
+		err = buildUniqueIndexTable(createTable, uniqueIndexInfos, colMap, pkeyName, ctx)
 		if err != nil {
 			return err
 		}
-
-		// build index table
-		if len(uniqueIndexInfos) != 0 {
-			err = buildUniqueIndexTable(createTable, uniqueIndexInfos, colMap, pkeyName, ctx)
-			if err != nil {
-				return err
-			}
+	}
+	if len(secondaryIndexInfos) != 0 {
+		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
+		if err != nil {
+			return err
 		}
-		if len(secondaryIndexInfos) != 0 {
-			err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, ctx)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	}, nil
+	}
+	return nil
 }
 
 // Check whether the name of the constraint(index,unqiue etc) is legal, and handle constraints without a name
@@ -2043,49 +2073,4 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 		}
 	}
 	return &fkData, nil
-}
-
-// maybeAddPrimaryKey for tables that do not have a primary key, we need to create a hidden
-// auto-increment column primary key. In pessimistic transactionm mode, locks arithmetic requires
-// a primary key. To avoid conflicts with Cluster-By, this primary key needs to be disabled from
-// sorting inside TAE.
-func maybeAddPrimaryKey(
-	stmt *tree.CreateTable,
-	def *plan.CreateTable) *ColDef {
-	if def.TableDef.Pkey == nil &&
-		!def.IsSystemExternalRel() {
-		def.TableDef.Cols = append(def.TableDef.Cols,
-			&ColDef{
-				ColId:  uint64(len(def.TableDef.Cols)),
-				Name:   catalog.FakePrimaryKeyColName,
-				Hidden: true,
-				Typ: &Type{
-					Id:       int32(types.T_uint64),
-					AutoIncr: true,
-				},
-				Default: &plan.Default{
-					NullAbility:  false,
-					Expr:         nil,
-					OriginString: "",
-				},
-				NotNull: true,
-				Primary: true,
-			})
-		def.TableDef.Pkey = &PrimaryKeyDef{
-			Names:       []string{catalog.FakePrimaryKeyColName},
-			PkeyColName: catalog.FakePrimaryKeyColName,
-		}
-		idx := len(def.TableDef.Cols) - 1
-		// FIXME: due to the special treatment of insert and update for composite primary key, cluster-by, the
-		// hidden primary key cannot be placed in the last column, otherwise it will cause the columns sent to
-		// tae will not match the definition of schema, resulting in panic.
-		if def.TableDef.ClusterBy != nil &&
-			len(stmt.ClusterByOption.ColumnList) > 1 {
-			// we must swap hide pk and cluster_by
-			def.TableDef.Cols[idx-1], def.TableDef.Cols[idx] = def.TableDef.Cols[idx], def.TableDef.Cols[idx-1]
-			idx = idx - 1
-		}
-		return def.TableDef.Cols[idx]
-	}
-	return nil
 }
