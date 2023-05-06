@@ -280,15 +280,6 @@ func (bf BloomFilter) GetBloomFilter(BlockID uint32) []byte {
 	return bf[offset : offset+length]
 }
 
-func (bf BloomFilter) GetBloomFilterObject(BlockID uint32) (StaticFilter, error) {
-	buf := bf.GetBloomFilter(BlockID)
-	bloomFilter, err := index.DecodeBloomFilter(buf)
-	if err != nil {
-		return nil, err
-	}
-	return bloomFilter, nil
-}
-
 type ZoneMapArea []byte
 
 func (zma ZoneMapArea) BlockCount() uint32 {

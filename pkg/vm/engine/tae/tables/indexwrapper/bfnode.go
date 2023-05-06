@@ -48,7 +48,7 @@ func NewBfReader(
 	}
 }
 
-func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
+func (r *BfReader) getBloomFilter() (objectio.BloomFilter, error) {
 	var v any
 	var size uint32
 	var err error
@@ -60,11 +60,7 @@ func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
 		}
 		r.indexCache.Set(*r.bfKey.ShortName(), v, int64(size))
 	}
-	bf, err := v.(objectio.BloomFilter).GetBloomFilterObject(uint32(r.bfKey.ID()))
-	if err != nil {
-		return nil, err
-	}
-	return bf, nil
+	return v.(objectio.BloomFilter), nil
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
@@ -72,8 +68,15 @@ func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
 	if err != nil {
 		return
 	}
+	buf := bf.GetBloomFilter(uint32(r.bfKey.ID()))
+	// bloomFilter must be allocated on the stack
+	bloomFilter := index.NewEmptyBinaryFuseFilter()
+	err = index.DecodeBloomFilter(bloomFilter, buf)
+	if err != nil {
+		return
+	}
 	v := types.EncodeValue(key, r.typ)
-	return bf.MayContainsKey(v)
+	return bloomFilter.MayContainsKey(v)
 }
 
 func (r *BfReader) MayContainsAnyKeys(keys containers.Vector) (b bool, m *roaring.Bitmap, err error) {
@@ -81,7 +84,14 @@ func (r *BfReader) MayContainsAnyKeys(keys containers.Vector) (b bool, m *roarin
 	if err != nil {
 		return
 	}
-	return bf.MayContainsAnyKeys(keys)
+	buf := bf.GetBloomFilter(uint32(r.bfKey.ID()))
+	// bloomFilter must be allocated on the stack
+	bloomFilter := index.NewEmptyBinaryFuseFilter()
+	err = index.DecodeBloomFilter(bloomFilter, buf)
+	if err != nil {
+		return
+	}
+	return bloomFilter.MayContainsAnyKeys(keys)
 }
 
 func (r *BfReader) Destroy() error { return nil }

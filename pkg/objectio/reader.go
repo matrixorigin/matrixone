@@ -169,7 +169,8 @@ func (r *objectReaderV1) ReadOneBF(
 		return
 	}
 	buf := bfs.GetBloomFilter(uint32(blk))
-	bf, err = index.DecodeBloomFilter(buf)
+	bf = index.NewEmptyBinaryFuseFilter()
+	err = index.DecodeBloomFilter(bf, buf)
 	if err != nil {
 		return
 	}
