@@ -332,7 +332,11 @@ func TestStream(t *testing.T) {
 func TestCloseStreamWithCloseConn(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
-			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+			for {
+				if err := conn.Write(msg, goetty.WriteOptions{Flush: true}); err != nil {
+					return err
+				}
+			}
 		},
 		func(b *remoteBackend) {
 			st, err := b.NewStream(false)
@@ -341,11 +345,8 @@ func TestCloseStreamWithCloseConn(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 			defer cancel()
 
-			n := 2
-			for i := 0; i < n; i++ {
-				req := &testMessage{id: st.ID()}
-				assert.NoError(t, st.Send(ctx, req))
-			}
+			req := &testMessage{id: st.ID()}
+			assert.NoError(t, st.Send(ctx, req))
 
 			for {
 				n := len(st.(*stream).c)
@@ -500,7 +501,7 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 	s.init(1, false)
 	assert.NoError(t, s.Send(ctx, &testMessage{id: s.ID()}))
 	assert.NoError(t, s.Close(false))
-	s.done(RPCMessage{}, false)
+	s.done(context.TODO(), RPCMessage{}, false)
 }
 
 func TestGCStream(t *testing.T) {

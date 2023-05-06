@@ -611,7 +611,7 @@ func (rb *remoteBackend) cancelActiveStreams() {
 	defer rb.mu.Unlock()
 
 	for _, st := range rb.mu.activeStreams {
-		st.done(RPCMessage{}, true)
+		st.done(context.TODO(), RPCMessage{}, true)
 	}
 }
 
@@ -659,7 +659,7 @@ func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMess
 	} else if st, ok := rb.mu.activeStreams[id]; ok {
 		rb.mu.Unlock()
 		if response != nil {
-			st.done(msg, false)
+			st.done(ctx, msg, false)
 		}
 	} else {
 		// future has been removed, e.g. it has timed out.
@@ -982,6 +982,7 @@ func (s *stream) ID() uint64 {
 }
 
 func (s *stream) done(
+	ctx context.Context,
 	message RPCMessage,
 	clean bool) {
 	s.mu.Lock()
@@ -1004,7 +1005,10 @@ func (s *stream) done(
 	}
 
 	s.lastReceivedSequence = message.streamSequence
-	s.c <- response
+	select {
+	case s.c <- response:
+	case <-ctx.Done():
+	}
 }
 
 func (s *stream) cleanCLocked() {
