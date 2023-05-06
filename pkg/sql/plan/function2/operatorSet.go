@@ -413,7 +413,9 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 			if err := rs.Append(dfv, true); err != nil {
 				return err
 			}
+			continue
 		}
+
 		if b {
 			if err := rs.Append(p2.GetValue(i)); err != nil {
 				return err
@@ -439,7 +441,9 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
 		}
+
 		if b {
 			if err := rs.AppendBytes(p2.GetStrValue(i)); err != nil {
 				return err

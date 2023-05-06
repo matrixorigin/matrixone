@@ -1523,17 +1523,22 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	vs2 := vector.GenerateFunctionStrParameter(ivecs[1])
 	vs3 := vector.GenerateFunctionStrParameter(ivecs[2])
 
+	val := ""
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := vs1.GetStrValue(i)
 		v2, null2 := vs2.GetStrValue(i)
 		v3, null3 := vs3.GetStrValue(i)
 
-		if null1 || null2 || null3 {
+		if null1 || null2 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			val, err := format.GetNumberFormat(string(v1), string(v2), string(v3))
+			if null3 {
+				val, err = format.GetNumberFormat(string(v1), string(v2), "en_US")
+			} else {
+				val, err = format.GetNumberFormat(string(v1), string(v2), string(v3))
+			}
 			if err != nil {
 				return err
 			}
