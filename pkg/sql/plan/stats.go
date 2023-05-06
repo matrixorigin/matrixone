@@ -91,25 +91,13 @@ type InfoFromZoneMap struct {
 	ColumnNDVs []float64
 }
 
-func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
+func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	info := &InfoFromZoneMap{
 		ColumnZMs:  make([]objectio.ZoneMap, lenCols),
 		DataTypes:  make([]types.Type, lenCols),
 		ColumnNDVs: make([]float64, lenCols),
 	}
 	return info
-}
-
-func GetHighNDVColumns(s *StatsInfoMap, b *Binding) []int32 {
-	cols := make([]int32, 0)
-	if s.TableCnt != 0 {
-		for colName, ndv := range s.NdvMap {
-			if ndv/s.TableCnt > 0.99 {
-				cols = append(cols, b.FindColumn(colName))
-			}
-		}
-	}
-	return cols
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
@@ -180,6 +168,20 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 		return outCnt * 0.1
 	}
 
+}
+
+// cols in one table, return if ndv of  multi column is high enough
+func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool {
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil || tableDef == nil {
+		return false
+	}
+	s := sc.GetStatsInfoMap(tableDef.TblId)
+	var totalNDV float64 = 1
+	for i := range cols {
+		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
+	}
+	return totalNDV > s.TableCnt*0.95
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
