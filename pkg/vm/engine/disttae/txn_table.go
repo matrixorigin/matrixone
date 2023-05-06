@@ -226,7 +226,6 @@ func (tbl *txnTable) reset(newId uint64) {
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]byte, err error) {
 	tbl.db.txn.Lock()
 	tbl.writes = tbl.writes[:0]
-	tbl.writesOffset = len(tbl.db.txn.writes)
 	for i, entry := range tbl.db.txn.writes {
 		if entry.databaseId != tbl.db.databaseId {
 			continue
@@ -552,7 +551,6 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	return nil
-	// return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {

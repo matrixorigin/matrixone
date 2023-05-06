@@ -48,9 +48,10 @@ func (txn *Transaction) getBlockInfos(
 		if i >= len(states) {
 			continue
 		}
-		state := states[i]
-		iter := state.Blocks.Iter()
 		var objectName objectio.ObjectNameShort
+		state := states[i]
+		blocks[i] = make([]catalog.BlockInfo, 0, state.Blocks.Len())
+		iter := state.Blocks.Iter()
 		for ok := iter.First(); ok; ok = iter.Next() {
 			entry := iter.Item()
 			if !entry.Visible(ts) {
