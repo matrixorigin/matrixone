@@ -269,9 +269,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 				if !blocks[i].EntryState {
 					if blocks[i].CommitTs.ToTimestamp().Less(ts) { // hack
 						ids[i] = blocks[i].BlockID
-					} else {
-						appendIds = append(appendIds, blocks[i].BlockID)
 					}
+				} else {
+					appendIds = append(appendIds, blocks[i].BlockID)
 				}
 			}
 			// non-append -> flush-deletes -- yes
