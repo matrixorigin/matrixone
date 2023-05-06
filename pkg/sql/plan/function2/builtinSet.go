@@ -127,20 +127,20 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
-		if null1 {
+		if null1 || len(v1) == 0 {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			if len(v1) == 0 {
-				if err := rs.AppendBytes([]byte{}, false); err != nil {
+			b, err := f(v1)
+			if err != nil {
+				return err
+			}
+			if b == nil {
+				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
 			} else {
-				b, err := f(v1)
-				if err != nil {
-					return err
-				}
 				if err = rs.AppendBytes(b, false); err != nil {
 					return err
 				}

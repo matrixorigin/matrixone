@@ -426,7 +426,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
-			if null1 || null2 {
+			if null1 || null2 || len(v2) == 0 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -448,7 +448,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			v1, null1 := p1.GetStrValue(i)
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
-			if null1 || null2 || null3 {
+			if null1 || null2 || null3 || len(v2) == 0 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -472,7 +472,7 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 			v2, null2 := p2.GetStrValue(i)
 			pos, null3 := positions.GetValue(i)
 			ocur, null4 := occurrences.GetValue(i)
-			if null1 || null2 || null3 || null4 {
+			if null1 || null2 || null3 || null4 || len(v2) == 0 {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
 				}

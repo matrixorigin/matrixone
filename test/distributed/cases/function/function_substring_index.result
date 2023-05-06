@@ -190,8 +190,6 @@ ehjwk
 null
 null
 null
-
-
 SELECT REVERSE(substring_index(s1,delim,3)) FROM substring_index_01;
 reverse(substring_index(s1, delim, 3))
 nc.moc.cba
@@ -235,8 +233,6 @@ SELECT substring_index(s1,delim,count1 + 3),substring_index(s1,delim,count2) FRO
 substring_index(s1, delim, count1 + 3)    substring_index(s1, delim, count2)
 SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length)    SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length)
 null    null
-    
-    
 SELECT substring_index(s1,delim,count2 % 2) FROM substring_index_02 WHERE count2 IS NOT NULL;
 substring_index(s1, delim, count2 % 2)
 SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, st
