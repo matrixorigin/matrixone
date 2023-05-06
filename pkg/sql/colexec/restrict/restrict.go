@@ -75,7 +75,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 	}
-	anal.Output(bat, isLast)
-	proc.SetInputBatch(bat)
+	if ap.IsEnd {
+		bat.Clean(proc.Mp())
+		proc.SetInputBatch(nil)
+	} else {
+		anal.Output(bat, isLast)
+		proc.SetInputBatch(bat)
+	}
 	return false, nil
 }

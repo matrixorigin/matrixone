@@ -473,8 +473,110 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 	}
 
 	// todo: make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
+	{
+		if pkPos := getPkPos(tableDef, true); pkPos != -1 {
+			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+			pkColExpr := &plan.Expr{
+				Typ: tableDef.Cols[pkPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(pkPos),
+						Name:   tableDef.Cols[pkPos].Name,
+					},
+				},
+			}
+			lastNodeId, err = appendAggCountGroupByColExpr(builder, bindCtx, lastNodeId, pkColExpr)
+			if err != nil {
+				return err
+			}
+
+			countType := types.T_int64.ToType()
+			countColExpr := &plan.Expr{
+				Typ: makePlan2Type(&countType),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						Name: tableDef.Cols[pkPos].Name,
+					},
+				},
+			}
+			lastNodeId, err = appendAssertEqNode(builder, bindCtx, lastNodeId, countColExpr, 1)
+			if err != nil {
+				return err
+			}
+			lastNodeId = builder.appendStep(lastNodeId)
+		}
+	}
 
 	// todo: make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
+	{
+		if pkPos := getPkPos(tableDef, true); pkPos != -1 {
+			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+
+			pkColExpr := &plan.Expr{
+				Typ: tableDef.Cols[pkPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(pkPos),
+						Name:   tableDef.Cols[pkPos].Name,
+					},
+				},
+			}
+			rightId := builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				Stats:       &plan.Stats{},
+				ObjRef:      objRef,
+				TableDef:    tableDef,
+				ProjectList: []*Expr{pkColExpr},
+			}, bindCtx)
+			rightExpr := &Expr{
+				Typ: tableDef.Cols[pkPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 1,
+						Name:   tableDef.Cols[pkPos].Name,
+					},
+				},
+			}
+			condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{pkColExpr, rightExpr})
+			if err != nil {
+				return err
+			}
+			lastNodeId = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_JOIN,
+				Children:    []int32{lastNodeId, rightId},
+				JoinType:    plan.Node_SEMI,
+				OnList:      []*Expr{condExpr},
+				ProjectList: []*Expr{pkColExpr},
+			}, bindCtx)
+			colExpr := &Expr{
+				Typ: tableDef.Cols[pkPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						Name: tableDef.Cols[pkPos].Name,
+					},
+				},
+			}
+			lastNodeId, err = appendAggCountGroupByColExpr(builder, bindCtx, lastNodeId, colExpr)
+			if err != nil {
+				return err
+			}
+
+			countType := types.T_int64.ToType()
+			countColExpr := &plan.Expr{
+				Typ: makePlan2Type(&countType),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						Name: tableDef.Cols[pkPos].Name,
+					},
+				},
+			}
+			lastNodeId, err = appendAssertEqNode(builder, bindCtx, lastNodeId, countColExpr, 0)
+			if err != nil {
+				return err
+			}
+			lastNodeId = builder.appendStep(lastNodeId)
+		}
+	}
 
 	return nil
 }
@@ -614,7 +716,53 @@ func appendSinkNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int3
 	return lastNodeId
 }
 
-func getPkPos(tableDef *TableDef) int {
+func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, colExpr *plan.Expr) (int32, error) {
+	aggExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "starcount", []*Expr{colExpr})
+	if err != nil {
+		return -1, err
+	}
+
+	countType := types.T_int64.ToType()
+	groupByNode := &Node{
+		NodeType: plan.Node_AGG,
+		Children: []int32{lastNodeId},
+		GroupBy:  []*Expr{colExpr},
+		AggList:  []*Expr{aggExpr},
+		ProjectList: []*Expr{{
+			Typ: makePlan2Type(&countType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: -2,
+					ColPos: 1,
+				},
+			},
+		}},
+	}
+	lastNodeId = builder.appendNode(groupByNode, bindCtx)
+	return lastNodeId, nil
+}
+
+func appendAssertEqNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, colExpr *plan.Expr, expectedInt int64) (int32, error) {
+	eqCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{MakePlan2Int64ConstExprWithType(expectedInt), colExpr})
+	if err != nil {
+		return -1, err
+	}
+	filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, makePlan2StringConstExprWithType("duplicate check error")})
+	if err != nil {
+		return -1, err
+	}
+	filterNode := &Node{
+		NodeType:    plan.Node_FILTER,
+		Children:    []int32{lastNodeId},
+		FilterList:  []*Expr{filterExpr},
+		ProjectList: getProjectionByLastNode(builder, lastNodeId),
+		IsEnd:       true,
+	}
+	lastNodeId = builder.appendNode(filterNode, bindCtx)
+	return lastNodeId, nil
+}
+
+func getPkPos(tableDef *TableDef, ignoreFakePK bool) int {
 	if tableDef.Pkey == nil {
 		return -1
 	}
@@ -624,6 +772,9 @@ func getPkPos(tableDef *TableDef) int {
 	}
 	for i, col := range tableDef.Cols {
 		if col.Name == pkName {
+			if ignoreFakePK && col.Name == catalog.FakePrimaryKeyColName {
+				continue
+			}
 			return i
 		}
 	}
@@ -838,7 +989,7 @@ func appendPreInsertUkNode(builder *QueryBuilder, bindCtx *BindContext, tableDef
 		}
 	}
 
-	pkColumn := int32(getPkPos(tableDef))
+	pkColumn := int32(getPkPos(tableDef, false))
 	var pkType *Type
 	var ukType *Type
 	if len(idxDef.Parts) == 1 {

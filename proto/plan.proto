@@ -671,6 +671,8 @@ message Node {
 	// build unique key batch before insert into hidden table which keep the unique key
 	PreInsertUkCtx pre_insert_uk_ctx = 34;
 	OnDuplicateKeyCtx on_duplicate_key = 35;
+
+	bool IsEnd = 36;
 }
 
 message PreInsertUkCtx {

@@ -429,7 +429,8 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 
 func constructRestrict(n *plan.Node) *restrict.Argument {
 	return &restrict.Argument{
-		E: colexec.RewriteFilterExprList(n.FilterList),
+		E:     colexec.RewriteFilterExprList(n.FilterList),
+		IsEnd: n.IsEnd,
 	}
 }
 
