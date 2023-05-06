@@ -121,7 +121,7 @@ func BlockReadInner(
 		} else {
 			rbat.Vecs[i] = vp.GetVector(typ)
 		}
-		if err := vector.GetUnionFunction(typ, mp)(rbat.Vecs[i], col); err != nil {
+		if err := vector.GetUnionAllFunction(typ, mp)(rbat.Vecs[i], col); err != nil {
 			return nil, err
 		}
 		if col.GetType().Oid == types.T_Rowid {

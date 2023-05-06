@@ -69,7 +69,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 		if needCopy {
 			rbat.Vecs[i] = proc.GetVector(*vec.GetType())
-			if err := vector.GetUnionFunction(*vec.GetType(), proc.Mp())(rbat.Vecs[i], vec); err != nil {
+			if err := vector.GetUnionAllFunction(*vec.GetType(), proc.Mp())(rbat.Vecs[i], vec); err != nil {
 				return false, err
 			}
 		} else {
