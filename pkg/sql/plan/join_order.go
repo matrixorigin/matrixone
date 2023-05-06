@@ -380,27 +380,63 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			edgeMap[[2]int32{leftId, rightId}] = edge
 
 			leftParent := vertices[leftId].parent
-			if leftParent == -1 || compareStats(vertices[rightId].node.Stats, vertices[leftParent].node.Stats) {
-				if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
+			if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
+				if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
 					if vertices[rightId].parent != leftId {
 						vertices[leftId].parent = rightId
-						vertices[rightId].children[leftId] = nil
+					} else if vertices[leftId].node.Stats.Outcnt < vertices[rightId].node.Stats.Outcnt {
+						vertices[leftId].parent = rightId
+						vertices[rightId].parent = -1
 					}
 				}
 			}
 			rightParent := vertices[rightId].parent
-			if rightParent == -1 || compareStats(vertices[leftId].node.Stats, vertices[rightParent].node.Stats) {
-				if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
+			if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
+				if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
 					if vertices[leftId].parent != rightId {
 						vertices[rightId].parent = leftId
-						vertices[leftId].children[rightId] = nil
+					} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
+						vertices[rightId].parent = leftId
+						vertices[leftId].parent = -1
 					}
 				}
 			}
 		}
 	}
 
+	for i := range vertices {
+		parent := vertices[i].parent
+		if parent != -1 {
+			vertices[parent].children[int32(i)] = nil
+		}
+	}
 	return vertices
+}
+
+func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinVertex) bool {
+	selfStats := vertices[self].node.Stats
+	currentParentStats := vertices[currentParent].node.Stats
+	nextParentStats := vertices[nextParent].node.Stats
+	if currentParentStats.Cost > selfStats.Cost && currentParentStats.Cost > nextParentStats.Cost {
+		// current Parent is the biggest node
+		if vertices[nextParent].parent == currentParent {
+			return true
+		}
+		if selfStats.Selectivity < 0.9 {
+			return false
+		}
+	}
+	if nextParentStats.Cost > selfStats.Cost && nextParentStats.Cost > currentParentStats.Cost {
+		// next Parent is the biggest node
+		if vertices[currentParent].parent == nextParent {
+			return false
+		}
+		if selfStats.Selectivity < 0.9 {
+			return true
+		}
+	}
+	// self is the biggest node
+	return compareStats(nextParentStats, currentParentStats)
 }
 
 // buildSubJoinTree build sub- join tree for a fact table and all its dimension tables
