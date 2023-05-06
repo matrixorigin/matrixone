@@ -600,8 +600,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 			//if there is non monotonic filters
 			if num > 0 {
-				node.Stats.Selectivity *= 0.15
-				node.Stats.Outcnt *= 0.15
+				node.Stats.Selectivity *= 0.13
+				node.Stats.Outcnt *= 0.13
 			}
 		}
 
@@ -702,21 +702,4 @@ func compareStats(stats1, stats2 *Stats) bool {
 		// todo we need to calculate ndv of outcnt here
 		return stats1.Outcnt < stats2.Outcnt
 	}
-}
-
-func shouldChangeParent(self, currentParent, nextParent *plan.Stats) bool {
-	if currentParent.Cost > self.Cost && currentParent.Cost > nextParent.Cost {
-		// current Parent is the biggest node
-		if self.Selectivity < 0.9 {
-			return false
-		}
-	}
-	if nextParent.Cost > self.Cost && nextParent.Cost > currentParent.Cost {
-		// next Parent is the biggest node
-		if self.Selectivity < 0.9 {
-			return true
-		}
-	}
-	// self is the biggest node
-	return compareStats(nextParent, currentParent)
 }

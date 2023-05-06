@@ -381,7 +381,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 			leftParent := vertices[leftId].parent
 			if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
-				if leftParent == -1 || shouldChangeParent(vertices[leftId].node.Stats, vertices[leftParent].node.Stats, vertices[rightId].node.Stats) {
+				if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
 					if vertices[rightId].parent != leftId {
 						vertices[leftId].parent = rightId
 					} else if vertices[leftId].node.Stats.Outcnt < vertices[rightId].node.Stats.Outcnt {
@@ -392,7 +392,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			}
 			rightParent := vertices[rightId].parent
 			if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
-				if rightParent == -1 || shouldChangeParent(vertices[rightId].node.Stats, vertices[rightParent].node.Stats, vertices[leftId].node.Stats) {
+				if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
 					if vertices[leftId].parent != rightId {
 						vertices[rightId].parent = leftId
 					} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
@@ -411,6 +411,32 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 		}
 	}
 	return vertices
+}
+
+func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinVertex) bool {
+	selfStats := vertices[self].node.Stats
+	currentParentStats := vertices[currentParent].node.Stats
+	nextParentStats := vertices[nextParent].node.Stats
+	if currentParentStats.Cost > selfStats.Cost && currentParentStats.Cost > nextParentStats.Cost {
+		// current Parent is the biggest node
+		if vertices[nextParent].parent == currentParent {
+			return true
+		}
+		if selfStats.Selectivity < 0.9 {
+			return false
+		}
+	}
+	if nextParentStats.Cost > selfStats.Cost && nextParentStats.Cost > currentParentStats.Cost {
+		// next Parent is the biggest node
+		if vertices[currentParent].parent == nextParent {
+			return false
+		}
+		if selfStats.Selectivity < 0.9 {
+			return true
+		}
+	}
+	// self is the biggest node
+	return compareStats(nextParentStats, currentParentStats)
 }
 
 // buildSubJoinTree build sub- join tree for a fact table and all its dimension tables
