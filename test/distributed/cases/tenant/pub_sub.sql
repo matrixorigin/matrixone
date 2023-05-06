@@ -197,3 +197,7 @@ drop database sys_db_1;
 drop database sub2;
 
 create database sub_db4 from no_exists publication pubname4;
+
+create database db1;
+create publication pubname4 database db1 comment 'publication to all tenant';
+create database sub_db4 from sys publication pubname4;
