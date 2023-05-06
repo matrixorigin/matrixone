@@ -160,7 +160,7 @@ func (w *StoreInfo) retryGetDriverLsn(gid uint32, lsn uint64) (driverLsn uint64,
 		currLsn := w.GetCurrSeqNum(gid)
 		if lsn <= currLsn {
 			for i := 0; i < 10; i++ {
-				logutil.Infof("retry %d-%d", gid, lsn)
+				logutil.Debugf("retry %d-%d", gid, lsn)
 				w.commitCond.L.Lock()
 				driverLsn, err = w.getDriverLsn(gid, lsn)
 				if err != ErrGroupNotFount && err != ErrLsnNotFount {
@@ -265,10 +265,10 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 			drLsn, err = w.retryGetDriverLsn(g, lsn+1)
 			if err != nil {
 				if err == ErrLsnTooSmall {
-					logutil.Infof("%d-%d too small", g, lsn)
+					logutil.Debugf("%d-%d too small", g, lsn)
 					return g, 0
 				}
-				logutil.Infof("%d-%d", g, lsn)
+				logutil.Debugf("%d-%d", g, lsn)
 				panic(err)
 			}
 			drLsn--

@@ -242,7 +242,7 @@ func (bc *BaseBatchPipe[T, B]) Stop(graceful bool) (<-chan struct{}, bool) {
 		return nil, false
 	}
 
-	logutil.Infof("BaseBatchPipe accept graceful(%v) Stop", graceful)
+	logutil.Debugf("BaseBatchPipe accept graceful(%v) Stop", graceful)
 	stopCh := make(chan struct{})
 	if graceful {
 		go func() {
@@ -287,7 +287,7 @@ func (bc *BaseBatchPipe[T, B]) startMergeWorker(inputCtx context.Context) {
 func (bc *BaseBatchPipe[T, B]) batchWorker(ctx context.Context) {
 	defer bc.batchStopWg.Done()
 	quitMsg := quitUnknown
-	defer logutil.Infof("batchWorker quit: %s", &quitMsg)
+	defer logutil.Debugf("batchWorker quit: %s", &quitMsg)
 	f := bc.impl.NewItemBatchHandler(ctx)
 	for {
 		select {
@@ -321,7 +321,7 @@ func (bc *BaseBatchPipe[T, B]) mergeWorker(ctx context.Context) {
 	registry := newReminderRegistry()
 	quitMsg := quitUnknown
 	defer registry.CleanAll()
-	defer logutil.Infof("mergeWorker quit: %v", &quitMsg)
+	defer logutil.Debugf("mergeWorker quit: %v", &quitMsg)
 
 	doFlush := func(name string, itembuf ItemBuffer[T, B]) {
 		batch := itembuf.GetBatch(ctx, batchbuf)

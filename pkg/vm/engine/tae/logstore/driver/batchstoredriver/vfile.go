@@ -127,7 +127,7 @@ func (vf *vFile) Close() error {
 }
 
 func (vf *vFile) Commit() {
-	logutil.Infof("Committing %s\n", vf.Name())
+	logutil.Debugf("Committing %s\n", vf.Name())
 	vf.wg.Wait()
 	vf.flushWg.Wait()
 	err := vf.Sync()
@@ -240,7 +240,7 @@ func (vf *vFile) Destroy() error {
 		return err
 	}
 	name := vf.Name()
-	logutil.Infof("Removing version file: %s", name)
+	logutil.Debugf("Removing version file: %s", name)
 	err := os.Remove(name)
 	return err
 }
@@ -268,7 +268,7 @@ func (vf *vFile) Load(lsn uint64) (*entry.Entry, error) {
 	offset, err := vf.GetOffsetByLSN(lsn)
 	if err == ErrVFileGroupNotExist || err == ErrVFileLsnNotExist {
 		for i := 0; i < 10; i++ {
-			logutil.Infof("load retry %d", lsn)
+			logutil.Debugf("load retry %d", lsn)
 			vf.addrCond.L.Lock()
 			offset, err = vf.GetOffsetByLSN(lsn)
 			if err == nil {

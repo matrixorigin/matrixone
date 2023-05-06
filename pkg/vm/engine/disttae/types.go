@@ -18,7 +18,6 @@ import (
 	"context"
 	"math"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -34,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -80,21 +80,12 @@ type Engine struct {
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache
 	dnMap      map[string]int
-	partitions map[[2]uint64]Partitions
+	partitions map[[2]uint64]logtailreplay.Partitions
 	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
 	usePushModel bool
 	pClient      pushClient
-}
-
-type Partitions []*Partition
-
-// a partition corresponds to a dn
-type Partition struct {
-	lock  chan struct{}
-	state atomic.Pointer[PartitionState]
-	ts    timestamp.Timestamp // last updated timestamp
 }
 
 // Transaction represents a transaction
@@ -170,8 +161,12 @@ func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID string) []int64 {
 	return offsets
 }
 
-func (b *deletedBlocks) removeBlockDeletedInfoLocked(blockID string) {
-	delete(b.offsets, blockID)
+func (b *deletedBlocks) removeBlockDeletedInfos(ids []string) {
+	b.Lock()
+	defer b.Unlock()
+	for _, id := range ids {
+		delete(b.offsets, id)
+	}
 }
 
 func (b *deletedBlocks) iter(fn func(string, []int64) bool) {
@@ -235,7 +230,7 @@ type txnTable struct {
 	defs              []engine.TableDef
 	tableDef          *plan.TableDef
 	idxs              []uint16
-	_parts            []*PartitionState
+	_parts            []*logtailreplay.PartitionState
 	modifiedBlocks    [][]ModifyBlockMeta
 	blockInfos        [][]catalog.BlockInfo
 	blockInfosUpdated bool
@@ -256,10 +251,9 @@ type txnTable struct {
 	writes []Entry
 	// offset of the writes in workspace
 	writesOffset int
-	skipBlocks   map[types.Blockid]uint8
 
 	// localState stores uncommitted data
-	localState *PartitionState
+	localState *logtailreplay.PartitionState
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
 	localTS timestamp.Timestamp

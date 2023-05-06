@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package objectio
 
 import (
+	"github.com/stretchr/testify/assert"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func BenchmarkEncode(b *testing.B) {
-	pool := mpool.MustNewZero()
-	packer := types.NewPacker(pool)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		encodePrimaryKey(int64(i), packer)
+func TestBuildMetaData(t *testing.T) {
+	objectMeta := BuildMetaData(20, 30)
+	for i := uint16(0); i < 20; i++ {
+		blkMeta := objectMeta.GetBlockMeta(uint32(i))
+		assert.Equal(t, i, blkMeta.BlockHeader().Sequence())
+		assert.Equal(t, uint16(30), blkMeta.BlockHeader().ColumnCount())
 	}
-	b.StopTimer()
-	packer.FreeMem()
-	b.StartTimer()
 }

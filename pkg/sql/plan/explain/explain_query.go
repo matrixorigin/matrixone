@@ -38,7 +38,7 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
 	nodes := e.QueryPlan.Nodes
 	for index, rootNodeID := range e.QueryPlan.Steps {
-		logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
+		logutil.Debugf("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
 			buffer: buffer,
 			offset: 0,
