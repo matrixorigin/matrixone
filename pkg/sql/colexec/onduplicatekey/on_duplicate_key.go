@@ -105,20 +105,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	}
 	updateExpr := insertArg.OnDuplicateExpr
 	oldRowIdVec := vector.MustFixedCol[types.Rowid](originBatch.Vecs[rowIdIdx])
-	delRowIdVec := vector.NewVec(types.T_Rowid.ToType())
-
-	var oldUniqueRowIdVec []types.Rowid
-	var oldUniquePkVec *vector.Vector
-	var delUniqueRowIdVec *vector.Vector
-	var delUniquePkVec *vector.Vector
-	if len(insertArg.IdxIdx) > 0 {
-		// for now, only support one unique constraint
-		oldUniqueRowIdVec = vector.MustFixedCol[types.Rowid](originBatch.Vecs[insertArg.IdxIdx[0]])
-		oldUniquePkVec = originBatch.Vecs[insertArg.IdxIdx[0]+1]
-
-		delUniqueRowIdVec = vector.NewVec(types.T_Rowid.ToType())
-		delUniquePkVec = vector.NewVec(*oldUniquePkVec.GetType())
-	}
+	// delRowIdVec := vector.NewVec(types.T_Rowid.ToType())
 
 	for i := 0; i < originBatch.Length(); i++ {
 		newBatch, err := fetchOneRowAsBatch(i, originBatch, proc, attrs)
@@ -173,21 +160,10 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 			} else {
 				// append row_id to deleteBatch
-				err := vector.AppendFixed(delRowIdVec, oldRowIdVec[i], false, proc.GetMPool())
-				if err != nil {
-					return nil, err
-				}
-
-				if len(insertArg.IdxIdx) > 0 {
-					err := vector.AppendFixed(delUniqueRowIdVec, oldUniqueRowIdVec[i], false, proc.GetMPool())
-					if err != nil {
-						return nil, err
-					}
-					err = delUniquePkVec.UnionOne(oldUniquePkVec, int64(i), proc.GetMPool())
-					if err != nil {
-						return nil, err
-					}
-				}
+				// err := vector.AppendFixed(delRowIdVec, oldRowIdVec[i], false, proc.GetMPool())
+				// if err != nil {
+				// 	return nil, err
+				// }
 
 				newBatch, err := updateOldBatch(newBatch, i, originBatch, updateExpr, proc, columnCount, attrs)
 				if err != nil {
@@ -238,6 +214,9 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	// 		}
 	// 	}
 	// }
+
+	// make return batch like update statement
+
 	return insertBatch, nil
 
 }

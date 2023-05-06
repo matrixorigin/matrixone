@@ -643,6 +643,16 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
+
+			// append ProjectNode
+			info.rootId = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				ProjectList: info.projectList,
+				Children:    []int32{info.rootId},
+				BindingTags: []int32{builder.genNewTag()},
+			}, bindCtx)
+			bindCtx.results = info.projectList
+
 		}
 
 	}

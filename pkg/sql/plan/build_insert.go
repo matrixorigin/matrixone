@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -59,17 +60,86 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
-	// new logic
 	objRef := tblInfo.objRef[0]
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
-		err = buildOnDuplicateKeyPlans(builder, bindCtx, rewriteInfo)
+		// append on duplicate key node
+		var dupProjection []*Expr
+		updateColLength := 0
+		rowIdPos := -1
+		for _, col := range tableDef.Cols {
+			dupProjection = append(dupProjection, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: int32(updateColLength),
+						Name:   col.Name,
+					},
+				},
+			})
+			if col.Name == catalog.Row_ID {
+				rowIdPos = updateColLength
+			}
+			updateColLength++
+		}
+		var insertColPos []int
+		for _, col := range tableDef.Cols {
+			if col.Name == catalog.Row_ID {
+				continue
+			}
+			idx := len(dupProjection)
+			insertColPos = append(insertColPos, idx)
+			dupProjection = append(dupProjection, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: int32(idx),
+						Name:   col.Name,
+					},
+				},
+			})
+		}
+		projectNode := &Node{
+			NodeType:    plan.Node_ON_DUPLICATE_KEY,
+			Children:    []int32{lastNodeId},
+			ProjectList: dupProjection,
+			OnDuplicateKey: &plan.OnDuplicateKeyCtx{
+				TableDef:        tableDef,
+				OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
+				OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
+			},
+		}
+		lastNodeId = builder.appendNode(projectNode, bindCtx)
+
+		// append sink node
+		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+		sourceStep = builder.appendStep(lastNodeId)
+
+		// append plans like update
+		updateBindCtx := NewBindContext(builder, nil)
+		upPlanCtx := &dmlPlanCtx{
+			objRef:          objRef,
+			tableDef:        tableDef,
+			beginIdx:        0,
+			sourceStep:      sourceStep,
+			isMulti:         false,
+			updateColLength: updateColLength,
+			rowIdPos:        rowIdPos,
+			insertColPos:    insertColPos,
+		}
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
+		if err != nil {
+			return nil, err
+		}
+
 	} else {
 		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId)
+		if err != nil {
+			return nil, err
+		}
+		query.StmtType = plan.Query_INSERT
 	}
-	if err != nil {
-		return nil, err
-	}
-	query.StmtType = plan.Query_INSERT
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,

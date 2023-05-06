@@ -34,10 +34,6 @@ type dmlPlanCtx struct {
 	updateColPosMap map[string]int
 }
 
-func buildOnDuplicateKeyPlans(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo) error {
-	return nil
-}
-
 // buildInsertPlans  build insert plan.
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
