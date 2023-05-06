@@ -202,8 +202,8 @@ type Stream interface {
 	// Receive returns a channel to read stream message from server. If nil is received, the receive
 	// loop needs to exit. In any case, Stream.Close needs to be called.
 	Receive() (chan Message, error)
-	// Close close the stream.
-	Close() error
+	// Close close the stream. If closeConn is true, the underlying connection will be closed.
+	Close(closeConn bool) error
 }
 
 // ClientOption client options for create client
