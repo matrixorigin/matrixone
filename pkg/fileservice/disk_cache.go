@@ -49,6 +49,7 @@ type DiskCache struct {
 		timer        *time.Timer
 		newlyWritten int64
 	}
+	noAutoEviction bool
 }
 
 func NewDiskCache(
@@ -281,6 +282,10 @@ func (d *DiskCache) Flush() {
 }
 
 func (d *DiskCache) triggerEvict(ctx context.Context, bytesWritten int64) {
+	if d.noAutoEviction {
+		return
+	}
+
 	d.evictState.Lock()
 	defer d.evictState.Unlock()
 
