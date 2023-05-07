@@ -473,39 +473,39 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 	}
 
 	// todo: make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
-	{
-		if pkPos := getPkPos(tableDef, true); pkPos != -1 {
-			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-			pkColExpr := &plan.Expr{
-				Typ: tableDef.Cols[pkPos].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(pkPos),
-						Name:   tableDef.Cols[pkPos].Name,
-					},
-				},
-			}
-			lastNodeId, err = appendAggCountGroupByColExpr(builder, bindCtx, lastNodeId, pkColExpr)
-			if err != nil {
-				return err
-			}
+	// {
+	// 	if pkPos := getPkPos(tableDef, true); pkPos != -1 {
+	// 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+	// 		pkColExpr := &plan.Expr{
+	// 			Typ: tableDef.Cols[pkPos].Typ,
+	// 			Expr: &plan.Expr_Col{
+	// 				Col: &plan.ColRef{
+	// 					ColPos: int32(pkPos),
+	// 					Name:   tableDef.Cols[pkPos].Name,
+	// 				},
+	// 			},
+	// 		}
+	// 		lastNodeId, err = appendAggCountGroupByColExpr(builder, bindCtx, lastNodeId, pkColExpr)
+	// 		if err != nil {
+	// 			return err
+	// 		}
 
-			countType := types.T_int64.ToType()
-			countColExpr := &plan.Expr{
-				Typ: makePlan2Type(&countType),
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						Name: tableDef.Cols[pkPos].Name,
-					},
-				},
-			}
-			lastNodeId, err = appendAssertEqNode(builder, bindCtx, lastNodeId, countColExpr, 1)
-			if err != nil {
-				return err
-			}
-			builder.appendStep(lastNodeId)
-		}
-	}
+	// 		countType := types.T_int64.ToType()
+	// 		countColExpr := &plan.Expr{
+	// 			Typ: makePlan2Type(&countType),
+	// 			Expr: &plan.Expr_Col{
+	// 				Col: &plan.ColRef{
+	// 					Name: tableDef.Cols[pkPos].Name,
+	// 				},
+	// 			},
+	// 		}
+	// 		lastNodeId, err = appendAssertEqNode(builder, bindCtx, lastNodeId, countColExpr, 1)
+	// 		if err != nil {
+	// 			return err
+	// 		}
+	// 		builder.appendStep(lastNodeId)
+	// 	}
+	// }
 
 	// todo: make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 	{

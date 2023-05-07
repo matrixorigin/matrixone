@@ -807,7 +807,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				len(stmt.ClusterByOption.ColumnList) > 1 {
 				// we must swap hide pk and cluster_by
 				createTable.TableDef.Cols[idx-1], createTable.TableDef.Cols[idx] = createTable.TableDef.Cols[idx], createTable.TableDef.Cols[idx-1]
-				idx = idx - 1
 			}
 		}
 	}
