@@ -1,5 +1,6 @@
 -- @setup
 drop database if exists test02;
+drop database if exists db1;
 drop database if exists test03;
 drop database if exists procedure_test;
 -- create tenant
@@ -387,9 +388,7 @@ CREATE SEQUENCE seq_id INCREMENT BY 1 MAXVALUE 1000 START with 1;
 -- @session:id=2&user=test_tenant_1:test_account&password=111
 create database sub_db1 from sys publication pubname7;
 use sub_db1;
--- @bvt:issue#9085
 show tables;
--- @bvt:issue
 SELECT NEXTVAL('seq_id');
 -- @session
 
@@ -405,9 +404,8 @@ drop database sub_db1;
 create database db100;
 -- @session
 
--- @bvt:issue#9076
+
 create publication pubname8 database db100 commment 'publication failed';
--- @bvt:issue
 
 -- @teardown
 -- @session:id=2&user=test_tenant_1:test_account&password=111
@@ -427,26 +425,21 @@ drop publication test_pubname;
 drop database test_db;
 -- @bvt:issue
 
--- @bvt:issue#9031
 create database sub_db4 from no_exists publication pubname4;
--- @bvt:issue
 
--- @bvt:issue#9037
 create publication test_pubname database mo_task account test_account comment 'publication to test_account tenant';
 create publication test_pubname database information_schema account test_account comment 'publication to test_account tenant';
 create publication test_pubname database mysql account test_account comment 'publication to test_account tenant';
 create publication test_pubname database system_metrics account test_account comment 'publication to test_account tenant';
 create publication test_pubname database system account test_account comment 'publication to test_account tenant';
 create publication test_pubname database mo_catalog account test_account comment 'publication to test_account tenant';
--- @bvt:issue
 
--- @bvt:issue#9045
+
 create database db5;
 create publication pubname5 database db5 comment 'publication to all tenant';
 create database sub_db5 from sys publication pubname5;
 drop publication pubname5;
 drop database db5;
--- @bvt:issue
 
 -- @teardown
 show publications;
