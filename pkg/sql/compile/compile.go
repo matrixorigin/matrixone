@@ -252,8 +252,9 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) error {
 	var wg sync.WaitGroup
 	errC := make(chan error, len(c.scope))
+	// reset early for multi steps
 	for _, s := range c.scope {
-		s.Proc.ResetContextFromParent(c.proc.Ctx)
+		s.SetContextRecursively(c.proc.Ctx)
 	}
 	for _, s := range c.scope {
 		wg.Add(1)

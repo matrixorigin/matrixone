@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
@@ -1266,20 +1267,20 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 	}
 	for i := range target.analInfos {
 		n := source[i]
-		target.analInfos[i].OutputSize += n.OutputSize
-		target.analInfos[i].OutputRows += n.OutputRows
-		target.analInfos[i].InputRows += n.InputRows
-		target.analInfos[i].InputSize += n.InputSize
-		target.analInfos[i].MemorySize += n.MemorySize
-		target.analInfos[i].TimeConsumed += n.TimeConsumed
-		target.analInfos[i].WaitTimeConsumed += n.WaitTimeConsumed
-		target.analInfos[i].DiskIO += n.DiskIO
-		target.analInfos[i].S3IOByte += n.S3IOByte
-		target.analInfos[i].S3IOInputCount += n.S3IOInputCount
-		target.analInfos[i].S3IOOutputCount += n.S3IOOutputCount
-		target.analInfos[i].NetworkIO += n.NetworkIO
-		target.analInfos[i].ScanTime += n.ScanTime
-		target.analInfos[i].InsertTime += n.InsertTime
+		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
+		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
+		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
+		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
+		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
+		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
+		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
+		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
+		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
+		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
+		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
+		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
+		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
+		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
 	}
 }
 

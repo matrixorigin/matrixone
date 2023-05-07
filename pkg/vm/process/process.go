@@ -154,7 +154,7 @@ func (proc *Process) InputBatch() *batch.Batch {
 	return proc.Reg.InputBatch
 }
 
-func (proc *Process) ResetContextFromParent(parent context.Context) {
+func (proc *Process) ResetContextFromParent(parent context.Context) context.Context {
 	newctx, cancel := context.WithCancel(parent)
 
 	proc.Ctx = newctx
@@ -163,6 +163,7 @@ func (proc *Process) ResetContextFromParent(parent context.Context) {
 	for i := range proc.Reg.MergeReceivers {
 		proc.Reg.MergeReceivers[i].Ctx = newctx
 	}
+	return newctx
 }
 
 func (proc *Process) GetAnalyze(idx int) Analyze {

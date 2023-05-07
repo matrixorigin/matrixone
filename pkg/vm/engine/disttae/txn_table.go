@@ -681,6 +681,7 @@ func (tbl *txnTable) compaction() error {
 			remove_batch[bat] = true
 		}
 	}
+	tbl.db.txn.Lock()
 	for i := 0; i < len(tbl.db.txn.writes); i++ {
 		if remove_batch[tbl.db.txn.writes[i].bat] {
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
@@ -692,6 +693,7 @@ func (tbl *txnTable) compaction() error {
 			tbl.db.txn.writes[i].bat = nil
 		}
 	}
+	tbl.db.txn.Unlock()
 	return nil
 }
 

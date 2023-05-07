@@ -17,7 +17,10 @@ package cnclient
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -25,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"go.uber.org/zap"
 )
 
 // client each node will hold only one client.
@@ -46,12 +48,12 @@ func AcquireMessage() *pipeline.Message {
 }
 
 func IsCNClientReady() bool {
-	return client != nil && client.ready
+	return client != nil && client.ready.Load()
 }
 
 type CNClient struct {
 	localServiceAddress string
-	ready               bool
+	ready               atomic.Bool
 	config              *ClientConfig
 	client              morpc.RPCClient
 
@@ -76,11 +78,11 @@ func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 func (c *CNClient) Close() error {
 	lock.Lock()
 	defer lock.Unlock()
-	if client == nil || !c.ready {
+	if client == nil || !c.ready.Load() {
 		return nil
 	}
 
-	c.ready = false
+	c.ready.Store(false)
 	return c.client.Close()
 }
 
@@ -146,7 +148,7 @@ func NewCNClient(
 		morpc.WithClientTag("cn-client"),
 		morpc.WithClientLogger(logger),
 	)
-	client.ready = true
+	client.ready.Store(true)
 	return err
 }
 
