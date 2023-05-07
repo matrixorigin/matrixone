@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -159,36 +160,103 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	var find bool
 	var ts timestamp.Timestamp
+	/**
+	In push mode.
+	It is necessary to distinguish the case create table/drop table
+	from truncate table.
 
+	CORNER CASE 1:
+	begin;
+	create table t1(a int);//table id x. catalog.insertTable(table id x)
+	insert into t1 values (1);
+	drop table t1; //same table id x. catalog.deleteTable(table id x)
+	commit;
+
+	CORNER CASE 2:
+	create table t1(a int); //table id x.
+	begin;
+	insert into t1 values (1);
+	-- @session:id=1{
+	truncate table t1;//insert table id y, then delete table id x. catalog.insertTable(table id y). catalog.deleteTable(table id x)
+	-- @session}
+	commit;
+
+	CORNER CASE 3:
+	create table t1(a int); //table id x.
+	begin;
+	truncate t1;//table id x changed to x1
+	truncate t1;//table id x1 changed to x2
+	truncate t1;//table id x2 changed to x3
+	commit;//catalog.insertTable(table id x1,x2,x3). catalog.deleteTable(table id x,x1,x2)
+
+	To be clear that the TableItem in catalogCache is sorted by the table id.
+	*/
+	var tableId uint64
+	deleted := make(map[uint64]bool)
+	inserted := make(map[uint64]*TableItem)
 	cc.tables.data.Ascend(tbl, func(item *TableItem) bool {
 		if item.deleted && item.AccountId == tbl.AccountId &&
 			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name {
 			if !ts.IsEmpty() {
-				return false
+				//if it is the truncate operation, we collect deleteTable together.
+				if item.Ts.Equal(ts) {
+					deleted[item.Id] = true
+					return true
+				} else {
+					return false
+				}
 			}
 			ts = item.Ts
+			tableId = item.Id
+			deleted[item.Id] = true
 			return true
 		}
 		if !item.deleted && item.AccountId == tbl.AccountId &&
 			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name &&
-			(ts.IsEmpty() || ts.Equal(item.Ts)) {
-			find = true
-			tbl.Id = item.Id
-			tbl.Defs = item.Defs
-			tbl.Kind = item.Kind
-			tbl.Comment = item.Comment
-			tbl.ViewDef = item.ViewDef
-			tbl.TableDef = item.TableDef
-			tbl.Constraint = item.Constraint
-			tbl.Partitioned = item.Partitioned
-			tbl.Partition = item.Partition
-			tbl.CreateSql = item.CreateSql
-			tbl.PrimaryIdx = item.PrimaryIdx
-			tbl.ClusterByIdx = item.ClusterByIdx
+			(ts.IsEmpty() || ts.Equal(item.Ts) && tableId != item.Id) {
+			//if it is the truncate operation, we collect insertTable together first.
+			if !ts.IsEmpty() && ts.Equal(item.Ts) && tableId != item.Id {
+				inserted[item.Id] = item
+				return true
+			} else {
+				find = true
+				copyTableItem(tbl, item)
+				return false
+			}
+		}
+		if find {
+			return false
 		}
 		return false
 	})
-	return find
+
+	if find {
+		return true
+	}
+
+	//handle truncate operation independently
+	//remove deleted item from inserted item
+	for rowid := range deleted {
+		delete(inserted, rowid)
+	}
+
+	//if there is no inserted item, it means that the table is deleted.
+	if len(inserted) == 0 {
+		return false
+	}
+
+	//if there is more than one inserted item, it means that it is wrong
+	if len(inserted) > 1 {
+		panic(fmt.Sprintf("account %d database %d has multiple tables %s",
+			tbl.AccountId, tbl.DatabaseId, tbl.Name))
+	}
+
+	//get item
+	for _, item := range inserted {
+		copyTableItem(tbl, item)
+	}
+
+	return true
 }
 
 func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
@@ -288,11 +356,13 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 
 	mp := make(map[tableItemKey]columns) // TableItem -> columns
 	key := new(TableItem)
+	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(MO_ROWID_IDX))
 	// get table key info
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_COLUMNS_ACCOUNT_ID_IDX + MO_OFF))
 	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX + MO_OFF))
 	tableNames := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF))
+	tableIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX + MO_OFF))
 	// get columns info
 	names := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATTNAME_IDX + MO_OFF))
 	comments := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_COMMENT_IDX + MO_OFF))
@@ -311,12 +381,14 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		key.Name = tableNames[i]
 		key.DatabaseId = databaseIds[i]
 		key.Ts = timestamps[i].ToTimestamp()
+		key.Id = tableIds[i]
 		tblKey.Name = key.Name
 		tblKey.AccountId = key.AccountId
 		tblKey.DatabaseId = key.DatabaseId
 		tblKey.NodeId = key.Ts.NodeID
 		tblKey.LogicalTime = key.Ts.LogicalTime
 		tblKey.PhysicalTime = uint64(key.Ts.PhysicalTime)
+		tblKey.Id = tableIds[i]
 		if _, ok := cc.tables.data.Get(key); ok {
 			col := column{
 				num:             nums[i],
@@ -329,6 +401,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				constraintType:  constraintTypes[i],
 				isClusterBy:     clusters[i],
 			}
+			copy(col.rowid[:], rowids[i][:])
 			col.typ = append(col.typ, typs[i]...)
 			col.updateExpr = append(col.updateExpr, updateExprs[i]...)
 			col.defaultExpr = append(col.defaultExpr, defaultExprs[i]...)
@@ -345,9 +418,11 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 			PhysicalTime: int64(k.PhysicalTime),
 			LogicalTime:  k.LogicalTime,
 		}
+		key.Id = k.Id
 		item, _ := cc.tables.data.Get(key)
 		defs := make([]engine.TableDef, 0, len(cols))
 		defs = append(defs, genTableDefOfComment(item.Comment))
+		item.Rowids = make([]types.Rowid, len(cols))
 		for i, col := range cols {
 			if col.constraintType == catalog.SystemColPKConstraint {
 				item.PrimaryIdx = i
@@ -356,6 +431,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				item.ClusterByIdx = i
 			}
 			defs = append(defs, genTableDefOfColumn(col))
+			copy(item.Rowids[i][:], col.rowid[:])
 		}
 		item.Defs = defs
 		item.TableDef = getTableDef(item.Name, defs)
