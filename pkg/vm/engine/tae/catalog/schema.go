@@ -173,7 +173,8 @@ func (s *Schema) GetSingleSortKeyType() types.Type { return s.GetSingleSortKey()
 func (s *Schema) getFakePrimaryKey() *ColDef {
 	idx, ok := s.NameIndex[pkgcatalog.FakePrimaryKeyColName]
 	if !ok {
-		logutil.Infof("fake primary key not existed: %v", s.String())
+		// should just call logutil.Fatal
+		logutil.Debugf("fake primary key not existed: %v", s.String())
 		panic("fake primary key not existed")
 	}
 	return s.ColDefs[idx]

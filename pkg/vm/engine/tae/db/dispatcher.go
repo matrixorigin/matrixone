@@ -26,9 +26,9 @@ func ScopeConflictCheck(oldScope, newScope *common.ID) (err error) {
 	if oldScope.TableID != newScope.TableID {
 		return
 	}
-	if oldScope.SegmentID != newScope.SegmentID &&
-		!objectio.IsEmptySegid(&oldScope.SegmentID) &&
-		!objectio.IsEmptySegid(&newScope.SegmentID) {
+	if !oldScope.SegmentID().Eq(*newScope.SegmentID()) &&
+		!objectio.IsEmptySegid(oldScope.SegmentID()) &&
+		!objectio.IsEmptySegid(newScope.SegmentID()) {
 		return
 	}
 	if oldScope.BlockID != newScope.BlockID &&

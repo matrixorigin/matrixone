@@ -257,7 +257,7 @@ type Base struct {
 func GetBase() *Base {
 	b := _basePool.Get().(*Base)
 	if b.GetPayloadSize() != 0 {
-		logutil.Infof("payload size is %d", b.GetPayloadSize())
+		logutil.Debugf("payload size is %d", b.GetPayloadSize())
 		panic("wrong payload size")
 	}
 	b.wg.Add(1)
@@ -313,7 +313,7 @@ func (b *Base) DoneWithErr(err error) {
 func (b *Base) Free() {
 	b.reset()
 	if b.GetPayloadSize() != 0 {
-		logutil.Infof("payload size is %d", b.GetPayloadSize())
+		logutil.Debugf("payload size is %d", b.GetPayloadSize())
 		panic("wrong payload size")
 	}
 	_basePool.Put(b)

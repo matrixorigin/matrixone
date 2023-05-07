@@ -78,8 +78,8 @@ func (rel *TxnRelation) AddBlksWithMetaLoc([]objectio.ZoneMap, []objectio.Locati
 }
 func (rel *TxnRelation) GetMeta() any                                                        { return nil }
 func (rel *TxnRelation) GetDB() (handle.Database, error)                                     { return nil, nil }
-func (rel *TxnRelation) GetSegment(id types.Uuid) (seg handle.Segment, err error)            { return }
-func (rel *TxnRelation) SoftDeleteSegment(id types.Uuid) (err error)                         { return }
+func (rel *TxnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error)      { return }
+func (rel *TxnRelation) SoftDeleteSegment(id *types.Segmentid) (err error)                   { return }
 func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)                  { return }
 func (rel *TxnRelation) CreateNonAppendableSegment(bool) (seg handle.Segment, err error)     { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, isNull bool, err error) { return }

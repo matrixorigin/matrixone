@@ -19,9 +19,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 
@@ -29,13 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -43,19 +40,6 @@ const (
 	HASH_VALUE_FUN string = "hash_value"
 	MAX_RANGE_SIZE int64  = 200
 )
-
-func loadObjectMeta(
-	ctx context.Context,
-	location objectio.Location,
-	fs fileservice.FileService,
-	m *mpool.MPool,
-) (meta objectio.ObjectMeta, err error) {
-	reader, err := blockio.NewObjectReader(fs, location)
-	if err != nil {
-		return
-	}
-	return reader.LoadObjectMeta(ctx, m)
-}
 
 func buildColumnZMVector(
 	zm objectio.ZoneMap,
@@ -766,37 +750,9 @@ func getBinarySearchFuncByPkValue[T compareT](typ types.T, v T) func(*vector.Vec
 	}
 }
 
-func mustVectorFromProto(v *api.Vector) *vector.Vector {
-	ret, err := vector.ProtoVectorToVector(v)
-	if err != nil {
-		panic(err)
-	}
-	return ret
-}
-
-func mustVectorToProto(v *vector.Vector) *api.Vector {
-	ret, err := vector.VectorToProtoVector(v)
-	if err != nil {
-		panic(err)
-	}
-	return ret
-}
-
 func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		infos = append(infos, txnMeta.DebugString())
 		logutil.Debugf(msg+" %s", infos...)
 	}
-}
-
-/*
-	RowId:
-
-| segmentId | blockId | offsetId |
-
-	18 bytes   2 bytes   4 bytes
-*/
-// SegmentId = Uuid + fileId
-func generateRowIdForCNBlock(blkid *types.Blockid, offset uint32) types.Rowid {
-	return objectio.NewRowid(blkid, offset)
 }

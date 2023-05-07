@@ -32,12 +32,10 @@ func Currval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	tblnames := vector.MustStrCol(vecs[0])
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := NewTxn(e, proc, proc.Ctx)
-	if err != nil {
-		return nil, err
+	txn := proc.TxnOperator
+	if txn == nil {
+		return nil, moerr.NewInternalError(proc.Ctx, "Currval: txn operator is nil")
 	}
-	defer RollbackTxn(e, txn, proc.Ctx)
-
 	dbHandler, err := e.Database(proc.Ctx, proc.SessionInfo.Database, txn)
 	if err != nil {
 		return nil, err

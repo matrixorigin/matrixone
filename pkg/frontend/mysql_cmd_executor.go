@@ -408,7 +408,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
 	ses.sentRows.Add(int64(n))
-	logInfof(ses.GetDebugString(), "rowCount %v \n"+
+	logDebugf(ses.GetDebugString(), "rowCount %v \n"+
 		"time of getDataFromPipeline : %s \n"+
 		"processBatchTime %v \n"+
 		"row2colTime %v \n"+
@@ -676,6 +676,14 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 				if err != nil {
 					return err
 				}
+			}
+		} else if name == "syspublications" {
+			if !ses.GetTenantInfo().IsSysTenant() {
+				return moerr.NewInternalError(ses.GetRequestContext(), "only system account can set system variable syspublications")
+			}
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
 			}
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value)
@@ -1557,483 +1565,483 @@ func getStmtExecutor(ses *Session, proc *process.Process, base *baseStmtExecutor
 	switch st := stmt.(type) {
 	//PART 1: the statements with the result set
 	case *tree.Select:
-		ret = (&SelectExecutor{
+		ret = &SelectExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			sel: st,
-		})
+		}
 	case *tree.ValuesStatement:
-		ret = (&ValuesStmtExecutor{
+		ret = &ValuesStmtExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			sel: st,
-		})
+		}
 	case *tree.ShowCreateTable:
-		ret = (&ShowCreateTableExecutor{
+		ret = &ShowCreateTableExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			sct: st,
-		})
+		}
 	case *tree.ShowCreateDatabase:
-		ret = (&ShowCreateDatabaseExecutor{
+		ret = &ShowCreateDatabaseExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			scd: st,
-		})
+		}
 	case *tree.ShowTables:
-		ret = (&ShowTablesExecutor{
+		ret = &ShowTablesExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			st: st,
-		})
+		}
 	case *tree.ShowSequences:
-		ret = (&ShowSequencesExecutor{
+		ret = &ShowSequencesExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			ss: st,
-		})
+		}
 	case *tree.ShowDatabases:
-		ret = (&ShowDatabasesExecutor{
+		ret = &ShowDatabasesExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			sd: st,
-		})
+		}
 	case *tree.ShowColumns:
-		ret = (&ShowColumnsExecutor{
+		ret = &ShowColumnsExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			sc: st,
-		})
+		}
 	case *tree.ShowProcessList:
-		ret = (&ShowProcessListExecutor{
+		ret = &ShowProcessListExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			spl: st,
-		})
+		}
 	case *tree.ShowStatus:
-		ret = (&ShowStatusExecutor{
+		ret = &ShowStatusExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			ss: st,
-		})
+		}
 	case *tree.ShowTableStatus:
-		ret = (&ShowTableStatusExecutor{
+		ret = &ShowTableStatusExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			sts: st,
-		})
+		}
 	case *tree.ShowGrants:
-		ret = (&ShowGrantsExecutor{
+		ret = &ShowGrantsExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			sg: st,
-		})
+		}
 	case *tree.ShowIndex:
-		ret = (&ShowIndexExecutor{
+		ret = &ShowIndexExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			si: st,
-		})
+		}
 	case *tree.ShowCreateView:
-		ret = (&ShowCreateViewExecutor{
+		ret = &ShowCreateViewExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			scv: st,
-		})
+		}
 	case *tree.ShowTarget:
-		ret = (&ShowTargetExecutor{
+		ret = &ShowTargetExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			st: st,
-		})
+		}
 	case *tree.ExplainFor:
-		ret = (&ExplainForExecutor{
+		ret = &ExplainForExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			ef: st,
-		})
+		}
 	case *tree.ExplainStmt:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&ExplainStmtExecutor{
+		ret = &ExplainStmtExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			es: st,
-		})
+		}
 	case *tree.ShowVariables:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&ShowVariablesExecutor{
+		ret = &ShowVariablesExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			sv: st,
-		})
+		}
 	case *tree.ShowErrors:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&ShowErrorsExecutor{
+		ret = &ShowErrorsExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			se: st,
-		})
+		}
 	case *tree.ShowWarnings:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&ShowWarningsExecutor{
+		ret = &ShowWarningsExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			sw: st,
-		})
+		}
 	case *tree.AnalyzeStmt:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&AnalyzeStmtExecutor{
+		ret = &AnalyzeStmtExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			as: st,
-		})
+		}
 	case *tree.ExplainAnalyze:
-		ret = (&ExplainAnalyzeExecutor{
+		ret = &ExplainAnalyzeExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			ea: st,
-		})
+		}
 	case *InternalCmdFieldList:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&InternalCmdFieldListExecutor{
+		ret = &InternalCmdFieldListExecutor{
 			resultSetStmtExecutor: &resultSetStmtExecutor{
 				base,
 			},
 			icfl: st,
-		})
+		}
 	//PART 2: the statement with the status only
 	case *tree.BeginTransaction:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&BeginTxnExecutor{
+		ret = &BeginTxnExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			bt: st,
-		})
+		}
 	case *tree.CommitTransaction:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&CommitTxnExecutor{
+		ret = &CommitTxnExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			ct: st,
-		})
+		}
 	case *tree.RollbackTransaction:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&RollbackTxnExecutor{
+		ret = &RollbackTxnExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			rt: st,
-		})
+		}
 	case *tree.SetRole:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&SetRoleExecutor{
+		ret = &SetRoleExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			sr: st,
-		})
+		}
 	case *tree.Use:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&UseExecutor{
+		ret = &UseExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			u: st,
-		})
+		}
 	case *tree.MoDump:
 		//TODO:
 		err = moerr.NewInternalError(proc.Ctx, "needs to add modump")
 	case *tree.DropDatabase:
-		ret = (&DropDatabaseExecutor{
+		ret = &DropDatabaseExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			dd: st,
-		})
+		}
 	case *tree.PrepareStmt:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&PrepareStmtExecutor{
+		ret = &PrepareStmtExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			ps: st,
-		})
+		}
 	case *tree.PrepareString:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&PrepareStringExecutor{
+		ret = &PrepareStringExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			ps: st,
-		})
+		}
 	case *tree.Deallocate:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&DeallocateExecutor{
+		ret = &DeallocateExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			d: st,
-		})
+		}
 	case *tree.SetVar:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&SetVarExecutor{
+		ret = &SetVarExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			sv: st,
-		})
+		}
 	case *tree.Delete:
-		ret = (&DeleteExecutor{
+		ret = &DeleteExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			d: st,
-		})
+		}
 	case *tree.Update:
-		ret = (&UpdateExecutor{
+		ret = &UpdateExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			u: st,
-		})
+		}
 	case *tree.CreatePublication:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&CreatePublicationExecutor{
+		ret = &CreatePublicationExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			cp: st,
-		})
+		}
 	case *tree.AlterPublication:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&AlterPublicationExecutor{
+		ret = &AlterPublicationExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			ap: st,
-		})
+		}
 	case *tree.DropPublication:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&DropPublicationExecutor{
+		ret = &DropPublicationExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			dp: st,
-		})
+		}
 	case *tree.CreateAccount:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&CreateAccountExecutor{
+		ret = &CreateAccountExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			ca: st,
-		})
+		}
 	case *tree.DropAccount:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&DropAccountExecutor{
+		ret = &DropAccountExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			da: st,
-		})
+		}
 	case *tree.AlterAccount:
-		ret = (&AlterAccountExecutor{
+		ret = &AlterAccountExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			aa: st,
-		})
+		}
 	case *tree.CreateUser:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&CreateUserExecutor{
+		ret = &CreateUserExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			cu: st,
-		})
+		}
 	case *tree.DropUser:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&DropUserExecutor{
+		ret = &DropUserExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			du: st,
-		})
+		}
 	case *tree.AlterUser:
-		ret = (&AlterUserExecutor{
+		ret = &AlterUserExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			au: st,
-		})
+		}
 	case *tree.CreateRole:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&CreateRoleExecutor{
+		ret = &CreateRoleExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			cr: st,
-		})
+		}
 	case *tree.DropRole:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&DropRoleExecutor{
+		ret = &DropRoleExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			dr: st,
-		})
+		}
 	case *tree.Grant:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&GrantExecutor{
+		ret = &GrantExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			g: st,
-		})
+		}
 	case *tree.Revoke:
 		base.ComputationWrapper = InitNullComputationWrapper(ses, st, proc)
-		ret = (&RevokeExecutor{
+		ret = &RevokeExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			r: st,
-		})
+		}
 	case *tree.CreateTable:
-		ret = (&CreateTableExecutor{
+		ret = &CreateTableExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			ct: st,
-		})
+		}
 	case *tree.DropTable:
-		ret = (&DropTableExecutor{
+		ret = &DropTableExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			dt: st,
-		})
+		}
 	case *tree.CreateDatabase:
-		ret = (&CreateDatabaseExecutor{
+		ret = &CreateDatabaseExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			cd: st,
-		})
+		}
 	case *tree.CreateIndex:
-		ret = (&CreateIndexExecutor{
+		ret = &CreateIndexExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			ci: st,
-		})
+		}
 	case *tree.DropIndex:
-		ret = (&DropIndexExecutor{
+		ret = &DropIndexExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			di: st,
-		})
+		}
 	case *tree.CreateSequence:
-		ret = (&CreateSequenceExecutor{
+		ret = &CreateSequenceExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			cs: st,
-		})
+		}
 	case *tree.DropSequence:
-		ret = (&DropSequenceExecutor{
+		ret = &DropSequenceExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			ds: st,
-		})
+		}
 	case *tree.CreateView:
-		ret = (&CreateViewExecutor{
+		ret = &CreateViewExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			cv: st,
-		})
+		}
 	case *tree.AlterView:
-		ret = (&AlterViewExecutor{
+		ret = &AlterViewExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			av: st,
-		})
+		}
 	case *tree.AlterTable:
-		ret = (&AlterTableExecutor{
+		ret = &AlterTableExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			at: st,
-		})
+		}
 	case *tree.DropView:
-		ret = (&DropViewExecutor{
+		ret = &DropViewExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			dv: st,
-		})
+		}
 	case *tree.Insert:
-		ret = (&InsertExecutor{
+		ret = &InsertExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			i: st,
-		})
+		}
 	case *tree.Load:
-		ret = (&LoadExecutor{
+		ret = &LoadExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			l: st,
-		})
+		}
 	case *tree.SetDefaultRole:
-		ret = (&SetDefaultRoleExecutor{
+		ret = &SetDefaultRoleExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			sdr: st,
-		})
+		}
 	case *tree.SetPassword:
-		ret = (&SetPasswordExecutor{
+		ret = &SetPasswordExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			sp: st,
-		})
+		}
 	case *tree.TruncateTable:
-		ret = (&TruncateTableExecutor{
+		ret = &TruncateTableExecutor{
 			statusStmtExecutor: &statusStmtExecutor{
 				base,
 			},
 			tt: st,
-		})
+		}
 	//PART 3: hybrid
 	case *tree.Execute:
 		ret = &ExecuteExecutor{
@@ -2185,7 +2193,7 @@ func authenticateUserCanExecutePrepareOrExecute(requestCtx context.Context, ses 
 
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
 func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(requestCtx context.Context, stmt tree.Statement) error {
-	can, err := StatementCanBeExecutedInUncommittedTransaction(mce.GetSession(), stmt)
+	can, err := statementCanBeExecutedInUncommittedTransaction(mce.GetSession(), stmt)
 	if err != nil {
 		return err
 	}
@@ -2524,7 +2532,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				return err
 			}
-			if st.SubscriptionOption != nil && !ses.GetTenantInfo().IsAdminRole() {
+			if st.SubscriptionOption != nil && ses.GetTenantInfo() != nil && !ses.GetTenantInfo().IsAdminRole() {
 				err = moerr.NewInternalError(proc.Ctx, "only admin can create subscription")
 				return err
 			}
@@ -2546,6 +2554,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 			err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
+				mce.GetSession().RemovePrepareStmt(prepareStmt.Name)
 				goto handleFailed
 			}
 		case *tree.PrepareString:
@@ -2556,6 +2565,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 			err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
+				mce.GetSession().RemovePrepareStmt(prepareStmt.Name)
 				goto handleFailed
 			}
 		case *tree.Deallocate:
@@ -2811,7 +2821,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 		runner = ret.(ComputationRunner)
 
-		logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		// only log if build time is longer than 1s
+		if time.Since(cmpBegin) > time.Second {
+			logInfof(ses.GetDebugString(), "time of Exec.Build : %s", time.Since(cmpBegin).String())
+		}
 
 		mrs = ses.GetMysqlResultSet()
 		// cw.Compile might rewrite sql, here we fetch the latest version
@@ -2900,7 +2913,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				}
 			}
 
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			// only log if run time is longer than 1s
+			if time.Since(runBegin) > time.Second {
+				logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
 
 			/*
 				Step 3: Say goodbye
@@ -2975,7 +2991,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				}
 			}
 
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			// only log if run time is longer than 1s
+			if time.Since(runBegin) > time.Second {
+				logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
 
 			rspLen = cw.GetAffectedRows()
 			echoTime := time.Now()
@@ -3035,7 +3054,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 
-			logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			// only log if run time is longer than 1s
+			if time.Since(runBegin) > time.Second {
+				logInfof(ses.GetDebugString(), "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
 
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
 				queryPlan := cwft.plan

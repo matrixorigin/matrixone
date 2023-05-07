@@ -38,16 +38,13 @@ import (
 // First vec is sequence names.
 func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := NewTxn(e, proc, proc.Ctx)
-	if err != nil {
-		return nil, err
+	txn := proc.TxnOperator
+	if txn == nil {
+		return nil, moerr.NewInternalError(proc.Ctx, "Setval: txn operator is nil")
 	}
 
 	resultType := types.T_varchar.ToType()
 	if vecs[0].IsConstNull() || vecs[1].IsConstNull() {
-		if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
-			return nil, err1
-		}
 		return vector.NewConstNull(resultType, vecs[0].Length(), proc.Mp()), nil
 	}
 
@@ -60,9 +57,6 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	v3 = nil
 	if len(vecs) == 3 {
 		if vecs[2].IsConstNull() {
-			if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
-				return nil, err1
-			}
 			return vector.NewConstNull(resultType, vecs[0].Length(), proc.Mp()), nil
 		}
 		v3 = vecs[2]
@@ -78,9 +72,6 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 
 	res, err := proc.AllocVectorOfRows(types.T_varchar.ToType(), 0, nil)
 	if err != nil {
-		if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
-			return nil, err1
-		}
 		return nil, err
 	}
 
@@ -95,9 +86,6 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 			}
 			s, err := setval(tblnames[0], setnums[0], iscalled[0], proc, txn, e)
 			if err != nil {
-				if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
-					return nil, err1
-				}
 				return nil, err
 			}
 			ress[i] = s
@@ -110,9 +98,6 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 			}
 			s, err := setval(tblnames[i], setnums[0], iscalled[0], proc, txn, e)
 			if err != nil {
-				if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
-					return nil, err1
-				}
 				return nil, err
 			}
 			ress[i] = s
@@ -125,9 +110,6 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 			}
 			s, err := setval(tblnames[i], setnums[0], iscalled[i], proc, txn, e)
 			if err != nil {
-				if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
-					return nil, err1
-				}
 				return nil, err
 			}
 			ress[i] = s
@@ -140,9 +122,6 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 			}
 			s, err := setval(tblnames[i], setnums[i], iscalled[0], proc, txn, e)
 			if err != nil {
-				if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
-					return nil, err1
-				}
 				return nil, err
 			}
 			ress[i] = s
@@ -155,17 +134,10 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 			}
 			s, err := setval(tblnames[i], setnums[i], iscalled[i], proc, txn, e)
 			if err != nil {
-				if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
-					return nil, err1
-				}
 				return nil, err
 			}
 			ress[i] = s
 		}
-	}
-
-	if err = CommitTxn(e, txn, proc.Ctx); err != nil {
-		return nil, err
 	}
 	vector.AppendStringList(res, ress, isNulls, proc.Mp())
 	return res, nil

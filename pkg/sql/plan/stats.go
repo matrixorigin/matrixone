@@ -72,6 +72,10 @@ func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
 	if sc == nil {
 		return NewStatsInfoMap()
 	}
+	switch tableID {
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+		return NewStatsInfoMap()
+	}
 	if s, ok := (sc.cachePool)[tableID]; ok {
 		return s
 	} else {
@@ -82,35 +86,18 @@ func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
 }
 
 type InfoFromZoneMap struct {
-	ValMap         []map[any]int // all distinct value in blocks zonemap
-	ColumnZMs      []objectio.ZoneMap
-	DataTypes      []types.Type
-	MaybeUniqueMap []bool
+	ColumnZMs  []objectio.ZoneMap
+	DataTypes  []types.Type
+	ColumnNDVs []float64
 }
 
-func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
+func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	info := &InfoFromZoneMap{
-		ValMap:         make([]map[any]int, lenCols),
-		ColumnZMs:      make([]objectio.ZoneMap, lenCols),
-		DataTypes:      make([]types.Type, lenCols),
-		MaybeUniqueMap: make([]bool, lenCols),
-	}
-	for i := 0; i < lenCols; i++ {
-		info.ValMap[i] = make(map[any]int, blockNumTotal)
+		ColumnZMs:  make([]objectio.ZoneMap, lenCols),
+		DataTypes:  make([]types.Type, lenCols),
+		ColumnNDVs: make([]float64, lenCols),
 	}
 	return info
-}
-
-func GetHighNDVColumns(s *StatsInfoMap, b *Binding) []int32 {
-	cols := make([]int32, 0)
-	if s.TableCnt != 0 {
-		for colName, ndv := range s.NdvMap {
-			if ndv/s.TableCnt > 0.99 {
-				cols = append(cols, b.FindColumn(colName))
-			}
-		}
-	}
-	return cols
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
@@ -122,7 +109,7 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int,
 	//set info in statsInfoMap
 	for i := range columns {
 		colName := tableDef.Cols[columns[i]].Name
-		s.NdvMap[colName] = calcNdv(info.ColumnZMs[i], float64(len(info.ValMap[i])), float64(blockNumTotal), tableCnt, &info.DataTypes[i], info.MaybeUniqueMap[i])
+		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
 		switch info.DataTypes[i].Oid {
 		case types.T_int8:
@@ -181,6 +168,20 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 		return outCnt * 0.1
 	}
 
+}
+
+// cols in one table, return if ndv of  multi column is high enough
+func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool {
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil || tableDef == nil {
+		return false
+	}
+	s := sc.GetStatsInfoMap(tableDef.TblId)
+	var totalNDV float64 = 1
+	for i := range cols {
+		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
+	}
+	return totalNDV > s.TableCnt*0.95
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
@@ -337,86 +338,6 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 		outcnt = 1
 	}
 	return outcnt
-}
-
-func calcNdv(zm objectio.ZoneMap, distinctValNum, blockNumTotal, tableCnt float64, t *types.Type, maybeUnique bool) float64 {
-	ndv1 := calNdvUsingZonemap(zm, t)
-	ndv2 := calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt)
-	if ndv1 <= 0 {
-		return ndv2
-	}
-	if ndv1 > tableCnt {
-		ndv1 = tableCnt
-	}
-	if maybeUnique {
-		return ndv1
-	} else {
-		return ndv1 / 2
-	}
-}
-
-// treat distinct val in zonemap like a sample , then estimate the ndv
-// more blocks, more accurate
-func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64) (ndv float64) {
-	// coefficient is 0.15 when 1 block, and 1 when many blocks.
-	coefficient := math.Pow(0.15, (1 / math.Log2(blockNumTotal*2)))
-	ndvRate := (distinctValNum / blockNumTotal)
-	if distinctValNum <= 100 || ndvRate < 0.4 {
-		// very little distinctValNum, assume ndv is very low
-		ndv = (distinctValNum + 4) / coefficient
-	} else {
-		// assume ndv is high
-		ndv = tableCnt * ndvRate * coefficient
-		if ndv < 1 {
-			ndv = 1
-		}
-	}
-	return ndv
-}
-
-func calNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
-	switch t.Oid {
-	case types.T_bool:
-		return 2
-	case types.T_int8:
-		return float64(types.DecodeFixed[int8](zm.GetMaxBuf())) - float64(types.DecodeFixed[int8](zm.GetMinBuf())) + 1
-	case types.T_int16:
-		return float64(types.DecodeFixed[int16](zm.GetMaxBuf())) - float64(types.DecodeFixed[int16](zm.GetMinBuf())) + 1
-	case types.T_int32:
-		return float64(types.DecodeFixed[int32](zm.GetMaxBuf())) - float64(types.DecodeFixed[int32](zm.GetMinBuf())) + 1
-	case types.T_int64:
-		return float64(types.DecodeFixed[int64](zm.GetMaxBuf())) - float64(types.DecodeFixed[int64](zm.GetMinBuf())) + 1
-	case types.T_uint8:
-		return float64(types.DecodeFixed[uint8](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint8](zm.GetMinBuf())) + 1
-	case types.T_uint16:
-		return float64(types.DecodeFixed[uint16](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint16](zm.GetMinBuf())) + 1
-	case types.T_uint32:
-		return float64(types.DecodeFixed[uint32](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint32](zm.GetMinBuf())) + 1
-	case types.T_uint64:
-		return float64(types.DecodeFixed[uint64](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint64](zm.GetMinBuf())) + 1
-	case types.T_decimal64:
-		return types.Decimal64ToFloat64(types.DecodeFixed[types.Decimal64](zm.GetMaxBuf()), t.Scale) -
-			types.Decimal64ToFloat64(types.DecodeFixed[types.Decimal64](zm.GetMinBuf()), t.Scale) + 1
-	case types.T_decimal128:
-		return types.Decimal128ToFloat64(types.DecodeFixed[types.Decimal128](zm.GetMaxBuf()), t.Scale) -
-			types.Decimal128ToFloat64(types.DecodeFixed[types.Decimal128](zm.GetMinBuf()), t.Scale) + 1
-	case types.T_float32:
-		return float64(types.DecodeFixed[float32](zm.GetMaxBuf())) - float64(types.DecodeFixed[float32](zm.GetMinBuf())) + 1
-	case types.T_float64:
-		return types.DecodeFixed[float64](zm.GetMaxBuf()) - types.DecodeFixed[float64](zm.GetMinBuf()) + 1
-	case types.T_timestamp:
-		return float64(types.DecodeFixed[types.Timestamp](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Timestamp](zm.GetMinBuf())) + 1
-	case types.T_date:
-		return float64(types.DecodeFixed[types.Date](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Date](zm.GetMinBuf())) + 1
-	case types.T_time:
-		return float64(types.DecodeFixed[types.Time](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Time](zm.GetMinBuf())) + 1
-	case types.T_datetime:
-		return float64(types.DecodeFixed[types.Datetime](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Datetime](zm.GetMinBuf())) + 1
-	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return -1
-	default:
-		return -1
-	}
 }
 
 func estimateFilterWeight(ctx context.Context, expr *plan.Expr, w float64) float64 {
@@ -590,7 +511,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      output,
-				Cost:        input,
+				Cost:        input + output,
 				HashmapSize: output,
 				Selectivity: 1,
 			}
@@ -679,8 +600,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 			//if there is non monotonic filters
 			if num > 0 {
-				node.Stats.Selectivity *= 0.15
-				node.Stats.Outcnt *= 0.15
+				node.Stats.Selectivity *= 0.13
+				node.Stats.Outcnt *= 0.13
 			}
 		}
 
@@ -740,9 +661,6 @@ func DefaultStats() *plan.Stats {
 	return stats
 }
 
-// If the RHS cardinality is larger than the LHS by this ratio, we build on left and probe on right
-const kLeftRightRatio = 1.3
-
 func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
@@ -769,7 +687,7 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*kLeftRightRatio < rightChild.Stats.Outcnt {
+		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
 			node.BuildOnLeft = true
 		}
 	}

@@ -17,8 +17,8 @@ package model
 import "github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
 
 type LRUCache interface {
-	Set(k, v any, size int64)
-	Get(k any) (any, bool)
+	Set(k any, v []byte, size int64)
+	Get(k any) ([]byte, bool)
 	Size() int64
 }
 
@@ -36,11 +36,11 @@ func (lru *simpleLRU) Size() int64 {
 	return lru.impl.Size()
 }
 
-func (lru *simpleLRU) Get(k any) (v any, ok bool) {
+func (lru *simpleLRU) Get(k any) (v []byte, ok bool) {
 	v, _, ok = lru.impl.Get(k, false)
 	return
 }
 
-func (lru *simpleLRU) Set(k, v any, size int64) {
+func (lru *simpleLRU) Set(k any, v []byte, size int64) {
 	lru.impl.Set(k, v, size, false)
 }

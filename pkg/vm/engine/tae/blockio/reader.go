@@ -113,8 +113,13 @@ func (r *BlockReader) LoadColumns(
 		}
 	}
 	bat = batch.NewWithSize(len(cols))
+	var obj any
 	for i := range cols {
-		bat.Vecs[i] = ioVectors.Entries[i].Object.(*vector.Vector)
+		obj, err = objectio.Decode(ioVectors.Entries[i].ObjectBytes)
+		if err != nil {
+			return
+		}
+		bat.Vecs[i] = obj.(*vector.Vector)
 	}
 	return
 }
@@ -147,8 +152,13 @@ func (r *BlockReader) LoadAllColumns(
 	}
 	for y := 0; y < int(meta.BlockCount()); y++ {
 		bat := batch.NewWithSize(len(idxs))
+		var obj any
 		for i := range idxs {
-			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+			obj, err = objectio.Decode(ioVectors.Entries[y*len(idxs)+i].ObjectBytes)
+			if err != nil {
+				return nil, err
+			}
+			bat.Vecs[i] = obj.(*vector.Vector)
 		}
 		bats = append(bats, bat)
 	}
@@ -191,13 +201,13 @@ func (r *BlockReader) LoadZoneMap(
 func (r *BlockReader) LoadOneBF(
 	ctx context.Context,
 	blk uint16,
-) (objectio.StaticFilter, error) {
+) (objectio.StaticFilter, uint32, error) {
 	return r.reader.ReadOneBF(ctx, blk)
 }
 
 func (r *BlockReader) LoadAllBF(
 	ctx context.Context,
-) ([]objectio.StaticFilter, uint32, error) {
+) (objectio.BloomFilter, uint32, error) {
 	return r.reader.ReadAllBF(ctx)
 }
 

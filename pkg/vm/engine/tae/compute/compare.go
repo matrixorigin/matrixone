@@ -53,7 +53,7 @@ func CompareBytes(a, b []byte) int64 {
 	}
 }
 
-func Compare(a, b []byte, t types.T) int64 {
+func Compare(a, b []byte, t types.T, scale1, scale2 int32) int64 {
 	switch t {
 	case types.T_bool:
 		return CompareBool(types.DecodeBool(a), types.DecodeBool(b))
@@ -74,9 +74,9 @@ func Compare(a, b []byte, t types.T) int64 {
 	case types.T_uint64:
 		return CompareOrdered(types.DecodeUint64(a), types.DecodeUint64(b))
 	case types.T_decimal64:
-		return types.CompareDecimal64(types.DecodeDecimal64(a), types.DecodeDecimal64(b))
+		return types.CompareDecimal64WithScale(types.DecodeDecimal64(a), types.DecodeDecimal64(b), scale1, scale2)
 	case types.T_decimal128:
-		return types.CompareDecimal128(types.DecodeDecimal128(a), types.DecodeDecimal128(b))
+		return types.CompareDecimal128WithScale(types.DecodeDecimal128(a), types.DecodeDecimal128(b), scale1, scale2)
 	case types.T_decimal256:
 		return types.CompareDecimal256(*(*types.Decimal256)(unsafe.Pointer(&a[0])), *(*types.Decimal256)(unsafe.Pointer(&b[0])))
 	case types.T_float32:

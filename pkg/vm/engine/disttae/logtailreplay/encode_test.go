@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package logtailreplay
 
-func init() {
-	//TODO for passing static check
-	_ = blockInfoMarshal
-	_ = genModifedBlocks
-	_ = needRead
-	_ = inBlockMap
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
+
+func BenchmarkEncode(b *testing.B) {
+	pool := mpool.MustNewZero()
+	packer := types.NewPacker(pool)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		EncodePrimaryKey(int64(i), packer)
+	}
+	b.StopTimer()
+	packer.FreeMem()
+	b.StartTimer()
 }
