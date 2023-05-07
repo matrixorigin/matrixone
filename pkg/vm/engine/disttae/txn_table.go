@@ -156,7 +156,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 			if objectio.IsSameObjectLocVsMeta(location, meta) {
 				continue
 			} else {
-				if meta, err = loadObjectMeta(ctx, location, tbl.db.txn.proc.FileService, tbl.db.txn.proc.Mp()); err != nil {
+				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
 					return nil, nil, err
 				}
 			}
@@ -189,8 +189,8 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	return 0, nil
 }
 
-func (tbl *txnTable) LoadDeletesForBlock(blockID string, deleteBlockId map[types.Blockid][]int, deletesRowId map[types.Rowid]uint8) error {
-	for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[blockID] {
+func (tbl *txnTable) LoadDeletesForBlock(blockID *types.Blockid, deleteBlockId map[types.Blockid][]int, deletesRowId map[types.Rowid]uint8) error {
+	for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blockID] {
 		vs := vector.MustStrCol(bat.GetVector(0))
 		for _, metalLoc := range vs {
 			location, err := blockio.EncodeLocationFromString(metalLoc)
@@ -243,22 +243,24 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 	tbl.db.txn.Lock()
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = len(tbl.db.txn.writes)
+
+	// get all writes for this table from the current transaction
 	for i, entry := range tbl.db.txn.writes {
-		if entry.databaseId != tbl.db.databaseId {
-			continue
-		}
-		if entry.tableId != tbl.tableId {
+		if entry.databaseId != tbl.db.databaseId || entry.tableId != tbl.tableId {
 			continue
 		}
 		tbl.writes = append(tbl.writes, tbl.db.txn.writes[i])
 	}
 	tbl.db.txn.Unlock()
 
+	// make sure we have the block infos snapshot
 	if err = tbl.updateBlockInfos(ctx, expr); err != nil {
 		return
 	}
-	parts, err := tbl.getParts(ctx)
-	if err != nil {
+
+	// get the table's snapshot
+	var parts []*logtailreplay.PartitionState
+	if parts, err = tbl.getParts(ctx); err != nil {
 		return
 	}
 
@@ -267,103 +269,165 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 	if len(tbl.blockInfos) == 0 {
 		return
 	}
+
 	tbl.modifiedBlocks = make([][]ModifyBlockMeta, len(tbl.blockInfos))
 
-	exprMono := plan2.CheckExprIsMonotonic(tbl.db.txn.proc.Ctx, expr)
-	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tbl.getTableDef())
 	for _, i := range tbl.dnList {
 		blocks := tbl.blockInfos[i]
-		deletes := make(map[types.Blockid][]int)
-		if len(blocks) > 0 {
-			ts := tbl.db.txn.meta.SnapshotTS
-			ids := make([]types.Blockid, len(blocks))
-			appendIds := make([]types.Blockid, len(blocks))
-			for i := range blocks {
-				// if cn can see a appendable block, this block must contain all updates
-				// in cache, no need to do merge read, BlockRead will filter out
-				// invisible and deleted rows with respect to the timestamp
-				if !blocks[i].EntryState {
-					if blocks[i].CommitTs.ToTimestamp().Less(ts) { // hack
-						ids[i] = blocks[i].BlockID
-					}
-				} else {
-					appendIds = append(appendIds, blocks[i].BlockID)
-				}
-			}
-			// non-append -> flush-deletes -- yes
-			// non-append -> raw-deletes  -- yes
-			// append     -> raw-deletes -- yes
-			// append     -> flush-deletes -- yes
-			for _, blockID := range ids {
-				ts := types.TimestampToTS(ts)
-				iter := parts[i].NewRowsIter(ts, &blockID, true)
-				for iter.Next() {
-					entry := iter.Entry()
-					id, offset := entry.RowID.Decode()
-					deletes[id] = append(deletes[id], int(offset))
-				}
-				iter.Close()
-				// DN flush deletes rowids block
-				if err = tbl.LoadDeletesForBlock(string(blockID[:]), deletes, nil); err != nil {
-					return
-				}
-			}
-			for _, entry := range tbl.writes {
-				if entry.isGeneratedByTruncate() {
-					continue
-				}
-				// rawBatch detele rowId for Dn block
-				if entry.typ == DELETE && entry.fileName == "" {
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-					for _, v := range vs {
-						id, offset := v.Decode()
-						deletes[id] = append(deletes[id], int(offset))
-					}
-				}
-			}
-			// add append-block flush-deletes
-			for _, blockID := range appendIds {
-				// DN flush deletes rowids block
-				if err = tbl.LoadDeletesForBlock(string(blockID[:]), deletes, nil); err != nil {
-					return
-				}
-			}
+		if len(blocks) == 0 {
+			continue
 		}
-
-		var (
-			meta  objectio.ObjectMeta
-			mblks []ModifyBlockMeta
-		)
-		hasDeletes := len(deletes) > 0
-		for _, blk := range blocks {
-			need := true
-			if exprMono {
-				location := blk.MetaLocation()
-				if !objectio.IsSameObjectLocVsMeta(location, meta) {
-					if meta, err = loadObjectMeta(ctx, location, tbl.db.txn.proc.FileService, tbl.db.txn.proc.Mp()); err != nil {
-						return
-					}
-				}
-				need = needRead(ctx, expr, meta, blk, tbl.getTableDef(), columnMap, columns, maxCol, tbl.db.txn.proc)
-			}
-
-			if !need {
-				continue
-			}
-
-			if hasDeletes {
-				if rows, ok := deletes[blk.BlockID]; ok {
-					mblks = append(mblks, ModifyBlockMeta{blk, rows})
-				} else {
-					ranges = append(ranges, blockInfoMarshal(blk))
-				}
-			} else {
-				ranges = append(ranges, blockInfoMarshal(blk))
-			}
+		if err = tbl.rangesOnePart(
+			ctx,
+			tbl.db.txn.meta.SnapshotTS,
+			parts[i],
+			tbl.getTableDef(),
+			expr,
+			blocks,
+			&ranges,
+			&tbl.modifiedBlocks[i],
+			tbl.db.txn.proc,
+		); err != nil {
+			return
 		}
-		tbl.modifiedBlocks[i] = mblks
 	}
 
+	return
+}
+
+// this function is to filter out the blocks to be read and marshal them into a byte array
+func (tbl *txnTable) rangesOnePart(
+	ctx context.Context,
+	ts timestamp.Timestamp, // snapshot timestamp
+	state *logtailreplay.PartitionState, // snapshot state of this transaction
+	tableDef *plan.TableDef, // table definition (schema)
+	expr *plan.Expr, // filter expression
+	blocks []catalog.BlockInfo, // whole block list
+	ranges *[][]byte, // output marshaled block list after filtering
+	modifies *[]ModifyBlockMeta, // output modified blocks after filtering
+	proc *process.Process, // process of this transaction
+) (err error) {
+	deletes := make(map[types.Blockid][]int)
+	ids := make([]types.Blockid, len(blocks))
+	appendIds := make([]types.Blockid, 0, 1)
+
+	for i := range blocks {
+		// if cn can see a appendable block, this block must contain all updates
+		// in cache, no need to do merge read, BlockRead will filter out
+		// invisible and deleted rows with respect to the timestamp
+		if blocks[i].EntryState {
+			appendIds = append(appendIds, blocks[i].BlockID)
+		} else {
+			if blocks[i].CommitTs.ToTimestamp().Less(ts) { // hack
+				ids[i] = blocks[i].BlockID
+			}
+		}
+	}
+
+	// non-append -> flush-deletes -- yes
+	// non-append -> raw-deletes  -- yes
+	// append     -> raw-deletes -- yes
+	// append     -> flush-deletes -- yes
+	for _, blockID := range ids {
+		ts := types.TimestampToTS(ts)
+		iter := state.NewRowsIter(ts, &blockID, true)
+		for iter.Next() {
+			entry := iter.Entry()
+			id, offset := entry.RowID.Decode()
+			deletes[id] = append(deletes[id], int(offset))
+		}
+		iter.Close()
+		// DN flush deletes rowids block
+		if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
+			return
+		}
+	}
+
+	for _, entry := range tbl.writes {
+		if entry.isGeneratedByTruncate() {
+			continue
+		}
+		// rawBatch detele rowId for Dn block
+		if entry.typ == DELETE && entry.fileName == "" {
+			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+			for _, v := range vs {
+				id, offset := v.Decode()
+				deletes[id] = append(deletes[id], int(offset))
+			}
+		}
+	}
+
+	// add append-block flush-deletes
+	for _, blockID := range appendIds {
+		// DN flush deletes rowids block
+		if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
+			return
+		}
+	}
+
+	var (
+		isMonoExpr bool
+		meta       objectio.ObjectMeta
+		columnMap  map[int]int
+		defCols    []int
+		exprCols   []int
+		maxCol     int
+	)
+
+	hasDeletes := len(deletes) > 0
+
+	// check if expr is monotonic, if not, we can skip evaluating expr for each block
+	if isMonoExpr = plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
+		columnMap, defCols, exprCols, maxCol = plan2.GetColumnsByExpr(expr, tableDef)
+	}
+
+	for _, blk := range blocks {
+		need := true
+
+		// if expr is monotonic, we need evaluating expr for each block
+		if isMonoExpr {
+			location := blk.MetaLocation()
+
+			// if the blk is from a new object, we need to load the object meta
+			// object meta is loaded once for each object
+			if !objectio.IsSameObjectLocVsMeta(location, meta) {
+				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
+					return
+				}
+			}
+
+			// eval filter expr on the block
+			need = needRead(
+				ctx,
+				expr,
+				meta,
+				blk,
+				tableDef,
+				columnMap,
+				defCols,
+				exprCols,
+				maxCol,
+				proc)
+		}
+
+		// if the block is not needed, skip it
+		if !need {
+			continue
+		}
+
+		if hasDeletes {
+			// check if the block has deletes
+			// if any, store the block and its deletes in modifies
+			if rows, ok := deletes[blk.BlockID]; ok {
+				*modifies = append(*modifies, ModifyBlockMeta{blk, rows})
+			} else {
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+			}
+		} else {
+			// store the block in ranges
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+		}
+	}
 	return
 }
 
@@ -569,7 +633,7 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 // |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | DN Blcok
 // |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
 func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
-	blkId, typ_str := name[:len(name)-2], string(name[len(name)-1])
+	blkId, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])
 	typ, err := strconv.ParseInt(typ_str, 10, 64)
 	if err != nil {
 		return err
@@ -586,7 +650,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.dnStores[0]); err != nil {
 			return err
 		}
-		tbl.db.txn.blockId_dn_delete_metaLoc_batch[blkId] = append(tbl.db.txn.blockId_dn_delete_metaLoc_batch[blkId], copBat)
+		tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId] = append(tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blkId], copBat)
 	case deletion.CNBlockOffset:
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
 		tbl.db.txn.PutCnBlockDeletes(blkId, vs)
@@ -594,7 +658,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 		tbl.writeDnPartition(tbl.db.txn.proc.Ctx, bat)
 	case deletion.RawBatchOffset:
 		vs := vector.MustFixedCol[int64](bat.GetVector(0))
-		entry_bat := tbl.db.txn.blockId_raw_batch[blkId]
+		entry_bat := tbl.db.txn.blockId_raw_batch[*blkId]
 		entry_bat.AntiShrink(vs)
 		// reset rowId offset
 		rowIds := vector.MustFixedCol[types.Rowid](entry_bat.GetVector(0))
@@ -615,17 +679,16 @@ func (tbl *txnTable) compaction() error {
 		return err
 	}
 
-	var deletedIDs []string
+	var deletedIDs []*types.Blockid
 	defer tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
-	tbl.db.txn.deletedBlocks.iter(func(id string, deleteOffsets []int64) bool {
-		blkId := types.Blockid(*(*[20]byte)([]byte(id)))
-		pos := tbl.db.txn.cnBlkId_Pos[string(blkId[:])]
+	tbl.db.txn.deletedBlocks.iter(func(id *types.Blockid, deleteOffsets []int64) bool {
+		pos := tbl.db.txn.cnBlkId_Pos[*id]
 		// just do compaction for current txnTable
 		entry := tbl.db.txn.writes[pos.idx]
 		if !(entry.databaseId == tbl.db.databaseId && entry.tableId == tbl.tableId) {
 			return true
 		}
-		delete(tbl.db.txn.cnBlkId_Pos, string(blkId[:]))
+		delete(tbl.db.txn.cnBlkId_Pos, *id)
 		deletedIDs = append(deletedIDs, id)
 		if len(deleteOffsets) == 0 {
 			return true
@@ -851,7 +914,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 	rds := make([]engine.Reader, num)
 	blks := make([]*catalog.BlockInfo, len(ranges))
 	for i := range ranges {
-		blks[i] = BlockInfoUnmarshal(ranges[i])
+		blks[i] = catalog.DecodeBlockInfo(ranges[i])
 	}
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
@@ -924,16 +987,16 @@ func (tbl *txnTable) newReader(
 			}
 		}
 		// get all blocks in disk
-		meta_blocks := make(map[string]bool)
+		meta_blocks := make(map[types.Blockid]bool)
 		if len(tbl.blockInfos) > 0 {
 			for _, blk := range tbl.blockInfos[0] {
-				meta_blocks[string(blk.BlockID[:])] = true
+				meta_blocks[blk.BlockID] = true
 			}
 		}
 
 		for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
 			if !meta_blocks[blkId] {
-				tbl.LoadDeletesForBlock(blkId, nil, deletes)
+				tbl.LoadDeletesForBlock(&blkId, nil, deletes)
 			}
 		}
 		// add add rawBatchRowId deletes info
@@ -948,7 +1011,7 @@ func (tbl *txnTable) newReader(
 					continue
 				}
 				blkId := vs[0].GetBlockid()
-				if !meta_blocks[string(blkId[:])] {
+				if !meta_blocks[*blkId] {
 					for _, v := range vs {
 						deletes[v] = 0
 					}
@@ -1174,6 +1237,8 @@ func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 	return tbl.localTS
 }
 
+// get the table's snapshot.
+// it is only initialized once for a transaction and will not change.
 func (tbl *txnTable) getParts(ctx context.Context) ([]*logtailreplay.PartitionState, error) {
 	if tbl._parts == nil {
 		if err := tbl.updateLogtail(ctx); err != nil {
@@ -1184,31 +1249,37 @@ func (tbl *txnTable) getParts(ctx context.Context) ([]*logtailreplay.PartitionSt
 	return tbl._parts, nil
 }
 
-func (tbl *txnTable) updateBlockInfos(ctx context.Context, expr *plan.Expr) error {
+func (tbl *txnTable) updateBlockInfos(ctx context.Context, expr *plan.Expr) (err error) {
 	tbl.dnList = []int{0}
+
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	// check if the table is not created in this txn, and the block infos are not updated, then update:
+	// 1. update logtail
+	// 2. generate block infos
+	// 3. update the blockInfosUpdated and blockInfos fields of the table
 	if !created && !tbl.blockInfosUpdated {
-		if err := tbl.updateLogtail(ctx); err != nil {
-			return err
+		if err = tbl.updateLogtail(ctx); err != nil {
+			return
 		}
-		blocks, err := tbl.db.txn.getBlockInfos(ctx, tbl)
-		if err != nil {
-			return err
+		var blocks [][]catalog.BlockInfo
+		if blocks, err = tbl.db.txn.getBlockInfos(ctx, tbl); err != nil {
+			return
 		}
 		tbl.blockInfos = blocks
 		tbl.blockInfosUpdated = true
 	}
-	return nil
+	return
 }
 
-func (tbl *txnTable) updateLogtail(ctx context.Context) error {
-	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
-	if created {
-		return nil
+func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
+	// if the logtail is updated, skip
+	if tbl.logtailUpdated {
+		return
 	}
 
-	if tbl.logtailUpdated {
-		return nil
+	// if the table is created in this txn, skip
+	if _, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId)); created {
+		return
 	}
 
 	tableId := tbl.tableId
@@ -1244,14 +1315,21 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) error {
 		if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return err
 		}
-		err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
-		if err != nil {
-			return err
+		if err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
+			return
 		}
 	} else {
-		if err := tbl.db.txn.engine.UpdateOfPull(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
-			tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-			return err
+		if err = tbl.db.txn.engine.UpdateOfPull(
+			ctx,
+			tbl.db.txn.dnStores[:1],
+			tbl,
+			tbl.db.txn.op,
+			tbl.primaryIdx,
+			tbl.db.databaseId,
+			tableId,
+			tbl.db.txn.meta.SnapshotTS,
+		); err != nil {
+			return
 		}
 	}
 

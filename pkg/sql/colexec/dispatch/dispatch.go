@@ -17,7 +17,6 @@ package dispatch
 import (
 	"bytes"
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -98,7 +97,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	cnt := len(arg.RemoteRegs)
 	for cnt > 0 {
-		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), time.Second*300)
+		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), waitNotifyTimeout)
 		defer timeoutCancel()
 		select {
 		case <-timeoutCtx.Done():

@@ -22,10 +22,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	maxMessageSizeToMoRpc = 64 * mpool.MB
+	procTimeout           = 10000 * time.Second
+	waitNotifyTimeout     = 45 * time.Second
+
+	// send to all reg functions
+	SendToAllLocalFunc = iota
+	SendToAllRemoteFunc
+	SendToAllFunc
+
+	// send to any reg functions
+	SendToAnyLocalFunc
+	SendToAnyRemoteFunc
+	SendToAnyFunc
 )
 
 type WrapperClientSession struct {
@@ -70,7 +87,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			arg.waitRemoteRegsReady(proc)
 		}
 		for _, r := range arg.ctr.remoteReceivers {
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
 			_ = cancel
 			message := cnclient.AcquireMessage()
 			{
@@ -80,7 +97,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 				message.Uuid = r.uuid[:]
 			}
 			if pipelineFailed {
-				err := moerr.NewInternalErrorNoCtx("pipeline failed")
+				err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
 				message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
 			}
 			r.cs.Write(timeoutCtx, message)
@@ -101,9 +118,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	}
 
 	for i := range arg.LocalRegs {
-		select {
-		case <-arg.LocalRegs[i].Ctx.Done():
-		case arg.LocalRegs[i].Ch <- nil:
+		if !pipelineFailed {
+			select {
+			case <-arg.LocalRegs[i].Ctx.Done():
+			case arg.LocalRegs[i].Ch <- nil:
+			}
 		}
 		close(arg.LocalRegs[i].Ch)
 	}
