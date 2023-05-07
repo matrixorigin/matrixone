@@ -369,16 +369,17 @@ func (tbl *txnTable) rangesOnePart(
 		isMonoExpr bool
 		meta       objectio.ObjectMeta
 		columnMap  map[int]int
-		defCols    []int
-		exprCols   []int
-		maxCol     int
+		// defCols    []int
+		// exprCols   []int
+		// maxCol     int
 	)
 
 	hasDeletes := len(deletes) > 0
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	if isMonoExpr = plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
-		columnMap, defCols, exprCols, maxCol = plan2.GetColumnsByExpr(expr, tableDef)
+		columnMap, _, _, _ = plan2.GetColumnsByExpr(expr, tableDef)
+		// columnMap, defCols, exprCols, maxCol = plan2.GetColumnsByExpr(expr, tableDef)
 	}
 
 	for _, blk := range blocks {
@@ -397,17 +398,18 @@ func (tbl *txnTable) rangesOnePart(
 			}
 
 			// eval filter expr on the block
-			need = needRead(
-				ctx,
-				expr,
-				meta,
-				blk,
-				tableDef,
-				columnMap,
-				defCols,
-				exprCols,
-				maxCol,
-				proc)
+			need = evalFilterExprWithZonemap(ctx, meta.GetBlockMeta(uint32(location.ID())), expr, columnMap, proc)
+			// need = needRead(
+			// 	ctx,
+			// 	expr,
+			// 	meta,
+			// 	blk,
+			// 	tableDef,
+			// 	columnMap,
+			// 	defCols,
+			// 	exprCols,
+			// 	maxCol,
+			// 	proc)
 		}
 
 		// if the block is not needed, skip it

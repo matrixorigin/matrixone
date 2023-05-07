@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -95,6 +96,21 @@ func buildColumnsZMVectors(
 			return
 		}
 		vecs[i] = vec
+	}
+	return
+}
+
+func evalNoColumnFilterExpr(
+	ctx context.Context,
+	expr *plan.Expr,
+	proc *process.Process,
+) (selected bool) {
+	errCtx := errutil.ContextWithNoReport(ctx, true)
+	bat := batch.NewWithSize(0)
+	defer bat.Clean(proc.Mp())
+	var err error
+	if selected, err = plan2.EvalFilterExpr(errCtx, expr, bat, proc); err != nil {
+		selected = true
 	}
 	return
 }

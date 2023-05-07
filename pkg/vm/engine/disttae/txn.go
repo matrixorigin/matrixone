@@ -423,6 +423,31 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
+func evalFilterExprWithZonemap(
+	ctx context.Context,
+	meta objectio.ColumnMetaFetcher,
+	expr *plan.Expr,
+	columnMap map[int]int,
+	proc *process.Process,
+) (selected bool) {
+	if expr == nil {
+		selected = true
+		return
+	}
+	errCtx := errutil.ContextWithNoReport(ctx, true)
+	if len(columnMap) == 0 {
+		selected = evalNoColumnFilterExpr(errCtx, expr, proc)
+		return
+	}
+	zm := colexec.EvalFilterByZonemap(errCtx, meta, expr, columnMap, proc)
+	if !zm.IsInited() || zm.GetType() != types.T_bool {
+		selected = true
+	} else {
+		selected = types.DecodeBool(zm.GetMaxBuf())
+	}
+	return
+}
+
 // needRead determine if a block needs to be read
 func needRead(
 	ctx context.Context,

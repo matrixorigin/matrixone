@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -35,6 +36,10 @@ type StaticFilter = index.StaticFilter
 
 var NewZM = index.NewZM
 var BuildZM = index.BuildZM
+
+type ColumnMetaFetcher interface {
+	MustGetColumn(idx uint16) ColumnMeta
+}
 
 type WriteOptions struct {
 	Type WriteType
