@@ -2554,6 +2554,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 			err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
+				mce.GetSession().RemovePrepareStmt(prepareStmt.Name)
 				goto handleFailed
 			}
 		case *tree.PrepareString:
@@ -2564,6 +2565,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 			err = authenticateUserCanExecutePrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
+				mce.GetSession().RemovePrepareStmt(prepareStmt.Name)
 				goto handleFailed
 			}
 		case *tree.Deallocate:
