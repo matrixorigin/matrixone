@@ -1,4 +1,5 @@
 drop database if exists test02;
+drop database if exists db1;
 drop database if exists test03;
 drop database if exists procedure_test;
 create account test_tenant_1 admin_name 'test_account' identified by '111';
@@ -26,8 +27,8 @@ sub_db1
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -66,8 +67,8 @@ sub_db1
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 drop publication pubname1;
 show databases;
 Database
@@ -86,8 +87,8 @@ sub_db1
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 use sub_db1;
 internal error: there is no publication pubname1
 drop database sub_db1;
@@ -102,8 +103,8 @@ sub_db1
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -112,11 +113,11 @@ create database sub_db1 from sys publication pubname2;
 show databases;
 Database
 sub_db1
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
+mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -142,8 +143,8 @@ sub_db1
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -151,11 +152,11 @@ t3
 show databases;
 Database
 sub_db1
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
+mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -181,19 +182,19 @@ sub_db1
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
 show databases;
 Database
 sub_db1
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
+mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -226,8 +227,8 @@ sub_db4
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -239,11 +240,11 @@ create database sub_db4 from sys publication pubname4;
 show databases;
 Database
 sub_db4
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
+mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -300,8 +301,8 @@ test_db_1
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -309,11 +310,11 @@ t4
 show databases;
 Database
 sub_db4
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
+mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -352,8 +353,8 @@ test_db_1
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -361,11 +362,11 @@ t4
 show databases;
 Database
 sub_db4
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
+mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -415,16 +416,16 @@ Database
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 drop database sub_db4;
 show databases;
 Database
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
+mo_catalog
 drop database sub_db4;
 show databases;
 Database
@@ -466,8 +467,8 @@ Database
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 drop database sub_db5;
 show databases;
 Database
@@ -481,11 +482,11 @@ mo_catalog
 drop database sub_db5;
 show databases;
 Database
-mo_catalog
 system
 system_metrics
 information_schema
 mysql
+mo_catalog
 drop database sub_db5;
 show databases;
 Database
@@ -545,10 +546,10 @@ null    null    2    b
 null    null    3    c
 select * from t3 union select * from sub_db1.t1;
 a    b
-10    aa
 1    a
 2    b
 3    c
+10    aa
 drop publication pubname7;
 drop database db7;
 show databases;
@@ -556,8 +557,8 @@ Database
 system
 system_metrics
 information_schema
-mo_catalog
 mysql
+mo_catalog
 drop database sub_db1;
 drop database db1;
 show databases;
@@ -597,7 +598,8 @@ CREATE SEQUENCE seq_id INCREMENT BY 1 MAXVALUE 1000 START with 1;
 create database sub_db1 from sys publication pubname7;
 use sub_db1;
 show tables;
-[unknown result because it is related to issue#9085]
+Tables_in_sub_db1
+t1
 SELECT NEXTVAL('seq_id');
 SQL parser error: table "seq_id" does not exist
 drop publication pubname7;
@@ -605,7 +607,7 @@ drop database db7;
 drop database sub_db1;
 create database db100;
 create publication pubname8 database db100 commment 'publication failed';
-[unknown result because it is related to issue#9076]
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " commment 'publication failed';";
 drop database db100;
 create database sub_db7 from sys publication pubname7;
 internal error: there is no publication pubname7
@@ -622,29 +624,25 @@ drop publication test_pubname;
 drop database test_db;
 [unknown result because it is related to issue#9024]
 create database sub_db4 from no_exists publication pubname4;
-[unknown result because it is related to issue#9031]
+internal error: there is no publication account no_exists
 create publication test_pubname database mo_task account test_account comment 'publication to test_account tenant';
-[unknown result because it is related to issue#9037]
+internal error: invalid database name 'mo_task', not support publishing system database
 create publication test_pubname database information_schema account test_account comment 'publication to test_account tenant';
-[unknown result because it is related to issue#9037]
+internal error: invalid database name 'information_schema', not support publishing system database
 create publication test_pubname database mysql account test_account comment 'publication to test_account tenant';
-[unknown result because it is related to issue#9037]
+internal error: invalid database name 'mysql', not support publishing system database
 create publication test_pubname database system_metrics account test_account comment 'publication to test_account tenant';
-[unknown result because it is related to issue#9037]
+internal error: invalid database name 'system_metrics', not support publishing system database
 create publication test_pubname database system account test_account comment 'publication to test_account tenant';
-[unknown result because it is related to issue#9037]
+internal error: invalid database name 'system', not support publishing system database
 create publication test_pubname database mo_catalog account test_account comment 'publication to test_account tenant';
-[unknown result because it is related to issue#9037]
+internal error: invalid database name 'mo_catalog', not support publishing system database
 create database db5;
-[unknown result because it is related to issue#9045]
 create publication pubname5 database db5 comment 'publication to all tenant';
-[unknown result because it is related to issue#9045]
 create database sub_db5 from sys publication pubname5;
-[unknown result because it is related to issue#9045]
+internal error: can not subscribe to self
 drop publication pubname5;
-[unknown result because it is related to issue#9045]
 drop database db5;
-[unknown result because it is related to issue#9045]
 show publications;
 Name    Database
 show subscriptions;
