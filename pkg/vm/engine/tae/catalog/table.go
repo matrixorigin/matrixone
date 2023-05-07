@@ -164,10 +164,10 @@ func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
 	return entry.rows.Add(^(delta - 1))
 }
 
-func (entry *TableEntry) GetSegmentByID(id types.Uuid) (seg *SegmentEntry, err error) {
+func (entry *TableEntry) GetSegmentByID(id *types.Segmentid) (seg *SegmentEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
-	node := entry.entries[id]
+	node := entry.entries[*id]
 	if node == nil {
 		return nil, moerr.GetOkExpectedEOB()
 	}
@@ -187,9 +187,9 @@ func (entry *TableEntry) CreateSegment(
 	opts *objectio.CreateSegOpt) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	var id types.Uuid
+	var id *objectio.Segmentid
 	if opts != nil && opts.Id != nil {
-		id = *opts.Id
+		id = opts.Id
 	} else {
 		id = objectio.NewSegmentid()
 	}
@@ -332,6 +332,7 @@ func (entry *TableEntry) LastNonAppendableSegmemt() (seg *SegmentEntry) {
 
 func (entry *TableEntry) AsCommonID() *common.ID {
 	return &common.ID{
+		DbID:    entry.GetDB().ID,
 		TableID: entry.ID,
 	}
 }
@@ -372,7 +373,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	return err
 }
 
-func (entry *TableEntry) DropSegmentEntry(id types.Uuid, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
+func (entry *TableEntry) DropSegmentEntry(id *types.Segmentid, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
 	seg, err := entry.GetSegmentByID(id)
 	if err != nil {
 		return

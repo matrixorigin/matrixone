@@ -181,10 +181,10 @@ func (h *txnRelation) AddBlksWithMetaLoc(
 	)
 }
 
-func (h *txnRelation) GetSegment(id types.Uuid) (seg handle.Segment, err error) {
+func (h *txnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error) {
 	fp := h.table.entry.AsCommonID()
-	fp.SegmentID = id
-	return h.Txn.GetStore().GetSegment(h.table.entry.GetDB().ID, fp)
+	fp.SetSegmentID(id)
+	return h.Txn.GetStore().GetSegment(fp)
 }
 
 func (h *txnRelation) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
@@ -195,10 +195,10 @@ func (h *txnRelation) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment
 	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
-func (h *txnRelation) SoftDeleteSegment(id types.Uuid) (err error) {
+func (h *txnRelation) SoftDeleteSegment(id *types.Segmentid) (err error) {
 	fp := h.table.entry.AsCommonID()
-	fp.SegmentID = id
-	return h.Txn.GetStore().SoftDeleteSegment(h.table.entry.GetDB().ID, fp)
+	fp.SetSegmentID(id)
+	return h.Txn.GetStore().SoftDeleteSegment(fp)
 }
 
 func (h *txnRelation) MakeSegmentItOnSnap() handle.SegmentIt {
@@ -270,47 +270,38 @@ func (h *txnRelation) DeleteByFilter(filter *handle.Filter) (err error) {
 }
 
 func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
-	id := &common.ID{
-		TableID: h.table.entry.ID,
-	}
+	id := h.table.entry.AsCommonID()
 	var row uint32
-	dbId := h.table.entry.GetDB().ID
 	err = containers.ForeachVectorWindow(
 		keys, 0, keys.Length(),
 		func(rid types.Rowid, _ bool, _ int) (err error) {
-			id.SegmentID, id.BlockID, row = model.DecodePhyAddrKey(rid)
-			err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
+			id.BlockID, row = model.DecodePhyAddrKey(&rid)
+			err = h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
 			return
 		}, nil)
 	return
 }
 
 func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
-	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
-	id := &common.ID{
-		TableID:   h.table.entry.ID,
-		SegmentID: sid,
-		BlockID:   bid,
-	}
-	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, row, row, handle.DT_Normal)
+	bid, row := model.DecodePhyAddrKeyFromValue(key)
+	id := h.table.entry.AsCommonID()
+	id.BlockID = bid
+	return h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
 }
 
 func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error {
-	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, start, end, dt)
+	return h.Txn.GetStore().RangeDelete(id, start, end, dt)
 }
 
 func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, bool, error) {
-	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
-	id := &common.ID{
-		TableID:   h.table.entry.ID,
-		SegmentID: sid,
-		BlockID:   bid,
-	}
-	return h.Txn.GetStore().GetValue(h.table.entry.GetDB().ID, id, row, uint16(col))
+	bid, row := model.DecodePhyAddrKeyFromValue(key)
+	id := h.table.entry.AsCommonID()
+	id.BlockID = bid
+	return h.Txn.GetStore().GetValue(id, row, uint16(col))
 }
 
 func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (any, bool, error) {
-	return h.Txn.GetStore().GetValue(h.table.entry.GetDB().ID, id, row, col)
+	return h.Txn.GetStore().GetValue(id, row, col)
 }
 
 func (h *txnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {

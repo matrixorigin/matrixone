@@ -683,7 +683,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			}
 			defer func(streamSender morpc.Stream) {
 				close(reg.Ch)
-				_ = streamSender.Close()
+				_ = streamSender.Close(false)
 			}(streamSender)
 
 			c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
