@@ -117,7 +117,7 @@ func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
 	if col := len(w.seqnums.Seqs); col == 0 {
 		w.seqnums.InitWithColCnt(len(batch.Vecs))
 	} else if col != len(batch.Vecs) {
-		panic(fmt.Sprintf("Unmatched Write Batch, expect %d, get %d", col, len(batch.Vecs)))
+		panic(fmt.Sprintf("Unmatched Write Batch, expect %d, get %d, %v", col, len(batch.Vecs), batch.Attrs))
 	}
 	block := NewBlock(w.seqnums)
 	w.AddBlock(block, batch, w.seqnums)
