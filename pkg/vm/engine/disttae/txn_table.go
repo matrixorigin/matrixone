@@ -355,7 +355,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	hasDeletes := len(deletes) > 0
 
-	// check if expr is monotonic, if so, we can skip evaluating expr for each block
+	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	if isMonoExpr = plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
 		columnMap, defCols, exprCols, maxCol = plan2.GetColumnsByExpr(expr, tableDef)
 	}
@@ -363,12 +363,12 @@ func (tbl *txnTable) rangesOnePart(
 	for _, blk := range blocks {
 		need := true
 
-		// if expr is monotonic, we can skip evaluating expr for each block
+		// if expr is monotonic, we need evaluating expr for each block
 		if isMonoExpr {
 			location := blk.MetaLocation()
 
-			// if the blk is from a new object, we need to load the meta
-			// meta is load only for each object
+			// if the blk is from a new object, we need to load the object meta
+			// object meta is loaded once for each object
 			if !objectio.IsSameObjectLocVsMeta(location, meta) {
 				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
 					return
@@ -396,12 +396,9 @@ func (tbl *txnTable) rangesOnePart(
 		if hasDeletes {
 			if rows, ok := deletes[blk.BlockID]; ok {
 				*modifies = append(*modifies, ModifyBlockMeta{blk, rows})
-			} else {
-				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 			}
-		} else {
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 		}
+		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
 	return
 }
