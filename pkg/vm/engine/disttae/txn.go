@@ -154,7 +154,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			size += uint64(txn.writes[i].bat.Size())
 		}
 	}
-	if offset > 0 && size < txn.workspaceSize {
+	if size < txn.workspaceSize {
 		txn.Unlock()
 		return nil
 	}
