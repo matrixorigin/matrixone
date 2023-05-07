@@ -28,7 +28,7 @@ func getLocation(name ObjectName) Location {
 func BenchmarkDecode(b *testing.B) {
 	var location Location
 	uuid, _ := types.BuildUuid()
-	name := BuildObjectName(uuid, 1)
+	name := BuildObjectName(&uuid, 1)
 	b.Run("build", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -48,12 +48,12 @@ func BenchmarkDecode(b *testing.B) {
 
 func BenchmarkCheckSame(b *testing.B) {
 	uid, _ := types.BuildUuid()
-	fname := BuildObjectName(uid, 0)
+	fname := BuildObjectName(&uid, 0)
 	blkID := NewBlockid(&uid, 0, 0)
 	b.Run("is-same-obj", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			IsBlockInObject(&blkID, &fname)
+			IsBlockInObject(blkID, &fname)
 		}
 	})
 	var segid Segmentid

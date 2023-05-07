@@ -200,7 +200,7 @@ func (blk *block) GetByFilter(
 		panic("logic error")
 	}
 	if blk.meta.GetSchema().SortKey == nil {
-		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		_, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
 

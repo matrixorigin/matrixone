@@ -51,7 +51,7 @@ type InsertNode interface {
 	Rows() uint32
 	GetValue(col int, row uint32) (any, bool, error)
 	MakeCommand(uint32) (txnif.TxnCmd, error)
-	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
+	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
 	LengthWithDeletes(appended, toAppend uint32) uint32
 	OffsetWithDeletes(count uint32) uint32
@@ -63,7 +63,6 @@ type InsertNode interface {
 type appendInfo struct {
 	seq              uint32
 	srcOff, srcLen   uint32
-	dbid             uint64
 	dest             common.ID
 	destOff, destLen uint32
 }
@@ -78,9 +77,6 @@ func EncodeAppendInfo(info *appendInfo) []byte {
 
 func (info *appendInfo) GetDest() *common.ID {
 	return &info.dest
-}
-func (info *appendInfo) GetDBID() uint64 {
-	return info.dbid
 }
 func (info *appendInfo) GetSrcOff() uint32 {
 	return info.srcOff

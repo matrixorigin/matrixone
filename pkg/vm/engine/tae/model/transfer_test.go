@@ -27,10 +27,10 @@ import (
 func TestTransferPage(t *testing.T) {
 	sid := objectio.NewSegmentid()
 	src := common.ID{
-		BlockID: objectio.NewBlockid(&sid, 1, 0),
+		BlockID: *objectio.NewBlockid(sid, 1, 0),
 	}
 	dest := common.ID{
-		BlockID: objectio.NewBlockid(&sid, 2, 0),
+		BlockID: *objectio.NewBlockid(sid, 2, 0),
 	}
 	prefix := dest.BlockID[:]
 
@@ -64,7 +64,7 @@ func TestTransferPage(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		rowID, ok := memo2.Transfer(uint32(i))
 		assert.True(t, ok)
-		_, blockId, offset := DecodePhyAddrKey(rowID)
+		blockId, offset := DecodePhyAddrKey(&rowID)
 		assert.Equal(t, dest.BlockID, blockId)
 		assert.Equal(t, uint32(i), offset)
 	}
@@ -76,8 +76,8 @@ func TestTransferTable(t *testing.T) {
 	defer table.Close()
 	sid := objectio.NewSegmentid()
 
-	id1 := common.ID{BlockID: objectio.NewBlockid(&sid, 1, 0)}
-	id2 := common.ID{BlockID: objectio.NewBlockid(&sid, 2, 0)}
+	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
+	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
 	prefix := id2.BlockID[:]
 

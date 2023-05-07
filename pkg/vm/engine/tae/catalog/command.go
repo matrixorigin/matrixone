@@ -118,7 +118,6 @@ type Node interface {
 type EntryCommand[T BaseNode[T], N Node] struct {
 	*txnbase.BaseCustomizedCmd
 	cmdType  uint16
-	DBID     uint64
 	ID       *common.ID
 	mvccNode *MVCCNode[T]
 	node     N
@@ -137,7 +136,6 @@ func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType uint16, mvccNodeFactory fun
 
 func newBlockCmd(id uint32, cmdType uint16, entry *BlockEntry) *EntryCommand[*MetadataMVCCNode, *BlockNode] {
 	impl := &EntryCommand[*MetadataMVCCNode, *BlockNode]{
-		DBID:     entry.GetSegment().GetTable().GetDB().ID,
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
@@ -149,7 +147,6 @@ func newBlockCmd(id uint32, cmdType uint16, entry *BlockEntry) *EntryCommand[*Me
 
 func newSegmentCmd(id uint32, cmdType uint16, entry *SegmentEntry) *EntryCommand[*MetadataMVCCNode, *SegmentNode] {
 	impl := &EntryCommand[*MetadataMVCCNode, *SegmentNode]{
-		DBID:     entry.GetTable().GetDB().ID,
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
@@ -161,7 +158,6 @@ func newSegmentCmd(id uint32, cmdType uint16, entry *SegmentEntry) *EntryCommand
 
 func newTableCmd(id uint32, cmdType uint16, entry *TableEntry) *EntryCommand[*TableMVCCNode, *TableNode] {
 	impl := &EntryCommand[*TableMVCCNode, *TableNode]{
-		DBID:     entry.GetDB().ID,
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
@@ -173,8 +169,7 @@ func newTableCmd(id uint32, cmdType uint16, entry *TableEntry) *EntryCommand[*Ta
 
 func newDBCmd(id uint32, cmdType uint16, entry *DBEntry) *EntryCommand[*EmptyMVCCNode, *DBNode] {
 	impl := &EntryCommand[*EmptyMVCCNode, *DBNode]{
-		DBID:     entry.ID,
-		ID:       &common.ID{},
+		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		node:     entry.DBNode,
 		mvccNode: entry.GetLatestNodeLocked(),
@@ -225,21 +220,21 @@ func (cmd *EntryCommand[T, N]) GetTs() types.TS {
 
 func (cmd *EntryCommand[T, N]) IDString() string {
 	s := ""
-	dbid, id := cmd.GetID()
+	id := cmd.GetID()
 	switch cmd.cmdType {
 	case IOET_WALTxnCommand_Database:
-		s = fmt.Sprintf("%sDB=%d", s, dbid)
+		s = fmt.Sprintf("%sCommonID=%s", s, id.DBString())
 	case IOET_WALTxnCommand_Table:
-		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.TableString())
+		s = fmt.Sprintf("%sCommonID=%s", s, id.TableString())
 	case IOET_WALTxnCommand_Segment:
-		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.SegmentString())
+		s = fmt.Sprintf("%sCommonID=%s", s, id.SegmentString())
 	case IOET_WALTxnCommand_Block:
-		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.BlockString())
+		s = fmt.Sprintf("%sCommonID=%s", s, id.BlockString())
 	}
 	return s
 }
-func (cmd *EntryCommand[T, N]) GetID() (uint64, *common.ID) {
-	return cmd.DBID, cmd.ID
+func (cmd *EntryCommand[T, N]) GetID() *common.ID {
+	return cmd.ID
 }
 
 func (cmd *EntryCommand[T, N]) String() string {
@@ -279,10 +274,6 @@ func (cmd *EntryCommand[T, N]) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += 2
 	var sn2 int
-	if sn2, err = w.Write(types.EncodeUint64(&cmd.DBID)); err != nil {
-		return
-	}
-	n += int64(sn2)
 	if sn2, err = w.Write(common.EncodeID(cmd.ID)); err != nil {
 		return
 	}
@@ -308,10 +299,6 @@ func (cmd *EntryCommand[T, N]) MarshalBinary() (buf []byte, err error) {
 }
 func (cmd *EntryCommand[T, N]) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn2 int
-	if sn2, err = r.Read(types.EncodeUint64(&cmd.DBID)); err != nil {
-		return
-	}
-	n += int64(sn2)
 	if sn2, err = r.Read(common.EncodeID(cmd.ID)); err != nil {
 		return
 	}
