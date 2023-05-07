@@ -51,7 +51,7 @@ func NewSqlWriter(ctx context.Context, tbl *table.Table, csv *CSVWriter) *Defaul
 		semaphore: make(chan struct{}, 3),
 		csvWriter: csv,
 		tbl:       tbl,
-		buffer:    make([][]string, 0, BUFFER_FLUSH_LIMIT*5),
+		buffer:    make([][]string, 0, BUFFER_FLUSH_LIMIT*3),
 	}
 }
 
@@ -72,7 +72,7 @@ func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 	sw.buffer = append(sw.buffer, row.ToStrings())
 
 	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT {
-		if err := sw.dumpBufferToCSV(); err != nil {
+		if _, err := sw.flushBuffer(); err != nil {
 			return err
 		}
 	}
@@ -83,15 +83,12 @@ func (sw *DefaultSqlWriter) flushBuffer() (int, error) {
 	if len(sw.buffer) == 0 {
 		return 0, nil
 	}
-	// convert sw.buffer to [][]string
 	cnt, err := sw.WriteRowRecords(sw.buffer, sw.tbl, false)
 	if err != nil {
 		if err := sw.dumpBufferToCSV(); err != nil {
 			return 0, err
-		} else {
-			sw.buffer = sw.buffer[:0] // Clear the buffer
-			return cnt, nil
 		}
+		return cnt, nil
 	}
 	sw.buffer = sw.buffer[:0] // Clear the buffer
 	return cnt, nil
@@ -110,11 +107,13 @@ func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
 }
 
 func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
-	sw.dumpBufferToCSV()
+	sw.flushBuffer()
 	cnt, err := sw.csvWriter.FlushAndClose()
 	if err != nil {
 		return 0, err
 	}
+	sw.buffer = nil
+	sw.tbl = nil
 	return cnt, err
 }
 
