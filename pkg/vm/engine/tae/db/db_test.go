@@ -5266,6 +5266,23 @@ func TestAlterRenameTbl(t *testing.T) {
 	schema.Constraint = []byte("start version")
 	schema.Comment = "comment version"
 
+	{
+		var err error
+		txn, _ := tae.StartTxn(nil)
+		txn.CreateDatabase("xx", "", "")
+		require.NoError(t, txn.Commit())
+		txn1, _ := tae.StartTxn(nil)
+		txn2, _ := tae.StartTxn(nil)
+
+		db, _ := txn1.GetDatabase("xx")
+		_, err = db.CreateRelation(schema)
+		require.NoError(t, err)
+
+		db1, _ := txn2.GetDatabase("xx")
+		_, err = db1.CreateRelation(schema)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+	}
+
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db", "", "")
 	created, _ := db.CreateRelation(schema)

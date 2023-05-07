@@ -219,6 +219,9 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		if rename.OldName != s.Name {
 			return moerr.NewInternalErrorNoCtx("unmatched old schema name")
 		}
+		if s.Extra.OldName == "" {
+			s.Extra.OldName = s.Name
+		}
 		s.Name = rename.NewName
 	default:
 		return moerr.NewNYINoCtx("unsupported alter kind: %v", req.Kind)

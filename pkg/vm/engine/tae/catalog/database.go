@@ -66,7 +66,8 @@ type DBEntry struct {
 	fullName string
 	isSys    bool
 
-	entries   map[uint64]*common.GenericDLNode[*TableEntry]
+	entries map[uint64]*common.GenericDLNode[*TableEntry]
+	// nameNodes[ABC] is a linked list of all table entries had been once named as ABC
 	nameNodes map[string]*nodeList[*TableEntry]
 	link      *common.GenericSortedDList[*TableEntry]
 
@@ -395,24 +396,22 @@ func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn
 	return created, err
 }
 
-func (e *DBEntry) RenameTableInTxn(old, new string, tid uint64, txn txnif.AsyncTxn, first bool) error {
-	tbl, err := e.TxnGetTableEntryByName(new, txn)
-	// if err is not nil, txn can see the name, it is used
-	if err == nil {
-		return moerr.GetOkExpectedDup()
-	}
+func (e *DBEntry) RenameTableInTxn(old, new string, tid uint64, tenantID uint32, txn txnif.AsyncTxn, first bool) error {
 	e.Lock()
 	defer e.Unlock()
+	newFullName := genTblFullName(tenantID, new)
+	if err := e.checkAddNameConflictLocked(new, e.nameNodes[newFullName], txn); err != nil {
+		return err
+	}
 
-	accId := txn.GetTenantID()
+	// if alter again and again in the same txn, previous temp name should be deleted.
 	if !first {
-		e.removeNameIndexLocked(genTblFullName(accId, old), tid)
+		e.removeNameIndexLocked(genTblFullName(tenantID, old), tid)
 	}
 	// make sure every name node has up to one table id. check case alter A -> B -> A
-	if tbl != nil && tbl.ID == tid {
-		e.removeNameIndexLocked(genTblFullName(accId, new), tid)
-	}
-	e.addNameIndexLocked(genTblFullName(accId, new), tid)
+	e.removeNameIndexLocked(newFullName, tid)
+	// add to the head of linked list
+	e.addNameIndexLocked(newFullName, tid)
 
 	return nil
 }
@@ -461,12 +460,28 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	if n, ok := e.entries[table.ID]; !ok {
 		return moerr.GetOkExpectedEOB()
 	} else {
-		nn := e.nameNodes[table.GetFullName()]
-		nn.DeleteNode(table.ID)
+		table.RLock()
+		defer table.RUnlock()
+		prevname := ""
+		// clean all name because RemoveEntry can be called by GC、
+		table.LoopChain(func(m *MVCCNode[*TableMVCCNode]) bool {
+			if prevname == m.BaseNode.Schema.Name {
+				return true
+			}
+			prevname = m.BaseNode.Schema.Name
+			tenantID := m.BaseNode.Schema.AcInfo.TenantID
+			fullname := genTblFullName(tenantID, prevname)
+			nn := e.nameNodes[fullname]
+			if nn == nil {
+				return true
+			}
+			nn.DeleteNode(table.ID)
+			if nn.Length() == 0 {
+				delete(e.nameNodes, fullname)
+			}
+			return true
+		})
 		e.link.Delete(n)
-		if nn.Length() == 0 {
-			delete(e.nameNodes, table.GetFullName())
-		}
 		delete(e.entries, table.ID)
 	}
 	return
@@ -505,10 +520,9 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 		nn.CreateNode(table.ID)
 	} else {
 		if !skipDedup {
-			exist, _ := nn.TxnGetNodeLocked(txn, table.GetLastestSchema().Name)
-			if exist != nil {
-				// name is used
-				return moerr.GetOkExpectedDup()
+			err = e.checkAddNameConflictLocked(table.GetLastestSchema().Name, nn, txn)
+			if err != nil {
+				return
 			}
 		}
 		n := e.link.Insert(table)
@@ -516,6 +530,22 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 		nn.CreateNode(table.ID)
 	}
 	return
+}
+
+func (e *DBEntry) checkAddNameConflictLocked(name string, nn *nodeList[*TableEntry], txn txnif.TxnReader) (err error) {
+	if nn == nil {
+		return nil
+	}
+	// check ww conflict
+	tbl := nn.GetNode().GetPayload()
+	if err = tbl.ConflictCheck(txn); err != nil {
+		return
+	}
+	// check name dup
+	if existEntry, _ := nn.TxnGetNodeLocked(txn, name); existEntry != nil {
+		return moerr.GetOkExpectedDup()
+	}
+	return nil
 }
 
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {

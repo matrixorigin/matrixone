@@ -417,6 +417,12 @@ func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {
+	// Safety: in commit queue, that's ok without lock
+	t := entry.GetLatestNodeLocked()
+	if schema := t.BaseNode.Schema; schema.Extra.OldName != "" {
+		fullname := genTblFullName(schema.AcInfo.TenantID, schema.Name)
+		entry.GetDB().RollbackRenameTable(fullname, entry.ID)
+	}
 	var isEmpty bool
 	isEmpty, err = entry.BaseEntryImpl.PrepareRollback()
 	if err != nil {
@@ -531,8 +537,8 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.AsyncTxn, req
 	if req.Kind == apipb.AlterKind_RenameTable {
 		rename := req.GetRenameTable()
 		// udpate name index in db entry
-		err = entry.db.RenameTableInTxn(rename.OldName, rename.NewName, entry.ID, txn, isNewNode)
-		// TODO(aptend) update fullname?
+		tenantID := newSchema.AcInfo.TenantID
+		err = entry.db.RenameTableInTxn(rename.OldName, rename.NewName, entry.ID, tenantID, txn, isNewNode)
 	}
 	if isNewNode {
 		node.BaseNode.Schema.Version += 1

@@ -144,13 +144,13 @@ func (n *nodeList[T]) TxnGetNodeLocked(txn txnif.TxnReader, targetName string) (
 			return true
 		}
 		if dropped {
-			return false
+			return true
 		}
 		if targetName != visibleName {
-			return false
+			return true
 		}
 		dn = dlNode
-		return true
+		return false
 	}
 	n.ForEachNodes(fn)
 	if dn == nil && err == nil {
