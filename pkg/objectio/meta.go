@@ -37,6 +37,10 @@ func (o objectMetaV1) BlockHeader() BlockHeader {
 	return BlockHeader(o[:headerLen])
 }
 
+func (o objectMetaV1) MustGetColumn(idx uint16) ColumnMeta {
+	return GetObjectColumnMeta(idx, o[headerLen:])
+}
+
 func (o objectMetaV1) ObjectColumnMeta(idx uint16) ColumnMeta {
 	return GetObjectColumnMeta(idx, o[headerLen:])
 }
