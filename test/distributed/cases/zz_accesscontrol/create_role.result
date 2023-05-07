@@ -167,7 +167,7 @@ a
 prepare stmt2 from 'update grant_table_30 set a=60';
 internal error: do not have privilege to execute the statement
 execute stmt2;
-internal error: do not have privilege to execute the statement
+invalid state prepared statement 'stmt2' does not exist
 prepare stmt2 from 'insert into grant_table_30 select 89';
 execute stmt2;
 prepare stmt3 from 'insert into grant_table_30 select * from grant_table_30';
@@ -175,7 +175,7 @@ execute stmt3;
 prepare stmt4 from 'show databases';
 internal error: do not have privilege to execute the statement
 execute stmt4;
-internal error: do not have privilege to execute the statement
+invalid state prepared statement 'stmt4' does not exist
 prepare stmt5 from 'select "abc"';
 execute stmt5;
 abc
