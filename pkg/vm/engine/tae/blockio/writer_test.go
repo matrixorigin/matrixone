@@ -81,6 +81,16 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	require.NoError(t, err)
 	meta, err := reader.LoadObjectMeta(context.TODO(), mp)
 	require.NoError(t, err)
+	blkMeta1 := meta.GetBlockMeta(0)
+	blkMeta2 := meta.GetBlockMeta(1)
+	for i := uint16(0); i < meta.BlockHeader().ColumnCount(); i++ {
+		offset := blkMeta1.ColumnMeta(i).Location().Offset()
+		length := blkMeta1.ColumnMeta(i).Location().Length() + blkMeta2.ColumnMeta(i).Location().Length()
+		oSize := blkMeta1.ColumnMeta(i).Location().OriginSize() + blkMeta2.ColumnMeta(i).Location().OriginSize()
+		assert.Equal(t, offset, meta.ObjectColumnMeta(i).Location().Offset())
+		assert.Equal(t, length, meta.ObjectColumnMeta(i).Location().Length())
+		assert.Equal(t, oSize, meta.ObjectColumnMeta(i).Location().OriginSize())
+	}
 	header := meta.BlockHeader()
 	require.Equal(t, uint32(80000), header.Rows())
 	t.Log(meta.ObjectColumnMeta(0).Ndv(), meta.ObjectColumnMeta(1).Ndv(), meta.ObjectColumnMeta(2).Ndv())

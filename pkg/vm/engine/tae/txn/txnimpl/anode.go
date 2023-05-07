@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 // anode corresponds to an appendable standalone-uncommitted block
@@ -49,13 +48,12 @@ func NewANode(
 func (n *anode) GetAppends() []*appendInfo {
 	return n.storage.mnode.appends
 }
-func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo {
+func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo {
 	seq := len(n.storage.mnode.appends)
 	info := &appendInfo{
 		dest:    *dest,
 		destOff: destOff,
 		destLen: destLen,
-		dbid:    dbid,
 		srcOff:  srcOff,
 		srcLen:  srcLen,
 		seq:     uint32(seq),
@@ -71,9 +69,7 @@ func (n *anode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	if n.storage.mnode.data == nil {
 		return
 	}
-	composedCmd := NewAppendCmd(id, n)
-	batCmd := txnbase.NewBatchCmd(n.storage.mnode.data)
-	composedCmd.AddCmd(batCmd)
+	composedCmd := NewAppendCmd(id, n, n.storage.mnode.data)
 	return composedCmd, nil
 }
 

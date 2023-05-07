@@ -450,6 +450,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		return nil, err
 	}
 	subName := dbName
+	var sql string
 	if sub != nil {
 		accountId = uint32(sub.AccountId)
 		dbName = sub.DbName
@@ -457,18 +458,28 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 		defer func() {
 			ctx.SetQueryingSubscription(nil)
 		}()
-	}
 
-	var sql string
-	if accountId == catalog.System_Account {
-		mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
-		clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
-		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and (%s)",
-			subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, accountClause)
+		if accountId == catalog.System_Account {
+			mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+			clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+			accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+			sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and (%s) and relkind != '%s'",
+				subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, accountClause, catalog.SystemViewRel)
+		} else {
+			sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and relkind != '%s' ",
+				subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, catalog.SystemViewRel)
+		}
 	} else {
-		sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s'",
-			subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel)
+		if accountId == catalog.System_Account {
+			mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+			clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+			accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+			sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s' and (%s)",
+				subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel, accountClause)
+		} else {
+			sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and relkind != '%s'",
+				subName, tableType, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel)
+		}
 	}
 
 	// Do not show sequences.
@@ -505,7 +516,10 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 	if err != nil {
 		return nil, err
 	}
+
+	ddlType := plan.DataDefinition_SHOW_TABLES
 	subName := dbName
+	var sql string
 	if sub != nil {
 		accountId = uint32(sub.AccountId)
 		dbName = sub.DbName
@@ -513,20 +527,29 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 		defer func() {
 			ctx.SetQueryingSubscription(nil)
 		}()
-	}
 
-	ddlType := plan.DataDefinition_SHOW_TABLES
-	var sql string
-
-	if accountId == catalog.System_Account {
-		mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
-		clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
-		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = fmt.Sprintf("SELECT count(relname) `Number of tables in %s`  FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
-			subName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", accountClause)
+		if accountId == catalog.System_Account {
+			mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+			clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+			accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+			sql = fmt.Sprintf("SELECT count(relname) `Number of tables in %s`  FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s) and relkind != '%s'",
+				subName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", accountClause, catalog.SystemViewRel)
+		} else {
+			sql = "SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'and relkind != '%s'"
+			sql = fmt.Sprintf(sql, subName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", catalog.SystemViewRel)
+		}
 	} else {
-		sql = "SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'"
-		sql = fmt.Sprintf(sql, subName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
+		if accountId == catalog.System_Account {
+			mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
+			clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
+			accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
+			sql = fmt.Sprintf("SELECT count(relname) `Number of tables in %s`  FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)",
+				subName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%", accountClause)
+		} else {
+			sql = "SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s'"
+			sql = fmt.Sprintf(sql, subName, MO_CATALOG_DB_NAME, dbName, catalog.AutoIncrTableName, catalog.IndexTableNamePrefix+"%")
+		}
+
 	}
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
@@ -694,15 +717,15 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
 		}
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND attname != '__mo_rowid' AND attname not like '__mo_cpkey_%%' AND attname not like '__mo_cbkey_%%' ORDER BY attnum"
+		sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND attname != '__mo_rowid' AND attname not like '__mo_cpkey_%%' AND attname not like '__mo_cbkey_%%' ORDER BY attnum"
+			sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
-		sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND attname != '__mo_rowid' AND attname not like '__mo_cpkey_%%' AND attname not like '__mo_cbkey_%%' ORDER BY attnum"
+		sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND attname != '__mo_rowid' AND attname not like '__mo_cpkey_%%' AND attname not like '__mo_cbkey_%%' ORDER BY attnum"
+			sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, dbName, tblName)
 	}

@@ -111,16 +111,17 @@ commit;
 show create table test_12;
 select * from test_12;
 
-begin;
 create database s_db_1;
+begin;
 use s_db_1;
 create table test_13(col1 int primary key,col2 varchar(25));
 rollback;
+drop database s_db_1;
 use s_db_1;
 select * from test_13;
 
-start transaction ;
 create database s_db_1;
+start transaction ;
 use s_db_1;
 create table test_13(col1 int primary key,col2 varchar(25));
 -- @session:id=2&user=sys:dump&password=111

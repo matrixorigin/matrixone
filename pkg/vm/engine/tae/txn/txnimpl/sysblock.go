@@ -167,7 +167,7 @@ func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Ta
 			colData.Append(int32(i+1), false)
 		case pkgcatalog.SystemColAttr_Type:
 			//colData.Append(int32(colDef.Type.Oid))
-			data, _ := types.Encode(colDef.Type)
+			data, _ := types.Encode(&colDef.Type)
 			colData.Append(data, false)
 		case pkgcatalog.SystemColAttr_DBID:
 			colData.Append(table.GetDB().GetID(), false)

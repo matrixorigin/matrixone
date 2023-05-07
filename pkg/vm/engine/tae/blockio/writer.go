@@ -85,10 +85,12 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		}
 		columnData := containers.ToDNVector(vec)
 		// update null count and distinct value
-		w.objMetaBuilder.InspectVector(i, columnData)
+		ndv := w.objMetaBuilder.InspectVector(i, columnData)
 
+		// set col distinct value
+		block.MustGetColumn(uint16(i)).SetNdv(ndv)
 		// Build ZM
-		zm := index.NewZM(vec.GetType().Oid)
+		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 		if err = index.BatchUpdateZM(zm, columnData); err != nil {
 			return nil, err
 		}

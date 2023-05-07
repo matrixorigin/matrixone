@@ -68,7 +68,7 @@ func NewLogtailClient(stream morpc.Stream, opts ...ClientOption) (*LogtailClient
 
 // Close closes stream.
 func (c *LogtailClient) Close() error {
-	return c.stream.Close()
+	return c.stream.Close(false)
 }
 
 // Subscribe subscribes table.

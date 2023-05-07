@@ -71,6 +71,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 		select {
 		case <-proc.Ctx.Done():
 			proc.SetInputBatch(nil)
+			p.cleanup(proc, false)
 			return true, nil
 		default:
 		}

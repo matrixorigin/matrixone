@@ -279,7 +279,7 @@ func (ls *localStream) Receive() (chan morpc.Message, error) {
 	return ls.out, nil
 }
 
-func (ls *localStream) Close() error {
+func (ls *localStream) Close(closeConn bool) error {
 	if ls.closed {
 		return nil
 	}
@@ -343,7 +343,7 @@ func (sr *SendResult) Release() {
 	if sr.pool != nil {
 		for k, st := range sr.streams {
 			if st != nil {
-				_ = st.Close()
+				_ = st.Close(false)
 			}
 			delete(sr.streams, k)
 		}

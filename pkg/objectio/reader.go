@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -111,8 +112,16 @@ func (r *objectReaderV1) ReadMeta(
 			return
 		}
 	}
-	if meta, err = ReadObjectMeta(ctx, r.name, r.metaExt, r.noLRUCache, r.fs); err != nil {
-		return
+	if r.oname != nil {
+		// read table data block
+		if meta, err = LoadObjectMetaByExtent(ctx, r.oname, r.metaExt, r.noLRUCache, r.fs); err != nil {
+			return
+		}
+	} else {
+		// read gc/ckp/etl ... data
+		if meta, err = ReadObjectMeta(ctx, r.name, r.metaExt, r.noLRUCache, r.fs); err != nil {
+			return
+		}
 	}
 	if r.withMetaCache {
 		r.metaCache.Store(&meta)
@@ -145,10 +154,11 @@ func (r *objectReaderV1) ReadAll(
 	return ReadAllBlocksWithMeta(ctx, &meta, r.name, idxs, r.noLRUCache, m, r.fs, constructorFactory)
 }
 
+// ReadOneBF read one bloom filter
 func (r *objectReaderV1) ReadOneBF(
 	ctx context.Context,
 	blk uint16,
-) (bf StaticFilter, err error) {
+) (bf StaticFilter, size uint32, err error) {
 	var meta objectMetaV1
 	if meta, err = r.ReadMeta(ctx, nil); err != nil {
 		return
@@ -158,42 +168,53 @@ func (r *objectReaderV1) ReadOneBF(
 	if err != nil {
 		return
 	}
-	bf = bfs[blk]
-	return
+	buf := bfs.GetBloomFilter(uint32(blk))
+	bf = index.NewEmptyBinaryFuseFilter()
+	err = index.DecodeBloomFilter(bf, buf)
+	if err != nil {
+		return
+	}
+	size = uint32(len(buf))
+	return bf, size, nil
 }
 
 func (r *objectReaderV1) ReadAllBF(
 	ctx context.Context,
-) (bfs []StaticFilter, size uint32, err error) {
+) (bfs BloomFilter, size uint32, err error) {
 	var meta objectMetaV1
+	var buf []byte
 	if meta, err = r.ReadMeta(ctx, nil); err != nil {
 		return
 	}
 	extent := meta.BlockHeader().BFExtent()
-	if bfs, err = ReadBloomFilter(ctx, r.name, &extent, r.noLRUCache, r.fs); err != nil {
+	if buf, err = ReadBloomFilter(ctx, r.name, &extent, r.noLRUCache, r.fs); err != nil {
 		return
 	}
-	size = extent.OriginSize()
-	return
+	return buf, extent.OriginSize(), nil
 }
 
 func (r *objectReaderV1) ReadExtent(
 	ctx context.Context,
 	extent Extent,
-	noHeaderHint bool,
 ) ([]byte, error) {
 	v, err := ReadExtent(
 		ctx,
 		r.name,
 		&extent,
 		r.noLRUCache,
-		noHeaderHint,
 		r.fs,
 		constructorFactory)
 	if err != nil {
 		return nil, err
 	}
-	return v.([]byte), nil
+
+	var obj any
+	obj, err = Decode(v)
+	if err != nil {
+		return nil, err
+	}
+
+	return obj.([]byte), nil
 }
 
 func (r *objectReaderV1) ReadMultiBlocks(
@@ -233,11 +254,11 @@ func (r *objectReaderV1) ReadAllMeta(
 
 func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header, err error) {
 	ext := NewExtent(0, 0, HeaderSize, HeaderSize)
-	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, true, r.fs, constructorFactory)
+	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, r.fs, constructorFactory)
 	if err != nil {
 		return
 	}
-	h = Header(v.([]byte))
+	h = Header(v)
 	return
 }
 

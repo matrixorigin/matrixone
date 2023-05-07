@@ -15,13 +15,10 @@
 package txnimpl
 
 import (
-	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -78,7 +75,7 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 	store.Observer.OnTimeStamp(txn.GetPrepareTS())
 	for i, command := range store.Cmd.Cmds {
 		command.SetReplayTxn(txn)
-		if command.GetType() == CmdAppend {
+		if command.GetType() == IOET_WALTxnCommand_Append {
 			internalCnt++
 			store.prepareCmd(command, nil)
 		} else {
@@ -131,11 +128,11 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) 
 func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.ReplayObserver) {
 	hasActive := false
 	for _, info := range cmd.Infos {
-		database, err := store.catalog.GetDatabaseByID(info.GetDBID())
+		id := info.GetDest()
+		database, err := store.catalog.GetDatabaseByID(id.DbID)
 		if err != nil {
 			panic(err)
 		}
-		id := info.GetDest()
 		blk, err := database.GetBlockEntryByID(id)
 		if err != nil {
 			panic(err)
@@ -153,36 +150,17 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		return
 	}
 
-	var data *containers.Batch
-
-	for _, subTxnCmd := range cmd.Cmds {
-		switch subCmd := subTxnCmd.(type) {
-		case *txnbase.BatchCmd:
-			data = subCmd.Bat
-		case *txnbase.PointerCmd:
-			batEntry, err := store.wal.LoadEntry(subCmd.Group, subCmd.Lsn)
-			if err != nil {
-				panic(err)
-			}
-			r := bytes.NewBuffer(batEntry.GetPayload())
-			txnCmd, _, err := txnbase.BuildCommandFrom(r)
-			if err != nil {
-				panic(err)
-			}
-			data = txnCmd.(*txnbase.BatchCmd).Bat
-			batEntry.Free()
-		}
-	}
+	data := cmd.Data
 	if data != nil {
 		defer data.Close()
 	}
 
 	for _, info := range cmd.Infos {
-		database, err := store.catalog.GetDatabaseByID(info.GetDBID())
+		id := info.GetDest()
+		database, err := store.catalog.GetDatabaseByID(id.DbID)
 		if err != nil {
 			panic(err)
 		}
-		id := info.GetDest()
 		blk, err := database.GetBlockEntryByID(id)
 		if err != nil {
 			panic(err)
@@ -205,18 +183,14 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 
 func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
 	switch cmd.GetType() {
-	case txnbase.CmdAppend:
+	case updates.IOET_WALTxnCommand_AppendNode:
 		store.replayAppend(cmd, idxCtx, observer)
-	case txnbase.CmdDelete:
+	case updates.IOET_WALTxnCommand_DeleteNode:
 		store.replayDelete(cmd, idxCtx, observer)
 	}
 }
 
 func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
-	database, err := store.catalog.GetDatabaseByID(cmd.GetDBID())
-	if err != nil {
-		panic(err)
-	}
 	deleteNode := cmd.GetDeleteNode()
 	deleteNode.SetLogIndex(idxCtx)
 	if deleteNode.Is1PC() {
@@ -225,6 +199,10 @@ func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, idxCtx *wal.In
 		}
 	}
 	id := deleteNode.GetID()
+	database, err := store.catalog.GetDatabaseByID(id.DbID)
+	if err != nil {
+		panic(err)
+	}
 	blk, err := database.GetBlockEntryByID(id)
 	if err != nil {
 		panic(err)
@@ -242,10 +220,6 @@ func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, idxCtx *wal.In
 }
 
 func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
-	database, err := store.catalog.GetDatabaseByID(cmd.GetDBID())
-	if err != nil {
-		panic(err)
-	}
 	appendNode := cmd.GetAppendNode()
 	appendNode.SetLogIndex(idxCtx)
 	if appendNode.Is1PC() {
@@ -254,6 +228,10 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, idxCtx *wal.In
 		}
 	}
 	id := appendNode.GetID()
+	database, err := store.catalog.GetDatabaseByID(id.DbID)
+	if err != nil {
+		panic(err)
+	}
 	blk, err := database.GetBlockEntryByID(id)
 	if err != nil {
 		panic(err)

@@ -62,6 +62,7 @@ func initTypeCheckRelated() {
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_decimal64, types.T_decimal128,
+		types.T_json,
 	}
 	numbers := []types.T{ // numbers without decimal
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,

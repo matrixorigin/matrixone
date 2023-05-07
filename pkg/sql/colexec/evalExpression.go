@@ -129,11 +129,13 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 				fixed := &FixedVectorExpressionExecutor{
 					m: proc.Mp(),
 				}
-				if result.IsConst() && !result.IsConstNull() {
-					fixed.resultVector, err = result.Dup(proc.Mp())
-				} else {
-					fixed.resultVector = result.ToConst(0, 1, proc.Mp())
-				}
+
+				fixed.resultVector = result.ToConst(0, 1, proc.Mp())
+				//if result.IsConst() {
+				//	fixed.resultVector, err = result.Dup(proc.Mp())
+				//} else {
+				//	fixed.resultVector = result.ToConst(0, 1, proc.Mp())
+				//}
 
 				executor.Free()
 				return fixed, err

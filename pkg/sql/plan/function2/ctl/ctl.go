@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -70,14 +69,7 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 		func(ctx context.Context, requests []txn.CNOpRequest) ([]txn.CNOpResponse, error) {
 			txnOp := proc.TxnOperator
 			if txnOp == nil {
-				v, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
-				if err != nil {
-					return nil, err
-				}
-				txnOp = v
-				defer func() {
-					_ = txnOp.Commit(proc.Ctx)
-				}()
+				return nil, moerr.NewInternalError(ctx, "ctl: txn operator is nil")
 			}
 			op, ok := txnOp.(client.DebugableTxnOperator)
 			if !ok {

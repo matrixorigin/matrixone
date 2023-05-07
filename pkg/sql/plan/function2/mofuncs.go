@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -43,15 +42,10 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 	// XXX WTF
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
-	if err != nil {
-		return err
+	if proc.TxnOperator == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
 	}
-	defer txn.Rollback(proc.Ctx)
-	if err = e.New(proc.Ctx, txn); err != nil {
-		return err
-	}
-	defer e.Rollback(proc.Ctx, txn)
+	txn := proc.TxnOperator
 
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
@@ -99,17 +93,11 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
 
-	// XXX WTF
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
-	if err != nil {
-		return err
+	if proc.TxnOperator == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
 	}
-	defer txn.Rollback(proc.Ctx)
-	if err = e.New(proc.Ctx, txn); err != nil {
-		return err
-	}
-	defer e.Rollback(proc.Ctx, txn)
+	txn := proc.TxnOperator
 
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
@@ -186,17 +174,11 @@ func moTableColMaxMinImpl(fn string, ivecs []*vector.Vector, result vector.Funct
 		minmaxIdx = 1
 	}
 
-	// XXX WTF
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
-	if err != nil {
-		return err
+	if proc.TxnOperator == nil {
+		return moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
 	}
-	defer txn.Rollback(proc.Ctx)
-	if err = e.New(proc.Ctx, txn); err != nil {
-		return err
-	}
-	defer e.Rollback(proc.Ctx, txn)
+	txn := proc.TxnOperator
 
 	for i := uint64(0); i < uint64(length); i++ {
 		db, dbnull := dbs.GetStrValue(i)

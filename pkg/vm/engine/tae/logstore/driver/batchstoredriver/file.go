@@ -295,7 +295,7 @@ func (rf *rotateFile) commitFile() {
 		panic(err)
 	}
 	rf.Unlock()
-	logutil.Infof("Committed %s", f.Name())
+	logutil.Debugf("Committed %s", f.Name())
 }
 
 func (rf *rotateFile) Sync() error {

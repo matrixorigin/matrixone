@@ -61,15 +61,13 @@ type Vector struct {
 
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
-	if v.data != nil {
-		v.data = v.data[:0]
-	}
+	//v.data = v.data[:0]
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
 	v.nsp = &nulls.Nulls{}
 	v.length = 0
-	v.capacity = cap(v.data) / v.typ.TypeSize()
+	//v.capacity = cap(v.data) / v.typ.TypeSize()
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -454,64 +452,25 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 }
 
 func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
-	if v.class == CONSTANT {
-		if v.IsConstNull() {
-			return NewConstNull(v.typ, length, mp)
-		}
-		return v
+	w := NewConstNull(v.typ, length, mp)
+	if v.IsConstNull() || nulls.Contains(v.nsp, uint64(row)) {
+		return w
 	}
 
-	if nulls.Contains(v.nsp, uint64(row)) {
-		return NewConstNull(v.typ, length, mp)
+	if v.IsConst() {
+		row = 0
 	}
 
-	switch v.typ.Oid {
-	case types.T_bool:
-		return NewConstFixed(v.typ, v.col.([]bool)[row], length, mp)
-	case types.T_int8:
-		return NewConstFixed(v.typ, v.col.([]int8)[row], length, mp)
-	case types.T_int16:
-		return NewConstFixed(v.typ, v.col.([]int16)[row], length, mp)
-	case types.T_int32:
-		return NewConstFixed(v.typ, v.col.([]int32)[row], length, mp)
-	case types.T_int64:
-		return NewConstFixed(v.typ, v.col.([]int64)[row], length, mp)
-	case types.T_uint8:
-		return NewConstFixed(v.typ, v.col.([]uint8)[row], length, mp)
-	case types.T_uint16:
-		return NewConstFixed(v.typ, v.col.([]uint16)[row], length, mp)
-	case types.T_uint32:
-		return NewConstFixed(v.typ, v.col.([]uint32)[row], length, mp)
-	case types.T_uint64:
-		return NewConstFixed(v.typ, v.col.([]uint64)[row], length, mp)
-	case types.T_float32:
-		return NewConstFixed(v.typ, v.col.([]float32)[row], length, mp)
-	case types.T_float64:
-		return NewConstFixed(v.typ, v.col.([]float64)[row], length, mp)
-	case types.T_date:
-		return NewConstFixed(v.typ, v.col.([]types.Date)[row], length, mp)
-	case types.T_datetime:
-		return NewConstFixed(v.typ, v.col.([]types.Datetime)[row], length, mp)
-	case types.T_time:
-		return NewConstFixed(v.typ, v.col.([]types.Time)[row], length, mp)
-	case types.T_timestamp:
-		return NewConstFixed(v.typ, v.col.([]types.Timestamp)[row], length, mp)
-	case types.T_decimal64:
-		return NewConstFixed(v.typ, v.col.([]types.Decimal64)[row], length, mp)
-	case types.T_decimal128:
-		return NewConstFixed(v.typ, v.col.([]types.Decimal128)[row], length, mp)
-	case types.T_uuid:
-		return NewConstFixed(v.typ, v.col.([]types.Uuid)[row], length, mp)
-	case types.T_TS:
-		return NewConstFixed(v.typ, v.col.([]types.TS)[row], length, mp)
-	case types.T_Rowid:
-		return NewConstFixed(v.typ, v.col.([]types.Rowid)[row], length, mp)
-	case types.T_Blockid:
-		return NewConstFixed(v.typ, v.col.([]types.Blockid)[row], length, mp)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
-		return NewConstBytes(v.typ, v.GetBytesAt(row), length, mp)
+	sz := v.typ.TypeSize()
+	w.data = v.data[row*sz : (row+1)*sz]
+	w.setupColFromData()
+	if v.typ.IsVarlen() {
+		w.area = v.area
 	}
-	return nil
+	w.cantFreeData = true
+	w.cantFreeArea = true
+
+	return w
 }
 
 // PreExtend use to expand the capacity of the vector
@@ -725,26 +684,22 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	return nil
 }
 
-// GetUnionFunction: A more sensible function for copying vector,
+// GetUnionAllFunction: A more sensible function for copying vector,
 // which avoids having to do type conversions and type judgements every time you append.
-func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
+func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
 	switch typ.Oid {
 	case types.T_bool:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, true, true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[bool](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -759,26 +714,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_int8:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, int8(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[int8](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -793,26 +744,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_int16:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, int16(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[int16](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -827,26 +774,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_int32:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, int32(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[int32](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -861,26 +804,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_int64:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, int64(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[int64](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -895,26 +834,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_uint8:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, uint8(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[uint8](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -929,26 +864,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_uint16:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, uint16(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[uint16](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -963,26 +894,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_uint32:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, uint32(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[uint32](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -997,26 +924,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_uint64:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, uint64(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[uint64](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1031,26 +954,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_float32:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, float32(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[float32](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1065,26 +984,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_float64:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, float64(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[float64](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1099,26 +1014,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_date:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.Date(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[types.Date](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1133,26 +1044,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_datetime:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.Datetime(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[types.Datetime](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1167,26 +1074,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_time:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.Time(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[types.Time](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1201,26 +1104,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_timestamp:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.Timestamp(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[types.Timestamp](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1235,26 +1134,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_decimal64:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.Decimal64(0), true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[types.Decimal64](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1269,26 +1164,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_decimal128:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.Decimal128{}, true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[types.Decimal128](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1303,26 +1194,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_uuid:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.Uuid{}, true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[types.Uuid](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1337,26 +1224,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_TS:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.TS{}, true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[types.TS](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1371,26 +1254,22 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
 	case types.T_Rowid:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.Rowid{}, true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[types.Rowid](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1405,7 +1284,7 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
@@ -1413,19 +1292,15 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 		types.T_json, types.T_blob, types.T_text:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.Varlena{}, true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			ws := MustFixedCol[types.Varlena](w)
 			if w.IsConst() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneBytes(v, ws[0].GetByteSlice(w.area), false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiBytes(v, ws[0].GetByteSlice(w.area), false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1449,7 +1324,7 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 			sz := v.typ.TypeSize()
 			length := uint32(len(v.area))
 			v.area = append(v.area, w.area...)
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			vs := v.col.([]types.Varlena)
 			for i, j := v.length, v.length+w.length; i < j; i++ {
 				if vs[i][0] > types.VarlenaInlineSize {
@@ -1463,19 +1338,15 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 	case types.T_Blockid:
 		return func(v, w *Vector) error {
 			if w.IsConstNull() {
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, types.Blockid{}, true, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
 			if w.IsConst() {
 				ws := MustFixedCol[types.Blockid](w)
-				for i := 0; i < w.length; i++ {
-					if err := appendOneFixed(v, ws[0], false, mp); err != nil {
-						return err
-					}
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -1490,7 +1361,7 @@ func GetUnionFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error 
 				}
 			}
 			sz := v.typ.TypeSize()
-			v.data = append(v.data[:v.length*sz], w.data[:w.length*sz]...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
 			v.length += w.length
 			return nil
 		}
@@ -2016,7 +1887,6 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.length++
-	v.data = v.data[:v.length*v.GetType().TypeSize()]
 	if w.IsConst() {
 		if w.IsConstNull() {
 			nulls.Add(v.nsp, uint64(oldLen))
@@ -2055,7 +1925,6 @@ func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) erro
 
 	oldLen := v.length
 	v.length += cnt
-	v.data = v.data[:v.length*v.GetType().TypeSize()]
 	if w.IsConst() {
 		if w.IsConstNull() {
 			nulls.AddRange(v.nsp, uint64(oldLen), uint64(oldLen+cnt))
@@ -2100,7 +1969,6 @@ func (v *Vector) Union(w *Vector, sels []int32, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.length += len(sels)
-	v.data = v.data[:v.length*v.GetType().TypeSize()]
 	if w.IsConst() {
 		if w.IsConstNull() {
 			nulls.AddRange(v.nsp, uint64(oldLen), uint64(oldLen+len(sels)))
@@ -2188,7 +2056,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if err := extend(v, addCnt, mp); err != nil {
 		return err
 	}
-	v.data = v.data[:(v.length+addCnt)*v.GetType().TypeSize()]
 
 	if w.IsConst() {
 		oldLen := v.length
@@ -2571,8 +2438,6 @@ func appendOneFixed[T any](vec *Vector, val T, isNull bool, mp *mpool.MPool) err
 		col := vec.col.([]T)
 		col[length] = val
 	}
-	sz := vec.typ.TypeSize()
-	vec.data = vec.data[:sz*vec.length]
 	return nil
 }
 

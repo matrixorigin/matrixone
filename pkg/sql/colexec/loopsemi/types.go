@@ -31,6 +31,8 @@ const (
 )
 
 type container struct {
+	colexec.ReceiverOperator
+
 	state   int
 	bat     *batch.Batch
 	joinBat *batch.Batch

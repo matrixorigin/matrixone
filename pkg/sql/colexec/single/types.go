@@ -37,6 +37,8 @@ type evalVector struct {
 }
 
 type container struct {
+	colexec.ReceiverOperator
+
 	state int
 
 	inBuckets []uint8

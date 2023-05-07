@@ -155,7 +155,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetSegment(blk1Meta.GetSegment().ID)
+	seg, err = rel.GetSegment(&blk1Meta.GetSegment().ID)
 	assert.Nil(t, err)
 	err = seg.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
@@ -233,7 +233,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetSegment(blk1Meta.GetSegment().ID)
+	seg, err = rel.GetSegment(&blk1Meta.GetSegment().ID)
 	assert.Nil(t, err)
 	err = seg.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
@@ -425,7 +425,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	blkIterator := rel.MakeBlockIt()
 	blk := blkIterator.GetBlock().GetMeta().(*catalog.BlockEntry)
-	seg, err := rel.GetSegment(blk.GetSegment().ID)
+	seg, err := rel.GetSegment(&blk.GetSegment().ID)
 	assert.Nil(t, err)
 	err = seg.SoftDeleteBlock(blk.ID)
 	assert.Nil(t, err)
@@ -1247,11 +1247,11 @@ func TestReplay10(t *testing.T) {
 	schema.ColDefs[1].OnUpdate, _ = types.Encode(&plan.OnUpdate{
 		Expr: &plan.Expr{},
 	})
-	schema.ColDefs[2].Default, _ = types.Encode(plan.Default{
+	schema.ColDefs[2].Default, _ = types.Encode(&plan.Default{
 		NullAbility: true,
 		Expr:        nil,
 	})
-	schema.ColDefs[2].OnUpdate, _ = types.Encode(plan.OnUpdate{
+	schema.ColDefs[2].OnUpdate, _ = types.Encode(&plan.OnUpdate{
 		Expr: nil,
 	})
 

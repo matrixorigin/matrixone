@@ -39,7 +39,7 @@ func handleCheckpoint() handleFunc {
 					return nil, err
 				}
 			}
-			payload, err := types.Encode((db.Checkpoint{
+			payload, err := types.Encode((&db.Checkpoint{
 				FlushDuration: flushDuration,
 			}))
 			return payload, err

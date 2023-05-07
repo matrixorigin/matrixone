@@ -22,7 +22,6 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,44 +35,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (txn *Transaction) getBlockMetas(
+func (txn *Transaction) getBlockInfos(
 	ctx context.Context,
-	databaseId uint64,
-	tableId uint64,
-	needUpdated bool,
-	columnLength int,
-	prefetch bool,
-) ([][]BlockMeta, error) {
-
-	blocks := make([][]BlockMeta, len(txn.dnStores))
-	name := genMetaTableName(tableId)
+	tbl *txnTable,
+) (blocks [][]catalog.BlockInfo, err error) {
+	blocks = make([][]catalog.BlockInfo, len(txn.dnStores))
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
-	if needUpdated {
-		states := txn.engine.getPartitions(databaseId, tableId).Snapshot()
-		for i := range txn.dnStores {
-			if i >= len(states) {
+	states, err := tbl.getParts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range txn.dnStores {
+		if i >= len(states) {
+			continue
+		}
+		state := states[i]
+		iter := state.Blocks.Iter()
+		var objectName objectio.ObjectNameShort
+		for ok := iter.First(); ok; ok = iter.Next() {
+			entry := iter.Item()
+			if !entry.Visible(ts) {
 				continue
 			}
-			var blockInfos []catalog.BlockInfo
-			state := states[i]
-			iter := state.Blocks.Iter()
-			for ok := iter.First(); ok; ok = iter.Next() {
-				entry := iter.Item()
-				if !entry.Visible(ts) {
-					continue
+			location := entry.BlockInfo.MetaLocation()
+			if !objectio.IsSameObjectLocVsShort(location, &objectName) {
+				// Prefetch object meta
+				if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
+					return
 				}
-				blockInfos = append(blockInfos, entry.BlockInfo)
+				objectName = *location.Name().Short()
 			}
-			iter.Release()
-			var err error
-			blocks[i], err = genBlockMetas(ctx, blockInfos, columnLength, txn.proc.FileService,
-				txn.proc.GetMPool(), prefetch)
-			if err != nil {
-				return nil, moerr.NewInternalError(ctx, "disttae: getTableMeta err: %v, table: %v", err.Error(), name)
-			}
+			blocks[i] = append(blocks[i], entry.BlockInfo)
 		}
+		iter.Release()
 	}
-	return blocks, nil
+	return
 }
 
 // detecting whether a transaction is a read-only transaction
@@ -83,6 +79,10 @@ func (txn *Transaction) ReadOnly() bool {
 
 // Write used to write data to the transaction buffer
 // insert/delete/update all use this api
+// insertBatchHasRowId : it denotes the batch has Rowid when the typ is INSERT.
+// if typ is not INSERT, it is always false.
+// truncate : it denotes the batch with typ DELETE on mo_tables is generated when Truncating
+// a table.
 func (txn *Transaction) WriteBatch(
 	typ int,
 	databaseId uint64,
@@ -92,10 +92,11 @@ func (txn *Transaction) WriteBatch(
 	bat *batch.Batch,
 	dnStore DNStore,
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
-) error {
+	insertBatchHasRowId bool,
+	truncate bool) error {
 	txn.readOnly = false
 	bat.Cnt = 1
-	if typ == INSERT {
+	if typ == INSERT && !insertBatchHasRowId {
 		txn.genBlock()
 		len := bat.Length()
 		vec := vector.NewVec(types.T_Rowid.ToType())
@@ -122,6 +123,7 @@ func (txn *Transaction) WriteBatch(
 		tableName:    tableName,
 		databaseName: databaseName,
 		dnStore:      dnStore,
+		truncate:     truncate,
 	})
 	txn.Unlock()
 	return nil
@@ -244,7 +246,8 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 		return -1, nil, nil, err
 	}
 	for i := 0; i < len(attrs); i++ {
-		if attrs[i].ClusterBy || attrs[i].Primary {
+		if attrs[i].ClusterBy ||
+			(attrs[i].Primary && !attrs[i].IsHidden) {
 			return i, attrs, tbl, err
 		}
 	}
@@ -310,7 +313,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	for i, rowid := range rowids {
 		// process cn block deletes
 		uid := rowid.GetSegid()
-		blkid := rowid.GetBlockid()
+		blkid := *rowid.GetBlockid()
 		deleteBlkId[blkid] = true
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
@@ -359,7 +362,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 				continue
 			}
 			// current batch is not be deleted
-			if !deleteBlkId[vs[0].GetBlockid()] {
+			if !deleteBlkId[*vs[0].GetBlockid()] {
 				continue
 			}
 			min2 := vs[0].GetRowOffset()
@@ -422,7 +425,7 @@ func (txn *Transaction) genRowId() types.Rowid {
 }
 
 // needRead determine if a block needs to be read
-func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
+func needRead(ctx context.Context, expr *plan.Expr, meta objectio.ObjectMeta, blkInfo catalog.BlockInfo, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
 	// TODO(CMS): I just removed the codes here. And will rewrite it tomorrow.
 	return true
 
@@ -446,14 +449,18 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 		//return ifNeed
 	}
 
-	// get min max data from Meta
-	datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
-	if err != nil || datas == nil {
+	// // get min max data from Meta
+	// datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
+	// if err != nil || datas == nil {
+	//  return true
+	// }
+
+	// // use all min/max data to build []vectors.
+	// buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
+	buildVectors, err := buildColumnsZMVectors(meta, int(blkInfo.MetaLocation().ID()), columns, tableDef, proc.Mp())
+	if err != nil || len(buildVectors) == 0 {
 		return true
 	}
-
-	// use all min/max data to build []vectors.
-	buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
 	bat := batch.NewWithSize(maxCol + 1)
 	defer bat.Clean(proc.Mp())
 	for k, v := range columnMap {
@@ -470,22 +477,17 @@ func needRead(ctx context.Context, expr *plan.Expr, blkInfo BlockMeta, tableDef 
 	if err != nil {
 		return true
 	}
+
 	return ifNeed
-
 }
 
-// get row count of block
-func blockRows(meta BlockMeta) int64 {
-	return meta.Rows
+func blockInfoMarshal(meta catalog.BlockInfo) []byte {
+	sz := unsafe.Sizeof(meta)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&meta)), sz)
 }
 
-func blockInfoMarshal(meta BlockMeta) []byte {
-	sz := unsafe.Sizeof(meta.Info)
-	return unsafe.Slice((*byte)(unsafe.Pointer(&meta.Info)), sz)
-}
-
-func BlockInfoUnmarshal(data []byte) catalog.BlockInfo {
-	return *(*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
+func BlockInfoUnmarshal(data []byte) *catalog.BlockInfo {
+	return (*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
 }
 
 /* used by multi-dn

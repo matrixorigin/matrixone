@@ -36,6 +36,7 @@ type container struct {
 	joinBat *batch.Batch
 	expr    colexec.ExpressionExecutor
 	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
+	colexec.ReceiverOperator
 }
 
 type Argument struct {

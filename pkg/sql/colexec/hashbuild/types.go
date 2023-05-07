@@ -36,6 +36,8 @@ type evalVector struct {
 }
 
 type container struct {
+	colexec.ReceiverOperator
+
 	state int
 
 	hasNull bool

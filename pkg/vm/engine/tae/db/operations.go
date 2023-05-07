@@ -16,7 +16,6 @@ package db
 
 import (
 	"context"
-	"encoding/gob"
 	"time"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -32,41 +31,6 @@ const (
 	OpPreCommit  = uint32(apipb.OpCode_OpPreCommit)
 	OpGetLogTail = uint32(apipb.OpCode_OpGetLogTail)
 )
-
-func init() {
-
-	// register TableDef types
-	gob.Register(new(engine.ViewDef))
-	gob.Register(new(engine.CommentDef))
-	gob.Register(new(engine.PartitionDef))
-	gob.Register(new(engine.AttributeDef))
-	gob.Register(new(engine.IndexTableDef))
-	gob.Register(new(engine.PropertiesDef))
-	gob.Register(new(engine.ConstraintDef))
-
-	// register vector column types
-	gob.Register([]bool{})
-	gob.Register([]int8{})
-	gob.Register([]int16{})
-	gob.Register([]int32{})
-	gob.Register([]int64{})
-	gob.Register([]uint8{})
-	gob.Register([]uint16{})
-	gob.Register([]uint32{})
-	gob.Register([]uint64{})
-	gob.Register([]float32{})
-	gob.Register([]float64{})
-	gob.Register([]string{})
-	gob.Register([][]any{})
-	gob.Register([]types.Date{})
-	gob.Register([]types.Datetime{})
-	gob.Register([]types.Timestamp{})
-	gob.Register([]types.Decimal64{})
-	gob.Register([]types.Decimal128{})
-
-	//plan types
-
-}
 
 type Request interface {
 	CreateDatabaseReq |
@@ -116,13 +80,37 @@ type FlushTable struct {
 	TableID    uint64
 }
 
+func (m *FlushTable) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *FlushTable) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 type Checkpoint struct {
 	FlushDuration time.Duration
+}
+
+func (m *Checkpoint) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *Checkpoint) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
 }
 
 type InspectDN struct {
 	AccessInfo AccessInfo
 	Operation  string
+}
+
+func (m *InspectDN) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *InspectDN) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
 }
 
 type CreateDatabaseResp struct {
@@ -224,22 +212,38 @@ type InspectResp struct {
 	Payload []byte `json:"-"`
 }
 
+func (m *InspectResp) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *InspectResp) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 const (
 	InspectNormal = 0
 	InspectCata   = 1
 )
 
-func (r *InspectResp) GetResponse() any {
-	var ret any = r
-	switch r.Typ {
+func (m *InspectResp) GetResponse() any {
+	switch m.Typ {
 	case InspectCata:
-		ret = new(CatalogResp)
-		types.Decode(r.Payload, ret)
+		resp := new(CatalogResp)
+		types.Decode(m.Payload, resp)
+		return resp
 	}
-	return ret
+	return m
 }
 
 type CatalogResp struct {
 	Item string         `json:"Item,omitempty"`
 	Sub  []*CatalogResp `json:"Sub,omitempty"`
+}
+
+func (m *CatalogResp) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *CatalogResp) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
 }

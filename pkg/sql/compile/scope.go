@@ -57,11 +57,11 @@ import (
 	"go.uber.org/zap"
 )
 
-func PrintScope(prefix []byte, ss []*Scope) {
+func DebugPrintScope(prefix []byte, ss []*Scope) {
 	for _, s := range ss {
-		PrintScope(append(prefix, '\t'), s.PreScopes)
+		DebugPrintScope(append(prefix, '\t'), s.PreScopes)
 		p := pipeline.NewMerge(s.Instructions, nil)
-		logutil.Infof("%s:%v %v", prefix, s.Magic, p)
+		logutil.Debugf("%s:%v %v", prefix, s.Magic, p)
 	}
 }
 
@@ -83,8 +83,11 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
-	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	errChan := make(chan error, len(s.PreScopes))
+
+	for _, scope := range s.PreScopes {
+		scope.Proc.ResetContextFromParent(s.Proc.Ctx)
+	}
 
 	for _, scope := range s.PreScopes {
 		switch scope.Magic {
@@ -100,6 +103,8 @@ func (s *Scope) MergeRun(c *Compile) error {
 			go func(cs *Scope) { errChan <- cs.PushdownRun() }(scope)
 		}
 	}
+
+	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
@@ -256,6 +261,12 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			newRds = append(newRds, m)
 		}
 		rds = newRds
+	}
+
+	if mcpu == 1 {
+		s.Magic = Normal
+		s.DataSource.R = rds[0] // rds's length is equal to mcpu so it is safe to do it
+		return s.Run(c)
 	}
 
 	ss := make([]*Scope, mcpu)
@@ -672,7 +683,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			}
 			defer func(streamSender morpc.Stream) {
 				close(reg.Ch)
-				_ = streamSender.Close()
+				_ = streamSender.Close(false)
 			}(streamSender)
 
 			c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
