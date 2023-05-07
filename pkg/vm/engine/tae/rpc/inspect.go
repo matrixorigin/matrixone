@@ -154,6 +154,32 @@ func runDropC(cmd *dropCCmd) error {
 	return txn.Commit()
 }
 
+type renameTCmd struct {
+	ctx          *inspectContext
+	db, old, new string
+}
+
+func (c *renameTCmd) fromCommand(cmd *cobra.Command) error {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+
+	c.db, _ = cmd.Flags().GetString("db")
+	c.old, _ = cmd.Flags().GetString("old")
+	c.new, _ = cmd.Flags().GetString("new")
+
+	return nil
+}
+
+func runRenameT(cmd *renameTCmd) error {
+	txn, _ := cmd.ctx.db.StartTxn(nil)
+	db, _ := txn.GetDatabase(cmd.db)
+	tbl, _ := db.GetRelationByName(cmd.old)
+	err := tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, cmd.old, cmd.new))
+	if err != nil {
+		return err
+	}
+	return txn.Commit()
+}
+
 func initCommand(ctx *inspectContext) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use: "inspect",
@@ -204,6 +230,23 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 		},
 	}
 
+	renameTCmd := &cobra.Command{
+		Use:   "renamet",
+		Short: "rename table",
+		Run: func(cmd *cobra.Command, args []string) {
+			arg := &renameTCmd{}
+			if err := arg.fromCommand(cmd); err != nil {
+				return
+			}
+			err := runRenameT(arg)
+			if err != nil {
+				cmd.OutOrStdout().Write([]byte(fmt.Sprintf("%v", err)))
+			} else {
+				cmd.OutOrStdout().Write([]byte("rename table success"))
+			}
+		},
+	}
+
 	rootCmd.PersistentFlags().VarPF(ctx, "ictx", "", "").Hidden = true
 
 	rootCmd.SetArgs(ctx.args)
@@ -225,6 +268,11 @@ func initCommand(ctx *inspectContext) *cobra.Command {
 	dropCCmd.Flags().StringP("table", "b", "", "table")
 	dropCCmd.Flags().IntP("pos", "p", -1, "column postion")
 	rootCmd.AddCommand(dropCCmd)
+
+	renameTCmd.Flags().StringP("db", "d", "", "database")
+	renameTCmd.Flags().StringP("old", "o", "", "old table")
+	renameTCmd.Flags().StringP("new", "n", "", "new table")
+	rootCmd.AddCommand(renameTCmd)
 
 	return rootCmd
 }
