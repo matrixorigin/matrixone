@@ -278,16 +278,17 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 	return
 }
 
+// this function is to filter out the blocks to be read and marshal them into a byte array
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
-	ts timestamp.Timestamp,
-	state *logtailreplay.PartitionState,
-	tableDef *plan.TableDef,
-	expr *plan.Expr,
-	blocks []catalog.BlockInfo,
-	ranges *[][]byte,
-	modifies *[]ModifyBlockMeta,
-	proc *process.Process,
+	ts timestamp.Timestamp, // snapshot timestamp
+	state *logtailreplay.PartitionState, // snapshot state of this transaction
+	tableDef *plan.TableDef, // table definition (schema)
+	expr *plan.Expr, // filter expression
+	blocks []catalog.BlockInfo, // whole block list
+	ranges *[][]byte, // output marshaled block list after filtering
+	modifies *[]ModifyBlockMeta, // output modified blocks after filtering
+	proc *process.Process, // process of this transaction
 ) (err error) {
 	deletes := make(map[types.Blockid][]int)
 	ids := make([]types.Blockid, len(blocks))
@@ -389,15 +390,19 @@ func (tbl *txnTable) rangesOnePart(
 				proc)
 		}
 
+		// if the block is not needed, skip it
 		if !need {
 			continue
 		}
 
 		if hasDeletes {
+			// check if the block has deletes
+			// if any, store the block and its deletes in modifies
 			if rows, ok := deletes[blk.BlockID]; ok {
 				*modifies = append(*modifies, ModifyBlockMeta{blk, rows})
 			}
 		}
+		// store the block in ranges
 		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
 	return
