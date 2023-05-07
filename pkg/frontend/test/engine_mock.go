@@ -110,6 +110,20 @@ func (m *MockTableDef) EXPECT() *MockTableDefMockRecorder {
 	return m.recorder
 }
 
+// ToPBVersion mocks base method.
+func (m *MockTableDef) ToPBVersion() engine.TableDefPB {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ToPBVersion")
+	ret0, _ := ret[0].(engine.TableDefPB)
+	return ret0
+}
+
+// ToPBVersion indicates an expected call of ToPBVersion.
+func (mr *MockTableDefMockRecorder) ToPBVersion() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ToPBVersion", reflect.TypeOf((*MockTableDef)(nil).ToPBVersion))
+}
+
 // tableDef mocks base method.
 func (m *MockTableDef) tableDef() {
 	m.ctrl.T.Helper()
@@ -143,6 +157,20 @@ func NewMockConstraint(ctrl *gomock.Controller) *MockConstraint {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockConstraint) EXPECT() *MockConstraintMockRecorder {
 	return m.recorder
+}
+
+// ToPBVersion mocks base method.
+func (m *MockConstraint) ToPBVersion() engine.ConstraintPB {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ToPBVersion")
+	ret0, _ := ret[0].(engine.ConstraintPB)
+	return ret0
+}
+
+// ToPBVersion indicates an expected call of ToPBVersion.
+func (mr *MockConstraintMockRecorder) ToPBVersion() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ToPBVersion", reflect.TypeOf((*MockConstraint)(nil).ToPBVersion))
 }
 
 // constraint mocks base method.
@@ -820,18 +848,18 @@ func (mr *MockEngineMockRecorder) NewBlockReader(ctx, num, ts, expr, ranges, tbl
 }
 
 // Nodes mocks base method.
-func (m *MockEngine) Nodes() (engine.Nodes, error) {
+func (m *MockEngine) Nodes(isInternal bool, tenant string, cnLabel map[string]string) (engine.Nodes, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Nodes")
+	ret := m.ctrl.Call(m, "Nodes", isInternal, tenant, cnLabel)
 	ret0, _ := ret[0].(engine.Nodes)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Nodes indicates an expected call of Nodes.
-func (mr *MockEngineMockRecorder) Nodes() *gomock.Call {
+func (mr *MockEngineMockRecorder) Nodes(isInternal, tenant, cnLabel interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes), isInternal, tenant, cnLabel)
 }
 
 // Rollback mocks base method.
