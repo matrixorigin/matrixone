@@ -545,7 +545,7 @@ func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath stri
 type Cache interface {
 	Put(*table.Row)
 	Size() int64
-	Flush(*sqlWriter.BaseSqlWriter, *table.Table) error
+	Flush(*sqlWriter.DefaultSqlWriter, *table.Table) error
 	Reset()
 	IsEmpty() bool
 }
@@ -555,7 +555,7 @@ type SliceCache struct {
 	size int64
 }
 
-func (c *SliceCache) Flush(writer *sqlWriter.BaseSqlWriter, tbl *table.Table) error {
+func (c *SliceCache) Flush(writer *sqlWriter.DefaultSqlWriter, tbl *table.Table) error {
 	_, err := writer.WriteRowRecords(c.m, tbl, true)
 	c.Reset()
 	return err

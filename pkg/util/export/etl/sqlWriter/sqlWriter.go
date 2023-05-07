@@ -30,14 +30,16 @@ import (
 )
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
-const MAX_CHUNK_SIZE = 1024 * 1024 * 8
+const MAX_CHUNK_SIZE = 1024 * 1024 * 10
 
 const PACKET_TOO_LARGE = "packet for query is too large"
 
-var _ SqlWriter = (*BaseSqlWriter)(nil)
+var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
-// BaseSqlWriter SqlWriter is a writer that writes data to a SQL database.
-type BaseSqlWriter struct {
+var _ table.RowWriter = (*DefaultSqlWriter)(nil)
+
+// DefaultSqlWriter SqlWriter is a writer that writes data to a SQL database.
+type DefaultSqlWriter struct {
 	db        *sql.DB
 	address   string
 	ctx       context.Context
@@ -51,11 +53,22 @@ type SqlWriter interface {
 	WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error)
 }
 
-func (sw *BaseSqlWriter) GetContent() string {
+func (sw *DefaultSqlWriter) GetContent() string {
 	return ""
 }
-func (sw *BaseSqlWriter) WriteRow(row *table.Row) error {
+func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 	return nil
+}
+
+func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
+	sw.dbMux.Lock()
+	defer sw.dbMux.Unlock()
+	var err error
+	if sw.db == nil {
+		err = sw.db.Close()
+	}
+	sw.db = nil
+	return 0, err
 }
 
 func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
@@ -167,17 +180,11 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	return len(records), nil
 }
 
-func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
+func (sw *DefaultSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 
 	if tbl.Table == "rawlog" && len(rows) > MAX_CHUNK_SIZE {
 		return 0, fmt.Errorf("rawlog log")
 	}
-
-	//sw.semaphore <- struct{}{}
-	//defer func() {
-	//	// Release the semaphore
-	//	<-sw.semaphore
-	//}()
 
 	r := csv.NewReader(strings.NewReader(rows))
 	records, err := r.ReadAll()
@@ -187,10 +194,14 @@ func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 	return sw.WriteRowRecords(records, tbl, false)
 }
 
-func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error) {
-	if is_merge {
-		return 0, nil
-	}
+func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error) {
+
+	sw.semaphore <- struct{}{}
+	defer func() {
+		// Release the semaphore
+		<-sw.semaphore
+	}()
+
 	var err error
 	var cnt int
 	//var stmt string
@@ -209,18 +220,7 @@ func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, i
 	return cnt, nil
 }
 
-func (sw *BaseSqlWriter) FlushAndClose() (int, error) {
-	sw.dbMux.Lock()
-	defer sw.dbMux.Unlock()
-	var err error
-	if sw.db == nil {
-		err = sw.db.Close()
-	}
-	sw.db = nil
-	return 0, err
-}
-
-func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
+func (sw *DefaultSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 	sw.dbMux.Lock()
 	defer sw.dbMux.Unlock()
 
