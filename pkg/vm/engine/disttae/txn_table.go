@@ -171,8 +171,8 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 			} else {
 				for idx := range zms {
 					zm := meta.ObjectColumnMeta(uint16(idx)).ZoneMap()
-					index.UpdateZM(&zms[idx], zm.GetMaxBuf())
-					index.UpdateZM(&zms[idx], zm.GetMinBuf())
+					index.UpdateZM(zms[idx], zm.GetMaxBuf())
+					index.UpdateZM(zms[idx], zm.GetMinBuf())
 				}
 			}
 		}

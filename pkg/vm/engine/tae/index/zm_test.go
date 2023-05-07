@@ -116,7 +116,7 @@ func makeZM(t types.T, scale int32, minv, maxv any) ZM {
 	zm := NewZM(t, scale)
 	zm.Update(minv)
 	zm.Update(maxv)
-	return *zm
+	return zm
 }
 
 func runCompare(tc *testCase) [][2]bool {
@@ -266,13 +266,13 @@ func TestZM(t *testing.T) {
 	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
 	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
 
-	UpdateZMAny(&zm1, i64l)
+	UpdateZMAny(zm1, i64l)
 	t.Log(zm1.String())
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
 	require.False(t, zm1.ContainsKey(types.EncodeInt64(&i64h)))
 
-	UpdateZMAny(&zm1, i64h)
+	UpdateZMAny(zm1, i64h)
 	t.Log(zm1.String())
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&int64v)))
 	require.True(t, zm1.ContainsKey(types.EncodeInt64(&i64l)))
@@ -290,13 +290,13 @@ func TestZM(t *testing.T) {
 	require.False(t, zm2.ContainsKey(v2))
 	require.True(t, zm2.ContainsKey(v3))
 
-	UpdateZM(&zm2, maxv)
+	UpdateZM(zm2, maxv)
 	require.False(t, zm2.MaxTruncated())
 	t.Log(zm2.String())
 	require.True(t, zm2.ContainsKey(maxv))
 
 	maxv[3] = 0xff
-	UpdateZM(&zm2, maxv)
+	UpdateZM(zm2, maxv)
 	t.Log(zm2.String())
 	require.True(t, zm2.MaxTruncated())
 

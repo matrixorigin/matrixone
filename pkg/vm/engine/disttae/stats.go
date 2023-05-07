@@ -122,8 +122,8 @@ func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.B
 				if !zm.IsInited() {
 					continue
 				}
-				index.UpdateZM(&info.ColumnZMs[idx], zm.GetMaxBuf())
-				index.UpdateZM(&info.ColumnZMs[idx], zm.GetMinBuf())
+				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
+				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
 				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 			}
 		}

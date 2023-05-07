@@ -254,10 +254,10 @@ func TestEvalZonemapFilter(t *testing.T) {
 			meta: func() objectio.BlockObject {
 				objMeta := objectio.BuildMetaData(1, 4)
 				meta := objMeta.GetBlockMeta(0)
-				meta.MustGetColumn(0).SetZoneMap(*zm0)
-				meta.MustGetColumn(1).SetZoneMap(*zm1)
-				meta.MustGetColumn(2).SetZoneMap(*zm2)
-				meta.MustGetColumn(3).SetZoneMap(*zm3)
+				meta.MustGetColumn(0).SetZoneMap(zm0)
+				meta.MustGetColumn(1).SetZoneMap(zm1)
+				meta.MustGetColumn(2).SetZoneMap(zm2)
+				meta.MustGetColumn(3).SetZoneMap(zm3)
 				return meta
 			}(),
 			expect: []bool{
