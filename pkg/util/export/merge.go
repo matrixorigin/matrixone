@@ -288,7 +288,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	row := m.Table.GetRow(ctx)
 	defer row.Free()
 	defer cacheFileData.Reset()
-	sqlWriter := etl.NewSqlWriter(ctx)
+	sqlWriter := etl.NewSqlWriter(ctx, m.Table, nil)
 
 	for _, path := range files {
 		// open reader
@@ -728,7 +728,7 @@ func InitMerge(ctx context.Context, SV *config.ObservabilityParameters) error {
 	filesize := SV.MergeMaxFileSize
 	ext := SV.MergedExtension
 	if mergeCycle > 0 {
-		err = InitCronExpr(ctx, 5*time.Minute)
+		err = InitCronExpr(ctx, time.Minute)
 		if err != nil {
 			return err
 		}

@@ -77,7 +77,6 @@ func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 	dbMux.Lock()
 	defer dbMux.Unlock()
 
-	dbConn := db.Load().(*sql.DB)
 	initFunc := func() error {
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
@@ -107,13 +106,13 @@ func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 		return nil
 	}
 
-	if forceNewConn || dbConn == nil {
+	if forceNewConn || db.Load() == nil {
 		logutil.Info("sqlWriter db init", zap.Bool("forceNewConn", forceNewConn))
 		err := initFunc()
 		if err != nil {
 			return nil, err
 		}
 	}
-	dbConn = db.Load().(*sql.DB)
+	dbConn := db.Load().(*sql.DB)
 	return dbConn, nil
 }

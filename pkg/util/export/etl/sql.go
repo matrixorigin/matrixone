@@ -17,7 +17,6 @@ package etl
 import (
 	"context"
 	"database/sql"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -31,33 +30,33 @@ import (
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 10
-const BUFFER_SIZE = 1024 // Adjust this value according to your requirements
+const BUFFER_FLUSH_LIMIT = 1024 // Adjust this value according to your requirements
 
 const PACKET_TOO_LARGE = "packet for query is too large"
 
 var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
-var _ table.RowWriter = (*DefaultSqlWriter)(nil)
-
 // DefaultSqlWriter SqlWriter is a writer that writes data to a SQL database.
 type DefaultSqlWriter struct {
 	ctx       context.Context
 	semaphore chan struct{}
-	csv       CSVWriter
+	csvWriter *CSVWriter
 	tbl       *table.Table
 	buffer    [][]string
 }
 
-func NewSqlWriter(ctx context.Context) *DefaultSqlWriter {
+func NewSqlWriter(ctx context.Context, tbl *table.Table, csv *CSVWriter) *DefaultSqlWriter {
 	return &DefaultSqlWriter{
 		ctx:       ctx,
 		semaphore: make(chan struct{}, 3),
+		csvWriter: csv,
+		tbl:       tbl,
+		buffer:    make([][]string, 0, BUFFER_FLUSH_LIMIT*5),
 	}
 }
 
 type SqlWriter interface {
 	table.RowWriter
-	WriteRows(rows string, tbl *table.Table) (int, error)
 	WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error)
 }
 
@@ -72,12 +71,11 @@ func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 	sw.buffer = append(sw.buffer, row.ToStrings())
 
-	if len(sw.buffer) >= BUFFER_SIZE {
-		if _, err := sw.flushBuffer(); err != nil {
+	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT {
+		if err := sw.dumpBufferToCSV(); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -85,73 +83,87 @@ func (sw *DefaultSqlWriter) flushBuffer() (int, error) {
 	if len(sw.buffer) == 0 {
 		return 0, nil
 	}
-
-	tbl := &table.Table{
-		// Set the required properties for your table here
-	}
-
-	cnt, err := sw.WriteRowRecords(sw.buffer, tbl, false)
+	// convert sw.buffer to [][]string
+	cnt, err := sw.WriteRowRecords(sw.buffer, sw.tbl, false)
 	if err != nil {
-		return 0, err
+		if err := sw.dumpBufferToCSV(); err != nil {
+			return 0, err
+		} else {
+			sw.buffer = sw.buffer[:0] // Clear the buffer
+			return cnt, nil
+		}
 	}
-
 	sw.buffer = sw.buffer[:0] // Clear the buffer
 	return cnt, nil
 }
 
+func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
+	if len(sw.buffer) == 0 {
+		return nil
+	}
+	// write sw.buffer to csvWriter
+	for _, row := range sw.buffer {
+		sw.csvWriter.WriteStrings(row)
+	}
+	sw.buffer = sw.buffer[:0] // Clear the buffer
+	return nil
+}
+
 func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
-	cnt, err := sw.flushBuffer()
+	sw.dumpBufferToCSV()
+	cnt, err := sw.csvWriter.FlushAndClose()
 	if err != nil {
 		return 0, err
 	}
 	return cnt, err
 }
 
-func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
-
-	sb := strings.Builder{}
-	defer sb.Reset()
-	sb.WriteString("INSERT INTO")
-	sb.WriteString(" `" + tbl.Database + "`." + tbl.Table + " ")
-	sb.WriteString("VALUES ")
-
-	// write values
-	for idx, row := range records {
-		if len(row) == 0 {
-			continue
-		}
-		sb.WriteString("(")
-		for i, field := range row {
-			if i != 0 {
-				sb.WriteString(",")
-			}
-			if tbl.Columns[i].ColType == table.TJson {
-				var js interface{}
-				err := json.Unmarshal([]byte(field), &js)
-				if err != nil {
-					return "", 0, err
-				}
-				escapedJSON, _ := json.Marshal(js)
-				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
-			} else {
-				// escape single quote abd backslash
-				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
-				// truncate string if it's too long caused by escape for varchar
-				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
-				} else {
-					sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
-				}
-			}
-		}
-		if idx == len(records)-1 {
-			sb.WriteString(");")
-		} else {
-			sb.WriteString("),")
-		}
-	}
-	return sb.String(), len(records), nil
-}
+//
+//func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
+//
+//	sb := strings.Builder{}
+//	defer sb.Reset()
+//	sb.WriteString("INSERT INTO")
+//	sb.WriteString(" `" + tbl.Database + "`." + tbl.Table + " ")
+//	sb.WriteString("VALUES ")
+//
+//	// write values
+//	for idx, row := range records {
+//		if len(row) == 0 {
+//			continue
+//		}
+//		sb.WriteString("(")
+//		for i, field := range row {
+//			if i != 0 {
+//				sb.WriteString(",")
+//			}
+//			if tbl.Columns[i].ColType == table.TJson {
+//				var js interface{}
+//				err := json.Unmarshal([]byte(field), &js)
+//				if err != nil {
+//					return "", 0, err
+//				}
+//				escapedJSON, _ := json.Marshal(js)
+//				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
+//			} else {
+//				// escape single quote abd backslash
+//				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
+//				// truncate string if it's too long caused by escape for varchar
+//				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+//					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
+//				} else {
+//					sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
+//				}
+//			}
+//		}
+//		if idx == len(records)-1 {
+//			sb.WriteString(");")
+//		} else {
+//			sb.WriteString("),")
+//		}
+//	}
+//	return sb.String(), len(records), nil
+//}
 
 func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
 	if len(records) == 0 {
@@ -216,22 +228,24 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	return len(records), nil
 }
 
-func (sw *DefaultSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
-
-	if tbl.Table == "rawlog" && len(rows) > MAX_CHUNK_SIZE {
-		return 0, fmt.Errorf("rawlog log")
-	}
-
-	r := csv.NewReader(strings.NewReader(rows))
-	records, err := r.ReadAll()
-	if err != nil {
-		return 0, err
-	}
-	return sw.WriteRowRecords(records, tbl, false)
-}
+//func (sw *DefaultSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
+//
+//	if tbl.Table == "rawlog" && len(rows) > MAX_CHUNK_SIZE {
+//		return 0, fmt.Errorf("rawlog log")
+//	}
+//
+//	r := csv.NewReader(strings.NewReader(rows))
+//	records, err := r.ReadAll()
+//	if err != nil {
+//		return 0, err
+//	}
+//	return sw.WriteRowRecords(records, tbl, false)
+//}
 
 func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error) {
-
+	if is_merge {
+		return 0, fmt.Errorf("merge is not supported")
+	}
 	sw.semaphore <- struct{}{}
 	defer func() {
 		// Release the semaphore
