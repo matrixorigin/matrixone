@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,6 +31,7 @@ import (
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 10
+const BUFFER_SIZE = 1024 // Adjust this value according to your requirements
 
 const PACKET_TOO_LARGE = "packet for query is too large"
 
@@ -41,13 +41,11 @@ var _ table.RowWriter = (*DefaultSqlWriter)(nil)
 
 // DefaultSqlWriter SqlWriter is a writer that writes data to a SQL database.
 type DefaultSqlWriter struct {
-	db        *sql.DB
-	address   string
 	ctx       context.Context
-	dbMux     sync.Mutex
 	semaphore chan struct{}
 	csv       CSVWriter
 	tbl       *table.Table
+	buffer    [][]string
 }
 
 func NewSqlWriter(ctx context.Context) *DefaultSqlWriter {
@@ -66,19 +64,47 @@ type SqlWriter interface {
 func (sw *DefaultSqlWriter) GetContent() string {
 	return ""
 }
-func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
+
+func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 	return nil
 }
 
-func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
-	sw.dbMux.Lock()
-	defer sw.dbMux.Unlock()
-	var err error
-	if sw.db == nil {
-		err = sw.db.Close()
+func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
+	sw.buffer = append(sw.buffer, row.ToStrings())
+
+	if len(sw.buffer) >= BUFFER_SIZE {
+		if _, err := sw.flushBuffer(); err != nil {
+			return err
+		}
 	}
-	sw.db = nil
-	return 0, err
+
+	return nil
+}
+
+func (sw *DefaultSqlWriter) flushBuffer() (int, error) {
+	if len(sw.buffer) == 0 {
+		return 0, nil
+	}
+
+	tbl := &table.Table{
+		// Set the required properties for your table here
+	}
+
+	cnt, err := sw.WriteRowRecords(sw.buffer, tbl, false)
+	if err != nil {
+		return 0, err
+	}
+
+	sw.buffer = sw.buffer[:0] // Clear the buffer
+	return cnt, nil
+}
+
+func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
+	cnt, err := sw.flushBuffer()
+	if err != nil {
+		return 0, err
+	}
+	return cnt, err
 }
 
 func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
@@ -215,71 +241,17 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 	var err error
 	var cnt int
 	//var stmt string
-	db, err := sw.initOrRefreshDBConn(false)
+	dbConn, err := db.InitOrRefreshDBConn(false)
 	if err != nil {
-		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(err))
+		logutil.Error("sqlWriter db init failed", zap.Error(err))
 		return 0, err
 	}
 
-	cnt, err = bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
+	cnt, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
-		logutil.Error("sqlWriter bulk insert failed", zap.String("address", sw.address), zap.Error(err))
+		logutil.Error("sqlWriter bulk insert failed", zap.Error(err))
 
 		return 0, err
 	}
 	return cnt, nil
-}
-
-func (sw *DefaultSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
-	sw.dbMux.Lock()
-	defer sw.dbMux.Unlock()
-
-	initFunc := func() error {
-		dbUser, _ := db.GetSQLWriterDBUser()
-		if dbUser == nil {
-			sw.db = nil
-		}
-
-		addressFunc := db.GetSQLWriterDBAddressFunc()
-		if addressFunc == nil {
-			sw.db = nil
-		}
-		dbAddress, err := addressFunc(context.Background())
-		if err != nil {
-			return err
-		}
-		dsn :=
-			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=300s&writeTimeout=30m&timeout=3000s&maxAllowedPacket=0",
-				dbUser.UserName,
-				dbUser.Password,
-				dbAddress)
-		db, err := sql.Open("mysql", dsn)
-		logutil.Info("sqlWriter db initialized", zap.String("address", dbAddress))
-		if err != nil {
-			logutil.Info("sqlWriter db initialized failed", zap.String("address", dbAddress), zap.Error(err))
-			return err
-		}
-		if sw.db != nil {
-			sw.db.Close()
-		}
-		sw.db = db
-		sw.address = dbAddress
-		return nil
-	}
-
-	if forceNewConn || sw.db == nil {
-		if sw.db != nil {
-			err := sw.db.Ping()
-			if err == nil {
-				return sw.db, nil
-			}
-		}
-		logutil.Info("sqlWriter db init", zap.Bool("forceNewConn", forceNewConn))
-		err := initFunc()
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return sw.db, nil
 }

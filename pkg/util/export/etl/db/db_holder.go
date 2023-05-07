@@ -16,9 +16,14 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 var (
@@ -29,6 +34,10 @@ var (
 var (
 	sqlWriterDBUser atomic.Value
 	dbAddressFunc   atomic.Value
+
+	db atomic.Value
+
+	dbMux sync.Mutex
 )
 
 const MOLoggerUser = "mo_logger"
@@ -61,4 +70,50 @@ func SetSQLWriterDBAddressFunc(f func(context.Context) (string, error)) {
 
 func GetSQLWriterDBAddressFunc() func(context.Context) (string, error) {
 	return dbAddressFunc.Load().(func(context.Context) (string, error))
+}
+
+func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
+
+	dbMux.Lock()
+	defer dbMux.Unlock()
+
+	dbConn := db.Load().(*sql.DB)
+	initFunc := func() error {
+		dbUser, _ := GetSQLWriterDBUser()
+		if dbUser == nil {
+			return errNotReady
+		}
+
+		addressFunc := GetSQLWriterDBAddressFunc()
+		if addressFunc == nil {
+			return errNotReady
+		}
+		dbAddress, err := addressFunc(context.Background())
+		if err != nil {
+			return err
+		}
+		dsn :=
+			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=300s&writeTimeout=30m&timeout=3000s&maxAllowedPacket=0",
+				dbUser.UserName,
+				dbUser.Password,
+				dbAddress)
+		newDBConn, err := sql.Open("mysql", dsn)
+		logutil.Info("sqlWriter db initialized", zap.String("address", dbAddress))
+		if err != nil {
+			logutil.Info("sqlWriter db initialized failed", zap.String("address", dbAddress), zap.Error(err))
+			return err
+		}
+		db.Store(newDBConn)
+		return nil
+	}
+
+	if forceNewConn || dbConn == nil {
+		logutil.Info("sqlWriter db init", zap.Bool("forceNewConn", forceNewConn))
+		err := initFunc()
+		if err != nil {
+			return nil, err
+		}
+	}
+	dbConn = db.Load().(*sql.DB)
+	return dbConn, nil
 }
