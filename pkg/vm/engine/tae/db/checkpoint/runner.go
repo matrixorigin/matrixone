@@ -459,7 +459,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	}
 	defer data.Close()
 
-	segmentid, _ := types.BuildUuid()
+	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
 	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name)
 	if err != nil {
@@ -483,7 +483,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	}
 	defer data.Close()
 
-	segmentid, _ := types.BuildUuid()
+	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
 	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name)
 	if err != nil {
@@ -654,11 +654,11 @@ func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, for
 		panic(err)
 	}
 	sid := objectio.ToSegmentId(id)
-	segment, err := table.GetSegmentByID(*sid)
+	segment, err := table.GetSegmentByID(sid)
 	if err != nil {
 		panic(err)
 	}
-	blk, err := segment.GetBlockEntryByID(*id)
+	blk, err := segment.GetBlockEntryByID(id)
 	if err != nil {
 		panic(err)
 	}
@@ -706,7 +706,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 	visitor.BlockFn = func(force bool) func(uint64, uint64, *objectio.Segmentid, uint16, uint16) error {
 		return func(dbID, tableID uint64, segmentID *objectio.Segmentid, num, seq uint16) (err error) {
 			id := objectio.NewBlockid(segmentID, num, seq)
-			return r.tryCompactBlock(dbID, tableID, &id, force)
+			return r.tryCompactBlock(dbID, tableID, id, force)
 		}
 	}(force)
 

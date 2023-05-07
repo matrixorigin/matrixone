@@ -169,7 +169,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				lens := rbat.Length()
 				vec := vector.NewVec(types.T_Rowid.ToType())
 				for i := 0; i < lens; i++ {
-					if err := vector.AppendFixed(vec, generateRowIdForCNBlock(&blkid, uint32(i)), false,
+					if err := vector.AppendFixed(vec, *objectio.NewRowid(blkid, uint32(i)), false,
 						p.procMPool); err != nil {
 						return rbat, err
 					}

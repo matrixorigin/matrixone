@@ -67,7 +67,6 @@ func init() {
 
 type UpdateCmd struct {
 	*txnbase.BaseCustomizedCmd
-	dbid    uint64
 	dest    *common.ID
 	delete  *DeleteNode
 	append  *AppendNode
@@ -91,7 +90,6 @@ func NewAppendCmd(id uint32, app *AppendNode) *UpdateCmd {
 		append:  app,
 		cmdType: IOET_WALTxnCommand_AppendNode,
 		dest:    app.mvcc.meta.AsCommonID(),
-		dbid:    app.mvcc.meta.GetSegment().GetTable().GetDB().ID,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -102,7 +100,6 @@ func NewDeleteCmd(id uint32, del *DeleteNode) *UpdateCmd {
 		delete:  del,
 		cmdType: IOET_WALTxnCommand_DeleteNode,
 		dest:    del.chain.mvcc.meta.AsCommonID(),
-		dbid:    del.chain.mvcc.meta.GetSegment().GetTable().GetDB().ID,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -113,9 +110,6 @@ func (c *UpdateCmd) GetAppendNode() *AppendNode {
 }
 func (c *UpdateCmd) GetDeleteNode() *DeleteNode {
 	return c.delete
-}
-func (c *UpdateCmd) GetDBID() uint64 {
-	return c.dbid
 }
 
 func (c *UpdateCmd) GetDest() *common.ID {
@@ -211,10 +205,7 @@ func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if _, err = w.Write(types.EncodeUint32(&c.ID)); err != nil {
 		return
 	}
-	if _, err = w.Write(types.EncodeUint64(&c.dbid)); err != nil {
-		return
-	}
-	n += 14
+	n += 6
 	if _, err = w.Write(common.EncodeID(c.dest)); err != nil {
 		return
 	}
@@ -233,9 +224,6 @@ func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(types.EncodeUint32(&c.ID)); err != nil {
 		return
 	}
-	if _, err = r.Read(types.EncodeUint64(&c.dbid)); err != nil {
-		return
-	}
 	c.dest = &common.ID{}
 	if _, err = r.Read(common.EncodeID(c.dest)); err != nil {
 		return
@@ -246,7 +234,7 @@ func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	case IOET_WALTxnCommand_AppendNode:
 		n, err = c.append.ReadFrom(r)
 	}
-	n += 12 + common.IDSize
+	n += 4 + common.IDSize
 	return
 }
 

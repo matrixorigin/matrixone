@@ -242,9 +242,9 @@ type TxnStore interface {
 	AddBlksWithMetaLoc(dbId, id uint64,
 		zm []objectio.ZoneMap, metaLocs []objectio.Location) error
 
-	RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) error
+	RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
-	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (any, bool, error)
+	GetValue(id *common.ID, row uint32, col uint16) (any, bool, error)
 
 	CreateRelation(dbId uint64, def any) (handle.Relation, error)
 	CreateRelationWithTableId(dbId uint64, tableId uint64, def any) (handle.Relation, error)
@@ -261,16 +261,16 @@ type TxnStore interface {
 	DropDatabaseByID(id uint64) (handle.Database, error)
 	DatabaseNames() []string
 
-	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
+	GetSegment(id *common.ID) (handle.Segment, error)
 	CreateSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
-	CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (handle.Block, error)
-	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *objectio.CreateBlockOpt) (handle.Block, error)
-	SoftDeleteSegment(dbId uint64, id *common.ID) error
-	SoftDeleteBlock(dbId uint64, id *common.ID) error
-	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objectio.Location) (err error)
-	UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc objectio.Location) (err error)
+	CreateBlock(id *common.ID, is1PC bool) (handle.Block, error)
+	GetBlock(id *common.ID) (handle.Block, error)
+	CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (handle.Block, error)
+	SoftDeleteSegment(id *common.ID) error
+	SoftDeleteBlock(id *common.ID) error
+	UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error)
+	UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error)
 
 	AddTxnEntry(TxnEntryType, TxnEntry)
 
