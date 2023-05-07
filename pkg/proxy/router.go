@@ -129,7 +129,11 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 func (r *router) SelectByLabel(label labelInfo) (*CNServer, error) {
 	var cns []*CNServer
 	var cnEmpty, cnNotEmpty bool
-	r.moCluster.GetCNService(label.genSelector(), func(s metadata.CNService) bool {
+	selector := label.genSelector()
+	if label.isSuperTenant() {
+		selector = clusterservice.NewSelector()
+	}
+	r.moCluster.GetCNService(selector, func(s metadata.CNService) bool {
 		cns = append(cns, &CNServer{
 			reqLabel: label,
 			cnLabel:  s.Labels,
