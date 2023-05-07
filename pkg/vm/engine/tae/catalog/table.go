@@ -535,12 +535,6 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.AsyncTxn, req
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return
 	}
-	if req.Kind == apipb.AlterKind_RenameTable {
-		rename := req.GetRenameTable()
-		// udpate name index in db entry
-		tenantID := newSchema.AcInfo.TenantID
-		err = entry.db.RenameTableInTxn(rename.OldName, rename.NewName, entry.ID, tenantID, txn, isNewNode)
-	}
 	if isNewNode {
 		node.BaseNode.Schema.Version += 1
 	}

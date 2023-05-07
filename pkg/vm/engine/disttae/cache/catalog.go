@@ -288,6 +288,19 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.PrimarySeqnum = -1
 		item.ClusterByIdx = -1
 		copy(item.Rowid[:], rowids[i][:])
+		// invalid old name table
+		if exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]}); ok && exist.Name != item.Name {
+			newItem := &TableItem{
+				deleted:    true,
+				Id:         exist.Id,
+				Name:       exist.Name,
+				Rowid:      exist.Rowid,
+				AccountId:  exist.AccountId,
+				DatabaseId: exist.DatabaseId,
+				Ts:         item.Ts,
+			}
+			cc.tables.data.Set(newItem)
+		}
 		cc.tables.data.Set(item)
 		cc.tables.rowidIndex.Set(item)
 	}

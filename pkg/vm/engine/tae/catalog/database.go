@@ -400,17 +400,34 @@ func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn
 	return created, err
 }
 
-func (e *DBEntry) RenameTableInTxn(old, new string, tid uint64, tenantID uint32, txn txnif.AsyncTxn, first bool) error {
+// For test only
+func (e *DBEntry) PrettyNameIndex() string {
+	buf := &bytes.Buffer{}
+	buf.WriteString(fmt.Sprintf("[%d]NameIndex:\n", len(e.nameNodes)))
+	// iterate all nodes in nameNodes, collect node ids to a string
+	ids := make([]uint64, 0)
+	for name, node := range e.nameNodes {
+		ids = ids[:0]
+		node.ForEachNodes(func(nn *nameNode[*TableEntry]) bool {
+			ids = append(ids, nn.id)
+			return true
+		})
+		buf.WriteString(fmt.Sprintf("  %s: %v\n", name, ids))
+	}
+	return buf.String()
+}
+
+func (e *DBEntry) RenameTableInTxn(old, new string, tid uint64, tenantID uint32, txn txnif.TxnReader, first bool) error {
 	e.Lock()
 	defer e.Unlock()
-	newFullName := genTblFullName(tenantID, new)
-	if err := e.checkAddNameConflictLocked(new, e.nameNodes[newFullName], txn); err != nil {
-		return err
-	}
-
 	// if alter again and again in the same txn, previous temp name should be deleted.
 	if !first {
 		e.removeNameIndexLocked(genTblFullName(tenantID, old), tid)
+	}
+
+	newFullName := genTblFullName(tenantID, new)
+	if err := e.checkAddNameConflictLocked(new, tid, e.nameNodes[newFullName], txn); err != nil {
+		return err
 	}
 	// make sure every name node has up to one table id. check case alter A -> B -> A
 	e.removeNameIndexLocked(newFullName, tid)
@@ -524,7 +541,8 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 		nn.CreateNode(table.ID)
 	} else {
 		if !skipDedup {
-			err = e.checkAddNameConflictLocked(table.GetLastestSchema().Name, nn, txn)
+			name := table.GetLastestSchema().Name
+			err = e.checkAddNameConflictLocked(name, table.ID, nn, txn)
 			if err != nil {
 				return
 			}
@@ -536,12 +554,16 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 	return
 }
 
-func (e *DBEntry) checkAddNameConflictLocked(name string, nn *nodeList[*TableEntry], txn txnif.TxnReader) (err error) {
+func (e *DBEntry) checkAddNameConflictLocked(name string, tid uint64, nn *nodeList[*TableEntry], txn txnif.TxnReader) (err error) {
 	if nn == nil {
 		return nil
 	}
 	// check ww conflict
 	tbl := nn.GetNode().GetPayload()
+	// skip the same table entry
+	if tbl.ID == tid {
+		return nil
+	}
 	if err = tbl.ConflictCheck(txn); err != nil {
 		return
 	}
