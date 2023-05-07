@@ -313,7 +313,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	for i, rowid := range rowids {
 		// process cn block deletes
 		uid := rowid.GetSegid()
-		blkid := rowid.GetBlockid()
+		blkid := *rowid.GetBlockid()
 		deleteBlkId[blkid] = true
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
@@ -362,7 +362,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 				continue
 			}
 			// current batch is not be deleted
-			if !deleteBlkId[vs[0].GetBlockid()] {
+			if !deleteBlkId[*vs[0].GetBlockid()] {
 				continue
 			}
 			min2 := vs[0].GetRowOffset()

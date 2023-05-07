@@ -577,7 +577,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		segHandle, err := rel.GetSegment(seg.ID)
+		segHandle, err := rel.GetSegment(&seg.ID)
 		if err != nil {
 			if skipConflict {
 				_ = txn.Rollback()

@@ -44,9 +44,15 @@ func NewReplayBlockEntry() *BlockEntry {
 	}
 }
 
-func NewBlockEntry(segment *SegmentEntry, id types.Blockid, txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) *BlockEntry {
+func NewBlockEntry(
+	segment *SegmentEntry,
+	id *objectio.Blockid,
+	txn txnif.AsyncTxn,
+	state EntryState,
+	dataFactory BlockDataFactory,
+) *BlockEntry {
 	e := &BlockEntry{
-		ID: id,
+		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
@@ -63,14 +69,14 @@ func NewBlockEntry(segment *SegmentEntry, id types.Blockid, txn txnif.AsyncTxn, 
 
 func NewBlockEntryWithMeta(
 	segment *SegmentEntry,
-	id types.Blockid,
+	id *objectio.Blockid,
 	txn txnif.AsyncTxn,
 	state EntryState,
 	dataFactory BlockDataFactory,
 	metaLoc objectio.Location,
 	deltaLoc objectio.Location) *BlockEntry {
 	e := &BlockEntry{
-		ID: id,
+		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
@@ -85,9 +91,9 @@ func NewBlockEntryWithMeta(
 	return e
 }
 
-func NewStandaloneBlock(segment *SegmentEntry, id types.Blockid, ts types.TS) *BlockEntry {
+func NewStandaloneBlock(segment *SegmentEntry, id *objectio.Blockid, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
-		ID: id,
+		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
@@ -101,12 +107,12 @@ func NewStandaloneBlock(segment *SegmentEntry, id types.Blockid, ts types.TS) *B
 
 func NewStandaloneBlockWithLoc(
 	segment *SegmentEntry,
-	id types.Blockid,
+	id *objectio.Blockid,
 	ts types.TS,
 	metaLoc objectio.Location,
 	delLoc objectio.Location) *BlockEntry {
 	e := &BlockEntry{
-		ID: id,
+		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
@@ -195,9 +201,9 @@ func (entry *BlockEntry) StringWithLevelLocked(level common.PPLevel) string {
 
 func (entry *BlockEntry) AsCommonID() *common.ID {
 	return &common.ID{
-		TableID:   entry.GetSegment().GetTable().ID,
-		SegmentID: entry.GetSegment().ID,
-		BlockID:   entry.ID,
+		DbID:    entry.GetSegment().GetTable().GetDB().ID,
+		TableID: entry.GetSegment().GetTable().ID,
+		BlockID: entry.ID,
 	}
 }
 

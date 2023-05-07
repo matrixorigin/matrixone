@@ -58,8 +58,8 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 	sid := objectio.NewSegmentid()
 	buildRowID := func(i int) types.Rowid {
-		blk := objectio.NewBlockid(&sid, uint16(i), 0)
-		return objectio.NewRowid(&blk, uint32(0))
+		blk := objectio.NewBlockid(sid, uint16(i), 0)
+		return *objectio.NewRowid(blk, uint32(0))
 	}
 
 	{
