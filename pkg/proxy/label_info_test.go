@@ -153,6 +153,25 @@ func TestLabelInfoAll(t *testing.T) {
 	})
 }
 
+func TestLabelSuperTenant(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	tenant := Tenant("t1")
+	labels := map[string]string{
+		"k1": "v1",
+		"k2": "v2",
+	}
+	info := newLabelInfo(tenant, labels)
+	require.Equal(t, false, info.isSuperTenant())
+
+	tenant = ""
+	info = newLabelInfo(tenant, labels)
+	require.Equal(t, true, info.isSuperTenant())
+
+	tenant = "sys"
+	info = newLabelInfo(tenant, labels)
+	require.Equal(t, true, info.isSuperTenant())
+}
+
 func TestLabelSelector(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	tenant := Tenant("t1")
