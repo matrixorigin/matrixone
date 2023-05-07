@@ -226,17 +226,17 @@ func (tbl *txnTable) reset(newId uint64) {
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]byte, err error) {
 	tbl.db.txn.Lock()
 	tbl.writes = tbl.writes[:0]
+
+	// get all writes for this table from the current transaction
 	for i, entry := range tbl.db.txn.writes {
-		if entry.databaseId != tbl.db.databaseId {
-			continue
-		}
-		if entry.tableId != tbl.tableId {
+		if entry.databaseId != tbl.db.databaseId || entry.tableId != tbl.tableId {
 			continue
 		}
 		tbl.writes = append(tbl.writes, tbl.db.txn.writes[i])
 	}
 	tbl.db.txn.Unlock()
 
+	// make sure we have the block infos snapshot
 	if err = tbl.updateBlockInfos(ctx, expr); err != nil {
 		return
 	}
@@ -1163,45 +1163,59 @@ func (tbl *txnTable) getParts(ctx context.Context) ([]*logtailreplay.PartitionSt
 	return tbl._parts, nil
 }
 
-func (tbl *txnTable) updateBlockInfos(ctx context.Context, expr *plan.Expr) error {
+func (tbl *txnTable) updateBlockInfos(ctx context.Context, expr *plan.Expr) (err error) {
 	tbl.dnList = []int{0}
+
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
+	// check if the table is not created in this txn, and the block infos are not updated, then update:
+	// 1. update logtail
+	// 2. generate block infos
+	// 3. update the blockInfosUpdated and blockInfos fields of the table
 	if !created && !tbl.blockInfosUpdated {
-		if err := tbl.updateLogtail(ctx); err != nil {
-			return err
+		if err = tbl.updateLogtail(ctx); err != nil {
+			return
 		}
-		blocks, err := tbl.db.txn.getBlockInfos(ctx, tbl)
-		if err != nil {
-			return err
+		var blocks [][]catalog.BlockInfo
+		if blocks, err = tbl.db.txn.getBlockInfos(ctx, tbl); err != nil {
+			return
 		}
 		tbl.blockInfos = blocks
 		tbl.blockInfosUpdated = true
 	}
-	return nil
+	return
 }
 
-func (tbl *txnTable) updateLogtail(ctx context.Context) error {
-	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))
-	if created {
-		return nil
-	}
-
+func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
+	// if the logtail is updated, skip
 	if tbl.logtailUpdated {
-		return nil
+		return
 	}
 
+	// if the table is created in this txn, skip
+	if _, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId)); created {
+		return
+	}
+
+	// if it is a push model
 	if tbl.db.txn.engine.UsePushModelOrNot() {
-		if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-			return err
+		if err = tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+			return
 		}
-		err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
-		if err != nil {
-			return err
+		if err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
+			return
 		}
 	} else {
-		if err := tbl.db.txn.engine.UpdateOfPull(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
-			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-			return err
+		if err = tbl.db.txn.engine.UpdateOfPull(
+			ctx,
+			tbl.db.txn.dnStores[:1],
+			tbl,
+			tbl.db.txn.op,
+			tbl.primaryIdx,
+			tbl.db.databaseId,
+			tbl.tableId,
+			tbl.db.txn.meta.SnapshotTS,
+		); err != nil {
+			return
 		}
 	}
 

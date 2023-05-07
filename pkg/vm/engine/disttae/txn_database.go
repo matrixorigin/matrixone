@@ -76,12 +76,17 @@ func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, 
 
 func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relation, error) {
 	logDebugf(db.txn.meta, "txnDatabase.Relation table %s", name)
+
+	// get relation from the txn tables cache: not created by this txn
 	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*txnTable), nil
 	}
+	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*txnTable), nil
 	}
+
+	// special tables
 	if db.databaseName == catalog.MO_CATALOG {
 		switch name {
 		case catalog.MO_DATABASE:

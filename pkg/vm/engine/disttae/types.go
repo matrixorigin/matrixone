@@ -227,14 +227,21 @@ type txnTable struct {
 	dnList    []int
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
-	defs              []engine.TableDef
-	tableDef          *plan.TableDef
-	idxs              []uint16
-	_parts            []*logtailreplay.PartitionState
-	modifiedBlocks    [][]ModifyBlockMeta
-	blockInfos        [][]catalog.BlockInfo
+	defs           []engine.TableDef
+	tableDef       *plan.TableDef
+	idxs           []uint16
+	_parts         []*logtailreplay.PartitionState
+	modifiedBlocks [][]ModifyBlockMeta
+
+	// blockInfos stores all the block infos for this table of this transaction
+	// it is only generated when the table is not created by this transaction
+	// it is initialized by updateBlockInfos and once it is initialized, it will not be updated
+	blockInfos [][]catalog.BlockInfo
+
+	// specify whether the blockInfos is updated. once it is updated, it will not be updated again
 	blockInfosUpdated bool
-	logtailUpdated    bool
+	// specify whether the logtail is updated. once it is updated, it will not be updated again
+	logtailUpdated bool
 
 	primaryIdx   int // -1 means no primary key
 	clusterByIdx int // -1 means no clusterBy key
