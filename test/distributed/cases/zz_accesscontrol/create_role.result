@@ -177,12 +177,12 @@ execute stmt4;
 Database
 mo_task
 information_schema
+mo_catalog
 mysql
 system_metrics
 system
 create_role
 p_db
-mo_catalog
 prepare stmt5 from 'select "abc"';
 execute stmt5;
 abc
