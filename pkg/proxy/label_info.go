@@ -88,6 +88,14 @@ func (l *labelInfo) tenantLabel() map[string]string {
 	return t
 }
 
+// isSuperTenant returns true if the tenant is sys or empty.
+func (l *labelInfo) isSuperTenant() bool {
+	if l.Tenant == "" || l.Tenant == "sys" {
+		return true
+	}
+	return false
+}
+
 // genSetVarStmt returns a statement of set session variable.
 func (l *labelInfo) genSetVarStmt() string {
 	var builder strings.Builder
