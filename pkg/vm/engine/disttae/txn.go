@@ -96,18 +96,20 @@ func (txn *Transaction) WriteBatch(
 	truncate bool) error {
 	txn.readOnly = false
 	bat.Cnt = 1
-	if typ == INSERT && !insertBatchHasRowId {
-		txn.genBlock()
-		len := bat.Length()
-		vec := vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < len; i++ {
-			if err := vector.AppendFixed(vec, txn.genRowId(), false,
-				txn.proc.Mp()); err != nil {
-				return err
+	if typ == INSERT {
+		if !insertBatchHasRowId {
+			txn.genBlock()
+			len := bat.Length()
+			vec := vector.NewVec(types.T_Rowid.ToType())
+			for i := 0; i < len; i++ {
+				if err := vector.AppendFixed(vec, txn.genRowId(), false,
+					txn.proc.Mp()); err != nil {
+					return err
+				}
 			}
+			bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+			bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 		}
-		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
-		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 		// for TestPrimaryKeyCheck
 		if txn.blockId_raw_batch != nil {
 			txn.blockId_raw_batch[*txn.getCurrentBlockId()] = bat
@@ -154,7 +156,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			size += uint64(txn.writes[i].bat.Size())
 		}
 	}
-	if offset > 0 && size < txn.workspaceSize && !force {
+	if offset > 0 && size < txn.workspaceSize {
 		txn.Unlock()
 		return nil
 	}
