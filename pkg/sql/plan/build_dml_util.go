@@ -503,79 +503,79 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 			if err != nil {
 				return err
 			}
-			lastNodeId = builder.appendStep(lastNodeId)
+			builder.appendStep(lastNodeId)
 		}
 	}
 
 	// todo: make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 	{
-		if pkPos := getPkPos(tableDef, true); pkPos != -1 {
-			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+		// if pkPos := getPkPos(tableDef, true); pkPos != -1 {
+		// 	lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 
-			pkColExpr := &plan.Expr{
-				Typ: tableDef.Cols[pkPos].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(pkPos),
-						Name:   tableDef.Cols[pkPos].Name,
-					},
-				},
-			}
-			rightId := builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_TABLE_SCAN,
-				Stats:       &plan.Stats{},
-				ObjRef:      objRef,
-				TableDef:    tableDef,
-				ProjectList: []*Expr{pkColExpr},
-			}, bindCtx)
-			rightExpr := &Expr{
-				Typ: tableDef.Cols[pkPos].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						Name:   tableDef.Cols[pkPos].Name,
-					},
-				},
-			}
-			condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{pkColExpr, rightExpr})
-			if err != nil {
-				return err
-			}
-			lastNodeId = builder.appendNode(&plan.Node{
-				NodeType:    plan.Node_JOIN,
-				Children:    []int32{lastNodeId, rightId},
-				JoinType:    plan.Node_SEMI,
-				OnList:      []*Expr{condExpr},
-				ProjectList: []*Expr{pkColExpr},
-			}, bindCtx)
-			colExpr := &Expr{
-				Typ: tableDef.Cols[pkPos].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						Name: tableDef.Cols[pkPos].Name,
-					},
-				},
-			}
-			lastNodeId, err = appendAggCountGroupByColExpr(builder, bindCtx, lastNodeId, colExpr)
-			if err != nil {
-				return err
-			}
+		// 	pkColExpr := &plan.Expr{
+		// 		Typ: tableDef.Cols[pkPos].Typ,
+		// 		Expr: &plan.Expr_Col{
+		// 			Col: &plan.ColRef{
+		// 				ColPos: int32(pkPos),
+		// 				Name:   tableDef.Cols[pkPos].Name,
+		// 			},
+		// 		},
+		// 	}
+		// 	rightId := builder.appendNode(&plan.Node{
+		// 		NodeType:    plan.Node_TABLE_SCAN,
+		// 		Stats:       &plan.Stats{},
+		// 		ObjRef:      objRef,
+		// 		TableDef:    tableDef,
+		// 		ProjectList: []*Expr{pkColExpr},
+		// 	}, bindCtx)
+		// 	rightExpr := &Expr{
+		// 		Typ: tableDef.Cols[pkPos].Typ,
+		// 		Expr: &plan.Expr_Col{
+		// 			Col: &plan.ColRef{
+		// 				RelPos: 1,
+		// 				Name:   tableDef.Cols[pkPos].Name,
+		// 			},
+		// 		},
+		// 	}
+		// 	condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{pkColExpr, rightExpr})
+		// 	if err != nil {
+		// 		return err
+		// 	}
+		// 	lastNodeId = builder.appendNode(&plan.Node{
+		// 		NodeType:    plan.Node_JOIN,
+		// 		Children:    []int32{lastNodeId, rightId},
+		// 		JoinType:    plan.Node_SEMI,
+		// 		OnList:      []*Expr{condExpr},
+		// 		ProjectList: []*Expr{pkColExpr},
+		// 	}, bindCtx)
+		// 	colExpr := &Expr{
+		// 		Typ: tableDef.Cols[pkPos].Typ,
+		// 		Expr: &plan.Expr_Col{
+		// 			Col: &plan.ColRef{
+		// 				Name: tableDef.Cols[pkPos].Name,
+		// 			},
+		// 		},
+		// 	}
+		// 	lastNodeId, err = appendAggCountGroupByColExpr(builder, bindCtx, lastNodeId, colExpr)
+		// 	if err != nil {
+		// 		return err
+		// 	}
 
-			countType := types.T_int64.ToType()
-			countColExpr := &plan.Expr{
-				Typ: makePlan2Type(&countType),
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						Name: tableDef.Cols[pkPos].Name,
-					},
-				},
-			}
-			lastNodeId, err = appendAssertEqNode(builder, bindCtx, lastNodeId, countColExpr, 0)
-			if err != nil {
-				return err
-			}
-			lastNodeId = builder.appendStep(lastNodeId)
-		}
+		// 	countType := types.T_int64.ToType()
+		// 	countColExpr := &plan.Expr{
+		// 		Typ: makePlan2Type(&countType),
+		// 		Expr: &plan.Expr_Col{
+		// 			Col: &plan.ColRef{
+		// 				Name: tableDef.Cols[pkPos].Name,
+		// 			},
+		// 		},
+		// 	}
+		// 	lastNodeId, err = appendAssertEqNode(builder, bindCtx, lastNodeId, countColExpr, 0)
+		// 	if err != nil {
+		// 		return err
+		// 	}
+		// 	builder.appendStep(lastNodeId)
+		// }
 	}
 
 	return nil
