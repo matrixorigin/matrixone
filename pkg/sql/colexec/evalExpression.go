@@ -259,6 +259,7 @@ func (expr *FunctionExpressionExecutor) Free() {
 	}
 	vec := expr.resultVector.GetResultVector()
 	vec.Free(expr.m)
+	expr.resultVector = nil
 	for _, p := range expr.parameterExecutor {
 		p.Free()
 	}
@@ -301,6 +302,7 @@ func (expr *FixedVectorExpressionExecutor) Free() {
 		return
 	}
 	expr.resultVector.Free(expr.m)
+	expr.resultVector = nil
 }
 
 func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Const) (*vector.Vector, error) {

@@ -179,12 +179,10 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 	if err := ctr.evalAggVector(bat, proc); err != nil {
 		return false, err
 	}
-	defer ctr.cleanAggVectors()
 
 	if err := ctr.evalMultiAggs(bat, proc); err != nil {
 		return false, err
 	}
-	defer ctr.cleanMultiAggVecs()
 
 	if ctr.bat == nil {
 		var err error
@@ -503,7 +501,6 @@ func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) err
 	for i := range ctr.aggVecs {
 		vec, err := ctr.aggVecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanAggVectors()
 			return err
 		}
 		ctr.aggVecs[i].vec = vec
@@ -517,7 +514,6 @@ func (ctr *container) evalMultiAggs(bat *batch.Batch, proc *process.Process) err
 		for j := range ctr.multiVecs[i] {
 			vec, err := ctr.multiVecs[i][j].executor.Eval(proc, []*batch.Batch{bat})
 			if err != nil {
-				ctr.cleanMultiAggVecs()
 				return err
 			}
 			ctr.multiVecs[i][j].vec = vec

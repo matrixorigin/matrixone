@@ -125,7 +125,9 @@ func (ctr *container) cleanAggVectors() {
 func (ctr *container) cleanMultiAggVecs() {
 	for i := range ctr.multiVecs {
 		for j := range ctr.multiVecs[i] {
-			ctr.multiVecs[i][j].executor.Free()
+			if ctr.multiVecs[i][j].executor != nil {
+				ctr.multiVecs[i][j].executor.Free()
+			}
 			ctr.multiVecs[i][j].vec = nil
 		}
 	}
