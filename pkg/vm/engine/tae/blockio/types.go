@@ -120,7 +120,7 @@ func EncodeLocationFromString(info string) (objectio.Location, error) {
 	if err != nil {
 		return nil, err
 	}
-	name := objectio.BuildObjectName(uid, uint16(num))
+	name := objectio.BuildObjectName(&uid, uint16(num))
 	return objectio.BuildLocation(name, extent, uint32(rows), uint16(id)), nil
 }
 

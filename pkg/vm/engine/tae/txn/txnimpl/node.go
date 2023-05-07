@@ -109,7 +109,6 @@ func (n *node) AddApplyInfo(
 	srcLen,
 	destOff,
 	destLen uint32,
-	dbid uint64,
 	dest *common.ID) *appendInfo {
 	panic("not supported ")
 }

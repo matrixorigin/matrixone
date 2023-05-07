@@ -18,12 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -129,16 +126,16 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	return table.AddBlksWithMetaLoc(zm, metaLocs)
 }
 
-func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
-	changed, nid, nrow, err := table.TransferDeleteIntent(id, row)
-	if err != nil {
-		return err
-	}
-	if !changed {
-		return table.RangeDelete(id, row, row, dt)
-	}
-	return table.RangeDelete(nid, nrow, nrow, dt)
-}
+// func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
+// 	changed, nid, nrow, err := table.TransferDeleteIntent(id, row)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	if !changed {
+// 		return table.RangeDelete(id, row, row, dt)
+// 	}
+// 	return table.RangeDelete(nid, nrow, nrow, dt)
+// }
 
 func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
 	table, err := db.getOrSetTable(id.TableID)
@@ -298,7 +295,7 @@ func (db *txnDB) GetSegment(id *common.ID) (seg handle.Segment, err error) {
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.GetSegment(id.SegmentID)
+	return table.GetSegment(id.SegmentID())
 }
 
 func (db *txnDB) CreateSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
@@ -351,7 +348,7 @@ func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBl
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.CreateNonAppendableBlock(id.SegmentID, opts)
+	return table.CreateNonAppendableBlock(id.SegmentID(), opts)
 }
 
 func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
@@ -362,12 +359,12 @@ func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	return table.GetBlock(id)
 }
 
-func (db *txnDB) CreateBlock(tid uint64, sid types.Uuid, is1PC bool) (blk handle.Block, err error) {
+func (db *txnDB) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err error) {
 	var table *txnTable
-	if table, err = db.getOrSetTable(tid); err != nil {
+	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.CreateBlock(sid, is1PC)
+	return table.CreateBlock(id.SegmentID(), is1PC)
 }
 
 func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
@@ -396,7 +393,7 @@ func (db *txnDB) SoftDeleteSegment(id *common.ID) (err error) {
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
-	return table.SoftDeleteSegment(id.SegmentID)
+	return table.SoftDeleteSegment(id.SegmentID())
 }
 func (db *txnDB) NeedRollback() bool {
 	return db.createEntry != nil && db.dropEntry != nil

@@ -117,7 +117,7 @@ func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
 	if col := len(w.seqnums.Seqs); col == 0 {
 		w.seqnums.InitWithColCnt(len(batch.Vecs))
 	} else if col != len(batch.Vecs) {
-		panic(fmt.Sprintf("Unmatched Write Batch, expect %d, get %d", col, len(batch.Vecs)))
+		panic(fmt.Sprintf("Unmatched Write Batch, expect %d, get %d, %v", col, len(batch.Vecs), batch.Attrs))
 	}
 	block := NewBlock(w.seqnums)
 	w.AddBlock(block, batch, w.seqnums)
@@ -152,7 +152,7 @@ func (w *objectWriterV1) prepareObjectMeta(objectMeta ObjectMeta, offset uint32,
 	objectMeta.BlockHeader().SetSequence(uint16(blockCount))
 	sid := w.name.SegmentId()
 	blockId := NewBlockid(&sid, w.name.Num(), uint16(blockCount))
-	objectMeta.BlockHeader().SetBlockID(&blockId)
+	objectMeta.BlockHeader().SetBlockID(blockId)
 	objectMeta.BlockHeader().SetRows(w.totalRow)
 	// write column meta
 	for i, colMeta := range w.colmeta {

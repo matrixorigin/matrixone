@@ -486,7 +486,7 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 	if err != nil {
 		return nil, err
 	}
-	w.writer, err = blockio.NewBlockWriterNew(s3, segId, w.schemaVersion, w.seqnums)
+	w.writer, err = blockio.NewBlockWriterNew(s3, segId, w.schemaVersion, nil)
 	if err != nil {
 		return nil, err
 	}
