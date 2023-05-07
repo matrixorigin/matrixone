@@ -217,6 +217,14 @@ type Entry struct {
 	truncate bool
 }
 
+// isGeneratedByTruncate denotes the entry is yielded by the truncate operation.
+func (e *Entry) isGeneratedByTruncate() bool {
+	return e.typ == DELETE &&
+		e.databaseId == catalog.MO_CATALOG_ID &&
+		e.tableId == catalog.MO_TABLES_ID &&
+		e.truncate
+}
+
 // txnDatabase represents an opened database in a transaction
 type txnDatabase struct {
 	databaseId        uint64

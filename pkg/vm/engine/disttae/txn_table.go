@@ -309,6 +309,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 				}
 			}
 			for _, entry := range tbl.writes {
+				if entry.isGeneratedByTruncate() {
+					continue
+				}
 				// rawBatch detele rowId for Dn block
 				if entry.typ == DELETE && entry.fileName == "" {
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
@@ -907,9 +910,7 @@ func (tbl *txnTable) newReader(
 					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
 					show tables; // t1 must be shown
 				*/
-				if entry.databaseId == catalog.MO_CATALOG_ID &&
-					entry.tableId == catalog.MO_TABLES_ID &&
-					entry.truncate {
+				if entry.isGeneratedByTruncate() {
 					continue
 				}
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
@@ -935,6 +936,9 @@ func (tbl *txnTable) newReader(
 
 	// add add rawBatchRowId deletes info
 	for _, entry := range tbl.writes {
+		if entry.isGeneratedByTruncate() {
+			continue
+		}
 		// rawBatch detele rowId for memory Dn block
 		if entry.typ == DELETE && entry.fileName == "" {
 			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
