@@ -23,12 +23,12 @@ func New(capacity int64) *Clock {
 	return &Clock{}
 }
 
-func (c *Clock) Set(key any, value any, size int64, preloading bool) {
+func (c *Clock) Set(key any, value []byte, size int64, preloading bool) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c *Clock) Get(key any, preloading bool) (value any, size int64, ok bool) {
+func (c *Clock) Get(key any, preloading bool) (value []byte, size int64, ok bool) {
 	//TODO implement me
 	panic("implement me")
 }

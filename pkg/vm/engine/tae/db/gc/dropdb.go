@@ -17,16 +17,17 @@ package gc
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type dropDB struct {
-	dbid   uint32
+	dbid   uint64
 	drop   bool
 	tables map[uint64]*dropTable
 }
 
-func NewDropDB(id uint32) *dropDB {
+func NewDropDB(id uint64) *dropDB {
 	return &dropDB{
 		dbid:   id,
 		drop:   false,

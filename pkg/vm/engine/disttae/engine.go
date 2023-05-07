@@ -334,7 +334,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	)
 
 	id := objectio.NewSegmentid()
-	bytes := types.EncodeUuid(&id)
+	bytes := types.EncodeUuid(id)
 	txn := &Transaction{
 		op:          op,
 		proc:        proc,
@@ -354,7 +354,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 			0,
 		},
-		segId: id,
+		segId: *id,
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
@@ -363,7 +363,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 	}
 	// TxnWorkSpace SegmentName
-	colexec.Srv.PutCnSegment(&id, colexec.TxnWorkSpaceIdType)
+	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
 	if e.UsePushModelOrNot() {
@@ -525,7 +525,7 @@ func (e *Engine) delTransaction(txn *Transaction) {
 		// |------|----------|----------|
 		//   uuid    filelen   blkoffset
 		//    16        2          2
-		segmentnames = append(segmentnames, blkId.Segment())
+		segmentnames = append(segmentnames, *blkId.Segment())
 	}
 	colexec.Srv.DeleteTxnSegmentIds(segmentnames)
 	txn.cnBlkId_Pos = nil

@@ -139,8 +139,8 @@ func (tbl *txnTable) TransferDeleteIntent(
 	entry, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.SegmentID,
-		id.BlockID)
+		id.SegmentID(),
+		&id.BlockID)
 	if err != nil {
 		panic(err)
 	}
@@ -158,7 +158,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		return
 	}
 	changed = true
-	nid.SegmentID, nid.BlockID, nrow = model.DecodePhyAddrKey(rowID)
+	nid.BlockID, nrow = model.DecodePhyAddrKey(&rowID)
 	return
 }
 
@@ -220,11 +220,10 @@ func (tbl *txnTable) recurTransferDelete(
 			msg)
 		return
 	}
-	segmentID, blockID, offset := model.DecodePhyAddrKey(rowID)
+	blockID, offset := model.DecodePhyAddrKey(&rowID)
 	newID := &common.ID{
-		TableID:   id.TableID,
-		SegmentID: segmentID,
-		BlockID:   blockID,
+		TableID: id.TableID,
+		BlockID: blockID,
 	}
 	if page2, ok = memo[blockID]; !ok {
 		if page2, err = tbl.store.transferTable.Pin(*newID); err != nil {
@@ -342,7 +341,7 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	return
 }
 
-func (tbl *txnTable) GetSegment(id types.Uuid) (seg handle.Segment, err error) {
+func (tbl *txnTable) GetSegment(id *types.Segmentid) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	if meta, err = tbl.entry.GetSegmentByID(id); err != nil {
 		return
@@ -362,7 +361,7 @@ func (tbl *txnTable) GetSegment(id types.Uuid) (seg handle.Segment, err error) {
 	return
 }
 
-func (tbl *txnTable) SoftDeleteSegment(id types.Uuid) (err error) {
+func (tbl *txnTable) SoftDeleteSegment(id *types.Segmentid) (err error) {
 	txnEntry, err := tbl.entry.DropSegmentEntry(id, tbl.store.txn)
 	if err != nil {
 		return
@@ -371,7 +370,7 @@ func (tbl *txnTable) SoftDeleteSegment(id types.Uuid) (err error) {
 	if txnEntry != nil {
 		tbl.txnEntries.Append(txnEntry)
 	}
-	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().GetID(), tbl.entry.ID, &id)
+	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().GetID(), tbl.entry.ID, id)
 	return
 }
 
@@ -404,10 +403,10 @@ func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *o
 
 func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 	var seg *catalog.SegmentEntry
-	if seg, err = tbl.entry.GetSegmentByID(id.SegmentID); err != nil {
+	if seg, err = tbl.entry.GetSegmentByID(id.SegmentID()); err != nil {
 		return
 	}
-	meta, err := seg.DropBlockEntry(id.BlockID, tbl.store.txn)
+	meta, err := seg.DropBlockEntry(&id.BlockID, tbl.store.txn)
 	if err != nil {
 		return
 	}
@@ -432,8 +431,8 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 		tbl.store.warChecker.InsertByID(
 			tbl.entry.GetDB().ID,
 			id.TableID,
-			id.SegmentID,
-			id.BlockID)
+			id.SegmentID(),
+			&id.BlockID)
 	}
 	return
 }
@@ -442,8 +441,8 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.SegmentID,
-		id.BlockID)
+		id.SegmentID(),
+		&id.BlockID)
 	if err != nil {
 		return
 	}
@@ -451,16 +450,16 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	return
 }
 
-func (tbl *txnTable) CreateNonAppendableBlock(sid types.Uuid, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
+func (tbl *txnTable) CreateNonAppendableBlock(sid *types.Segmentid, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	return tbl.createBlock(sid, catalog.ES_NotAppendable, false, opts)
 }
 
-func (tbl *txnTable) CreateBlock(sid types.Uuid, is1PC bool) (blk handle.Block, err error) {
+func (tbl *txnTable) CreateBlock(sid *types.Segmentid, is1PC bool) (blk handle.Block, err error) {
 	return tbl.createBlock(sid, catalog.ES_Appendable, is1PC, nil)
 }
 
 func (tbl *txnTable) createBlock(
-	sid types.Uuid,
+	sid *types.Segmentid,
 	state catalog.EntryState,
 	is1PC bool,
 	opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
@@ -680,7 +679,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 				err)
 		}
 	}()
-	if tbl.localSegment != nil && id.SegmentID == tbl.localSegment.entry.ID {
+	if tbl.localSegment != nil && id.SegmentID().Eq(tbl.localSegment.entry.ID) {
 		err = tbl.RangeDeleteLocalRows(start, end)
 		return
 	}
@@ -701,8 +700,8 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 	}
 	blk, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
-		id.TableID, id.SegmentID,
-		id.BlockID)
+		id.TableID, id.SegmentID(),
+		&id.BlockID)
 	if err != nil {
 		return
 	}
@@ -756,14 +755,14 @@ func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, 
 }
 
 func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
-	if tbl.localSegment != nil && tbl.localSegment.entry.ID == id.SegmentID {
+	if tbl.localSegment != nil && id.SegmentID().Eq(tbl.localSegment.entry.ID) {
 		return tbl.localSegment.GetValue(row, col)
 	}
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.SegmentID,
-		id.BlockID)
+		id.SegmentID(),
+		&id.BlockID)
 	if err != nil {
 		panic(err)
 	}
@@ -775,8 +774,8 @@ func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (er
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.SegmentID,
-		id.BlockID)
+		id.SegmentID(),
+		&id.BlockID)
 	if err != nil {
 		panic(err)
 	}
@@ -794,8 +793,8 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.SegmentID,
-		id.BlockID)
+		id.SegmentID(),
+		&id.BlockID)
 	if err != nil {
 		panic(err)
 	}

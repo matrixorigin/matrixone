@@ -108,7 +108,7 @@ func (m *MemCache) Read(
 		if entry.done {
 			continue
 		}
-		if entry.ToObject == nil {
+		if entry.ToObjectBytes == nil {
 			continue
 		}
 		key := IOVectorCacheKey{
@@ -116,10 +116,10 @@ func (m *MemCache) Read(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
-		obj, size, ok := m.objCache.Get(key, vector.Preloading)
+		bs, size, ok := m.objCache.Get(key, vector.Preloading)
 		numRead++
 		if ok {
-			vector.Entries[i].Object = obj
+			vector.Entries[i].ObjectBytes = bs
 			vector.Entries[i].ObjectSize = size
 			vector.Entries[i].done = true
 			numHit++
@@ -149,7 +149,7 @@ func (m *MemCache) Update(
 	}
 
 	for _, entry := range vector.Entries {
-		if entry.Object == nil {
+		if entry.ObjectBytes == nil {
 			continue
 		}
 		key := IOVectorCacheKey{
@@ -158,13 +158,13 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 		if async {
-			obj := entry.Object // copy from loop variable
+			obj := entry.ObjectBytes // copy from loop variable
 			objSize := entry.ObjectSize
 			m.ch <- func() {
 				m.objCache.Set(key, obj, objSize, vector.Preloading)
 			}
 		} else {
-			m.objCache.Set(key, entry.Object, entry.ObjectSize, vector.Preloading)
+			m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
 		}
 	}
 	return nil

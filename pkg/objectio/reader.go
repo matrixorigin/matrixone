@@ -169,7 +169,8 @@ func (r *objectReaderV1) ReadOneBF(
 		return
 	}
 	buf := bfs.GetBloomFilter(uint32(blk))
-	bf, err = index.DecodeBloomFilter(buf)
+	bf = index.NewEmptyBinaryFuseFilter()
+	err = index.DecodeBloomFilter(bf, buf)
 	if err != nil {
 		return
 	}
@@ -179,7 +180,7 @@ func (r *objectReaderV1) ReadOneBF(
 
 func (r *objectReaderV1) ReadAllBF(
 	ctx context.Context,
-) (bfs []StaticFilter, size uint32, err error) {
+) (bfs BloomFilter, size uint32, err error) {
 	var meta objectMetaV1
 	var buf []byte
 	if meta, err = r.ReadMeta(ctx, nil); err != nil {
@@ -189,41 +190,31 @@ func (r *objectReaderV1) ReadAllBF(
 	if buf, err = ReadBloomFilter(ctx, r.name, &extent, r.noLRUCache, r.fs); err != nil {
 		return
 	}
-	indexes := make([]StaticFilter, 0)
-	bf := BloomFilter(buf)
-	count := bf.BlockCount()
-	for i := uint32(0); i < count; i++ {
-		buf = bf.GetBloomFilter(i)
-		if len(buf) == 0 {
-			indexes = append(indexes, nil)
-			continue
-		}
-		index, err := index.DecodeBloomFilter(bf.GetBloomFilter(i))
-		if err != nil {
-			return nil, 0, err
-		}
-		indexes = append(indexes, index)
-	}
-	return indexes, extent.OriginSize(), nil
+	return buf, extent.OriginSize(), nil
 }
 
 func (r *objectReaderV1) ReadExtent(
 	ctx context.Context,
 	extent Extent,
-	noHeaderHint bool,
 ) ([]byte, error) {
 	v, err := ReadExtent(
 		ctx,
 		r.name,
 		&extent,
 		r.noLRUCache,
-		noHeaderHint,
 		r.fs,
 		constructorFactory)
 	if err != nil {
 		return nil, err
 	}
-	return v.([]byte), nil
+
+	var obj any
+	obj, err = Decode(v)
+	if err != nil {
+		return nil, err
+	}
+
+	return obj.([]byte), nil
 }
 
 func (r *objectReaderV1) ReadMultiBlocks(
@@ -263,11 +254,11 @@ func (r *objectReaderV1) ReadAllMeta(
 
 func (r *objectReaderV1) ReadHeader(ctx context.Context, m *mpool.MPool) (h Header, err error) {
 	ext := NewExtent(0, 0, HeaderSize, HeaderSize)
-	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, true, r.fs, constructorFactory)
+	v, err := ReadExtent(ctx, r.name, &ext, r.noLRUCache, r.fs, constructorFactory)
 	if err != nil {
 		return
 	}
-	h = Header(v.([]byte))
+	h = Header(v)
 	return
 }
 

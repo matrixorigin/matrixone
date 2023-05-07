@@ -256,7 +256,7 @@ func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
 		} else {
 			sid := location.Name().SegmentId()
 			blkid := objectio.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
-			txn.cnBlkId_Pos[blkid] = Pos{idx: idx, offset: int64(i)}
+			txn.cnBlkId_Pos[*blkid] = Pos{idx: idx, offset: int64(i)}
 		}
 	}
 	return nil
@@ -307,11 +307,11 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	for i, rowid := range rowids {
 		// process cn block deletes
 		uid := rowid.GetSegid()
-		blkid := rowid.GetBlockid()
+		blkid := *rowid.GetBlockid()
 		deleteBlkId[blkid] = true
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
-		if colexec.Srv != nil && colexec.Srv.GetCnSegmentType(&uid) == colexec.CnBlockIdType {
+		if colexec.Srv != nil && colexec.Srv.GetCnSegmentType(uid) == colexec.CnBlockIdType {
 			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
@@ -356,7 +356,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 				continue
 			}
 			// current batch is not be deleted
-			if !deleteBlkId[vs[0].GetBlockid()] {
+			if !deleteBlkId[*vs[0].GetBlockid()] {
 				continue
 			}
 			min2 := vs[0].GetRowOffset()
@@ -405,8 +405,7 @@ func (txn *Transaction) genBlock() {
 
 func (txn *Transaction) getCurrentBlockId() *types.Blockid {
 	rowId := types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
-	blkId := rowId.GetBlockid()
-	return &blkId
+	return rowId.GetBlockid()
 }
 
 func (txn *Transaction) genRowId() types.Rowid {
