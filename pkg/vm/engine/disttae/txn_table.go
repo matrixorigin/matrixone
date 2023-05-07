@@ -936,7 +936,6 @@ func (tbl *txnTable) newReader(
 				tbl.LoadDeletesForBlock(blkId, nil, deletes)
 			}
 		}
-
 		// add add rawBatchRowId deletes info
 		for _, entry := range tbl.writes {
 			if entry.isGeneratedByTruncate() {
@@ -948,27 +947,10 @@ func (tbl *txnTable) newReader(
 				if len(vs) == 0 {
 					continue
 				}
-			}
-
-			for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-				if !meta_blocks[blkId] {
-					tbl.LoadDeletesForBlock(blkId, nil, deletes)
-				}
-			}
-
-			// add add rawBatchRowId deletes info
-			for _, entry := range tbl.writes {
-				// rawBatch detele rowId for memory Dn block
-				if entry.typ == DELETE && entry.fileName == "" {
-					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-					if len(vs) == 0 {
-						continue
-					}
-					blkId := vs[0].GetBlockid()
-					if !meta_blocks[string(blkId[:])] {
-						for _, v := range vs {
-							deletes[v] = 0
-						}
+				blkId := vs[0].GetBlockid()
+				if !meta_blocks[string(blkId[:])] {
+					for _, v := range vs {
+						deletes[v] = 0
 					}
 				}
 			}
