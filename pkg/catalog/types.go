@@ -291,6 +291,10 @@ func (m *ObjectLocation) Unmarshal(data []byte) error {
 	return nil
 }
 
+const (
+	BlockInfoSize = unsafe.Sizeof(BlockInfo{})
+)
+
 type BlockInfo struct {
 	BlockID    types.Blockid
 	EntryState bool
@@ -315,6 +319,14 @@ func (b *BlockInfo) DeltaLocation() objectio.Location {
 
 func (b *BlockInfo) SetDeltaLocation(deltaLoc objectio.Location) {
 	b.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
+}
+
+func EncodeBlockInfo(info BlockInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
+}
+
+func DecodeBlockInfo(buf []byte) *BlockInfo {
+	return (*BlockInfo)(unsafe.Pointer(&buf[0]))
 }
 
 // used for memengine and tae

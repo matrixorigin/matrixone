@@ -177,7 +177,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				rbat.Vecs = append(rbat.Vecs, vec)
 			}
 
-			deletes := p.deletedBlocks.getDeletedOffsetsByBlock(string(blkid[:]))
+			deletes := p.deletedBlocks.getDeletedOffsetsByBlock(blkid)
 			if len(deletes) != 0 {
 				rbat.AntiShrink(deletes)
 			}
