@@ -81,6 +81,14 @@ func IsCreateDropDatabase(stmt tree.Statement) bool {
 	return false
 }
 
+func IsCreateDropSequence(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.CreateSequence, *tree.DropSequence:
+		return true
+	}
+	return false
+}
+
 /*
 NeedToBeCommittedInActiveTransaction checks the statement that need to be committed
 in an active transaction.
@@ -93,7 +101,7 @@ func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}
-	return IsCreateDropDatabase(stmt) || IsDropStatement(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
+	return IsCreateDropDatabase(stmt) || IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt)
 }
 
 /*
@@ -119,12 +127,12 @@ If it is Case4, Then
 
 	Create/Drop database commits current txn. a new txn for the next statement if needed.
 */
-func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
+func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
-	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable, *tree.CreateSequence:
+	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
 		return true, nil
-	case *tree.CreateDatabase: //Case1, Case3 above
+	case *tree.CreateDatabase, *tree.CreateSequence: //Case1, Case3 above
 		return !ses.OptionBitsIsSet(OPTION_BEGIN), nil
 		//dml statement
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement:
@@ -166,7 +174,7 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
 		return true, nil
 	case *tree.PrepareStmt:
-		return StatementCanBeExecutedInUncommittedTransaction(ses, st.Stmt)
+		return statementCanBeExecutedInUncommittedTransaction(ses, st.Stmt)
 	case *tree.PrepareString:
 		v, err := ses.GetGlobalVar("lower_case_table_names")
 		if err != nil {
@@ -176,14 +184,14 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		if err != nil {
 			return false, err
 		}
-		return StatementCanBeExecutedInUncommittedTransaction(ses, preStmt)
+		return statementCanBeExecutedInUncommittedTransaction(ses, preStmt)
 	case *tree.Execute:
 		preName := string(st.Name)
 		preStmt, err := ses.GetPrepareStmt(preName)
 		if err != nil {
 			return false, err
 		}
-		return StatementCanBeExecutedInUncommittedTransaction(ses, preStmt.PrepareStmt)
+		return statementCanBeExecutedInUncommittedTransaction(ses, preStmt.PrepareStmt)
 	case *tree.Deallocate, *tree.Reset:
 		return true, nil
 	case *tree.Use:
@@ -193,10 +201,9 @@ func StatementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 				USE ROLE role;
 		*/
 		return !st.IsUseRole(), nil
-	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.DropSequence:
-		//background transaction can execute the DROPxxx in one transaction
-		return ses.IsBackgroundSession(), nil
-	case *tree.DropDatabase: //Case1, Case3 above
+	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.TruncateTable:
+		return true, nil
+	case *tree.DropDatabase, *tree.DropSequence: //Case1, Case3 above
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession() || !ses.OptionBitsIsSet(OPTION_BEGIN), nil
 	}

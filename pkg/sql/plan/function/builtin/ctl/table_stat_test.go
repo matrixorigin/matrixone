@@ -78,6 +78,7 @@ func TestMoTableRowsAndTableSize(t *testing.T) {
 	eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.EngineKey{}, eng)
 	proc.TxnClient = txnClient
+	proc.TxnOperator = txnOperator
 
 	r, err := MoTableRows(inputVectors, proc)
 	require.Nil(t, err)
