@@ -240,8 +240,8 @@ func (tbl *txnTable) reset(newId uint64) {
 
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]byte, err error) {
-	tbl.db.txn.Lock()
 	tbl.db.txn.DumpBatch(false, 0)
+	tbl.db.txn.Lock()
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = len(tbl.db.txn.writes)
 
