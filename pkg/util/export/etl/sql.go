@@ -53,7 +53,6 @@ func NewSqlWriter(ctx context.Context, tbl *table.Table, csv *CSVWriter) *Defaul
 		semaphore: make(chan struct{}, 3),
 		csvWriter: csv,
 		tbl:       tbl,
-		buffer:    make([][]string, 0, BUFFER_FLUSH_LIMIT*3),
 	}
 }
 
@@ -73,7 +72,7 @@ func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 	sw.buffer = append(sw.buffer, row.ToStrings())
 
-	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT {
+	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT*3 {
 		if _, err := sw.flushBuffer(); err != nil {
 			return err
 		}
@@ -231,33 +230,10 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	return len(records), nil
 }
 
-//func (sw *DefaultSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
-//
-//	if tbl.Table == "rawlog" && len(rows) > MAX_CHUNK_SIZE {
-//		return 0, fmt.Errorf("rawlog log")
-//	}
-//
-//	r := csv.NewReader(strings.NewReader(rows))
-//	records, err := r.ReadAll()
-//	if err != nil {
-//		return 0, err
-//	}
-//	return sw.WriteRowRecords(records, tbl, false)
-//}
-
 func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error) {
-	if is_merge {
-		return 0, fmt.Errorf("merge is not supported")
-	}
-	sw.semaphore <- struct{}{}
-	defer func() {
-		// Release the semaphore
-		<-sw.semaphore
-	}()
 
 	var err error
 	var cnt int
-	//var stmt string
 	dbConn, err := db.InitOrRefreshDBConn(false)
 	if err != nil {
 		logutil.Error("sqlWriter db init failed", zap.Error(err))
@@ -267,7 +243,6 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 	cnt, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
 		logutil.Error("sqlWriter bulk insert failed", zap.Error(err))
-
 		return 0, err
 	}
 	return cnt, nil
