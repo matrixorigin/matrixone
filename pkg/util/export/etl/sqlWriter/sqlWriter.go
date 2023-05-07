@@ -30,7 +30,7 @@ import (
 )
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
-const MAX_CHUNK_SIZE = 1024 * 1024 * 4
+const MAX_CHUNK_SIZE = 1024 * 1024 * 8
 
 const PACKET_TOO_LARGE = "packet for query is too large"
 
@@ -114,6 +114,12 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	sb := strings.Builder{}
 	defer sb.Reset()
 
+	// Start a new transaction
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+
 	for idx, row := range records {
 		if len(row) == 0 {
 			continue
@@ -144,6 +150,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 			stmt := baseStr + sb.String() + ";"
 			_, err := db.Exec(stmt)
 			if err != nil {
+				tx.Rollback() // Rollback the transaction on error
 				return 0, err
 			}
 			sb.Reset()
@@ -152,20 +159,25 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 		}
 	}
 
+	err = tx.Commit() // Commit the transaction
+	if err != nil {
+		return 0, err
+	}
+
 	return len(records), nil
 }
 
 func (sw *BaseSqlWriter) WriteRows(rows string, tbl *table.Table) (int, error) {
 
-	sw.semaphore <- struct{}{}
-	defer func() {
-		// Release the semaphore
-		<-sw.semaphore
-	}()
-
-	if tbl.Table == "rawlog" && len(rows) > 4*1024*1024 {
+	if tbl.Table == "rawlog" && len(rows) > MAX_CHUNK_SIZE {
 		return 0, fmt.Errorf("rawlog log")
 	}
+
+	//sw.semaphore <- struct{}{}
+	//defer func() {
+	//	// Release the semaphore
+	//	<-sw.semaphore
+	//}()
 
 	r := csv.NewReader(strings.NewReader(rows))
 	records, err := r.ReadAll()
@@ -187,11 +199,6 @@ func (sw *BaseSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, i
 		logutil.Error("sqlWriter db init failed", zap.String("address", sw.address), zap.Error(err))
 		return 0, err
 	}
-	//stmt, cnt, err = generateInsertStatement(records, tbl)
-	//if err != nil {
-	//	return 0, err
-	//
-	//}
 
 	cnt, err = bulkInsert(db, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
@@ -248,8 +255,6 @@ func (sw *BaseSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, error)
 			sw.db.Close()
 		}
 		sw.db = db
-		//sw.db.SetMaxOpenConns(3)
-		//sw.db.SetMaxIdleConns(3)
 		sw.address = dbAddress
 		return nil
 	}
