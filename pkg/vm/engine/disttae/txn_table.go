@@ -400,10 +400,13 @@ func (tbl *txnTable) rangesOnePart(
 			// if any, store the block and its deletes in modifies
 			if rows, ok := deletes[blk.BlockID]; ok {
 				*modifies = append(*modifies, ModifyBlockMeta{blk, rows})
+			} else {
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 			}
+		} else {
+			// store the block in ranges
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 		}
-		// store the block in ranges
-		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
 	return
 }
