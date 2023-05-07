@@ -115,7 +115,7 @@ func Prepare(proc *process.Process, arg any) error {
 		Name2ColIndex: name2ColIndex,
 	}
 	var columns []int
-	param.Filter.columnMap, columns, param.Filter.maxCol = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
+	param.Filter.columnMap, columns, _, param.Filter.maxCol = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.columns = make([]uint16, len(columns))
 	param.Filter.defColumns = make([]uint16, len(columns))
 	for i := 0; i < len(columns); i++ {

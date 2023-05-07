@@ -25,7 +25,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -884,12 +883,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	}
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
-	if param.Local {
-		if param.Parallel {
-			return nil, moerr.NewInvalidInput(ctx, "load local do not support parallel mode")
-		}
-		mcpu = 1
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -949,7 +942,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		return nil, nil
 	}
 
-	if param.Parallel && external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS {
+	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
 		return c.compileExternScanParallel(n, param, fileList, fileSize, ctx)
 	}
 
@@ -2213,7 +2206,7 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 	//to maxify locality, put blocks in the same s3 object in the same CN
 	lenCN := len(c.cnList)
 	for i, blk := range ranges {
-		unmarshalledBlockInfo := disttae.BlockInfoUnmarshal(ranges[i])
+		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		objName := unmarshalledBlockInfo.MetaLocation().Name()
 		index := plan2.SimpleHashToRange(objName, lenCN)
 		nodes[index].Data = append(nodes[index].Data, blk)

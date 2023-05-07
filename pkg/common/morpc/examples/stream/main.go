@@ -51,7 +51,7 @@ func main() {
 	}
 
 	defer func() {
-		if err := st.Close(); err != nil {
+		if err := st.Close(false); err != nil {
 			panic(err)
 		}
 	}()

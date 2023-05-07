@@ -45,8 +45,8 @@ func TestMemCacheLeak(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
-					return 42, 1, nil
+				ToObjectBytes: func(reader io.Reader, data []byte) ([]byte, int64, error) {
+					return []byte{42}, 1, nil
 				},
 			},
 		},
@@ -66,8 +66,8 @@ func TestMemCacheLeak(t *testing.T) {
 		Entries: []IOEntry{
 			{
 				Size: 3,
-				ToObject: func(reader io.Reader, data []byte) (any, int64, error) {
-					return 42, 1, nil
+				ToObjectBytes: func(reader io.Reader, data []byte) ([]byte, int64, error) {
+					return []byte{42}, 1, nil
 				},
 			},
 		},

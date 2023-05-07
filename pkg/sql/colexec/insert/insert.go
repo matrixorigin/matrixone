@@ -127,7 +127,6 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 		}
 	}
 	proc.SetInputBatch(res)
-	proc.PutBatch(res)
 	return
 }
 

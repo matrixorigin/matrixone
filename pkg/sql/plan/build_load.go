@@ -87,7 +87,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		return nil, err
 	}
 
-	if stmt.Param.Parallel && getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS {
+	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
 		node2.ProjectList = makeCastExpr(stmt, fileName, tableDef)
 	}
 

@@ -498,13 +498,19 @@ select * from test_11;
 SQL parser error: table "test_11" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
-SQL parser error: table "test_11" does not exist
+c    d
+1    1
+2    2
 commit;
 set @@autocommit=1;
 select * from test_11;
-SQL parser error: table "test_11" does not exist
+c    d
+1    1
+2    2
 select * from test_11;
-SQL parser error: table "test_11" does not exist
+c    d
+1    1
+2    2
 drop table if exists test_11;
 set @@autocommit=0;
 create table test_11 (c int primary key,d int);

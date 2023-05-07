@@ -26,10 +26,9 @@ func ReadExtent(
 	name string,
 	extent *Extent,
 	noLRUCache bool,
-	noHeaderHint bool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
-) (v any, err error) {
+) (v []byte, err error) {
 	ioVec := &fileservice.IOVector{
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 1),
@@ -37,14 +36,14 @@ func ReadExtent(
 	}
 
 	ioVec.Entries[0] = fileservice.IOEntry{
-		Offset:   int64(extent.Offset()),
-		Size:     int64(extent.Length()),
-		ToObject: factory(int64(extent.OriginSize()), extent.Alg(), noHeaderHint),
+		Offset:        int64(extent.Offset()),
+		Size:          int64(extent.Length()),
+		ToObjectBytes: factory(int64(extent.OriginSize()), extent.Alg()),
 	}
 	if err = fs.Read(ctx, ioVec); err != nil {
 		return
 	}
-	v = ioVec.Entries[0].Object
+	v = ioVec.Entries[0].ObjectBytes
 	return
 }
 
@@ -55,18 +54,24 @@ func ReadBloomFilter(
 	noLRUCache bool,
 	fs fileservice.FileService,
 ) (filters BloomFilter, err error) {
-	var v any
+	var v []byte
 	if v, err = ReadExtent(
 		ctx,
 		name,
 		extent,
 		noLRUCache,
-		false,
 		fs,
 		constructorFactory); err != nil {
 		return
 	}
-	filters = v.([]byte)
+
+	var obj any
+	obj, err = Decode(v)
+	if err != nil {
+		return
+	}
+
+	filters = obj.([]byte)
 	return
 }
 
@@ -88,11 +93,18 @@ func ReadObjectMeta(
 	noLRUCache bool,
 	fs fileservice.FileService,
 ) (meta ObjectMeta, err error) {
-	var v any
-	if v, err = ReadExtent(ctx, name, extent, noLRUCache, false, fs, constructorFactory); err != nil {
+	var v []byte
+	if v, err = ReadExtent(ctx, name, extent, noLRUCache, fs, constructorFactory); err != nil {
 		return
 	}
-	meta = ObjectMeta(v.([]byte))
+
+	var obj any
+	obj, err = Decode(v)
+	if err != nil {
+		return
+	}
+
+	meta = ObjectMeta(obj.([]byte))
 	return
 }
 
@@ -114,9 +126,9 @@ func ReadOneBlockWithMeta(
 		col := meta.GetColumnMeta(uint32(blk), col)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-			Offset:   int64(ext.Offset()),
-			Size:     int64(ext.Length()),
-			ToObject: factory(int64(ext.OriginSize()), ext.Alg(), false),
+			Offset:        int64(ext.Offset()),
+			Size:          int64(ext.Length()),
+			ToObjectBytes: factory(int64(ext.OriginSize()), ext.Alg()),
 		})
 	}
 	err = fs.Read(ctx, ioVec)
@@ -144,7 +156,7 @@ func ReadMultiBlocksWithMeta(
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
 
-				ToObject: factory(int64(col.Location().OriginSize()), col.Location().Alg(), false),
+				ToObjectBytes: factory(int64(col.Location().OriginSize()), col.Location().Alg()),
 			})
 		}
 	}
@@ -176,7 +188,7 @@ func ReadAllBlocksWithMeta(
 				Offset: int64(ext.Offset()),
 				Size:   int64(ext.Length()),
 
-				ToObject: factory(int64(ext.OriginSize()), ext.Alg(), false),
+				ToObjectBytes: factory(int64(ext.OriginSize()), ext.Alg()),
 			})
 		}
 	}

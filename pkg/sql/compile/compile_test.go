@@ -66,7 +66,7 @@ func init() {
 		newTestCase("select count(distinct uid) from R", new(testing.T)),
 		newTestCase("insert into R values('1', '2', '3')", new(testing.T)),
 		newTestCase("insert into R select * from R", new(testing.T)),
-		newTestCase(fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n';", GetFilePath()), new(testing.T)),
+		newTestCase(fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' parallel 'true';", GetFilePath()), new(testing.T)),
 	}
 }
 
