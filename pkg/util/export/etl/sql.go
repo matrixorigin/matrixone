@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sqlWriter
+package etl
 
 import (
 	"context"
@@ -25,6 +25,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"go.uber.org/zap"
 )
@@ -45,6 +46,15 @@ type DefaultSqlWriter struct {
 	ctx       context.Context
 	dbMux     sync.Mutex
 	semaphore chan struct{}
+	csv       CSVWriter
+	tbl       *table.Table
+}
+
+func NewSqlWriter(ctx context.Context) *DefaultSqlWriter {
+	return &DefaultSqlWriter{
+		ctx:       ctx,
+		semaphore: make(chan struct{}, 3),
+	}
 }
 
 type SqlWriter interface {
@@ -225,16 +235,14 @@ func (sw *DefaultSqlWriter) initOrRefreshDBConn(forceNewConn bool) (*sql.DB, err
 	defer sw.dbMux.Unlock()
 
 	initFunc := func() error {
-		dbUser, _ := GetSQLWriterDBUser()
+		dbUser, _ := db.GetSQLWriterDBUser()
 		if dbUser == nil {
 			sw.db = nil
-			return errNotReady
 		}
 
-		addressFunc := GetSQLWriterDBAddressFunc()
+		addressFunc := db.GetSQLWriterDBAddressFunc()
 		if addressFunc == nil {
 			sw.db = nil
-			return errNotReady
 		}
 		dbAddress, err := addressFunc(context.Background())
 		if err != nil {

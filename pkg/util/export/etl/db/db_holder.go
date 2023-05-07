@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sqlWriter
+package db
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,10 +29,6 @@ var (
 var (
 	sqlWriterDBUser atomic.Value
 	dbAddressFunc   atomic.Value
-
-	sqlWriter atomic.Value
-
-	once sync.Once
 )
 
 const MOLoggerUser = "mo_logger"
@@ -66,14 +61,4 @@ func SetSQLWriterDBAddressFunc(f func(context.Context) (string, error)) {
 
 func GetSQLWriterDBAddressFunc() func(context.Context) (string, error) {
 	return dbAddressFunc.Load().(func(context.Context) (string, error))
-}
-
-func NewSqlWriter(ctx context.Context) *DefaultSqlWriter {
-	once.Do(func() {
-		sqlWriter.Store(&DefaultSqlWriter{
-			ctx:       ctx,
-			semaphore: make(chan struct{}, 3),
-		})
-	})
-	return sqlWriter.Load().(*DefaultSqlWriter)
 }

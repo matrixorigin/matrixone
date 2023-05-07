@@ -25,20 +25,19 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl/sqlWriter"
-
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -397,7 +396,7 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 }
 
 func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.tenant != nil && ses.tenant.User == sqlWriter.MOLoggerUser {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
@@ -410,7 +409,7 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 //}
 
 func logError(ses *Session, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.tenant != nil && ses.tenant.User == sqlWriter.MOLoggerUser {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))

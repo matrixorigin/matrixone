@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl/sqlWriter"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
@@ -289,7 +288,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	row := m.Table.GetRow(ctx)
 	defer row.Free()
 	defer cacheFileData.Reset()
-	sqlWriter := sqlWriter.NewSqlWriter(ctx)
+	sqlWriter := etl.NewSqlWriter(ctx)
 
 	for _, path := range files {
 		// open reader
@@ -545,7 +544,7 @@ func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath stri
 type Cache interface {
 	Put(*table.Row)
 	Size() int64
-	Flush(*sqlWriter.DefaultSqlWriter, *table.Table) error
+	Flush(*etl.DefaultSqlWriter, *table.Table) error
 	Reset()
 	IsEmpty() bool
 }
@@ -555,7 +554,7 @@ type SliceCache struct {
 	size int64
 }
 
-func (c *SliceCache) Flush(writer *sqlWriter.DefaultSqlWriter, tbl *table.Table) error {
+func (c *SliceCache) Flush(writer *etl.DefaultSqlWriter, tbl *table.Table) error {
 	_, err := writer.WriteRowRecords(c.m, tbl, true)
 	c.Reset()
 	return err

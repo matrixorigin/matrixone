@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl/sqlWriter"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -110,12 +110,12 @@ func (s *service) initSqlWriterFactory() {
 		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
 	}
 
-	sqlWriter.SetSQLWriterDBAddressFunc(addressFunc)
+	db.SetSQLWriterDBAddressFunc(addressFunc)
 }
 
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
-	frontend.SetSpecialUser(sqlWriter.MOLoggerUser, []byte(command.User.Password))
-	sqlWriter.SetSQLWriterDBUser(sqlWriter.MOLoggerUser, command.User.Password)
+	frontend.SetSpecialUser(db.MOLoggerUser, []byte(command.User.Password))
+	db.SetSQLWriterDBUser(db.MOLoggerUser, command.User.Password)
 }
 
 func (s *service) startTaskRunner() {

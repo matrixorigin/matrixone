@@ -19,8 +19,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl/sqlWriter"
-
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,10 +46,10 @@ func (s *Service) initSqlWriterFactory() {
 		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
 	}
 
-	sqlWriter.SetSQLWriterDBAddressFunc(addressFunc)
+	db.SetSQLWriterDBAddressFunc(addressFunc)
 }
 func (s *Service) createSQLLogger(command *logservicepb.CreateTaskService) {
-	sqlWriter.SetSQLWriterDBUser(sqlWriter.MOLoggerUser, command.User.Password)
+	db.SetSQLWriterDBUser(db.MOLoggerUser, command.User.Password)
 }
 
 func (s *Service) initTaskHolder() {
