@@ -283,6 +283,8 @@ type txnTable struct {
 	// use for skip rows
 	// snapshot for read
 	writes []Entry
+	// offset of the writes in workspace
+	writesOffset int
 
 	// localState stores uncommitted data
 	localState *logtailreplay.PartitionState

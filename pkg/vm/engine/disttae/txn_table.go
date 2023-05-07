@@ -242,6 +242,7 @@ func (tbl *txnTable) reset(newId uint64) {
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]byte, err error) {
 	tbl.db.txn.Lock()
 	tbl.writes = tbl.writes[:0]
+	tbl.writesOffset = len(tbl.db.txn.writes)
 
 	// get all writes for this table from the current transaction
 	for i, entry := range tbl.db.txn.writes {
@@ -308,18 +309,18 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	deletes := make(map[types.Blockid][]int)
 	ids := make([]types.Blockid, len(blocks))
-	appendIds := make([]types.Blockid, len(blocks))
+	appendIds := make([]types.Blockid, 0, 1)
 
 	for i := range blocks {
 		// if cn can see a appendable block, this block must contain all updates
 		// in cache, no need to do merge read, BlockRead will filter out
 		// invisible and deleted rows with respect to the timestamp
-		if !blocks[i].EntryState {
+		if blocks[i].EntryState {
+			appendIds = append(appendIds, blocks[i].BlockID)
+		} else {
 			if blocks[i].CommitTs.ToTimestamp().Less(ts) { // hack
 				ids[i] = blocks[i].BlockID
 			}
-		} else {
-			appendIds = append(appendIds, blocks[i].BlockID)
 		}
 	}
 
@@ -617,6 +618,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	return nil
+	// return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
