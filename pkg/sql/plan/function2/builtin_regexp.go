@@ -763,13 +763,14 @@ func generalRegMatch(
 						return err
 					}
 				} else {
-					err = rs.Append(reg.MatchString(function2Util.QuickBytesToStr(v1)), false)
+					err = rs.Append(reg.MatchString(function2Util.QuickBytesToStr(v1)) == isReg, false)
 					if err != nil {
 						return err
 					}
 				}
 			}
 		}
+		return nil
 	}
 
 	for i := uint64(0); i < length; i++ {

@@ -86,6 +86,10 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	minIndex := -1
 	minCost := math.MaxInt
 	for i, ov := range overloads {
+		if len(ov.args) != len(inputs) {
+			continue
+		}
+
 		sta, cos := tryToMatch(inputs, ov.args)
 		if sta == matchFailed {
 			continue
@@ -116,22 +120,25 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 }
 
 // a fixed type match method without any type convert. (const null exception)
+// if all parameters were `constant null`, match the first one whose number of parameters was same.
 func fixedDirectlyTypeMatch(overload []overload, inputs []types.Type) checkResult {
 	for i, o := range overload {
 		if len(o.args) != len(inputs) {
 			continue
 		}
 		allSame := true
+		allNull := true
 		for j := range o.args {
-			if o.args[j] == types.T_any {
+			if inputs[j].Oid == types.T_any {
 				continue
 			}
+			allNull = false
 			if o.args[j] != inputs[j].Oid {
 				allSame = false
 				break
 			}
 		}
-		if allSame {
+		if allSame || allNull {
 			return newCheckResultWithSuccess(i)
 		}
 	}

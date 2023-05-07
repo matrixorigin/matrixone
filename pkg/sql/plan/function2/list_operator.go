@@ -250,16 +250,12 @@ var supportedOperators = []FuncNew{
 		functionId: NOT,
 		class:      plan.Function_STRICT,
 		layout:     UNARY_LOGICAL_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 1 && inputs[0].Oid == types.T_bool {
-				return newCheckResultWithSuccess(0)
-			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		},
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				args:       []types.T{types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -277,20 +273,12 @@ var supportedOperators = []FuncNew{
 		functionId: AND,
 		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     BINARY_LOGICAL_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			sta, _ := tryToMatch(inputs, []types.T{types.T_bool, types.T_bool})
-			if sta == matchDirectly {
-				return newCheckResultWithSuccess(0)
-			}
-			if sta == matchFailed {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), types.T_bool.ToType()})
-		},
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				args:       []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -308,20 +296,12 @@ var supportedOperators = []FuncNew{
 		functionId: OR,
 		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     BINARY_LOGICAL_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			sta, _ := tryToMatch(inputs, []types.T{types.T_bool, types.T_bool})
-			if sta == matchDirectly {
-				return newCheckResultWithSuccess(0)
-			}
-			if sta == matchFailed {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), types.T_bool.ToType()})
-		},
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				args:       []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
@@ -339,20 +319,12 @@ var supportedOperators = []FuncNew{
 		functionId: XOR,
 		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     BINARY_LOGICAL_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			sta, _ := tryToMatch(inputs, []types.T{types.T_bool, types.T_bool})
-			if sta == matchDirectly {
-				return newCheckResultWithSuccess(0)
-			}
-			if sta == matchFailed {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), types.T_bool.ToType()})
-		},
+		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				args:       []types.T{types.T_bool, types.T_bool},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
 				},
