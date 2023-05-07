@@ -24,8 +24,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/google/uuid"
@@ -2162,7 +2160,7 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 	//to maxify locality, put blocks in the same s3 object in the same CN
 	lenCN := len(c.cnList)
 	for i, blk := range ranges {
-		unmarshalledBlockInfo := disttae.BlockInfoUnmarshal(ranges[i])
+		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		objName := unmarshalledBlockInfo.MetaLocation().Name()
 		index := plan2.SimpleHashToRange(objName, lenCN)
 		nodes[index].Data = append(nodes[index].Data, blk)

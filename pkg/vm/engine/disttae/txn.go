@@ -19,7 +19,6 @@ import (
 	"math"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -49,9 +48,10 @@ func (txn *Transaction) getBlockInfos(
 		if i >= len(states) {
 			continue
 		}
-		state := states[i]
-		iter := state.Blocks.Iter()
 		var objectName objectio.ObjectNameShort
+		state := states[i]
+		blocks[i] = make([]catalog.BlockInfo, 0, state.Blocks.Len())
+		iter := state.Blocks.Iter()
 		for ok := iter.First(); ok; ok = iter.Next() {
 			entry := iter.Item()
 			if !entry.Visible(ts) {
@@ -110,7 +110,7 @@ func (txn *Transaction) WriteBatch(
 		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 		// for TestPrimaryKeyCheck
 		if txn.blockId_raw_batch != nil {
-			txn.blockId_raw_batch[txn.getCurrentBlockId()] = bat
+			txn.blockId_raw_batch[*txn.getCurrentBlockId()] = bat
 		}
 		txn.workspaceSize += uint64(bat.Size())
 	}
@@ -262,7 +262,7 @@ func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
 		} else {
 			sid := location.Name().SegmentId()
 			blkid := objectio.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
-			txn.cnBlkId_Pos[string(blkid[:])] = Pos{idx: idx, offset: int64(i)}
+			txn.cnBlkId_Pos[*blkid] = Pos{idx: idx, offset: int64(i)}
 		}
 	}
 	return nil
@@ -296,7 +296,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	} else {
 		// get uuid string
 		if typ == INSERT {
-			colexec.Srv.PutCnSegment(string(uid[:]), colexec.CnBlockIdType)
+			colexec.Srv.PutCnSegment(&uid, colexec.CnBlockIdType)
 		}
 	}
 	return nil
@@ -317,8 +317,8 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		deleteBlkId[blkid] = true
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
-		if colexec.Srv != nil && colexec.Srv.GetCnSegmentType(string(uid[:])) == colexec.CnBlockIdType {
-			txn.deletedBlocks.addDeletedBlocks(string(blkid[:]), []int64{int64(rowOffset)})
+		if colexec.Srv != nil && colexec.Srv.GetCnSegmentType(uid) == colexec.CnBlockIdType {
+			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
 		}
@@ -409,10 +409,9 @@ func (txn *Transaction) genBlock() {
 	txn.rowId[5] = INIT_ROWID_OFFSET
 }
 
-func (txn *Transaction) getCurrentBlockId() string {
+func (txn *Transaction) getCurrentBlockId() *types.Blockid {
 	rowId := types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
-	blkId := rowId.GetBlockid()
-	return string(blkId[:])
+	return rowId.GetBlockid()
 }
 
 func (txn *Transaction) genRowId() types.Rowid {
@@ -425,7 +424,16 @@ func (txn *Transaction) genRowId() types.Rowid {
 }
 
 // needRead determine if a block needs to be read
-func needRead(ctx context.Context, expr *plan.Expr, meta objectio.ObjectMeta, blkInfo catalog.BlockInfo, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
+func needRead(
+	ctx context.Context,
+	expr *plan.Expr,
+	meta objectio.ObjectMeta,
+	blkInfo catalog.BlockInfo,
+	tableDef *plan.TableDef,
+	columnMap map[int]int,
+	defCols, exprCols []int,
+	maxCol int,
+	proc *process.Process) bool {
 	var err error
 	if expr == nil {
 		return true
@@ -433,7 +441,7 @@ func needRead(ctx context.Context, expr *plan.Expr, meta objectio.ObjectMeta, bl
 	notReportErrCtx := errutil.ContextWithNoReport(ctx, true)
 
 	// if expr match no columns, just eval expr
-	if len(columns) == 0 {
+	if len(columnMap) == 0 {
 		bat := batch.NewWithSize(0)
 		defer bat.Clean(proc.Mp())
 		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
@@ -443,27 +451,14 @@ func needRead(ctx context.Context, expr *plan.Expr, meta objectio.ObjectMeta, bl
 		return ifNeed
 	}
 
-	// // get min max data from Meta
-	// datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
-	// if err != nil || datas == nil {
-	//  return true
-	// }
-
-	// // use all min/max data to build []vectors.
-	// buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
-	buildVectors, err := buildColumnsZMVectors(meta, int(blkInfo.MetaLocation().ID()), columns, tableDef, proc.Mp())
+	buildVectors, err := buildColumnsZMVectors(meta, int(blkInfo.MetaLocation().ID()), defCols, tableDef, proc.Mp())
 	if err != nil || len(buildVectors) == 0 {
 		return true
 	}
 	bat := batch.NewWithSize(maxCol + 1)
 	defer bat.Clean(proc.Mp())
-	for k, v := range columnMap {
-		for i, realIdx := range columns {
-			if realIdx == v {
-				bat.SetVector(int32(k), buildVectors[i])
-				break
-			}
-		}
+	for i := range defCols {
+		bat.SetVector(int32(exprCols[i]), buildVectors[i])
 	}
 	bat.SetZs(buildVectors[0].Length(), proc.Mp())
 
@@ -473,15 +468,6 @@ func needRead(ctx context.Context, expr *plan.Expr, meta objectio.ObjectMeta, bl
 	}
 
 	return ifNeed
-}
-
-func blockInfoMarshal(meta catalog.BlockInfo) []byte {
-	sz := unsafe.Sizeof(meta)
-	return unsafe.Slice((*byte)(unsafe.Pointer(&meta)), sz)
-}
-
-func BlockInfoUnmarshal(data []byte) *catalog.BlockInfo {
-	return (*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
 }
 
 /* used by multi-dn
