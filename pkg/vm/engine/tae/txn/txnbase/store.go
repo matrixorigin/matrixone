@@ -15,7 +15,6 @@
 package txnbase
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -87,7 +86,7 @@ func (store *NoopTxnStore) UnsafeGetRelation(dbId, id uint64) (rel handle.Relati
 func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)   { return }
 func (store *NoopTxnStore) GetDatabaseByID(id uint64) (db handle.Database, err error) { return }
 func (store *NoopTxnStore) DatabaseNames() (names []string)                           { return }
-func (store *NoopTxnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Segment, err error) {
+func (store *NoopTxnStore) GetSegment(id *common.ID) (seg handle.Segment, err error) {
 	return
 }
 
@@ -97,33 +96,33 @@ func (store *NoopTxnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg hand
 func (store *NoopTxnStore) CreateNonAppendableSegment(dbId, tid uint64, _ bool) (seg handle.Segment, err error) {
 	return
 }
-func (store *NoopTxnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) { return }
-func (store *NoopTxnStore) CreateBlock(uint64, uint64, types.Uuid, bool) (blk handle.Block, err error) {
+func (store *NoopTxnStore) GetBlock(id *common.ID) (blk handle.Block, err error) { return }
+func (store *NoopTxnStore) CreateBlock(*common.ID, bool) (blk handle.Block, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableBlock(uint64, *common.ID, *objectio.CreateBlockOpt) (blk handle.Block, err error) {
+func (store *NoopTxnStore) CreateNonAppendableBlock(*common.ID, *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	return
 }
 
-func (store *NoopTxnStore) UpdateMetaLoc(dbId uint64, id *common.ID, un objectio.Location) (err error) {
+func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (err error) {
 	return
 }
-func (store *NoopTxnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, un objectio.Location) (err error) {
+func (store *NoopTxnStore) UpdateDeltaLoc(id *common.ID, un objectio.Location) (err error) {
 	return
 }
-func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)   { return }
-func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error) { return }
+func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error)                { return }
+func (store *NoopTxnStore) SoftDeleteSegment(id *common.ID) (err error)              { return }
 func (store *NoopTxnStore) BatchDedup(uint64, uint64, containers.Vector) (err error) { return }
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }
-func (store *NoopTxnStore) RangeDelete(uint64, *common.ID, uint32, uint32, handle.DeleteType) (err error) {
+func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
 	return
 }
 func (store *NoopTxnStore) GetByFilter(uint64, uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
 	return
 }
-func (store *NoopTxnStore) GetValue(uint64, *common.ID, uint32, uint16) (v any, isNull bool, err error) {
+func (store *NoopTxnStore) GetValue(*common.ID, uint32, uint16) (v any, isNull bool, err error) {
 	return
 }
 

@@ -58,9 +58,8 @@ func TestHiddenWithPK1(t *testing.T) {
 			defer view.Close()
 			fp := blk.Fingerprint()
 			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
-				sid, bid, offset := model.DecodePhyAddrKeyFromValue(v)
-				t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-				assert.Equal(t, fp.SegmentID, sid)
+				bid, offset := model.DecodePhyAddrKeyFromValue(v)
+				t.Logf("bid=%s,offset=%d", bid.String(), offset)
 				assert.Equal(t, fp.BlockID, bid)
 				offsets = append(offsets, offset)
 				return
@@ -83,9 +82,8 @@ func TestHiddenWithPK1(t *testing.T) {
 		fp := blk.Fingerprint()
 		t.Log(fp.String())
 		_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
-			sid, bid, offset := model.DecodePhyAddrKeyFromValue(v)
-			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-			assert.Equal(t, fp.SegmentID, sid)
+			bid, offset := model.DecodePhyAddrKeyFromValue(v)
+			t.Logf(",bid=%s,offset=%d", bid, offset)
 			assert.Equal(t, fp.BlockID, bid)
 			offsets = append(offsets, offset)
 			return
@@ -125,9 +123,8 @@ func TestHiddenWithPK1(t *testing.T) {
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
 			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
-				sid, bid, offset := model.DecodePhyAddrKeyFromValue(v)
+				bid, offset := model.DecodePhyAddrKeyFromValue(v)
 				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-				assert.Equal(t, meta.GetSegment().ID, sid)
 				assert.Equal(t, meta.ID, bid)
 				offsets = append(offsets, offset)
 				return
@@ -167,9 +164,8 @@ func TestHiddenWithPK1(t *testing.T) {
 			t.Log(meta.String())
 			t.Log(meta.GetSegment().String())
 			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
-				sid, bid, offset := model.DecodePhyAddrKeyFromValue(v)
+				bid, offset := model.DecodePhyAddrKeyFromValue(v)
 				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-				assert.Equal(t, meta.GetSegment().ID, sid)
 				assert.Equal(t, meta.ID, bid)
 				offsets = append(offsets, offset)
 				return
@@ -218,8 +214,8 @@ func TestHidden2(t *testing.T) {
 			}
 		}
 		_ = hidden.GetData().Foreach(func(key any, _ bool, _ int) (err error) {
-			sid, bid, offset := model.DecodePhyAddrKeyFromValue(key)
-			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
+			bid, offset := model.DecodePhyAddrKeyFromValue(key)
+			t.Logf(",bid=%s,offset=%d", bid, offset)
 			v, _, err := rel.GetValueByPhyAddrKey(key, schema.PhyAddrKey.Idx)
 			assert.NoError(t, err)
 			assert.Equal(t, key, v)
@@ -254,8 +250,8 @@ func TestHidden2(t *testing.T) {
 			}
 		}
 		_ = hidden.GetData().Foreach(func(key any, _ bool, _ int) (err error) {
-			sid, bid, offset := model.DecodePhyAddrKeyFromValue(key)
-			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
+			bid, offset := model.DecodePhyAddrKeyFromValue(key)
+			t.Logf(",bid=%s,offset=%d", bid, offset)
 			v, _, err := rel.GetValueByPhyAddrKey(key, schema.PhyAddrKey.Idx)
 			assert.NoError(t, err)
 			assert.Equal(t, key, v)
