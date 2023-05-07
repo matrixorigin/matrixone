@@ -169,7 +169,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				lens := rbat.Length()
 				vec := vector.NewVec(types.T_Rowid.ToType())
 				for i := 0; i < lens; i++ {
-					if err := vector.AppendFixed(vec, generateRowIdForCNBlock(&blkid, uint32(i)), false,
+					if err := vector.AppendFixed(vec, *objectio.NewRowid(blkid, uint32(i)), false,
 						p.procMPool); err != nil {
 						return rbat, err
 					}
@@ -208,7 +208,12 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					}
 				}
 			}
-			b.SetZs(bat.Length(), p.procMPool)
+			/*
+				CORNER CASE:
+				if some rowIds[j] is in p.deletes above, then some rows has been filtered.
+				the bat.Length() is not always the right value for the result batch b.
+			*/
+			b.SetZs(b.Vecs[0].Length(), mp)
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
 			return b, nil
 		}

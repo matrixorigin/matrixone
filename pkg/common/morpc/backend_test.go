@@ -303,7 +303,7 @@ func TestStream(t *testing.T) {
 			st, err := b.NewStream(false)
 			assert.NoError(t, err)
 			defer func() {
-				assert.NoError(t, st.Close())
+				assert.NoError(t, st.Close(false))
 				b.mu.RLock()
 				assert.Equal(t, 0, len(b.mu.futures))
 				b.mu.RUnlock()
@@ -329,6 +329,46 @@ func TestStream(t *testing.T) {
 	)
 }
 
+func TestCloseStreamWithCloseConn(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			for {
+				if err := conn.Write(msg, goetty.WriteOptions{Flush: true}); err != nil {
+					return err
+				}
+			}
+		},
+		func(b *remoteBackend) {
+			st, err := b.NewStream(false)
+			assert.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+			defer cancel()
+
+			req := &testMessage{id: st.ID()}
+			assert.NoError(t, st.Send(ctx, req))
+
+			for {
+				n := len(st.(*stream).c)
+				if n == 2 {
+					break
+				}
+				time.Sleep(time.Millisecond * 10)
+			}
+
+			require.NoError(t, st.Close(true))
+
+			_, err = st.Receive()
+			require.Error(t, err)
+
+			b.Lock()
+			defer b.Unlock()
+			assert.Equal(t, stateStopped, b.stateMu.state)
+		},
+		WithBackendStreamBufferSize(2),
+	)
+}
+
 func TestStreamSendWillPanicIfDeadlineNotSet(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
@@ -338,7 +378,7 @@ func TestStreamSendWillPanicIfDeadlineNotSet(t *testing.T) {
 			st, err := b.NewStream(false)
 			assert.NoError(t, err)
 			defer func() {
-				assert.NoError(t, st.Close())
+				assert.NoError(t, st.Close(false))
 				b.mu.RLock()
 				assert.Equal(t, 0, len(b.mu.futures))
 				b.mu.RUnlock()
@@ -368,7 +408,7 @@ func TestStreamClosedByConnReset(t *testing.T) {
 			st, err := b.NewStream(false)
 			assert.NoError(t, err)
 			defer func() {
-				assert.NoError(t, st.Close())
+				assert.NoError(t, st.Close(false))
 			}()
 			c, err := st.Receive()
 			assert.NoError(t, err)
@@ -395,7 +435,7 @@ func TestStreamClosedBySequenceNotMatch(t *testing.T) {
 			st, err := b.NewStream(false)
 			assert.NoError(t, err)
 			defer func() {
-				assert.NoError(t, st.Close())
+				assert.NoError(t, st.Close(false))
 			}()
 			c, err := st.Receive()
 			assert.NoError(t, err)
@@ -448,7 +488,9 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 	defer cancel()
 
 	c := make(chan Message, 1)
-	s := newStream(c,
+	s := newStream(
+		nil,
+		c,
 		func() *Future { return newFuture(nil) },
 		func(m *Future) error {
 			m.messageSended(nil)
@@ -458,15 +500,15 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 		func() {})
 	s.init(1, false)
 	assert.NoError(t, s.Send(ctx, &testMessage{id: s.ID()}))
-	assert.NoError(t, s.Close())
-	assert.Nil(t, <-c)
-
-	s.done(RPCMessage{})
+	assert.NoError(t, s.Close(false))
+	s.done(context.TODO(), RPCMessage{}, false)
 }
 
 func TestGCStream(t *testing.T) {
 	c := make(chan Message, 1)
-	s := newStream(c,
+	s := newStream(
+		nil,
+		c,
 		func() *Future { return newFuture(nil) },
 		func(m *Future) error {
 			return nil
@@ -539,7 +581,7 @@ func TestLastActiveWithStream(t *testing.T) {
 			st, err := b.NewStream(false)
 			assert.NoError(t, err)
 			defer func() {
-				assert.NoError(t, st.Close())
+				assert.NoError(t, st.Close(false))
 			}()
 
 			n := 1
@@ -634,7 +676,7 @@ func TestLockedStream(t *testing.T) {
 			st, err := b.NewStream(true)
 			assert.NoError(t, err)
 			assert.True(t, b.Locked())
-			assert.NoError(t, st.Close())
+			assert.NoError(t, st.Close(false))
 			assert.False(t, b.Locked())
 		},
 	)
@@ -739,7 +781,9 @@ func (b *testBackend) SendInternal(ctx context.Context, request Message) (*Futur
 
 func (b *testBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	b.active()
-	st := newStream(make(chan Message, 1),
+	st := newStream(
+		nil,
+		make(chan Message, 1),
 		func() *Future { return newFuture(nil) },
 		func(m *Future) error {
 			m.messageSended(nil)

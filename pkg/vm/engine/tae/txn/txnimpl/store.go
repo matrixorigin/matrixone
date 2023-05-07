@@ -19,12 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -189,16 +186,16 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	return db.AddBlksWithMetaLoc(tid, zm, metaLoc)
 }
 
-func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
-	db, err := store.getOrSetDB(dbId)
+func (store *txnStore) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
 	}
 	return db.RangeDelete(id, start, end, dt)
 }
 
-func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objectio.Location) (err error) {
-	db, err := store.getOrSetDB(dbId)
+func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
+	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
 	}
@@ -208,8 +205,8 @@ func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objecti
 	return db.UpdateMetaLoc(id, metaLoc)
 }
 
-func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc objectio.Location) (err error) {
-	db, err := store.getOrSetDB(dbId)
+func (store *txnStore) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
+	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
 	}
@@ -231,8 +228,8 @@ func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id 
 	return db.GetByFilter(tid, filter)
 }
 
-func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
-	db, err := store.getOrSetDB(dbId)
+func (store *txnStore) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
+	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return
 	}
@@ -476,9 +473,9 @@ func (store *txnStore) GetRelationByID(dbId uint64, id uint64) (relation handle.
 	return db.GetRelationByID(id)
 }
 
-func (store *txnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Segment, err error) {
+func (store *txnStore) GetSegment(id *common.ID) (seg handle.Segment, err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	return db.GetSegment(id)
@@ -523,41 +520,41 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	return
 }
 
-func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
+func (store *txnStore) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	return db.CreateNonAppendableBlock(id, opts)
 }
 
-func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
+func (store *txnStore) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	return db.GetBlock(id)
 }
 
-func (store *txnStore) CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (blk handle.Block, err error) {
+func (store *txnStore) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
-	return db.CreateBlock(tid, sid, is1PC)
+	return db.CreateBlock(id, is1PC)
 }
 
-func (store *txnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error) {
+func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	return db.SoftDeleteBlock(id)
 }
 
-func (store *txnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error) {
+func (store *txnStore) SoftDeleteSegment(id *common.ID) (err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	return db.SoftDeleteSegment(id)

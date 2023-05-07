@@ -26,8 +26,8 @@ import (
 
 func TestIDAllocate(t *testing.T) {
 	sid := NewSegmentid()
-	bid := NewBlockid(&sid, 1, 2)
-	rid := NewRowid(&bid, 42)
+	bid := NewBlockid(sid, 1, 2)
+	rid := NewRowid(bid, 42)
 
 	// ensure not copy
 	sidSlice := sid[:]
