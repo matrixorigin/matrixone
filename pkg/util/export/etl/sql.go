@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -29,8 +30,8 @@ import (
 )
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
-const MAX_CHUNK_SIZE = 1024 * 1024 * 10
-const BUFFER_FLUSH_LIMIT = 1024 // Adjust this value according to your requirements
+const MAX_CHUNK_SIZE = 1024 * 1024 * 4
+const BUFFER_FLUSH_LIMIT = 512 // Adjust this value according to your requirements
 
 const PACKET_TOO_LARGE = "packet for query is too large"
 
@@ -43,6 +44,7 @@ type DefaultSqlWriter struct {
 	csvWriter *CSVWriter
 	tbl       *table.Table
 	buffer    [][]string
+	mux       sync.Mutex
 }
 
 func NewSqlWriter(ctx context.Context, tbl *table.Table, csv *CSVWriter) *DefaultSqlWriter {
@@ -80,6 +82,8 @@ func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 }
 
 func (sw *DefaultSqlWriter) flushBuffer() (int, error) {
+	sw.mux.Lock()
+	defer sw.mux.Unlock()
 	if len(sw.buffer) == 0 {
 		return 0, nil
 	}
