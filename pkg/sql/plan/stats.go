@@ -91,25 +91,13 @@ type InfoFromZoneMap struct {
 	ColumnNDVs []float64
 }
 
-func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
+func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	info := &InfoFromZoneMap{
 		ColumnZMs:  make([]objectio.ZoneMap, lenCols),
 		DataTypes:  make([]types.Type, lenCols),
 		ColumnNDVs: make([]float64, lenCols),
 	}
 	return info
-}
-
-func GetHighNDVColumns(s *StatsInfoMap, b *Binding) []int32 {
-	cols := make([]int32, 0)
-	if s.TableCnt != 0 {
-		for colName, ndv := range s.NdvMap {
-			if ndv/s.TableCnt > 0.99 {
-				cols = append(cols, b.FindColumn(colName))
-			}
-		}
-	}
-	return cols
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
@@ -180,6 +168,20 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 		return outCnt * 0.1
 	}
 
+}
+
+// cols in one table, return if ndv of  multi column is high enough
+func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool {
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil || tableDef == nil {
+		return false
+	}
+	s := sc.GetStatsInfoMap(tableDef.TblId)
+	var totalNDV float64 = 1
+	for i := range cols {
+		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
+	}
+	return totalNDV > s.TableCnt*0.95
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
@@ -509,7 +511,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      output,
-				Cost:        input,
+				Cost:        input + output,
 				HashmapSize: output,
 				Selectivity: 1,
 			}
@@ -598,8 +600,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 			//if there is non monotonic filters
 			if num > 0 {
-				node.Stats.Selectivity *= 0.15
-				node.Stats.Outcnt *= 0.15
+				node.Stats.Selectivity *= 0.13
+				node.Stats.Outcnt *= 0.13
 			}
 		}
 
@@ -659,9 +661,6 @@ func DefaultStats() *plan.Stats {
 	return stats
 }
 
-// If the RHS cardinality is larger than the LHS by this ratio, we build on left and probe on right
-const kLeftRightRatio = 1.3
-
 func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
@@ -688,7 +687,7 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*kLeftRightRatio < rightChild.Stats.Outcnt {
+		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
 			node.BuildOnLeft = true
 		}
 	}

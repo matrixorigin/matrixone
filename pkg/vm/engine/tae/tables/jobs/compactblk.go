@@ -76,7 +76,7 @@ func NewCompactBlockTask(
 		return
 	}
 	task.schema = rel.Schema().(*catalog.Schema)
-	seg, err := rel.GetSegment(meta.GetSegment().ID)
+	seg, err := rel.GetSegment(&meta.GetSegment().ID)
 	if err != nil {
 		return
 	}
@@ -183,7 +183,7 @@ func (task *compactBlockTask) Execute() (err error) {
 				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
 				return moerr.GetOkExpectedEOB()
 			}
-			createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(nextSeg.ID)
+			createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID)
 			if err != nil {
 				return err
 			}

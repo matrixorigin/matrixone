@@ -186,7 +186,9 @@ func NewRemoteBackend(
 	}
 	rb.pool.streams = &sync.Pool{
 		New: func() any {
-			return newStream(make(chan Message, rb.options.streamBufferSize),
+			return newStream(
+				rb,
+				make(chan Message, rb.options.streamBufferSize),
 				rb.newFuture,
 				rb.doSend,
 				rb.removeActiveStream,
@@ -257,7 +259,6 @@ func (rb *remoteBackend) SendInternal(ctx context.Context, request Message) (*Fu
 }
 
 func (rb *remoteBackend) send(ctx context.Context, request Message, internal bool) (*Future, error) {
-	rb.active()
 	request.SetID(rb.nextID())
 
 	f := rb.newFuture()
@@ -268,11 +269,11 @@ func (rb *remoteBackend) send(ctx context.Context, request Message, internal boo
 		f.Close()
 		return nil, err
 	}
+	rb.active()
 	return f, nil
 }
 
 func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
-	rb.active()
 	rb.stateMu.RLock()
 	defer rb.stateMu.RUnlock()
 
@@ -286,6 +287,7 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	st := rb.acquireStream()
 	st.init(rb.nextID(), unlockAfterClose)
 	rb.mu.activeStreams[st.ID()] = st
+	rb.active()
 	return st, nil
 }
 
@@ -318,6 +320,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 }
 
 func (rb *remoteBackend) Close() {
+	rb.inactive()
 	rb.cancelOnce.Do(func() {
 		rb.cancel()
 	})
@@ -608,7 +611,7 @@ func (rb *remoteBackend) cancelActiveStreams() {
 	defer rb.mu.Unlock()
 
 	for _, st := range rb.mu.activeStreams {
-		st.done(RPCMessage{})
+		st.done(context.TODO(), RPCMessage{}, true)
 	}
 }
 
@@ -620,6 +623,9 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 	delete(rb.mu.futures, s.id)
 	if s.unlockAfterClose {
 		rb.Unlock()
+	}
+	if len(s.c) > 0 {
+		panic("BUG: stream channel is not empty")
 	}
 	rb.pool.streams.Put(s)
 }
@@ -653,7 +659,7 @@ func (rb *remoteBackend) requestDone(ctx context.Context, id uint64, msg RPCMess
 	} else if st, ok := rb.mu.activeStreams[id]; ok {
 		rb.mu.Unlock()
 		if response != nil {
-			st.done(msg)
+			st.done(ctx, msg, false)
 		}
 	} else {
 		// future has been removed, e.g. it has timed out.
@@ -828,6 +834,7 @@ func (bf *goettyBasedBackendFactory) Create(remote string) (Backend, error) {
 }
 
 type stream struct {
+	rb               *remoteBackend
 	c                chan Message
 	sendFunc         func(*Future) error
 	activeFunc       func()
@@ -848,6 +855,7 @@ type stream struct {
 }
 
 func newStream(
+	rb *remoteBackend,
 	c chan Message,
 	acquireFutureFunc func() *Future,
 	sendFunc func(*Future) error,
@@ -855,6 +863,7 @@ func newStream(
 	activeFunc func()) *stream {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &stream{
+		rb:             rb,
 		c:              c,
 		ctx:            ctx,
 		cancel:         cancel,
@@ -951,7 +960,10 @@ func (s *stream) Receive() (chan Message, error) {
 	return s.c, nil
 }
 
-func (s *stream) Close() error {
+func (s *stream) Close(closeConn bool) error {
+	if closeConn {
+		s.rb.Close()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -959,8 +971,7 @@ func (s *stream) Close() error {
 		return nil
 	}
 
-	// the stream is reuseable, so use nil to notify stream is closed
-	s.c <- nil
+	s.cleanCLocked()
 	s.mu.closed = true
 	s.unregisterFunc(s)
 	return nil
@@ -970,7 +981,10 @@ func (s *stream) ID() uint64 {
 	return s.id
 }
 
-func (s *stream) done(message RPCMessage) {
+func (s *stream) done(
+	ctx context.Context,
+	message RPCMessage,
+	clean bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -978,6 +992,9 @@ func (s *stream) done(message RPCMessage) {
 		return
 	}
 
+	if clean {
+		s.cleanCLocked()
+	}
 	response := message.Message
 	if response != nil && !message.stream {
 		panic("BUG")
@@ -988,5 +1005,18 @@ func (s *stream) done(message RPCMessage) {
 	}
 
 	s.lastReceivedSequence = message.streamSequence
-	s.c <- response
+	select {
+	case s.c <- response:
+	case <-ctx.Done():
+	}
+}
+
+func (s *stream) cleanCLocked() {
+	for {
+		select {
+		case <-s.c:
+		default:
+			return
+		}
+	}
 }

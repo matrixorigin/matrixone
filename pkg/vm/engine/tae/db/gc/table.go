@@ -33,12 +33,12 @@ import (
 // GCTable is a data structure in memory after consuming checkpoint
 type GCTable struct {
 	sync.Mutex
-	dbs map[uint32]*dropDB
+	dbs map[uint64]*dropDB
 }
 
 func NewGCTable() *GCTable {
 	table := GCTable{
-		dbs: make(map[uint32]*dropDB),
+		dbs: make(map[uint64]*dropDB),
 	}
 	return &table
 }
@@ -46,23 +46,23 @@ func NewGCTable() *GCTable {
 func (t *GCTable) addBlock(id common.ID, name string) {
 	t.Lock()
 	defer t.Unlock()
-	db := t.dbs[id.PartID]
+	db := t.dbs[id.DbID]
 	if db == nil {
-		db = NewDropDB(id.PartID)
+		db = NewDropDB(id.DbID)
 	}
 	db.addBlock(id, name)
-	t.dbs[id.PartID] = db
+	t.dbs[id.DbID] = db
 }
 
 func (t *GCTable) deleteBlock(id common.ID, name string) {
 	t.Lock()
 	defer t.Unlock()
-	db := t.dbs[id.PartID]
+	db := t.dbs[id.DbID]
 	if db == nil {
-		db = NewDropDB(id.PartID)
+		db = NewDropDB(id.DbID)
 	}
 	db.deleteBlock(id, name)
-	t.dbs[id.PartID] = db
+	t.dbs[id.DbID] = db
 }
 
 // Merge can merge two GCTables
@@ -96,23 +96,23 @@ func (t *GCTable) SoftGC() []string {
 func (t *GCTable) dropDB(id common.ID) {
 	t.Lock()
 	defer t.Unlock()
-	db := t.dbs[id.PartID]
+	db := t.dbs[id.DbID]
 	if db == nil {
-		db = NewDropDB(id.PartID)
+		db = NewDropDB(id.DbID)
 	}
 	db.drop = true
-	t.dbs[id.PartID] = db
+	t.dbs[id.DbID] = db
 }
 
 func (t *GCTable) dropTable(id common.ID) {
 	t.Lock()
 	defer t.Unlock()
-	db := t.dbs[id.PartID]
+	db := t.dbs[id.DbID]
 	if db == nil {
-		db = NewDropDB(id.PartID)
+		db = NewDropDB(id.DbID)
 	}
 	db.DropTable(id)
-	t.dbs[id.PartID] = db
+	t.dbs[id.DbID] = db
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
@@ -120,29 +120,25 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	for i := 0; i < ins.Length(); i++ {
 		dbid := insTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := insTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
-		sid := insTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(types.Uuid)
 		blkID := ins.GetVectorByName(pkgcatalog.BlockMeta_ID).Get(i).(types.Blockid)
 		metaLoc := objectio.Location(ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 		id := common.ID{
-			SegmentID: sid,
-			TableID:   tid,
-			BlockID:   blkID,
-			PartID:    uint32(dbid),
+			DbID:    dbid,
+			TableID: tid,
+			BlockID: blkID,
 		}
 		t.addBlock(id, metaLoc.Name().String())
 	}
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
-		sid := delTxn.GetVectorByName(catalog.SnapshotAttr_SegID).Get(i).(types.Uuid)
 		blkID := del.GetVectorByName(catalog.AttrRowID).Get(i).(types.Rowid)
 		metaLoc := objectio.Location(delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
 
 		id := common.ID{
-			SegmentID: sid,
-			TableID:   tid,
-			BlockID:   blkID.GetBlockid(),
-			PartID:    uint32(dbid),
+			TableID: tid,
+			BlockID: *blkID.GetBlockid(),
+			DbID:    dbid,
 		}
 		t.deleteBlock(id, metaLoc.Name().String())
 	}
@@ -151,8 +147,8 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
 		id := common.ID{
+			DbID:    dbid,
 			TableID: tid,
-			PartID:  uint32(dbid),
 		}
 		t.dropTable(id)
 	}
@@ -161,7 +157,7 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		id := common.ID{
-			PartID: uint32(dbid),
+			DbID: dbid,
 		}
 		t.dropDB(id)
 	}
@@ -174,52 +170,48 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 		files[name] = true
 	}
 	for i := 0; i < bats[CreateBlock].Length(); i++ {
-		dbid := bats[CreateBlock].GetVectorByName(GCAttrDBId).Get(i).(uint32)
+		dbid := bats[CreateBlock].GetVectorByName(GCAttrDBId).Get(i).(uint64)
 		tid := bats[CreateBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
-		sid := bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Get(i).(types.Uuid)
 		blkID := bats[CreateBlock].GetVectorByName(GCAttrBlockId).Get(i).(types.Blockid)
 		name := string(bats[CreateBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
 		if files[name] {
 			continue
 		}
 		id := common.ID{
-			SegmentID: sid,
-			TableID:   tid,
-			BlockID:   blkID,
-			PartID:    uint32(dbid),
+			TableID: tid,
+			BlockID: blkID,
+			DbID:    dbid,
 		}
 		t.addBlock(id, name)
 	}
 	for i := 0; i < bats[DeleteBlock].Length(); i++ {
-		dbid := bats[DeleteBlock].GetVectorByName(GCAttrDBId).Get(i).(uint32)
+		dbid := bats[DeleteBlock].GetVectorByName(GCAttrDBId).Get(i).(uint64)
 		tid := bats[DeleteBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
-		sid := bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Get(i).(types.Uuid)
 		blkID := bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Get(i).(types.Blockid)
 		name := string(bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
 		if files[name] {
 			continue
 		}
 		id := common.ID{
-			SegmentID: sid,
-			TableID:   tid,
-			BlockID:   blkID,
-			PartID:    dbid,
+			TableID: tid,
+			BlockID: blkID,
+			DbID:    dbid,
 		}
 		t.deleteBlock(id, name)
 	}
 	for i := 0; i < bats[DropTable].Length(); i++ {
-		dbid := bats[DropTable].GetVectorByName(GCAttrDBId).Get(i).(uint32)
+		dbid := bats[DropTable].GetVectorByName(GCAttrDBId).Get(i).(uint64)
 		tid := bats[DropTable].GetVectorByName(GCAttrTableId).Get(i).(uint64)
 		id := common.ID{
 			TableID: tid,
-			PartID:  dbid,
+			DbID:    dbid,
 		}
 		t.dropTable(id)
 	}
 	for i := 0; i < bats[DropDB].Length(); i++ {
-		dbid := bats[DropDB].GetVectorByName(GCAttrDBId).Get(i).(uint32)
+		dbid := bats[DropDB].GetVectorByName(GCAttrDBId).Get(i).(uint64)
 		id := common.ID{
-			PartID: dbid,
+			DbID: dbid,
 		}
 		t.dropDB(id)
 	}
@@ -270,16 +262,14 @@ func (t *GCTable) collectData(files []string) []*containers.Batch {
 			for name, obj := range table.object {
 				for _, block := range obj.table.blocks {
 					bats[CreateBlock].GetVectorByName(GCAttrBlockId).Append(block.BlockID, false)
-					bats[CreateBlock].GetVectorByName(GCAttrSegmentId).Append(block.SegmentID, false)
 					bats[CreateBlock].GetVectorByName(GCAttrTableId).Append(block.TableID, false)
-					bats[CreateBlock].GetVectorByName(GCAttrDBId).Append(block.PartID, false)
+					bats[CreateBlock].GetVectorByName(GCAttrDBId).Append(block.DbID, false)
 					bats[CreateBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
 				}
 				for _, block := range obj.table.delete {
 					bats[DeleteBlock].GetVectorByName(GCAttrBlockId).Append(block.BlockID, false)
-					bats[DeleteBlock].GetVectorByName(GCAttrSegmentId).Append(block.SegmentID, false)
 					bats[DeleteBlock].GetVectorByName(GCAttrTableId).Append(block.TableID, false)
-					bats[DeleteBlock].GetVectorByName(GCAttrDBId).Append(block.PartID, false)
+					bats[DeleteBlock].GetVectorByName(GCAttrDBId).Append(block.DbID, false)
 					bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
 				}
 			}
