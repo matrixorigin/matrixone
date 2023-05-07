@@ -246,6 +246,8 @@ const (
 	BLOCKMETA_DELTALOC_IDX   = 4
 	BLOCKMETA_COMMITTS_IDX   = 5
 	BLOCKMETA_SEGID_IDX      = 6
+
+	SKIP_ROWID_OFFSET = 1 //rowid is the 0th vector in the batch
 )
 
 type ObjectLocation [objectio.LocationLen]byte
