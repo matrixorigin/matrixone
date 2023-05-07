@@ -84,6 +84,18 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 			rows = rows + int64(entry.bat.Length())
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.databaseId == catalog.MO_CATALOG_ID &&
+					entry.tableId == catalog.MO_TABLES_ID &&
+					entry.truncate {
+					continue
+				}
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					deletes[v] = struct{}{}
@@ -214,6 +226,10 @@ func (tbl *txnTable) GetEngineType() engine.EngineType {
 }
 
 func (tbl *txnTable) reset(newId uint64) {
+	//if the table is truncated first time, the table id is saved into the oldTableId
+	if tbl.oldTableId == 0 {
+		tbl.oldTableId = tbl.tableId
+	}
 	tbl.tableId = newId
 	tbl._parts = nil
 	tbl.blockInfos = nil
@@ -293,6 +309,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 				}
 			}
 			for _, entry := range tbl.writes {
+				if entry.isGeneratedByTruncate() {
+					continue
+				}
 				// rawBatch detele rowId for Dn block
 				if entry.typ == DELETE && entry.fileName == "" {
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
@@ -447,7 +466,7 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 		return err
 	}
 	if err = tbl.db.txn.WriteBatch(UPDATE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1); err != nil {
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1, false, false); err != nil {
 		return err
 	}
 	tbl.constraint = ct
@@ -526,7 +545,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx); err != nil {
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
 	}
 	packer, put := tbl.db.txn.engine.packerPool.Get()
@@ -735,7 +754,7 @@ func CopyBatch(ctx context.Context, proc *process.Process, bat *batch.Batch) *ba
 func (tbl *txnTable) writeDnPartition(ctx context.Context, bat *batch.Batch) error {
 	ibat := CopyBatch(ctx, tbl.db.txn.proc, bat)
 	if err := tbl.db.txn.WriteBatch(DELETE, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx); err != nil {
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
 	}
 	return nil
@@ -884,6 +903,16 @@ func (tbl *txnTable) newReader(
 			inserts = append(inserts, entry.bat)
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.isGeneratedByTruncate() {
+					continue
+				}
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					deletes[v] = 0
@@ -907,6 +936,9 @@ func (tbl *txnTable) newReader(
 
 	// add add rawBatchRowId deletes info
 	for _, entry := range tbl.writes {
+		if entry.isGeneratedByTruncate() {
+			continue
+		}
 		// rawBatch detele rowId for memory Dn block
 		if entry.typ == DELETE && entry.fileName == "" {
 			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
@@ -1176,8 +1208,37 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) error {
 		return nil
 	}
 
+	tableId := tbl.tableId
+	/*
+		if the table is truncated once or more than once,
+		it is suitable to use the old table id to sync logtail.
+
+		CORNER CASE 1:
+		create table t1(a int);
+		begin;
+		truncate t1; //table id changed. there is no new table id in DN.
+		select count(*) from t1; // sync logtail for the new id failed.
+
+		CORNER CASE 2:
+		create table t1(a int);
+		begin;
+		select count(*) from t1; // sync logtail for the old succeeded.
+		truncate t1; //table id changed. there is no new table id in DN.
+		select count(*) from t1; // not sync logtail this time.
+
+		CORNER CASE 3:
+		create table t1(a int);
+		begin;
+		truncate t1; //table id changed. there is no new table id in DN.
+		truncate t1; //table id changed. there is no new table id in DN.
+		select count(*) from t1; // sync logtail for the new id failed.
+	*/
+	if tbl.oldTableId != 0 {
+		tableId = tbl.oldTableId
+	}
+
 	if tbl.db.txn.engine.UsePushModelOrNot() {
-		if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+		if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return err
 		}
 		err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
@@ -1186,7 +1247,7 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) error {
 		}
 	} else {
 		if err := tbl.db.txn.engine.UpdateOfPull(ctx, tbl.db.txn.dnStores[:1], tbl, tbl.db.txn.op, tbl.primaryIdx,
-			tbl.db.databaseId, tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+			tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 			return err
 		}
 	}

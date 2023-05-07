@@ -208,7 +208,12 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					}
 				}
 			}
-			b.SetZs(bat.Length(), p.procMPool)
+			/*
+				CORNER CASE:
+				if some rowIds[j] is in p.deletes above, then some rows has been filtered.
+				the bat.Length() is not always the right value for the result batch b.
+			*/
+			b.SetZs(b.Vecs[0].Length(), mp)
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
 			return b, nil
 		}
