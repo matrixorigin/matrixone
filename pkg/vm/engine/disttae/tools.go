@@ -148,8 +148,11 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 	return bat, nil
 }
 
+// genCreateTableTuple yields a batch for insertion into mo_tables.
+// rowid: rowid of the row.
+// needRowid: true -- there is a rowid vector in position 0 of the batch.
 func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId uint32, name string,
-	tableId uint64, databaseId uint64, databaseName string, m *mpool.MPool) (*batch.Batch, error) {
+	tableId uint64, databaseId uint64, databaseName string, rowid types.Rowid, needRowid bool, m *mpool.MPool) (*batch.Batch, error) {
 	_ = sql //TODO delete this param if not required
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
@@ -241,10 +244,22 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 			return nil, err
 		}
 	}
+	if needRowid {
+		//add the rowid vector as the first one in the batch
+		vec := vector.NewVec(types.T_Rowid.ToType())
+		if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
+	}
 	return bat, nil
 }
 
-func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
+// genCreateColumnTuple yields a batch for insertion into mo_columns.
+// rowid: rowid of the row.
+// needRowid: true -- there is a rowid vector in position 0 of the batch.
+func genCreateColumnTuple(col column, rowid types.Rowid, needRowid bool, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 	bat.SetZs(1, m)
@@ -362,10 +377,37 @@ func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 		}
 
 	}
+	if needRowid {
+		//add the rowid vector as the first one in the batch
+		vec := vector.NewVec(types.T_Rowid.ToType())
+		if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
+	}
 	return bat, nil
 }
 
-func genDropTableTuple(id, databaseId uint64, name, databaseName string,
+// genDropColumnTuple generates the batch for deletion on mo_columns.
+// the batch has rowid vector.
+func genDropColumnTuple(rowid types.Rowid, m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{catalog.Row_ID}
+	bat.SetZs(1, m)
+
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
+	}
+	bat.Vecs[0] = vec
+	return bat, nil
+}
+
+// genDropTableTuple generates the batch for deletion on mo_tables.
+// the batch has rowid vector.
+func genDropTableTuple(rowid types.Rowid, id, databaseId uint64, name, databaseName string,
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
@@ -392,10 +434,19 @@ func genDropTableTuple(id, databaseId uint64, name, databaseName string,
 			return nil, err
 		}
 	}
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
+	}
+	bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+	bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	return bat, nil
 }
 
-func genTruncateTableTuple(id, databaseId uint64, name, databaseName string,
+// genTruncateTableTuple generates the batch for the trunacte.
+// it needs deletion on mo_tables. the batch has rowid vector.
+func genTruncateTableTuple(rowid types.Rowid, id, databaseId uint64, name, databaseName string,
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
@@ -422,6 +473,13 @@ func genTruncateTableTuple(id, databaseId uint64, name, databaseName string,
 			return nil, err
 		}
 	}
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
+	}
+	bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+	bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	return bat, nil
 }
 
@@ -658,6 +716,17 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByDN{})
 	for _, e := range writes {
+		//SKIP update/delete on mo_columns
+		//The DN does not counsume the update/delete on mo_columns.
+		//there are update/delete entries on mo_columns just after one on mo_tables.
+		//case 1: (DELETE,MO_TABLES),(UPDATE/DELETE,MO_COLUMNS),(UPDATE/DELETE,MO_COLUMNS),...
+		//there is none update/delete entries on mo_columns just after one on mo_tables.
+		//case 2: (DELETE,MO_TABLES),...
+		if (e.typ == DELETE || e.typ == UPDATE) &&
+			e.databaseId == catalog.MO_DATABASE_ID &&
+			e.tableId == catalog.MO_COLUMNS_ID {
+			continue
+		}
 		if e.bat.Length() == 0 {
 			continue
 		}

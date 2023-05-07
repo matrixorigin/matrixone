@@ -1,0 +1,78 @@
+drop table if exists t1;
+create table t1(a int);
+insert into t1 values(1),(2),(3),(4);
+select count(*) from t1;
+count(*)
+4
+begin;
+select count(*) from t1;
+count(*)
+4
+truncate t1;
+select count(*) from t1;
+count(*)
+0
+show columns from t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+create table t2(a int,b int);
+show tables;
+Tables_in_truncate_table_3
+t2
+t1
+insert into t2 values (1,2),(2,3);
+rollback;
+show tables;
+Tables_in_truncate_table_3
+t1
+select count(*) from t1;
+count(*)
+4
+begin;
+truncate t1;
+select count(*) from t1;
+count(*)
+0
+show columns from t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+create table t2(a int,b int);
+show tables;
+Tables_in_truncate_table_3
+t2
+t1
+insert into t2 values (1,2),(2,3);
+rollback;
+show tables;
+Tables_in_truncate_table_3
+t1
+select count(*) from t1;
+count(*)
+4
+begin;
+truncate t1;
+select count(*) from t1;
+count(*)
+0
+show columns from t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+create table t2(a int,b int);
+show tables;
+Tables_in_truncate_table_3
+t2
+t1
+insert into t2 values (1,2),(2,3);
+truncate t1;
+truncate t1;
+commit;
+show tables;
+Tables_in_truncate_table_3
+t1
+t2
+select count(*) from t1;
+count(*)
+0
+select count(*) from t2;
+count(*)
+2
