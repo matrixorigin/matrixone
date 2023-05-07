@@ -309,9 +309,10 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
-	evictInterval := time.Millisecond * 1
+	evictInterval := time.Hour * 1
 	cache, err := NewDiskCache(dir, 3, evictInterval, 0.8, nil)
 	assert.Nil(t, err)
+	cache.noAutoEviction = true
 
 	// update
 	err = cache.Update(ctx, &IOVector{
@@ -326,7 +327,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.WriteFile.Load())
 
-	// update another entry to trigger eviction
+	// update another entry
 	err = cache.Update(ctx, &IOVector{
 		FilePath: "foo",
 		Entries: []IOEntry{
@@ -340,15 +341,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, int64(2), counterSet.FileService.Cache.Disk.WriteFile.Load())
 
-	// wait evict finish
-	for {
-		cache.evictState.Lock()
-		inProgress := cache.evictState.timer != nil
-		cache.evictState.Unlock()
-		if !inProgress {
-			break
-		}
-	}
+	cache.evict(ctx)
 
 	// update again, should write cache file again
 	err = cache.Update(ctx, &IOVector{
