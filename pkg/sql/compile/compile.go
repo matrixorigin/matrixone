@@ -253,6 +253,9 @@ func (c *Compile) Run(_ uint64) error {
 	var wg sync.WaitGroup
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {
+		s.Proc.ResetContextFromParent(c.proc.Ctx)
+	}
+	for _, s := range c.scope {
 		wg.Add(1)
 		go func(scope *Scope) {
 			errC <- c.run(scope)
