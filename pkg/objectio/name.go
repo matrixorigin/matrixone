@@ -32,9 +32,9 @@ import (
 type ObjectName []byte
 type ObjectNameShort [ObjectNameShortLen]byte
 
-func BuildObjectName(segid Segmentid, num uint16) ObjectName {
+func BuildObjectName(segid *Segmentid, num uint16) ObjectName {
 	var name [ObjectNameLen]byte
-	copy(name[:SegmentIdSize], types.EncodeUuid(&segid))
+	copy(name[:SegmentIdSize], types.EncodeUuid(segid))
 	copy(name[FileNumOff:FileNumOff+FileNumLen], types.EncodeUint16(&num))
 	str := fmt.Sprintf("%v_%05d", segid.ToString(), num)
 	copy(name[NameStringOff:NameStringOff+NameStringLen], str)
@@ -47,6 +47,10 @@ func (s *ObjectNameShort) Segmentid() *Segmentid {
 
 func (s *ObjectNameShort) Num() uint16 {
 	return types.DecodeUint16(s[SegmentIdSize:])
+}
+
+func (s *ObjectNameShort) Equal(o []byte) bool {
+	return bytes.Equal(s[:], o)
 }
 
 func (o ObjectName) String() string {

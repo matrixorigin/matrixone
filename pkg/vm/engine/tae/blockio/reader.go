@@ -26,6 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
+const (
+	AsyncIo = 1
+	SyncIo  = 2
+)
+
+var IoModel = SyncIo
+
 type BlockReader struct {
 	reader *objectio.ObjectReader
 	aio    *IoPipeline
@@ -86,20 +93,33 @@ func (r *BlockReader) LoadColumns(
 	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
-	proc := fetchParams{
-		idxes:  cols,
-		blk:    blk,
-		pool:   m,
-		reader: r.reader,
+	var ioVectors *fileservice.IOVector
+	if IoModel == AsyncIo {
+		proc := fetchParams{
+			idxes:  cols,
+			blk:    blk,
+			pool:   m,
+			reader: r.reader,
+		}
+		var v any
+		if v, err = r.aio.Fetch(ctx, proc); err != nil {
+			return
+		}
+		ioVectors = v.(*fileservice.IOVector)
+	} else {
+		ioVectors, err = r.reader.ReadOneBlock(ctx, cols, blk, m)
+		if err != nil {
+			return
+		}
 	}
-	var v any
-	if v, err = r.aio.Fetch(ctx, proc); err != nil {
-		return
-	}
-	ioVectors := v.(*fileservice.IOVector)
 	bat = batch.NewWithSize(len(cols))
+	var obj any
 	for i := range cols {
-		bat.Vecs[i] = ioVectors.Entries[i].Object.(*vector.Vector)
+		obj, err = objectio.Decode(ioVectors.Entries[i].ObjectBytes)
+		if err != nil {
+			return
+		}
+		bat.Vecs[i] = obj.(*vector.Vector)
 	}
 	return
 }
@@ -132,8 +152,13 @@ func (r *BlockReader) LoadAllColumns(
 	}
 	for y := 0; y < int(meta.BlockCount()); y++ {
 		bat := batch.NewWithSize(len(idxs))
+		var obj any
 		for i := range idxs {
-			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+			obj, err = objectio.Decode(ioVectors.Entries[y*len(idxs)+i].ObjectBytes)
+			if err != nil {
+				return nil, err
+			}
+			bat.Vecs[i] = obj.(*vector.Vector)
 		}
 		bats = append(bats, bat)
 	}
@@ -176,13 +201,13 @@ func (r *BlockReader) LoadZoneMap(
 func (r *BlockReader) LoadOneBF(
 	ctx context.Context,
 	blk uint16,
-) (objectio.StaticFilter, error) {
+) (objectio.StaticFilter, uint32, error) {
 	return r.reader.ReadOneBF(ctx, blk)
 }
 
 func (r *BlockReader) LoadAllBF(
 	ctx context.Context,
-) ([]objectio.StaticFilter, uint32, error) {
+) (objectio.BloomFilter, uint32, error) {
 	return r.reader.ReadAllBF(ctx)
 }
 

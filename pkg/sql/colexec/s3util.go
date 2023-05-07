@@ -150,7 +150,8 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 			} else {
 				// Get Single Col pk index
 				for idx, colDef := range tableDef.Cols {
-					if colDef.Primary {
+					if colDef.Primary &&
+						!colDef.Hidden {
 						writers[i].sortIndex = idx
 						break
 					}
@@ -193,9 +194,7 @@ func (w *S3Writer) ResetMetaLocBat() {
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
-
-	metaLocBat := batch.NewWithSize(len(attrs))
-	metaLocBat.Attrs = attrs
+	metaLocBat := batch.New(true, attrs)
 	metaLocBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
 	metaLocBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
 	w.metaLocBat = metaLocBat

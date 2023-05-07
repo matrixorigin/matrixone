@@ -109,7 +109,7 @@ func BlockReadInner(
 			return nil, err
 		}
 		deleteRows = mergeDeleteRows(deleteRows, recordDeletes(deleteBatch, ts))
-		logutil.Infof(
+		logutil.Debugf(
 			"blockread %s read delete %d: base %s filter out %v\n",
 			info.BlockID.String(), deleteBatch.Length(), ts.ToString(), len(deleteRows))
 	}
@@ -121,7 +121,7 @@ func BlockReadInner(
 		} else {
 			rbat.Vecs[i] = vp.GetVector(typ)
 		}
-		if err := vector.GetUnionFunction(typ, mp)(rbat.Vecs[i], col); err != nil {
+		if err := vector.GetUnionAllFunction(typ, mp)(rbat.Vecs[i], col); err != nil {
 			return nil, err
 		}
 		if col.GetType().Oid == types.T_Rowid {
@@ -246,7 +246,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 				deleteRows = append(deleteRows, int64(i))
 			}
 		}
-		logutil.Infof(
+		logutil.Debugf(
 			"blockread %s scan filter cost %v: base %s filter out %v\n ",
 			info.BlockID.String(), time.Since(t0), ts.ToString(), len(deleteRows))
 		return nil
@@ -292,7 +292,7 @@ func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
 			continue
 		}
 		rowid := vector.GetFixedAt[types.Rowid](deleteBatch.Vecs[0], i)
-		_, _, row := model.DecodePhyAddrKey(rowid)
+		_, row := model.DecodePhyAddrKey(&rowid)
 		nulls.Add(deleteRows, uint64(row))
 	}
 	var rows []int64

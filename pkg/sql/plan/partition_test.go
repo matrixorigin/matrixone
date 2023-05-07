@@ -2058,6 +2058,8 @@ func Test_partition_binder(t *testing.T) {
 		{"unix_timestamp(col3)", false, false},
 		{"weekday(col3)", false, false},
 		{"year(col3)", false, false},
+		{"to_days(col3)", false, false},
+		{"to_seconds(col3)", false, false},
 	}
 	for _, k := range supportedFuncCases {
 		checkFunc(k)
@@ -2069,8 +2071,6 @@ func Test_partition_binder(t *testing.T) {
 		{"microsecond(col3)", true, false}, //unsupported function
 		{"quarter(col3)", true, false},     //unsupported function
 		{"time_to_sec(col3)", true, false},
-		{"to_days(col3)", true, false},
-		{"to_seconds(col3)", true, false},
 		{"yearweek(col3)", true, false},
 	}
 	for _, k := range unsupportedFuncCases {

@@ -23,18 +23,6 @@ import (
 type Type = uint16
 
 const (
-	ETInvalid Type = iota
-	ETNoop
-	ETFlush
-	ETCheckpoint
-	ETUncommitted
-	ETTxn
-	ETPostCommit
-	ETMeta
-	ETCustomizedStart
-)
-
-const (
 	GTInvalid uint32 = iota
 	GTNoop
 	GTCKp
@@ -52,8 +40,6 @@ type Desc interface {
 	GetMetaSize() int
 	TotalSize() int
 	GetMetaBuf() []byte
-	IsFlush() bool
-	IsCheckpoint() bool
 }
 
 type Entry interface {

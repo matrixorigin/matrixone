@@ -923,28 +923,12 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Exp
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
-	// If it is Expr_List, perform constant folding on its elements
-	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
-		exprList := exprImpl.List
-		for i, exprElem := range exprList.List {
-			_, ok2 := exprElem.Expr.(*plan.Expr_F)
-			if ok2 {
-				foldExpr, err := ConstantFold(bat, exprElem, proc)
-				if err != nil {
-					return e, nil
-				}
-				exprImpl.List.List[i] = foldExpr
-			}
-		}
-		return e, nil
-	}
-
 	var err error
+
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok || proc == nil {
 		return e, nil
 	}
-
 	overloadID := ef.F.Func.GetObj()
 	f, err := function.GetFunctionByID(proc.Ctx, overloadID)
 	if err != nil {
@@ -1299,7 +1283,7 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 // return : []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
 func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
 	uniqueCols := make([]map[string]int, 0, len(tableDef.Cols))
-	if tableDef.Pkey != nil {
+	if tableDef.Pkey != nil && !onlyHasHiddenPrimaryKey(tableDef) {
 		pkMap := make(map[string]int)
 		for _, colName := range tableDef.Pkey.Names {
 			pkMap[colName] = int(tableDef.Name2ColIndex[colName])

@@ -89,7 +89,7 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 		return
 	}
 	for _, meta := range mergedBlks {
-		seg, err := task.rel.GetSegment(meta.GetSegment().ID)
+		seg, err := task.rel.GetSegment(&meta.GetSegment().ID)
 		if err != nil {
 			return nil, err
 		}
@@ -328,7 +328,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
-	name := objectio.BuildObjectName(task.toSegEntry.ID, 0)
+	name := objectio.BuildObjectName(&task.toSegEntry.ID, 0)
 	writer, err := blockio.NewBlockWriterNew(task.mergedBlks[0].GetBlockData().GetFs().Service, name)
 	if err != nil {
 		return err
@@ -367,7 +367,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 	for _, entry := range task.mergedSegs {
-		if err = task.rel.SoftDeleteSegment(entry.ID); err != nil {
+		if err = task.rel.SoftDeleteSegment(&entry.ID); err != nil {
 			return err
 		}
 	}

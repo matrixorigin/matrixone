@@ -59,11 +59,16 @@ func newMergeBlocksCmd(
 	}
 }
 
-func (cmd *mergeBlocksCmd) GetType() int16 { return CmdMergeBlocks }
+func (cmd *mergeBlocksCmd) GetType() uint16 { return IOET_WALTxnCommand_Merge }
 
 func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
-	typ := CmdMergeBlocks
-	if _, err = w.Write(types.EncodeInt16(&typ)); err != nil {
+	typ := IOET_WALTxnCommand_Merge
+	if _, err = w.Write(types.EncodeUint16(&typ)); err != nil {
+		return
+	}
+	n = 2
+	ver := IOET_WALTxnCommand_Merge_CurrVer
+	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
 		return
 	}
 	n = 2
@@ -72,7 +77,7 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
-func (cmd *mergeBlocksCmd) Marshal() (buf []byte, err error) {
+func (cmd *mergeBlocksCmd) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = cmd.WriteTo(&bbuf); err != nil {
 		return
@@ -80,7 +85,7 @@ func (cmd *mergeBlocksCmd) Marshal() (buf []byte, err error) {
 	buf = bbuf.Bytes()
 	return
 }
-func (cmd *mergeBlocksCmd) Unmarshal(buf []byte) (err error) {
+func (cmd *mergeBlocksCmd) UnmarshalBinary(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
 	_, err = cmd.ReadFrom(bbuf)
 	return

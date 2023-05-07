@@ -20,24 +20,20 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -46,58 +42,71 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func fetchZonemapAndRowsFromBlockInfo(
+func loadObjectMeta(
 	ctx context.Context,
-	idxs []uint16,
-	blockInfo catalog.BlockInfo,
+	location objectio.Location,
 	fs fileservice.FileService,
-	m *mpool.MPool) ([]Zonemap, uint32, error) {
-	zonemapList := make([]Zonemap, len(idxs))
-
-	// raed s3
-	reader, err := blockio.NewObjectReader(fs, blockInfo.MetaLocation())
-	if err != nil {
-		return nil, 0, err
-	}
-
-	obs, err := reader.LoadZoneMaps(ctx, idxs, blockInfo.MetaLocation().ID(), m)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	for i := range idxs {
-		bytes := obs[i].GetBuf()
-		copy(zonemapList[i][:], bytes[:])
-	}
-
-	return zonemapList, blockInfo.MetaLocation().Rows(), nil
+	m *mpool.MPool,
+) (meta objectio.ObjectMeta, err error) {
+	return objectio.FastLoadObjectMeta(ctx, &location, fs)
 }
 
-func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
-	dataLength := len(columns)
-	datas := make([][2]any, dataLength)
-	dataTypes := make([]uint8, dataLength)
-
-	for i := 0; i < dataLength; i++ {
-		idx := columns[i]
-		dataTypes[i] = uint8(tableDef.Cols[idx].Typ.Id)
-		typ := types.T(dataTypes[i]).ToType()
-
-		zm := index.NewZoneMap(typ)
-		err := zm.Unmarshal(meta.Zonemap[idx][:])
+func buildColumnZMVector(
+	zm objectio.ZoneMap,
+	mp *mpool.MPool,
+) (vec *vector.Vector, err error) {
+	t := zm.GetType().ToType()
+	vec = vector.NewVec(t)
+	defer func() {
 		if err != nil {
-			return nil, nil, err
+			vec.Free(mp)
 		}
-
-		min := zm.GetMin()
-		max := zm.GetMax()
-		if min == nil || max == nil {
-			return nil, nil, nil
-		}
-		datas[i] = [2]any{min, max}
+	}()
+	appendFn := vector.MakeAppendBytesFunc(vec)
+	if err = appendFn(zm.GetMinBuf(), false, mp); err != nil {
+		return
 	}
+	err = appendFn(zm.GetMaxBuf(), false, mp)
+	return
+}
 
-	return datas, dataTypes, nil
+func buildColumnsZMVectors(
+	meta objectio.ObjectMeta,
+	blknum int,
+	cols []int,
+	def *plan.TableDef,
+	mp *mpool.MPool,
+) (vecs []*vector.Vector, err error) {
+	toClean := false
+	vecs = make([]*vector.Vector, len(cols))
+	defer func() {
+		if toClean {
+			for i, vec := range vecs {
+				if vec != nil {
+					vec.Free(mp)
+					vecs[i] = nil
+				} else {
+					break
+				}
+			}
+			vecs = vecs[:0]
+		}
+	}()
+	var vec *vector.Vector
+	for i, colIdx := range cols {
+		zm := meta.GetColumnMeta(uint32(blknum), uint16(colIdx)).ZoneMap()
+		// colType := types.T(def.Cols[colIdx].Typ.Id)
+		if !zm.IsInited() {
+			toClean = true
+			return
+		}
+		if vec, err = buildColumnZMVector(zm, mp); err != nil {
+			toClean = true
+			return
+		}
+		vecs[i] = vec
+	}
+	return
 }
 
 func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
@@ -751,37 +760,9 @@ func getBinarySearchFuncByPkValue[T compareT](typ types.T, v T) func(*vector.Vec
 	}
 }
 
-func mustVectorFromProto(v *api.Vector) *vector.Vector {
-	ret, err := vector.ProtoVectorToVector(v)
-	if err != nil {
-		panic(err)
-	}
-	return ret
-}
-
-func mustVectorToProto(v *vector.Vector) *api.Vector {
-	ret, err := vector.VectorToProtoVector(v)
-	if err != nil {
-		panic(err)
-	}
-	return ret
-}
-
 func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		infos = append(infos, txnMeta.DebugString())
 		logutil.Debugf(msg+" %s", infos...)
 	}
-}
-
-/*
-	RowId:
-
-| segmentId | blockId | offsetId |
-
-	18 bytes   2 bytes   4 bytes
-*/
-// SegmentId = Uuid + fileId
-func generateRowIdForCNBlock(blkid *types.Blockid, offset uint32) types.Rowid {
-	return objectio.NewRowid(blkid, offset)
 }

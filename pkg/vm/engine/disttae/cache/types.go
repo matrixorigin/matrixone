@@ -88,6 +88,16 @@ type TableItem struct {
 	TableDef *plan.TableDef
 	Defs     []engine.TableDef
 	Rowid    types.Rowid
+	/*
+		Rowids in mo_columns from replayed logtail.
+
+		CORNER CASE:
+		create table t1(a int);
+		begin;
+		drop table t1;
+		show tables; //no table t1. no item for t1 in mo_columns also.
+	*/
+	Rowids []types.Rowid
 
 	// table def
 	Kind        string
@@ -111,6 +121,7 @@ type tableItemKey struct {
 	AccountId    uint32
 	DatabaseId   uint64
 	Name         string
+	Id           uint64
 	PhysicalTime uint64
 	LogicalTime  uint32
 	NodeId       uint32
@@ -129,6 +140,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	isClusterBy     int8
+	rowid           types.Rowid //rowid for a column in mo_columns
 }
 
 type columns []column
@@ -173,7 +185,35 @@ func tableItemLess(a, b *TableItem) bool {
 		return false
 	}
 	if a.Ts.Equal(b.Ts) {
-		return a.deleted
+		/*
+			The DN use the table id to distinguish different tables.
+			For operation on mo_tables, the rowid is the serialized bytes of the table id.
+			So, the rowid is unique for each table in mo_tables. We can use it to sort the items.
+			To be clear, the comparation a.Id < b.Id does not means the table a.Id is created before the table b.Id.
+			We just use it to reserve the items yielded by the truncate on same table multiple times in one txn.
+
+			CORNER CASE:
+
+			create table t1(a int); //table id x.
+			begin;
+			truncate t1;//table id x changed to x1
+			truncate t1;//table id x1 changed to x2
+			truncate t1;//table id x2 changed to x3
+			commit;//catalog.insertTable(table id x1,x2,x3). catalog.deleteTable(table id x,x1,x2)
+
+			In above case, the DN does not keep the order of multiple insertTable (or deleteTable).
+			That is ,it may generate the insertTable order like: x3,x2,x1.
+			In previous design without sort on the table id, the item x3,x2 will be overwritten by the x1.
+			Then the item x3 will be lost. The DN will not know the table x3. It is wrong!
+			With sort on the table id, the item x3,x2,x1 will be reserved.
+		*/
+		if a.deleted && !b.deleted { //deleted item head first
+			return true
+		} else if !a.deleted && b.deleted {
+			return false
+		} else { //a.deleted && b.deleted || !a.deleted && !b.deleted
+			return a.Id < b.Id
+		}
 	}
 	return a.Ts.Greater(b.Ts)
 }
@@ -184,4 +224,25 @@ func databaseItemRowidLess(a, b *DatabaseItem) bool {
 
 func tableItemRowidLess(a, b *TableItem) bool {
 	return bytes.Compare(a.Rowid[:], b.Rowid[:]) < 0
+}
+
+// copyTableItem copies src to dst
+func copyTableItem(dst, src *TableItem) {
+	dst.Id = src.Id
+	dst.Defs = src.Defs
+	dst.Kind = src.Kind
+	dst.Comment = src.Comment
+	dst.ViewDef = src.ViewDef
+	dst.TableDef = src.TableDef
+	dst.Constraint = src.Constraint
+	dst.Partitioned = src.Partitioned
+	dst.Partition = src.Partition
+	dst.CreateSql = src.CreateSql
+	dst.PrimaryIdx = src.PrimaryIdx
+	dst.ClusterByIdx = src.ClusterByIdx
+	copy(dst.Rowid[:], src.Rowid[:])
+	dst.Rowids = make([]types.Rowid, len(src.Rowids))
+	for i, rowid := range src.Rowids {
+		copy(dst.Rowids[i][:], rowid[:])
+	}
 }

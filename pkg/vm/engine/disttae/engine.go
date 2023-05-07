@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -69,7 +70,7 @@ func New(
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
 		dnMap:      dnMap,
-		partitions: make(map[[2]uint64]Partitions),
+		partitions: make(map[[2]uint64]logtailreplay.Partitions),
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -110,7 +111,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1, false, false); err != nil {
 		return err
 	}
 	txn.databaseMap.Store(genDatabaseKey(ctx, name), &txnDatabase{
@@ -250,7 +251,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if rel == nil {
 		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
-		for _, dbName = range dbNames {
+		for _, dbName := range dbNames {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
 				return "", "", nil, err
@@ -314,7 +315,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1, false, false); err != nil {
 		return err
 	}
 	return nil
@@ -333,18 +334,19 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	)
 
 	id := objectio.NewSegmentid()
-	bytes := types.EncodeUuid(&id)
+	bytes := types.EncodeUuid(id)
 	txn := &Transaction{
-		op:          op,
-		proc:        proc,
-		engine:      e,
-		readOnly:    true,
-		meta:        op.Txn(),
-		idGen:       e.idGen,
-		dnStores:    e.getDNServices(),
-		tableMap:    new(sync.Map),
-		databaseMap: new(sync.Map),
-		createMap:   new(sync.Map),
+		op:              op,
+		proc:            proc,
+		engine:          e,
+		readOnly:        true,
+		meta:            op.Txn(),
+		idGen:           e.idGen,
+		dnStores:        e.getDNServices(),
+		tableMap:        new(sync.Map),
+		databaseMap:     new(sync.Map),
+		createMap:       new(sync.Map),
+		deletedTableMap: new(sync.Map),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
@@ -353,7 +355,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 			0,
 			0,
 		},
-		segId: id,
+		segId: *id,
 		deletedBlocks: &deletedBlocks{
 			offsets: map[string][]int64{},
 		},
@@ -514,6 +516,7 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.tableMap = nil
 	txn.createMap = nil
 	txn.databaseMap = nil
+	txn.deletedTableMap = nil
 	txn.blockId_dn_delete_metaLoc_batch = nil
 	txn.blockId_raw_batch = nil
 	txn.deletedBlocks = nil
@@ -543,7 +546,7 @@ func (e *Engine) getDNServices() []DNStore {
 
 func (e *Engine) cleanMemoryTable() {
 	e.Lock()
-	e.partitions = make(map[[2]uint64]Partitions)
+	e.partitions = make(map[[2]uint64]logtailreplay.Partitions)
 	e.Unlock()
 }
 

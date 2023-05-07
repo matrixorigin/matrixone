@@ -16,125 +16,176 @@ package disttae
 
 import (
 	"context"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
-func maybeUnique(v1, v2 any, rows int64) bool {
-	switch value1 := v1.(type) {
-	case int8:
-		value2 := v2.(int8)
-		return int64(value2-value1+1) >= rows
-	case int16:
-		value2 := v2.(int16)
-		return int64(value2-value1+1) >= rows
-	case int32:
-		value2 := v2.(int32)
-		return int64(value2-value1+1) >= rows
-	case int64:
-		value2 := v2.(int64)
-		return value2-value1+1 >= rows
-	case uint8:
-		value2 := v2.(uint8)
-		return int64(value2-value1+1) >= rows
-	case uint16:
-		value2 := v2.(uint16)
-		return int64(value2-value1+1) >= rows
-	case uint32:
-		value2 := v2.(uint32)
-		return int64(value2-value1+1) >= rows
-	case uint64:
-		value2 := v2.(uint64)
-		return int64(value2-value1+1) >= rows
+func groupBlocksToObjectsForStats(blocks [][]catalog.BlockInfo) []*catalog.BlockInfo {
+	var objs []*catalog.BlockInfo
+	objMap := make(map[string]int, 0)
+	for i := range blocks {
+		for j := range blocks[i] {
+			block := blocks[i][j]
+			objName := block.MetaLocation().Name().String()
+			if _, ok := objMap[objName]; !ok {
+				objMap[objName] = 1
+				objs = append(objs, &block)
+			}
+		}
 	}
-	return true
+	return objs
 }
 
-// get minval , maxval, datatype from zonemap
-func getInfoFromZoneMap(columns []int, ctx context.Context, blocks *[][]BlockMeta, blockNumTotal int, tableDef *plan.TableDef) (*plan2.InfoFromZoneMap, error) {
+func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
+	switch t.Oid {
+	case types.T_bool:
+		return 2
+	case types.T_int8:
+		return float64(types.DecodeFixed[int8](zm.GetMaxBuf())) - float64(types.DecodeFixed[int8](zm.GetMinBuf())) + 1
+	case types.T_int16:
+		return float64(types.DecodeFixed[int16](zm.GetMaxBuf())) - float64(types.DecodeFixed[int16](zm.GetMinBuf())) + 1
+	case types.T_int32:
+		return float64(types.DecodeFixed[int32](zm.GetMaxBuf())) - float64(types.DecodeFixed[int32](zm.GetMinBuf())) + 1
+	case types.T_int64:
+		return float64(types.DecodeFixed[int64](zm.GetMaxBuf())) - float64(types.DecodeFixed[int64](zm.GetMinBuf())) + 1
+	case types.T_uint8:
+		return float64(types.DecodeFixed[uint8](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint8](zm.GetMinBuf())) + 1
+	case types.T_uint16:
+		return float64(types.DecodeFixed[uint16](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint16](zm.GetMinBuf())) + 1
+	case types.T_uint32:
+		return float64(types.DecodeFixed[uint32](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint32](zm.GetMinBuf())) + 1
+	case types.T_uint64:
+		return float64(types.DecodeFixed[uint64](zm.GetMaxBuf())) - float64(types.DecodeFixed[uint64](zm.GetMinBuf())) + 1
+	case types.T_decimal64:
+		return types.Decimal64ToFloat64(types.DecodeFixed[types.Decimal64](zm.GetMaxBuf()), t.Scale) -
+			types.Decimal64ToFloat64(types.DecodeFixed[types.Decimal64](zm.GetMinBuf()), t.Scale) + 1
+	case types.T_decimal128:
+		return types.Decimal128ToFloat64(types.DecodeFixed[types.Decimal128](zm.GetMaxBuf()), t.Scale) -
+			types.Decimal128ToFloat64(types.DecodeFixed[types.Decimal128](zm.GetMinBuf()), t.Scale) + 1
+	case types.T_float32:
+		return float64(types.DecodeFixed[float32](zm.GetMaxBuf())) - float64(types.DecodeFixed[float32](zm.GetMinBuf())) + 1
+	case types.T_float64:
+		return types.DecodeFixed[float64](zm.GetMaxBuf()) - types.DecodeFixed[float64](zm.GetMinBuf()) + 1
+	case types.T_timestamp:
+		return float64(types.DecodeFixed[types.Timestamp](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Timestamp](zm.GetMinBuf())) + 1
+	case types.T_date:
+		return float64(types.DecodeFixed[types.Date](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Date](zm.GetMinBuf())) + 1
+	case types.T_time:
+		return float64(types.DecodeFixed[types.Time](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Time](zm.GetMinBuf())) + 1
+	case types.T_datetime:
+		return float64(types.DecodeFixed[types.Datetime](zm.GetMaxBuf())) - float64(types.DecodeFixed[types.Datetime](zm.GetMinBuf())) + 1
+	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+		return -1
+	default:
+		return -1
+	}
+}
+
+// get ndv, minval , maxval, datatype from zonemap
+func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.BlockInfo, tableCnt float64, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
 
 	lenCols := len(columns)
-	info := plan2.NewInfoFromZoneMap(lenCols, blockNumTotal)
+	info := plan2.NewInfoFromZoneMap(lenCols)
 
-	//first, get info needed from zonemap
+	var err error
+	var objectMeta objectio.ObjectMeta
+	//group blocks to objects
+	objs := groupBlocksToObjectsForStats(blocks)
+
 	var init bool
-	for i := range *blocks {
-		for j := range (*blocks)[i] {
-			zonemapVal, blkTypes, err := getZonemapDataFromMeta(columns, (*blocks)[i][j], tableDef)
-			if err != nil {
-				return nil, err
+	for i := range objs {
+		if objectMeta, err = loadObjectMeta(ctx, objs[i].MetaLocation(), proc.FileService, proc.Mp()); err != nil {
+			return nil, err
+		}
+		if !init {
+			init = true
+			for idx, colIdx := range columns {
+				objColMeta := objectMeta.ObjectColumnMeta(uint16(colIdx))
+				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
+				info.DataTypes[idx] = types.T(tableDef.Cols[columns[idx]].Typ.Id).ToType()
+				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 			}
-			if !init {
-				init = true
-				for i := range zonemapVal {
-					info.MinVal[i] = zonemapVal[i][0]
-					info.MaxVal[i] = zonemapVal[i][1]
-					info.DataTypes[i] = types.T(blkTypes[i]).ToType()
-					info.MaybeUniqueMap[i] = true
+		} else {
+			for idx, colIdx := range columns {
+				objColMeta := objectMeta.ObjectColumnMeta(uint16(colIdx))
+				zm := objColMeta.ZoneMap().Clone()
+				if !zm.IsInited() {
+					continue
 				}
-			}
-
-			for colIdx := range zonemapVal {
-				currentBlockMin := zonemapVal[colIdx][0]
-				currentBlockMax := zonemapVal[colIdx][1]
-
-				if !maybeUnique(currentBlockMin, currentBlockMax, (*blocks)[i][j].Rows) {
-					info.MaybeUniqueMap[colIdx] = false
-				}
-
-				if s, ok := currentBlockMin.([]uint8); ok {
-					info.ValMap[colIdx][string(s)] = 1
-				} else {
-					info.ValMap[colIdx][currentBlockMin] = 1
-				}
-
-				if compute.CompareGeneric(currentBlockMin, info.MinVal[colIdx], info.DataTypes[colIdx].Oid) < 0 {
-					info.MinVal[colIdx] = currentBlockMin
-				}
-				if compute.CompareGeneric(currentBlockMax, info.MaxVal[colIdx], info.DataTypes[colIdx].Oid) > 0 {
-					info.MaxVal[colIdx] = currentBlockMax
-				}
+				index.UpdateZM(&info.ColumnZMs[idx], zm.GetMaxBuf())
+				index.UpdateZM(&info.ColumnZMs[idx], zm.GetMinBuf())
+				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 			}
 		}
 	}
 
+	//adjust ndv
+	lenobjs := float64(len(objs))
+	if lenobjs > 1 {
+		for idx := range columns {
+			rate := info.ColumnNDVs[idx] / tableCnt
+			if rate > 1 {
+				rate = 1
+			}
+			if rate < 0.1 {
+				info.ColumnNDVs[idx] /= math.Pow(lenobjs, (1 - rate))
+			}
+			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
+			if ndvUsingZonemap != -1 && info.ColumnNDVs[idx] > ndvUsingZonemap {
+				info.ColumnNDVs[idx] = ndvUsingZonemap
+			}
+
+			if info.ColumnNDVs[idx] > tableCnt {
+				info.ColumnNDVs[idx] = tableCnt
+			}
+		}
+	}
 	return info, nil
 }
 
 // calculate the stats for scan node.
 // we need to get the zonemap from cn, and eval the filters with zonemap
-func CalcStats(ctx context.Context, blocks *[][]BlockMeta, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process, sortKeyName string, s *plan2.StatsInfoMap) (*plan.Stats, error) {
+func CalcStats(ctx context.Context, blocks [][]catalog.BlockInfo, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process, sortKeyName string, s *plan2.StatsInfoMap) (stats *plan.Stats, err error) {
 	var blockNumNeed, blockNumTotal int
 	var tableCnt, cost int64
 	exprMono := plan2.CheckExprIsMonotonic(ctx, expr)
 	columnMap, columns, maxCol := plan2.GetColumnsByExpr(expr, tableDef)
-	for i := range *blocks {
-		for j := range (*blocks)[i] {
+	var meta objectio.ObjectMeta
+	for i := range blocks {
+		for _, blk := range blocks[i] {
+			location := blk.MetaLocation()
 			blockNumTotal++
-			tableCnt += (*blocks)[i][j].Rows
-			if !exprMono || needRead(ctx, expr, (*blocks)[i][j], tableDef, columnMap, columns, maxCol, proc) {
-				cost += (*blocks)[i][j].Rows
+			tableCnt += int64(location.Rows())
+			ok := true
+			if exprMono {
+				if !objectio.IsSameObjectLocVsMeta(location, meta) {
+					if meta, err = loadObjectMeta(ctx, location, proc.FileService, proc.Mp()); err != nil {
+						return
+					}
+				}
+				ok = needRead(ctx, expr, meta, blk, tableDef, columnMap, columns, maxCol, proc)
+			}
+			if ok {
+				cost += int64(location.Rows())
 				blockNumNeed++
 			}
 		}
 	}
 
-	if blockNumTotal == 0 {
-		return plan2.DefaultStats(), nil
-	}
-
-	stats := new(plan.Stats)
+	stats = new(plan.Stats)
 	stats.BlockNum = int32(blockNumNeed)
 	stats.TableCnt = float64(tableCnt)
 	stats.Cost = float64(cost)
 
 	columns = plan2.MakeAllColumns(tableDef)
 	if s.NeedUpdate(blockNumTotal) {
-		info, err := getInfoFromZoneMap(columns, ctx, blocks, blockNumTotal, tableDef)
+		info, err := getInfoFromZoneMap(ctx, columns, blocks, float64(tableCnt), tableDef, proc)
 		if err != nil {
 			return plan2.DefaultStats(), nil
 		}
