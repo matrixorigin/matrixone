@@ -185,11 +185,8 @@ col2 varchar
 create view view_2 as select * from table_2;
 create index index_table_2 on table_2(col1);
 drop index index_table_2 on table_2;
-internal error: Only CREATE of DDL is supported in transactions
 drop view view_2;
-internal error: Only CREATE of DDL is supported in transactions
 drop table table_2;
-internal error: Only CREATE of DDL is supported in transactions
 drop database db2;
 internal error: CREATE/DROP of database is not supported in transactions
 select * from unnest('{"a":1}') as f;

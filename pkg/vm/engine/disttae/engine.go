@@ -111,7 +111,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1, false, false); err != nil {
 		return err
 	}
 	txn.databaseMap.Store(genDatabaseKey(ctx, name), &txnDatabase{
@@ -315,7 +315,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0], -1, false, false); err != nil {
 		return err
 	}
 	return nil
@@ -336,16 +336,17 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(id)
 	txn := &Transaction{
-		op:          op,
-		proc:        proc,
-		engine:      e,
-		readOnly:    true,
-		meta:        op.Txn(),
-		idGen:       e.idGen,
-		dnStores:    e.getDNServices(),
-		tableMap:    new(sync.Map),
-		databaseMap: new(sync.Map),
-		createMap:   new(sync.Map),
+		op:              op,
+		proc:            proc,
+		engine:          e,
+		readOnly:        true,
+		meta:            op.Txn(),
+		idGen:           e.idGen,
+		dnStores:        e.getDNServices(),
+		tableMap:        new(sync.Map),
+		databaseMap:     new(sync.Map),
+		createMap:       new(sync.Map),
+		deletedTableMap: new(sync.Map),
 		rowId: [6]uint32{
 			types.DecodeUint32(bytes[0:4]),
 			types.DecodeUint32(bytes[4:8]),
@@ -515,6 +516,7 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	txn.tableMap = nil
 	txn.createMap = nil
 	txn.databaseMap = nil
+	txn.deletedTableMap = nil
 	txn.blockId_dn_delete_metaLoc_batch = nil
 	txn.blockId_raw_batch = nil
 	txn.deletedBlocks = nil
