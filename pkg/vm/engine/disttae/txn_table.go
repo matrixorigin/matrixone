@@ -872,51 +872,55 @@ func (tbl *txnTable) newReader(
 	blks []ModifyBlockMeta,
 	entries []Entry,
 ) ([]engine.Reader, error) {
+	var inserts []*batch.Batch
+	var deletes map[types.Rowid]uint8
 
 	txn := tbl.db.txn
 	ts := txn.meta.SnapshotTS
 	fs := txn.engine.fs
 
-	inserts := make([]*batch.Batch, 0, len(entries))
-	deletes := make(map[types.Rowid]uint8)
-	for _, entry := range entries {
-		if entry.typ == INSERT {
-			inserts = append(inserts, entry.bat)
-		} else {
-			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					deletes[v] = 0
+	if !txn.readOnly {
+		inserts = make([]*batch.Batch, 0, len(entries))
+		deletes = make(map[types.Rowid]uint8)
+		for _, entry := range entries {
+			if entry.typ == INSERT {
+				inserts = append(inserts, entry.bat)
+			} else {
+				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					for _, v := range vs {
+						deletes[v] = 0
+					}
 				}
 			}
 		}
-	}
-	// get all blocks in disk
-	meta_blocks := make(map[string]bool)
-	if len(tbl.blockInfos) > 0 {
-		for _, blk := range tbl.blockInfos[0] {
-			meta_blocks[string(blk.BlockID[:])] = true
-		}
-	}
-
-	for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-		if !meta_blocks[blkId] {
-			tbl.LoadDeletesForBlock(blkId, nil, deletes)
-		}
-	}
-
-	// add add rawBatchRowId deletes info
-	for _, entry := range tbl.writes {
-		// rawBatch detele rowId for memory Dn block
-		if entry.typ == DELETE && entry.fileName == "" {
-			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-			if len(vs) == 0 {
-				continue
+		// get all blocks in disk
+		meta_blocks := make(map[string]bool)
+		if len(tbl.blockInfos) > 0 {
+			for _, blk := range tbl.blockInfos[0] {
+				meta_blocks[string(blk.BlockID[:])] = true
 			}
-			blkId := vs[0].GetBlockid()
-			if !meta_blocks[string(blkId[:])] {
-				for _, v := range vs {
-					deletes[v] = 0
+		}
+
+		for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
+			if !meta_blocks[blkId] {
+				tbl.LoadDeletesForBlock(blkId, nil, deletes)
+			}
+		}
+
+		// add add rawBatchRowId deletes info
+		for _, entry := range tbl.writes {
+			// rawBatch detele rowId for memory Dn block
+			if entry.typ == DELETE && entry.fileName == "" {
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				if len(vs) == 0 {
+					continue
+				}
+				blkId := vs[0].GetBlockid()
+				if !meta_blocks[string(blkId[:])] {
+					for _, v := range vs {
+						deletes[v] = 0
+					}
 				}
 			}
 		}
