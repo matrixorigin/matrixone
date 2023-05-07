@@ -15,13 +15,18 @@
 package ctl
 
 import (
-	"regexp"
-	"strings"
-
+	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/ctlservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"regexp"
+	"strings"
+	"time"
 )
 
 type cnLabel struct {
@@ -121,5 +126,59 @@ func handleSetLabel(proc *process.Process,
 	return pb.CtlResult{
 		Method: pb.CmdMethod_Label.String(),
 		Data:   "OK",
+	}, nil
+}
+
+func handleSyncCommit(
+	proc *process.Process,
+	service serviceType,
+	parameter string,
+	sender requestSender) (pb.CtlResult, error) {
+	cs := ctlservice.GetCtlService()
+	mc := clusterservice.GetMOCluster()
+	var services []string
+	mc.GetCNService(
+		clusterservice.NewSelector(),
+		func(c metadata.CNService) bool {
+			services = append(services, c.ServiceID)
+			return true
+		})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	maxCommitTS := timestamp.Timestamp{}
+	for _, id := range services {
+		resp, err := cs.SendCtlMessage(
+			ctx,
+			metadata.ServiceType_CN,
+			id,
+			cs.NewRequest(pb.CmdMethod_GetCommit))
+		if err != nil {
+			return pb.CtlResult{}, err
+		}
+		if maxCommitTS.Less(resp.GetCommit.CurrentCommitTS) {
+			maxCommitTS = resp.GetCommit.CurrentCommitTS
+		}
+		cs.Release(resp)
+	}
+
+	for _, id := range services {
+		req := cs.NewRequest(pb.CmdMethod_SyncCommit)
+		req.SycnCommit.LatestCommitTS = maxCommitTS
+		resp, err := cs.SendCtlMessage(
+			ctx,
+			metadata.ServiceType_CN,
+			id,
+			req)
+		if err != nil {
+			return pb.CtlResult{}, err
+		}
+		cs.Release(resp)
+	}
+
+	return pb.CtlResult{
+		Method: pb.CmdMethod_SyncCommit.String(),
+		Data: fmt.Sprintf("sync %d cn services's commit ts to %s",
+			len(services),
+			maxCommitTS.DebugString()),
 	}, nil
 }
