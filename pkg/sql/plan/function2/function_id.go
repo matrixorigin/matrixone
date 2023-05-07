@@ -224,6 +224,8 @@ const (
 	HOUR   // HOUR
 	MINUTE // MINUTE
 	SECOND // SECOND
+	TO_DAYS
+	TO_SECONDS
 
 	DATE_ADD              // DATE_ADD
 	DATE_SUB              // DATE_SUB
@@ -425,7 +427,9 @@ var functionIdRegister = map[string]int32{
 	"hour":                           HOUR,
 	"minute":                         MINUTE,
 	"second":                         SECOND,
+	"to_seconds":                     TO_SECONDS,
 	"day":                            DAY,
+	"to_days":                        TO_DAYS,
 	"dayofyear":                      DAYOFYEAR,
 	"exp":                            EXP,
 	"empty":                          EMPTY,
