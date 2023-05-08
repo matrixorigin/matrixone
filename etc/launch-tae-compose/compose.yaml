@@ -42,6 +42,10 @@ services:
       - AWS_SECRET_ACCESS_KEY=minio123
     networks:
       monet:
+    deploy:
+      resources:
+        limits:
+          memory: 12g
 
   cn-1:
     container_name: cn-1
@@ -60,6 +64,10 @@ services:
       - AWS_SECRET_ACCESS_KEY=minio123
     networks:
       monet:
+    deploy:
+      resources:
+        limits:
+          memory: 12g
 
   dn:
     container_name: dn
