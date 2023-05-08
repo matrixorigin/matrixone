@@ -31,7 +31,7 @@ import (
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 4
-const BUFFER_FLUSH_LIMIT = 512 // Adjust this value according to your requirements
+const BUFFER_FLUSH_LIMIT = 1024 // Adjust this value according to your requirements
 
 const PACKET_TOO_LARGE = "packet for query is too large"
 
@@ -70,9 +70,11 @@ func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 }
 
 func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
-	sw.buffer = append(sw.buffer, row.ToStrings())
+	sw.mux.Lock()
+	defer sw.mux.Unlock()
 
-	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT*3 {
+	sw.buffer = append(sw.buffer, row.ToStrings())
+	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT {
 		if _, err := sw.flushBuffer(); err != nil {
 			return err
 		}
@@ -81,8 +83,6 @@ func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 }
 
 func (sw *DefaultSqlWriter) flushBuffer() (int, error) {
-	sw.mux.Lock()
-	defer sw.mux.Unlock()
 	if len(sw.buffer) == 0 {
 		return 0, nil
 	}
