@@ -118,6 +118,7 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 			elems[colIdx] = field
 		case types.T_json:
 			elems[colIdx] = field
+			w.ctx = context.WithValue(w.ctx, types.T_json, true)
 		case types.T_datetime:
 			elems[colIdx] = field
 		default:
@@ -246,17 +247,24 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 		case types.T_json:
 			switch t := field.(type) {
 			case string:
-				byteJson, err := types.ParseStringToByteJson(field.(string))
-				if err != nil {
-					return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
-				}
-				jsonBytes, err := types.EncodeJson(byteJson)
-				if err != nil {
-					return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
-				}
-				err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
-				if err != nil {
-					return err
+				if ctx.Value(types.T_json) != true {
+					byteJson, err := types.ParseStringToByteJson(field.(string))
+					if err != nil {
+						return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
+					}
+					jsonBytes, err := types.EncodeJson(byteJson)
+					if err != nil {
+						return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
+					}
+					err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
+					if err != nil {
+						return err
+					}
+				} else {
+					err := vector.SetBytesAt(vec, rowIdx, []byte(field.(string)), mp)
+					if err != nil {
+						return err
+					}
 				}
 			default:
 				return moerr.NewInternalError(ctx, "not Support json type %v", t)
