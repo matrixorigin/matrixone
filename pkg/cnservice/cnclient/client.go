@@ -177,3 +177,10 @@ func (cfg *ClientConfig) Fill() {
 		cfg.TimeOutForEachConnect = dfConnectTimeout
 	}
 }
+
+func GetRPCClient() morpc.RPCClient {
+	if client == nil {
+		return nil
+	}
+	return client.client
+}
