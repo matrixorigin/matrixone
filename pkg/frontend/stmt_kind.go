@@ -158,7 +158,7 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		*tree.ShowVariables,
 		*tree.ShowStatus,
 		*tree.ShowIndex,
-		*tree.ShowFunctionStatus,
+		*tree.ShowFunctionOrProcedureStatus,
 		*tree.ShowNodeList,
 		*tree.ShowLocks,
 		*tree.ShowTableNumber,
