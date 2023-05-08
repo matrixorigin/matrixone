@@ -54,6 +54,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if len(bat.Zs) == 0 {
+				bat.Clean(proc.Mp())
 				continue
 			}
 			if ctr.bat == nil {
