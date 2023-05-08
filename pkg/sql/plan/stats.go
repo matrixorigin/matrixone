@@ -100,15 +100,15 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	return info
 }
 
-func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
+func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
 	logutil.Infof("need to update statsCache for table %v", tableDef.Name)
 	s.BlockNumber = blockNumTotal
 	s.TableCnt = tableCnt
 	s.tableName = tableDef.Name
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
 	//set info in statsInfoMap
-	for i := range columns {
-		colName := tableDef.Cols[columns[i]].Name
+	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
+		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
 		switch info.DataTypes[i].Oid {
@@ -141,15 +141,6 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int,
 			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
 		}
 	}
-}
-
-func MakeAllColumns(tableDef *plan.TableDef) []int {
-	lenCols := len(tableDef.Cols)
-	cols := make([]int, lenCols-1)
-	for i := 0; i < lenCols-1; i++ {
-		cols[i] = i
-	}
-	return cols
 }
 
 func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
