@@ -226,7 +226,7 @@ func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builde
 }
 
 func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
-	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
+	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	ret, col := CheckFilter(expr)
 	if !ret {
@@ -288,7 +288,7 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string,
 			}
 		}
 	}
-	return cost / 2
+	return cost / 10
 }
 
 // estimate output lines for a filter
@@ -325,8 +325,8 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 				outcnt = math.Max(out1, out2) * 1.5
 			}
 		default:
-			//no good way to estimate, just 0.1*cost
-			outcnt = cost * 0.1
+			//no good way to estimate, just 0.15*cost
+			outcnt = cost * 0.15
 		}
 	case *plan.Expr_C:
 		outcnt = cost
@@ -595,13 +595,24 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
-			expr, num := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
-			node.Stats = builder.compCtx.Stats(node.ObjRef, expr)
+			monoExpr, nonMonoExpr := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
+			node.Stats = builder.compCtx.Stats(node.ObjRef, monoExpr)
 
 			//if there is non monotonic filters
-			if num > 0 {
-				node.Stats.Selectivity *= 0.13
-				node.Stats.Outcnt *= 0.13
+			if nonMonoExpr != nil {
+				sc := builder.compCtx.GetStatsCache()
+				if sc != nil {
+					var sortkeyName string
+					if node.TableDef.ClusterBy != nil {
+						sortkeyName = node.TableDef.ClusterBy.Name
+					}
+					fixColumnName(node.TableDef, nonMonoExpr)
+					outcnt := EstimateOutCnt(nonMonoExpr, sortkeyName, node.Stats.TableCnt, node.Stats.Cost, sc.GetStatsInfoMap(node.TableDef.TblId))
+					node.Stats.Selectivity *= (outcnt / node.Stats.TableCnt)
+					node.Stats.Outcnt = node.Stats.TableCnt * node.Stats.Selectivity
+					node.Stats.Cost = node.Stats.Outcnt
+					node.Stats.BlockNum = int32(node.Stats.Outcnt/8192 + 1)
+				}
 			}
 		}
 
@@ -623,6 +634,17 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		} else if node.Stats == nil {
 			node.Stats = DefaultStats()
 		}
+	}
+}
+
+func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnName(tableDef, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
 	}
 }
 

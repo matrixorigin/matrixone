@@ -499,7 +499,7 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=":
 			switch exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C:
+			case *plan.Expr_C, *plan.Expr_P:
 				return CheckFilter(exprImpl.F.Args[0])
 			default:
 				return false, nil
@@ -909,12 +909,11 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 
 // handle the filter list for zonemap. rewrite and constFold
 // return monotonic filters and number of nonMonotonic filters
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, int) {
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
 	if proc == nil || proc.Ctx == nil {
-		return nil, 0
+		return nil, nil
 	}
-	num := 0
-	var newExprList []*plan.Expr
+	var monoExprList, nonMonoExprList []*plan.Expr
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	for _, expr := range exprList {
@@ -923,13 +922,12 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Exp
 			expr = tmpexpr
 		}
 		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
-			newExprList = append(newExprList, expr)
+			monoExprList = append(monoExprList, expr)
 		} else {
-			num++
+			nonMonoExprList = append(nonMonoExprList, expr)
 		}
 	}
-	e := colexec.RewriteFilterExprList(newExprList)
-	return e, num
+	return colexec.RewriteFilterExprList(monoExprList), colexec.RewriteFilterExprList(nonMonoExprList)
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
