@@ -184,7 +184,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 
 	err = tx.Commit() // Commit the transaction
 	// todo: adjust this sleep time
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	if err != nil {
 		return 0, err
 	}
