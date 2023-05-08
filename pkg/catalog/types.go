@@ -133,6 +133,7 @@ const (
 	SystemColAttr_HasUpdate       = "attr_has_update"
 	SystemColAttr_Update          = "attr_update"
 	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
+	SystemColAttr_Seqnum          = "attr_seqnum"
 
 	BlockMeta_ID              = "block_id"
 	BlockMeta_Delete_ID       = "block_delete_id"
@@ -238,6 +239,7 @@ const (
 	MO_COLUMNS_ATT_HAS_UPDATE_IDX        = 19
 	MO_COLUMNS_ATT_UPDATE_IDX            = 20
 	MO_COLUMNS_ATT_IS_CLUSTERBY          = 21
+	MO_COLUMNS_ATT_SEQNUM_IDX            = 22
 
 	BLOCKMETA_ID_IDX         = 0
 	BLOCKMETA_ENTRYSTATE_IDX = 1
@@ -437,6 +439,7 @@ var (
 		SystemColAttr_HasUpdate,
 		SystemColAttr_Update,
 		SystemColAttr_IsClusterBy,
+		SystemColAttr_Seqnum,
 	}
 	MoTableMetaSchema = []string{
 		BlockMeta_ID,
@@ -500,6 +503,7 @@ var (
 		types.New(types.T_int8, 0, 0),       // att_has_update
 		types.New(types.T_varchar, 2048, 0), // att_update
 		types.New(types.T_int8, 0, 0),       // att_is_clusterby
+		types.New(types.T_uint16, 0, 0),     // att_seqnum
 	}
 	MoTableMetaTypes = []types.Type{
 		types.New(types.T_Blockid, 0, 0),                   // block_id

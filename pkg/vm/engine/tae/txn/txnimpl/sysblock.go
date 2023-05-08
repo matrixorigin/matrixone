@@ -207,6 +207,8 @@ func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Ta
 			colData.Append(bool2i8(colDef.IsClusterBy()), false)
 		case pkgcatalog.SystemColAttr_Update:
 			colData.Append(colDef.OnUpdate, false)
+		case pkgcatalog.SystemColAttr_Seqnum:
+			colData.Append(colDef.SeqNum, false)
 		default:
 			panic("unexpected colname. if add new catalog def, fill it in this switch")
 		}

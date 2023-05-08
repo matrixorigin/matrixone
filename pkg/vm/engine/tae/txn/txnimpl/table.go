@@ -603,6 +603,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 				bat, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
+					nil,
 					loc.ID(),
 					nil,
 				)
@@ -767,7 +768,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isN
 		panic(err)
 	}
 	block := meta.GetBlockData()
-	return block.GetValue(tbl.store.txn, int(row), int(col))
+	return block.GetValue(tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col))
 }
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
@@ -810,19 +811,18 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 
 func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
 	switch req.Kind {
-	case apipb.AlterKind_UpdateConstraint, apipb.AlterKind_UpdateComment:
+	case apipb.AlterKind_UpdateConstraint, apipb.AlterKind_UpdateComment, apipb.AlterKind_AddColumn, apipb.AlterKind_DropColumn:
 	default:
 		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.store.txn.GetMemo().AddCatalogChange()
-	isNewNode, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
+	isNewNode, newSchema, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
+	tbl.schema = newSchema // update new schema to txn local schema
 	if isNewNode {
 		tbl.txnEntries.Append(tbl.entry)
 	}
-	//TODO(aptend):
-	// 1.update local schema
-	// 2.handle written data in localseg, keep the batch aligned with the new schema
+	//TODO(aptend): handle written data in localseg, keep the batch aligned with the new schema
 	return err
 }
 
@@ -927,6 +927,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 				bat, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
+					nil,
 					loc.ID(),
 					nil,
 				)
