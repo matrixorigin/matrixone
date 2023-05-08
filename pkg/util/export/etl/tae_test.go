@@ -136,7 +136,7 @@ func genLines(cnt int) (lines []*table.Row) {
 		row.SetColumnVal(dummyFloat64Column, table.Float64Field(float64(i)))
 		row.SetColumnVal(dummyUInt64Column, table.Uint64Field(uint64(i)))
 		row.SetColumnVal(dummyDatetimeColumn, table.TimeField(time.Now()))
-		row.SetColumnVal(dummyJsonColumn, table.JsonField(fmt.Sprintf(`{"cnt":"%d"}`, i)))
+		row.SetColumnVal(dummyJsonColumn, table.StringField(fmt.Sprintf(`{"cnt":"%d"}`, i)))
 		lines = append(lines, row)
 	}
 

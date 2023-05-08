@@ -15,10 +15,13 @@
 package table
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -416,6 +419,7 @@ type ColumnField struct {
 	Type      ColType
 	Integer   int64
 	String    string
+	Bytes     []byte
 	Interface interface{}
 }
 
@@ -433,27 +437,17 @@ func (cf *ColumnField) GetTime() time.Time {
 	}
 }
 
-func (cf *ColumnField) GetBytes() []byte {
-	return String2Bytes(cf.String)
+func (cf *ColumnField) EncodeBytes() string {
+	return hex.EncodeToString(cf.Bytes)
 }
 
-func (cf *ColumnField) EncodedByte() (dst []byte) {
-	src := cf.GetBytes()
-	dst = make([]byte, len(src)*2)
-	hex.Encode(dst, src)
+func (cf *ColumnField) EncodeUuid() (dst [36]byte) {
+	EncodeUUIDHex(dst[:], cf.Bytes)
 	return
 }
 
-func (cf *ColumnField) EncodedUuid() (dst [36]byte) {
-	src := cf.GetBytes()
-	EncodeUUIDHex(dst[:], src)
-	return
-}
-
-func (cf *ColumnField) EncodedDatetime() []byte {
-	var dst = make([]byte, 0, 64)
-	dst = Time2DatetimeBuffed(cf.GetTime(), dst)
-	return dst[:]
+func (cf *ColumnField) EncodedDatetime(dst []byte) []byte {
+	return Time2DatetimeBuffed(cf.GetTime(), dst[:0])
 }
 
 func TimeField(val time.Time) ColumnField {
@@ -473,8 +467,8 @@ func Float64Field(val float64) ColumnField {
 	return ColumnField{Type: TFloat64, Integer: int64(math.Float64bits(val))}
 }
 
-func JsonField(val string) ColumnField {
-	return ColumnField{Type: TJson, String: val}
+func ObjectField(val any) ColumnField {
+	return ColumnField{Type: TJson, Interface: val}
 }
 
 func StringField(val string) ColumnField {
@@ -482,10 +476,27 @@ func StringField(val string) ColumnField {
 }
 
 func BytesField(val []byte) ColumnField {
-	return ColumnField{Type: TBytes, String: string(val)}
+	return ColumnField{Type: TBytes, Bytes: val}
 }
+
 func UuidField(val []byte) ColumnField {
-	return ColumnField{Type: TUuid, String: string(val)}
+	return ColumnField{Type: TUuid, Bytes: val}
+}
+
+var bufferPool = sync.Pool{
+	New: func() any {
+		return bytes.NewBuffer(make([]byte, 16*mpool.MB))
+	},
+}
+
+func GetBuffer() *bytes.Buffer {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+func ReleaseBuffer(b *bytes.Buffer) {
+	bufferPool.Put(b)
 }
 
 type Row struct {
@@ -571,7 +582,7 @@ func (r *Row) Reset() {
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			r.Columns[idx] = StringField(typ.Default)
 		case types.T_json:
-			r.Columns[idx] = JsonField(typ.Default)
+			r.Columns[idx] = StringField(typ.Default)
 		case types.T_datetime:
 			r.Columns[idx] = TimeField(ZeroTime)
 		default:
@@ -620,20 +631,25 @@ func (r *Row) ToStrings() []string {
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			switch r.Columns[idx].Type {
 			case TBytes:
-				dst := r.Columns[idx].EncodedByte()
-				col[idx] = string(dst)
+				col[idx] = r.Columns[idx].EncodeBytes()
 			case TUuid:
-				dst := r.Columns[idx].EncodedUuid()
+				dst := r.Columns[idx].EncodeUuid()
 				col[idx] = string(dst[:])
 			default:
 				col[idx] = r.Columns[idx].String // default val can see Row.Reset
 			}
 		case types.T_json:
-			val := r.Columns[idx].String
-			if len(val) == 0 {
-				val = typ.Default
+			switch r.Columns[idx].Type {
+			case TJson:
+				buf, _ := json.Marshal(r.Columns[idx].Interface)
+				col[idx] = string(buf)
+			case TVarchar, TText:
+				val := r.Columns[idx].String
+				if len(val) == 0 {
+					val = typ.Default
+				}
+				col[idx] = val
 			}
-			col[idx] = val
 		case types.T_datetime:
 			col[idx] = Time2DatetimeString(r.Columns[idx].GetTime())
 		default:

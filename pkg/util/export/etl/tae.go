@@ -16,6 +16,7 @@ package etl
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -117,7 +118,7 @@ func (w *TAEWriter) WriteStrings(Line []string) error {
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			elems[colIdx] = table.StringField(field)
 		case types.T_json:
-			elems[colIdx] = table.JsonField(field)
+			elems[colIdx] = table.StringField(field)
 		case types.T_datetime:
 			elems[colIdx] = table.StringField(field)
 		default:
@@ -217,13 +218,13 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 					return err
 				}
 			case table.TBytes:
-				dst := field.EncodedByte()
-				err := vector.SetBytesAt(vec, rowIdx, dst, mp)
+				dst := field.EncodeBytes()
+				err := vector.SetStringAt(vec, rowIdx, dst, mp)
 				if err != nil {
 					return err
 				}
 			case table.TUuid:
-				dst := field.EncodedUuid()
+				dst := field.EncodeUuid()
 				err := vector.SetBytesAt(vec, rowIdx, dst[:], mp)
 				if err != nil {
 					return err
@@ -232,15 +233,33 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 				return moerr.NewInternalError(ctx, "not Support string type %v", field.Type)
 			}
 		case types.T_json:
-			err := vector.SetStringAt(vec, rowIdx, field.String, mp)
-			if err != nil {
-				return err
+			switch field.Type {
+			case table.TVarchar, table.TText:
+				err := vector.SetStringAt(vec, rowIdx, field.String, mp)
+				if err != nil {
+					return err
+				}
+			case table.TJson:
+				buf := table.GetBuffer()
+				encoder := json.NewEncoder(buf)
+				err := encoder.Encode(field.Interface)
+				if err != nil {
+					return moerr.ConvertGoError(ctx, err)
+				}
+				table.ReleaseBuffer(buf)
+				err = vector.SetBytesAt(vec, rowIdx, buf.Bytes(), mp)
+				if err != nil {
+					return err
+				}
+			default:
+				return moerr.NewInternalError(ctx, "not Support string type %v", field.Type)
 			}
 		case types.T_datetime:
 			cols := vector.MustFixedCol[types.Datetime](vec)
 			switch field.Type {
 			case table.TDatetime:
-				dst := field.EncodedDatetime()
+				var buf [64]byte
+				dst := field.EncodedDatetime(buf[:0])
 				d, err := types.ParseDatetime(string(dst), vec.GetType().Scale)
 				if err != nil {
 					return moerr.NewInternalError(ctx, "the input value is not Datetime type for column %d: %v", colIdx, field)

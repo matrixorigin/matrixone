@@ -340,7 +340,9 @@ func TestColumnField_EncodedDatetime(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := tt.fields.cf.GetTime()
 			require.Equal(t, tt.wantT, buf)
-			require.Equal(t, tt.want, string(tt.fields.cf.EncodedDatetime()))
+			var bbuf [64]byte
+			dst := tt.fields.cf.EncodedDatetime(bbuf[:0])
+			require.Equal(t, tt.want, string(dst))
 		})
 	}
 }
