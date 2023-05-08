@@ -290,8 +290,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 
 var genFactory = func() table.WriterFactory {
 	return func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-		buf := bytes.NewBuffer(nil)
-		return etl.NewCSVWriter(ctx, buf, &dummyStringWriter{})
+		return etl.NewCSVWriter(ctx, &dummyStringWriter{})
 	}
 }
 

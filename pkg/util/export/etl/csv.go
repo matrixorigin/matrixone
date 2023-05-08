@@ -22,9 +22,12 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
+
+const initedSize = mpool.MB
 
 var _ table.RowWriter = (*CSVWriter)(nil)
 
@@ -34,10 +37,10 @@ type CSVWriter struct {
 	writer io.StringWriter
 }
 
-func NewCSVWriter(ctx context.Context, buf *bytes.Buffer, writer io.StringWriter) *CSVWriter {
+func NewCSVWriter(ctx context.Context, writer io.StringWriter) *CSVWriter {
 	w := &CSVWriter{
 		ctx:    ctx,
-		buf:    buf,
+		buf:    bytes.NewBuffer(make([]byte, 0, initedSize)),
 		writer: writer,
 	}
 	return w
