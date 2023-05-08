@@ -1104,8 +1104,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= 100000 && constVal >= -100000
 		case types.T_float64:
 			//float64 has 15 significant digits.
-			//return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
-			return false // filtering zonemap is slow for now. will change this in the future
+			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		case types.T_decimal64:
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		default:
@@ -1139,8 +1138,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= 100000
 		case types.T_float64:
 			//float64 has 15 significant digits.
-			//return constVal <= math.MaxUint32
-			return false // filtering zonemap is slow for now. will change this in the future
+			return constVal <= math.MaxUint32
 		case types.T_decimal64:
 			return constVal <= math.MaxInt32
 		default:

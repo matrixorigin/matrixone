@@ -165,7 +165,7 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 	} else if sortOrder == 1 {
 		return outCnt * 0.7
 	} else {
-		return outCnt * 0.1
+		return outCnt * 0.5
 	}
 
 }
@@ -288,7 +288,7 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string,
 			}
 		}
 	}
-	return cost / 10
+	return cost / 2
 }
 
 // estimate output lines for a filter
