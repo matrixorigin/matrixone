@@ -1177,7 +1177,13 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					typ := parameters[0]
+					if typ.Oid.IsDecimal() {
+						if typ.Scale < parameters[1].Scale {
+							typ.Scale = parameters[1].Scale
+						}
+					}
+					return typ
 				},
 				newOp: func() executeLogicOfOverload {
 					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {

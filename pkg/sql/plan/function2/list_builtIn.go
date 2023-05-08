@@ -3344,7 +3344,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_time, types.T_time},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiff[types.Time]
@@ -3354,7 +3354,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime, types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					t := types.T_time.ToType()
+					t.Scale = parameters[0].Scale
+					return t
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimeDiff[types.Datetime]

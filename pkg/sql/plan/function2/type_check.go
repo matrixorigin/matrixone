@@ -39,6 +39,19 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		if s2.Oid == types.T_any {
 			return true, s1, s1
 		}
+
+		// too bad.
+		// but how to make sure we can let `time = varchar` always right if we want to convert varchar to be time.
+		if t1.Oid.IsDateRelate() {
+			if t1.Oid == t2.Oid {
+				if s1.Oid == t1.Oid {
+					return true, s1, s1
+				} else if s2.Oid == t2.Oid {
+					return true, s2, s2
+				}
+			}
+		}
+
 		setTargetScaleFromSource(&s1, &t1)
 		setTargetScaleFromSource(&s2, &t2)
 
@@ -65,6 +78,17 @@ func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		if s2.Oid == types.T_any {
 			return true, s1, s1
 		}
+
+		if t1.Oid.IsDateRelate() {
+			if t1.Oid == t2.Oid {
+				if s1.Oid == t1.Oid {
+					return true, s1, s1
+				} else if s2.Oid == t2.Oid {
+					return true, s2, s2
+				}
+			}
+		}
+
 		setTargetScaleFromSource(&s1, &t1)
 		setTargetScaleFromSource(&s2, &t2)
 
@@ -209,22 +233,52 @@ func setTargetScaleFromSource(source, target *types.Type) {
 		target.Scale = source.Scale
 		return
 	}
+
 	if target.Oid == types.T_datetime {
 		if source.Oid.IsMySQLString() {
 			target.Scale = 6
+		} else if source.Oid.IsDateRelate() {
+			target.Scale = source.Scale
 		}
+		return
 	}
+
+	if target.Oid == types.T_time {
+		if source.Oid.IsMySQLString() {
+			target.Scale = 6
+		} else if source.Oid.IsDateRelate() {
+			target.Scale = source.Scale
+		}
+		return
+	}
+
+	if target.Oid == types.T_timestamp {
+		if source.Oid.IsMySQLString() {
+			target.Scale = 6
+		} else if source.Oid.IsDateRelate() {
+			target.Scale = source.Scale
+		}
+		return
+	}
+
 	if target.Oid == types.T_decimal64 {
 		if source.Oid.IsInteger() {
 			target.Scale = 0
+		} else if source.Oid.IsDateRelate() {
+			target.Scale = source.Scale
 		}
+		return
 	}
+
 	if target.Oid == types.T_decimal128 {
 		if source.Oid == types.T_decimal64 {
 			target.Scale = source.Scale
 		} else if source.Oid.IsInteger() {
 			target.Scale = 0
+		} else if source.Oid.IsDateRelate() {
+			target.Scale = source.Scale
 		}
+		return
 	}
 }
 
