@@ -678,7 +678,7 @@ func EnableFaultInjection(_ []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func RemoveFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	if ivecs[0].IsConst() || !ivecs[0].IsConstNull() {
+	if !ivecs[0].IsConst() || ivecs[0].IsConstNull() {
 		return moerr.NewInvalidArg(proc.Ctx, "RemoveFaultPoint", "not scalar")
 	}
 
@@ -707,8 +707,8 @@ func RemoveFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	if ivecs[0].IsConst() || !ivecs[0].IsConstNull() {
-		return moerr.NewInvalidArg(proc.Ctx, "RemoveFaultPoint", "not scalar")
+	if !ivecs[0].IsConst() || ivecs[0].IsConstNull() {
+		return moerr.NewInvalidArg(proc.Ctx, "TriggerFaultPoint", "not scalar")
 	}
 
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -724,9 +724,6 @@ func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 
 			iv, _, ok := fault.TriggerFault(function2Util.QuickBytesToStr(v))
 			if !ok {
-
-				//TODO: Need validation. Original code: https://github.com/m-schen/matrixone/blob/9a29d4656c2c6be66885270a2a50664d3ba2a203/pkg/sql/plan/function/builtin/multi/faultinj.go#L73
-				// Original code: 		return vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp()), nil
 				if err = rs.Append(0, true); err != nil {
 					return err
 				}
