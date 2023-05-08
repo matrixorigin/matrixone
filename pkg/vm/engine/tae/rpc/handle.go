@@ -389,7 +389,7 @@ func (h *Handle) HandleInspectDN(
 	return nil
 }
 
-func (h *Handle) prefetch(ctx context.Context,
+func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 	req *db.WriteReq) error {
 	if len(req.DeltaLocs) == 0 {
 		return nil
@@ -399,11 +399,11 @@ func (h *Handle) prefetch(ctx context.Context,
 	//start loading jobs asynchronously,should create a new root context.
 	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
 	if err != nil {
-		return nil
+		return err
 	}
 	pref, err := blockio.BuildPrefetchParams(h.db.Fs.Service, loc)
 	if err != nil {
-		return nil
+		return err
 	}
 	for _, key := range req.DeltaLocs {
 		var location objectio.Location
@@ -414,6 +414,25 @@ func (h *Handle) prefetch(ctx context.Context,
 		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint16{location.ID()})
 	}
 	return blockio.PrefetchWithMerged(pref)
+}
+
+func (h *Handle) prefetchMetadata(ctx context.Context,
+	req *db.WriteReq) error {
+	if len(req.MetaLocs) == 0 {
+		return nil
+	}
+	//start loading jobs asynchronously,should create a new root context.
+	for _, meta := range req.MetaLocs {
+		loc, err := blockio.EncodeLocationFromString(meta)
+		if err != nil {
+			return err
+		}
+		err = blockio.PrefetchMeta(h.db.Fs.Service, loc)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // EvaluateTxnRequest only evaluate the request ,do not change the state machine of TxnEngine.
@@ -428,11 +447,17 @@ func (h *Handle) EvaluateTxnRequest(
 		if r, ok := e.(*db.WriteReq); ok {
 			if r.FileName != "" {
 				if r.Type == db.EntryDelete {
-					//start to load deleted row ids
-					err = h.prefetch(ctx, r)
+					// start to load deleted row ids
+					err = h.prefetchDeleteRowID(ctx, r)
 					if err != nil {
 						return
 					}
+				} else if r.Type == db.EntryInsert {
+					err = h.prefetchMetadata(ctx, r)
+					if err != nil {
+						return
+					}
+
 				}
 			}
 		}

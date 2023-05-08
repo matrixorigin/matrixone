@@ -930,6 +930,7 @@ var (
 
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
 		name,
+		owner,
 		args,
 		body,
 		db,
@@ -941,7 +942,7 @@ var (
 		comment,
 		character_set_client,
 		collation_connection,
-		database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+		database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -7525,6 +7526,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 
 	initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
 		string(cp.Name.Name.ObjectName),
+		ses.GetTenantInfo().GetDefaultRoleID(),
 		string(argsJson),
 		cp.Body, dbName,
 		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")

@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"hash/crc32"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 
@@ -25,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -329,7 +327,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 			Magic:    Merge,
 			NodeInfo: s.NodeInfo,
 		}
-		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 2, c.anal.Nodes())
+		ss[i].Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 2, c.anal.Nodes())
 		ss[i].Proc.Reg.MergeReceivers[1].Ch = make(chan *batch.Batch, 10)
 	}
 	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
@@ -674,7 +672,7 @@ func fillInstructionsByCopyScope(targetScope *Scope, srcScope *Scope,
 func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	for i := range s.RemoteReceivRegInfos {
 		op := &s.RemoteReceivRegInfos[i]
-		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister, mp *mpool.MPool) {
+		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
 				reg.Ch <- nil
@@ -686,8 +684,6 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 				_ = streamSender.Close(false)
 			}(streamSender)
 
-			c, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-			_ = cancel
 			message := cnclient.AcquireMessage()
 			{
 				message.Id = streamSender.ID()
@@ -695,15 +691,13 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 				message.Sid = pbpipeline.Last
 				message.Uuid = info.Uuid[:]
 			}
-			if errSend := streamSender.Send(c, message); errSend != nil {
-				reg.Ch <- nil
+			if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
 				errChan <- errSend
 				return
 			}
 
 			messagesReceive, errReceive := streamSender.Receive()
 			if errReceive != nil {
-				reg.Ch <- nil
 				errChan <- errReceive
 				return
 			}
@@ -711,30 +705,29 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			if reg != nil {
 				ch = reg.Ch
 			}
-			if err := receiveMsgAndForward(c, messagesReceive, ch, mp, s.Proc); err != nil {
-				reg.Ch <- nil
+			if err := receiveMsgAndForward(s.Proc, messagesReceive, ch); err != nil {
 				errChan <- err
 				return
 			}
 			reg.Ch <- nil
 			errChan <- nil
-		}(op, s.Proc.Reg.MergeReceivers[op.Idx], s.Proc.GetMPool())
+		}(op, s.Proc.Reg.MergeReceivers[op.Idx])
 	}
 }
 
-func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, forwardCh chan *batch.Batch, mp *mpool.MPool, proc *process.Process) error {
+func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, forwardCh chan *batch.Batch) error {
 	var val morpc.Message
 	var dataBuffer []byte
 	var ok bool
 	for {
 		select {
-		case <-ctx.Done():
-			return moerr.NewRPCTimeout(ctx)
+		case <-proc.Ctx.Done():
+			logutil.Errorf("proc ctx done during forward")
+			return nil
 		case val, ok = <-receiveCh:
-		}
-
-		if val == nil || !ok {
-			return moerr.NewStreamClosedNoCtx()
+			if val == nil || !ok {
+				return moerr.NewStreamClosedNoCtx()
+			}
 		}
 
 		m, ok := val.(*pbpipeline.Message)
@@ -759,9 +752,9 @@ func receiveMsgAndForward(ctx context.Context, receiveCh chan morpc.Message, for
 			continue
 		case pbpipeline.Last:
 			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
-				return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
+				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
 			}
-			bat, err := decodeBatch(mp, dataBuffer)
+			bat, err := decodeBatch(proc.Mp(), dataBuffer)
 			if err != nil {
 				return err
 			}

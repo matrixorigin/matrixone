@@ -26,7 +26,6 @@ start transaction;
 use autocommit;
 start transaction;
 drop table t1;
-internal error: Only CREATE of DDL is supported in transactions
 commit;
 start transaction;
 set autocommit=1;
@@ -35,7 +34,6 @@ commit;
 start transaction;
 show tables;
 tables_in_autocommit
-t1
 commit;
 set autocommit=0;
 drop table if exists t1;

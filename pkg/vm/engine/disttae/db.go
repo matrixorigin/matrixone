@@ -16,7 +16,7 @@ package disttae
 
 import (
 	"context"
-
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -89,7 +89,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		tbl.relKind = catalog.SystemOrdinaryRel
 		bat, err := genCreateTableTuple(tbl, "", 0, 0, 0,
 			catalog.MO_DATABASE, catalog.MO_DATABASE_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, m)
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, types.Rowid{}, false, m)
 		if err != nil {
 			return err
 		}
@@ -109,7 +109,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
 		for _, col := range cols {
-			bat0, err := genCreateColumnTuple(col, m)
+			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
 				return err
 			}
@@ -149,7 +149,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		tbl := new(txnTable)
 		tbl.relKind = catalog.SystemOrdinaryRel
 		bat, err := genCreateTableTuple(tbl, "", 0, 0, 0, catalog.MO_TABLES, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, m)
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, types.Rowid{}, false, m)
 		if err != nil {
 			return err
 		}
@@ -169,7 +169,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
 		for _, col := range cols {
-			bat0, err := genCreateColumnTuple(col, m)
+			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
 				return err
 			}
@@ -209,7 +209,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		tbl := new(txnTable)
 		tbl.relKind = catalog.SystemOrdinaryRel
 		bat, err := genCreateTableTuple(tbl, "", 0, 0, 0, catalog.MO_COLUMNS, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, m)
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, types.Rowid{}, false, m)
 		if err != nil {
 			return err
 		}
@@ -229,7 +229,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
 		for _, col := range cols {
-			bat0, err := genCreateColumnTuple(col, m)
+			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
 				return err
 			}
