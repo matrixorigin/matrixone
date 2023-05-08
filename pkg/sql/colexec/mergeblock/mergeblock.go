@@ -178,9 +178,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	if ap.IsEnd {
 		proc.SetInputBatch(nil)
-		if insertBatch != nil {
-			insertBatch.Clean(proc.GetMPool())
-		}
 	} else {
 		proc.SetInputBatch(insertBatch)
 	}
