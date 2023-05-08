@@ -150,6 +150,7 @@ func tryToMatch(from []types.Type, to []types.T) (sta matchCheckStatus, cost int
 	if len(from) != len(to) {
 		return matchFailed, -1
 	}
+	l := len(from)
 	for i, source := range from {
 		if source.Oid == to[i] {
 			cost += 0
@@ -158,7 +159,11 @@ func tryToMatch(from []types.Type, to []types.T) (sta matchCheckStatus, cost int
 			if !can {
 				return matchFailed, -1
 			}
-			cost += c
+			if c == 1 {
+				cost += c
+			} else {
+				cost += c * l
+			}
 		}
 	}
 	if cost == 0 {
