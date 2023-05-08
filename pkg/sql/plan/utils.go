@@ -521,7 +521,7 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=":
 			switch exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C:
+			case *plan.Expr_C, *plan.Expr_P:
 				return CheckFilter(exprImpl.F.Args[0])
 			default:
 				return false, nil
@@ -943,12 +943,11 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 
 // handle the filter list for zonemap. rewrite and constFold
 // return monotonic filters and number of nonMonotonic filters
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, int) {
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
 	if proc == nil || proc.Ctx == nil {
-		return nil, 0
+		return nil, nil
 	}
-	num := 0
-	var newExprList []*plan.Expr
+	var monoExprList, nonMonoExprList []*plan.Expr
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	for _, expr := range exprList {
@@ -957,13 +956,12 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Exp
 			expr = tmpexpr
 		}
 		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
-			newExprList = append(newExprList, expr)
+			monoExprList = append(monoExprList, expr)
 		} else {
-			num++
+			nonMonoExprList = append(nonMonoExprList, expr)
 		}
 	}
-	e := colexec.RewriteFilterExprList(newExprList)
-	return e, num
+	return colexec.RewriteFilterExprList(monoExprList), colexec.RewriteFilterExprList(nonMonoExprList)
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
@@ -1106,8 +1104,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= 100000 && constVal >= -100000
 		case types.T_float64:
 			//float64 has 15 significant digits.
-			//return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
-			return false // filtering zonemap is slow for now. will change this in the future
+			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		case types.T_decimal64:
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		default:
@@ -1141,8 +1138,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= 100000
 		case types.T_float64:
 			//float64 has 15 significant digits.
-			//return constVal <= math.MaxUint32
-			return false // filtering zonemap is slow for now. will change this in the future
+			return constVal <= math.MaxUint32
 		case types.T_decimal64:
 			return constVal <= math.MaxInt32
 		default:
