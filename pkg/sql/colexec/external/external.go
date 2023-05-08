@@ -629,7 +629,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 		}
 	}
 
-	tmpBat, err := objectReader.LoadColumns(ctx, idxs, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), proc.GetMPool())
+	tmpBat, err := objectReader.LoadColumns(ctx, idxs, nil, param.Zoneparam.bs[param.Zoneparam.offset].BlockHeader().BlockID().Sequence(), proc.GetMPool())
 	if err != nil {
 		return nil, err
 	}
@@ -697,6 +697,7 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, 
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		return true
 	}
+	// external read, columns won't change, there is no need to use seqnum
 	indexes, err := objectReader.LoadZoneMap(context.Background(), param.Filter.columns,
 		param.Zoneparam.bs[param.Zoneparam.offset], proc.GetMPool())
 	if err != nil {

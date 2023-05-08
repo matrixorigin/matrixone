@@ -328,6 +328,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	partitioneds := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
 	paritions := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_PARTITION_INFO_IDX + MO_OFF))
 	constraints := vector.MustBytesCol(bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
+	versions := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_VERSION_IDX + MO_OFF))
 
 	for i, account := range accounts {
 		item := new(TableItem)
@@ -343,7 +344,9 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.Partitioned = partitioneds[i]
 		item.Partition = paritions[i]
 		item.CreateSql = createSqls[i]
+		item.Version = versions[i]
 		item.PrimaryIdx = -1
+		item.PrimarySeqnum = -1
 		item.ClusterByIdx = -1
 		copy(item.Rowid[:], rowids[i][:])
 		cc.tables.data.Set(item)
@@ -376,6 +379,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	updateExprs := vector.MustBytesCol(bat.GetVector(catalog.MO_COLUMNS_ATT_UPDATE_IDX + MO_OFF))
 	nums := vector.MustFixedCol[int32](bat.GetVector(catalog.MO_COLUMNS_ATTNUM_IDX + MO_OFF))
 	clusters := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_CLUSTERBY + MO_OFF))
+	seqnums := vector.MustFixedCol[uint16](bat.GetVector(catalog.MO_COLUMNS_ATT_SEQNUM_IDX + MO_OFF))
 	for i, account := range accounts {
 		key.AccountId = account
 		key.Name = tableNames[i]
@@ -400,6 +404,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				hasUpdate:       hasUpdates[i],
 				constraintType:  constraintTypes[i],
 				isClusterBy:     clusters[i],
+				seqnum:          seqnums[i],
 			}
 			copy(col.rowid[:], rowids[i][:])
 			col.typ = append(col.typ, typs[i]...)
@@ -426,6 +431,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		for i, col := range cols {
 			if col.constraintType == catalog.SystemColPKConstraint {
 				item.PrimaryIdx = i
+				item.PrimarySeqnum = int(col.seqnum)
 			}
 			if col.isClusterBy == 1 {
 				item.ClusterByIdx = i
@@ -435,6 +441,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		}
 		item.Defs = defs
 		item.TableDef = getTableDef(item.Name, defs)
+		item.TableDef.Version = item.Version
 	}
 }
 
@@ -476,6 +483,7 @@ func genTableDefOfColumn(col column) engine.TableDef {
 	attr.IsHidden = col.isHidden == 1
 	attr.ClusterBy = col.isClusterBy == 1
 	attr.AutoIncrement = col.isAutoIncrement == 1
+	attr.Seqnum = col.seqnum
 	if err := types.Decode(col.typ, &attr.Type); err != nil {
 		panic(err)
 	}
@@ -520,6 +528,7 @@ func getTableDef(name string, defs []engine.TableDef) *plan.TableDef {
 				OnUpdate: attr.Attr.OnUpdate,
 				Comment:  attr.Attr.Comment,
 				Hidden:   attr.Attr.IsHidden,
+				Seqnum:   uint32(attr.Attr.Seqnum),
 			})
 			i++
 		}
