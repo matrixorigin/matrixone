@@ -32,6 +32,12 @@ message CommentDef {
     string Comment              = 1;
 }
 
+message VersionDef {
+    option (gogoproto.typedecl) = false;
+    uint32 Version              = 1;
+}
+
+
 message PartitionDef {
     option (gogoproto.typedecl) = false;
     string Partition            = 1;
@@ -113,6 +119,7 @@ message TableDefPB {
         PropertiesDef PropertiesDef     = 6;
         ClusterByDef ClusterByDef       = 7;
         ConstraintDefPB ConstraintDefPB = 8;
+        VersionDef VersionDef           = 9;
     }
 }
 

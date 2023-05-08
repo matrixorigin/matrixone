@@ -386,7 +386,14 @@ func (store *txnStore) ObserveTxn(
 				for _, node := range tbl.localSegment.nodes {
 					anode, ok := node.(*anode)
 					if ok {
-						visitAppend(anode.storage.mnode.data)
+						schema := anode.table.GetLocalSchema()
+						bat := &containers.BatchWithVersion{
+							Version:    schema.Version,
+							NextSeqnum: uint16(schema.Extra.NextColSeqnum),
+							Seqnums:    schema.AllSeqnums(),
+							Batch:      anode.storage.mnode.data,
+						}
+						visitAppend(bat)
 					}
 				}
 			}
