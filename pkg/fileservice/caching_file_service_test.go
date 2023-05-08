@@ -58,17 +58,13 @@ func testCachingFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToObject: func(r io.Reader, data []byte) (any, int64, error) {
+					ToObjectBytes: func(r io.Reader, data []byte) ([]byte, int64, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						var m api.Int64Map
-						if err := m.Unmarshal(bs); err != nil {
-							return nil, 0, err
-						}
-						return m, 1, nil
+						return bs, 1, nil
 					},
 				},
 			},
@@ -80,8 +76,9 @@ func testCachingFileService(
 	vec.NoCache = true
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
-	m, ok := vec.Entries[0].Object.(api.Int64Map)
-	assert.True(t, ok)
+
+	err = m.Unmarshal(vec.Entries[0].ObjectBytes)
+	assert.NoError(t, err)
 	assert.Equal(t, 1, len(m.M))
 	assert.Equal(t, int64(42), m.M[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
@@ -92,8 +89,8 @@ func testCachingFileService(
 	vec = makeVec()
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
-	m, ok = vec.Entries[0].Object.(api.Int64Map)
-	assert.True(t, ok)
+	err = m.Unmarshal(vec.Entries[0].ObjectBytes)
+	assert.NoError(t, err)
 	assert.Equal(t, 1, len(m.M))
 	assert.Equal(t, int64(42), m.M[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
@@ -104,8 +101,8 @@ func testCachingFileService(
 	vec = makeVec()
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
-	m, ok = vec.Entries[0].Object.(api.Int64Map)
-	assert.True(t, ok)
+	err = m.Unmarshal(vec.Entries[0].ObjectBytes)
+	assert.NoError(t, err)
 	assert.Equal(t, 1, len(m.M))
 	assert.Equal(t, int64(42), m.M[42])
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)

@@ -798,23 +798,33 @@ func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 	}
 }
 
-func GetColumnsByExpr(expr *plan.Expr, tableDef *plan.TableDef) (map[int]int, []int, int) {
-	columnMap := make(map[int]int)
+func GetColumnsByExpr(
+	expr *plan.Expr,
+	tableDef *plan.TableDef,
+) (columnMap map[int]int, defColumns, exprColumns []int, maxCol int) {
+	columnMap = make(map[int]int)
 	// key = expr's ColPos,  value = tableDef's ColPos
 	getColumnMapByExpr(expr, tableDef, &columnMap)
 
-	maxCol := 0
-	useColumn := len(columnMap)
-	columns := make([]int, useColumn)
+	if len(columnMap) == 0 {
+		return
+	}
+
+	defColumns = make([]int, len(columnMap))
+	exprColumns = make([]int, len(columnMap))
+
+	// k: col pos in expr
+	// v: col pos in def
 	i := 0
 	for k, v := range columnMap {
-		if k > maxCol {
-			maxCol = k
+		if v > maxCol {
+			maxCol = v
 		}
-		columns[i] = v //tableDef's ColPos
+		exprColumns[i] = k
+		defColumns[i] = v
 		i = i + 1
 	}
-	return columnMap, columns, maxCol
+	return
 }
 
 func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {

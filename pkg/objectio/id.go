@@ -62,6 +62,12 @@ func BuildObjectBlockid(name ObjectName, sequence uint16) *Blockid {
 	return &id
 }
 
+func Str2Blockid(id string) *Blockid {
+	var blkid Blockid
+	copy(blkid[:], id)
+	return &blkid
+}
+
 func ToObjectNameShort(blkID *Blockid) *ObjectNameShort {
 	return (*ObjectNameShort)(unsafe.Pointer(&blkID[0]))
 }

@@ -35,9 +35,10 @@ select 1
 select account, statement from system.statement_info where statement = 'insert into query_tae_table values (1)' and statement_id = @uuid_insert_table limit 1;
 account    statement
 query_tae_table    insert into query_tae_table values (1)
-select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "NOT_EXIST_SPAN" limit 1;
+select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "GenBatch" limit 1;
 span_kind
-select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt', '/*issue_8168*/use query_tae_table');
+internal
+select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt', '/*issue_8168*/use query_tae_table') and status != 'Running';
 status    err_code    error
 Failed    20303    SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 58 near " stmt;";
 Failed    20303    SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 58 near " stmt;";
