@@ -17,14 +17,16 @@ package disttae
 import (
 	"context"
 
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 func groupBlocksToObjectsForStats(blocks [][]catalog.BlockInfo) []*catalog.BlockInfo {
@@ -120,8 +122,8 @@ func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.B
 				if !zm.IsInited() {
 					continue
 				}
-				index.UpdateZM(&info.ColumnZMs[idx], zm.GetMaxBuf())
-				index.UpdateZM(&info.ColumnZMs[idx], zm.GetMinBuf())
+				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
+				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
 				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 			}
 		}
@@ -166,14 +168,16 @@ func CalcStats(
 		blockNumNeed, blockNumTotal int
 		tableCnt, cost              int64
 		columnMap                   map[int]int
-		defCols, exprCols           []int
-		maxCol                      int
 		isMonoExpr                  bool
 		meta                        objectio.ObjectMeta
+		skipThisObject              bool
+		// defCols, exprCols           []int
+		// maxCol                      int
 	)
 	if isMonoExpr = plan2.CheckExprIsMonotonic(ctx, expr); isMonoExpr {
-		columnMap, defCols, exprCols, maxCol = plan2.GetColumnsByExpr(expr, tableDef)
+		columnMap, _, _, _ = plan2.GetColumnsByExpr(expr, tableDef)
 	}
+	errCtx := errutil.ContextWithNoReport(ctx, true)
 	for i := range blocks {
 		blockNumTotal += len(blocks[i])
 		for _, blk := range blocks[i] {
@@ -185,8 +189,16 @@ func CalcStats(
 					if meta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
 						return
 					}
+					if skipThisObject = !evalFilterExprWithZonemap(errCtx, meta, expr, columnMap, proc); skipThisObject {
+						continue
+					}
 				}
-				needed = needRead(ctx, expr, meta, blk, tableDef, columnMap, defCols, exprCols, maxCol, proc)
+				needed = evalFilterExprWithZonemap(
+					errCtx,
+					meta.GetBlockMeta(uint32(location.ID())),
+					expr,
+					columnMap,
+					proc)
 			}
 			if needed {
 				cost += int64(location.Rows())

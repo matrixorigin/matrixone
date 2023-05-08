@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -49,6 +50,13 @@ func (appender *blockAppender) IsAppendable() bool {
 func (appender *blockAppender) Close() {
 	appender.blk.Unref()
 }
+
+func (appender *blockAppender) IsSameColumns(other any) bool {
+	n := appender.blk.PinNode()
+	defer n.Unref()
+	return n.MustMNode().writeSchema.IsSameColumns(other.(*catalog.Schema))
+}
+
 func (appender *blockAppender) PrepareAppend(
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
@@ -92,7 +100,7 @@ func (appender *blockAppender) ApplyAppend(
 	defer appender.blk.Unlock()
 	from, err = node.ApplyAppend(bat, txn)
 
-	schema := appender.blk.meta.GetSchema()
+	schema := node.writeSchema
 	keysCtx := new(index.KeysCtx)
 	keysCtx.Count = bat.Length()
 	for _, colDef := range schema.ColDefs {
@@ -100,7 +108,7 @@ func (appender *blockAppender) ApplyAppend(
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		if err = node.indexes[colDef.Idx].BatchUpsert(keysCtx, from); err != nil {
+		if err = node.indexes[colDef.SeqNum].BatchUpsert(keysCtx, from); err != nil {
 			panic(err)
 		}
 	}

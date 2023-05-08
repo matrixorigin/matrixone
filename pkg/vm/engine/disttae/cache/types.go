@@ -88,6 +88,7 @@ type TableItem struct {
 	TableDef *plan.TableDef
 	Defs     []engine.TableDef
 	Rowid    types.Rowid
+	Version  uint32
 	/*
 		Rowids in mo_columns from replayed logtail.
 
@@ -109,7 +110,8 @@ type TableItem struct {
 	CreateSql   string
 
 	// primary index
-	PrimaryIdx int
+	PrimaryIdx    int
+	PrimarySeqnum int
 	// clusterBy key
 	ClusterByIdx int
 
@@ -140,6 +142,7 @@ type column struct {
 	hasUpdate       int8
 	updateExpr      []byte
 	isClusterBy     int8
+	seqnum          uint16
 	rowid           types.Rowid //rowid for a column in mo_columns
 }
 
@@ -240,6 +243,8 @@ func copyTableItem(dst, src *TableItem) {
 	dst.CreateSql = src.CreateSql
 	dst.PrimaryIdx = src.PrimaryIdx
 	dst.ClusterByIdx = src.ClusterByIdx
+	dst.PrimarySeqnum = src.PrimarySeqnum
+	dst.Version = src.Version
 	copy(dst.Rowid[:], src.Rowid[:])
 	dst.Rowids = make([]types.Rowid, len(src.Rowids))
 	for i, rowid := range src.Rowids {

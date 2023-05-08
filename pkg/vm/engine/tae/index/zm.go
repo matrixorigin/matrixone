@@ -48,16 +48,11 @@ func init() {
 //	                              type
 type ZM []byte
 
-// TODO: remove me later
-func NewZoneMap(typ types.Type) *ZM {
-	return NewZM(typ.Oid, typ.Scale)
-}
-
-func NewZM(t types.T, scale int32) *ZM {
+func NewZM(t types.T, scale int32) ZM {
 	zm := ZM(make([]byte, ZMSize))
 	zm.SetType(t)
 	zm.SetScale(scale)
-	return &zm
+	return zm
 }
 
 func BuildZM(t types.T, v []byte) ZM {
@@ -181,7 +176,7 @@ func (zm ZM) Unmarshal(buf []byte) (err error) {
 
 // TODO: remove me later
 func (zm ZM) Update(v any) (err error) {
-	UpdateZMAny(&zm, v)
+	UpdateZMAny(zm, v)
 	return
 }
 
@@ -487,8 +482,8 @@ func ZMPlus(v1, v2 ZM) (res ZM, ok bool) {
 		return
 	}
 	// check supported type
-	res = *NewZM(v1.GetType(), v1.GetScale())
-	ok = applyArithmetic(&v1, &v2, &res, '+', v1.GetScale(), v2.GetScale())
+	res = NewZM(v1.GetType(), v1.GetScale())
+	ok = applyArithmetic(v1, v2, res, '+', v1.GetScale(), v2.GetScale())
 	return
 }
 
@@ -500,8 +495,8 @@ func ZMMinus(v1, v2 ZM) (res ZM, ok bool) {
 		return
 	}
 	// check supported type
-	res = *NewZM(v1.GetType(), v1.GetScale())
-	ok = applyArithmetic(&v1, &v2, &res, '-', v1.GetScale(), v2.GetScale())
+	res = NewZM(v1.GetType(), v1.GetScale())
+	ok = applyArithmetic(v1, v2, res, '-', v1.GetScale(), v2.GetScale())
 	return
 }
 
@@ -513,12 +508,12 @@ func ZMMulti(v1, v2 ZM) (res ZM, ok bool) {
 		return
 	}
 	// check supported type
-	res = *NewZM(v1.GetType(), v2.GetScale())
-	ok = applyArithmetic(&v1, &v2, &res, '*', v1.GetScale(), v2.GetScale())
+	res = NewZM(v1.GetType(), v2.GetScale())
+	ok = applyArithmetic(v1, v2, res, '*', v1.GetScale(), v2.GetScale())
 	return
 }
 
-func applyArithmetic(v1, v2, res *ZM, op byte, scale1, scale2 int32) (ok bool) {
+func applyArithmetic(v1, v2, res ZM, op byte, scale1, scale2 int32) (ok bool) {
 	ok = true
 	switch v1.GetType() {
 	case types.T_int8:
@@ -886,7 +881,7 @@ func adjustBytes(bs []byte) {
 	}
 }
 
-func BatchUpdateZM(zm *ZM, vs containers.Vector) (err error) {
+func BatchUpdateZM(zm ZM, vs containers.Vector) (err error) {
 	op := func(v []byte, isNull bool, _ int) (err error) {
 		if isNull {
 			return
@@ -898,7 +893,7 @@ func BatchUpdateZM(zm *ZM, vs containers.Vector) (err error) {
 	return
 }
 
-func UpdateZM(zm *ZM, v []byte) {
+func UpdateZM(zm ZM, v []byte) {
 	if !zm.IsInited() {
 		zm.doInit(v)
 	}
@@ -919,7 +914,7 @@ func UpdateZM(zm *ZM, v []byte) {
 	}
 }
 
-func UpdateZMAny(zm *ZM, v any) {
+func UpdateZMAny(zm ZM, v any) {
 	vv := types.EncodeValue(v, zm.GetType())
 	UpdateZM(zm, vv)
 }
@@ -936,10 +931,10 @@ func BoolToZM(v bool) ZM {
 	zm := NewZM(types.T_bool, 0)
 	buf := types.EncodeBool(&v)
 	UpdateZM(zm, buf)
-	return *zm
+	return zm
 }
 
-func MustZMToVector(zm *ZM, m *mpool.MPool) (vec *vector.Vector) {
+func MustZMToVector(zm ZM, m *mpool.MPool) (vec *vector.Vector) {
 	var err error
 	if vec, err = ZMToVector(zm, m); err != nil {
 		t := zm.GetType().ToType()
@@ -951,7 +946,7 @@ func MustZMToVector(zm *ZM, m *mpool.MPool) (vec *vector.Vector) {
 
 // if zm is not initialized, return a const null vector
 // if zm is of type varlen and truncated, the max value is null
-func ZMToVector(zm *ZM, m *mpool.MPool) (vec *vector.Vector, err error) {
+func ZMToVector(zm ZM, m *mpool.MPool) (vec *vector.Vector, err error) {
 	t := zm.GetType().ToType()
 	t.Scale = zm.GetScale()
 	if !zm.IsInited() {
@@ -979,7 +974,7 @@ func ZMToVector(zm *ZM, m *mpool.MPool) (vec *vector.Vector, err error) {
 }
 
 // if zm is not of length 2, return not initilized zm
-func VectorToZM(vec *vector.Vector) (zm *ZM) {
+func VectorToZM(vec *vector.Vector) (zm ZM) {
 	t := vec.GetType()
 	zm = NewZM(t.Oid, t.Scale)
 	if vec.Length() != 2 {

@@ -193,44 +193,51 @@ func (blk *txnBlock) Rows() int {
 	return blk.entry.GetBlockData().Rows()
 }
 
-func (blk *txnBlock) GetColumnDataByIds(colIdxes []int) (*model.BlockView, error) {
+func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error) {
+	schema := blk.table.GetLocalSchema()
+	colIdx := schema.GetColIdx(attr)
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes)
+		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, colIdxes)
+	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, schema, colIdx)
 }
 
 func (blk *txnBlock) GetColumnDataByNames(attrs []string) (*model.BlockView, error) {
+	schema := blk.table.GetLocalSchema()
+	attrIds := make([]int, len(attrs))
+	for i, attr := range attrs {
+		attrIds[i] = schema.GetColIdx(attr)
+	}
 	if blk.isUncommitted {
-		attrIds := make([]int, len(attrs))
-		for i, attr := range attrs {
-			attrIds[i] = blk.table.GetLocalSchema().GetColIdx(attr)
-		}
 		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByNames(blk.Txn, attrs)
+	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, schema, attrIds)
 }
 
 func (blk *txnBlock) GetColumnDataById(colIdx int) (*model.ColumnView, error) {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx)
 	}
-	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, colIdx)
+	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, blk.table.GetLocalSchema(), colIdx)
+}
+
+func (blk *txnBlock) GetColumnDataByIds(colIdxes []int) (*model.BlockView, error) {
+	if blk.isUncommitted {
+		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes)
+	}
+	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, blk.table.GetLocalSchema(), colIdxes)
 }
 
 func (blk *txnBlock) Prefetch(idxes []uint16) error {
-	if blk.isUncommitted {
-		return blk.table.localSegment.Prefetch(blk.entry, idxes)
+	schema := blk.table.GetLocalSchema()
+	seqnums := make([]uint16, 0, len(idxes))
+	for _, idx := range idxes {
+		seqnums = append(seqnums, schema.ColDefs[idx].SeqNum)
 	}
-	return blk.entry.GetBlockData().Prefetch(idxes)
-}
-
-func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error) {
 	if blk.isUncommitted {
-		attrId := blk.table.GetLocalSchema().GetColIdx(attr)
-		return blk.table.localSegment.GetColumnDataById(blk.entry, attrId)
+		return blk.table.localSegment.Prefetch(blk.entry, seqnums)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByName(blk.Txn, attr)
+	return blk.entry.GetBlockData().Prefetch(seqnums)
 }
 
 func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {

@@ -91,22 +91,6 @@ func (blk *baseBlock) PinNode() *Node {
 	return n
 }
 
-func (blk *baseBlock) GetColumnData(
-	from uint32,
-	to uint32,
-	colIdx int,
-) (vec containers.Vector, err error) {
-	node := blk.PinNode()
-	defer node.Unref()
-	if !node.IsPersisted() {
-		blk.RLock()
-		defer blk.RUnlock()
-		return node.GetColumnDataWindow(from, to, colIdx)
-	} else {
-		return node.GetColumnDataWindow(from, to, colIdx)
-	}
-}
-
 func (blk *baseBlock) Rows() int {
 	node := blk.PinNode()
 	defer node.Unref()
@@ -174,39 +158,43 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	}
 	bat, err := reader.LoadColumns(
 		context.Background(),
-		[]uint16{uint16(len(blk.meta.GetSchema().NameIndex))},
+		[]uint16{objectio.SEQNUM_COMMITTS},
+		nil,
 		location.ID(),
 		nil,
 	)
 	if err != nil {
 		return
 	}
+	if bat.Vecs[0].GetType().Oid != types.T_TS {
+		panic(fmt.Sprintf("%s: bad commits layout", blk.meta.ID.String()))
+	}
 	vec = containers.ToDNVector(bat.Vecs[0])
 	return
 }
 
-func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
-	schema := blk.meta.GetSchema()
-	bat = containers.NewBatch()
-	defer func() {
-		if err != nil {
-			bat.Close()
-		}
-	}()
-	var vec containers.Vector
-	for i, col := range schema.ColDefs {
-		vec, err = blk.LoadPersistedColumnData(i)
-		if err != nil {
-			return
-		}
-		bat.AddVector(col.Name, vec)
-	}
-	return
-}
+// func (blk *baseBlock) LoadPersistedData() (bat *containers.Batch, err error) {
+// 	schema := blk.meta.GetSchema()
+// 	bat = containers.NewBatch()
+// 	defer func() {
+// 		if err != nil {
+// 			bat.Close()
+// 		}
+// 	}()
+// 	var vec containers.Vector
+// 	for i, col := range schema.ColDefs {
+// 		vec, err = blk.LoadPersistedColumnData(i)
+// 		if err != nil {
+// 			return
+// 		}
+// 		bat.AddVector(col.Name, vec)
+// 	}
+// 	return
+// }
 
-func (blk *baseBlock) LoadPersistedColumnData(colIdx int) (
+func (blk *baseBlock) LoadPersistedColumnData(schema *catalog.Schema, colIdx int) (
 	vec containers.Vector, err error) {
-	def := blk.meta.GetSchema().ColDefs[colIdx]
+	def := schema.ColDefs[colIdx]
 	location := blk.meta.GetMetaLoc()
 	return LoadPersistedColumnData(
 		blk.fs,
@@ -265,15 +253,17 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 func (blk *baseBlock) ResolvePersistedColumnDatas(
 	pnode *persistedNode,
 	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
 	colIdxs []int,
 	skipDeletes bool) (view *model.BlockView, err error) {
-	data, err := blk.LoadPersistedData()
-	if err != nil {
-		return nil, err
-	}
+
 	view = model.NewBlockView()
 	for _, colIdx := range colIdxs {
-		view.SetData(colIdx, data.Vecs[colIdx])
+		vec, err := blk.LoadPersistedColumnData(readSchema, colIdx)
+		if err != nil {
+			return nil, err
+		}
+		view.SetData(colIdx, vec)
 	}
 
 	if skipDeletes {
@@ -295,7 +285,7 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
 	if view.BaseView.DeleteMask != nil {
 		for _, colIdx := range colIdxs {
-			vec := data.Vecs[colIdx]
+			vec := view.Columns[colIdx].GetData()
 			view.SetData(colIdx, vec.CloneWindow(0, vec.Length(), nil))
 			vec.Close()
 		}
@@ -306,10 +296,11 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 func (blk *baseBlock) ResolvePersistedColumnData(
 	pnode *persistedNode,
 	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
 	colIdx int,
 	skipDeletes bool) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(colIdx)
-	vec, err := blk.LoadPersistedColumnData(colIdx)
+	vec, err := blk.LoadPersistedColumnData(readSchema, colIdx)
 	if err != nil {
 		return
 	}
@@ -353,10 +344,12 @@ func (blk *baseBlock) PersistedBatchDedup(
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return
 	}
-	def := blk.meta.GetSchema().GetSingleSortKey()
+	schema := blk.meta.GetSchema()
+	def := schema.GetSingleSortKey()
 	view, err := blk.ResolvePersistedColumnData(
 		pnode,
 		txn,
+		schema,
 		def.Idx,
 		false)
 	if err != nil {
@@ -383,6 +376,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 func (blk *baseBlock) getPersistedValue(
 	pnode *persistedNode,
 	txn txnif.TxnReader,
+	schema *catalog.Schema,
 	row, col int,
 	skipMemory bool) (v any, isNull bool, err error) {
 	view := model.NewColumnView(col)
@@ -401,7 +395,7 @@ func (blk *baseBlock) getPersistedValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view2, err := blk.ResolvePersistedColumnData(pnode, txn, col, true)
+	view2, err := blk.ResolvePersistedColumnData(pnode, txn, schema, col, true)
 	if err != nil {
 		return
 	}
@@ -600,6 +594,6 @@ func (blk *baseBlock) BuildCompactionTaskFactory() (
 	return
 }
 
-func (blk *baseBlock) CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error) {
+func (blk *baseBlock) CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.BatchWithVersion, error) {
 	return nil, nil
 }

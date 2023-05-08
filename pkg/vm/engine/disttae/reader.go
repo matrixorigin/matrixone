@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -57,30 +58,28 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 
 	info := r.blks[0]
 
-	if len(cols) != len(r.colIdxs) {
-		if len(r.colIdxs) == 0 {
+	if len(cols) != len(r.seqnums) {
+		if len(r.seqnums) == 0 {
 			r.prefetchColIdxs = make([]uint16, 0)
-			r.colIdxs = make([]uint16, len(cols))
+			r.seqnums = make([]uint16, len(cols))
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
 			r.pkidxInColIdxs = -1
 			for i, column := range cols {
 				// sometimes Name2ColIndex have no row_id， sometimes have one
 				if column == catalog.Row_ID {
-					if colIdx, ok := r.tableDef.Name2ColIndex[column]; ok {
-						r.colIdxs[i] = uint16(colIdx)
-					} else {
-						r.colIdxs[i] = uint16(len(r.tableDef.Name2ColIndex))
-					}
+					// actually rowid's seqnum does not matter because it is generated in memory
+					r.seqnums[i] = objectio.SEQNUM_ROWID
 					r.colTypes[i] = types.T_Rowid.ToType()
 				} else {
-					r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
-					r.prefetchColIdxs = append(r.prefetchColIdxs, r.colIdxs[i])
-					if r.colIdxs[i] == uint16(r.primaryIdx) {
+					logicalIdx := r.tableDef.Name2ColIndex[column]
+					colDef := r.tableDef.Cols[logicalIdx]
+					r.seqnums[i] = uint16(colDef.Seqnum)
+					r.prefetchColIdxs = append(r.prefetchColIdxs, r.seqnums[i])
+					if int(r.seqnums[i]) == r.primarySeqnum {
 						r.pkidxInColIdxs = i
 						r.pkName = column
 					}
-					colDef := r.tableDef.Cols[r.colIdxs[i]]
 					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
 					if colDef.Default != nil {
 						r.colNulls[i] = colDef.Default.NullAbility
@@ -99,7 +98,9 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 		r.steps = r.steps[1:]
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, mp, vp)
+	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	logutil.Debugf("read %v with %v", cols, r.seqnums)
+	bat.SetAttributes(cols)
 	if err != nil {
 		return nil, err
 	}
@@ -143,23 +144,22 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	defer func() { r.blks = r.blks[1:] }()
 	info := &r.blks[0].meta
 
-	if len(cols) != len(r.colIdxs) {
-		if len(r.colIdxs) == 0 {
-			r.colIdxs = make([]uint16, len(cols))
+	if len(cols) != len(r.seqnums) {
+		if len(r.seqnums) == 0 {
+			r.seqnums = make([]uint16, len(cols))
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
 			for i, column := range cols {
 				// sometimes Name2ColIndex have no row_id， sometimes have one
+				// sometimes Name2ColIndex have no row_id， sometimes have one
 				if column == catalog.Row_ID {
-					if colIdx, ok := r.tableDef.Name2ColIndex[column]; ok {
-						r.colIdxs[i] = uint16(colIdx)
-					} else {
-						r.colIdxs[i] = uint16(len(r.tableDef.Name2ColIndex))
-					}
+					// actually rowid's seqnum does not matter because it is generated in memory
+					r.seqnums[i] = objectio.SEQNUM_ROWID
 					r.colTypes[i] = types.T_Rowid.ToType()
 				} else {
-					r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
-					colDef := r.tableDef.Cols[r.colIdxs[i]]
+					logicalIdx := r.tableDef.Name2ColIndex[column]
+					colDef := r.tableDef.Cols[logicalIdx]
+					r.seqnums[i] = uint16(colDef.Seqnum)
 					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
 					if colDef.Default != nil {
 						r.colNulls[i] = colDef.Default.NullAbility
@@ -171,7 +171,9 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 		}
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, mp, vp)
+	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	logutil.Debugf("read %v with %v", cols, r.seqnums)
+	bat.SetAttributes(cols)
 	if err != nil {
 		return nil, err
 	}
