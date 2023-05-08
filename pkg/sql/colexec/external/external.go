@@ -434,8 +434,9 @@ func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) *batc
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := makeType(param.Cols, i, param.ParallelLoad)
-		vec, _ := proc.AllocVectorOfRows(typ, batchSize, nil)
-		bat.Vecs[i] = vec
+		bat.Vecs[i] = proc.GetVector(typ)
+		bat.Vecs[i].PreExtend(batchSize, proc.Mp())
+		bat.Vecs[i].SetLength(batchSize)
 	}
 	return bat
 }
