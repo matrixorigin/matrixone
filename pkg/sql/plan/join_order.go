@@ -188,7 +188,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	}
 
 	leaves, conds := builder.gatherJoinLeavesAndConds(node, nil, nil)
-
+	conds = append(conds, onListDeduction(conds)...)
 	vertices := builder.getJoinGraph(leaves, conds)
 	subTrees := make([]*plan.Node, 0, len(leaves))
 	for i, vertex := range vertices {
@@ -344,64 +344,54 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 	edgeMap := make(map[[2]int32]*joinEdge)
 
 	for _, cond := range conds {
-		if f, ok := cond.Expr.(*plan.Expr_F); ok {
-			if f.F.Func.ObjName != "=" {
-				continue
-			}
-			if _, ok = f.F.Args[0].Expr.(*plan.Expr_Col); !ok {
-				continue
-			}
-			if _, ok = f.F.Args[1].Expr.(*plan.Expr_Col); !ok {
-				continue
-			}
+		ok, leftCol, rightCol := checkStrictJoinPred(cond)
+		if !ok {
+			continue
+		}
+		var leftId, rightId int32
+		if leftId, ok = tag2Vert[leftCol.RelPos]; !ok {
+			continue
+		}
+		if rightId, ok = tag2Vert[rightCol.RelPos]; !ok {
+			continue
+		}
 
-			var leftId, rightId int32
+		if leftId > rightId {
+			leftId, rightId = rightId, leftId
+			leftCol, rightCol = rightCol, leftCol
+		}
 
-			leftCol := f.F.Args[0].Expr.(*plan.Expr_Col).Col
-			rightCol := f.F.Args[1].Expr.(*plan.Expr_Col).Col
-			if leftId, ok = tag2Vert[leftCol.RelPos]; !ok {
-				continue
-			}
-			if rightId, ok = tag2Vert[rightCol.RelPos]; !ok {
-				continue
-			}
+		edge := edgeMap[[2]int32{leftId, rightId}]
+		if edge == nil {
+			edge = &joinEdge{}
+		}
+		edge.leftCols = append(edge.leftCols, leftCol.ColPos)
+		edge.rightCols = append(edge.rightCols, rightCol.ColPos)
+		edgeMap[[2]int32{leftId, rightId}] = edge
 
-			if leftId > rightId {
-				leftId, rightId = rightId, leftId
-				leftCol, rightCol = rightCol, leftCol
-			}
-
-			edge := edgeMap[[2]int32{leftId, rightId}]
-			if edge == nil {
-				edge = &joinEdge{}
-			}
-			edge.leftCols = append(edge.leftCols, leftCol.ColPos)
-			edge.rightCols = append(edge.rightCols, rightCol.ColPos)
-			edgeMap[[2]int32{leftId, rightId}] = edge
-
-			leftParent := vertices[leftId].parent
-			if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
-				if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
-					if vertices[rightId].parent != leftId {
-						vertices[leftId].parent = rightId
-					} else if vertices[leftId].node.Stats.Outcnt < vertices[rightId].node.Stats.Outcnt {
-						vertices[leftId].parent = rightId
-						vertices[rightId].parent = -1
-					}
-				}
-			}
-			rightParent := vertices[rightId].parent
-			if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
-				if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
-					if vertices[leftId].parent != rightId {
-						vertices[rightId].parent = leftId
-					} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
-						vertices[rightId].parent = leftId
-						vertices[leftId].parent = -1
-					}
+		leftParent := vertices[leftId].parent
+		if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
+			if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
+				if vertices[rightId].parent != leftId {
+					vertices[leftId].parent = rightId
+				} else if vertices[leftId].node.Stats.Outcnt < vertices[rightId].node.Stats.Outcnt {
+					vertices[leftId].parent = rightId
+					vertices[rightId].parent = -1
 				}
 			}
 		}
+		rightParent := vertices[rightId].parent
+		if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
+			if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
+				if vertices[leftId].parent != rightId {
+					vertices[rightId].parent = leftId
+				} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
+					vertices[rightId].parent = leftId
+					vertices[leftId].parent = -1
+				}
+			}
+		}
+
 	}
 
 	for i := range vertices {
