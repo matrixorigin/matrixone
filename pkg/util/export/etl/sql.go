@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -71,7 +72,7 @@ func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 	sw.mux.Lock()
 	defer sw.mux.Unlock()
 	sw.buffer = append(sw.buffer, row.ToStrings())
-	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT {
+	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT && sw.tbl.Table != "rawlog" {
 		if _, err := sw.flushBuffer(); err != nil {
 			return err
 		}
@@ -107,7 +108,16 @@ func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
 }
 
 func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
-	sw.flushBuffer()
+
+	// todo: remove the rawlog special case
+
+	if sw.tbl.Table != "rawlog" {
+		sw.flushBuffer()
+
+	} else {
+		sw.dumpBufferToCSV()
+	}
+
 	cnt, err := sw.csvWriter.FlushAndClose()
 	if err != nil {
 		return 0, err
@@ -173,6 +183,8 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	}
 
 	err = tx.Commit() // Commit the transaction
+	// todo: adjust this sleep time
+	time.Sleep(10 * time.Second)
 	if err != nil {
 		return 0, err
 	}
