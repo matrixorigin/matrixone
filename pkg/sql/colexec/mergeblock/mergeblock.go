@@ -15,6 +15,7 @@ package mergeblock
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -177,7 +178,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	if ap.IsEnd {
 		proc.SetInputBatch(nil)
-		bat.Clean(proc.GetMPool())
+		insertBatch.Clean(proc.GetMPool())
 	} else {
 		proc.SetInputBatch(insertBatch)
 	}
