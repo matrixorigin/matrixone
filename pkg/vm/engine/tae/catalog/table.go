@@ -515,7 +515,7 @@ func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	return
 }
 
-func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.AsyncTxn, req *apipb.AlterTableReq) (isNewNode bool, newSchema *Schema, err error) {
+func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, newSchema *Schema, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
