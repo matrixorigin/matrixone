@@ -44,7 +44,7 @@ func (b *ObjectColumnMetasBuilder) AddRowCnt(rows int) {
 	b.totalRow += uint32(rows)
 }
 
-func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector) uint32 {
+func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector) {
 	if vec.HasNull() {
 		cnt := b.metas[idx].NullCnt()
 		cnt += uint32(vec.NullCount())
@@ -57,16 +57,13 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 	if b.sks[idx] == nil {
 		b.sks[idx] = hll.New()
 	}
-	sks := hll.New()
 	containers.ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
 		if isNull {
 			return
 		}
 		b.sks[idx].Insert(v)
-		sks.Insert(v)
 		return
 	}, nil)
-	return uint32(sks.Estimate())
 }
 
 func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm index.ZM) {
