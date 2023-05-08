@@ -4415,6 +4415,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
+				realTimeRelated: true,
 				newOp: func() executeLogicOfOverload {
 					return LastInsertID
 				},
