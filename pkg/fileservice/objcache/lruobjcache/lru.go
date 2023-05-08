@@ -122,6 +122,18 @@ func (l *LRU) Flush() {
 	l.kv = make(map[any]*list.Element)
 }
 
-func (l *LRU) Size() int64 {
+func (l *LRU) Capacity() int64 {
+	return l.capacity
+}
+
+func (l *LRU) Used() int64 {
+	l.Lock()
+	defer l.Unlock()
 	return l.size
+}
+
+func (l *LRU) Available() int64 {
+	l.Lock()
+	defer l.Unlock()
+	return l.capacity - l.size
 }
