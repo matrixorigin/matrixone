@@ -511,29 +511,29 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if readToEnd {
-			rang := fmt.Sprintf("bytes=%d-", min)
-			output, err := s.s3GetObject(
+			r, err := s.s3GetObject(
 				ctx,
+				min,
+				-1,
 				&s3.GetObjectInput{
 					Bucket: ptrTo(s.bucket),
 					Key:    ptrTo(key),
-					Range:  ptrTo(rang),
 				},
 			)
 			err = s.mapError(err, key)
 			if err != nil {
 				return nil, err
 			}
-			return output.Body, nil
+			return r, nil
 		}
 
-		rang := fmt.Sprintf("bytes=%d-%d", min, max)
-		output, err := s.s3GetObject(
+		r, err := s.s3GetObject(
 			ctx,
+			min,
+			max,
 			&s3.GetObjectInput{
 				Bucket: ptrTo(s.bucket),
 				Key:    ptrTo(key),
-				Range:  ptrTo(rang),
 			},
 		)
 		err = s.mapError(err, key)
@@ -541,8 +541,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			return nil, err
 		}
 		return &readCloser{
-			r:         io.LimitReader(output.Body, int64(max-min)),
-			closeFunc: output.Body.Close,
+			r:         io.LimitReader(r, int64(max-min)),
+			closeFunc: r.Close,
 		}, nil
 	}
 
@@ -1065,12 +1065,32 @@ func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 	return s.s3Client.PutObject(ctx, params, optFns...)
 }
 
-func (s *S3FS) s3GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (io.ReadCloser, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, s.perfCounterSets...)
-	return s.s3Client.GetObject(ctx, params, optFns...)
+	r, err := newRetryableReader(
+		func(offset int64) (io.ReadCloser, error) {
+			var rang string
+			if max >= 0 {
+				rang = fmt.Sprintf("bytes=%d-%d", offset, max)
+			} else {
+				rang = fmt.Sprintf("bytes=%d-", offset)
+			}
+			params.Range = &rang
+			output, err := s.s3Client.GetObject(ctx, params, optFns...)
+			if err != nil {
+				return nil, err
+			}
+			return output.Body, nil
+		},
+		min,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
