@@ -1,6 +1,3 @@
-select mo_ctl('cn', 'task', 'disable');
-mo_ctl(cn, task, disable)
-{\n  "method": "Task",\n  "result": "OK"\n}\n
 create database if not exists db;
 use db;
 drop table if exists t;
@@ -27,13 +24,13 @@ mo_ctl(dn, flush, db.t)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select aplus from t;
 aplus
-null
-null
-null
-null
-null
 6
 7
+null
+null
+null
+null
+null
 update t set aplus = 11 where a = 1;
 update t set aplus = 61 where a = 6;
 select * from t;
@@ -56,12 +53,12 @@ Field    Type    Null    Key    Default    Extra    Comment
 aminus    INT UNSIGNED(0)    YES        null        
 a    INT(32)    NO    PRI    null        
 b    INT(32)    YES        null        
-select att_uniq_name, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
-att_uniq_name    attr_seqnum
-272482-__mo_rowid    65535
-272482-a    0
-272482-aminus    3
-272482-b    1
+select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
+attname    attr_seqnum
+__mo_rowid    65535
+a    0
+aminus    3
+b    1
 select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
 relname    rel_version
 %!%mo_increment_columns    0
@@ -95,15 +92,16 @@ null    2    2
 null    3    3
 null    4    4
 null    5    5
-select att_uniq_name, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
-att_uniq_name    attr_seqnum
-select att_uniq_name, attr_seqnum from mo_catalog.mo_columns where att_relname = "newt";
-att_uniq_name    attr_seqnum
-272482-__mo_rowid    65535
-272482-a    0
-272482-aminus    3
-272482-b    1
+select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
+attname    attr_seqnum
+select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "newt";
+attname    attr_seqnum
+__mo_rowid    65535
+a    0
+aminus    3
+b    1
 select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
 relname    rel_version
 %!%mo_increment_columns    0
 newt    4
+drop database db;
