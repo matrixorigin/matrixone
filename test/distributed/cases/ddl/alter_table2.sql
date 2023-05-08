@@ -51,4 +51,7 @@ select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
 select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "newt";
 select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
 
+-- check zonmeap filter
+select a,b from newt where a > 4 and b < 10;
+
 drop database db;
