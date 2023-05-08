@@ -65,6 +65,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		for i := range bat.Vecs {
 			if vec == bat.Vecs[i] {
 				needCopy = true
+				break
 			}
 		}
 		if needCopy {

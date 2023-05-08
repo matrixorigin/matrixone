@@ -236,7 +236,15 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsConstNull() {
-			vec.SetType(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale))
+			// vec.SetType(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale))
+
+			// todo: should set type before eval expr
+			newTyp := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+			vec = proc.GetVector(newTyp)
+			if err := vector.GetUnionAllFunction(newTyp, proc.Mp())(vec, bat.Vecs[t.Col.ColPos]); err != nil {
+				return nil, err
+			}
+			// vec = vector.NewConstNull(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), length, proc.GetMPool())
 		}
 		return vec, nil
 	case *plan.Expr_List:

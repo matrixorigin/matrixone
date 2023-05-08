@@ -89,9 +89,9 @@ func (txn *Transaction) WriteBatch(
 	dnStore DNStore,
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
 ) error {
-	txn.readOnly = false
 	bat.Cnt = 1
 	txn.Lock()
+	txn.readOnly = false
 	if typ == INSERT {
 		txn.genBlock()
 		len := bat.Length()
