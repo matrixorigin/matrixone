@@ -444,13 +444,23 @@ func findSelectivityInChildren(self int32, vertices []*joinVertex) bool {
 	return false
 }
 
+func findParent(self, target int32, vertices []*joinVertex) bool {
+	parent := vertices[self].parent
+	if parent == target {
+		return true
+	} else if parent != -1 {
+		return findParent(parent, target, vertices)
+	}
+	return false
+}
+
 func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinVertex) bool {
 	selfStats := vertices[self].node.Stats
 	currentParentStats := vertices[currentParent].node.Stats
 	nextParentStats := vertices[nextParent].node.Stats
 	if currentParentStats.Cost > selfStats.Cost && currentParentStats.Cost > nextParentStats.Cost {
 		// current Parent is the biggest node
-		if vertices[nextParent].parent == currentParent {
+		if findParent(nextParent, currentParent, vertices) {
 			return true
 		}
 		if findSelectivityInChildren(self, vertices) {
@@ -459,7 +469,7 @@ func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinV
 	}
 	if nextParentStats.Cost > selfStats.Cost && nextParentStats.Cost > currentParentStats.Cost {
 		// next Parent is the biggest node
-		if vertices[currentParent].parent == nextParent {
+		if findParent(nextParent, currentParent, vertices) {
 			return false
 		}
 		if findSelectivityInChildren(self, vertices) {
