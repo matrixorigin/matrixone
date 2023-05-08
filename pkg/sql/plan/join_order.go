@@ -373,10 +373,10 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 		if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
 			if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
 				if vertices[rightId].parent != leftId {
-					vertices[leftId].parent = rightId
+					setParent(leftId, rightId, vertices)
 				} else if vertices[leftId].node.Stats.Outcnt < vertices[rightId].node.Stats.Outcnt {
-					vertices[leftId].parent = rightId
-					vertices[rightId].parent = -1
+					unsetParent(rightId, leftId, vertices)
+					setParent(leftId, rightId, vertices)
 				}
 			}
 		}
@@ -384,23 +384,46 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 		if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
 			if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
 				if vertices[leftId].parent != rightId {
-					vertices[rightId].parent = leftId
+					setParent(rightId, leftId, vertices)
 				} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
-					vertices[rightId].parent = leftId
-					vertices[leftId].parent = -1
+					unsetParent(leftId, rightId, vertices)
+					setParent(rightId, leftId, vertices)
 				}
 			}
 		}
-
 	}
 
-	for i := range vertices {
-		parent := vertices[i].parent
-		if parent != -1 {
-			vertices[parent].children[int32(i)] = nil
+	return vertices
+}
+
+func setParent(child, parent int32, vertices []*joinVertex) {
+	if child == -1 || parent == -1 {
+		return
+	}
+	unsetParent(child, vertices[child].parent, vertices)
+	vertices[child].parent = parent
+	vertices[parent].children[child] = nil
+}
+func unsetParent(child, parent int32, vertices []*joinVertex) {
+	if child == -1 || parent == -1 {
+		return
+	}
+	if vertices[child].parent == parent {
+		vertices[child].parent = -1
+		delete(vertices[parent].children, child)
+	}
+}
+
+func findSelectivityInChildren(self int32, vertices []*joinVertex) bool {
+	if vertices[self].node.Stats.Selectivity < 0.9 {
+		return true
+	}
+	for child := range vertices[self].children {
+		if findSelectivityInChildren(child, vertices) {
+			return true
 		}
 	}
-	return vertices
+	return false
 }
 
 func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinVertex) bool {
@@ -412,7 +435,7 @@ func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinV
 		if vertices[nextParent].parent == currentParent {
 			return true
 		}
-		if selfStats.Selectivity < 0.9 {
+		if findSelectivityInChildren(self, vertices) {
 			return false
 		}
 	}
@@ -421,7 +444,7 @@ func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinV
 		if vertices[currentParent].parent == nextParent {
 			return false
 		}
-		if selfStats.Selectivity < 0.9 {
+		if findSelectivityInChildren(self, vertices) {
 			return true
 		}
 	}
