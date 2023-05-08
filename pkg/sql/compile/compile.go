@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"runtime"
 	"sort"
 	"strings"
@@ -421,15 +422,15 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	c.cnList, err = c.e.Nodes()
 	if client != nil {
 		for i := 0; i < len(c.cnList); i++ {
-			addrs := strings.Split(c.cnList[i].Addr, ":")
-			if len(addrs) != 2 {
+			_, _, err := net.SplitHostPort(c.cnList[i].Addr)
+			if err != nil {
 				logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
 			}
 			if isSameCN(c.addr, c.cnList[i].Addr) {
 				continue
 			}
 			logutil.Infof("ping start")
-			err := client.Ping(ctx, c.cnList[i].Addr)
+			err = client.Ping(ctx, c.cnList[i].Addr)
 			logutil.Infof("ping err %+v\n", err)
 			// ping failed
 			if err != nil {
