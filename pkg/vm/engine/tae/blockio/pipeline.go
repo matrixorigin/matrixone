@@ -17,6 +17,8 @@ package blockio
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -48,6 +50,27 @@ func getJob(
 func putJob(job *tasks.Job) {
 	job.Reset()
 	_jobPool.Put(job)
+}
+
+var (
+	_readerPool = sync.Pool{
+		New: func() any {
+			return new(objectio.ObjectReader)
+		},
+	}
+)
+
+func getReader(
+	fs fileservice.FileService,
+	location objectio.Location) *objectio.ObjectReader {
+	job := _jobPool.Get().(*objectio.ObjectReader)
+	job.Init(location, fs)
+	return job
+}
+
+func putReader(reader *objectio.ObjectReader) {
+	reader.Reset()
+	_readerPool.Put(reader)
 }
 
 // At present, the read and write operations of all modules of mo-service use blockio.
@@ -112,18 +135,20 @@ func jobFactory(
 func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 	return getJob(
 		ctx,
-		makeName(params.reader.GetName()),
+		makeName(params.key.Name().String()),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := params.reader.ReadMultiBlocks(ctx,
+			reader := getReader(params.fs, params.key)
+			ioVectors, err := reader.ReadMultiBlocks(ctx,
 				params.ids, nil)
 			if err != nil {
 				res.Err = err
 				return
 			}
 			res.Res = ioVectors
+			putReader(reader)
 			return
 		},
 	)
@@ -133,17 +158,19 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
 	return getJob(
 		ctx,
-		makeName(params.reader.GetName()),
+		makeName(params.key.Name().String()),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := params.reader.ReadMeta(ctx, nil)
+			reader := getReader(params.fs, params.key)
+			ioVectors, err := reader.ReadMeta(ctx, nil)
 			if err != nil {
 				res.Err = err
 				return
 			}
 			res.Res = ioVectors
+			putReader(reader)
 			return
 		},
 	)

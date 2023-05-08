@@ -17,8 +17,6 @@ package blockio
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -252,7 +250,8 @@ func PrefetchMeta(service fileservice.FileService, key objectio.Location) error 
 }
 
 func PrefetchFile(service fileservice.FileService, name string) error {
-	reader, err := NewFileReader(service, name)
+	return nil
+	/*reader, err := NewFileReader(service, name)
 	if err != nil {
 		return err
 	}
@@ -260,7 +259,7 @@ func PrefetchFile(service fileservice.FileService, name string) error {
 	if err != nil {
 		return err
 	}
-	params := buildPrefetchParams2(reader)
+	params := BuildPrefetchParams(service, bs[0].BlockHeader().)
 	for i := range bs {
 		idxes := make([]uint16, bs[i].GetColumnCount())
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
@@ -268,5 +267,5 @@ func PrefetchFile(service fileservice.FileService, name string) error {
 		}
 		params.AddBlock(idxes, []uint16{bs[i].GetID()})
 	}
-	return PrefetchWithMerged(params)
+	return PrefetchWithMerged(params)*/
 }
