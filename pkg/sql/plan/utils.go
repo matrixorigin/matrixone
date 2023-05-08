@@ -423,7 +423,7 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 }
 
 // deduction of new predicates for join on list. for example join on a=b and b=c, then a=c can be deduced
-func onListDeduction(onList []*plan.Expr) []*plan.Expr {
+func deduceNewOnList(onList []*plan.Expr) []*plan.Expr {
 	var newPreds []*plan.Expr
 	lenOnlist := len(onList)
 	for i := range onList {
@@ -445,7 +445,7 @@ func onListDeduction(onList []*plan.Expr) []*plan.Expr {
 }
 
 // deduction of new predicates. for example join on a=b where b=1, then a=1 can be deduced
-func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
+func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 	var newFilters []*plan.Expr
 	for _, onPred := range onList {
 		ret, col1, col2 := checkStrictJoinPred(onPred)

@@ -188,8 +188,27 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	}
 
 	leaves, conds := builder.gatherJoinLeavesAndConds(node, nil, nil)
-	conds = append(conds, onListDeduction(conds)...)
-	vertices := builder.getJoinGraph(leaves, conds)
+	newConds := deduceNewOnList(conds)
+	totalConds := append(conds, newConds...)
+	vertices, tag2Vert := builder.getJoinGraph(leaves, totalConds)
+	for i := range newConds {
+		ok, leftCol, rightCol := checkStrictJoinPred(newConds[i])
+		if !ok {
+			continue
+		}
+		var leftId, rightId int32
+		if leftId, ok = tag2Vert[leftCol.RelPos]; !ok {
+			continue
+		}
+		if rightId, ok = tag2Vert[rightCol.RelPos]; !ok {
+			continue
+		}
+		if vertices[leftId].parent == rightId || vertices[rightId].parent == leftId {
+			// deduced new cond is useful
+			conds = append(conds, newConds[i])
+		}
+	}
+
 	subTrees := make([]*plan.Node, 0, len(leaves))
 	for i, vertex := range vertices {
 		// TODO handle cycles in the "dimension -> fact" DAG
@@ -321,7 +340,7 @@ func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leave
 	return leaves, conds
 }
 
-func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Expr) []*joinVertex {
+func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Expr) ([]*joinVertex, map[int32]int32) {
 	vertices := make([]*joinVertex, len(leaves))
 	tag2Vert := make(map[int32]int32)
 
@@ -392,8 +411,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			}
 		}
 	}
-
-	return vertices
+	return vertices, tag2Vert
 }
 
 func setParent(child, parent int32, vertices []*joinVertex) {
