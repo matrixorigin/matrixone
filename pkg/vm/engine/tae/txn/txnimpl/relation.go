@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
@@ -167,6 +168,9 @@ func (h *txnRelation) BatchDedup(col containers.Vector) error {
 }
 
 func (h *txnRelation) Append(data *containers.Batch) error {
+	if !h.table.GetLocalSchema().IsSameColumns(h.table.GetMeta().GetLastestSchema()) {
+		return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
+	}
 	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 

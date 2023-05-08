@@ -210,7 +210,7 @@ func (v *Vector) setupColFromData() {
 		case types.T_Blockid:
 			v.col = DecodeFixedCol[types.Blockid](v)
 		default:
-			panic("unknown type")
+			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
 		}
 	}
 	tlen := v.GetType().TypeSize()

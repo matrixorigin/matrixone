@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
@@ -38,6 +39,9 @@ type S3Writer struct {
 	sortIndex int
 	pk        map[string]struct{}
 	idx       int16
+
+	schemaVersion uint32
+	seqnums       []uint16
 
 	writer  *blockio.BlockWriter
 	lengths []uint64
@@ -144,6 +148,14 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 		writers[i].ResetMetaLocBat()
 		//handle origin/main table's sort index.
 		if i == 0 {
+			writers[i].schemaVersion = tableDef.Version
+			writers[i].seqnums = make([]uint16, 0)
+			for _, colDef := range tableDef.Cols {
+				if colDef.Name != catalog.Row_ID {
+					writers[i].seqnums = append(writers[i].seqnums, uint16(colDef.Seqnum))
+				}
+			}
+			logutil.Infof("allocate s3write tbl: %d-%s, seqnums: %v", tableDef.TblId, tableDef.Name, writers[i].seqnums)
 			if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 				// the serialized cpk col is located in the last of the bat.vecs
 				writers[i].sortIndex = len(tableDef.Cols)
@@ -474,7 +486,7 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 	if err != nil {
 		return nil, err
 	}
-	w.writer, err = blockio.NewBlockWriterNew(s3, segId)
+	w.writer, err = blockio.NewBlockWriterNew(s3, segId, w.schemaVersion, nil)
 	if err != nil {
 		return nil, err
 	}

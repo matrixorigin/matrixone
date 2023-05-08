@@ -1,0 +1,675 @@
+drop database if exists test02;
+drop database if exists db1;
+drop database if exists test03;
+drop database if exists procedure_test;
+create account test_tenant_1 admin_name 'test_account' identified by '111';
+create account test_tenant_2 admin_name 'test_account' identified by '111';
+create account test_tenant_3 admin_name 'test_account' identified by '111';
+create account test_tenant_4 admin_name 'test_account' identified by '111';
+show databases;
+Database
+mo_task
+information_schema
+mysql
+system_metrics
+system
+publish_subscribe
+mo_catalog
+create database db1;
+use db1;
+create table t1(a int);
+insert into t1 values (1),(2),(3);
+create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
+create database sub_db1 from sys publication pubname1;
+show databases;
+Database
+sub_db1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+select * from t1;
+a
+1
+2
+3
+create table t2(b int);
+insert into t2 values (4),(5),(6);
+show tables;
+Tables_in_sub_db1
+t1
+t2
+select * from t2;
+b
+4
+5
+6
+insert into t2 values(10);
+internal error: cannot insert/update/delete from public table
+update t2 set b=10 where b=4;
+internal error: cannot insert/update/delete from public table
+delete from t2 where b=4;
+internal error: cannot insert/update/delete from public table
+drop table t1;
+show tables;
+Tables_in_sub_db1
+t2
+drop database db1;
+internal error: can not drop database 'db1' which is publishing
+show databases;
+Database
+sub_db1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+drop publication pubname1;
+show databases;
+Database
+mo_task
+information_schema
+mysql
+system_metrics
+system
+db1
+publish_subscribe
+mo_catalog
+drop database db1;
+show databases;
+Database
+sub_db1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db1;
+internal error: there is no publication pubname1
+drop database sub_db1;
+create database db2;
+use db2;
+create table t3(a int);
+create publication pubname2 database db2 account test_tenant_1,test_tenant_2,test_tenant_3 comment 'publish db2';
+create database sub_db1 from sys publication pubname2;
+show databases;
+Database
+sub_db1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t3
+create database sub_db1 from sys publication pubname2;
+show databases;
+Database
+sub_db1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t3
+create database sub_db1 from sys publication pubname2;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+sub_db1
+mo_catalog
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t3
+drop publication pubname2;
+create publication pubname2 database db2 account test_tenant_1,test_tenant_2,test_tenant_3 comment 'publish db3';
+show databases;
+Database
+sub_db1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t3
+show databases;
+Database
+sub_db1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t3
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+sub_db1
+mo_catalog
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t3
+drop publication pubname2;
+create database db3;
+create publication pubname2 database db3 account test_tenant_1,test_tenant_2,test_tenant_3 comment 'publish db3';
+show databases;
+Database
+sub_db1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+show databases;
+Database
+sub_db1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+sub_db1
+mo_catalog
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+drop publication pubname2;
+drop database db2;
+drop database db3;
+drop database sub_db1;
+drop database sub_db1;
+drop database sub_db1;
+create database db4;
+use db4;
+create table t4(a int);
+create publication pubname4 database db4 comment 'publication to all tenant';
+create publication pubname4_1 database db4 comment 'publication to all tenant';
+create database sub_db4 from sys publication pubname4;
+show databases;
+Database
+sub_db4
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+create database test_db_1;
+create database test_db_1 from sys publication pubname4;
+database test_db_1 already exists
+create database sub_db4 from sys publication pubname4;
+show databases;
+Database
+sub_db4
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+create database sub_db4 from sys publication pubname4;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+sub_db4
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+create database sub_db4 from sys publication pubname4;
+create database sub_db4_1 from sys publication pubname4;
+create database sub_db4_2 from sys publication pubname4;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+sub_db4
+sub_db4_1
+sub_db4_2
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+create account test_tenant_5 admin_name 'test_account' identified by '111';
+create database sub_db4 from sys publication pubname4;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+sub_db4
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+alter publication pubname4 account test_tenant_1, test_tenant_2;
+show databases;
+Database
+sub_db4
+test_db_1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+show databases;
+Database
+sub_db4
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+sub_db4
+mo_catalog
+use sub_db4;
+internal error: the account test_tenant_3 is not allowed to subscribe the publication pubname4
+show tables;
+internal error: the account test_tenant_3 is not allowed to subscribe the publication pubname4
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+sub_db4
+sub_db4_1
+sub_db4_2
+mo_catalog
+use sub_db4;
+internal error: the account test_tenant_4 is not allowed to subscribe the publication pubname4
+show tables;
+internal error: the account test_tenant_4 is not allowed to subscribe the publication pubname4
+alter publication pubname4 account all;
+show databases;
+Database
+sub_db4
+test_db_1
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+show databases;
+Database
+sub_db4
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+sub_db4
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+sub_db4
+sub_db4_1
+sub_db4_2
+mo_catalog
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+drop publication pubname4;
+drop publication pubname4_1;
+drop database db4;
+show databases;
+Database
+mo_task
+information_schema
+mysql
+system_metrics
+system
+publish_subscribe
+mo_catalog
+drop database sub_db4;
+drop database test_db_1;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+drop database sub_db4;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+drop database sub_db4;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+drop database sub_db4;
+drop database sub_db4_1;
+drop database sub_db4_2;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+create database db1;
+create publication pubname5 database db1 account sys comment 'publication to sys tenant';
+create database sub_db5 from test_tenant_1 publication pubname5;
+create publication test_pubname database sub_db5 comment 'publication to all tenant';
+internal error: database 'sub_db5' is not a user database
+drop publication pubname5;
+drop database sub_db5;
+create publication pubname5 database db1 comment 'publication to sys tenant';
+create database sub_db5 from test_tenant_1 publication pubname5;
+use sub_db5;
+create table t1 (a int);
+internal error: cannot create table in subscription database
+create view test_view as select 1;
+internal error: cannot create view in subscription database
+create database sub_db5 from test_tenant_1 publication pubname5;
+create database sub_db5 from test_tenant_1 publication pubname5;
+drop publication pubname5;
+drop database db1;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+drop database sub_db5;
+show databases;
+Database
+mo_task
+information_schema
+mysql
+system_metrics
+system
+publish_subscribe
+mo_catalog
+drop database sub_db5;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+drop database sub_db5;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+create database db7;
+use db7;
+create table t1(a int, b varchar(225));
+insert into t1 values (1, 'a'),(2, 'b'),(3, 'c');
+create table t2(col1 int, col2 text);
+insert into t2 values (100, 'xx'),(200, 'yy'),(300, 'zz');
+create publication pubname7 database db7 account sys comment 'publication to sys tenant';
+create database sub_db1 from test_tenant_1 publication pubname7;
+use sub_db1;
+select * from t1;
+a    b
+1    a
+2    b
+3    c
+select * from t2;
+col1    col2
+100    xx
+200    yy
+300    zz
+select * from t1 left join t2 on t1.a=t2.col1;
+a    b    col1    col2
+1    a    null    null
+2    b    null    null
+3    c    null    null
+select * from t1 right join t2 on t1.a=t2.col1;
+a    b    col1    col2
+null    null    100    xx
+null    null    200    yy
+null    null    300    zz
+select * from t1 union select * from t2;
+a    b
+100    xx
+200    yy
+300    zz
+1    a
+2    b
+3    c
+create database db1;
+use db1;
+create table t3 (a int, b varchar(225));
+insert into t3 values (10, 'aa');
+select * from t3 left join sub_db1.t1 as t on t3.a=t.a;
+a    b    a    b
+10    aa    null    null
+select * from t3 right join sub_db1.t1 as t on t3.a=t.a;
+a    b    a    b
+null    null    1    a
+null    null    2    b
+null    null    3    c
+select * from t3 union select * from sub_db1.t1;
+a    b
+1    a
+2    b
+3    c
+10    aa
+drop publication pubname7;
+drop database db7;
+show databases;
+Database
+system
+system_metrics
+information_schema
+mysql
+mo_catalog
+drop database sub_db1;
+drop database db1;
+show databases;
+Database
+mo_task
+information_schema
+mysql
+system_metrics
+system
+publish_subscribe
+mo_catalog
+create database db6;
+create publication pubname6 database db6 account test_tenant_1 comment 'publication to test_tenant_1';
+show create publication pubname6;
+Publication    Create Publication
+pubname6    CREATE PUBLICATION `pubname6` DATABASE `db6` ACCOUNT `test_tenant_1` COMMENT 'publication to test_tenant_1'
+show publications;
+Name    Database
+pubname6    db6
+create database sub_db6 from sys publication pubname6;
+show subscriptions;
+Name    From_Account
+sub_db6    sys
+show create database sub_db6;
+Database    Create Database
+sub_db6    create database sub_db6 from sys publication pubname6
+drop publication pubname6;
+drop database db6;
+drop database sub_db6;
+create database db7;
+use db7;
+create table t1(a int);
+insert into t1 values (1),(2);
+create view v_name as select * from t1;
+create publication pubname7 database db7 account test_tenant_1 comment 'publication to test_tenant_1 tenant';
+CREATE SEQUENCE seq_id INCREMENT BY 1 MAXVALUE 1000 START with 1;
+create database sub_db1 from sys publication pubname7;
+use sub_db1;
+show tables;
+Tables_in_sub_db1
+t1
+SELECT NEXTVAL('seq_id');
+SQL parser error: table "seq_id" does not exist
+drop publication pubname7;
+drop database db7;
+drop database sub_db1;
+create database db100;
+create publication pubname8 database db100 commment 'publication failed';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " commment 'publication failed';";
+drop database db100;
+create database sub_db7 from sys publication pubname7;
+internal error: there is no publication pubname7
+use sub_db7;
+invalid database sub_db7
+show tables;
+not connect to a database
+create database test_db;
+[unknown result because it is related to issue#9024]
+create publication test_pubname database test_db account all comment 'publication to all tenant';
+[unknown result because it is related to issue#9024]
+drop publication test_pubname;
+[unknown result because it is related to issue#9024]
+drop database test_db;
+[unknown result because it is related to issue#9024]
+create database sub_db4 from no_exists publication pubname4;
+internal error: there is no publication account no_exists
+create publication test_pubname database mo_task account test_account comment 'publication to test_account tenant';
+internal error: invalid database name 'mo_task', not support publishing system database
+create publication test_pubname database information_schema account test_account comment 'publication to test_account tenant';
+internal error: invalid database name 'information_schema', not support publishing system database
+create publication test_pubname database mysql account test_account comment 'publication to test_account tenant';
+internal error: invalid database name 'mysql', not support publishing system database
+create publication test_pubname database system_metrics account test_account comment 'publication to test_account tenant';
+internal error: invalid database name 'system_metrics', not support publishing system database
+create publication test_pubname database system account test_account comment 'publication to test_account tenant';
+internal error: invalid database name 'system', not support publishing system database
+create publication test_pubname database mo_catalog account test_account comment 'publication to test_account tenant';
+internal error: invalid database name 'mo_catalog', not support publishing system database
+create database db5;
+create publication pubname5 database db5 comment 'publication to all tenant';
+create database sub_db5 from sys publication pubname5;
+internal error: can not subscribe to self
+drop publication pubname5;
+drop database db5;
+show publications;
+Name    Database
+show subscriptions;
+Name    From_Account
+show publications;
+Name    Database
+show subscriptions;
+Name    From_Account
+show publications;
+Name    Database
+show subscriptions;
+Name    From_Account
+show publications;
+Name    Database
+show subscriptions;
+Name    From_Account
+show publications;
+Name    Database
+show subscriptions;
+Name    From_Account
+show publications;
+Name    Database
+show subscriptions;
+Name    From_Account
+sub_db4    sys
+drop account test_tenant_1;
+drop account test_tenant_2;
+drop account test_tenant_3;
+drop account test_tenant_4;
+drop account test_tenant_5;

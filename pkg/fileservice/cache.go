@@ -73,7 +73,9 @@ type ObjectCache interface {
 	Set(key any, value []byte, size int64, preloading bool)
 	Get(key any, preloading bool) (value []byte, size int64, ok bool)
 	Flush()
-	Size() int64
+	Capacity() int64
+	Used() int64
+	Available() int64
 }
 
 // FileContentCache caches contents of files

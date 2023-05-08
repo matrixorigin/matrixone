@@ -703,8 +703,6 @@ utf8mb4_bin    utf8mb4    46    Yes    1
 load data infile '$resources/load_data/test.csv' into table test_table;
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
-[unknown result because it is related to issue#7772]
 delete from test_table where col1=3;
-[unknown result because it is related to issue#7772]
 rollback ;
 drop account if exists query_type;
