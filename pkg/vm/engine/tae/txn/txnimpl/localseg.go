@@ -196,6 +196,9 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				}
 				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
 			}
+			if !appender.IsSameColumns(seg.table.GetLocalSchema()) {
+				return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
+			}
 			//PrepareAppend: It is very important that appending a AppendNode into
 			// block's MVCCHandle before applying data into block.
 			anode, created, toAppend, err := appender.PrepareAppend(

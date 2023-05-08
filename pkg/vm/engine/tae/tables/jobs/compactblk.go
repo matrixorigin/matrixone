@@ -47,6 +47,7 @@ type compactBlockTask struct {
 	txn       txnif.AsyncTxn
 	compacted handle.Block
 	created   handle.Block
+	schema    *catalog.Schema
 	meta      *catalog.BlockEntry
 	scheduler tasks.TaskScheduler
 	scopes    []common.ID
@@ -74,6 +75,7 @@ func NewCompactBlockTask(
 	if err != nil {
 		return
 	}
+	task.schema = rel.Schema().(*catalog.Schema)
 	seg, err := rel.GetSegment(&meta.GetSegment().ID)
 	if err != nil {
 		return
@@ -93,8 +95,9 @@ func (task *compactBlockTask) PrepareData() (preparer *model.PreparedCompactedBl
 	preparer = model.NewPreparedCompactedBlockData()
 	preparer.Columns = containers.NewBatch()
 
-	schema := task.meta.GetSchema()
+	schema := task.schema
 	var view *model.ColumnView
+	seqnums := make([]uint16, 0, len(schema.ColDefs))
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
@@ -116,7 +119,10 @@ func (task *compactBlockTask) PrepareData() (preparer *model.PreparedCompactedBl
 			return
 		}
 		preparer.Columns.AddVector(def.Name, vec)
+		seqnums = append(seqnums, def.SeqNum)
 	}
+	preparer.SchemaVersion = schema.Version
+	preparer.Seqnums = seqnums
 	// Sort only if sort key is defined
 	if schema.HasSortKey() {
 		idx := schema.GetSingleSortKeyIdx()
@@ -140,7 +146,6 @@ func (task *compactBlockTask) Execute() (err error) {
 	seg := task.compacted.GetSegment()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
-	// data, sortCol, closer, err := task.PrepareData(newMeta.MakeKey())
 	preparer, empty, err := task.PrepareData()
 	if err != nil {
 		return
@@ -193,10 +198,11 @@ func (task *compactBlockTask) Execute() (err error) {
 	// write ablock
 	if oldBMeta.IsAppendable() {
 		var data *containers.Batch
-		data, err = oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true)
-		if err != nil {
-			return
+		dataVer, errr := oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true)
+		if errr != nil {
+			return errr
 		}
+		data = dataVer.Batch
 		defer data.Close()
 		deletes, err = oldBlkData.CollectDeleteInRange(types.TS{}, task.txn.GetStartTS(), true)
 		if err != nil {
@@ -207,8 +213,9 @@ func (task *compactBlockTask) Execute() (err error) {
 		}
 		ablockTask := NewFlushBlkTask(
 			tasks.WaitableCtx,
+			dataVer.Version,
+			dataVer.Seqnums,
 			oldBlkData.GetFs(),
-			task.txn.GetStartTS(),
 			oldBMeta,
 			data,
 			deletes,
@@ -247,7 +254,8 @@ func (task *compactBlockTask) Execute() (err error) {
 		// 	return err
 		// }
 	}
-	if !table.GetLastestSchema().HasSortKey() && task.created != nil {
+	// sortkey does not change, nerver mind the schema version
+	if !task.schema.HasSortKey() && task.created != nil {
 		n := task.created.Rows()
 		task.mapping = make([]uint32, n)
 		for i := 0; i < n; i++ {
@@ -297,8 +305,9 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	newBlkData := newMeta.GetBlockData()
 	ioTask := NewFlushBlkTask(
 		tasks.WaitableCtx,
+		preparer.SchemaVersion,
+		preparer.Seqnums,
 		newBlkData.GetFs(),
-		task.txn.GetStartTS(),
 		newMeta,
 		preparer.Columns,
 		deletes)

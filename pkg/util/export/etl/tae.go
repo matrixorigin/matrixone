@@ -246,15 +246,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []any, rowIdx int
 		case types.T_json:
 			switch t := field.(type) {
 			case string:
-				byteJson, err := types.ParseStringToByteJson(field.(string))
-				if err != nil {
-					return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
-				}
-				jsonBytes, err := types.EncodeJson(byteJson)
-				if err != nil {
-					return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
-				}
-				err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
+				err := vector.SetBytesAt(vec, rowIdx, []byte(field.(string)), mp)
 				if err != nil {
 					return err
 				}
