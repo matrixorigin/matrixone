@@ -182,6 +182,12 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -199,6 +205,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
@@ -218,6 +227,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -235,6 +247,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
@@ -254,6 +269,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -271,6 +289,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
@@ -290,6 +311,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -307,6 +331,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
@@ -326,6 +353,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -343,6 +373,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
@@ -362,6 +395,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -379,6 +415,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
@@ -398,6 +437,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -415,6 +457,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
@@ -434,6 +479,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -452,6 +500,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -469,6 +520,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
@@ -489,6 +543,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %s, but get NULL", i+1, string(want))
+			}
 			if string(want) != string(get) {
 				return false, fmt.Sprintf("the %dth row expected %s, but get %s",
 					i+1, string(want), string(get))
@@ -506,6 +563,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
@@ -525,6 +585,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -542,6 +605,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
@@ -561,6 +627,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
 			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
 			if want != get {
 				return false, fmt.Sprintf("the %dth row expected %v, but get %v",
 					i+1, want, get)
@@ -578,6 +647,9 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 				} else {
 					return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
 				}
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
 			}
 			if string(want) != string(get) {
 				return false, fmt.Sprintf("the %dth row expected %s, but get %s",

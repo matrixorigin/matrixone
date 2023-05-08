@@ -302,3 +302,87 @@ func Test_Operator_Is_Not_Null(t *testing.T) {
 		require.True(t, succeed, tc.info, info)
 	}
 }
+
+func Test_Operator_And(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				// 3 true + 3 false + 3 null
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, true, true, false, false, false, false, false, false},
+					[]bool{false, false, false, false, false, false, true, true, true},
+				),
+
+				// 3 loop of `true, false, null`
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false, true, false, false, true, false, false},
+					[]bool{false, false, true, false, false, true, false, false, true},
+				),
+			},
+			expect: testutil.NewFunctionTestResult(
+				types.T_bool.ToType(), false,
+				[]bool{true, false, false, false, false, false, false, false, false},
+				[]bool{false, false, true, false, false, false, true, false, true}),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, andFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_Operator_Or(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				// 3 true + 3 false + 3 null
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, true, true, false, false, false, false, false, false},
+					[]bool{false, false, false, false, false, false, true, true, true},
+				),
+
+				// 3 loop of `true, false, null`
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false, true, false, false, true, false, false},
+					[]bool{false, false, true, false, false, true, false, false, true},
+				),
+			},
+			expect: testutil.NewFunctionTestResult(
+				types.T_bool.ToType(), false,
+				[]bool{true, true, true, true, false, false, true, false, false},
+				[]bool{false, false, false, false, false, true, false, true, true}),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, orFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}
+
+func Test_Operator_Xor(t *testing.T) {
+	proc := testutil.NewProcess()
+	{
+		tc := tcTemp{
+			inputs: []testutil.FunctionTestInput{
+				// 3 true + 3 false + 3 null
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, true, true, false, false, false, false, false, false},
+					[]bool{false, false, false, false, false, false, true, true, true},
+				),
+
+				// 3 loop of `true, false, null`
+				testutil.NewFunctionTestInput(types.T_bool.ToType(),
+					[]bool{true, false, false, true, false, false, true, false, false},
+					[]bool{false, false, true, false, false, true, false, false, true},
+				),
+			},
+			expect: testutil.NewFunctionTestResult(
+				types.T_bool.ToType(), false,
+				[]bool{false, true, false, true, false, false, false, false, false},
+				[]bool{false, false, true, false, false, true, true, true, true}),
+		}
+		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, xorFn)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+}

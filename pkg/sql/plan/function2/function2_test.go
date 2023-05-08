@@ -16,7 +16,6 @@ package function2
 
 import (
 	"fmt"
-	"sort"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -217,48 +216,5 @@ func Test_GetFunctionByName(t *testing.T) {
 			}
 			require.Equal(t, c.requireRet, get.retType, msg)
 		}
-	}
-}
-
-func Test_ShowFunctionsShouldBeRefactored(t *testing.T) {
-	alreadyRegistered := make(map[int32]bool)
-	fromIDtoName := make(map[int32][]string)
-	for name, id := range functionIdRegister {
-		if names, ok := fromIDtoName[id]; ok {
-			fromIDtoName[id] = append(names, name)
-		} else {
-			fromIDtoName[id] = []string{name}
-		}
-
-		alreadyRegistered[id] = true
-	}
-
-	sets := [][]FuncNew{
-		supportedBuiltins, supportedOperators, supportedAggregateFunctions,
-		tempListForUnaryFunctions1, tempListForBinaryFunctions2,
-	}
-
-	for _, set := range sets {
-		for _, f := range set {
-			if f.checkFn == nil || len(f.Overloads) == 0 {
-				if !f.isAggregate() {
-					continue
-				}
-			}
-			delete(alreadyRegistered, int32(f.functionId))
-		}
-	}
-
-	// show how many function we should implement.
-	fmt.Printf("there are still %d functions need to implement\n", len(alreadyRegistered))
-
-	result := make([]string, 0, len(alreadyRegistered))
-	for id := range alreadyRegistered {
-		result = append(result, fmt.Sprintf("%v", fromIDtoName[id]))
-	}
-	sort.Strings(result)
-
-	for i, name := range result {
-		fmt.Printf("%d: %s\n", i+1, name)
 	}
 }

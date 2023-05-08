@@ -27,8 +27,20 @@ func andFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
-		if err := rs.Append(v1 && v2, null1 || null2); err != nil {
-			return err
+		if null1 {
+			if err := rs.Append(v2, v2 || null2); err != nil {
+				return err
+			}
+		} else {
+			if v1 {
+				if err := rs.Append(v2, null2); err != nil {
+					return err
+				}
+			} else {
+				if err := rs.Append(false, false); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -42,9 +54,16 @@ func orFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
-		if err := rs.Append(v1 || v2, null1 || null2); err != nil {
-			return err
+		if v1 || v2 {
+			if err := rs.Append(true, false); err != nil {
+				return err
+			}
+		} else {
+			if err := rs.Append(false, null1 || null2); err != nil {
+				return err
+			}
 		}
+
 	}
 	return nil
 }
