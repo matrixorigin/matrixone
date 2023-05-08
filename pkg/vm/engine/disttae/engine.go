@@ -18,6 +18,7 @@ import (
 	"context"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -335,11 +336,13 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(id)
+	readOnly := atomic.Bool{}
+	readOnly.Store(true)
 	txn := &Transaction{
 		op:              op,
 		proc:            proc,
 		engine:          e,
-		readOnly:        true,
+		readOnly:        readOnly,
 		meta:            op.Txn(),
 		idGen:           e.idGen,
 		dnStores:        e.getDNServices(),
@@ -417,7 +420,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
 	defer e.delTransaction(txn)
-	if txn.readOnly {
+	if txn.readOnly.Load() {
 		return nil
 	}
 	err := txn.DumpBatch(true, 0)

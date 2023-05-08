@@ -74,7 +74,7 @@ func (txn *Transaction) getBlockInfos(
 
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
-	return txn.readOnly
+	return txn.readOnly.Load()
 }
 
 // Write used to write data to the transaction buffer
@@ -94,9 +94,9 @@ func (txn *Transaction) WriteBatch(
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
 	insertBatchHasRowId bool,
 	truncate bool) error {
-	txn.Lock()
-	txn.readOnly = false
+	txn.readOnly.Store(false)
 	bat.Cnt = 1
+	txn.Lock()
 	if typ == INSERT && !insertBatchHasRowId {
 		txn.genBlock()
 		len := bat.Length()
@@ -279,7 +279,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	} else if typ == INSERT {
 		txn.updatePosForCNBlock(bat.GetVector(0), idx)
 	}
-	txn.readOnly = false
+	txn.readOnly.Store(false)
 	txn.writes = append(txn.writes, Entry{
 		typ:          typ,
 		tableId:      tableId,

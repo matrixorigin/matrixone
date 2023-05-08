@@ -966,7 +966,7 @@ func (tbl *txnTable) newReader(
 	ts := txn.meta.SnapshotTS
 	fs := txn.engine.fs
 
-	if !txn.readOnly {
+	if !txn.readOnly.Load() {
 		inserts = make([]*batch.Batch, 0, len(entries))
 		deletes = make(map[types.Rowid]uint8)
 		for _, entry := range entries {
