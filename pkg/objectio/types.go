@@ -45,6 +45,10 @@ type StaticFilter = index.StaticFilter
 var NewZM = index.NewZM
 var BuildZM = index.BuildZM
 
+type ColumnMetaFetcher interface {
+	MustGetColumn(idx uint16) ColumnMeta
+}
+
 type WriteOptions struct {
 	Type WriteType
 	Val  any

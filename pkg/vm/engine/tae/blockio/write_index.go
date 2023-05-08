@@ -25,7 +25,7 @@ type ObjectColumnMetasBuilder struct {
 	totalRow uint32
 	metas    []objectio.ColumnMeta
 	sks      []*hll.Sketch
-	zms      []*index.ZM
+	zms      []index.ZM
 }
 
 func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
@@ -36,7 +36,7 @@ func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
 	return &ObjectColumnMetasBuilder{
 		metas: metas,
 		sks:   make([]*hll.Sketch, colIdx),
-		zms:   make([]*index.ZM, colIdx),
+		zms:   make([]index.ZM, colIdx),
 	}
 }
 
@@ -69,7 +69,7 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 	return uint32(sks.Estimate())
 }
 
-func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZM) {
+func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm index.ZM) {
 	// When UpdateZm is called, it is all in memroy, GetMin and GetMax has no loss
 	// min and max can be nil if the input vector is null vector
 	if !zm.IsInited() {
