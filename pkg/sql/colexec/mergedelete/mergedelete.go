@@ -50,6 +50,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 
 	if len(bat.Zs) == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 	// 		blkId          		deltaLoc                        type

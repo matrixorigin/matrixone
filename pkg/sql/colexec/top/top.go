@@ -66,6 +66,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.Clean(proc.Mp())
 				return false, nil
 			}
 			if ap.Limit == 0 {

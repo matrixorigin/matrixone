@@ -50,6 +50,7 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
 		return true, nil
 	}
 	if len(bat.Zs) == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 
