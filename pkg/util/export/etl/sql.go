@@ -72,13 +72,12 @@ func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 	sw.mux.Lock()
 	defer sw.mux.Unlock()
-
 	sw.buffer = append(sw.buffer, row.ToStrings())
-	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT {
-		if _, err := sw.flushBuffer(); err != nil {
-			return err
-		}
-	}
+	//if len(sw.buffer) >= BUFFER_FLUSH_LIMIT {
+	//	if err := sw.dumpBufferToCSV(); err != nil {
+	//		return err
+	//	}
+	//}
 	return nil
 }
 
@@ -110,7 +109,11 @@ func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
 }
 
 func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
-	sw.flushBuffer()
+	if sw.tbl.Table != "rawlog" {
+		sw.flushBuffer()
+	} else {
+		sw.dumpBufferToCSV()
+	}
 	cnt, err := sw.csvWriter.FlushAndClose()
 	if err != nil {
 		return 0, err
