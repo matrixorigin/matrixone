@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -162,45 +161,4 @@ func BenchmarkTxnTableInsert(b *testing.B) {
 		)
 		assert.Nil(b, err)
 	}
-}
-
-func TestBuildColumnVector(t *testing.T) {
-	mp := mpool.MustNewZero()
-	vec := vector.NewVec(types.T_int32.ToType())
-	defer vec.Free(mp)
-	minv := int32(-10)
-	maxv := int32(10)
-	vector.AppendFixed[int32](vec, 1, false, mp)
-	vector.AppendFixed[int32](vec, 2, false, mp)
-	vector.AppendFixed[int32](vec, -2, false, mp)
-	vector.AppendFixed[int32](vec, 3, false, mp)
-	vector.AppendFixed(vec, minv, false, mp)
-	vector.AppendFixed[int32](vec, 9, false, mp)
-	vector.AppendFixed(vec, maxv, false, mp)
-
-	zm := objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
-	zm.Update(minv)
-	zm.Update(maxv)
-	t.Log(zm.String())
-
-	vec2, err := buildColumnZMVector(*zm, mp)
-	assert.NoError(t, err)
-	defer vec2.Free(mp)
-	assert.Equal(t, minv, vector.GetFixedAt[int32](vec2, 0))
-	assert.Equal(t, maxv, vector.GetFixedAt[int32](vec2, 1))
-}
-
-func BenchmarkBuildColumnZMVector(b *testing.B) {
-	mp := mpool.MustNewZero()
-	zm := objectio.NewZM(types.T_int64, 0)
-	zm.Update(int64(-100))
-	zm.Update(int64(99))
-
-	b.Run("build-column-zm-vec", func(b *testing.B) {
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			vec, _ := buildColumnZMVector(*zm, mp)
-			vec.Free(mp)
-		}
-	})
 }

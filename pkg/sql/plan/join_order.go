@@ -188,8 +188,27 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	}
 
 	leaves, conds := builder.gatherJoinLeavesAndConds(node, nil, nil)
+	newConds := deduceNewOnList(conds)
+	totalConds := append(conds, newConds...)
+	vertices, tag2Vert := builder.getJoinGraph(leaves, totalConds)
+	for i := range newConds {
+		ok, leftCol, rightCol := checkStrictJoinPred(newConds[i])
+		if !ok {
+			continue
+		}
+		var leftId, rightId int32
+		if leftId, ok = tag2Vert[leftCol.RelPos]; !ok {
+			continue
+		}
+		if rightId, ok = tag2Vert[rightCol.RelPos]; !ok {
+			continue
+		}
+		if vertices[leftId].parent == rightId || vertices[rightId].parent == leftId {
+			// deduced new cond is useful
+			conds = append(conds, newConds[i])
+		}
+	}
 
-	vertices := builder.getJoinGraph(leaves, conds)
 	subTrees := make([]*plan.Node, 0, len(leaves))
 	for i, vertex := range vertices {
 		// TODO handle cycles in the "dimension -> fact" DAG
@@ -321,7 +340,7 @@ func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leave
 	return leaves, conds
 }
 
-func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Expr) []*joinVertex {
+func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Expr) ([]*joinVertex, map[int32]int32) {
 	vertices := make([]*joinVertex, len(leaves))
 	tag2Vert := make(map[int32]int32)
 
@@ -343,22 +362,13 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 	edgeMap := make(map[[2]int32]*joinEdge)
 
-	for _, cond := range conds {
-		if f, ok := cond.Expr.(*plan.Expr_F); ok {
-			if f.F.Func.ObjName != "=" {
+	for i := 0; i < 2; i++ {
+		for _, cond := range conds {
+			ok, leftCol, rightCol := checkStrictJoinPred(cond)
+			if !ok {
 				continue
 			}
-			if _, ok = f.F.Args[0].Expr.(*plan.Expr_Col); !ok {
-				continue
-			}
-			if _, ok = f.F.Args[1].Expr.(*plan.Expr_Col); !ok {
-				continue
-			}
-
 			var leftId, rightId int32
-
-			leftCol := f.F.Args[0].Expr.(*plan.Expr_Col).Col
-			rightCol := f.F.Args[1].Expr.(*plan.Expr_Col).Col
 			if leftId, ok = tag2Vert[leftCol.RelPos]; !ok {
 				continue
 			}
@@ -372,21 +382,23 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			}
 
 			edge := edgeMap[[2]int32{leftId, rightId}]
-			if edge == nil {
-				edge = &joinEdge{}
+			if i == 0 {
+				if edge == nil {
+					edge = &joinEdge{}
+				}
+				edge.leftCols = append(edge.leftCols, leftCol.ColPos)
+				edge.rightCols = append(edge.rightCols, rightCol.ColPos)
+				edgeMap[[2]int32{leftId, rightId}] = edge
 			}
-			edge.leftCols = append(edge.leftCols, leftCol.ColPos)
-			edge.rightCols = append(edge.rightCols, rightCol.ColPos)
-			edgeMap[[2]int32{leftId, rightId}] = edge
 
 			leftParent := vertices[leftId].parent
 			if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
 				if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
 					if vertices[rightId].parent != leftId {
-						vertices[leftId].parent = rightId
+						setParent(leftId, rightId, vertices)
 					} else if vertices[leftId].node.Stats.Outcnt < vertices[rightId].node.Stats.Outcnt {
-						vertices[leftId].parent = rightId
-						vertices[rightId].parent = -1
+						unsetParent(rightId, leftId, vertices)
+						setParent(leftId, rightId, vertices)
 					}
 				}
 			}
@@ -394,23 +406,56 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
 				if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
 					if vertices[leftId].parent != rightId {
-						vertices[rightId].parent = leftId
+						setParent(rightId, leftId, vertices)
 					} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
-						vertices[rightId].parent = leftId
-						vertices[leftId].parent = -1
+						unsetParent(leftId, rightId, vertices)
+						setParent(rightId, leftId, vertices)
 					}
 				}
 			}
 		}
 	}
+	return vertices, tag2Vert
+}
 
-	for i := range vertices {
-		parent := vertices[i].parent
-		if parent != -1 {
-			vertices[parent].children[int32(i)] = nil
+func setParent(child, parent int32, vertices []*joinVertex) {
+	if child == -1 || parent == -1 {
+		return
+	}
+	unsetParent(child, vertices[child].parent, vertices)
+	vertices[child].parent = parent
+	vertices[parent].children[child] = nil
+}
+func unsetParent(child, parent int32, vertices []*joinVertex) {
+	if child == -1 || parent == -1 {
+		return
+	}
+	if vertices[child].parent == parent {
+		vertices[child].parent = -1
+		delete(vertices[parent].children, child)
+	}
+}
+
+func findSelectivityInChildren(self int32, vertices []*joinVertex) bool {
+	if vertices[self].node.Stats.Selectivity < 0.9 {
+		return true
+	}
+	for child := range vertices[self].children {
+		if findSelectivityInChildren(child, vertices) {
+			return true
 		}
 	}
-	return vertices
+	return false
+}
+
+func findParent(self, target int32, vertices []*joinVertex) bool {
+	parent := vertices[self].parent
+	if parent == target {
+		return true
+	} else if parent != -1 {
+		return findParent(parent, target, vertices)
+	}
+	return false
 }
 
 func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinVertex) bool {
@@ -419,19 +464,19 @@ func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinV
 	nextParentStats := vertices[nextParent].node.Stats
 	if currentParentStats.Cost > selfStats.Cost && currentParentStats.Cost > nextParentStats.Cost {
 		// current Parent is the biggest node
-		if vertices[nextParent].parent == currentParent {
+		if findParent(nextParent, currentParent, vertices) {
 			return true
 		}
-		if selfStats.Selectivity < 0.9 {
+		if findSelectivityInChildren(self, vertices) {
 			return false
 		}
 	}
 	if nextParentStats.Cost > selfStats.Cost && nextParentStats.Cost > currentParentStats.Cost {
 		// next Parent is the biggest node
-		if vertices[currentParent].parent == nextParent {
+		if findParent(currentParent, nextParent, vertices) {
 			return false
 		}
-		if selfStats.Selectivity < 0.9 {
+		if findSelectivityInChildren(self, vertices) {
 			return true
 		}
 	}

@@ -519,7 +519,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				break
 			}
 			tmpBatch.Clean(ses.GetMemPool())
-			bat, err := reader.LoadColumns(ctx, indexes, block.BlockHeader().BlockID().Sequence(), ses.GetMemPool())
+			bat, err := reader.LoadColumns(ctx, indexes, nil, block.BlockHeader().BlockID().Sequence(), ses.GetMemPool())
 			if err != nil {
 				return err
 			}
