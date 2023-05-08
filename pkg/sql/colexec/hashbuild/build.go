@@ -99,6 +99,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			break
 		}
 		if bat.Length() == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 		anal.Input(bat, isFirst)

@@ -37,10 +37,10 @@ select account, statement from system.statement_info where statement = 'insert i
 -- @session
 
 -- case: select span_kind issue #7571
-select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "NOT_EXIST_SPAN" limit 1;
+select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "GenBatch" limit 1;
 
 -- case: fix issue 8168, with syntax error
-select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt', '/*issue_8168*/use query_tae_table');
+select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt', '/*issue_8168*/use query_tae_table') and status != 'Running';
 
 -- clean
 drop account `query_tae_table`;

@@ -113,8 +113,13 @@ func (r *BlockReader) LoadColumns(
 		}
 	}
 	bat = batch.NewWithSize(len(cols))
+	var obj any
 	for i := range cols {
-		bat.Vecs[i] = ioVectors.Entries[i].Object.(*vector.Vector)
+		obj, err = objectio.Decode(ioVectors.Entries[i].ObjectBytes)
+		if err != nil {
+			return
+		}
+		bat.Vecs[i] = obj.(*vector.Vector)
 	}
 	return
 }
@@ -147,8 +152,13 @@ func (r *BlockReader) LoadAllColumns(
 	}
 	for y := 0; y < int(meta.BlockCount()); y++ {
 		bat := batch.NewWithSize(len(idxs))
+		var obj any
 		for i := range idxs {
-			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+			obj, err = objectio.Decode(ioVectors.Entries[y*len(idxs)+i].ObjectBytes)
+			if err != nil {
+				return nil, err
+			}
+			bat.Vecs[i] = obj.(*vector.Vector)
 		}
 		bats = append(bats, bat)
 	}

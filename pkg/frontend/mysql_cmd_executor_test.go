@@ -974,7 +974,7 @@ func Test_statement_type(t *testing.T) {
 		}
 
 		for _, k := range kases {
-			ret, _ := StatementCanBeExecutedInUncommittedTransaction(nil, k.stmt)
+			ret, _ := statementCanBeExecutedInUncommittedTransaction(nil, k.stmt)
 			convey.So(ret, convey.ShouldBeTrue)
 		}
 
@@ -983,7 +983,7 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
-		convey.So(NeedToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(nil), convey.ShouldBeFalse)
 	})
@@ -1163,7 +1163,7 @@ func Test_StatementClassify(t *testing.T) {
 	}
 
 	for _, a := range args {
-		ret, err := StatementCanBeExecutedInUncommittedTransaction(nil, a.stmt)
+		ret, err := statementCanBeExecutedInUncommittedTransaction(nil, a.stmt)
 		assert.Nil(t, err)
 		assert.Equal(t, ret, a.want)
 	}

@@ -35,14 +35,13 @@ func EncodePhyAddrKeyWithPrefix(prefix []byte, offset uint32) types.Rowid {
 	return rowid
 }
 
-func DecodePhyAddrKeyFromValue(v any) (segmentId types.Uuid, blockId types.Blockid, offset uint32) {
+func DecodePhyAddrKeyFromValue(v any) (blockId types.Blockid, offset uint32) {
 	rowid := v.(types.Rowid)
-	return DecodePhyAddrKey(rowid)
+	return DecodePhyAddrKey(&rowid)
 }
 
-func DecodePhyAddrKey(src types.Rowid) (segmentId types.Uuid, blockId types.Blockid, offset uint32) {
-	segmentId = src.GetSegid()
-	blockId = src.GetBlockid()
+func DecodePhyAddrKey(src *types.Rowid) (blockId types.Blockid, offset uint32) {
+	blockId = *src.GetBlockid()
 	offset = types.DecodeUint32(src[types.BlockidSize:])
 	return
 }

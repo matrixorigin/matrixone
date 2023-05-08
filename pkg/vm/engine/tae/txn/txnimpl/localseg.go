@@ -143,8 +143,7 @@ func (seg *localSegment) ApplyAppend() (err error) {
 			ctx.start,
 			ctx.count,
 			uint32(destOff),
-			ctx.count,
-			seg.table.entry.GetDB().ID, id)
+			ctx.count, id)
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
@@ -191,7 +190,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
 			} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
 				id := appender.GetID()
-				blk, err := seg.table.CreateBlock(id.SegmentID, true)
+				blk, err := seg.table.CreateBlock(id.SegmentID(), true)
 				if err != nil {
 					return err
 				}
@@ -456,7 +455,7 @@ func (seg *localSegment) Rows() (n uint32) {
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	if !seg.table.GetLocalSchema().HasPK() {
 		id = seg.table.entry.AsCommonID()
-		id.SegmentID, id.BlockID, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		id.BlockID, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
 	id = seg.entry.AsCommonID()
