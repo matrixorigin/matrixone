@@ -184,7 +184,7 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	entry *api.Entry,
-	primaryKeyIndex int,
+	primarySeqnum int,
 	packer *types.Packer,
 ) {
 	switch entry.EntryType {
@@ -192,7 +192,7 @@ func (p *PartitionState) HandleLogtailEntry(
 		if IsMetaTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else {
-			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex, packer)
+			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
 	case api.Entry_Delete:
 		if IsMetaTable(entry.TableName) {
@@ -210,7 +210,7 @@ var nextRowEntryID = int64(1)
 func (p *PartitionState) HandleRowsInsert(
 	ctx context.Context,
 	input *api.Batch,
-	primaryKeyIndex int,
+	primarySeqnum int,
 	packer *types.Packer,
 ) (
 	primaryKeys [][]byte,
@@ -224,9 +224,9 @@ func (p *PartitionState) HandleRowsInsert(
 	if err != nil {
 		panic(err)
 	}
-	if primaryKeyIndex >= 0 {
+	if primarySeqnum >= 0 {
 		primaryKeys = EncodePrimaryKeyVector(
-			batch.Vecs[2+primaryKeyIndex],
+			batch.Vecs[2+primarySeqnum],
 			packer,
 		)
 	}

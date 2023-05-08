@@ -279,6 +279,13 @@ message AlterTableReq {
     }
 }
 
+message SchemaExtra {
+    uint32 next_col_seqnum = 1;
+    // sending mo_columns deletes according to this.
+    repeated string dropped_attrs = 2;
+    bool column_changed = 3; 
+}
+
 // Int64Map mainly used in unit test
 message Int64Map {
     map<int64, int64> m = 1;

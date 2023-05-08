@@ -96,6 +96,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 
 		// empty batch
 		if btc.Length() == 0 {
+			btc.Clean(proc.Mp())
 			continue
 		}
 
@@ -148,6 +149,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 		// empty batch
 		if btc.Length() == 0 {
+			btc.Clean(proc.Mp())
 			continue
 		}
 

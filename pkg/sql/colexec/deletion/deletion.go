@@ -109,7 +109,8 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 
 	// empty batch
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 

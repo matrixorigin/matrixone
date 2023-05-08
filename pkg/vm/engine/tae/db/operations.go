@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	fmt "fmt"
 	"time"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -134,6 +135,11 @@ type CreateRelationReq struct {
 	RelationId   uint64
 	Type         RelationType
 	Defs         []engine.TableDef
+}
+
+func (req *CreateRelationReq) String() string {
+	return fmt.Sprintf("%+v, %d-%s:%d-%s",
+		req.AccessInfo, req.DatabaseID, req.DatabaseName, req.RelationId, req.Name)
 }
 
 type UpdateConstraintReq struct {
