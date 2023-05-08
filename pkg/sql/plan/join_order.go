@@ -362,51 +362,55 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 	edgeMap := make(map[[2]int32]*joinEdge)
 
-	for _, cond := range conds {
-		ok, leftCol, rightCol := checkStrictJoinPred(cond)
-		if !ok {
-			continue
-		}
-		var leftId, rightId int32
-		if leftId, ok = tag2Vert[leftCol.RelPos]; !ok {
-			continue
-		}
-		if rightId, ok = tag2Vert[rightCol.RelPos]; !ok {
-			continue
-		}
+	for i := 0; i < 2; i++ {
+		for _, cond := range conds {
+			ok, leftCol, rightCol := checkStrictJoinPred(cond)
+			if !ok {
+				continue
+			}
+			var leftId, rightId int32
+			if leftId, ok = tag2Vert[leftCol.RelPos]; !ok {
+				continue
+			}
+			if rightId, ok = tag2Vert[rightCol.RelPos]; !ok {
+				continue
+			}
 
-		if leftId > rightId {
-			leftId, rightId = rightId, leftId
-			leftCol, rightCol = rightCol, leftCol
-		}
+			if leftId > rightId {
+				leftId, rightId = rightId, leftId
+				leftCol, rightCol = rightCol, leftCol
+			}
 
-		edge := edgeMap[[2]int32{leftId, rightId}]
-		if edge == nil {
-			edge = &joinEdge{}
-		}
-		edge.leftCols = append(edge.leftCols, leftCol.ColPos)
-		edge.rightCols = append(edge.rightCols, rightCol.ColPos)
-		edgeMap[[2]int32{leftId, rightId}] = edge
+			edge := edgeMap[[2]int32{leftId, rightId}]
+			if i == 0 {
+				if edge == nil {
+					edge = &joinEdge{}
+				}
+				edge.leftCols = append(edge.leftCols, leftCol.ColPos)
+				edge.rightCols = append(edge.rightCols, rightCol.ColPos)
+				edgeMap[[2]int32{leftId, rightId}] = edge
+			}
 
-		leftParent := vertices[leftId].parent
-		if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
-			if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
-				if vertices[rightId].parent != leftId {
-					setParent(leftId, rightId, vertices)
-				} else if vertices[leftId].node.Stats.Outcnt < vertices[rightId].node.Stats.Outcnt {
-					unsetParent(rightId, leftId, vertices)
-					setParent(leftId, rightId, vertices)
+			leftParent := vertices[leftId].parent
+			if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
+				if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
+					if vertices[rightId].parent != leftId {
+						setParent(leftId, rightId, vertices)
+					} else if vertices[leftId].node.Stats.Outcnt < vertices[rightId].node.Stats.Outcnt {
+						unsetParent(rightId, leftId, vertices)
+						setParent(leftId, rightId, vertices)
+					}
 				}
 			}
-		}
-		rightParent := vertices[rightId].parent
-		if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
-			if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
-				if vertices[leftId].parent != rightId {
-					setParent(rightId, leftId, vertices)
-				} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
-					unsetParent(leftId, rightId, vertices)
-					setParent(rightId, leftId, vertices)
+			rightParent := vertices[rightId].parent
+			if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
+				if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
+					if vertices[leftId].parent != rightId {
+						setParent(rightId, leftId, vertices)
+					} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
+						unsetParent(leftId, rightId, vertices)
+						setParent(rightId, leftId, vertices)
+					}
 				}
 			}
 		}
@@ -469,7 +473,7 @@ func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinV
 	}
 	if nextParentStats.Cost > selfStats.Cost && nextParentStats.Cost > currentParentStats.Cost {
 		// next Parent is the biggest node
-		if findParent(nextParent, currentParent, vertices) {
+		if findParent(currentParent, nextParent, vertices) {
 			return false
 		}
 		if findSelectivityInChildren(self, vertices) {
