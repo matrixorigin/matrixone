@@ -485,7 +485,7 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 	if length == len(w.Bats) {
 		w.Bats = w.Bats[:0]
 	} else {
-		w.Bats = append(w.Bats[:length], w.Bats[length+1:]...)
+		w.Bats = append(w.Bats[:0], w.Bats[length+1:]...)
 	}
 	return nil
 }
