@@ -96,6 +96,9 @@ func (m *MemCache) Read(
 			c.FileService.Cache.Hit.Add(numHit)
 			c.FileService.Cache.Memory.Read.Add(numRead)
 			c.FileService.Cache.Memory.Hit.Add(numHit)
+			c.FileService.Cache.Memory.Capacity.Swap(m.objCache.Capacity())
+			c.FileService.Cache.Memory.Used.Swap(m.objCache.Used())
+			c.FileService.Cache.Memory.Available.Swap(m.objCache.Available())
 		}, m.counterSets...)
 	}()
 
