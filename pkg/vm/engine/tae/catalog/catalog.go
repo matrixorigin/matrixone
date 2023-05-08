@@ -51,6 +51,7 @@ const (
 	SegmentAttr_Sorted           = "sorted"
 	SnapshotAttr_BlockMaxRow     = "block_max_row"
 	SnapshotAttr_SegmentMaxBlock = "segment_max_block"
+	SnapshotAttr_SchemaExtra     = "schema_extra"
 )
 
 type DataFactory interface {
@@ -361,7 +362,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.db = db
 		tbl.tableData = dataFactory.MakeTableFactory()(tbl)
 		tbl.TableNode = cmd.node
-		tbl.TableNode.schema = un.BaseNode.Schema
+		tbl.TableNode.schema.Store(un.BaseNode.Schema)
 		tbl.Insert(un)
 		err = db.AddEntryLocked(tbl, un.GetTxn(), false)
 		if err != nil {
@@ -372,8 +373,11 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 	}
 	tblun := tbl.SearchNode(un)
 	if tblun == nil {
-		tbl.TableNode.schema = un.BaseNode.Schema
 		tbl.Insert(un) //TODO isvalid
+		if tbl.isColumnChangedInSchema() {
+			tbl.FreezeAppend()
+		}
+		tbl.TableNode.schema.Store(un.BaseNode.Schema)
 	}
 
 }
@@ -401,6 +405,8 @@ func (catalog *Catalog) OnReplayTableBatch(ins, insTxn, insCol, del, delTxn *con
 		schema.AcInfo.TenantID = ins.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).Get(i).(uint32)
 		schema.BlockMaxRows = insTxn.GetVectorByName(SnapshotAttr_BlockMaxRow).Get(i).(uint32)
 		schema.SegmentMaxBlocks = insTxn.GetVectorByName(SnapshotAttr_SegmentMaxBlock).Get(i).(uint16)
+		extra := insTxn.GetVectorByName(SnapshotAttr_SchemaExtra).Get(i).([]byte)
+		schema.MustRestoreExtra(extra)
 		txnNode := txnbase.ReadTuple(insTxn, i)
 		catalog.onReplayCreateTable(dbid, tid, schema, txnNode, dataFactory)
 	}
@@ -426,7 +432,6 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		// alter table
-		tbl.TableNode.schema = schema
 		un := &MVCCNode[*TableMVCCNode]{
 			EntryMVCCNode: &EntryMVCCNode{
 				CreatedAt: tblCreatedAt,
@@ -437,11 +442,16 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 			},
 		}
 		tbl.Insert(un)
+		if tbl.isColumnChangedInSchema() {
+			tbl.FreezeAppend()
+		}
+		tbl.TableNode.schema.Store(schema)
 
 		return
 	}
 	tbl = NewReplayTableEntry()
-	tbl.TableNode = &TableNode{schema: schema}
+	tbl.TableNode = &TableNode{}
+	tbl.TableNode.schema.Store(schema)
 	tbl.db = db
 	tbl.ID = tid
 	tbl.tableData = dataFactory.MakeTableFactory()(tbl)

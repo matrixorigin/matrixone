@@ -1044,6 +1044,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 				panic(e)
 			}
 		}
+		// defs has no rowid
 		defs, err := rel.TableDefs(ctx)
 		if err != nil {
 			panic(err)
@@ -1054,7 +1055,8 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			if attr, ok := def.(*engine.AttributeDef); ok {
 				name2index[attr.Attr.Name] = i
 				cols = append(cols, &plan.ColDef{
-					Name: attr.Attr.Name,
+					ColId: attr.Attr.ID,
+					Name:  attr.Attr.Name,
 					Typ: &plan.Type{
 						Id:       int32(attr.Attr.Type.Oid),
 						Width:    attr.Attr.Type.Width,
@@ -1066,6 +1068,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 					OnUpdate:  attr.Attr.OnUpdate,
 					Comment:   attr.Attr.Comment,
 					ClusterBy: attr.Attr.ClusterBy,
+					Seqnum:    uint32(attr.Attr.Seqnum),
 				})
 				i++
 			}
@@ -1073,6 +1076,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		tblDef = &plan.TableDef{
 			Cols:          cols,
 			Name2ColIndex: name2index,
+			Version:       n.TableDef.Version,
 			Name:          n.TableDef.Name,
 			TableType:     n.TableDef.GetTableType(),
 		}
