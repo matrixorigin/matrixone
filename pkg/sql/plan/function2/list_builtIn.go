@@ -1688,7 +1688,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return AbsDecimal128

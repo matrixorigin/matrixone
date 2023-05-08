@@ -34,10 +34,26 @@ var supportedOperators = []FuncNew{
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if compareOperatorSupports(t1, t2) {
+						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
+							if t1.Scale > t2.Scale {
+								t2.Scale = t1.Scale
+							} else {
+								t1.Scale = t2.Scale
+							}
+						}
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
 					if compareOperatorSupports(inputs[0], inputs[1]) {
+						if inputs[0].Oid.IsDecimal() && inputs[0].Scale != inputs[0].Scale {
+							t1, t2 := inputs[0], inputs[1]
+							if t1.Scale > t2.Scale {
+								t2.Scale = t1.Scale
+							} else {
+								t1.Scale = t2.Scale
+							}
+							return newCheckResultWithCast(0, []types.Type{t1, t2})
+						}
 						return newCheckResultWithSuccess(0)
 					}
 				}
