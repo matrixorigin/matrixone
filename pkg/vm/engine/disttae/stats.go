@@ -90,10 +90,10 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	}
 }
 
-// get ndv, minval , maxval, datatype from zonemap
-func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.BlockInfo, tableCnt float64, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
+// get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid
+func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, tableCnt float64, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
 
-	lenCols := len(columns)
+	lenCols := len(tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 
 	var err error
@@ -109,15 +109,15 @@ func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.B
 		}
 		if !init {
 			init = true
-			for idx, colIdx := range columns {
-				objColMeta := objectMeta.ObjectColumnMeta(uint16(colIdx))
+			for idx, col := range tableDef.Cols[:lenCols] {
+				objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
-				info.DataTypes[idx] = types.T(tableDef.Cols[columns[idx]].Typ.Id).ToType()
+				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 			}
 		} else {
-			for idx, colIdx := range columns {
-				objColMeta := objectMeta.ObjectColumnMeta(uint16(colIdx))
+			for idx, col := range tableDef.Cols[:lenCols] {
+				objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
 				zm := objColMeta.ZoneMap().Clone()
 				if !zm.IsInited() {
 					continue
@@ -132,7 +132,7 @@ func getInfoFromZoneMap(ctx context.Context, columns []int, blocks [][]catalog.B
 	//adjust ndv
 	lenobjs := float64(len(objs))
 	if lenobjs > 1 {
-		for idx := range columns {
+		for idx := range tableDef.Cols[:lenCols] {
 			rate := info.ColumnNDVs[idx] / tableCnt
 			if rate > 1 {
 				rate = 1
@@ -212,13 +212,12 @@ func CalcStats(
 	stats.TableCnt = float64(tableCnt)
 	stats.Cost = float64(cost)
 
-	columns := plan2.MakeAllColumns(tableDef)
 	if s.NeedUpdate(blockNumTotal) {
-		info, err := getInfoFromZoneMap(ctx, columns, blocks, float64(tableCnt), tableDef, proc)
+		info, err := getInfoFromZoneMap(ctx, blocks, float64(tableCnt), tableDef, proc)
 		if err != nil {
 			return plan2.DefaultStats(), nil
 		}
-		plan2.UpdateStatsInfoMap(info, columns, blockNumTotal, stats.TableCnt, tableDef, s)
+		plan2.UpdateStatsInfoMap(info, blockNumTotal, stats.TableCnt, tableDef, s)
 	}
 
 	if expr != nil {
