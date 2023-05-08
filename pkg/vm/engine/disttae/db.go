@@ -303,7 +303,7 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 				return err
 			}
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primaryIdx, e, state, entry); err != nil {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
 					return err
 				}
 			}
@@ -321,7 +321,7 @@ func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, t
 }
 
 func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTable, op client.TxnOperator,
-	primaryIdx int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+	primarySeqnum int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	logDebugf(op.Txn(), "UpdateOfPull")
 	e.Lock()
 	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
@@ -348,7 +348,7 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 		}
 
 		if err := updatePartitionOfPull(
-			primaryIdx, tbl, ctx, op, e, part, dn,
+			primarySeqnum, tbl, ctx, op, e, part, dn,
 			genSyncLogTailReq(part.TS, ts, databaseId, tableId),
 		); err != nil {
 			part.Unlock()
