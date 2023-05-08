@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -416,7 +417,28 @@ func (c *Compile) compileAttachedScope(ctx context.Context, attachedPlan *plan.P
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
+	client := cnclient.GetRPCClient()
 	c.cnList, err = c.e.Nodes()
+	if client != nil {
+		for i := 0; i < len(c.cnList); i++ {
+			addrs := strings.Split(c.cnList[i].Addr, ":")
+			if len(addrs) != 2 {
+				logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
+			}
+			if isSameCN(c.addr, c.cnList[i].Addr) {
+				continue
+			}
+			logutil.Infof("ping start")
+			err := client.Ping(ctx, c.cnList[i].Addr)
+			logutil.Infof("ping err %+v\n", err)
+			// ping failed
+			if err != nil {
+				logutil.Infof("ping err %+v\n", err)
+				c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
+				i--
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
