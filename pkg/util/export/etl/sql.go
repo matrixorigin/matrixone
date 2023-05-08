@@ -32,7 +32,7 @@ import (
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 4
-const BUFFER_FLUSH_LIMIT = 1000 // Adjust this value according to your requirements
+const BUFFER_FLUSH_LIMIT = 500 // Adjust this value according to your requirements
 
 var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
@@ -69,28 +69,37 @@ func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 }
 
 func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
-	sw.mux.Lock()
-	defer sw.mux.Unlock()
 	sw.buffer = append(sw.buffer, row.ToStrings())
-	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT && sw.tbl.Table != "rawlog" {
-		if _, err := sw.flushBuffer(); err != nil {
-			return err
-		}
-	}
+	sw.flushBuffer(false)
 	return nil
 }
 
-func (sw *DefaultSqlWriter) flushBuffer() (int, error) {
+func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
+	sw.mux.Lock()
+	defer sw.mux.Unlock()
 	if len(sw.buffer) == 0 {
 		return 0, nil
 	}
-	cnt, err := sw.WriteRowRecords(sw.buffer, sw.tbl, false)
+	var cnt int
+	var err error
+	// conditions that skip the flush
+	// 1. force is false and buffer size is less than BUFFER_FLUSH_LIMIT
+	if !force && len(sw.buffer) < BUFFER_FLUSH_LIMIT {
+		return 0, nil
+	}
+	// 2. force is false and is rawlog table
+	if !force && sw.tbl.Table == "rawlog" {
+		return 0, nil
+	}
+
+	cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
 	if err != nil {
 		if err := sw.dumpBufferToCSV(); err != nil {
 			return 0, err
 		}
 		return cnt, nil
 	}
+
 	sw.buffer = sw.buffer[:0] // Clear the buffer
 	return cnt, nil
 }
@@ -108,20 +117,11 @@ func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
 }
 
 func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
-
-	// todo: remove the rawlog special case
-
-	if sw.tbl.Table != "rawlog" {
-		sw.flushBuffer()
-
-	} else {
-		sw.dumpBufferToCSV()
+	if len(sw.buffer) == 0 {
+		return 0, nil
 	}
-
-	cnt, err := sw.csvWriter.FlushAndClose()
-	if err != nil {
-		return 0, err
-	}
+	cnt, err := sw.flushBuffer(true)
+	cnt, err = sw.csvWriter.FlushAndClose()
 	sw.buffer = nil
 	sw.tbl = nil
 	return cnt, err
@@ -171,7 +171,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 
 		if sb.Len() >= maxLen || idx == len(records)-1 {
 			stmt := baseStr + sb.String() + ";"
-			_, err := db.Exec(stmt)
+			_, err := tx.Exec(stmt)
 			if err != nil {
 				tx.Rollback() // Rollback the transaction on error
 				return 0, err
@@ -185,7 +185,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	err = tx.Commit() // Commit the transaction
 	// todo: adjust this sleep time
 	if tbl.Table == "rawlog" {
-		time.Sleep(5 * time.Second)
+		time.Sleep(10 * time.Second)
 	}
 	if err != nil {
 		return 0, err
@@ -207,6 +207,8 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 	cnt, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
 		logutil.Error("sqlWriter bulk insert failed", zap.Error(err))
+		// Sleep few seconds before retrying
+		time.Sleep(10 * time.Second)
 		return 0, err
 	}
 	return cnt, nil
