@@ -56,14 +56,54 @@ Field    Type    Null    Key    Default    Extra    Comment
 aminus    INT UNSIGNED(0)    YES        null        
 a    INT(32)    NO    PRI    null        
 b    INT(32)    YES        null        
+select att_uniq_name, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
+att_uniq_name    attr_seqnum
+272482-__mo_rowid    65535
+272482-a    0
+272482-aminus    3
+272482-b    1
+select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
+relname    rel_version
+%!%mo_increment_columns    0
+t    3
 insert into t values (12, 12, 12);
 select * from t;
 aminus    a    b
 null    1    1
 null    6    6
 12    12    12
+null    7    7
 null    2    2
 null    3    3
 null    4    4
 null    5    5
+show tables;
+Tables_in_db
+t
+select mo_ctl('dn', 'inspect', 'renamet -d db -o t -n newt');
+mo_ctl(dn, inspect, renamet -d db -o t -n newt)
+{\n  "method": "Inspect",\n  "result": [\n    {\n      "msg": "rename table success"\n    }\n  ]\n}\n
+select * from t;
+SQL parser error: table "t" does not exist
+select * from newt;
+aminus    a    b
+null    1    1
+null    6    6
+12    12    12
 null    7    7
+null    2    2
+null    3    3
+null    4    4
+null    5    5
+select att_uniq_name, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
+att_uniq_name    attr_seqnum
+select att_uniq_name, attr_seqnum from mo_catalog.mo_columns where att_relname = "newt";
+att_uniq_name    attr_seqnum
+272482-__mo_rowid    65535
+272482-a    0
+272482-aminus    3
+272482-b    1
+select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
+relname    rel_version
+%!%mo_increment_columns    0
+newt    4

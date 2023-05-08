@@ -35,8 +35,20 @@ select mo_ctl('dn', 'inspect', 'addc -d db -b t -n aminus -t samllint -p 0');
 
 show columns from t;
 
+select att_uniq_name, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
+select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
+
 insert into t values (12, 12, 12);
 
 select * from t;
 
+show tables;
+-- @separator:table
+select mo_ctl('dn', 'inspect', 'renamet -d db -o t -n newt');
 
+select * from t;
+select * from newt;
+
+select att_uniq_name, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
+select att_uniq_name, attr_seqnum from mo_catalog.mo_columns where att_relname = "newt";
+select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
