@@ -19,11 +19,14 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMemCacheLeak(t *testing.T) {
 	ctx := context.Background()
+	var counter perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &counter)
 
 	fs, err := NewMemoryFS("test", DisabledCacheConfig, nil)
 	assert.Nil(t, err)
@@ -57,8 +60,10 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 	err = m.Update(ctx, vec, false)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(1), m.objCache.Size())
+	assert.Equal(t, int64(1), m.objCache.Capacity()-m.objCache.Available())
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
+	assert.Equal(t, int64(4), counter.FileService.Cache.Memory.Available.Load())
+	assert.Equal(t, int64(0), counter.FileService.Cache.Memory.Used.Load())
 
 	// read from cache
 	vec = &IOVector{
@@ -78,7 +83,9 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 	err = m.Update(ctx, vec, false)
 	assert.Nil(t, err)
-	assert.Equal(t, int64(1), m.objCache.Size())
+	assert.Equal(t, int64(1), m.objCache.Capacity()-m.objCache.Available())
 	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
+	assert.Equal(t, int64(3), counter.FileService.Cache.Memory.Available.Load())
+	assert.Equal(t, int64(1), counter.FileService.Cache.Memory.Used.Load())
 
 }
