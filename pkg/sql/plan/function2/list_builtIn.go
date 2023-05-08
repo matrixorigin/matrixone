@@ -342,7 +342,6 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				volatile:   true,
 				args:       []types.T{types.T_varchar, types.T_char},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -353,7 +352,6 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 1,
-				volatile:   true,
 				args:       []types.T{types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -364,7 +362,6 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 2,
-				volatile:   true,
 				args:       []types.T{types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -375,7 +372,6 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 3,
-				volatile:   true,
 				args:       []types.T{types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -386,7 +382,6 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 4,
-				volatile:   true,
 				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -397,7 +392,6 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 5,
-				volatile:   true,
 				args:       []types.T{types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -408,7 +402,6 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 6,
-				volatile:   true,
 				args:       []types.T{types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -419,7 +412,6 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 7,
-				volatile:   true,
 				args:       []types.T{types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -430,7 +422,6 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 8,
-				volatile:   true,
 				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -441,7 +432,6 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 9,
-				volatile:   true,
 				args:       []types.T{types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -452,7 +442,6 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 10,
-				volatile:   true,
 				args:       []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
@@ -3689,6 +3678,7 @@ var supportedControlBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				volatile:   true,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
@@ -3775,6 +3765,7 @@ var supportedControlBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				volatile:   true,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
@@ -3796,6 +3787,7 @@ var supportedControlBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				volatile:   true,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
@@ -3817,6 +3809,7 @@ var supportedControlBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
+				volatile:   true,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_bool.ToType()
@@ -3837,8 +3830,10 @@ var supportedControlBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_uint64},
+				overloadId:      0,
+				args:            []types.T{types.T_uint64},
+				volatile:        true,
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
@@ -3847,8 +3842,10 @@ var supportedControlBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_float64},
+				overloadId:      0,
+				args:            []types.T{types.T_float64},
+				volatile:        true,
+				realTimeRelated: true,
 				retType: func(parameter []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
@@ -3868,8 +3865,10 @@ var supportedControlBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_varchar},
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -4124,7 +4123,6 @@ var supportedOthersBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				volatile:   true,
 				args:       nil,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
@@ -4147,6 +4145,7 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -4412,6 +4411,7 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -4432,8 +4432,10 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{},
+				overloadId:      0,
+				args:            []types.T{},
+				volatile:        true,
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -4442,8 +4444,10 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
-				args:       []types.T{types.T_int64},
+				overloadId:      1,
+				args:            []types.T{types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
@@ -4497,8 +4501,10 @@ var supportedOthersBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_varchar},
+				overloadId:      0,
+				volatile:        true,
+				realTimeRelated: true,
+				args:            []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},

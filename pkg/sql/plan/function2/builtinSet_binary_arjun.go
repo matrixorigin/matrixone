@@ -547,7 +547,6 @@ func TimeDiff[T timediff.DiffT](ivecs []*vector.Vector, result vector.FunctionRe
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
 	rs := vector.MustFunctionResult[types.Time](result)
 
-	//TODO: ignoring scale: Original code: https://github.com/m-schen/matrixone/blob/a4b3a641c3daaa10972f17db091c0eb88554c5c2/pkg/sql/plan/function/builtin/binary/timediff.go#L33
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)

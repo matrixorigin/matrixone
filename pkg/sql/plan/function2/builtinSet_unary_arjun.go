@@ -498,7 +498,6 @@ func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 	rs := vector.MustFunctionResult[uint64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		//TODO: Validate: Code: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L170
 		if err := rs.Append(0, false); err != nil {
 			return err
 		}
@@ -510,7 +509,6 @@ func ICULIBVersion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		//TODO: Validate: Code: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L192
 		if err := rs.AppendBytes(function2Util.QuickStrToBytes(""), false); err != nil {
 			return err
 		}
@@ -603,7 +601,6 @@ func RolesGraphml(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		//TODO: Validate: Code: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L281
 		if err := rs.AppendBytes(function2Util.QuickStrToBytes(""), false); err != nil {
 			return err
 		}
@@ -615,7 +612,6 @@ func RowCount(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	rs := vector.MustFunctionResult[uint64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		//TODO: Validate: Code:https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L295
 		if err := rs.Append(0, false); err != nil {
 			return err
 		}
@@ -627,7 +623,6 @@ func User(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		//TODO: Validate: Code: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L94
 		if err := rs.AppendBytes(function2Util.QuickStrToBytes(proc.SessionInfo.GetUserHost()), false); err != nil {
 			return err
 		}
@@ -721,7 +716,6 @@ func TriggerFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 				return err
 			}
 		} else {
-
 			iv, _, ok := fault.TriggerFault(function2Util.QuickBytesToStr(v))
 			if !ok {
 				if err = rs.Append(0, true); err != nil {
