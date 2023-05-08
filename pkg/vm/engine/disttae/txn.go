@@ -27,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -423,51 +421,28 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-// needRead determine if a block needs to be read
-func needRead(
+func evalFilterExprWithZonemap(
 	ctx context.Context,
+	meta objectio.ColumnMetaFetcher,
 	expr *plan.Expr,
-	meta objectio.ObjectMeta,
-	blkInfo catalog.BlockInfo,
-	tableDef *plan.TableDef,
 	columnMap map[int]int,
-	defCols, exprCols []int,
-	maxCol int,
-	proc *process.Process) bool {
-	var err error
+	proc *process.Process,
+) (selected bool) {
 	if expr == nil {
-		return true
+		selected = true
+		return
 	}
-	notReportErrCtx := errutil.ContextWithNoReport(ctx, true)
-
-	// if expr match no columns, just eval expr
 	if len(columnMap) == 0 {
-		bat := batch.NewWithSize(0)
-		defer bat.Clean(proc.Mp())
-		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
-		if err != nil {
-			return true
-		}
-		return ifNeed
+		selected = evalNoColumnFilterExpr(ctx, expr, proc)
+		return
 	}
-
-	buildVectors, err := buildColumnsZMVectors(meta, int(blkInfo.MetaLocation().ID()), defCols, tableDef, proc.Mp())
-	if err != nil || len(buildVectors) == 0 {
-		return true
+	zm := colexec.EvalFilterByZonemap(ctx, meta, expr, columnMap, proc)
+	if !zm.IsInited() || zm.GetType() != types.T_bool {
+		selected = true
+	} else {
+		selected = types.DecodeBool(zm.GetMaxBuf())
 	}
-	bat := batch.NewWithSize(maxCol + 1)
-	defer bat.Clean(proc.Mp())
-	for i := range defCols {
-		bat.SetVector(int32(exprCols[i]), buildVectors[i])
-	}
-	bat.SetZs(buildVectors[0].Length(), proc.Mp())
-
-	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
-	if err != nil {
-		return true
-	}
-
-	return ifNeed
+	return
 }
 
 /* used by multi-dn

@@ -33,7 +33,7 @@ func NewSimpleLRU(capacity int64) LRUCache {
 }
 
 func (lru *simpleLRU) Size() int64 {
-	return lru.impl.Size()
+	return lru.impl.Used()
 }
 
 func (lru *simpleLRU) Get(k any) (v []byte, ok bool) {

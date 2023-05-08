@@ -293,7 +293,7 @@ func (t *GCTable) replayData(ctx context.Context,
 	for i := range attrs {
 		idxes[i] = uint16(i)
 	}
-	mobat, err := reader.LoadColumns(ctx, idxes, bs[typ].GetID(), common.DefaultAllocator)
+	mobat, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
 	if err != nil {
 		return err
 	}
@@ -320,7 +320,7 @@ func (t *GCTable) SaveTable(start, end types.TS, fs *objectio.ObjectFS, files []
 		return nil, err
 	}
 	for i := range bats {
-		if _, err := writer.Write(containers.ToCNBatch(bats[i])); err != nil {
+		if _, err := writer.WriteWithoutSeqnum(containers.ToCNBatch(bats[i])); err != nil {
 			return nil, err
 		}
 	}
@@ -340,7 +340,7 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 		return nil, err
 	}
 	for i := range bats {
-		if _, err := writer.Write(containers.ToCNBatch(bats[i])); err != nil {
+		if _, err := writer.WriteWithoutSeqnum(containers.ToCNBatch(bats[i])); err != nil {
 			return nil, err
 		}
 	}

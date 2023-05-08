@@ -15,11 +15,11 @@
 package txnif
 
 import (
+	"context"
 	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"golang.org/x/net/context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"

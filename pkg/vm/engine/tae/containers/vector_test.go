@@ -22,9 +22,18 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestXxx(t *testing.T) {
+	m := mpool.MustNewZero()
+	v := movec.NewConstNull(types.T_int32.ToType(), 20, m)
+	v.IsConstNull()
+	dnv := ToDNVector(v)
+	t.Log(dnv.IsNull(2))
+}
 
 func withAllocator(opt Options) Options {
 	opt.Allocator = mpool.MustNewZero()
