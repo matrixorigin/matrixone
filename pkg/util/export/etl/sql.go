@@ -31,9 +31,7 @@ import (
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 4
-const BUFFER_FLUSH_LIMIT = 1024 // Adjust this value according to your requirements
-
-const PACKET_TOO_LARGE = "packet for query is too large"
+const BUFFER_FLUSH_LIMIT = 1000 // Adjust this value according to your requirements
 
 var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
@@ -73,11 +71,11 @@ func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 	sw.mux.Lock()
 	defer sw.mux.Unlock()
 	sw.buffer = append(sw.buffer, row.ToStrings())
-	//if len(sw.buffer) >= BUFFER_FLUSH_LIMIT {
-	//	if err := sw.dumpBufferToCSV(); err != nil {
-	//		return err
-	//	}
-	//}
+	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT {
+		if _, err := sw.flushBuffer(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -109,11 +107,7 @@ func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
 }
 
 func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
-	if sw.tbl.Table != "rawlog" {
-		sw.flushBuffer()
-	} else {
-		sw.dumpBufferToCSV()
-	}
+	sw.flushBuffer()
 	cnt, err := sw.csvWriter.FlushAndClose()
 	if err != nil {
 		return 0, err
@@ -122,53 +116,6 @@ func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
 	sw.tbl = nil
 	return cnt, err
 }
-
-//
-//func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
-//
-//	sb := strings.Builder{}
-//	defer sb.Reset()
-//	sb.WriteString("INSERT INTO")
-//	sb.WriteString(" `" + tbl.Database + "`." + tbl.Table + " ")
-//	sb.WriteString("VALUES ")
-//
-//	// write values
-//	for idx, row := range records {
-//		if len(row) == 0 {
-//			continue
-//		}
-//		sb.WriteString("(")
-//		for i, field := range row {
-//			if i != 0 {
-//				sb.WriteString(",")
-//			}
-//			if tbl.Columns[i].ColType == table.TJson {
-//				var js interface{}
-//				err := json.Unmarshal([]byte(field), &js)
-//				if err != nil {
-//					return "", 0, err
-//				}
-//				escapedJSON, _ := json.Marshal(js)
-//				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
-//			} else {
-//				// escape single quote abd backslash
-//				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
-//				// truncate string if it's too long caused by escape for varchar
-//				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-//					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
-//				} else {
-//					sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
-//				}
-//			}
-//		}
-//		if idx == len(records)-1 {
-//			sb.WriteString(");")
-//		} else {
-//			sb.WriteString("),")
-//		}
-//	}
-//	return sb.String(), len(records), nil
-//}
 
 func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
 	if len(records) == 0 {

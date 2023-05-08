@@ -341,6 +341,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 			}
 		}
 		reader.Close()
+		time.Sleep(10 * time.Second)
 	}
 
 	return nil
@@ -726,7 +727,7 @@ func InitMerge(ctx context.Context, SV *config.ObservabilityParameters) error {
 	mergeCycle := SV.MergeCycle.Duration
 	filesize := SV.MergeMaxFileSize
 	if mergeCycle > 0 {
-		err = InitCronExpr(ctx, time.Minute)
+		err = InitCronExpr(ctx, 5*time.Minute)
 		if err != nil {
 			return err
 		}
