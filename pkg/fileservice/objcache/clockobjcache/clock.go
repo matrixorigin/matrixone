@@ -38,7 +38,17 @@ func (c *Clock) Flush() {
 	panic("implement me")
 }
 
-func (c *Clock) Size() int64 {
+func (c *Clock) Capacity() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *Clock) Used() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *Clock) Available() int64 {
 	//TODO implement me
 	panic("implement me")
 }

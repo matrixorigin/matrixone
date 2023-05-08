@@ -41,8 +41,11 @@ type FileServiceCounterSet struct {
 		Read   stats.Counter
 		Hit    stats.Counter
 		Memory struct {
-			Read stats.Counter
-			Hit  stats.Counter
+			Read      stats.Counter
+			Hit       stats.Counter
+			Capacity  stats.Counter
+			Used      stats.Counter
+			Available stats.Counter
 		}
 		Disk struct {
 			Read             stats.Counter
