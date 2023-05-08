@@ -853,6 +853,7 @@ func (h *Handle) HandleWrite(
 			bat, err = reader.LoadColumns(
 				ctx,
 				[]uint16{uint16(columnIdx)},
+				nil,
 				location.ID(),
 				nil,
 			)
@@ -884,7 +885,7 @@ func (h *Handle) HandleAlterTable(
 		return err
 	}
 
-	logutil.Infof("[precommit] alter table: %+v txn: %s\n", req, txn.String())
+	logutil.Infof("[precommit] alter table: %v txn: %s\n", req.String(), txn.String())
 
 	dbase, err := txn.GetDatabaseByID(req.DbId)
 	if err != nil {

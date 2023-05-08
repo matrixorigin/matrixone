@@ -38,7 +38,7 @@ import (
 func BlockRead(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
-	colIdxes []uint16,
+	seqnums []uint16,
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
@@ -46,7 +46,7 @@ func BlockRead(
 
 	// read
 	columnBatch, err := BlockReadInner(
-		ctx, info, colIdxes, colTypes,
+		ctx, info, seqnums, colTypes,
 		types.TimestampToTS(ts), fs, mp, vp,
 	)
 	if err != nil {
@@ -92,13 +92,13 @@ func mergeDeleteRows(d1, d2 []int64) []int64 {
 func BlockReadInner(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
-	colIdxes []uint16,
+	seqnums []uint16,
 	colTypes []types.Type,
 	ts types.TS,
 	fs fileservice.FileService,
 	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	var deleteRows []int64
-	columnBatch, deleteRows, err := readBlockData(ctx, colIdxes, colTypes, info, ts,
+	columnBatch, deleteRows, err := readBlockData(ctx, seqnums, colTypes, info, ts,
 		fs, mp)
 	if err != nil {
 		return nil, err
@@ -135,7 +135,7 @@ func BlockReadInner(
 	return rbat, nil
 }
 
-func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, uint16, []uint16) {
+func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, []uint16, []types.Type) {
 	found := false
 	idx := 0
 	for i, typ := range colTypes {
@@ -146,16 +146,18 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, uint16, [
 		}
 	}
 	if !found {
-		return found, uint16(idx), colIndexes
+		return found, colIndexes, colTypes
 	}
-	idxes := make([]uint16, 0)
+	idxes := make([]uint16, 0, len(colTypes)-1)
+	typs := make([]types.Type, len(colTypes)-1)
 	for i := range colIndexes {
 		if i == idx {
 			continue
 		}
 		idxes = append(idxes, colIndexes[i])
+		typs = append(typs, colTypes[i])
 	}
-	return found, uint16(idx), idxes
+	return found, idxes, typs
 }
 
 func preparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32, pool *mpool.MPool) (col *vector.Vector, err error) {
@@ -171,7 +173,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 	colTypes []types.Type, info *pkgcatalog.BlockInfo, ts types.TS,
 	fs fileservice.FileService, m *mpool.MPool) (*batch.Batch, []int64, error) {
 	deleteRows := make([]int64, 0)
-	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
+	ok, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 	id := info.MetaLocation().ID()
 	reader, err := NewObjectReader(fs, info.MetaLocation())
 	if err != nil {
@@ -206,7 +208,7 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 			bat.Vecs = append(bat.Vecs, rowIdVec)
 			return nil, nil
 		}
-		bats, err := reader.LoadColumns(ctx, idxes, id, nil)
+		bats, err := reader.LoadColumns(ctx, idxes, typs, id, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -225,14 +227,9 @@ func readBlockData(ctx context.Context, colIndexes []uint16,
 
 	loadAppendBlock := func() error {
 		// appendable block should be filtered by committs
-		meta, err := reader.reader.ReadMeta(ctx, m)
-		if err != nil {
-			return err
-		}
-		block := meta.GetBlockMeta(0)
-		colCount := block.GetColumnCount()
-		idxes = append(idxes, colCount-2) // committs
-		idxes = append(idxes, colCount-1) // aborted
+		idxes = append(idxes, objectio.SEQNUM_COMMITTS) // committs
+		idxes = append(idxes, objectio.SEQNUM_ABORT)    // aborted
+		// no need to add typs, the two columns won't be generated
 		bats, err := loadBlock(idxes)
 		if err != nil {
 			return err
@@ -271,7 +268,7 @@ func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 		return nil, err
 	}
 
-	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, deltaloc.ID(), nil)
+	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, nil, deltaloc.ID(), nil)
 	if err != nil {
 		return nil, err
 	}

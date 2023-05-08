@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"fmt"
 	"hash/fnv"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -121,6 +123,70 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 			continue
 		}
 		bat.AddVector(attr, containers.MakeVector(typs[i]))
+	}
+	return bat
+}
+
+// func makeDataInsertRespBatch(schema *catalog.Schema) *containers.Batch {
+// 	capactity := int(schema.NextColSeqnum) + 2
+// 	bat := containers.NewBatch()
+// 	bat.Attrs = make([]string, capactity, capactity)
+// 	bat.Vecs = make([]containers.Vector, capactity, capactity)
+// 	bat.Attrs[0] = catalog.AttrRowID
+// 	bat.Attrs[1] = catalog.AttrCommitTs
+// 	bat.Vecs[0] = containers.MakeVector(types.T_Rowid.ToType())
+// 	bat.Vecs[1] = containers.MakeVector(types.T_TS.ToType())
+
+// 	for _, col := range schema.ColDefs {
+// 		if col.IsPhyAddr() {
+// 			continue
+// 		}
+// 		bat.Vecs[2+col.SeqNum] = containers.MakeVector(col.Type)
+// 		bat.Attrs[2+col.SeqNum] = col.Name
+// 	}
+// 	for i := range bat.Attrs {
+// 		if bat.Vecs[i] != nil {
+// 			bat.Nameidx[bat.Attrs[i]] = i
+// 		} else {
+// 			bat.Vecs[i] = containers.EMPTY_VECTOR
+// 		}
+// 	}
+// 	return bat
+// }
+
+// GetDataWindowForLogtail returns the batch according to the writeSchema.
+// columns are sorted by seqnum and vacancy is filled with zero value
+func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batch {
+	seqnums := src.Seqnums
+	if len(seqnums) != len(src.Vecs) {
+		panic("unmatched seqnums length")
+	}
+
+	// sort by seqnum
+	sort.Sort(src)
+
+	bat := containers.NewBatchWithCapacity(int(src.NextSeqnum) + 2)
+	if src.Deletes != nil {
+		bat.Deletes = src.Deletes
+	}
+
+	i := len(src.Seqnums) - 1
+	// move special column first, no abort column in logtail
+	if src.Seqnums[i] != objectio.SEQNUM_ROWID || src.Seqnums[i-1] != objectio.SEQNUM_COMMITTS {
+		panic(fmt.Sprintf("bad last seqnums %v", src.Seqnums))
+	}
+	bat.AddVector(src.Attrs[i], src.Vecs[i])
+	bat.AddVector(src.Attrs[i-1], src.Vecs[i-1])
+
+	for i, seqnum := range seqnums {
+		if seqnum >= objectio.SEQNUM_UPPER {
+			// two special column has been moved
+			continue
+		}
+		for len(bat.Vecs) < 2+int(seqnum) {
+			bat.AppendPlaceholder()
+		}
+		bat.AddVector(src.Attrs[i], src.Vecs[i].TryConvertConst())
 	}
 	return bat
 }

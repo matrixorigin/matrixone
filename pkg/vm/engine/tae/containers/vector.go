@@ -20,6 +20,7 @@ import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -57,6 +58,9 @@ func NewVector[T any](typ types.Type, opts ...Options) *vector[T] {
 }
 
 func (vec *vector[T]) Get(i int) any {
+	if vec.downstreamVector.IsConstNull() {
+		return nil
+	}
 	if vec.GetType().IsVarlen() {
 		bs := vec.ShallowGet(i).([]byte)
 		ret := make([]byte, len(bs))
@@ -76,6 +80,7 @@ func (vec *vector[T]) Length() int {
 }
 
 func (vec *vector[T]) Append(v any, isNull bool) {
+	// innsert AppendAny will check IsConst
 	vec.tryCoW()
 
 	var err error
@@ -94,7 +99,14 @@ func (vec *vector[T]) GetAllocator() *mpool.MPool {
 }
 
 func (vec *vector[T]) IsNull(i int) bool {
-	return vec.downstreamVector.GetNulls() != nil && vec.downstreamVector.GetNulls().Contains(uint64(i))
+	inner := vec.downstreamVector
+	if inner.IsConstNull() {
+		return true
+	}
+	if inner.IsConst() {
+		return false
+	}
+	return cnNulls.Contains(inner.GetNulls(), uint64(i))
 }
 
 func (vec *vector[T]) NullMask() *cnNulls.Nulls {
@@ -106,10 +118,16 @@ func (vec *vector[T]) GetType() *types.Type {
 }
 
 func (vec *vector[T]) Extend(src Vector) {
+	if vec.downstreamVector.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("extend to const vector"))
+	}
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
 
 func (vec *vector[T]) Update(i int, v any, isNull bool) {
+	if vec.downstreamVector.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("update to const vector"))
+	}
 	vec.tryCoW()
 	UpdateValue(vec.downstreamVector, uint32(i), v, isNull)
 }
@@ -168,7 +186,49 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (vec *vector[T]) HasNull() bool {
+	if vec.downstreamVector.IsConstNull() {
+		return true
+	}
+	if vec.downstreamVector.IsConst() {
+		return false
+	}
 	return vec.NullMask() != nil && vec.NullMask().Any()
+}
+
+func (vec *vector[T]) NullCount() int {
+	if vec.downstreamVector.IsConstNull() {
+		return vec.Length()
+	}
+	if vec.downstreamVector.IsConst() {
+		return 0
+	}
+	if vec.NullMask() != nil {
+		return vec.NullMask().GetCardinality()
+	}
+	return 0
+}
+
+// conver a const vector to a normal one, getting ready to edit
+func (vec *vector[T]) TryConvertConst() Vector {
+	if vec.downstreamVector.IsConstNull() {
+		ret := NewVector[T](*vec.GetType())
+		ret.mpool = vec.mpool
+		for i := 0; i < vec.Length(); i++ {
+			ret.Append(nil, true)
+		}
+		return ret
+	}
+
+	if vec.downstreamVector.IsConst() {
+		ret := NewVector[T](*vec.GetType())
+		ret.mpool = vec.mpool
+		v := vec.Get(0)
+		for i := 0; i < vec.Length(); i++ {
+			ret.Append(v, false)
+		}
+		return ret
+	}
+	return vec
 }
 
 func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
@@ -217,6 +277,9 @@ func (vec *vector[T]) tryCoW() {
 }
 
 func (vec *vector[T]) Window(offset, length int) Vector {
+	if vec.downstreamVector.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("foreach to const vector"))
+	}
 	var err error
 	win := new(vector[T])
 	win.mpool = vec.mpool
@@ -237,6 +300,15 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	}
 
 	cloned := NewVector[T](*vec.GetType(), opts)
+	if vec.downstreamVector.IsConstNull() {
+		cloned.downstreamVector = cnVector.NewConstNull(*vec.GetType(), length, vec.GetAllocator())
+		return cloned
+	}
+
+	if vec.downstreamVector.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("cloneWindow to const vector"))
+	}
+
 	var err error
 	cloned.downstreamVector, err = vec.downstreamVector.CloneWindow(offset, offset+length, cloned.GetAllocator())
 	if err != nil {
@@ -247,6 +319,9 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 }
 
 func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+	if vec.downstreamVector.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("extend to const vector"))
+	}
 	if srcLen <= 0 {
 		return
 	}
