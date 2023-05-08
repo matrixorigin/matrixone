@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -31,7 +32,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support EscapedBy field.")
 	}
 	stmt.Param.Local = stmt.Local
-	if err := checkFileExist(stmt.Param, ctx); err != nil {
+	fileName, err := checkFileExist(stmt.Param, ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -84,6 +86,11 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	if err := getProjectNode(stmt, ctx, node2, tableDef); err != nil {
 		return nil, err
 	}
+
+	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
+		node2.ProjectList = makeCastExpr(stmt, fileName, tableDef)
+	}
+
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return nil, err
 	}
@@ -128,30 +135,30 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	return pn, nil
 }
 
-func checkFileExist(param *tree.ExternParam, ctx CompilerContext) error {
+func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error) {
 	if param.Local {
-		return nil
+		return "", nil
 	}
 	param.Ctx = ctx.GetContext()
 	if param.ScanType == tree.S3 {
 		if err := InitS3Param(param); err != nil {
-			return err
+			return "", err
 		}
 	} else {
 		if err := InitInfileParam(param); err != nil {
-			return err
+			return "", err
 		}
 	}
 
 	fileList, _, err := ReadDir(param)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if len(fileList) == 0 {
-		return moerr.NewInvalidInput(param.Ctx, "the file does not exist in load flow")
+		return "", moerr.NewInvalidInput(param.Ctx, "the file does not exist in load flow")
 	}
 	param.Ctx = nil
-	return nil
+	return fileList[0], nil
 }
 
 func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) error {
@@ -269,4 +276,48 @@ func checkNullMap(stmt *tree.Load, Cols []*ColDef, ctx CompilerContext) error {
 		}
 	}
 	return nil
+}
+
+func getCompressType(param *tree.ExternParam, filepath string) string {
+	if param.CompressType != "" && param.CompressType != tree.AUTO {
+		return param.CompressType
+	}
+	index := strings.LastIndex(filepath, ".")
+	if index == -1 {
+		return tree.NOCOMPRESS
+	}
+	tail := string([]byte(filepath)[index+1:])
+	switch tail {
+	case "gz", "gzip":
+		return tree.GZIP
+	case "bz2", "bzip2":
+		return tree.BZIP2
+	case "lz4":
+		return tree.LZ4
+	default:
+		return tree.NOCOMPRESS
+	}
+}
+
+func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef) []*plan.Expr {
+	ret := make([]*plan.Expr, 0)
+	stringTyp := &plan.Type{
+		Id: int32(types.T_varchar),
+	}
+	for i := 0; i < len(tableDef.Cols); i++ {
+		typ := tableDef.Cols[i].Typ
+		expr := &plan.Expr{
+			Typ: stringTyp,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+				},
+			},
+		}
+
+		expr, _ = makePlan2CastExpr(stmt.Param.Ctx, expr, typ)
+		ret = append(ret, expr)
+	}
+	return ret
 }

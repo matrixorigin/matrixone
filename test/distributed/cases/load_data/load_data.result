@@ -330,3 +330,40 @@ drop table t7;
 create table t8(a int, b int);
 load data infile '$resources/load_data/auto_increment_20.csv' into table t7 set col2=nullif(col2, '1');
 invalid input: the file does not exist in load flow
+create table t9(a varchar, b varchar, c varchar, d varchar);
+load data infile {"filepath"="$resources/load_data/parallel.txt.gz", "compression"="gzip"} into table t9 FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t9;
+a    b    c    d
+1    155190    7706    1
+1    67310    7311    2
+1    63700    3701    3
+1    2132    4633    4
+1    24027    1534    5
+1    15635    638    6
+2    106170    1191    1
+3    4297    1798    1
+3    19036    6540    2
+3    128449    3474    3
+load data infile {"filepath"="$resources/load_data/parallel.txt.gz", "compression"="gzip"} into table t9 FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n' parallel 'true';
+select * from t9;
+a    b    c    d
+1    155190    7706    1
+1    67310    7311    2
+1    63700    3701    3
+1    2132    4633    4
+1    24027    1534    5
+1    15635    638    6
+2    106170    1191    1
+3    4297    1798    1
+3    19036    6540    2
+3    128449    3474    3
+1    155190    7706    1
+1    67310    7311    2
+1    63700    3701    3
+1    2132    4633    4
+1    24027    1534    5
+1    15635    638    6
+2    106170    1191    1
+3    4297    1798    1
+3    19036    6540    2
+3    128449    3474    3
