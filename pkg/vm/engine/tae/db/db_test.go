@@ -5220,39 +5220,6 @@ func TestGCDropTable(t *testing.T) {
 	tae.restart()
 }
 
-func TestXxx(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
-	defer tae.Close()
-
-	schema := catalog.MockSchemaAll(2, -1)
-	schema.Name = "test"
-
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db", "", "")
-	db.CreateRelation(schema)
-	require.NoError(t, txn.Commit())
-
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	_, err := db.DropRelationByName("test")
-	require.NoError(t, err)
-	require.NoError(t, txn.Commit())
-
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	_, err = db.CreateRelation(schema)
-	require.NoError(t, err)
-	require.NoError(t, txn.Commit())
-
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	db.GetRelationByName("test")
-	require.NoError(t, txn.Commit())
-
-}
-
 func TestAlterRenameTbl(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)

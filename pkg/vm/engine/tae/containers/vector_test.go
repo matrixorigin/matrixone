@@ -25,14 +25,15 @@ import (
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestXxx(t *testing.T) {
+func TestDnConst(t *testing.T) {
 	m := mpool.MustNewZero()
 	v := movec.NewConstNull(types.T_int32.ToType(), 20, m)
 	v.IsConstNull()
 	dnv := ToDNVector(v)
-	t.Log(dnv.IsNull(2))
+	require.True(t, dnv.IsNull(2))
 }
 
 func withAllocator(opt Options) Options {
