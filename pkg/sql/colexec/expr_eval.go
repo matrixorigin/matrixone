@@ -244,7 +244,6 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			if err := vector.GetUnionAllFunction(newTyp, proc.Mp())(vec, bat.Vecs[t.Col.ColPos]); err != nil {
 				return nil, err
 			}
-			// vec = vector.NewConstNull(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), length, proc.GetMPool())
 		}
 		return vec, nil
 	case *plan.Expr_List:

@@ -250,6 +250,8 @@ type databaseKey struct {
 
 // txnTable represents an opened table in a transaction
 type txnTable struct {
+	sync.Mutex
+
 	tableId   uint64
 	tableName string
 	dnList    []int

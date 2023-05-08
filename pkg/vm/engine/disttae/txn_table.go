@@ -1238,7 +1238,9 @@ func (tbl *txnTable) updateLocalState(
 }
 
 func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
+	tbl.Lock()
 	tbl.localTS = tbl.localTS.Next()
+	tbl.Unlock()
 	return tbl.localTS
 }
 
