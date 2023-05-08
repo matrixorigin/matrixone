@@ -15,6 +15,8 @@
 package txnimpl
 
 import (
+	"context"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -585,12 +587,14 @@ func (store *txnStore) WaitPrepared() (err error) {
 			return
 		}
 	}
-	for _, e := range store.logs {
-		if err = e.WaitDone(); err != nil {
-			break
+	trace.WithRegion(context.Background(), "Wait for WAL to be flushed", func() {
+		for _, e := range store.logs {
+			if err = e.WaitDone(); err != nil {
+				break
+			}
+			e.Free()
 		}
-		e.Free()
-	}
+	})
 	store.wg.Wait()
 	return
 }
