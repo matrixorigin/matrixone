@@ -17,8 +17,8 @@ package etl
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"io"
-	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,12 +44,16 @@ func NewCSVWriter(ctx context.Context, buf *bytes.Buffer, writer io.StringWriter
 }
 
 func (w *CSVWriter) WriteRow(row *table.Row) error {
-	writeCsvOneLine(w.ctx, w.buf, row.ToStrings())
-	return nil
+	return w.WriteStrings(row.ToStrings())
 }
 
 func (w *CSVWriter) WriteStrings(record []string) error {
-	writeCsvOneLine(w.ctx, w.buf, record)
+	writer := csv.NewWriter(w.buf)
+	err := writer.Write(record)
+	if err != nil {
+		return moerr.ConvertGoError(w.ctx, err)
+	}
+	writer.Flush()
 	return nil
 }
 
@@ -65,42 +69,6 @@ func (w *CSVWriter) FlushAndClose() (int, error) {
 	w.writer = nil
 	w.buf = nil
 	return n, nil
-}
-
-func writeCsvOneLine(ctx context.Context, buf *bytes.Buffer, fields []string) {
-	opts := table.CommonCsvOptions
-	for idx, field := range fields {
-		if idx > 0 {
-			buf.WriteRune(opts.FieldTerminator)
-		}
-		if strings.ContainsRune(field, opts.FieldTerminator) || strings.ContainsRune(field, opts.EncloseRune) || strings.ContainsRune(field, opts.Terminator) {
-			buf.WriteRune(opts.EncloseRune)
-			QuoteFieldFunc(ctx, buf, field, opts.EncloseRune)
-			buf.WriteRune(opts.EncloseRune)
-		} else {
-			buf.WriteString(field)
-		}
-	}
-	buf.WriteRune(opts.Terminator)
-}
-
-var QuoteFieldFunc = func(ctx context.Context, buf *bytes.Buffer, value string, enclose rune) string {
-	replaceRules := map[rune]string{
-		'"':  `""`,
-		'\'': `\'`,
-	}
-	quotedClose, hasRule := replaceRules[enclose]
-	if !hasRule {
-		panic(moerr.NewInternalError(ctx, "not support csv enclose: %c", enclose))
-	}
-	for _, c := range value {
-		if c == enclose {
-			buf.WriteString(quotedClose)
-		} else {
-			buf.WriteRune(c)
-		}
-	}
-	return value
 }
 
 type FSWriter struct {

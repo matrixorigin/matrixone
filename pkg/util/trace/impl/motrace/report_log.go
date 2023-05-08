@@ -66,19 +66,19 @@ func (m *MOZapLog) GetTable() *table.Table { return logView.OriginTable }
 
 func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
-	row.SetColumnVal(rawItemCol, logView.Table)
-	row.SetColumnVal(traceIDCol, m.SpanContext.TraceID.String())
-	row.SetColumnVal(spanIDCol, m.SpanContext.SpanID.String())
-	row.SetColumnVal(spanKindCol, m.SpanContext.Kind.String())
-	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
-	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(timestampCol, m.Timestamp)
-	row.SetColumnVal(loggerNameCol, m.LoggerName)
-	row.SetColumnVal(levelCol, m.Level.String())
-	row.SetColumnVal(callerCol, m.Caller)
-	row.SetColumnVal(messageCol, m.Message)
-	row.SetColumnVal(extraCol, m.Extra)
-	row.SetColumnVal(stackCol, m.Stack)
+	row.SetColumnVal(rawItemCol, table.StringField(logView.Table))
+	row.SetColumnVal(traceIDCol, table.UuidField(m.SpanContext.TraceID[:]))
+	row.SetColumnVal(spanIDCol, table.BytesField(m.SpanContext.SpanID[:]))
+	row.SetColumnVal(spanKindCol, table.StringField(m.SpanContext.Kind.String()))
+	row.SetColumnVal(nodeUUIDCol, table.StringField(GetNodeResource().NodeUuid))
+	row.SetColumnVal(nodeTypeCol, table.StringField(GetNodeResource().NodeType))
+	row.SetColumnVal(timestampCol, table.TimeField(m.Timestamp))
+	row.SetColumnVal(loggerNameCol, table.StringField(m.LoggerName))
+	row.SetColumnVal(levelCol, table.StringField(m.Level.String()))
+	row.SetColumnVal(callerCol, table.StringField(m.Caller))
+	row.SetColumnVal(messageCol, table.StringField(m.Message))
+	row.SetColumnVal(extraCol, table.StringField(m.Extra))
+	row.SetColumnVal(stackCol, table.StringField(m.Stack))
 }
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {

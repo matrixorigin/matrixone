@@ -16,15 +16,16 @@ package table
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
-	"strings"
-	"sync"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"math"
+	"strings"
+	"sync"
+	"time"
 )
 
 const ExternalFilePath = "__mo_filepath"
@@ -44,13 +45,16 @@ var CommonCsvOptions = &CsvOptions{
 type ColType int
 
 const (
-	TDatetime ColType = iota
+	TSkip ColType = iota
+	TDatetime
 	TUint64
 	TInt64
 	TFloat64
 	TJson
 	TText
 	TVarchar
+	TBytes // only used in ColumnField
+	TUuid  // only used in ColumnField
 )
 
 func (c *ColType) ToType() types.Type {
@@ -71,6 +75,8 @@ func (c *ColType) ToType() types.Type {
 		return types.T_text.ToType()
 	case TVarchar:
 		return types.T_varchar.ToType()
+	case TSkip:
+		fallthrough
 	default:
 		panic("not support ColType")
 	}
@@ -95,8 +101,10 @@ func (c *ColType) String(scale int) string {
 			scale = 1024
 		}
 		return fmt.Sprintf("VARCHAR(%d)", scale)
+	case TSkip:
+		panic("not support SkipType")
 	default:
-		panic("not support ColType")
+		panic(fmt.Sprintf("not support ColType: %v", c))
 	}
 }
 
@@ -404,17 +412,93 @@ func (tbl *ViewSingleCondition) String() string {
 	return fmt.Sprintf("`%s` = %q", tbl.Column.Name, tbl.Table)
 }
 
+type ColumnField struct {
+	Type      ColType
+	Integer   int64
+	String    string
+	Interface interface{}
+}
+
+// GetFloat64 return float64
+// which store in Integer
+func (cf *ColumnField) GetFloat64() float64 {
+	return math.Float64frombits(uint64(cf.Integer))
+}
+
+func (cf *ColumnField) GetTime() time.Time {
+	if cf.Interface != nil {
+		return time.Unix(0, cf.Integer).In(cf.Interface.(*time.Location))
+	} else {
+		return time.Unix(0, cf.Integer)
+	}
+}
+
+func (cf *ColumnField) GetBytes() []byte {
+	return String2Bytes(cf.String)
+}
+
+func (cf *ColumnField) EncodedByte() (dst []byte) {
+	src := cf.GetBytes()
+	dst = make([]byte, len(src)*2)
+	hex.Encode(dst, src)
+	return
+}
+
+func (cf *ColumnField) EncodedUuid() (dst [36]byte) {
+	src := cf.GetBytes()
+	EncodeUUIDHex(dst[:], src)
+	return
+}
+
+func (cf *ColumnField) EncodedDatetime() []byte {
+	var dst = make([]byte, 0, 64)
+	dst = Time2DatetimeBuffed(cf.GetTime(), dst)
+	return dst[:]
+}
+
+func TimeField(val time.Time) ColumnField {
+	secs := val.UnixNano()
+	return ColumnField{Type: TDatetime, Integer: secs, Interface: val.Location()}
+}
+
+func Uint64Field(val uint64) ColumnField {
+	return ColumnField{Type: TUint64, Integer: int64(val)}
+}
+
+func Int64Field(val int64) ColumnField {
+	return ColumnField{Type: TInt64, Integer: val}
+}
+
+func Float64Field(val float64) ColumnField {
+	return ColumnField{Type: TFloat64, Integer: int64(math.Float64bits(val))}
+}
+
+func JsonField(val string) ColumnField {
+	return ColumnField{Type: TJson, String: val}
+}
+
+func StringField(val string) ColumnField {
+	return ColumnField{Type: TVarchar, String: val}
+}
+
+func BytesField(val []byte) ColumnField {
+	return ColumnField{Type: TBytes, String: string(val)}
+}
+func UuidField(val []byte) ColumnField {
+	return ColumnField{Type: TUuid, String: string(val)}
+}
+
 type Row struct {
 	Table *Table
 
-	Columns    []any
+	Columns    []ColumnField
 	CsvColumns []string
 }
 
 func (tbl *Table) GetRow(ctx context.Context) *Row {
 	row := NewRow()
 	row.Table = tbl
-	row.Columns = make([]any, len(tbl.Columns))
+	row.Columns = make([]ColumnField, len(tbl.Columns))
 
 	if len(tbl.name2ColumnIdx) == 0 {
 		tbl.name2ColumnIdx = make(map[string]int, len(tbl.Columns))
@@ -464,7 +548,7 @@ func (r *Row) Clone() *Row {
 	n := NewRow()
 	n.Table = r.Table
 	if len(r.Columns) > 0 {
-		n.Columns = make([]any, len(r.Columns))
+		n.Columns = make([]ColumnField, len(r.Columns))
 		copy(n.Columns[:], r.Columns[:])
 	}
 	if len(r.CsvColumns) > 0 {
@@ -478,18 +562,18 @@ func (r *Row) Reset() {
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
 		case types.T_int64:
-			r.Columns[idx] = int64(0)
+			r.Columns[idx] = Int64Field(0)
 		case types.T_uint64:
-			r.Columns[idx] = uint64(0)
+			r.Columns[idx] = Uint64Field(0)
 		case types.T_float64:
-			r.Columns[idx] = float64(0)
+			r.Columns[idx] = Float64Field(0)
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			r.Columns[idx] = typ.Default
+			r.Columns[idx] = StringField(typ.Default)
 		case types.T_json:
-			r.Columns[idx] = typ.Default
+			r.Columns[idx] = JsonField(typ.Default)
 		case types.T_datetime:
-			r.Columns[idx] = time.Time{}
+			r.Columns[idx] = TimeField(ZeroTime)
 		default:
 			logutil.Errorf("the value type %v is not SUPPORT", typ.ColType.ToType().String())
 			panic("the value type is not support now")
@@ -501,7 +585,7 @@ func (r *Row) Reset() {
 // else return "sys"
 func (r *Row) GetAccount() string {
 	if r.Table.PathBuilder.SupportAccountStrategy() && r.Table.accountIdx >= 0 {
-		return r.Columns[r.Table.accountIdx].(string)
+		return r.Columns[r.Table.accountIdx].String
 	}
 	if r.Table.SupportConstAccess && len(r.Table.Account) > 0 {
 		return r.Table.Account
@@ -509,16 +593,16 @@ func (r *Row) GetAccount() string {
 	return "sys"
 }
 
-func (r *Row) SetVal(col string, val any) {
+func (r *Row) SetVal(col string, cf ColumnField) {
 	if idx, exist := r.Table.name2ColumnIdx[col]; !exist {
 		logutil.Fatalf("column(%s) not exist in table(%s)", col, r.Table.Table)
 	} else {
-		r.Columns[idx] = val
+		r.Columns[idx] = cf
 	}
 }
 
-func (r *Row) SetColumnVal(col Column, val any) {
-	r.SetVal(col.Name, val)
+func (r *Row) SetColumnVal(col Column, cf ColumnField) {
+	r.SetVal(col.Name, cf)
 }
 
 // ToStrings output all column as string
@@ -527,22 +611,31 @@ func (r *Row) ToStrings() []string {
 	for idx, typ := range r.Table.Columns {
 		switch typ.ColType.ToType().Oid {
 		case types.T_int64:
-			col[idx] = fmt.Sprintf("%d", r.Columns[idx].(int64))
+			col[idx] = fmt.Sprintf("%d", r.Columns[idx].Integer)
 		case types.T_uint64:
-			col[idx] = fmt.Sprintf("%d", r.Columns[idx].(uint64))
+			col[idx] = fmt.Sprintf("%d", uint64(r.Columns[idx].Integer))
 		case types.T_float64:
-			col[idx] = fmt.Sprintf("%.1f", r.Columns[idx].(float64))
+			col[idx] = fmt.Sprintf("%.1f", r.Columns[idx].GetFloat64())
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			col[idx] = r.Columns[idx].(string) // default val can see Row.Reset
+			switch r.Columns[idx].Type {
+			case TBytes:
+				dst := r.Columns[idx].EncodedByte()
+				col[idx] = string(dst)
+			case TUuid:
+				dst := r.Columns[idx].EncodedUuid()
+				col[idx] = string(dst[:])
+			default:
+				col[idx] = r.Columns[idx].String // default val can see Row.Reset
+			}
 		case types.T_json:
-			val := r.Columns[idx].(string)
+			val := r.Columns[idx].String
 			if len(val) == 0 {
 				val = typ.Default
 			}
 			col[idx] = val
 		case types.T_datetime:
-			col[idx] = Time2DatetimeString(r.Columns[idx].(time.Time))
+			col[idx] = Time2DatetimeString(r.Columns[idx].GetTime())
 		default:
 			logutil.Errorf("the value type %v is not SUPPORT", typ.ColType.ToType().String())
 			panic("the value type is not support now")
@@ -551,7 +644,7 @@ func (r *Row) ToStrings() []string {
 	return col
 }
 
-func (r *Row) GetRawColumn() []any {
+func (r *Row) GetRawColumns() []ColumnField {
 	return r.Columns
 }
 
@@ -598,9 +691,9 @@ func (r *Row) Size() (size int64) {
 			size += 8
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			size += int64(len(r.Columns[idx].(string)))
+			size += int64(len(r.Columns[idx].String))
 		case types.T_json:
-			size += int64(len(r.Columns[idx].(string)))
+			size += int64(len(r.Columns[idx].String))
 		case types.T_datetime:
 			size += 16
 		}
@@ -707,8 +800,16 @@ func SetPathBuilder(ctx context.Context, pathBuilder string) error {
 	return nil
 }
 
+var ZeroTime = time.Unix(0, 0)
+
 const timestampFormatter = "2006-01-02 15:04:05.000000"
 
 func Time2DatetimeString(t time.Time) string {
 	return t.Format(timestampFormatter)
+}
+
+// Time2DatetimeBuffed output datetime string to buffer
+// len(buf) should >= max(64, len(timestampFormatter) + 10)
+func Time2DatetimeBuffed(t time.Time, buf []byte) []byte {
+	return t.AppendFormat(buf, timestampFormatter)
 }
