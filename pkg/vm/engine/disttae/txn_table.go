@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -173,8 +174,8 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 					if !zm.IsInited() {
 						continue
 					}
-					index.UpdateZM(&zms[idx], zm.GetMaxBuf())
-					index.UpdateZM(&zms[idx], zm.GetMinBuf())
+					index.UpdateZM(zms[idx], zm.GetMaxBuf())
+					index.UpdateZM(zms[idx], zm.GetMinBuf())
 				}
 			}
 		}
@@ -369,21 +370,20 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var (
-		isMonoExpr bool
-		meta       objectio.ObjectMeta
-		columnMap  map[int]int
-		defCols    []int
-		exprCols   []int
-		maxCol     int
+		isMonoExpr     bool
+		meta           objectio.ObjectMeta
+		columnMap      map[int]int
+		skipThisObject bool
 	)
 
 	hasDeletes := len(deletes) > 0
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	if isMonoExpr = plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
-		columnMap, defCols, exprCols, maxCol = plan2.GetColumnsByExpr(expr, tableDef)
+		columnMap, _, _, _ = plan2.GetColumnsByExpr(expr, tableDef)
 	}
 
+	errCtx := errutil.ContextWithNoReport(ctx, true)
 	for _, blk := range blocks {
 		need := true
 
@@ -391,26 +391,26 @@ func (tbl *txnTable) rangesOnePart(
 		if isMonoExpr {
 			location := blk.MetaLocation()
 
-			// if the blk is from a new object, we need to load the object meta
-			// object meta is loaded once for each object
+			// check whether the block belongs to a new object
+			// yes:
+			//     1. load object meta
+			//     2. eval expr on object meta
+			//     3. if the expr is false, skip eval expr on the blocks of the same object
+			// no:
+			//     1. check whether the object is skipped
+			//     2. if skipped, skip this block
+			//     3. if not skipped, eval expr on the block
 			if !objectio.IsSameObjectLocVsMeta(location, meta) {
 				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
 					return
 				}
+				if skipThisObject = !evalFilterExprWithZonemap(errCtx, meta, expr, columnMap, proc); skipThisObject {
+					continue
+				}
 			}
 
 			// eval filter expr on the block
-			need = needRead(
-				ctx,
-				expr,
-				meta,
-				blk,
-				tableDef,
-				columnMap,
-				defCols,
-				exprCols,
-				maxCol,
-				proc)
+			need = evalFilterExprWithZonemap(errCtx, meta.GetBlockMeta(uint32(location.ID())), expr, columnMap, proc)
 		}
 
 		// if the block is not needed, skip it
