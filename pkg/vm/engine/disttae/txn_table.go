@@ -998,20 +998,16 @@ func (tbl *txnTable) newReader(
 				}
 			}
 		}
-		// get all blocks in disk
-		meta_blocks := make(map[types.Blockid]bool)
-		if len(tbl.blockInfos) > 0 {
-			for _, blk := range tbl.blockInfos[0] {
-				meta_blocks[blk.BlockID] = true
-			}
-		}
 
 		for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-			if !meta_blocks[blkId] {
+			if !tbl._parts[0].BlockVisible(blkId, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
+				// load dn memory data deletes
 				tbl.LoadDeletesForBlock(&blkId, nil, deletes)
 			}
 		}
-		// add add rawBatchRowId deletes info
+
+		// load dn memory data deletes
+		// add rawBatchRowId deletes info
 		for _, entry := range tbl.writes {
 			if entry.isGeneratedByTruncate() {
 				continue
@@ -1023,7 +1019,7 @@ func (tbl *txnTable) newReader(
 					continue
 				}
 				blkId := vs[0].GetBlockid()
-				if !meta_blocks[*blkId] {
+				if !tbl._parts[0].BlockVisible(*blkId, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
 					for _, v := range vs {
 						deletes[v] = 0
 					}
