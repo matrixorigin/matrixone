@@ -308,15 +308,14 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows []int64)
 
 	if !deletedRows.Any() {
 		return
+
+	var rows []int64
+	itr := deleteRows.GetBitmap().Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		rows = append(rows, int64(r))
 	}
 
-	rows = make([]int64, 0, nulls.Length(deletedRows))
-
-	it := deletedRows.Np.Iterator()
-	for it.HasNext() {
-		row := it.Next()
-		rows = append(rows, int64(row))
-	}
 	return
 }
 

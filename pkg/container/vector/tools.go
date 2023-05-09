@@ -247,12 +247,10 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	} else {
 		rvec.class = FLAT
 	}
-	rvec.nsp = &nulls.Nulls{}
 	if err := rvec.nsp.Read(vec.Nsp); err != nil {
 		return nil, err
 	}
 	if rvec.IsConst() && rvec.nsp.Contains(0) {
-		rvec.nsp = &nulls.Nulls{}
 		return rvec, nil
 	}
 	rvec.data = vec.Data
@@ -548,7 +546,7 @@ func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) b
 	if vec1.IsConstNull() || vec2.IsConstNull() {
 		return true
 	}
-	if nulls.Any(vec1.nsp) || nulls.Any(vec2.nsp) {
+	if nulls.Any(vec1.GetNulls()) || nulls.Any(vec2.GetNulls()) {
 		return true
 	}
 	cols1 := MustFixedCol[T](vec1)
@@ -562,7 +560,7 @@ func runStrCompareCheckAnyResultIsTrue(vec1, vec2 *Vector, fn compFn[string]) bo
 	if vec1.IsConstNull() || vec2.IsConstNull() {
 		return true
 	}
-	if nulls.Any(vec1.nsp) || nulls.Any(vec2.nsp) {
+	if nulls.Any(vec1.GetNulls()) || nulls.Any(vec2.GetNulls()) {
 		return true
 	}
 
