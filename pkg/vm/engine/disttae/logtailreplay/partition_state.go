@@ -197,6 +197,8 @@ func (p *PartitionState) HandleLogtailEntry(
 	case api.Entry_Delete:
 		if IsMetaTable(entry.TableName) {
 			p.HandleMetadataDelete(ctx, entry.Bat)
+		} else if IsSegTable(entry.TableName) {
+			// TODO p.HandleSegDelete(ctx, entry.Bat)
 		} else {
 			p.HandleRowsDelete(ctx, entry.Bat)
 		}

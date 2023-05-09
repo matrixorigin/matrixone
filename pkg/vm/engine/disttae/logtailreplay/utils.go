@@ -22,9 +22,14 @@ import (
 )
 
 var metaTableMatchRegexp = regexp.MustCompile(`\_\d+\_meta`)
+var segTableMatchRegexp = regexp.MustCompile(`\_\d+\_seg`)
 
 func IsMetaTable(name string) bool {
 	return metaTableMatchRegexp.MatchString(name)
+}
+
+func IsSegTable(name string) bool {
+	return segTableMatchRegexp.MatchString(name)
 }
 
 func mustVectorFromProto(v *api.Vector) *vector.Vector {

@@ -35,7 +35,7 @@ func consumeEntry(
 	defer put()
 	state.HandleLogtailEntry(ctx, e, primarySeqnum, packer)
 
-	if logtailreplay.IsMetaTable(e.TableName) {
+	if logtailreplay.IsMetaTable(e.TableName) || logtailreplay.IsSegTable(e.TableName) {
 		return nil
 	}
 
