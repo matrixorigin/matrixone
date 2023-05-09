@@ -38,7 +38,7 @@ type PartitionReader struct {
 	inserts              []*batch.Batch
 	deletes              map[types.Rowid]uint8
 	skipBlocks           map[types.Blockid]uint8
-	iter                 logtailreplay.PartitionStateIter
+	iter                 logtailreplay.RowsIter
 	sourceBatchNameIndex map[string]int
 
 	// the following attributes are used to support cn2s3
