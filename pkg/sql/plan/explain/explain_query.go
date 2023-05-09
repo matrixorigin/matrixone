@@ -148,19 +148,6 @@ func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings,
 					settings.buffer.PushNewLine(rowsetInfo, false, settings.level)
 				}
 			}
-
-			if nodedescImpl.Node.NodeType == plan.Node_UPDATE {
-				if nodedescImpl.Node.UpdateCtx != nil {
-					updateCtxsDescImpl := &UpdateCtxsDescribeImpl{
-						UpdateCtx: nodedescImpl.Node.UpdateCtx,
-					}
-					updateCols, err := updateCtxsDescImpl.GetDescription(ctx, options)
-					if err != nil {
-						return err
-					}
-					settings.buffer.PushNewLine(updateCols, false, settings.level)
-				}
-			}
 		}
 
 		// print out the actual operation information

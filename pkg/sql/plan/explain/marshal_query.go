@@ -142,8 +142,6 @@ func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 		name = "Assert"
 	case plan.Node_INSERT:
 		name = "Insert"
-	case plan.Node_UPDATE:
-		name = "Update"
 	case plan.Node_DELETE:
 		name = "Delete"
 	case plan.Node_INTERSECT:
@@ -178,21 +176,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 			result += m.node.ObjRef.GetSchemaName() + "." + m.node.ObjRef.GetObjName()
 		} else if m.node.TableDef != nil {
 			result += m.node.TableDef.GetName()
-		} else {
-			return result, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
-		}
-	case plan.Node_UPDATE:
-		if m.node.UpdateCtx != nil {
-			first := true
-			for _, ctx := range m.node.UpdateCtx.Ref {
-				if !first {
-					result += ", "
-				}
-				result += ctx.SchemaName + "." + ctx.ObjName
-				if first {
-					first = false
-				}
-			}
 		} else {
 			return result, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
@@ -288,7 +271,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		})
 
 		// "name" : "Columns (2 / 28)",
-		columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
+		columns := GetTableColsLabelValue(tableDef.Cols)
 
 		labels = append(labels, Label{
 			Name:  "Columns",
@@ -320,7 +303,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		})
 
 		// "name" : "Columns (2 / 28)",
-		// columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
+		// columns := GetTableColsLabelValue(ctx, tableDef.Cols, options)
 
 		// labels = append(labels, Label{
 		// 	Name:  "Columns",
@@ -336,31 +319,9 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		// 	Name:  "Scan columns",
 		// 	Value: len(tableDef.Cols),
 		// })
-	case plan.Node_UPDATE:
-		if m.node.UpdateCtx != nil {
-			updateTableNames := GetUpdateTableLableValue(ctx, m.node.UpdateCtx, options)
-			labels = append(labels, Label{
-				Name:  "Full table name",
-				Value: updateTableNames,
-			})
-
-			updateCols := make([]string, 0)
-			for i, ctx := range m.node.UpdateCtx.Ref {
-				if m.node.UpdateCtx.UpdateCol[i] != nil {
-					upcols := GetUpdateTableColsLableValue(m.node.UpdateCtx.UpdateCol[i].Map, ctx.SchemaName, ctx.ObjName, options)
-					updateCols = append(updateCols, upcols...)
-				}
-			}
-			labels = append(labels, Label{
-				Name:  "Update columns",
-				Value: updateCols,
-			})
-		} else {
-			return nil, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
-		}
 	case plan.Node_DELETE:
 		if m.node.DeleteCtx != nil {
-			deleteTableNames := GetDeleteTableLableValue(ctx, m.node.DeleteCtx, options)
+			deleteTableNames := GetDeleteTableLabelValue(m.node.DeleteCtx)
 			labels = append(labels, Label{
 				Name:  "Full table name",
 				Value: deleteTableNames,
@@ -438,7 +399,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Value: m.node.Children[1],
 		})
 	case plan.Node_SORT:
-		result, err := GettOrderByLabelValue(ctx, m.node.OrderBy, options)
+		result, err := GetOrderByLabelValue(ctx, m.node.OrderBy, options)
 		if err != nil {
 			return nil, err
 		}
@@ -714,7 +675,7 @@ func GetExprsLabelValue(ctx context.Context, exprList []*plan.Expr, options *Exp
 	return result, nil
 }
 
-func GettOrderByLabelValue(ctx context.Context, orderbyList []*plan.OrderBySpec, options *ExplainOptions) ([]string, error) {
+func GetOrderByLabelValue(ctx context.Context, orderbyList []*plan.OrderBySpec, options *ExplainOptions) ([]string, error) {
 	if orderbyList == nil {
 		return make([]string, 0), nil
 	}
@@ -732,7 +693,7 @@ func GettOrderByLabelValue(ctx context.Context, orderbyList []*plan.OrderBySpec,
 	return result, nil
 }
 
-func GetDeleteTableLableValue(ctx context.Context, deleteCtx *plan.DeleteCtx, options *ExplainOptions) []string {
+func GetDeleteTableLabelValue(deleteCtx *plan.DeleteCtx) []string {
 	if deleteCtx == nil {
 		return make([]string, 0)
 	}
@@ -742,31 +703,10 @@ func GetDeleteTableLableValue(ctx context.Context, deleteCtx *plan.DeleteCtx, op
 	return result
 }
 
-func GetUpdateTableLableValue(ctx context.Context, updateCtx *plan.UpdateCtx, options *ExplainOptions) []string {
-	if updateCtx == nil {
-		return make([]string, 0)
-	}
-	result := make([]string, 0)
-	for _, ctx := range updateCtx.Ref {
-		result = append(result, ctx.SchemaName+"."+ctx.ObjName)
-	}
-	return result
-}
-
-func GetTableColsLableValue(ctx context.Context, cols []*plan.ColDef, options *ExplainOptions) []string {
+func GetTableColsLabelValue(cols []*plan.ColDef) []string {
 	columns := make([]string, len(cols))
 	for i, col := range cols {
 		columns[i] = col.Name
-	}
-	return columns
-}
-
-func GetUpdateTableColsLableValue(cols map[string]int32, db string, tname string, options *ExplainOptions) []string {
-	columns := make([]string, len(cols))
-	i := 0
-	for col := range cols {
-		columns[i] = db + "." + tname + "." + col
-		i++
 	}
 	return columns
 }
