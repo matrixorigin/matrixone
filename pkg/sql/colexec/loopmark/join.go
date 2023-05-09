@@ -178,7 +178,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		} else {
 			vector.AppendFixed(rbat.Vecs[markPos], false, false, proc.Mp())
 		}
-		vec.Free(proc.Mp())
 	}
 	for i, rp := range ap.Result {
 		if rp >= 0 {

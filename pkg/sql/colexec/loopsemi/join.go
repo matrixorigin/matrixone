@@ -132,7 +132,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				break
 			}
 		}
-		vec.Free(proc.Mp())
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)

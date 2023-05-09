@@ -54,11 +54,14 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 
 func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
+
+	// TODO: not a good way to solve this problem. and will be fixed by file `specialRule.go`
 	scale := int32(6)
-	if len(ivecs) == 1 {
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
 		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+
 	resultValue := types.UnixNanoToTimestamp(proc.UnixTime)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
