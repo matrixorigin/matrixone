@@ -894,7 +894,7 @@ func checkPlanIsInsertValues(p *plan.Plan) (bool, *batch.Batch) {
 	qry := p.GetQuery()
 	if qry != nil && qry.StmtType == plan.Query_INSERT {
 		for _, node := range qry.Nodes {
-			if node.NodeType == plan.Node_VALUE_SCAN {
+			if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
 				colCount := len(node.TableDef.Cols)
 				bat := batch.NewWithSize(colCount)
 				attrs := make([]string, colCount)

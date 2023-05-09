@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -231,7 +232,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 		if prepareStmt.IsInsertValues {
 			for _, node := range preparePlan.Plan.GetQuery().Nodes {
-				if node.RowsetData != nil {
+				if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
 					tableDef := node.TableDef
 					colCount := len(tableDef.Cols)
 					colsData := node.RowsetData.Cols
