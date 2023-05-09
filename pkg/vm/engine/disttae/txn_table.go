@@ -620,7 +620,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	packer, put := tbl.db.txn.engine.packerPool.Get()
-	defer put()
+	defer put(packer)
 	if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
 		return err
 	}
@@ -806,7 +806,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	bat.SetAttributes([]string{catalog.Row_ID})
 
 	packer, put := tbl.db.txn.engine.packerPool.Get()
-	defer put()
+	defer put(packer)
 	if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
 		return err
 	}
@@ -888,7 +888,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
 		if ok {
 			packer, put := tbl.db.txn.engine.packerPool.Get()
-			defer put()
+			defer put(packer)
 			encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
 		}
 	}
