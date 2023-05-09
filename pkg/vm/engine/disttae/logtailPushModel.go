@@ -872,7 +872,7 @@ func updatePartitionOfPush(
 	key := e.catalog.GetTableById(dbId, tblId)
 
 	if lazyLoad {
-		state.Checkpoints = append(state.Checkpoints, tl.CkpLocation)
+		state.AppendCheckpoint(tl.CkpLocation)
 
 		err = consumeLogTailOfPushWithLazyLoad(
 			ctx,
