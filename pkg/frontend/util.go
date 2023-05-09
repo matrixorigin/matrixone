@@ -547,6 +547,15 @@ func rowsetDataToVector(
 	var err error
 
 	for _, e := range exprs {
+		if expr, ok := e.Expr.(*plan.Expr_F); ok {
+			if expr.F.Func.ObjName == "cast" {
+				castTyp := expr.F.Args[1].Typ
+				if typ.Id == castTyp.Id && typ.Width == castTyp.Width && typ.Scale == castTyp.Scale {
+					e = expr.F.Args[0]
+				}
+			}
+		}
+
 		if expr, ok := e.Expr.(*plan.Expr_P); ok {
 			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, params[int(expr.P.Pos)])
 			if err != nil {
