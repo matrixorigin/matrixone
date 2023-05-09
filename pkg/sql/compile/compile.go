@@ -234,14 +234,6 @@ func (c *Compile) run(s *Scope) error {
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
-	case Update:
-		defer c.fillAnalyzeInfo()
-		affectedRows, err := s.Update(c)
-		if err != nil {
-			return err
-		}
-		c.setAffectedRows(affectedRows)
-		return nil
 	}
 	return nil
 }
@@ -772,7 +764,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := c.newMergeScope(ss)
 		rs.Magic = Merge
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curr)
-		onDuplicateKeyArg, err := constructOnduplicateKey(n, c.e, c.proc)
+		onDuplicateKeyArg, err := constructOnduplicateKey(n, c.e)
 		if err != nil {
 			return nil, err
 		}
@@ -789,7 +781,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		preInsertUkArg, err := constructPreInsertUk(n, c.e, c.proc)
+		preInsertUkArg, err := constructPreInsertUk(n, c.proc)
 		if err != nil {
 			return nil, err
 		}

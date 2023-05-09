@@ -58,7 +58,6 @@ const (
 	DropIndex
 	Deletion
 	Insert
-	Update
 	InsertValues
 	TruncateTable
 	AlterView

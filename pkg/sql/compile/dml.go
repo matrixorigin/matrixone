@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 )
 
 func (s *Scope) Delete(c *Compile) (uint64, error) {
@@ -72,15 +71,6 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 func (s *Scope) Insert(c *Compile) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*insert.Argument)
-	if err := s.MergeRun(c); err != nil {
-		return 0, err
-	}
-	return arg.AffectedRows(), nil
-}
-
-func (s *Scope) Update(c *Compile) (uint64, error) {
-	s.Magic = Merge
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*update.Argument)
 	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}

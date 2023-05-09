@@ -50,7 +50,7 @@ func (aip *AutoIncrParam) SetLastInsertID(id uint64) {
 	aip.proc.SetLastInsertID(id)
 }
 
-func getNextAutoIncrNum(proc *process.Process, colDefs []*plan.ColDef, ctx context.Context, incrParam *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
+func getNextAutoIncrNum(proc *process.Process, colDefs []*plan.ColDef, incrParam *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]uint64, []uint64, error) {
 	aicm := proc.Aicm
 	aicm.Mu.Lock()
 	defer aicm.Mu.Unlock()
@@ -69,7 +69,7 @@ func getNextAutoIncrNum(proc *process.Process, colDefs []*plan.ColDef, ctx conte
 			if ok {
 				cur = autoincrcache.CurNum
 			}
-			curNum, maxNum, stp, err := getNextOneCache(ctx, incrParam, bat, tableID, i, name, aicm.MaxSize, cur)
+			curNum, maxNum, stp, err := getNextOneCache(incrParam, bat, i, name, aicm.MaxSize, cur)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -118,7 +118,7 @@ func renameAutoIncrCache(newname, oldname string, proc *process.Process) {
 	}
 }
 
-func getNextOneCache(ctx context.Context, param *AutoIncrParam, bat *batch.Batch, tableID uint64, i int, name string, cachesize, curNum uint64) (uint64, uint64, uint64, error) {
+func getNextOneCache(param *AutoIncrParam, bat *batch.Batch, i int, name string, cachesize, curNum uint64) (uint64, uint64, uint64, error) {
 	var err error
 	loopCnt := 0
 loop:
@@ -154,7 +154,7 @@ func UpdateInsertBatch(proc *process.Process, ColDefs []*plan.ColDef, bat *batch
 		tblName: tblName,
 	}
 
-	offset, step, err := getNextAutoIncrNum(proc, ColDefs, proc.Ctx, incrParam, bat, tableID)
+	offset, step, err := getNextAutoIncrNum(proc, ColDefs, incrParam, bat, tableID)
 	if err != nil {
 		return err
 	}
@@ -244,7 +244,7 @@ func updateVector[T constraints.Integer](vec *vector.Vector, length, curNum, ste
 	vs := vector.MustFixedCol[T](vec)
 	rowIndex := uint64(0)
 	for rowIndex = 0; rowIndex < length; rowIndex++ {
-		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) {
+		if nulls.Contains(vec.GetNulls(), rowIndex) {
 			nulls.Del(vec.GetNulls(), rowIndex)
 			curNum += stepNum
 			vs[rowIndex] = T(curNum)
@@ -619,7 +619,7 @@ func CreateAutoIncrTable(e engine.Engine, ctx context.Context, proc *process.Pro
 }
 
 // for create table operation, add col in mo_increment_columns table
-func CreateAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database, proc *process.Process, cols []*plan.ColDef, dbName, tblName string) error {
+func CreateAutoIncrCol(ctx context.Context, db engine.Database, proc *process.Process, cols []*plan.ColDef, tblName string) error {
 	rel, err := db.Relation(ctx, tblName)
 	if err != nil {
 		return err

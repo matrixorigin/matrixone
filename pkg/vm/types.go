@@ -55,7 +55,6 @@ const (
 
 	Deletion
 	Insert
-	Update
 	External
 
 	Minus

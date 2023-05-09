@@ -582,7 +582,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
+	return colexec.CreateAutoIncrCol(c.ctx, dbSource, c.proc, tableCols, tblName)
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
@@ -661,7 +661,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		}
 	}
 
-	return colexec.CreateAutoIncrCol(c.e, c.ctx, tmpDBSource, c.proc, tableCols, defines.TEMPORARY_DBNAME, engine.GetTempTableName(dbName, tblName))
+	return colexec.CreateAutoIncrCol(c.ctx, tmpDBSource, c.proc, tableCols, engine.GetTempTableName(dbName, tblName))
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {

@@ -468,7 +468,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	}, nil
 }
 
-func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Process) (*onduplicatekey.Argument, error) {
+func constructOnduplicateKey(n *plan.Node, eg engine.Engine) (*onduplicatekey.Argument, error) {
 	oldCtx := n.OnDuplicateKey
 	return &onduplicatekey.Argument{
 		Engine:          eg,
@@ -510,7 +510,7 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	}, nil
 }
 
-func constructPreInsertUk(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsertunique.Argument, error) {
+func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.Argument, error) {
 	preCtx := n.PreInsertUkCtx
 	return &preinsertunique.Argument{
 		Ctx:          proc.Ctx,

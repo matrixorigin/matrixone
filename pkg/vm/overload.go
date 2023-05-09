@@ -63,7 +63,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -109,7 +108,6 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	OnDuplicateKey:  onduplicatekey.String,
 	PreInsert:       preinsert.String,
 	PreInsertUnique: preinsertunique.String,
-	Update:          update.String,
 	External:        external.String,
 
 	Minus:        minus.String,
@@ -165,7 +163,6 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	OnDuplicateKey:  onduplicatekey.Prepare,
 	PreInsert:       preinsert.Prepare,
 	PreInsertUnique: preinsertunique.Prepare,
-	Update:          update.Prepare,
 	External:        external.Prepare,
 
 	Minus:        minus.Prepare,
@@ -218,7 +215,6 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 
 	Deletion: deletion.Call,
 	Insert:   insert.Call,
-	Update:   update.Call,
 	External: external.Call,
 
 	OnDuplicateKey:  onduplicatekey.Call,
