@@ -51,7 +51,7 @@ func (m *MOZapLog) GetName() string {
 
 // Size 计算近似值
 func (m *MOZapLog) Size() int64 {
-	return int64(unsafe.Sizeof(m) + unsafe.Sizeof(len(m.LoggerName)+len(m.Caller)+len(m.Message)+len(m.Extra)))
+	return int64(unsafe.Sizeof(m) + unsafe.Sizeof(len(m.LoggerName)+len(m.Caller)+len(m.Message)+len(m.Extra)+len(m.Stack)))
 }
 
 func (m *MOZapLog) Free() {

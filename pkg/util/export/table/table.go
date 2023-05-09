@@ -613,6 +613,9 @@ func (r *Row) SetVal(col string, cf ColumnField) {
 }
 
 func (r *Row) SetColumnVal(col Column, cf ColumnField) {
+	if col.ColType == TVarchar && len(cf.String) > col.Scale {
+		cf.String = cf.String[0:col.Scale]
+	}
 	r.SetVal(col.Name, cf)
 }
 
