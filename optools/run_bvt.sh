@@ -23,7 +23,7 @@ PROXY=${3:-}
 
 function launch_mo() {
     cd $MO_WORKSPACE
-    ./mo-service -launch ./etc/$LAUNCH/launch.toml $PROXY &>mo-service.log &
+    ./mo-service -debug-http=:12345 -launch ./etc/$LAUNCH/launch.toml $PROXY &>mo-service.log &
 }
 
 # this will wait mo all system init completed

@@ -16,7 +16,6 @@ package single
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +33,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, false)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
@@ -61,15 +61,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			ctr.state = Probe
 
 		case Probe:
-			start := time.Now()
-			bat := <-proc.Reg.MergeReceivers[0].Ch
-			anal.WaitStop(start)
+			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			if err != nil {
+				return false, err
+			}
 
 			if bat == nil {
 				ctr.state = End
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.Clean(proc.Mp())
 				continue
 			}
 			if ctr.bat.Length() == 0 {
@@ -94,9 +96,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	start := time.Now()
-	bat := <-proc.Reg.MergeReceivers[1].Ch
-	anal.WaitStop(start)
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	if err != nil {
+		return err
+	}
 
 	if bat != nil {
 		ctr.bat = bat
@@ -107,7 +110,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
@@ -126,7 +129,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) error {
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
@@ -134,11 +137,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
 		}
 	}
-	ctr.cleanEvalVectors(proc.Mp())
 	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, anal); err != nil {
 		rbat.Clean(proc.Mp())
 		return err
 	}
+	defer ctr.cleanEvalVectors(proc.Mp())
 
 	count := bat.Length()
 	mSels := ctr.mp.Sels()

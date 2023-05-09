@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"os"
 	"runtime"
 	"strconv"
@@ -30,11 +33,9 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -276,7 +277,9 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		// set @a = on, type of a is bool.
 		return v.Parts[0], nil
 	default:
-		binder := plan2.NewDefaultBinder(ses.GetRequestContext(), nil, nil, nil, nil)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx())
+		bindContext := plan2.NewBindContext(builder, nil)
+		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err := binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
@@ -325,10 +328,10 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 		return vec.GetStringAt(0), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAt[types.Decimal64](vec, 0)
-		return plan2.MakePlan2Decimal64ExprWithType(val, plan2.DeepCopyTyp(expr.Typ)), nil
+		return plan2.MakePlan2Decimal64ExprWithType(val, plan2.DeepCopyType(expr.Typ)), nil
 	case types.T_decimal128:
 		val := vector.GetFixedAt[types.Decimal128](vec, 0)
-		return plan2.MakePlan2Decimal128ExprWithType(val, plan2.DeepCopyTyp(expr.Typ)), nil
+		return plan2.MakePlan2Decimal128ExprWithType(val, plan2.DeepCopyType(expr.Typ)), nil
 	case types.T_json:
 		val := vec.GetBytesAt(0)
 		byteJson := types.DecodeJson(val)
@@ -429,100 +432,6 @@ func isInvalidConfigInput(config string) bool {
 	// first verify if the input string can parse as a josn type data
 	_, err := types.ParseStringToByteJson(config)
 	return err != nil
-}
-
-func removePrefixComment(sql string) string {
-	if len(sql) >= 4 {
-		p1 := strings.Index(sql, "/*")
-		if p1 != 0 {
-			// no prefix comment in this sql
-			return sql
-		}
-
-		p2 := strings.Index(sql, "*/")
-		if p2 < 2 {
-			// no valid prefix comment in this sql
-			return sql
-		}
-
-		sql = sql[p2+2:]
-	}
-	return sql
-}
-
-func hideAccessKey(sql string) string {
-	sqlLen := len(sql)
-	if sqlLen > 13 {
-		index := strings.Index(sql, "identified by")
-		if index > 0 {
-			start := index + 13
-			for start < sqlLen && sql[start] != '\'' {
-				start++
-			}
-
-			end := start + 1
-			for end < sqlLen && sql[end] != '\'' {
-				end++
-			}
-
-			if end < sqlLen {
-				sql = sql[:start+1] + "******" + sql[end:]
-			}
-		}
-
-		index = strings.Index(sql, "identified with")
-		if index > 0 {
-			start := index + 15
-			for start < sqlLen && sql[start] != '\'' {
-				start++
-			}
-
-			end := start + 1
-			for end < sqlLen && sql[end] != '\'' {
-				end++
-			}
-
-			if end < sqlLen {
-				sql = sql[:start+1] + "******" + sql[end:]
-			}
-		}
-	}
-	if sqlLen > 15 {
-		index := strings.Index(sql, "'access_key_id'")
-		if index > 0 {
-			start := index + 15
-			for start < sqlLen && sql[start] != '\'' {
-				start++
-			}
-
-			end := start + 1
-			for end < sqlLen && sql[end] != '\'' {
-				end++
-			}
-
-			if end < sqlLen {
-				sql = sql[:start+1] + "******" + sql[end:]
-			}
-		}
-
-		index = strings.Index(sql, "'secret_access_key'")
-		if index > 0 {
-			start := index + 19
-			for start < sqlLen && sql[start] != '\'' {
-				start++
-			}
-
-			end := start + 1
-			for end < sqlLen && sql[end] != '\'' {
-				end++
-			}
-
-			if end < sqlLen {
-				sql = sql[:start+1] + "******" + sql[end:]
-			}
-		}
-	}
-	return sql
 }
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.

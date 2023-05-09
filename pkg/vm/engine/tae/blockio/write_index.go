@@ -25,7 +25,7 @@ type ObjectColumnMetasBuilder struct {
 	totalRow uint32
 	metas    []objectio.ColumnMeta
 	sks      []*hll.Sketch
-	zms      []*index.ZM
+	zms      []index.ZM
 }
 
 func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
@@ -36,7 +36,7 @@ func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
 	return &ObjectColumnMetasBuilder{
 		metas: metas,
 		sks:   make([]*hll.Sketch, colIdx),
-		zms:   make([]*index.ZM, colIdx),
+		zms:   make([]index.ZM, colIdx),
 	}
 }
 
@@ -47,12 +47,12 @@ func (b *ObjectColumnMetasBuilder) AddRowCnt(rows int) {
 func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector) {
 	if vec.HasNull() {
 		cnt := b.metas[idx].NullCnt()
-		cnt += uint32(vec.NullMask().GetCardinality())
+		cnt += uint32(vec.NullCount())
 		b.metas[idx].SetNullCnt(cnt)
 	}
 
 	if b.zms[idx] == nil {
-		b.zms[idx] = index.NewZM(vec.GetType().Oid)
+		b.zms[idx] = index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 	}
 	if b.sks[idx] == nil {
 		b.sks[idx] = hll.New()
@@ -66,7 +66,7 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 	}, nil)
 }
 
-func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm *index.ZM) {
+func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm index.ZM) {
 	// When UpdateZm is called, it is all in memroy, GetMin and GetMax has no loss
 	// min and max can be nil if the input vector is null vector
 	if !zm.IsInited() {

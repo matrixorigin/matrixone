@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -35,6 +36,8 @@ type evalVector struct {
 }
 
 type container struct {
+	colexec.ReceiverOperator
+
 	state int
 
 	hasNull bool
@@ -47,8 +50,6 @@ type container struct {
 	vecs  []*vector.Vector
 
 	mp *hashmap.StrHashMap
-
-	nullSels []int32
 }
 
 type Argument struct {
@@ -60,8 +61,6 @@ type Argument struct {
 	Nbucket     uint64
 	Typs        []types.Type
 	Conditions  []*plan.Expr
-
-	IsRight bool
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

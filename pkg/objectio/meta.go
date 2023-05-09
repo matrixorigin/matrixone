@@ -15,57 +15,68 @@
 package objectio
 
 import (
+	"bytes"
+	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
+
+var EmptyZm = [64]byte{}
 
 const FooterSize = 64
 const HeaderSize = 64
 
-type ObjectMeta []byte
+type objectMetaV1 []byte
 
-func BuildObjectMeta(count uint16) ObjectMeta {
+func buildObjectMetaV1(count uint16) objectMetaV1 {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
-	meta := ObjectMeta(buf)
-	meta.BlockHeader().setVersion(Version)
 	return buf[:]
 }
 
-func (o ObjectMeta) BlockHeader() BlockHeader {
+func (o objectMetaV1) BlockHeader() BlockHeader {
 	return BlockHeader(o[:headerLen])
 }
 
-func (o ObjectMeta) ObjectColumnMeta(idx uint16) ColumnMeta {
-	return GetObjectColumnMeta(idx, o[headerLen:])
+func (o objectMetaV1) MustGetColumn(seqnum uint16) ColumnMeta {
+	return GetObjectColumnMeta(seqnum, o[headerLen:])
 }
 
-func (o ObjectMeta) AddColumnMeta(idx uint16, col ColumnMeta) {
+func (o objectMetaV1) ObjectColumnMeta(seqnum uint16) ColumnMeta {
+	return GetObjectColumnMeta(seqnum, o[headerLen:])
+}
+
+func (o objectMetaV1) AddColumnMeta(idx uint16, col ColumnMeta) {
 	offset := headerLen + uint32(idx)*colMetaLen
 	copy(o[offset:offset+colMetaLen], col)
 }
 
-func (o ObjectMeta) Length() uint32 {
-	return headerLen + uint32(o.BlockHeader().ColumnCount())*colMetaLen
+func (o objectMetaV1) Length() uint32 {
+	return headerLen + uint32(o.BlockHeader().MetaColumnCount())*colMetaLen
 }
 
-func (o ObjectMeta) BlockCount() uint32 {
+func (o objectMetaV1) BlockCount() uint32 {
 	return uint32(o.BlockHeader().Sequence())
 }
 
-func (o ObjectMeta) BlockIndex() BlockIndex {
+func (o objectMetaV1) BlockIndex() BlockIndex {
 	offset := o.Length()
 	return BlockIndex(o[offset:])
 }
 
-func (o ObjectMeta) GetBlockMeta(id uint32) BlockObject {
+func (o objectMetaV1) GetBlockMeta(id uint32) BlockObject {
 	offset, length := o.BlockIndex().BlockMetaPos(id)
 	return BlockObject(o[offset : offset+length])
 }
 
-func (o ObjectMeta) GetColumnMeta(idx uint16, id uint32) ColumnMeta {
-	return o.GetBlockMeta(id).ColumnMeta(idx)
+func (o objectMetaV1) GetColumnMeta(blk uint32, seqnum uint16) ColumnMeta {
+	return o.GetBlockMeta(blk).ColumnMeta(seqnum)
+}
+
+func (o objectMetaV1) IsEmpty() bool {
+	return len(o) == 0
 }
 
 const (
@@ -120,9 +131,8 @@ func BuildObjectColumnMeta() ColumnMeta {
 
 const (
 	sequenceLen        = 2
-	dbIDOff            = versionOff + versionLen
 	dbIDLen            = 8
-	tableIDOff         = dbIDOff + dbIDLen
+	tableIDOff         = dbIDLen
 	tableIDLen         = 8
 	blockIDOff         = tableIDOff + tableIDLen
 	blockIDLen         = types.BlockidSize
@@ -140,8 +150,12 @@ const (
 	zoneMapAreaLen     = ZoneMapSize
 	zoneMapCheckSumOff = zoneMapAreaOff + zoneMapAreaLen
 	zoneMapCheckSumLen = 4
-	headerDummyOff     = zoneMapCheckSumOff + zoneMapCheckSumLen
-	headerDummyLen     = 39
+	metaColCntOff      = zoneMapCheckSumOff + zoneMapCheckSumLen
+	metaColCntLen      = 2
+	maxSeqOff          = metaColCntOff + metaColCntLen
+	maxSeqLen          = 2
+	headerDummyOff     = maxSeqOff + maxSeqLen
+	headerDummyLen     = 35
 	headerLen          = headerDummyOff + headerDummyLen
 )
 
@@ -151,7 +165,6 @@ func BuildBlockMeta(count uint16) BlockObject {
 	length := headerLen + uint32(count)*colMetaLen
 	buf := make([]byte, length)
 	meta := BlockObject(buf)
-	meta.BlockHeader().setVersion(Version)
 	return meta
 }
 
@@ -163,8 +176,8 @@ func (bm BlockObject) SetBlockMetaHeader(header BlockHeader) {
 	copy(bm[:headerLen], header)
 }
 
-func (bm BlockObject) ColumnMeta(idx uint16) ColumnMeta {
-	return GetColumnMeta(idx, bm)
+func (bm BlockObject) ColumnMeta(seqnum uint16) ColumnMeta {
+	return GetColumnMeta(seqnum, bm)
 }
 
 func (bm BlockObject) AddColumnMeta(idx uint16, col ColumnMeta) {
@@ -176,6 +189,22 @@ func (bm BlockObject) IsEmpty() bool {
 	return len(bm) == 0
 }
 
+func (bm BlockObject) ToColumnZoneMaps(seqnums []uint16) []ZoneMap {
+	maxseq := bm.GetMaxSeqnum()
+	zms := make([]ZoneMap, len(seqnums))
+	for i, idx := range seqnums {
+		if idx >= SEQNUM_UPPER {
+			panic(fmt.Sprintf("do not read special %d", idx))
+		}
+		if idx > maxseq {
+			zms[i] = index.DecodeZM(EmptyZm[:])
+		}
+		column := bm.MustGetColumn(idx)
+		zms[i] = index.DecodeZM(column.ZoneMap())
+	}
+	return zms
+}
+
 type BlockHeader []byte
 
 func BuildBlockHeader() BlockHeader {
@@ -183,20 +212,12 @@ func BuildBlockHeader() BlockHeader {
 	return buf[:]
 }
 
-func (bh BlockHeader) Version() uint16 {
-	return types.DecodeUint16(bh[:typeLen])
-}
-
-func (bh BlockHeader) setVersion(version uint16) {
-	copy(bh[:typeLen], types.EncodeUint16(&version))
-}
-
 func (bh BlockHeader) TableID() uint64 {
-	return types.DecodeUint64(bh[:tableIDLen])
+	return types.DecodeUint64(bh[tableIDOff:])
 }
 
 func (bh BlockHeader) SetTableID(id uint64) {
-	copy(bh[:tableIDLen], types.EncodeUint64(&id))
+	copy(bh[tableIDOff:], types.EncodeUint64(&id))
 }
 
 func (bh BlockHeader) BlockID() *Blockid {
@@ -205,6 +226,10 @@ func (bh BlockHeader) BlockID() *Blockid {
 
 func (bh BlockHeader) SetBlockID(id *Blockid) {
 	copy(bh[blockIDOff:blockIDOff+blockIDLen], id[:])
+}
+
+func (bh BlockHeader) ShortName() *ObjectNameShort {
+	return (*ObjectNameShort)(unsafe.Pointer(&bh[blockIDOff]))
 }
 
 func (bh BlockHeader) Sequence() uint16 {
@@ -231,6 +256,22 @@ func (bh BlockHeader) SetColumnCount(count uint16) {
 	copy(bh[columnCountOff:columnCountOff+columnCountLen], types.EncodeUint16(&count))
 }
 
+func (bh BlockHeader) MetaColumnCount() uint16 {
+	return types.DecodeUint16(bh[metaColCntOff : metaColCntOff+metaColCntLen])
+}
+
+func (bh BlockHeader) SetMetaColumnCount(count uint16) {
+	copy(bh[metaColCntOff:metaColCntOff+metaColCntLen], types.EncodeUint16(&count))
+}
+
+func (bh BlockHeader) MaxSeqnum() uint16 {
+	return types.DecodeUint16(bh[maxSeqOff : maxSeqOff+maxSeqLen])
+}
+
+func (bh BlockHeader) SetMaxSeqnum(seqnum uint16) {
+	copy(bh[maxSeqOff:maxSeqOff+maxSeqLen], types.EncodeUint16(&seqnum))
+}
+
 func (bh BlockHeader) MetaLocation() Extent {
 	return Extent(bh[metaLocationOff : metaLocationOff+metaLocationLen])
 }
@@ -247,11 +288,11 @@ func (bh BlockHeader) SetZoneMapArea(location Extent) {
 	copy(bh[zoneMapAreaOff:zoneMapAreaOff+zoneMapAreaLen], location)
 }
 
-func (bh BlockHeader) BloomFilter() Extent {
+func (bh BlockHeader) BFExtent() Extent {
 	return Extent(bh[bloomFilterOff : bloomFilterOff+bloomFilterLen])
 }
 
-func (bh BlockHeader) SetBloomFilter(location Extent) {
+func (bh BlockHeader) SetBFExtent(location Extent) {
 	copy(bh[bloomFilterOff:bloomFilterOff+bloomFilterLen], location)
 }
 
@@ -300,12 +341,20 @@ func BuildHeader() Header {
 	return buf[:]
 }
 
-func (h Header) SetLocation(location Extent) {
+func (h Header) SetExtent(location Extent) {
 	copy(h[8+2:8+2+ExtentSize], location)
 }
 
-func (h Header) Location() Extent {
+func (h Header) Extent() Extent {
 	return Extent(h[8+2 : 8+2+ExtentSize])
+}
+
+func (h Header) SetSchemaVersion(ver uint32) {
+	copy(h[8+2+ExtentSize:8+2+ExtentSize+4], types.EncodeUint32(&ver))
+}
+
+func (h Header) SchemaVersion(ver uint32) {
+	types.DecodeUint32(h[8+2+ExtentSize : 8+2+ExtentSize+4])
 }
 
 type Footer struct {
@@ -318,4 +367,47 @@ type Footer struct {
 
 func (f Footer) Marshal() []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&f)), FooterSize)
+}
+
+func IsSameObjectLocVsMeta(location Location, meta ObjectMeta) bool {
+	if len(location) == 0 || len(meta) == 0 {
+		return false
+	}
+	return location.ShortName().Equal(meta.BlockHeader().ShortName()[:])
+}
+
+func IsSameObjectLocVsShort(location Location, short *ObjectNameShort) bool {
+	if len(location) == 0 || short == nil {
+		return false
+	}
+	return location.ShortName().Equal(short[:])
+}
+
+// test used
+func BuildMetaData(blkCount, colCount uint16) objectMetaV1 {
+	var meta bytes.Buffer
+	length := uint32(0)
+	seqnum := NewSeqnums(nil)
+	seqnum.InitWithColCnt(int(colCount))
+	objectMeta := BuildObjectMeta(colCount)
+	objectMeta.BlockHeader().SetColumnCount(colCount)
+	objectMeta.BlockHeader().SetMetaColumnCount(colCount)
+	objectMeta.BlockHeader().SetSequence(blkCount)
+	length += objectMeta.Length()
+	blockIndex := BuildBlockIndex(uint32(blkCount))
+	blockIndex.SetBlockCount(uint32(blkCount))
+	length += blockIndex.Length()
+	var blkMetaBuf bytes.Buffer
+	for i := uint16(0); i < blkCount; i++ {
+		blkMeta := NewBlock(seqnum)
+		blkMeta.BlockHeader().SetSequence(i)
+		n := uint32(len(blkMeta))
+		blockIndex.SetBlockMetaPos(uint32(i), length, n)
+		length += n
+		blkMetaBuf.Write(blkMeta)
+	}
+	meta.Write(objectMeta)
+	meta.Write(blockIndex)
+	meta.Write(blkMetaBuf.Bytes())
+	return meta.Bytes()
 }

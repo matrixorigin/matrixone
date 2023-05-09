@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -253,10 +254,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 
 		//check privilege
+		/* prepare not need check privilege
 		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
 		if err != nil {
 			return nil, err
 		}
+		*/
 	} else {
 		var vp *plan2.VisitPlan
 		if cacheHit {
@@ -271,30 +274,23 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 
 	txnHandler := cwft.ses.GetTxnHandler()
-	if cacheHit && cwft.plan.NeedImplicitTxn() {
-		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
-		if err != nil {
-			return nil, err
-		}
-	} else if cwft.plan.GetQuery().GetLoadTag() {
-		cwft.proc.TxnOperator = txnHandler.GetTxnOperator()
-	} else if cwft.plan.NeedImplicitTxn() {
-		cwft.proc.TxnOperator, err = txnHandler.GetTxn()
-		if err != nil {
-			return nil, err
-		}
+	var txnCtx context.Context
+	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+	if err != nil {
+		return nil, err
 	}
 	addr := ""
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {
 		addr = cwft.ses.GetParameterUnit().ClusterNodes[0].Addr
 	}
+	cwft.proc.Ctx = txnCtx
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
-	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), txnHandler.GetTxnCtx(), cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), txnCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
 	}
-	err = cwft.compile.Compile(txnHandler.GetTxnCtx(), cwft.plan, cwft.ses, fill)
+	err = cwft.compile.Compile(txnCtx, cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err
 	}

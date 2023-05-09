@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -45,10 +44,10 @@ type ablock struct {
 func newABlock(
 	meta *catalog.BlockEntry,
 	fs *objectio.ObjectFS,
-	bufMgr base.INodeManager,
+	indexCache model.LRUCache,
 	scheduler tasks.TaskScheduler) *ablock {
 	blk := &ablock{}
-	blk.baseBlock = newBaseBlock(blk, meta, bufMgr, fs, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, indexCache, fs, scheduler)
 	blk.mvcc.SetAppendListener(blk.OnApplyAppend)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	if blk.meta.HasDropCommitted() {
@@ -117,47 +116,33 @@ func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
 	}
 }
 
-func (blk *ablock) GetColumnDataByNames(
-	txn txnif.AsyncTxn,
-	attrs []string,
-) (view *model.BlockView, err error) {
-	colIdxes := make([]int, len(attrs))
-	for i, attr := range attrs {
-		colIdxes[i] = blk.meta.GetSchema().GetColIdx(attr)
-	}
-	return blk.GetColumnDataByIds(txn, colIdxes)
-}
-
-func (blk *ablock) GetColumnDataByName(
-	txn txnif.AsyncTxn,
-	attr string,
-) (view *model.ColumnView, err error) {
-	colIdx := blk.meta.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(txn, colIdx)
-}
-
 func (blk *ablock) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
+	readSchema any,
 	colIdxes []int,
 ) (view *model.BlockView, err error) {
 	return blk.resolveColumnDatas(
 		txn,
+		readSchema.(*catalog.Schema),
 		colIdxes,
 		false)
 }
 
 func (blk *ablock) GetColumnDataById(
 	txn txnif.AsyncTxn,
-	colIdx int,
+	readSchema any,
+	col int,
 ) (view *model.ColumnView, err error) {
 	return blk.resolveColumnData(
 		txn,
-		colIdx,
+		readSchema.(*catalog.Schema),
+		col,
 		false)
 }
 
 func (blk *ablock) resolveColumnDatas(
 	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
 	colIdxes []int,
 	skipDeletes bool) (view *model.BlockView, err error) {
 	node := blk.PinNode()
@@ -167,12 +152,14 @@ func (blk *ablock) resolveColumnDatas(
 		return blk.resolveInMemoryColumnDatas(
 			node.MustMNode(),
 			txn,
+			readSchema,
 			colIdxes,
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnDatas(
 			node.MustPNode(),
 			txn,
+			readSchema,
 			colIdxes,
 			skipDeletes,
 		)
@@ -181,7 +168,8 @@ func (blk *ablock) resolveColumnDatas(
 
 func (blk *ablock) resolveColumnData(
 	txn txnif.TxnReader,
-	colIdx int,
+	readSchema *catalog.Schema,
+	col int,
 	skipDeletes bool) (view *model.ColumnView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
@@ -190,13 +178,15 @@ func (blk *ablock) resolveColumnData(
 		return blk.resolveInMemoryColumnData(
 			node.MustMNode(),
 			txn,
-			colIdx,
+			readSchema,
+			col,
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnData(
 			node.MustPNode(),
 			txn,
-			colIdx,
+			readSchema,
+			col,
 			skipDeletes,
 		)
 	}
@@ -206,6 +196,7 @@ func (blk *ablock) resolveColumnData(
 func (blk *ablock) resolveInMemoryColumnDatas(
 	mnode *memoryNode,
 	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
 	colIdxes []int,
 	skipDeletes bool) (view *model.BlockView, err error) {
 	blk.RLock()
@@ -215,8 +206,7 @@ func (blk *ablock) resolveInMemoryColumnDatas(
 		// blk.RUnlock()
 		return
 	}
-
-	data, err := mnode.GetDataWindow(0, maxRow)
+	data, err := mnode.GetDataWindow(readSchema, 0, maxRow)
 	if err != nil {
 		return
 	}
@@ -248,7 +238,8 @@ func (blk *ablock) resolveInMemoryColumnDatas(
 func (blk *ablock) resolveInMemoryColumnData(
 	mnode *memoryNode,
 	txn txnif.TxnReader,
-	colIdx int,
+	readSchema *catalog.Schema,
+	col int,
 	skipDeletes bool) (view *model.ColumnView, err error) {
 	blk.RLock()
 	defer blk.RUnlock()
@@ -258,12 +249,13 @@ func (blk *ablock) resolveInMemoryColumnData(
 		return
 	}
 
-	view = model.NewColumnView(colIdx)
+	view = model.NewColumnView(col)
 	var data containers.Vector
 	data, err = mnode.GetColumnDataWindow(
+		readSchema,
 		0,
 		maxRow,
-		colIdx)
+		col)
 	if err != nil {
 		// blk.RUnlock()
 		return
@@ -292,15 +284,18 @@ func (blk *ablock) resolveInMemoryColumnData(
 
 func (blk *ablock) GetValue(
 	txn txnif.AsyncTxn,
+	readSchema any,
 	row, col int) (v any, isNull bool, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
+	schema := readSchema.(*catalog.Schema)
 	if !node.IsPersisted() {
-		return blk.getInMemoryValue(node.MustMNode(), txn, row, col)
+		return blk.getInMemoryValue(node.MustMNode(), txn, schema, row, col)
 	} else {
 		return blk.getPersistedValue(
 			node.MustPNode(),
 			txn,
+			schema,
 			row,
 			col,
 			true)
@@ -311,6 +306,7 @@ func (blk *ablock) GetValue(
 func (blk *ablock) getInMemoryValue(
 	mnode *memoryNode,
 	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
 	row, col int) (v any, isNull bool, err error) {
 	blk.RLock()
 	deleted, err := blk.mvcc.IsDeletedLocked(uint32(row), txn, blk.RWMutex)
@@ -322,7 +318,7 @@ func (blk *ablock) getInMemoryValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view, err := blk.resolveInMemoryColumnData(mnode, txn, col, true)
+	view, err := blk.resolveInMemoryColumnData(mnode, txn, readSchema, col, true)
 	if err != nil {
 		return
 	}
@@ -337,6 +333,7 @@ func (blk *ablock) getInMemoryValue(
 	return
 }
 
+// GetByFilter will read pk column, which seqnum will not change, no need to pass the read schema.
 func (blk *ablock) GetByFilter(
 	txn txnif.AsyncTxn,
 	filter *handle.Filter) (offset uint32, err error) {
@@ -344,7 +341,7 @@ func (blk *ablock) GetByFilter(
 		panic("logic error")
 	}
 	if blk.meta.GetSchema().SortKey == nil {
-		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		_, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
 
@@ -371,14 +368,15 @@ func (blk *ablock) getPersistedRowByFilter(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	sortKey, err := blk.LoadPersistedColumnData(
-		blk.meta.GetSchema().GetSingleSortKeyIdx())
+	// Note: sort key do not change
+	schema := blk.meta.GetSchema()
+	sortKey, err := blk.LoadPersistedColumnData(schema, schema.GetSingleSortKeyIdx())
 	if err != nil {
 		return
 	}
 	defer sortKey.Close()
 	rows := make([]uint32, 0)
-	err = sortKey.ForeachShallow(func(v any, _ bool, offset int) error {
+	err = sortKey.Foreach(func(v any, _ bool, offset int) error {
 		if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
 			row := uint32(offset)
 			rows = append(rows, row)
@@ -569,10 +567,9 @@ func (blk *ablock) inMemoryBatchDedup(
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
 		return
 	}
-
-	def := blk.meta.GetSchema().GetSingleSortKey()
-	v, isNull := mnode.GetValueByRow(int(dupRow), def.Idx)
-	entry := common.TypeStringValue(keys.GetType(), v, isNull)
+	def := mnode.writeSchema.GetSingleSortKey()
+	v, isNull := mnode.GetValueByRow(mnode.writeSchema, int(dupRow), def.Idx)
+	entry := common.TypeStringValue(*keys.GetType(), v, isNull)
 	return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
 }
 
@@ -604,50 +601,56 @@ func (blk *ablock) BatchDedup(
 func (blk *ablock) persistedCollectAppendInRange(
 	pnode *persistedNode,
 	start, end types.TS,
-	withAborted bool) (bat *containers.Batch, err error) {
-	// FIXME: we'll gc mvcc after being persisted. refactor it later
-	blk.RLock()
-	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
-		blk.mvcc.CollectAppendLocked(start, end)
-	blk.RUnlock()
-	if bat, err = pnode.GetDataWindow(minRow, maxRow); err != nil {
-		return
-	}
-	bat.AddVector(catalog.AttrCommitTs, commitTSVec)
-	if withAborted {
-		bat.AddVector(catalog.AttrAborted, abortVec)
-	} else {
-		bat.Deletes = abortedMap
-		bat.Compact()
-	}
-	return
+	withAborted bool) (bat *containers.BatchWithVersion, err error) {
+	// logtail should have sent metaloc
+	return nil, nil
+	// blk.RLock()
+	// minRow, maxRow, commitTSVec, abortVec, abortedMap :=
+	// 	blk.mvcc.CollectAppendLocked(start, end)
+	// blk.RUnlock()
+	// if bat, err = pnode.GetDataWindow(minRow, maxRow); err != nil {
+	// 	return
+	// }
+	// bat.AddVector(catalog.AttrCommitTs, commitTSVec)
+	// if withAborted {
+	// 	bat.AddVector(catalog.AttrAborted, abortVec)
+	// } else {
+	// 	bat.Deletes = abortedMap
+	// 	bat.Compact()
+	// }
+	// return
 }
 
 func (blk *ablock) inMemoryCollectAppendInRange(
 	mnode *memoryNode,
 	start, end types.TS,
-	withAborted bool) (bat *containers.Batch, err error) {
+	withAborted bool) (batWithVer *containers.BatchWithVersion, err error) {
 	blk.RLock()
 	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
 		blk.mvcc.CollectAppendLocked(start, end)
-	if bat, err = mnode.GetDataWindow(minRow, maxRow); err != nil {
+	batWithVer, err = mnode.GetDataWindowOnWriteSchema(minRow, maxRow)
+	if err != nil {
 		blk.RUnlock()
-		return
+		return nil, err
 	}
 	blk.RUnlock()
-	bat.AddVector(catalog.AttrCommitTs, commitTSVec)
+
+	batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_COMMITTS)
+	batWithVer.AddVector(catalog.AttrCommitTs, commitTSVec)
 	if withAborted {
-		bat.AddVector(catalog.AttrAborted, abortVec)
+		batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_ABORT)
+		batWithVer.AddVector(catalog.AttrAborted, abortVec)
 	} else {
-		bat.Deletes = abortedMap
-		bat.Compact()
+		batWithVer.Deletes = abortedMap
+		batWithVer.Compact()
 	}
+
 	return
 }
 
 func (blk *ablock) CollectAppendInRange(
 	start, end types.TS,
-	withAborted bool) (*containers.Batch, error) {
+	withAborted bool) (*containers.BatchWithVersion, error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {

@@ -14,6 +14,8 @@
 package objectio
 
 import (
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -84,4 +86,91 @@ func (o *CreateBlockOpt) WithBlkIdx(s uint16) *CreateBlockOpt {
 		}{Blkn: s}
 	}
 	return o
+}
+
+func WriteString(str string, w io.Writer) (n int64, err error) {
+	buf := []byte(str)
+	size := uint32(len(buf))
+	if _, err = w.Write(types.EncodeUint32(&size)); err != nil {
+		return
+	}
+	wn, err := w.Write(buf)
+	return int64(wn + 4), err
+}
+
+func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
+	size := uint32(len(b))
+	if _, err = w.Write(types.EncodeUint32(&size)); err != nil {
+		return
+	}
+	wn, err := w.Write(b)
+	return int64(wn + 4), err
+}
+
+func ReadString(r io.Reader) (str string, n int64, err error) {
+	strLen := uint32(0)
+	if _, err = r.Read(types.EncodeUint32(&strLen)); err != nil {
+		return
+	}
+	buf := make([]byte, strLen)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	str = string(buf)
+	n = 4 + int64(strLen)
+	return
+}
+
+func ReadBytes(r io.Reader) (buf []byte, n int64, err error) {
+	strLen := uint32(0)
+	if _, err = r.Read(types.EncodeUint32(&strLen)); err != nil {
+		return
+	}
+	buf = make([]byte, strLen)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	n = 4 + int64(strLen)
+	return
+}
+
+type Seqnums struct {
+	Seqs       []uint16
+	MaxSeq     uint16 // do not consider special column like rowid and committs
+	MetaColCnt uint16 // include special columns
+}
+
+func NewSeqnums(seqs []uint16) *Seqnums {
+	s := &Seqnums{
+		Seqs: make([]uint16, 0, len(seqs)),
+	}
+	if len(seqs) == 0 {
+		return s
+	}
+
+	for _, v := range seqs {
+		if v < SEQNUM_UPPER && v > s.MaxSeq {
+			s.MaxSeq = v
+		}
+	}
+
+	maxseq := s.MaxSeq
+	for _, v := range seqs {
+		if v >= SEQNUM_UPPER {
+			s.Seqs = append(s.Seqs, maxseq+1)
+			maxseq += 1
+		} else {
+			s.Seqs = append(s.Seqs, v)
+		}
+	}
+	s.MetaColCnt = maxseq + 1
+	return s
+}
+
+func (s *Seqnums) InitWithColCnt(colcnt int) {
+	for i := 0; i < colcnt; i++ {
+		s.Seqs = append(s.Seqs, uint16(i))
+	}
+	s.MaxSeq = uint16(colcnt) - 1
+	s.MetaColCnt = uint16(colcnt)
 }

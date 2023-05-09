@@ -77,7 +77,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-
 	if len(ap.Exprs) == 0 {
 		end, err = ap.ctr.process(ap, proc, anal, isFirst, isLast)
 	} else {
@@ -141,7 +140,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	if len(bat.Vecs) == 0 {
 		return false, nil
 	}
@@ -184,6 +183,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		}
 	}
 	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 	if err := ctr.processH0(bat, ap, proc); err != nil {
@@ -194,7 +194,6 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	var err error
-
 	bat := proc.InputBatch()
 	if bat == nil {
 		if ctr.bat != nil {
@@ -222,9 +221,10 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		return true, nil
 	}
 	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	proc.SetInputBatch(&batch.Batch{})
 	if len(ctr.aggVecs) == 0 {
@@ -277,7 +277,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.bat.Zs = proc.Mp().GetSels()
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
-			ctr.bat.Vecs[i] = vector.NewVec(*vec.GetType())
+			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
 			switch vec.GetType().TypeSize() {
 			case 1:
 				size += 1 + 1

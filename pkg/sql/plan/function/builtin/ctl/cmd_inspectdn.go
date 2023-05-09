@@ -28,7 +28,7 @@ func handleInspectDN() handleFunc {
 			return nil, nil
 		},
 		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
-			return types.Encode(db.InspectDN{
+			return types.Encode(&db.InspectDN{
 				AccessInfo: db.AccessInfo{
 					AccountID: proc.SessionInfo.AccountId,
 					UserID:    proc.SessionInfo.UserId,
@@ -39,7 +39,7 @@ func handleInspectDN() handleFunc {
 		},
 		func(data []byte) (interface{}, error) {
 			resp := &db.InspectResp{}
-			types.Decode(data, &resp)
+			types.Decode(data, resp)
 			return resp.GetResponse(), nil
 		})
 }

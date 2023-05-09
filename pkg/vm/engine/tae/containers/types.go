@@ -35,7 +35,7 @@ type ItOpT[T any] func(v T, isNull bool, row int) error
 // type ItBytesOp func(v []byte, isNull bool, row int) error
 
 type Vector interface {
-	GetType() types.Type
+	GetType() *types.Type
 
 	// Deep copy ops
 	Get(i int) any
@@ -49,6 +49,9 @@ type Vector interface {
 	ShallowGet(i int) any
 	Window(offset, length int) Vector
 
+	// Deepcopy if const
+	TryConvertConst() Vector
+
 	GetDownstreamVector() *cnVector.Vector
 	setDownstreamVector(vec *cnVector.Vector)
 
@@ -60,8 +63,6 @@ type Vector interface {
 
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
-	ForeachShallow(op ItOp, sels *roaring.Bitmap) error
-	ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) error
 
 	Length() int
 	Allocated() int
@@ -70,6 +71,8 @@ type Vector interface {
 	IsNull(i int) bool
 	HasNull() bool
 	NullMask() *cnNulls.Nulls
+	// NullCount will consider ConstNull and Const vector
+	NullCount() int
 
 	Slice() any
 
@@ -87,6 +90,13 @@ type Batch struct {
 	Attrs   []string
 	Vecs    []Vector
 	Deletes *roaring.Bitmap
-	nameidx map[string]int
+	Nameidx map[string]int
 	// refidx  map[int]int
+}
+
+type BatchWithVersion struct {
+	*Batch
+	Seqnums    []uint16
+	NextSeqnum uint16
+	Version    uint32
 }

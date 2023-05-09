@@ -16,7 +16,9 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,25 +37,25 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	defer put()
 
 	{
-		parts := make(Partitions, len(e.dnMap))
+		parts := make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
 	}
 
 	{
-		parts := make(Partitions, len(e.dnMap))
+		parts := make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
 	}
 
 	{
-		parts := make(Partitions, len(e.dnMap))
+		parts := make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
 	}
@@ -87,7 +89,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		tbl.relKind = catalog.SystemOrdinaryRel
 		bat, err := genCreateTableTuple(tbl, "", 0, 0, 0,
 			catalog.MO_DATABASE, catalog.MO_DATABASE_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, m)
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, types.Rowid{}, false, m)
 		if err != nil {
 			return err
 		}
@@ -107,7 +109,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
 		for _, col := range cols {
-			bat0, err := genCreateColumnTuple(col, m)
+			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
 				return err
 			}
@@ -147,7 +149,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		tbl := new(txnTable)
 		tbl.relKind = catalog.SystemOrdinaryRel
 		bat, err := genCreateTableTuple(tbl, "", 0, 0, 0, catalog.MO_TABLES, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, m)
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, types.Rowid{}, false, m)
 		if err != nil {
 			return err
 		}
@@ -167,7 +169,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
 		for _, col := range cols {
-			bat0, err := genCreateColumnTuple(col, m)
+			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
 				return err
 			}
@@ -207,7 +209,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		tbl := new(txnTable)
 		tbl.relKind = catalog.SystemOrdinaryRel
 		bat, err := genCreateTableTuple(tbl, "", 0, 0, 0, catalog.MO_COLUMNS, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, m)
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, types.Rowid{}, false, m)
 		if err != nil {
 			return err
 		}
@@ -227,7 +229,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
 		for _, col := range cols {
-			bat0, err := genCreateColumnTuple(col, m)
+			bat0, err := genCreateColumnTuple(col, types.Rowid{}, false, m)
 			if err != nil {
 				return err
 			}
@@ -260,30 +262,28 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	return nil
 }
 
-func (e *Engine) getPartitions(databaseId, tableId uint64) Partitions {
+func (e *Engine) getPartitions(databaseId, tableId uint64) logtailreplay.Partitions {
 	e.Lock()
 	defer e.Unlock()
 	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		parts = make(Partitions, len(e.dnMap))
+		parts = make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
 	return parts
 }
 
-func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64, tbl *txnTable) error {
-	parts := e.getPartitions(databaseId, tableId)
+func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
+	parts := e.getPartitions(tbl.db.databaseId, tbl.tableId)
 
 	for _, part := range parts {
 
 		select {
-		case <-part.lock:
-			defer func() {
-				part.lock <- struct{}{}
-			}()
+		case <-part.Lock():
+			defer part.Unlock()
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -303,7 +303,7 @@ func (e *Engine) lazyLoad(ctx context.Context, databaseId, tableId uint64, tbl *
 				return err
 			}
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primaryIdx, e, state, entry); err != nil {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
 					return err
 				}
 			}
@@ -321,14 +321,14 @@ func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, t
 }
 
 func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTable, op client.TxnOperator,
-	primaryIdx int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+	primarySeqnum int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	logDebugf(op.Txn(), "UpdateOfPull")
 	e.Lock()
 	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		parts = make(Partitions, len(e.dnMap))
+		parts = make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
-			parts[i] = NewPartition()
+			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
@@ -338,10 +338,9 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 		part := parts[e.dnMap[dn.ServiceID]]
 
 		select {
-		case <-part.lock:
-			if part.ts.Greater(ts) ||
-				part.ts.Equal(ts) {
-				part.lock <- struct{}{}
+		case <-part.Lock():
+			if part.TS.Greater(ts) || part.TS.Equal(ts) {
+				part.Unlock()
 				return nil
 			}
 		case <-ctx.Done():
@@ -349,15 +348,15 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 		}
 
 		if err := updatePartitionOfPull(
-			primaryIdx, tbl, ctx, op, e, part, dn,
-			genSyncLogTailReq(part.ts, ts, databaseId, tableId),
+			primarySeqnum, tbl, ctx, op, e, part, dn,
+			genSyncLogTailReq(part.TS, ts, databaseId, tableId),
 		); err != nil {
-			part.lock <- struct{}{}
+			part.Unlock()
 			return err
 		}
 
-		part.ts = ts
-		part.lock <- struct{}{}
+		part.TS = ts
+		part.Unlock()
 	}
 
 	return nil

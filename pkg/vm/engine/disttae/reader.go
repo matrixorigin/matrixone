@@ -16,8 +16,10 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -35,7 +37,8 @@ func (r *emptyReader) Close() error {
 	return nil
 }
 
-func (r *emptyReader) Read(ctx context.Context, cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *emptyReader) Read(_ context.Context, _ []string,
+	_ *plan.Expr, _ *mpool.MPool, _ engine.VectorPool) (*batch.Batch, error) {
 	return nil, nil
 }
 
@@ -43,36 +46,40 @@ func (r *blockReader) Close() error {
 	return nil
 }
 
-func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *blockReader) Read(ctx context.Context, cols []string,
+	_ *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if len(r.blks) == 0 {
 		return nil, nil
 	}
-	defer func() { r.blks = r.blks[1:] }()
+	defer func() {
+		r.blks = r.blks[1:]
+		r.currentStep++
+	}()
 
-	info := &r.blks[0].Info
+	info := r.blks[0]
 
-	if len(cols) != len(r.colIdxs) {
-		if len(r.colIdxs) == 0 {
-			r.colIdxs = make([]uint16, len(cols))
+	if len(cols) != len(r.seqnums) {
+		if len(r.seqnums) == 0 {
+			r.prefetchColIdxs = make([]uint16, 0)
+			r.seqnums = make([]uint16, len(cols))
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
 			r.pkidxInColIdxs = -1
 			for i, column := range cols {
 				// sometimes Name2ColIndex have no row_id， sometimes have one
 				if column == catalog.Row_ID {
-					if colIdx, ok := r.tableDef.Name2ColIndex[column]; ok {
-						r.colIdxs[i] = uint16(colIdx)
-					} else {
-						r.colIdxs[i] = uint16(len(r.tableDef.Name2ColIndex))
-					}
+					// actually rowid's seqnum does not matter because it is generated in memory
+					r.seqnums[i] = objectio.SEQNUM_ROWID
 					r.colTypes[i] = types.T_Rowid.ToType()
 				} else {
-					r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
-					if r.colIdxs[i] == uint16(r.primaryIdx) {
+					logicalIdx := r.tableDef.Name2ColIndex[column]
+					colDef := r.tableDef.Cols[logicalIdx]
+					r.seqnums[i] = uint16(colDef.Seqnum)
+					r.prefetchColIdxs = append(r.prefetchColIdxs, r.seqnums[i])
+					if int(r.seqnums[i]) == r.primarySeqnum {
 						r.pkidxInColIdxs = i
 						r.pkName = column
 					}
-					colDef := r.tableDef.Cols[r.colIdxs[i]]
 					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
 					if colDef.Default != nil {
 						r.colNulls[i] = colDef.Default.NullAbility
@@ -84,21 +91,33 @@ func (r *blockReader) Read(ctx context.Context, cols []string, _ *plan.Expr, m *
 		}
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, m)
+	//prefetch some objects
+	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
+		blockio.BlockPrefetch(r.prefetchColIdxs, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		r.infos = r.infos[1:]
+		r.steps = r.steps[1:]
+	}
+
+	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	logutil.Debugf("read %v with %v", cols, r.seqnums)
+	bat.SetAttributes(cols)
 	if err != nil {
 		return nil, err
 	}
 
 	// if it's not sorted, just return
-	if !r.blks[0].Info.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
+	if !r.blks[0].Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
 		return bat, nil
 	}
 
 	// if expr like : pkCol = xx，  we will try to find(binary search) the row in batch
 	vec := bat.GetVector(int32(r.pkidxInColIdxs))
-	canCompute, v := getPkValueByExpr(r.expr, r.pkName, vec.GetType().Oid)
-	if canCompute {
-		row := findRowByPkValue(vec, v)
+	if !r.init {
+		r.init = true
+		r.canCompute, r.searchFunc = getBinarySearchFuncByExpr(r.expr, r.pkName, vec.GetType().Oid)
+	}
+	if r.canCompute && r.searchFunc != nil {
+		row := r.searchFunc(vec)
 		if row >= vec.Length() {
 			// can not find row.
 			bat.Shrink([]int64{})
@@ -116,31 +135,31 @@ func (r *blockMergeReader) Close() error {
 	return nil
 }
 
-func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *blockMergeReader) Read(ctx context.Context, cols []string,
+	expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if len(r.blks) == 0 {
 		r.sels = nil
 		return nil, nil
 	}
 	defer func() { r.blks = r.blks[1:] }()
-	info := &r.blks[0].meta.Info
+	info := &r.blks[0].meta
 
-	if len(cols) != len(r.colIdxs) {
-		if len(r.colIdxs) == 0 {
-			r.colIdxs = make([]uint16, len(cols))
+	if len(cols) != len(r.seqnums) {
+		if len(r.seqnums) == 0 {
+			r.seqnums = make([]uint16, len(cols))
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
 			for i, column := range cols {
 				// sometimes Name2ColIndex have no row_id， sometimes have one
+				// sometimes Name2ColIndex have no row_id， sometimes have one
 				if column == catalog.Row_ID {
-					if colIdx, ok := r.tableDef.Name2ColIndex[column]; ok {
-						r.colIdxs[i] = uint16(colIdx)
-					} else {
-						r.colIdxs[i] = uint16(len(r.tableDef.Name2ColIndex))
-					}
+					// actually rowid's seqnum does not matter because it is generated in memory
+					r.seqnums[i] = objectio.SEQNUM_ROWID
 					r.colTypes[i] = types.T_Rowid.ToType()
 				} else {
-					r.colIdxs[i] = uint16(r.tableDef.Name2ColIndex[column])
-					colDef := r.tableDef.Cols[r.colIdxs[i]]
+					logicalIdx := r.tableDef.Name2ColIndex[column]
+					colDef := r.tableDef.Cols[logicalIdx]
+					r.seqnums[i] = uint16(colDef.Seqnum)
 					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
 					if colDef.Default != nil {
 						r.colNulls[i] = colDef.Default.NullAbility
@@ -152,7 +171,9 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string, expr *plan.E
 		}
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, r.colIdxs, r.colTypes, r.ts, r.fs, m)
+	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	logutil.Debugf("read %v with %v", cols, r.seqnums)
+	bat.SetAttributes(cols)
 	if err != nil {
 		return nil, err
 	}
@@ -183,12 +204,13 @@ func (r *mergeReader) Close() error {
 	return nil
 }
 
-func (r *mergeReader) Read(ctx context.Context, cols []string, expr *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
+func (r *mergeReader) Read(ctx context.Context, cols []string,
+	expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if len(r.rds) == 0 {
 		return nil, nil
 	}
 	for len(r.rds) > 0 {
-		bat, err := r.rds[0].Read(ctx, cols, expr, m)
+		bat, err := r.rds[0].Read(ctx, cols, expr, mp, vp)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()

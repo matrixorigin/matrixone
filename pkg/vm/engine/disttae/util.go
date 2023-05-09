@@ -14,29 +14,23 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
 	"math"
 	"sort"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -45,58 +39,18 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func fetchZonemapAndRowsFromBlockInfo(
+func evalNoColumnFilterExpr(
 	ctx context.Context,
-	idxs []uint16,
-	blockInfo catalog.BlockInfo,
-	fs fileservice.FileService,
-	m *mpool.MPool) ([][64]byte, uint32, error) {
-	zonemapList := make([][64]byte, len(idxs))
-
-	// raed s3
-	reader, err := blockio.NewObjectReader(fs, blockInfo.MetaLoc)
-	if err != nil {
-		return nil, 0, err
+	expr *plan.Expr,
+	proc *process.Process,
+) (selected bool) {
+	bat := batch.NewWithSize(0)
+	defer bat.Clean(proc.Mp())
+	var err error
+	if selected, err = plan2.EvalFilterExpr(ctx, expr, bat, proc); err != nil {
+		selected = true
 	}
-
-	obs, err := reader.LoadZoneMaps(ctx, idxs, blockInfo.MetaLoc.ID(), m)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	for i := range idxs {
-		bytes := obs[i].GetBuf()
-		copy(zonemapList[i][:], bytes[:])
-	}
-
-	return zonemapList, blockInfo.MetaLoc.Rows(), nil
-}
-
-func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
-	dataLength := len(columns)
-	datas := make([][2]any, dataLength)
-	dataTypes := make([]uint8, dataLength)
-
-	for i := 0; i < dataLength; i++ {
-		idx := columns[i]
-		dataTypes[i] = uint8(tableDef.Cols[idx].Typ.Id)
-		typ := types.T(dataTypes[i]).ToType()
-
-		zm := index.NewZoneMap(typ)
-		err := zm.Unmarshal(meta.Zonemap[idx][:])
-		if err != nil {
-			return nil, nil, err
-		}
-
-		min := zm.GetMin()
-		max := zm.GetMax()
-		if min == nil || max == nil {
-			return nil, nil, nil
-		}
-		datas[i] = [2]any{min, max}
-	}
-
-	return datas, dataTypes, nil
+	return
 }
 
 func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
@@ -168,6 +122,100 @@ func getPkExpr(expr *plan.Expr, pkName string) (bool, *plan.Expr) {
 		}
 	}
 
+	return false, nil
+}
+
+func getBinarySearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, func(*vector.Vector) int) {
+	canCompute, valExpr := getPkExpr(expr, pkName)
+	if !canCompute {
+		return canCompute, nil
+	}
+	switch val := valExpr.Expr.(*plan.Expr_C).C.Value.(type) {
+	case *plan.Const_I8Val:
+		ok, v := transferIval(val.I8Val, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(int8))
+	case *plan.Const_I16Val:
+		ok, v := transferIval(val.I16Val, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(int16))
+	case *plan.Const_I32Val:
+		ok, v := transferIval(val.I32Val, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(int32))
+	case *plan.Const_I64Val:
+		ok, v := transferIval(val.I64Val, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(int64))
+	case *plan.Const_Dval:
+		ok, v := transferDval(val.Dval, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(float32))
+	case *plan.Const_U8Val:
+		ok, v := transferUval(val.U8Val, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(uint8))
+	case *plan.Const_U16Val:
+		ok, v := transferUval(val.U16Val, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(uint16))
+	case *plan.Const_U32Val:
+		ok, v := transferUval(val.U32Val, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(uint32))
+	case *plan.Const_U64Val:
+		ok, v := transferUval(val.U64Val, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(uint64))
+	case *plan.Const_Fval:
+		ok, v := transferFval(val.Fval, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(float32))
+	case *plan.Const_Dateval:
+		ok, v := transferDateval(val.Dateval, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(types.Date))
+	case *plan.Const_Timeval:
+		ok, v := transferTimeval(val.Timeval, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(types.Time))
+	case *plan.Const_Datetimeval:
+		ok, v := transferDatetimeval(val.Datetimeval, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(types.Datetime))
+	case *plan.Const_Timestampval:
+		ok, v := transferTimestampval(val.Timestampval, oid)
+		if !ok {
+			return false, nil
+		}
+		return true, getBinarySearchFuncByPkValue(oid, v.(types.Timestamp))
+	}
 	return false, nil
 }
 
@@ -634,141 +682,26 @@ func getListByItems[T DNStore](list []T, items []int64) []int {
 // 	return dnList
 // }
 
-func findRowByPkValue(vec *vector.Vector, v any) int {
-	switch vec.GetType().Oid {
-	case types.T_int8:
-		rows := vector.MustFixedCol[int8](vec)
-		val := v.(int8)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_int16:
-		rows := vector.MustFixedCol[int16](vec)
-		val := v.(int16)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_int32:
-		rows := vector.MustFixedCol[int32](vec)
-		val := v.(int32)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_int64:
-		rows := vector.MustFixedCol[int64](vec)
-		val := v.(int64)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_uint8:
-		rows := vector.MustFixedCol[uint8](vec)
-		val := v.(uint8)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_uint16:
-		rows := vector.MustFixedCol[uint16](vec)
-		val := v.(uint16)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_uint32:
-		rows := vector.MustFixedCol[uint32](vec)
-		val := v.(uint32)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_uint64:
-		rows := vector.MustFixedCol[uint64](vec)
-		val := v.(uint64)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_float32:
-		rows := vector.MustFixedCol[float32](vec)
-		val := v.(float32)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_float64:
-		rows := vector.MustFixedCol[float64](vec)
-		val := v.(float64)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_date:
-		rows := vector.MustFixedCol[types.Date](vec)
-		val := v.(types.Date)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_time:
-		rows := vector.MustFixedCol[types.Time](vec)
-		val := v.(types.Time)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_datetime:
-		rows := vector.MustFixedCol[types.Datetime](vec)
-		val := v.(types.Datetime)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_timestamp:
-		rows := vector.MustFixedCol[types.Timestamp](vec)
-		val := v.(types.Timestamp)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx] >= val
-		})
-	case types.T_uuid:
-		rows := vector.MustFixedCol[types.Uuid](vec)
-		val := v.(types.Uuid)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Ge(val)
-		})
-	case types.T_decimal64:
-		rows := vector.MustFixedCol[types.Decimal64](vec)
-		val := v.(types.Decimal64)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Compare(val) >= 0
-		})
-	case types.T_decimal128:
-		rows := vector.MustFixedCol[types.Decimal128](vec)
-		val := v.(types.Decimal128)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			return rows[idx].Compare(val) >= 0
-		})
-	case types.T_char, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_varchar, types.T_json, types.T_blob:
-		// rows := vector.MustStrCols(vec)
-		// val := string(v.([]byte))
-		// return sort.SearchStrings(rows, val)
-		val := v.([]byte)
-		area := vec.GetArea()
-		varlenas := vector.MustFixedCol[types.Varlena](vec)
-		return sort.Search(vec.Length(), func(idx int) bool {
-			colVal := varlenas[idx].GetByteSlice(area)
-			return bytes.Compare(colVal, val) >= 0
-		})
-	}
-
-	return -1
+type compareT interface {
+	constraints.Integer | constraints.Float |
+		types.Date | types.Time | types.Datetime | types.Timestamp
 }
 
-func mustVectorFromProto(v *api.Vector) *vector.Vector {
-	ret, err := vector.ProtoVectorToVector(v)
-	if err != nil {
-		panic(err)
+func getBinarySearchFuncByPkValue[T compareT](typ types.T, v T) func(*vector.Vector) int {
+	switch typ {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		return func(vec *vector.Vector) int {
+			rows := vector.MustFixedCol[T](vec)
+			return sort.Search(vec.Length(), func(idx int) bool {
+				return rows[idx] >= v
+			})
+		}
+	default:
+		return nil
 	}
-	return ret
-}
-
-func mustVectorToProto(v *vector.Vector) *api.Vector {
-	ret, err := vector.VectorToProtoVector(v)
-	if err != nil {
-		panic(err)
-	}
-	return ret
 }
 
 func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {

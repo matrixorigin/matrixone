@@ -76,7 +76,7 @@ func MakeVector(typ types.Type, opts ...Options) (vec Vector) {
 func BuildBatch(attrs []string, colTypes []types.Type, opts Options) *Batch {
 	bat := &Batch{
 		Attrs:   make([]string, 0, len(attrs)),
-		nameidx: make(map[string]int, len(attrs)),
+		Nameidx: make(map[string]int, len(attrs)),
 		Vecs:    make([]Vector, 0, len(attrs)),
 	}
 	for i, attr := range attrs {
@@ -90,6 +90,6 @@ func NewEmptyBatch() *Batch {
 	return &Batch{
 		Attrs:   make([]string, 0),
 		Vecs:    make([]Vector, 0),
-		nameidx: make(map[string]int),
+		Nameidx: make(map[string]int),
 	}
 }

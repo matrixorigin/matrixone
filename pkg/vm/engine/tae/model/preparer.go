@@ -39,8 +39,10 @@ func PreparePhyAddrDataWithPool(typ types.Type, prefix []byte, startRow, length 
 }
 
 type PreparedCompactedBlockData struct {
-	Columns *containers.Batch
-	SortKey containers.Vector
+	Columns       *containers.Batch
+	SortKey       containers.Vector
+	SchemaVersion uint32
+	Seqnums       []uint16
 }
 
 func NewPreparedCompactedBlockData() *PreparedCompactedBlockData {
@@ -50,9 +52,10 @@ func NewPreparedCompactedBlockData() *PreparedCompactedBlockData {
 func (preparer *PreparedCompactedBlockData) Close() {
 	if preparer.Columns != nil {
 		preparer.Columns.Close()
+		preparer.Columns = nil
 	}
-	preparer.Columns.Close()
 	if preparer.SortKey != nil {
 		preparer.SortKey.Close()
+		preparer.SortKey = nil
 	}
 }

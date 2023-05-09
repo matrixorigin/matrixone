@@ -15,11 +15,10 @@
 package mergegroup
 
 import (
-	"reflect"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -36,6 +35,8 @@ const (
 )
 
 type container struct {
+	colexec.ReceiverOperator
+
 	state     int
 	typ       int
 	inserted  []uint8
@@ -45,11 +46,6 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 
 	bat *batch.Batch
-
-	// aliveMergeReceiver is a count for no-close receiver
-	aliveMergeReceiver int
-	// receiverListener is a structure to listen all the merge receiver.
-	receiverListener []reflect.SelectCase
 }
 
 type Argument struct {
@@ -61,6 +57,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()
+		ctr.FreeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
 	}

@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"net"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -61,10 +62,18 @@ type CNServer struct {
 	uuid string
 	// addr is the net address of CN server.
 	addr string
+	// conn for test.
+	conn net.Conn
 }
 
 // Connect connects to backend server and returns IOSession.
 func (s *CNServer) Connect() (goetty.IOSession, error) {
+	if s.conn != nil { // for test.
+		return goetty.NewIOSession(
+			goetty.WithSessionCodec(frontend.NewSqlCodec()),
+			goetty.WithSessionConn(0, s.conn),
+		), nil
+	}
 	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
 	err := c.Connect(s.addr, defaultConnectTimeout)
 	if err != nil {
@@ -120,7 +129,11 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 func (r *router) SelectByLabel(label labelInfo) (*CNServer, error) {
 	var cns []*CNServer
 	var cnEmpty, cnNotEmpty bool
-	r.moCluster.GetCNService(label.genSelector(), func(s metadata.CNService) bool {
+	selector := label.genSelector()
+	if label.isSuperTenant() {
+		selector = clusterservice.NewSelector()
+	}
+	r.moCluster.GetCNService(selector, func(s metadata.CNService) bool {
 		cns = append(cns, &CNServer{
 			reqLabel: label,
 			cnLabel:  s.Labels,

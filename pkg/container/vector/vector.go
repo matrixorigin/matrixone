@@ -59,6 +59,15 @@ type Vector struct {
 	isBin bool
 }
 
+func (v *Vector) Reset(typ types.Type) {
+	v.typ = typ
+	//v.data = v.data[:0]
+	v.area = v.area[:0]
+	v.nsp = &nulls.Nulls{}
+	v.length = 0
+	//v.capacity = cap(v.data) / v.typ.TypeSize()
+}
+
 func (v *Vector) UnsafeGetRawData() []byte {
 	length := 1
 	if !v.IsConst() {
@@ -287,6 +296,14 @@ func (v *Vector) Free(mp *mpool.MPool) {
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
+	err := v.MarshalBinaryWithBuffer(&buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 
 	// write class
 	buf.WriteByte(uint8(v.class))
@@ -321,7 +338,7 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 	// write nspLen, nsp
 	nspData, err := v.nsp.Show()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	nspLen := uint32(len(nspData))
 	buf.Write(types.EncodeUint32(&nspLen))
@@ -329,7 +346,7 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 		buf.Write(nspData)
 	}
 
-	return buf.Bytes(), nil
+	return nil
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
@@ -367,7 +384,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	nspLen := types.DecodeUint32(data[:4])
 	data = data[4:]
 	if nspLen > 0 {
-		if err := v.nsp.Read(data[:nspLen]); err != nil {
+		if err := v.nsp.ReadNoCopy(data[:nspLen]); err != nil {
 			return err
 		}
 		//data = data[nspLen:]
@@ -433,64 +450,25 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 }
 
 func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
-	if v.class == CONSTANT {
-		if v.IsConstNull() {
-			return NewConstNull(v.typ, length, mp)
-		}
-		return v
+	w := NewConstNull(v.typ, length, mp)
+	if v.IsConstNull() || nulls.Contains(v.nsp, uint64(row)) {
+		return w
 	}
 
-	if nulls.Contains(v.nsp, uint64(row)) {
-		return NewConstNull(v.typ, length, mp)
+	if v.IsConst() {
+		row = 0
 	}
 
-	switch v.typ.Oid {
-	case types.T_bool:
-		return NewConstFixed(v.typ, v.col.([]bool)[row], length, mp)
-	case types.T_int8:
-		return NewConstFixed(v.typ, v.col.([]int8)[row], length, mp)
-	case types.T_int16:
-		return NewConstFixed(v.typ, v.col.([]int16)[row], length, mp)
-	case types.T_int32:
-		return NewConstFixed(v.typ, v.col.([]int32)[row], length, mp)
-	case types.T_int64:
-		return NewConstFixed(v.typ, v.col.([]int64)[row], length, mp)
-	case types.T_uint8:
-		return NewConstFixed(v.typ, v.col.([]uint8)[row], length, mp)
-	case types.T_uint16:
-		return NewConstFixed(v.typ, v.col.([]uint16)[row], length, mp)
-	case types.T_uint32:
-		return NewConstFixed(v.typ, v.col.([]uint32)[row], length, mp)
-	case types.T_uint64:
-		return NewConstFixed(v.typ, v.col.([]uint64)[row], length, mp)
-	case types.T_float32:
-		return NewConstFixed(v.typ, v.col.([]float32)[row], length, mp)
-	case types.T_float64:
-		return NewConstFixed(v.typ, v.col.([]float64)[row], length, mp)
-	case types.T_date:
-		return NewConstFixed(v.typ, v.col.([]types.Date)[row], length, mp)
-	case types.T_datetime:
-		return NewConstFixed(v.typ, v.col.([]types.Datetime)[row], length, mp)
-	case types.T_time:
-		return NewConstFixed(v.typ, v.col.([]types.Time)[row], length, mp)
-	case types.T_timestamp:
-		return NewConstFixed(v.typ, v.col.([]types.Timestamp)[row], length, mp)
-	case types.T_decimal64:
-		return NewConstFixed(v.typ, v.col.([]types.Decimal64)[row], length, mp)
-	case types.T_decimal128:
-		return NewConstFixed(v.typ, v.col.([]types.Decimal128)[row], length, mp)
-	case types.T_uuid:
-		return NewConstFixed(v.typ, v.col.([]types.Uuid)[row], length, mp)
-	case types.T_TS:
-		return NewConstFixed(v.typ, v.col.([]types.TS)[row], length, mp)
-	case types.T_Rowid:
-		return NewConstFixed(v.typ, v.col.([]types.Rowid)[row], length, mp)
-	case types.T_Blockid:
-		return NewConstFixed(v.typ, v.col.([]types.Blockid)[row], length, mp)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
-		return NewConstBytes(v.typ, v.GetBytesAt(row), length, mp)
+	sz := v.typ.TypeSize()
+	w.data = v.data[row*sz : (row+1)*sz]
+	w.setupColFromData()
+	if v.typ.IsVarlen() {
+		w.area = v.area
 	}
-	return nil
+	w.cantFreeData = true
+	w.cantFreeArea = true
+
+	return w
 }
 
 // PreExtend use to expand the capacity of the vector
@@ -704,119 +682,938 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 	return nil
 }
 
+// GetUnionAllFunction: A more sensible function for copying vector,
+// which avoids having to do type conversions and type judgements every time you append.
+func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
+	switch typ.Oid {
+	case types.T_bool:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[bool](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_int8:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[int8](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_int16:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[int16](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_int32:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[int32](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_int64:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[int64](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_uint8:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[uint8](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_uint16:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[uint16](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_uint32:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[uint32](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_uint64:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[uint64](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_float32:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[float32](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_float64:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[float64](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_date:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Date](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_datetime:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Datetime](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_time:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Time](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_timestamp:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Timestamp](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_decimal64:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Decimal64](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_decimal128:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Decimal128](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_uuid:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Uuid](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_TS:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.TS](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_Rowid:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Rowid](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_json, types.T_blob, types.T_text:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			if w.IsConst() {
+				if err := appendMultiBytes(v, ws[0].GetByteSlice(w.area), false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
+				area, err := mp.Grow(v.area, sz)
+				if err != nil {
+					return err
+				}
+				v.area = area[:len(v.area)]
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			length := uint32(len(v.area))
+			v.area = append(v.area, w.area...)
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			vs := v.col.([]types.Varlena)
+			for i, j := v.length, v.length+w.length; i < j; i++ {
+				if vs[i][0] > types.VarlenaInlineSize {
+					s := vs[i].U32Slice()
+					s[1] += length
+				}
+			}
+			v.length += w.length
+			return nil
+		}
+	case types.T_Blockid:
+		return func(v, w *Vector) error {
+			if w.IsConstNull() {
+				if err := appendMultiFixed(v, 0, true, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if w.IsConst() {
+				ws := MustFixedCol[types.Blockid](w)
+				if err := appendMultiFixed(v, ws[0], false, w.length, mp); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if w.nsp.Any() {
+				for i := 0; i < w.length; i++ {
+					if nulls.Contains(w.nsp, uint64(i)) {
+						nulls.Add(v.nsp, uint64(i+v.length))
+					}
+				}
+			}
+			sz := v.typ.TypeSize()
+			copy(v.data[v.length*sz:], w.data[:w.length*sz])
+			v.length += w.length
+			return nil
+		}
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.GetUnionFunction", typ))
+	}
+}
+
 // GetUnionOneFunction: A more sensible function for copying elements,
 // which avoids having to do type conversions and type judgements every time you append.
 func GetUnionOneFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel int64) error {
 	switch typ.Oid {
 	case types.T_bool:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, true, true, mp)
+			}
 			ws := MustFixedCol[bool](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_int8:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, int8(0), true, mp)
+			}
 			ws := MustFixedCol[int8](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_int16:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, int16(0), true, mp)
+			}
 			ws := MustFixedCol[int16](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_int32:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, int32(0), true, mp)
+			}
 			ws := MustFixedCol[int32](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_int64:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, int64(0), true, mp)
+			}
 			ws := MustFixedCol[int64](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_uint8:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, uint8(0), true, mp)
+			}
 			ws := MustFixedCol[uint8](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_uint16:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, uint16(0), true, mp)
+			}
 			ws := MustFixedCol[uint16](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_uint32:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, uint32(0), true, mp)
+			}
 			ws := MustFixedCol[uint32](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_uint64:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, uint64(0), true, mp)
+			}
 			ws := MustFixedCol[uint64](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_float32:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, float32(0), true, mp)
+			}
 			ws := MustFixedCol[float32](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_float64:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, float64(0), true, mp)
+			}
 			ws := MustFixedCol[float64](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_date:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Date(0), true, mp)
+			}
 			ws := MustFixedCol[types.Date](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_datetime:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Datetime(0), true, mp)
+			}
 			ws := MustFixedCol[types.Datetime](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_time:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Time(0), true, mp)
+			}
 			ws := MustFixedCol[types.Time](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_timestamp:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Timestamp(0), true, mp)
+			}
 			ws := MustFixedCol[types.Timestamp](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_decimal64:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Decimal64(0), true, mp)
+			}
 			ws := MustFixedCol[types.Decimal64](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_decimal128:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Decimal128{}, true, mp)
+			}
 			ws := MustFixedCol[types.Decimal128](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_uuid:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Uuid{}, true, mp)
+			}
 			ws := MustFixedCol[types.Uuid](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_TS:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.TS{}, true, mp)
+			}
 			ws := MustFixedCol[types.TS](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_Rowid:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Rowid{}, true, mp)
+			}
 			ws := MustFixedCol[types.Rowid](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
+		}
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_json, types.T_blob, types.T_text:
+		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Varlena{}, true, mp)
+			}
+			ws := MustFixedCol[types.Varlena](w)
+			if w.IsConst() {
+				return appendOneBytes(v, ws[0].GetByteSlice(w.area), false, mp)
+			}
+			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	case types.T_Blockid:
 		return func(v, w *Vector, sel int64) error {
+			if w.IsConstNull() {
+				return appendOneFixed(v, types.Blockid{}, true, mp)
+			}
 			ws := MustFixedCol[types.Blockid](w)
+			if w.IsConst() {
+				return appendOneFixed(v, ws[0], false, mp)
+			}
 			return appendOneFixed(v, ws[sel], nulls.Contains(w.nsp, uint64(sel)), mp)
-		}
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text:
-		return func(v, w *Vector, sel int64) error {
-			ws := MustFixedCol[types.Varlena](w)
-			return appendOneBytes(v, ws[sel].GetByteSlice(w.area), nulls.Contains(w.nsp, uint64(sel)), mp)
 		}
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.GetUnionOneFunction", typ))

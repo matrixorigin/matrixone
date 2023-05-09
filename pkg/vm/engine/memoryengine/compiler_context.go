@@ -171,8 +171,9 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 	}
 
 	objRef = &plan.ObjectRef{
-		SchemaName: schemaName,
-		ObjName:    tableName,
+		SchemaName:   schemaName,
+		ObjName:      tableName,
+		PubAccountId: -1,
 	}
 
 	tableDef = &plan.TableDef{
@@ -258,5 +259,6 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 		Pkidx:     int32(idx),
 		Comment:   attr.Comment,
 		ClusterBy: attr.ClusterBy,
+		Seqnum:    uint32(attr.Seqnum),
 	}
 }

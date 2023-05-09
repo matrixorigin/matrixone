@@ -32,17 +32,8 @@ import (
 
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
-func compareSegmentFn(a, b *SegmentEntry) int {
-	if a.SortHint < b.SortHint {
-		return -1
-	} else if a.SortHint > b.SortHint {
-		return 1
-	}
-	return 0
-}
-
 type SegmentEntry struct {
-	ID types.Uuid
+	ID objectio.Segmentid
 	*BaseEntryImpl[*MetadataMVCCNode]
 	table   *TableEntry
 	entries map[types.Blockid]*common.GenericDLNode[*BlockEntry]
@@ -52,13 +43,13 @@ type SegmentEntry struct {
 	segData data.Segment
 }
 
-func NewSegmentEntry(table *TableEntry, id types.Uuid, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
+func NewSegmentEntry(table *TableEntry, id *objectio.Segmentid, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
 	e := &SegmentEntry{
-		ID: id,
+		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		table:   table,
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		SegmentNode: &SegmentNode{
 			state:    state,
@@ -76,7 +67,7 @@ func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 	}
 	return e
@@ -84,11 +75,11 @@ func NewReplaySegmentEntry() *SegmentEntry {
 
 func NewStandaloneSegment(table *TableEntry, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		ID: objectio.NewSegmentid(),
+		ID: *objectio.NewSegmentid(),
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		table:   table,
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		SegmentNode: &SegmentNode{
 			state:   ES_Appendable,
@@ -104,7 +95,7 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		table:   table,
-		link:    common.NewGenericSortedDList(compareBlockFn),
+		link:    common.NewGenericSortedDList((*BlockEntry).Less),
 		entries: make(map[types.Blockid]*common.GenericDLNode[*BlockEntry]),
 		SegmentNode: &SegmentNode{
 			state: ES_Appendable,
@@ -112,29 +103,40 @@ func NewSysSegmentEntry(table *TableEntry, id types.Uuid) *SegmentEntry {
 	}
 	e.CreateWithTS(types.SystemDBTS, &MetadataMVCCNode{})
 	var bid types.Blockid
-	if table.schema.Name == SystemTableSchema.Name {
+	schema := table.GetLastestSchema()
+	if schema.Name == SystemTableSchema.Name {
 		bid = SystemBlock_Table_ID
-	} else if table.schema.Name == SystemDBSchema.Name {
+	} else if schema.Name == SystemDBSchema.Name {
 		bid = SystemBlock_DB_ID
-	} else if table.schema.Name == SystemColumnSchema.Name {
+	} else if schema.Name == SystemColumnSchema.Name {
 		bid = SystemBlock_Columns_ID
 	} else {
 		panic("not supported")
 	}
+	e.ID = *bid.Segment()
 	block := NewSysBlockEntry(e, bid)
 	e.AddEntryLocked(block)
 	return e
 }
 
-func (entry *SegmentEntry) GetBlockEntryByID(id types.Blockid) (blk *BlockEntry, err error) {
+func (entry *SegmentEntry) Less(b *SegmentEntry) int {
+	if entry.SortHint < b.SortHint {
+		return -1
+	} else if entry.SortHint > b.SortHint {
+		return 1
+	}
+	return 0
+}
+
+func (entry *SegmentEntry) GetBlockEntryByID(id *objectio.Blockid) (blk *BlockEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	return entry.GetBlockEntryByIDLocked(id)
 }
 
 // XXX API like this, why do we need the error?   Isn't blk is nil enough?
-func (entry *SegmentEntry) GetBlockEntryByIDLocked(id types.Blockid) (blk *BlockEntry, err error) {
-	node := entry.entries[id]
+func (entry *SegmentEntry) GetBlockEntryByIDLocked(id *objectio.Blockid) (blk *BlockEntry, err error) {
+	node := entry.entries[*id]
 	if node == nil {
 		err = moerr.GetOkExpectedEOB()
 		return
@@ -144,7 +146,7 @@ func (entry *SegmentEntry) GetBlockEntryByIDLocked(id types.Blockid) (blk *Block
 }
 
 func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := CmdUpdateSegment
+	cmdType := IOET_WALTxnCommand_Segment
 	entry.RLock()
 	defer entry.RUnlock()
 	return newSegmentCmd(id, cmdType, entry), nil
@@ -294,7 +296,7 @@ func (entry *SegmentEntry) CreateBlock(
 	opts *objectio.CreateBlockOpt) (created *BlockEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	var id types.Blockid
+	var id *objectio.Blockid
 	if opts != nil && opts.Id != nil {
 		id = objectio.NewBlockid(&entry.ID, opts.Id.Filen, opts.Id.Blkn)
 		if entry.nextObjectIdx <= opts.Id.Filen {
@@ -307,7 +309,7 @@ func (entry *SegmentEntry) CreateBlock(
 	if entry.nextObjectIdx == math.MaxUint16 {
 		panic("bad logic: full object offset")
 	}
-	if _, ok := entry.entries[id]; ok {
+	if _, ok := entry.entries[*id]; ok {
 		panic(fmt.Sprintf("duplicate bad block id: %s", id.String()))
 	}
 	if opts != nil && opts.Loc != nil {
@@ -319,7 +321,7 @@ func (entry *SegmentEntry) CreateBlock(
 	return
 }
 
-func (entry *SegmentEntry) DropBlockEntry(id types.Blockid, txn txnif.AsyncTxn) (deleted *BlockEntry, err error) {
+func (entry *SegmentEntry) DropBlockEntry(id *objectio.Blockid, txn txnif.AsyncTxn) (deleted *BlockEntry, err error) {
 	blk, err := entry.GetBlockEntryByID(id)
 	if err != nil {
 		return
@@ -361,10 +363,12 @@ func (entry *SegmentEntry) ReplayAddEntryLocked(block *BlockEntry) {
 }
 
 func (entry *SegmentEntry) AsCommonID() *common.ID {
-	return &common.ID{
-		TableID:   entry.GetTable().ID,
-		SegmentID: entry.ID,
+	id := &common.ID{
+		DbID:    entry.GetTable().GetDB().ID,
+		TableID: entry.GetTable().ID,
 	}
+	id.SetSegmentID(&entry.ID)
+	return id
 }
 
 func (entry *SegmentEntry) GetCatalog() *Catalog { return entry.table.db.catalog }

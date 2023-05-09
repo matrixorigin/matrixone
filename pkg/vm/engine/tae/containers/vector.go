@@ -20,6 +20,7 @@ import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -57,6 +58,9 @@ func NewVector[T any](typ types.Type, opts ...Options) *vector[T] {
 }
 
 func (vec *vector[T]) Get(i int) any {
+	if vec.downstreamVector.IsConstNull() {
+		return nil
+	}
 	if vec.GetType().IsVarlen() {
 		bs := vec.ShallowGet(i).([]byte)
 		ret := make([]byte, len(bs))
@@ -76,6 +80,7 @@ func (vec *vector[T]) Length() int {
 }
 
 func (vec *vector[T]) Append(v any, isNull bool) {
+	// innsert AppendAny will check IsConst
 	vec.tryCoW()
 
 	var err error
@@ -94,22 +99,35 @@ func (vec *vector[T]) GetAllocator() *mpool.MPool {
 }
 
 func (vec *vector[T]) IsNull(i int) bool {
-	return vec.downstreamVector.GetNulls() != nil && vec.downstreamVector.GetNulls().Contains(uint64(i))
+	inner := vec.downstreamVector
+	if inner.IsConstNull() {
+		return true
+	}
+	if inner.IsConst() {
+		return false
+	}
+	return cnNulls.Contains(inner.GetNulls(), uint64(i))
 }
 
 func (vec *vector[T]) NullMask() *cnNulls.Nulls {
 	return vec.downstreamVector.GetNulls()
 }
 
-func (vec *vector[T]) GetType() types.Type {
-	return *vec.downstreamVector.GetType()
+func (vec *vector[T]) GetType() *types.Type {
+	return vec.downstreamVector.GetType()
 }
 
 func (vec *vector[T]) Extend(src Vector) {
+	if vec.downstreamVector.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("extend to const vector"))
+	}
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
 
 func (vec *vector[T]) Update(i int, v any, isNull bool) {
+	if vec.downstreamVector.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("update to const vector"))
+	}
 	vec.tryCoW()
 	UpdateValue(vec.downstreamVector, uint32(i), v, isNull)
 }
@@ -119,66 +137,109 @@ func (vec *vector[T]) Slice() any {
 }
 
 func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
+	var bs bytes.Buffer
 
-	// 1. Vector bytes
-	var buf []byte
-	if buf, err = vec.downstreamVector.MarshalBinary(); err != nil {
-		return 0, err
+	var size int64
+	_, _ = bs.Write(types.EncodeInt64(&size))
+
+	if err = vec.downstreamVector.MarshalBinaryWithBuffer(&bs); err != nil {
+		return
 	}
 
-	//0. Length of vector bytes [8 bytes]
-	i64 := int64(len(buf))
-	buf = append(types.EncodeInt64(&i64), buf...)
+	size = int64(bs.Len() - 8)
 
-	var writtenBytes int
-	if writtenBytes, err = w.Write(buf); err != nil {
-		return 0, err
+	buf := bs.Bytes()
+	copy(buf[:8], types.EncodeInt64(&size))
+
+	if _, err = w.Write(buf); err != nil {
+		return
 	}
 
-	return int64(writtenBytes), nil
+	n = int64(len(buf))
+	return
 }
 
 func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
-	// 0. Length [8 bytes]
-	lengthBytes := make([]byte, 8)
-	if _, err = r.Read(lengthBytes); err != nil {
-		return 0, err
+	buf := make([]byte, 8)
+	if _, err = r.Read(buf); err != nil {
+		return
 	}
-	length := types.DecodeInt64(lengthBytes[:8])
+
 	n += 8
 
 	// 1. Whole DN Vector
-	buf := make([]byte, length)
+	buf = make([]byte, types.DecodeInt64(buf[:]))
 	if _, err = r.Read(buf); err != nil {
-		return 0, err
+		return
 	}
 
 	n += int64(len(buf))
 
+	t := vec.downstreamVector.GetType()
 	vec.releaseDownstream()
+	vec.downstreamVector = cnVector.NewVec(*t)
 	if err = vec.downstreamVector.UnmarshalBinary(buf); err != nil {
-		return 0, err
+		return
 	}
 
-	return n, nil
+	return
 }
 
 func (vec *vector[T]) HasNull() bool {
+	if vec.downstreamVector.IsConstNull() {
+		return true
+	}
+	if vec.downstreamVector.IsConst() {
+		return false
+	}
 	return vec.NullMask() != nil && vec.NullMask().Any()
 }
 
+func (vec *vector[T]) NullCount() int {
+	if vec.downstreamVector.IsConstNull() {
+		return vec.Length()
+	}
+	if vec.downstreamVector.IsConst() {
+		return 0
+	}
+	if vec.NullMask() != nil {
+		return vec.NullMask().GetCardinality()
+	}
+	return 0
+}
+
+// conver a const vector to a normal one, getting ready to edit
+func (vec *vector[T]) TryConvertConst() Vector {
+	if vec.downstreamVector.IsConstNull() {
+		ret := NewVector[T](*vec.GetType())
+		ret.mpool = vec.mpool
+		for i := 0; i < vec.Length(); i++ {
+			ret.Append(nil, true)
+		}
+		return ret
+	}
+
+	if vec.downstreamVector.IsConst() {
+		ret := NewVector[T](*vec.GetType())
+		ret.mpool = vec.mpool
+		v := vec.Get(0)
+		for i := 0; i < vec.Length(); i++ {
+			ret.Append(v, false)
+		}
+		return ret
+	}
+	return vec
+}
+
 func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
-	return vec.ForeachWindow(0, vec.Length(), op, sels)
+	return vec.ForeachWindow(0, vec.downstreamVector.Length(), op, sels)
 }
+
 func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	err = vec.forEachWindowWithBias(offset, length, op, sels, 0, false)
-	return
-}
-func (vec *vector[T]) ForeachShallow(op ItOp, sels *roaring.Bitmap) error {
-	return vec.ForeachWindowShallow(0, vec.Length(), op, sels)
-}
-func (vec *vector[T]) ForeachWindowShallow(offset, length int, op ItOp, sels *roaring.Bitmap) error {
-	return vec.forEachWindowWithBias(offset, length, op, sels, 0, true)
+	if vec.downstreamVector.GetType().IsVarlen() {
+		return ForeachWindowVarlen(vec, offset, length, nil, op, sels)
+	}
+	return ForeachWindowFixed[T](vec, offset, length, nil, op, sels)
 }
 
 func (vec *vector[T]) Close() {
@@ -186,9 +247,13 @@ func (vec *vector[T]) Close() {
 }
 
 func (vec *vector[T]) releaseDownstream() {
+	if vec.downstreamVector == nil {
+		return
+	}
 	if !vec.downstreamVector.NeedDup() {
 		vec.downstreamVector.Free(vec.mpool)
 	}
+	vec.downstreamVector = nil
 }
 
 func (vec *vector[T]) Allocated() int {
@@ -212,6 +277,9 @@ func (vec *vector[T]) tryCoW() {
 }
 
 func (vec *vector[T]) Window(offset, length int) Vector {
+	if vec.downstreamVector.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("foreach to const vector"))
+	}
 	var err error
 	win := new(vector[T])
 	win.mpool = vec.mpool
@@ -231,7 +299,16 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 		opts.Allocator = allocator[0]
 	}
 
-	cloned := NewVector[T](vec.GetType(), opts)
+	cloned := NewVector[T](*vec.GetType(), opts)
+	if vec.downstreamVector.IsConstNull() {
+		cloned.downstreamVector = cnVector.NewConstNull(*vec.GetType(), length, vec.GetAllocator())
+		return cloned
+	}
+
+	if vec.downstreamVector.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("cloneWindow to const vector"))
+	}
+
 	var err error
 	cloned.downstreamVector, err = vec.downstreamVector.CloneWindow(offset, offset+length, cloned.GetAllocator())
 	if err != nil {
@@ -242,6 +319,9 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 }
 
 func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+	if vec.downstreamVector.IsConst() {
+		panic(moerr.NewInternalErrorNoCtx("extend to const vector"))
+	}
 	if srcLen <= 0 {
 		return
 	}
@@ -254,92 +334,6 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func (vec *vector[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int, shallow bool) (err error) {
-
-	if !vec.HasNull() {
-		var v T
-		if _, ok := any(v).([]byte); !ok {
-			// Optimization for :- Vectors which are 1. not containing nulls & 2. not byte[]
-			slice := vec.Slice().([]T)
-			slice = slice[offset+bias : offset+length+bias]
-			if sels == nil || sels.IsEmpty() {
-				for i, elem := range slice {
-					var vv any
-					isNull := false
-					if vec.IsNull(i + offset + bias) {
-						isNull = true
-						vv = nil
-					} else {
-						vv = elem
-					}
-					if err = op(vv, isNull, i+offset); err != nil {
-						break
-					}
-				}
-			} else {
-				idxes := sels.ToArray()
-				end := offset + length
-				for _, idx := range idxes {
-					if int(idx) < offset {
-						continue
-					} else if int(idx) >= end {
-						break
-					}
-
-					var vv any
-					isNull := false
-					if vec.IsNull(int(idx) + bias) {
-						isNull = true
-						vv = nil
-					} else {
-						vv = slice[int(idx)-offset]
-					}
-					if err = op(vv, isNull, int(idx)); err != nil {
-						break
-					}
-				}
-			}
-			return
-		}
-
-	}
-	if sels == nil || sels.IsEmpty() {
-		for i := offset; i < offset+length; i++ {
-			var elem any
-			if shallow {
-				elem = vec.ShallowGet(i + bias)
-			} else {
-				elem = vec.Get(i + bias)
-			}
-			if err = op(elem, vec.IsNull(i+bias), i); err != nil {
-				break
-			}
-		}
-	} else {
-
-		idxes := sels.ToArray()
-		end := offset + length
-		for _, idx := range idxes {
-			if int(idx) < offset {
-				continue
-			} else if int(idx) >= end {
-				break
-			}
-			var elem any
-			if shallow {
-				elem = vec.ShallowGet(int(idx) + bias)
-			} else {
-				elem = vec.Get(int(idx) + bias)
-			}
-
-			if err = op(elem, vec.IsNull(int(idx)+bias), int(idx)); err != nil {
-				break
-			}
-		}
-	}
-	return
 }
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
@@ -445,7 +439,7 @@ func (vec *vector[T]) Equals(o Vector) bool {
 	if vec.Length() != o.Length() {
 		return false
 	}
-	if vec.GetType() != o.GetType() {
+	if *vec.GetType() != *o.GetType() {
 		return false
 	}
 	if vec.HasNull() != o.HasNull() {

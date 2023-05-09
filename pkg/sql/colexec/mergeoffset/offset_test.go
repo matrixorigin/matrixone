@@ -95,6 +95,7 @@ func TestOffset(t *testing.T) {
 				}
 			}
 		}
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -42,6 +41,7 @@ type CheckpointUnit interface {
 type BlockAppender interface {
 	GetID() *common.ID
 	GetMeta() any
+	IsSameColumns(otherSchema any /*avoid import cycle*/) bool
 	PrepareAppend(rows uint32,
 		txn txnif.AsyncTxn) (
 		node txnif.AppendNode, created bool, n uint32, err error)
@@ -72,13 +72,10 @@ type Block interface {
 	PrepareCompact() bool
 
 	Rows() int
-	GetColumnDataByNames(txn txnif.AsyncTxn, attrs []string) (*model.BlockView, error)
-	GetColumnDataByIds(txn txnif.AsyncTxn, colIdxes []int) (*model.BlockView, error)
-	GetColumnDataByName(txn txnif.AsyncTxn, attr string) (*model.ColumnView, error)
-	GetColumnDataById(txn txnif.AsyncTxn, colIdx int) (*model.ColumnView, error)
+	GetColumnDataById(txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int) (*model.ColumnView, error)
+	GetColumnDataByIds(txn txnif.AsyncTxn, readSchema any, colIdxes []int) (*model.BlockView, error)
 	Prefetch(idxes []uint16) error
 	GetMeta() any
-	GetBufMgr() base.INodeManager
 
 	MakeAppender() (BlockAppender, error)
 	RangeDelete(txn txnif.AsyncTxn, start, end uint32, dt handle.DeleteType) (txnif.DeleteNode, error)
@@ -96,16 +93,17 @@ type Block interface {
 	//	metaLoc objectio.Location, rowmask *roaring.Bitmap, precommit bool) error
 
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
-	GetValue(txn txnif.AsyncTxn, row, col int) (any, bool, error)
+	GetValue(txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
 
 	Init() error
 	TryUpgrade() error
-	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
+	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS
+	FreezeAppend()
 
 	Close()
 }

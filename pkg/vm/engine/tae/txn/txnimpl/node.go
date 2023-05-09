@@ -18,7 +18,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -38,19 +37,19 @@ type node struct {
 func NewNode(
 	tbl *txnTable,
 	fs *objectio.ObjectFS,
-	mgr base.INodeManager,
+	indexCache model.LRUCache,
 	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
 ) *node {
 	impl := new(node)
-	impl.baseNode = newBaseNode(tbl, fs, mgr, sched, meta)
-	impl.storage.pnode = newPersistedNode(impl.baseNode)
-	impl.storage.pnode.Ref()
+	impl.baseNode = newBaseNode(tbl, fs, indexCache, sched, meta)
+	// impl.storage.pnode = newPersistedNode(impl.baseNode)
+	// impl.storage.pnode.Ref()
 	return impl
 }
 
 func (n *node) Close() error {
-	n.storage.pnode.close()
+	// n.storage.pnode.close()
 	return nil
 }
 
@@ -110,7 +109,6 @@ func (n *node) AddApplyInfo(
 	srcLen,
 	destOff,
 	destLen uint32,
-	dbid uint64,
 	dest *common.ID) *appendInfo {
 	panic("not supported ")
 }

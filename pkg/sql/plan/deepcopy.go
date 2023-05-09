@@ -404,7 +404,7 @@ func DeepCopyDefault(def *plan.Default) *plan.Default {
 	}
 }
 
-func DeepCopyTyp(typ *plan.Type) *plan.Type {
+func DeepCopyType(typ *plan.Type) *plan.Type {
 	if typ == nil {
 		return nil
 	}
@@ -425,13 +425,15 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		ColId:     col.ColId,
 		Name:      col.Name,
 		Alg:       col.Alg,
-		Typ:       DeepCopyTyp(col.Typ),
+		Typ:       DeepCopyType(col.Typ),
 		Default:   DeepCopyDefault(col.Default),
 		Primary:   col.Primary,
 		Pkidx:     col.Pkidx,
 		Comment:   col.Comment,
 		OnUpdate:  DeepCopyOnUpdate(col.OnUpdate),
 		ClusterBy: col.ClusterBy,
+		Hidden:    col.Hidden,
+		Seqnum:    col.Seqnum,
 	}
 }
 
@@ -861,7 +863,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ: DeepCopyTyp(expr.Typ),
+		Typ: DeepCopyType(expr.Typ),
 	}
 
 	switch item := expr.Expr.(type) {
@@ -974,7 +976,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_T:
 		newExpr.Expr = &plan.Expr_T{
 			T: &plan.TargetType{
-				Typ: DeepCopyTyp(item.T.Typ),
+				Typ: DeepCopyType(item.T.Typ),
 			},
 		}
 

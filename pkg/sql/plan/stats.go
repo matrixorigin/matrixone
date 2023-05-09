@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -76,6 +77,10 @@ func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
 	if sc == nil {
 		return NewStatsInfoMap()
 	}
+	switch tableID {
+	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
+		return NewStatsInfoMap()
+	}
 	if s, ok := (sc.cachePool)[tableID]; ok {
 		return s
 	} else {
@@ -86,89 +91,61 @@ func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
 }
 
 type InfoFromZoneMap struct {
-	ValMap         []map[any]int // all distinct value in blocks zonemap
-	MinVal         []any         //minvalue of all blocks for column
-	MaxVal         []any         //maxvalue of all blocks for column
-	DataTypes      []types.Type
-	MaybeUniqueMap []bool
+	ColumnZMs  []objectio.ZoneMap
+	DataTypes  []types.Type
+	ColumnNDVs []float64
 }
 
-func NewInfoFromZoneMap(lenCols, blockNumTotal int) *InfoFromZoneMap {
+func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	info := &InfoFromZoneMap{
-		ValMap:         make([]map[any]int, lenCols),
-		MinVal:         make([]any, lenCols),
-		MaxVal:         make([]any, lenCols),
-		DataTypes:      make([]types.Type, lenCols),
-		MaybeUniqueMap: make([]bool, lenCols),
-	}
-	for i := 0; i < lenCols; i++ {
-		info.ValMap[i] = make(map[any]int, blockNumTotal)
+		ColumnZMs:  make([]objectio.ZoneMap, lenCols),
+		DataTypes:  make([]types.Type, lenCols),
+		ColumnNDVs: make([]float64, lenCols),
 	}
 	return info
 }
 
-func GetHighNDVColumns(s *StatsInfoMap, b *Binding) []int32 {
-	cols := make([]int32, 0)
-	if s.TableCnt != 0 {
-		for colName, ndv := range s.NdvMap {
-			if ndv/s.TableCnt > 0.99 {
-				cols = append(cols, b.FindColumn(colName))
-			}
-		}
-	}
-	return cols
-}
-
-func UpdateStatsInfoMap(info *InfoFromZoneMap, columns []int, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
+func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
 	logutil.Infof("need to update statsCache for table %v", tableDef.Name)
 	s.BlockNumber = blockNumTotal
 	s.TableCnt = tableCnt
 	s.tableName = tableDef.Name
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
 	//set info in statsInfoMap
-	for i := range columns {
-		colName := tableDef.Cols[columns[i]].Name
-		s.NdvMap[colName] = calcNdv(info.MinVal[i], info.MaxVal[i], float64(len(info.ValMap[i])), float64(blockNumTotal), tableCnt, info.DataTypes[i], info.MaybeUniqueMap[i])
+	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
+		colName := coldef.Name
+		s.NdvMap[colName] = info.ColumnNDVs[i]
 		s.DataTypeMap[colName] = info.DataTypes[i].Oid
 		switch info.DataTypes[i].Oid {
 		case types.T_int8:
-			s.MinValMap[colName] = float64(info.MinVal[i].(int8))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(int8))
+			s.MinValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_int16:
-			s.MinValMap[colName] = float64(info.MinVal[i].(int16))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(int16))
+			s.MinValMap[colName] = float64(types.DecodeInt16(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeInt16(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_int32:
-			s.MinValMap[colName] = float64(info.MinVal[i].(int32))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(int32))
+			s.MinValMap[colName] = float64(types.DecodeInt32(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeInt32(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_int64:
-			s.MinValMap[colName] = float64(info.MinVal[i].(int64))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(int64))
+			s.MinValMap[colName] = float64(types.DecodeInt64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeInt64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_uint8:
-			s.MinValMap[colName] = float64(info.MinVal[i].(uint8))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint8))
+			s.MinValMap[colName] = float64(types.DecodeUint8(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeUint8(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_uint16:
-			s.MinValMap[colName] = float64(info.MinVal[i].(uint16))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint16))
+			s.MinValMap[colName] = float64(types.DecodeUint16(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeUint16(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_uint32:
-			s.MinValMap[colName] = float64(info.MinVal[i].(uint32))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint32))
+			s.MinValMap[colName] = float64(types.DecodeUint32(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeUint32(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_uint64:
-			s.MinValMap[colName] = float64(info.MinVal[i].(uint64))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(uint64))
+			s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_date:
-			s.MinValMap[colName] = float64(info.MinVal[i].(types.Date))
-			s.MaxValMap[colName] = float64(info.MaxVal[i].(types.Date))
+			s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
 		}
 	}
-}
-
-func MakeAllColumns(tableDef *plan.TableDef) []int {
-	lenCols := len(tableDef.Cols)
-	cols := make([]int, lenCols-1)
-	for i := 0; i < lenCols-1; i++ {
-		cols[i] = i
-	}
-	return cols
 }
 
 func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
@@ -184,9 +161,23 @@ func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
 	} else if sortOrder == 1 {
 		return outCnt * 0.7
 	} else {
-		return outCnt * 0.1
+		return outCnt * 0.5
 	}
 
+}
+
+// cols in one table, return if ndv of  multi column is high enough
+func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool {
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil || tableDef == nil {
+		return false
+	}
+	s := sc.GetStatsInfoMap(tableDef.TblId)
+	var totalNDV float64 = 1
+	for i := range cols {
+		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
+	}
+	return totalNDV > s.TableCnt*0.95
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
@@ -195,7 +186,12 @@ func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
 		return -1
 	}
 
-	if binding, ok := builder.ctxByNode[nodeID].bindingByTag[col.RelPos]; ok {
+	ctx := builder.ctxByNode[nodeID]
+	if ctx == nil {
+		return -1
+	}
+
+	if binding, ok := ctx.bindingByTag[col.RelPos]; ok {
 		s := sc.GetStatsInfoMap(binding.tableID)
 		return s.NdvMap[binding.cols[col.ColPos]]
 	} else {
@@ -226,7 +222,7 @@ func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builde
 }
 
 func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
-	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
+	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	ret, col := CheckFilter(expr)
 	if !ret {
@@ -313,7 +309,7 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
-				outcnt = out1 * out2 / tableCnt
+				outcnt = andSelectivity(out1/tableCnt, out2/tableCnt) * tableCnt
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
@@ -325,8 +321,8 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 				outcnt = math.Max(out1, out2) * 1.5
 			}
 		default:
-			//no good way to estimate, just 0.1*cost
-			outcnt = cost * 0.1
+			//no good way to estimate, just 0.15*cost
+			outcnt = cost * 0.15
 		}
 	case *plan.Expr_C:
 		outcnt = cost
@@ -338,84 +334,6 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 		outcnt = 1
 	}
 	return outcnt
-}
-
-func calcNdv(minVal, maxVal any, distinctValNum, blockNumTotal, tableCnt float64, t types.Type, maybeUnique bool) float64 {
-	ndv1 := calcNdvUsingMinMax(minVal, maxVal, t)
-	ndv2 := calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt)
-	if ndv1 <= 0 {
-		return ndv2
-	}
-	if ndv1 > tableCnt {
-		ndv1 = tableCnt
-	}
-	if maybeUnique {
-		return ndv1
-	} else {
-		return ndv1 / 2
-	}
-}
-
-// treat distinct val in zonemap like a sample , then estimate the ndv
-// more blocks, more accurate
-func calcNdvUsingDistinctValNum(distinctValNum, blockNumTotal, tableCnt float64) (ndv float64) {
-	// coefficient is 0.15 when 1 block, and 1 when many blocks.
-	coefficient := math.Pow(0.15, (1 / math.Log2(blockNumTotal*2)))
-	ndvRate := (distinctValNum / blockNumTotal)
-	if distinctValNum <= 100 || ndvRate < 0.4 {
-		// very little distinctValNum, assume ndv is very low
-		ndv = (distinctValNum + 4) / coefficient
-	} else {
-		// assume ndv is high
-		ndv = tableCnt * ndvRate * coefficient
-		if ndv < 1 {
-			ndv = 1
-		}
-	}
-	return ndv
-}
-
-func calcNdvUsingMinMax(minVal, maxVal any, t types.Type) float64 {
-	switch t.Oid {
-	case types.T_bool:
-		return 2
-	case types.T_int8:
-		return float64(maxVal.(int8)-minVal.(int8)) + 1
-	case types.T_int16:
-		return float64(maxVal.(int16)-minVal.(int16)) + 1
-	case types.T_int32:
-		return float64(maxVal.(int32)-minVal.(int32)) + 1
-	case types.T_int64:
-		return float64(maxVal.(int64)-minVal.(int64)) + 1
-	case types.T_uint8:
-		return float64(maxVal.(uint8)-minVal.(uint8)) + 1
-	case types.T_uint16:
-		return float64(maxVal.(uint16)-minVal.(uint16)) + 1
-	case types.T_uint32:
-		return float64(maxVal.(uint32)-minVal.(uint32)) + 1
-	case types.T_uint64:
-		return float64(maxVal.(uint64)-minVal.(uint64)) + 1
-	case types.T_decimal64:
-		return types.Decimal64ToFloat64(maxVal.(types.Decimal64), t.Scale) - types.Decimal64ToFloat64(minVal.(types.Decimal64), t.Scale) + 1
-	case types.T_decimal128:
-		return types.Decimal128ToFloat64(maxVal.(types.Decimal128), t.Scale) - types.Decimal128ToFloat64(minVal.(types.Decimal128), t.Scale) + 1
-	case types.T_float32:
-		return float64(maxVal.(float32)-minVal.(float32)) + 1
-	case types.T_float64:
-		return maxVal.(float64) - minVal.(float64) + 1
-	case types.T_timestamp:
-		return float64(maxVal.(types.Timestamp)-minVal.(types.Timestamp)) + 1
-	case types.T_date:
-		return float64(maxVal.(types.Date)-minVal.(types.Date)) + 1
-	case types.T_time:
-		return float64(maxVal.(types.Time)-minVal.(types.Time)) + 1
-	case types.T_datetime:
-		return float64(maxVal.(types.Datetime)-minVal.(types.Datetime)) + 1
-	case types.T_uuid, types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return -1
-	default:
-		return -1
-	}
 }
 
 func estimateFilterWeight(ctx context.Context, expr *plan.Expr, w float64) float64 {
@@ -589,7 +507,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      output,
-				Cost:        input,
+				Cost:        input + output,
 				HashmapSize: output,
 				Selectivity: 1,
 			}
@@ -645,26 +563,52 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			Selectivity: 1,
 		}
 
+	case plan.Node_VALUE_SCAN:
+		if node.RowsetData == nil {
+			node.Stats = DefaultStats()
+		} else {
+			colsData := node.RowsetData.Cols
+			rowCount := float64(len(colsData[0].Data))
+			blockNumber := rowCount/8192 + 1
+			node.Stats = &plan.Stats{
+				TableCnt:    (rowCount),
+				BlockNum:    int32(blockNumber),
+				Outcnt:      rowCount,
+				Cost:        rowCount,
+				Selectivity: 1,
+			}
+		}
+
+	case plan.Node_SINK_SCAN:
+		node.Stats = builder.qry.Nodes[node.GetSourceStep()].Stats
+
 	case plan.Node_EXTERNAL_SCAN:
-		// no good method to estimate external table
-		node.Stats = &plan.Stats{
-			TableCnt:    1000000,
-			BlockNum:    100,
-			Outcnt:      1000000,
-			Cost:        1000000,
-			Selectivity: 1,
+		//calc for external scan is heavy, avoid recalc of this
+		if node.Stats == nil || node.Stats.TableCnt == 0 {
+			node.Stats = getExternalStats(node, builder)
 		}
 
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
-			expr, num := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
-			node.Stats = builder.compCtx.Stats(node.ObjRef, expr)
+			monoExpr, nonMonoExpr := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
+			node.Stats = builder.compCtx.Stats(node.ObjRef, monoExpr)
 
 			//if there is non monotonic filters
-			if num > 0 {
-				node.Stats.Selectivity *= 0.15
-				node.Stats.Outcnt *= 0.15
+			if nonMonoExpr != nil {
+				sc := builder.compCtx.GetStatsCache()
+				if sc != nil {
+					var sortkeyName string
+					if node.TableDef.ClusterBy != nil {
+						sortkeyName = node.TableDef.ClusterBy.Name
+					}
+					fixColumnName(node.TableDef, nonMonoExpr)
+					outcnt := EstimateOutCnt(nonMonoExpr, sortkeyName, node.Stats.TableCnt, node.Stats.Cost, sc.GetStatsInfoMap(node.TableDef.TblId))
+					node.Stats.Selectivity *= (outcnt / node.Stats.TableCnt)
+					node.Stats.Outcnt = node.Stats.TableCnt * node.Stats.Selectivity
+					node.Stats.Cost = node.Stats.Outcnt
+					node.Stats.BlockNum = int32(node.Stats.Outcnt/8192 + 1)
+				}
 			}
 		}
 
@@ -689,6 +633,17 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	}
 }
 
+func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnName(tableDef, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
+	}
+}
+
 func NeedStats(tableDef *TableDef) bool {
 	switch tableDef.TblId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
@@ -704,6 +659,16 @@ func NeedStats(tableDef *TableDef) bool {
 	return true
 }
 
+func DefaultHugeStats() *plan.Stats {
+	stats := new(Stats)
+	stats.TableCnt = 10000000
+	stats.Cost = 10000000
+	stats.Outcnt = 10000000
+	stats.Selectivity = 1
+	stats.BlockNum = 1000
+	return stats
+}
+
 func DefaultStats() *plan.Stats {
 	stats := new(Stats)
 	stats.TableCnt = 1000
@@ -713,9 +678,6 @@ func DefaultStats() *plan.Stats {
 	stats.BlockNum = 1
 	return stats
 }
-
-// If the RHS cardinality is larger than the LHS by this ratio, we build on left and probe on right
-const kLeftRightRatio = 1.3
 
 func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
@@ -743,7 +705,7 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt*kLeftRightRatio < rightChild.Stats.Outcnt {
+		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
 			node.BuildOnLeft = true
 		}
 	}
@@ -758,4 +720,11 @@ func compareStats(stats1, stats2 *Stats) bool {
 		// todo we need to calculate ndv of outcnt here
 		return stats1.Outcnt < stats2.Outcnt
 	}
+}
+
+func andSelectivity(s1, s2 float64) float64 {
+	if s1 > 0.15 || s2 > 0.15 || s1*s2 > 0.1 {
+		return s1 * s2
+	}
+	return math.Min(s1, s2) * math.Max(math.Pow(s1, math.Pow(s2, 2)), math.Pow(s2, math.Pow(s1, 2)))
 }

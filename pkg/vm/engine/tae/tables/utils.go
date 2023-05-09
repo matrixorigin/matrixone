@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -39,7 +38,6 @@ func constructRowId(id *common.ID, rows uint32) (col containers.Vector, err erro
 }
 
 func LoadPersistedColumnData(
-	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
 	id *common.ID,
 	def *catalog.ColDef,
@@ -52,11 +50,11 @@ func LoadPersistedColumnData(
 	if err != nil {
 		return
 	}
-	bat, err := reader.LoadColumns(context.Background(), []uint16{uint16(def.Idx)}, location.ID(), nil)
+	bat, err := reader.LoadColumns(context.Background(), []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, location.ID(), nil)
 	if err != nil {
 		return
 	}
-	return containers.NewVectorWithSharedMemory(bat.Vecs[0]), nil
+	return containers.ToDNVector(bat.Vecs[0]), nil
 }
 
 func ReadPersistedBlockRow(location objectio.Location) int {
@@ -64,21 +62,20 @@ func ReadPersistedBlockRow(location objectio.Location) int {
 }
 
 func LoadPersistedDeletes(
-	mgr base.INodeManager,
 	fs *objectio.ObjectFS,
 	location objectio.Location) (bat *containers.Batch, err error) {
 	reader, err := blockio.NewObjectReader(fs.Service, location)
 	if err != nil {
 		return
 	}
-	movbat, err := reader.LoadColumns(context.Background(), []uint16{0, 1, 2}, location.ID(), nil)
+	movbat, err := reader.LoadColumns(context.Background(), []uint16{0, 1, 2}, nil, location.ID(), nil)
 	if err != nil {
 		return
 	}
 	bat = containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	for i := 0; i < 3; i++ {
-		bat.AddVector(colNames[i], containers.NewVectorWithSharedMemory(movbat.Vecs[i]))
+		bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
 	}
 	return
 }

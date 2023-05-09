@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
-	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -114,41 +114,37 @@ func CnServerMessageHandler(
 	return receiver.sendEndMessage()
 }
 
-func fillEngineForInsert(s *Scope, e engine.Engine) {
-	for i := range s.Instructions {
-		if s.Instructions[i].Op == vm.Insert {
-			s.Instructions[i].Arg.(*insert.Argument).Engine = e
-		}
-	}
-	for i := range s.PreScopes {
-		fillEngineForInsert(s.PreScopes[i], e)
-	}
-}
-
 // cnMessageHandle deal the received message at cn-server.
 func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
-		var ch chan process.WrapCs
-		var ok bool
-		opUuid := receiver.messageUuid
-		for {
-			if ch, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
-				runtime.Gosched()
-			} else {
-				break
-			}
+		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
+		if err != nil || opProc == nil {
+			return err
 		}
 
+		putCtx, putCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
+		defer putCancel()
 		doneCh := make(chan struct{})
 		info := process.WrapCs{
 			MsgId:  receiver.messageId,
-			Uid:    opUuid,
+			Uid:    receiver.messageUuid,
 			Cs:     receiver.clientSession,
 			DoneCh: doneCh,
 		}
-		ch <- info
-		<-doneCh
+
+		select {
+		case <-putCtx.Done():
+			return moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
+		case <-receiver.ctx.Done():
+			logutil.Errorf("receiver conctx done during send notify to dispatch operator")
+		case <-opProc.Ctx.Done():
+			logutil.Errorf("dispatch operator context done")
+		case opProc.DispatchNotifyCh <- info:
+			// TODO: need fix. It may hung here if dispatch operator receive the info but
+			// end without close doneCh
+			<-doneCh
+		}
 		return nil
 
 	case pipeline.PipelineMessage:
@@ -160,8 +156,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 		if err != nil {
 			return err
 		}
-		fillEngineForInsert(s, c.e)
-		s = refactorScope(c, c.ctx, s)
+		s = refactorScope(c, s)
 
 		err = s.ParallelRun(c, s.IsRemote)
 		if err != nil {
@@ -184,14 +179,22 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 }
 
 // receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
+func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var err error
 	var dataBuffer []byte
 	var sequence uint64
+
+	if sender.receiveCh == nil {
+		sender.receiveCh, err = sender.streamSender.Receive()
+		if err != nil {
+			return err
+		}
+	}
+
 	for {
 		val, err = sender.receiveMessage()
-		if err != nil {
+		if err != nil || val == nil {
 			return err
 		}
 
@@ -254,13 +257,13 @@ func (s *Scope) remoteRun(c *Compile) error {
 	s.Instructions = append(s.Instructions, con)
 
 	// encode the process related information
-	pData, errEncodeProc := encodeProcessInfo(c.proc)
+	pData, errEncodeProc := encodeProcessInfo(s.Proc)
 	if errEncodeProc != nil {
 		return errEncodeProc
 	}
 
 	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(c.ctx, s.NodeInfo.Addr)
+	sender, err := newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
 		return err
 	}
@@ -348,7 +351,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 	return procInfo.Marshal()
 }
 
-func refactorScope(c *Compile, _ context.Context, s *Scope) *Scope {
+func refactorScope(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.Output,
@@ -513,7 +516,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s := &Scope{
-		Magic:    int(p.GetPipelineType()),
+		Magic:    magicType(p.GetPipelineType()),
 		IsEnd:    p.IsEnd,
 		IsJoin:   p.IsJoin,
 		IsLoad:   p.IsLoad,
@@ -607,6 +610,36 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			ClusterTable: t.InsertCtx.ClusterTable,
 			ParentIdx:    t.InsertCtx.ParentIdx,
 			IdxIdx:       t.InsertCtx.IdxIdx,
+		}
+	case *deletion.Argument:
+		onSetUpdateCols := make([]*pipeline.Map, 0, len(t.DeleteCtx.OnSetUpdateCol))
+		for i := 0; i < len(t.DeleteCtx.OnSetUpdateCol); i++ {
+			onSetUpdateCols[i].Mp = t.DeleteCtx.OnSetUpdateCol[i]
+		}
+		onSetIdxs := make([]*pipeline.Array, 0, len(t.DeleteCtx.OnSetIdx))
+		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
+			onSetIdxs[i].Array = t.DeleteCtx.OnSetIdx[i]
+		}
+		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
+
+		}
+		in.Delete = &pipeline.Deletion{
+			Ts:           t.Ts,
+			AffectedRows: t.AffectedRows,
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			NBucket:      t.Nbucket,
+			// deleteCtx
+			CanTruncate:    t.DeleteCtx.CanTruncate,
+			DelRef:         t.DeleteCtx.DelRef,
+			IdxIdx:         t.DeleteCtx.IdxIdx,
+			OnRestrictIdx:  t.DeleteCtx.OnRestrictIdx,
+			OnCascadeIdx:   t.DeleteCtx.OnCascadeIdx,
+			OnSetRef:       t.DeleteCtx.OnSetRef,
+			OnSetTableDef:  t.DeleteCtx.OnSetTableDef,
+			OnSetUpdateCol: onSetUpdateCols,
+			OnSetIdx:       onSetIdxs,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
@@ -905,8 +938,37 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 // convert pipeline.Instruction to vm.Instruction
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.Instruction, error) {
-	v := vm.Instruction{Op: int(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
-	switch opr.Op {
+	v := vm.Instruction{Op: vm.OpType(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
+	switch v.Op {
+	case vm.Deletion:
+		t := opr.GetDelete()
+		onSetUpdateCols := make([]map[string]int32, 0, len(t.OnSetUpdateCol))
+		for i := 0; i < len(t.OnSetUpdateCol); i++ {
+			onSetUpdateCols = append(onSetUpdateCols, t.OnSetUpdateCol[i].Mp)
+		}
+		onSetIdxs := make([][]int32, 0, len(t.OnSetIdx))
+		for i := 0; i < len(t.OnSetIdx); i++ {
+			onSetIdxs = append(onSetIdxs, t.OnSetIdx[i].Array)
+		}
+		v.Arg = &deletion.Argument{
+			Ts:           t.Ts,
+			AffectedRows: t.AffectedRows,
+			RemoteDelete: t.RemoteDelete,
+			SegmentMap:   t.SegmentMap,
+			IBucket:      t.IBucket,
+			Nbucket:      t.NBucket,
+			DeleteCtx: &deletion.DeleteCtx{
+				CanTruncate:    t.CanTruncate,
+				DelRef:         t.DelRef,
+				IdxIdx:         t.IdxIdx,
+				OnRestrictIdx:  t.OnRestrictIdx,
+				OnCascadeIdx:   t.OnCascadeIdx,
+				OnSetRef:       t.OnSetRef,
+				OnSetTableDef:  t.OnSetTableDef,
+				OnSetUpdateCol: onSetUpdateCols,
+				OnSetIdx:       onSetIdxs,
+			},
+		}
 	case vm.Insert:
 		t := opr.GetInsert()
 		v.Arg = &insert.Argument{
@@ -1489,14 +1551,14 @@ func (ctx *scopeContext) addSubPipeline(id uint64, idx int32, ctxId int32, nodeI
 	ctx.scope.PreScopes = append(ctx.scope.PreScopes, ds)
 	p := &pipeline.Pipeline{}
 	p.PipelineId = ctxId
-	p.PipelineType = Pushdown
+	p.PipelineType = pipeline.Pipeline_PipelineType(Pushdown)
 	ctxId++
 	p.DataSource = &pipeline.Source{
 		PushdownId:   id,
 		PushdownAddr: nodeInfo.Addr,
 	}
 	p.InstructionList = append(p.InstructionList, &pipeline.Instruction{
-		Op: vm.Connector,
+		Op: int32(vm.Connector),
 		Connect: &pipeline.Connector{
 			ConnectorIndex: idx,
 			PipelineId:     ctx.id,

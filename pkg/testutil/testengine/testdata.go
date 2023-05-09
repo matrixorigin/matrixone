@@ -766,3 +766,40 @@ func CreateDate(db engine.Database) {
 		}
 	}
 }
+
+func CreateCompressFileTable(db engine.Database) {
+	ctx := context.TODO()
+	{
+		var attrs []engine.TableDef
+
+		{
+			attrs = append(attrs, &engine.AttributeDef{
+				Attr: engine.Attribute{
+					Alg:  compress.Lz4,
+					Name: "a",
+					Type: types.T_int32.ToType(),
+				}})
+			attrs = append(attrs, &engine.AttributeDef{
+				Attr: engine.Attribute{
+					Alg:  compress.Lz4,
+					Name: "b",
+					Type: types.T_int32.ToType(),
+				}})
+			attrs = append(attrs, &engine.AttributeDef{
+				Attr: engine.Attribute{
+					Alg:  compress.Lz4,
+					Name: "c",
+					Type: types.T_int32.ToType(),
+				}})
+			attrs = append(attrs, &engine.AttributeDef{
+				Attr: engine.Attribute{
+					Alg:  compress.Lz4,
+					Name: "d",
+					Type: types.T_int32.ToType(),
+				}})
+		}
+		if err := db.Create(ctx, "pressTbl", attrs); err != nil {
+			log.Fatal(err)
+		}
+	}
+}

@@ -165,9 +165,8 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 		convert[k] = metadata.LabelList{Labels: v}
 	}
 	label := logpb.CNStoreLabel{
-		UUID:      uuid,
-		Operation: logpb.SetLabel,
-		Labels:    convert,
+		UUID:   uuid,
+		Labels: convert,
 	}
 	proxyClient := c.client.(logservice.ProxyHAKeeperClient)
 	if err := proxyClient.UpdateCNLabel(ctx, label); err != nil {
@@ -251,6 +250,7 @@ func newCNService(cn logpb.CNStore) metadata.CNService {
 		PipelineServiceAddress: cn.ServiceAddress,
 		SQLAddress:             cn.SQLAddress,
 		LockServiceAddress:     cn.LockServiceAddress,
+		CtlAddress:             cn.CtlAddress,
 		Labels:                 cn.Labels,
 	}
 }
@@ -261,6 +261,7 @@ func newDNService(dn logpb.DNStore) metadata.DNService {
 		TxnServiceAddress:     dn.ServiceAddress,
 		LogTailServiceAddress: dn.LogtailServerAddress,
 		LockServiceAddress:    dn.LockServiceAddress,
+		CtlAddress:            dn.CtlAddress,
 	}
 	v.Shards = make([]metadata.DNShard, 0, len(dn.Shards))
 	for _, s := range dn.Shards {

@@ -16,12 +16,9 @@ package mergegroup
 
 import (
 	"bytes"
-	"reflect"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,17 +29,9 @@ func String(_ interface{}, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg interface{}) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, true)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
-
-	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
-	for i, mr := range proc.Reg.MergeReceivers {
-		ap.ctr.receiverListener[i] = reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(mr.Ch),
-		}
-	}
-	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
 	return nil
 }
 
@@ -95,30 +84,14 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 }
 
 func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
-	var err error
 	for {
-		if ctr.aliveMergeReceiver == 0 {
-			return false, nil
-		}
-
-		start := time.Now()
-		chosen, value, ok := reflect.Select(ctr.receiverListener)
-		if !ok {
-			logutil.Errorf("pipeline closed unexpectedly")
+		bat, end, err := ctr.ReceiveFromAllRegs(anal)
+		if err != nil {
 			return true, nil
 		}
-		anal.WaitStop(start)
 
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
-		if bat == nil {
-			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			ctr.aliveMergeReceiver--
-			continue
-		}
-
-		if bat.Length() == 0 {
-			continue
+		if end {
+			return false, nil
 		}
 
 		anal.Input(bat, isFirst)
@@ -184,7 +157,7 @@ func (ctr *container) processH0(bat *batch.Batch, proc *process.Process) error {
 		ctr.bat = bat
 		return nil
 	}
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	for _, z := range bat.Zs {
 		ctr.bat.Zs[0] += z
 	}
@@ -202,7 +175,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	itr := ctr.intHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
-		defer bat.Clean(proc.Mp())
+		defer proc.PutBatch(bat)
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -231,7 +204,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	itr := ctr.strHashMap.NewIterator()
 	flg := ctr.bat == nil
 	if !flg {
-		defer bat.Clean(proc.Mp())
+		defer proc.PutBatch(bat)
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
 		n := count - i

@@ -19,12 +19,8 @@ import (
 )
 
 const (
-	typeLen         = 2
-	versionOff      = typeLen
-	versionLen      = 2
-	dataTypeOff     = versionOff + versionLen
 	dataTypeLen     = 1
-	idxOff          = dataTypeOff + dataTypeLen
+	idxOff          = dataTypeLen
 	idxLen          = 2
 	ndvOff          = idxOff + idxLen
 	ndvLen          = 4
@@ -51,33 +47,15 @@ type ColumnMeta []byte
 func BuildColumnMeta() ColumnMeta {
 	var buf [colMetaLen]byte
 	meta := ColumnMeta(buf[:])
-	meta.setVersion(Version)
-	meta.setType(0)
 	return meta
 }
 
-func (cm ColumnMeta) Type() uint16 {
-	return types.DecodeUint16(cm[:typeLen])
-}
-
-func (cm ColumnMeta) setType(t uint16) {
-	copy(cm[:typeLen], types.EncodeUint16(&t))
-}
-
 func (cm ColumnMeta) DataType() uint8 {
-	return types.DecodeUint8(cm[dataTypeOff : dataTypeOff+dataTypeLen])
+	return types.DecodeUint8(cm[:dataTypeLen])
 }
 
 func (cm ColumnMeta) setDataType(t uint8) {
-	copy(cm[dataTypeOff:dataTypeOff+dataTypeLen], types.EncodeUint8(&t))
-}
-
-func (cm ColumnMeta) Version() uint16 {
-	return types.DecodeUint16(cm[:typeLen])
-}
-
-func (cm ColumnMeta) setVersion(version uint16) {
-	copy(cm[:typeLen], types.EncodeUint16(&version))
+	copy(cm[:dataTypeLen], types.EncodeUint8(&t))
 }
 
 func (cm ColumnMeta) Idx() uint16 {
@@ -89,11 +67,11 @@ func (cm ColumnMeta) setIdx(idx uint16) {
 }
 
 func (cm ColumnMeta) Ndv() uint32 {
-	return types.DecodeUint32(cm[:ndvLen])
+	return types.DecodeUint32(cm[ndvOff : ndvOff+ndvLen])
 }
 
 func (cm ColumnMeta) SetNdv(cnt uint32) {
-	copy(cm[:ndvLen], types.EncodeUint32(&cnt))
+	copy(cm[ndvOff:ndvOff+ndvLen], types.EncodeUint32(&cnt))
 }
 
 func (cm ColumnMeta) NullCnt() uint32 {

@@ -50,8 +50,9 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 	}, nil
 }
 
-func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName) (*BlockWriter, error) {
-	writer, err := objectio.NewObjectWriter(name, fs)
+// seqnums is the column's seqnums of the batch written by `WriteBatch`. `WriteBatchWithoutIndex` will ignore the seqnums
+func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName, schemaVer uint32, seqnums []uint16) (*BlockWriter, error) {
+	writer, err := objectio.NewObjectWriter(name, fs, schemaVer, seqnums)
 	if err != nil {
 		return nil, err
 	}
@@ -68,13 +69,7 @@ func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 	w.pk = idx
 }
 
-func (w *BlockWriter) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
-	bat := batch.New(true, columns.Attrs)
-	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
-	block, err = w.WriteBatch(bat)
-	return
-}
-
+// WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew
 func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, error) {
 	block, err := w.writer.Write(batch)
 	if err != nil {
@@ -83,6 +78,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 	if w.objMetaBuilder == nil {
 		w.objMetaBuilder = NewObjectColumnMetasBuilder(len(batch.Vecs))
 	}
+	seqnums := w.writer.GetSeqnums()
 	for i, vec := range batch.Vecs {
 		if i == 0 {
 			w.objMetaBuilder.AddRowCnt(vec.Length())
@@ -90,17 +86,17 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
 			continue
 		}
-		columnData := containers.NewVectorWithSharedMemory(vec)
+		columnData := containers.ToDNVector(vec)
 		// update null count and distinct value
 		w.objMetaBuilder.InspectVector(i, columnData)
 
 		// Build ZM
-		zm := index.NewZM(vec.GetType().Oid)
+		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 		if err = index.BatchUpdateZM(zm, columnData); err != nil {
 			return nil, err
 		}
 		// Update column meta zonemap
-		w.writer.UpdateBlockZM(int(block.GetID()), i, *zm)
+		w.writer.UpdateBlockZM(int(block.GetID()), seqnums[i], zm)
 		// update object zonemap
 		w.objMetaBuilder.UpdateZm(i, zm)
 
@@ -116,21 +112,16 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 			return nil, err
 		}
 
-		if err = w.writer.WriteBF(int(block.GetID()), i, buf); err != nil {
+		if err = w.writer.WriteBF(int(block.GetID()), seqnums[i], buf); err != nil {
 			return nil, err
 		}
 	}
 	return block, nil
 }
 
-func (w *BlockWriter) WriteBlockWithOutIndex(columns *containers.Batch) (objectio.BlockObject, error) {
-	bat := batch.New(true, columns.Attrs)
-	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
-	return w.writer.Write(bat)
-}
-
+// WriteBatch write a fixed schema batch, usually not a user table
 func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.BlockObject, error) {
-	return w.writer.Write(batch)
+	return w.writer.WriteWithoutSeqnum(batch)
 }
 
 func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
@@ -141,10 +132,13 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 	blocks, err := w.writer.WriteEnd(ctx)
 	if len(blocks) == 0 {
 		logutil.Info("[WriteEnd]", common.OperationField(w.nameStr),
-			common.OperandField("[Size=0]"))
+			common.OperandField("[Size=0]"), common.OperandField(w.writer.GetSeqnums()))
 		return blocks, objectio.Extent{}, err
 	}
-	logutil.Info("[WriteEnd]", common.OperationField(w.String(blocks)))
+	logutil.Info("[WriteEnd]",
+		common.OperationField(w.String(blocks)),
+		common.OperandField(w.writer.GetSeqnums()),
+		common.OperandField(w.writer.GetMaxSeqnum()))
 	return blocks, blocks[0].BlockHeader().MetaLocation(), err
 }
 

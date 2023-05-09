@@ -139,22 +139,20 @@ func (variance *Variance[T1]) Fill(groupIndex int64, v1 T1, v2 float64, z int64,
 }
 
 func (variance *Variance[T1]) MarshalBinary() ([]byte, error) {
-	return types.Encode(&EncodeVariance{
+	ev := EncodeVariance{
 		Sum:    variance.Sum,
 		Counts: variance.Counts,
-	})
+	}
+	return ev.Marshal()
 }
 
 func (variance *Variance[T1]) UnmarshalBinary(data []byte) error {
-	// avoid resulting errors caused by morpc overusing memory
-	copyData := make([]byte, len(data))
-	copy(copyData, data)
-	decoded := new(EncodeVariance)
-	if err := types.Decode(copyData, decoded); err != nil {
-		return nil
+	var ev EncodeVariance
+	if err := ev.Unmarshal(data); err != nil {
+		return err
 	}
-	variance.Sum = decoded.Sum
-	variance.Counts = decoded.Counts
+	variance.Sum = ev.Sum
+	variance.Counts = ev.Counts
 	return nil
 }
 
@@ -237,22 +235,20 @@ func (v *VD64) Fill(i int64, v1 types.Decimal64, v2 types.Decimal128, z int64, i
 }
 
 func (v *VD64) MarshalBinary() ([]byte, error) {
-	return types.Encode(&EncodeDecimalV{
+	ed := &EncodeDecimalV{
 		Sum:    v.Sum,
 		Counts: v.Counts,
-	})
+	}
+	return ed.Marshal()
 }
 
 func (v *VD64) UnmarshalBinary(data []byte) error {
-	// avoid resulting errors caused by morpc overusing memory
-	copyData := make([]byte, len(data))
-	copy(copyData, data)
-	decoded := new(EncodeDecimalV)
-	if err := types.Decode(copyData, decoded); err != nil {
-		return nil
+	var ed EncodeDecimalV
+	if err := ed.Unmarshal(data); err != nil {
+		return err
 	}
-	v.Sum = decoded.Sum
-	v.Counts = decoded.Counts
+	v.Sum = ed.Sum
+	v.Counts = ed.Counts
 	return nil
 }
 
@@ -331,21 +327,19 @@ func (v *VD128) Fill(i int64, v1 types.Decimal128, v2 types.Decimal128, z int64,
 }
 
 func (v *VD128) MarshalBinary() ([]byte, error) {
-	return types.Encode(&EncodeDecimalV{
+	ed := &EncodeDecimalV{
 		Sum:    v.Sum,
 		Counts: v.Counts,
-	})
+	}
+	return ed.Marshal()
 }
 
 func (v *VD128) UnmarshalBinary(data []byte) error {
-	// avoid resulting errors caused by morpc overusing memory
-	copyData := make([]byte, len(data))
-	copy(copyData, data)
-	decoded := new(EncodeDecimalV)
-	if err := types.Decode(copyData, decoded); err != nil {
-		return nil
+	var ed EncodeDecimalV
+	if err := ed.Unmarshal(data); err != nil {
+		return err
 	}
-	v.Sum = decoded.Sum
-	v.Counts = decoded.Counts
+	v.Sum = ed.Sum
+	v.Counts = ed.Counts
 	return nil
 }

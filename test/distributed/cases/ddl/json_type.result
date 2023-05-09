@@ -109,7 +109,7 @@ not supported: JSON column 'j1' cannot be in primary key
 create table json_table_5(j1 json) partition by hash(j1);
 SQL syntax error: type JSON not allowed in partition clause
 select j1 from json_table_1 where j1>'{"": "", "123456": "中文mo"}';
-invalid argument operator >, bad value [JSON VARCHAR]
+invalid argument operator >, bad value [JSON JSON]
 create table json_table_61(j1 json,a varchar(25),b int);
 insert into json_table_61 values('{"010": "beijing", "021": "shanghai"}','apple',345),('{"phonenum":"17290839029","age":"45"}','pear',0);
 select * from json_table_61;

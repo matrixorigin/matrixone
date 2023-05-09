@@ -131,53 +131,6 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 }
 
 func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
-	// switch column[0].GetType().Oid {
-	// case types.T_bool:
-	// 	ret, mapping = bools.Merge(column, sortedIdx, fromLayout, toLayout)
-	// case types.T_int8:
-	// 	ret, mapping = numerics.Merge[int8](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_int16:
-	// 	ret, mapping = numerics.Merge[int16](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_int32:
-	// 	ret, mapping = numerics.Merge[int32](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_int64:
-	// 	ret, mapping = numerics.Merge[int64](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_uint8:
-	// 	ret, mapping = numerics.Merge[uint8](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_uint16:
-	// 	ret, mapping = numerics.Merge[uint16](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_uint32:
-	// 	ret, mapping = numerics.Merge[uint32](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_uint64:
-	// 	ret, mapping = numerics.Merge[uint64](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_float32:
-	// 	ret, mapping = numerics.Merge[float32](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_float64:
-	// 	ret, mapping = numerics.Merge[float64](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_date:
-	// 	ret, mapping = numerics.Merge[types.Date](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_time:
-	// 	ret, mapping = numerics.Merge[types.Time](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_datetime:
-	// 	ret, mapping = numerics.Merge[types.Datetime](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_decimal64:
-	// 	ret, mapping = decimal64s.Merge(column, sortedIdx, fromLayout, toLayout)
-	// case types.T_decimal128:
-	// 	ret, mapping = decimal128s.Merge(column, sortedIdx, fromLayout, toLayout)
-	// case types.T_uuid:
-	// 	ret, mapping = uuids.Merge(column, sortedIdx, fromLayout, toLayout)
-	// case types.T_timestamp:
-	// 	ret, mapping = numerics.Merge[types.Timestamp](column, sortedIdx, fromLayout, toLayout)
-	// case types.T_TS:
-	// 	ret, mapping = txnts.Merge(column, sortedIdx, fromLayout, toLayout)
-	// case types.T_Rowid:
-	// 	ret, mapping = rowid.Merge(column, sortedIdx, fromLayout, toLayout)
-	// case types.T_char, types.T_json, types.T_varchar, types.T_blob, types.T_text:
-	// 	ret, mapping = varchar.Merge(column, sortedIdx, fromLayout, toLayout)
-	// default:
-	// 	panic(fmt.Sprintf("%s not supported", column[0].GetType().String()))
-	// }
-	// return
 	switch column[0].GetType().Oid {
 	case types.T_bool:
 		ret, mapping = Merge(column, sortedIdx, boolLess, fromLayout, toLayout)

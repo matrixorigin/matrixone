@@ -14,6 +14,10 @@
 
 package plan
 
+const (
+	SystemExternalRel = "e"
+)
+
 // when autocommit is set to false, and no active txn is started
 // an implicit txn need to be started for statements , like insert/delete/update
 // and most select statement, like select * from t1.
@@ -49,4 +53,24 @@ func (p *PartitionByDef) MarshalPartitionInfo() ([]byte, error) {
 
 func (p *PartitionByDef) UnMarshalPartitionInfo(data []byte) error {
 	return p.Unmarshal(data)
+}
+
+func (m *OnUpdate) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *OnUpdate) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+func (m *Default) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *Default) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+func (m CreateTable) IsSystemExternalRel() bool {
+	return m.TableDef.TableType == SystemExternalRel
 }

@@ -67,9 +67,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	} else {
 		// if delete table have no constraint
 		if stmt.Where == nil && stmt.Limit == nil {
-			// we need to fix #7779 first, don't use truncate
-			// I will improve this after cn-write-s3 delete
-			canTruncate = false
+			canTruncate = true
 		}
 		rewriteInfo.rootId, err = deleteToSelect(builder, bindCtx, stmt, false, tblInfo)
 		if err != nil {

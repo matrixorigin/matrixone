@@ -19,7 +19,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/csv"
-	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
@@ -35,6 +34,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -616,12 +616,13 @@ func testFileService(
 		fs := newFS(fsName)
 		ctx := context.Background()
 
-		buf := new(bytes.Buffer)
-		err := gob.NewEncoder(buf).Encode(map[int]int{
-			42: 42,
-		})
+		m := api.Int64Map{
+			M: map[int64]int64{
+				42: 42,
+			},
+		}
+		data, err := m.Marshal()
 		assert.Nil(t, err)
-		data := buf.Bytes()
 		err = fs.Write(ctx, IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -638,17 +639,13 @@ func testFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToObject: func(r io.Reader, data []byte) (any, int64, error) {
+					ToObjectBytes: func(r io.Reader, data []byte) ([]byte, int64, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
 							assert.Equal(t, bs, data)
 						}
-						var m map[int]int
-						if err := gob.NewDecoder(bytes.NewReader(bs)).Decode(&m); err != nil {
-							return nil, 0, err
-						}
-						return m, 1, nil
+						return bs, 1, nil
 					},
 				},
 			},
@@ -656,10 +653,10 @@ func testFileService(
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
 
-		m, ok := vec.Entries[0].Object.(map[int]int)
-		assert.True(t, ok)
-		assert.Equal(t, 1, len(m))
-		assert.Equal(t, 42, m[42])
+		err = m.Unmarshal(vec.Entries[0].ObjectBytes)
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(m.M))
+		assert.Equal(t, int64(42), m.M[42])
 		assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 
 	})

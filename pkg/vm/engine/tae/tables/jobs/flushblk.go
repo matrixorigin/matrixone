@@ -17,7 +17,6 @@ package jobs
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -28,29 +27,32 @@ import (
 
 type flushBlkTask struct {
 	*tasks.BaseTask
-	data   *containers.Batch
-	delta  *containers.Batch
-	meta   *catalog.BlockEntry
-	fs     *objectio.ObjectFS
-	ts     types.TS
-	name   objectio.ObjectName
-	blocks []objectio.BlockObject
+	data      *containers.Batch
+	delta     *containers.Batch
+	meta      *catalog.BlockEntry
+	fs        *objectio.ObjectFS
+	name      objectio.ObjectName
+	blocks    []objectio.BlockObject
+	schemaVer uint32
+	seqnums   []uint16
 }
 
 func NewFlushBlkTask(
 	ctx *tasks.Context,
+	schemaVer uint32,
+	seqnums []uint16,
 	fs *objectio.ObjectFS,
-	ts types.TS,
 	meta *catalog.BlockEntry,
 	data *containers.Batch,
 	delta *containers.Batch,
 ) *flushBlkTask {
 	task := &flushBlkTask{
-		ts:    ts,
-		data:  data,
-		meta:  meta,
-		fs:    fs,
-		delta: delta,
+		schemaVer: schemaVer,
+		seqnums:   seqnums,
+		data:      data,
+		meta:      meta,
+		fs:        fs,
+		delta:     delta,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
@@ -63,19 +65,19 @@ func (task *flushBlkTask) Execute() error {
 	num, _ := task.meta.ID.Offsets()
 	name := objectio.BuildObjectName(seg, num)
 	task.name = name
-	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name)
+	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, task.schemaVer, task.seqnums)
 	if err != nil {
 		return err
 	}
 	if task.meta.GetSchema().HasPK() {
 		writer.SetPrimaryKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
-	_, err = writer.WriteBlock(task.data)
+	_, err = writer.WriteBatch(containers.ToCNBatch(task.data))
 	if err != nil {
 		return err
 	}
 	if task.delta != nil {
-		_, err := writer.WriteBlockWithOutIndex(task.delta)
+		_, err := writer.WriteBatchWithOutIndex(containers.ToCNBatch(task.delta))
 		if err != nil {
 			return err
 		}

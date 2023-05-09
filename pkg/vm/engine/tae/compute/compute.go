@@ -55,19 +55,6 @@ func ShuffleByDeletes(deleteMask, deletes *roaring.Bitmap) (destDelets *roaring.
 	return destDelets
 }
 
-func ShuffleOffset(offset uint32, deletes *roaring.Bitmap) uint32 {
-	if deletes == nil || deletes.IsEmpty() {
-		return offset
-	}
-	end := offset
-	deleteCnt := deletes.Rank(end)
-	for offset+uint32(deleteCnt) > end {
-		end = offset + uint32(deleteCnt)
-		deleteCnt = deletes.Rank(end)
-	}
-	return end
-}
-
 func GetOffsetMapBeforeApplyDeletes(deletes *roaring.Bitmap) []uint32 {
 	if deletes == nil || deletes.IsEmpty() {
 		return nil
@@ -259,4 +246,46 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 	default:
 		panic("unsupported type")
 	}
+}
+
+func GetOrderedMinAndMax[T types.OrderedT](vs ...T) (minv, maxv T) {
+	minv = vs[0]
+	maxv = vs[0]
+	for _, v := range vs[1:] {
+		if v < minv {
+			minv = v
+		}
+		if v > maxv {
+			maxv = v
+		}
+	}
+	return
+}
+
+func GetDecimal64MinAndMax(vs []types.Decimal64) (minv, maxv types.Decimal64) {
+	minv = vs[0]
+	maxv = vs[0]
+	for _, v := range vs[1:] {
+		if types.CompareDecimal64(v, minv) < 0 {
+			minv = v
+		}
+		if types.CompareDecimal64(v, maxv) > 0 {
+			maxv = v
+		}
+	}
+	return
+}
+
+func GetDecimal128MinAndMax(vs []types.Decimal128) (minv, maxv types.Decimal128) {
+	minv = vs[0]
+	maxv = vs[0]
+	for _, v := range vs[1:] {
+		if types.CompareDecimal128(v, minv) < 0 {
+			minv = v
+		}
+		if types.CompareDecimal128(v, maxv) > 0 {
+			maxv = v
+		}
+	}
+	return
 }

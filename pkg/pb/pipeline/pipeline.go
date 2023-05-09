@@ -93,8 +93,11 @@ func (m *Message) SetProcData(data []byte) {
 func (m *Message) DebugString() string {
 	errInfo := "none"
 	if len(m.Err) > 0 {
-		me := moerr.Error{}
-		errInfo = me.UnmarshalBinary(m.Err).Error()
+		me := &moerr.Error{}
+		if err := me.UnmarshalBinary(m.Err); err != nil {
+			panic(err)
+		}
+		errInfo = me.Error()
 	}
 	return fmt.Sprintf("MessageSize: %d, sid: %d, ErrInfo: %s, batchSize: %d", m.Size(), m.Sid, errInfo, len(m.Data))
 }

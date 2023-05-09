@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,10 +27,6 @@ import (
 )
 
 type BlockDataFactory = func(meta *BlockEntry) data.Block
-
-func compareBlockFn(a, b *BlockEntry) int {
-	return a.ID.Compare(b.ID)
-}
 
 type BlockEntry struct {
 	*BaseEntryImpl[*MetadataMVCCNode]
@@ -47,9 +44,15 @@ func NewReplayBlockEntry() *BlockEntry {
 	}
 }
 
-func NewBlockEntry(segment *SegmentEntry, id types.Blockid, txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) *BlockEntry {
+func NewBlockEntry(
+	segment *SegmentEntry,
+	id *objectio.Blockid,
+	txn txnif.AsyncTxn,
+	state EntryState,
+	dataFactory BlockDataFactory,
+) *BlockEntry {
 	e := &BlockEntry{
-		ID: id,
+		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
@@ -66,14 +69,14 @@ func NewBlockEntry(segment *SegmentEntry, id types.Blockid, txn txnif.AsyncTxn, 
 
 func NewBlockEntryWithMeta(
 	segment *SegmentEntry,
-	id types.Blockid,
+	id *objectio.Blockid,
 	txn txnif.AsyncTxn,
 	state EntryState,
 	dataFactory BlockDataFactory,
 	metaLoc objectio.Location,
 	deltaLoc objectio.Location) *BlockEntry {
 	e := &BlockEntry{
-		ID: id,
+		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
@@ -88,9 +91,9 @@ func NewBlockEntryWithMeta(
 	return e
 }
 
-func NewStandaloneBlock(segment *SegmentEntry, id types.Blockid, ts types.TS) *BlockEntry {
+func NewStandaloneBlock(segment *SegmentEntry, id *objectio.Blockid, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
-		ID: id,
+		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
@@ -104,12 +107,12 @@ func NewStandaloneBlock(segment *SegmentEntry, id types.Blockid, ts types.TS) *B
 
 func NewStandaloneBlockWithLoc(
 	segment *SegmentEntry,
-	id types.Blockid,
+	id *objectio.Blockid,
 	ts types.TS,
 	metaLoc objectio.Location,
 	delLoc objectio.Location) *BlockEntry {
 	e := &BlockEntry{
-		ID: id,
+		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
 		segment: segment,
@@ -135,6 +138,10 @@ func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 	return e
 }
 
+func (entry *BlockEntry) Less(b *BlockEntry) int {
+	return entry.ID.Compare(b.ID)
+}
+
 func (entry *BlockEntry) GetCatalog() *Catalog { return entry.segment.table.db.catalog }
 
 func (entry *BlockEntry) IsAppendable() bool {
@@ -146,7 +153,7 @@ func (entry *BlockEntry) GetSegment() *SegmentEntry {
 }
 
 func (entry *BlockEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := CmdUpdateBlock
+	cmdType := IOET_WALTxnCommand_Block
 	entry.RLock()
 	defer entry.RUnlock()
 	return newBlockCmd(id, cmdType, entry), nil
@@ -194,9 +201,9 @@ func (entry *BlockEntry) StringWithLevelLocked(level common.PPLevel) string {
 
 func (entry *BlockEntry) AsCommonID() *common.ID {
 	return &common.ID{
-		TableID:   entry.GetSegment().GetTable().ID,
-		SegmentID: entry.GetSegment().ID,
-		BlockID:   entry.ID,
+		DbID:    entry.GetSegment().GetTable().GetDB().ID,
+		TableID: entry.GetSegment().GetTable().ID,
+		BlockID: entry.ID,
 	}
 }
 
@@ -208,7 +215,7 @@ func (entry *BlockEntry) InitData(factory DataFactory) {
 	entry.blkData = dataFactory(entry)
 }
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
-func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
+func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetLastestSchema() }
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	var empty bool
 	empty, err = entry.BaseEntryImpl.PrepareRollback()

@@ -16,11 +16,19 @@ package objectio
 
 import (
 	"context"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+)
+
+const (
+	SEQNUM_UPPER    = math.MaxUint16 - 5 // reserved 5 column for special committs、committs etc.
+	SEQNUM_ROWID    = math.MaxUint16
+	SEQNUM_ABORT    = math.MaxUint16 - 1
+	SEQNUM_COMMITTS = math.MaxUint16 - 2
 )
 
 type WriteType int8
@@ -33,6 +41,13 @@ const ZoneMapSize = index.ZMSize
 
 type ZoneMap = index.ZM
 type StaticFilter = index.StaticFilter
+
+var NewZM = index.NewZM
+var BuildZM = index.BuildZM
+
+type ColumnMetaFetcher interface {
+	MustGetColumn(idx uint16) ColumnMeta
+}
 
 type WriteOptions struct {
 	Type WriteType
@@ -69,21 +84,21 @@ type Reader interface {
 		extent *Extent, idxs []uint16,
 		id uint32,
 		m *mpool.MPool,
-		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
+		readFunc CacheConstructorFactory) (*fileservice.IOVector, error)
 
 	ReadAll(
 		ctx context.Context,
 		extent *Extent,
 		idxs []uint16,
 		m *mpool.MPool,
-		readFunc ReadObjectFunc,
+		readFunc CacheConstructorFactory,
 	) (*fileservice.IOVector, error)
 
 	ReadBlocks(ctx context.Context,
 		extent *Extent,
 		ids map[uint32]*ReadBlockOptions,
 		m *mpool.MPool,
-		readFunc ReadObjectFunc) (*fileservice.IOVector, error)
+		readFunc CacheConstructorFactory) (*fileservice.IOVector, error)
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta

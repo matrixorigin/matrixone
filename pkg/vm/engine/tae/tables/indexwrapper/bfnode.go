@@ -16,46 +16,52 @@ package indexwrapper
 
 import (
 	"context"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type BfReader struct {
-	bfKey  objectio.Location
-	idx    uint16
-	reader *blockio.BlockReader
-	typ    types.T
+	bfKey      objectio.Location
+	reader     *blockio.BlockReader
+	typ        types.T
+	indexCache model.LRUCache
 }
 
 func NewBfReader(
-	id *common.ID,
 	typ types.T,
 	metaLoc objectio.Location,
+	indexCache model.LRUCache,
 	fs *objectio.ObjectFS,
 ) *BfReader {
 	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
 
 	return &BfReader{
-		idx:    id.Idx,
-		bfKey:  metaLoc,
-		reader: reader,
-		typ:    typ,
+		indexCache: indexCache,
+		bfKey:      metaLoc,
+		reader:     reader,
+		typ:        typ,
 	}
 }
 
-func (r *BfReader) getBloomFilter() (index.StaticFilter, error) {
-	bf, err := r.reader.LoadBloomFilter(context.Background(), r.idx, r.bfKey.ID(), nil)
-	if err != nil {
-		// TODOa: Error Handling?
-		return nil, err
+func (r *BfReader) getBloomFilter() (objectio.BloomFilter, error) {
+	var v []byte
+	var size uint32
+	var err error
+	v, ok := r.indexCache.Get(*r.bfKey.ShortName())
+	if !ok {
+		v, size, err = r.reader.LoadAllBF(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		r.indexCache.Set(*r.bfKey.ShortName(), v, int64(size))
 	}
-	return bf, err
+
+	return objectio.BloomFilter(v), nil
 }
 
 func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
@@ -63,8 +69,15 @@ func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
 	if err != nil {
 		return
 	}
+	buf := bf.GetBloomFilter(uint32(r.bfKey.ID()))
+	// bloomFilter must be allocated on the stack
+	bloomFilter := index.NewEmptyBinaryFuseFilter()
+	err = index.DecodeBloomFilter(bloomFilter, buf)
+	if err != nil {
+		return
+	}
 	v := types.EncodeValue(key, r.typ)
-	return bf.MayContainsKey(v)
+	return bloomFilter.MayContainsKey(v)
 }
 
 func (r *BfReader) MayContainsAnyKeys(keys containers.Vector) (b bool, m *roaring.Bitmap, err error) {
@@ -72,7 +85,14 @@ func (r *BfReader) MayContainsAnyKeys(keys containers.Vector) (b bool, m *roarin
 	if err != nil {
 		return
 	}
-	return bf.MayContainsAnyKeys(keys)
+	buf := bf.GetBloomFilter(uint32(r.bfKey.ID()))
+	// bloomFilter must be allocated on the stack
+	bloomFilter := index.NewEmptyBinaryFuseFilter()
+	err = index.DecodeBloomFilter(bloomFilter, buf)
+	if err != nil {
+		return
+	}
+	return bloomFilter.MayContainsAnyKeys(keys)
 }
 
 func (r *BfReader) Destroy() error { return nil }

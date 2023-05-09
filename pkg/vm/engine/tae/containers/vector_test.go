@@ -22,9 +22,18 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestXxx(t *testing.T) {
+	m := mpool.MustNewZero()
+	v := movec.NewConstNull(types.T_int32.ToType(), 20, m)
+	v.IsConstNull()
+	dnv := ToDNVector(v)
+	t.Log(dnv.IsNull(2))
+}
 
 func withAllocator(opt Options) Options {
 	opt.Allocator = mpool.MustNewZero()
@@ -48,14 +57,8 @@ func TestVectorShallowForeach(t *testing.T) {
 				}
 			}
 		}
-		vec.ForeachWindowShallow(0, 10, func(v any, isNull bool, row int) error {
-			if row%2 == 0 {
-				assert.True(t, isNull)
-			}
-			return nil
-		}, nil)
 
-		vec.ForeachShallow(func(v any, isNull bool, row int) error {
+		vec.Foreach(func(v any, isNull bool, row int) error {
 			if row%2 == 0 {
 				assert.True(t, isNull)
 			}
@@ -459,7 +462,7 @@ func TestForeachWindowFixed(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowFixed(vec1, 0, vec1.Length(), op, nil)
+	ForeachWindowFixed(vec1, 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -479,7 +482,7 @@ func TestForeachWindowBytes(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowVarlen(vec1, 0, vec1.Length(), op, nil)
+	ForeachWindowVarlen(vec1, 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -539,7 +542,7 @@ func BenchmarkForeachVectorBytes(b *testing.B) {
 	b.Run("int64-old", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec.ForeachShallow(func(any, bool, int) error {
+			vec.Foreach(func(any, bool, int) error {
 				return nil
 			}, nil)
 		}
@@ -569,7 +572,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("func-old", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			vec.ForeachShallow(func(any, bool, int) (err error) {
+			vec.Foreach(func(any, bool, int) (err error) {
 				return
 			}, nil)
 		}

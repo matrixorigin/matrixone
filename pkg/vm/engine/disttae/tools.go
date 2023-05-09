@@ -17,8 +17,10 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,15 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
@@ -150,8 +148,11 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 	return bat, nil
 }
 
+// genCreateTableTuple yields a batch for insertion into mo_tables.
+// rowid: rowid of the row.
+// needRowid: true -- there is a rowid vector in position 0 of the batch.
 func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId uint32, name string,
-	tableId uint64, databaseId uint64, databaseName string, m *mpool.MPool) (*batch.Batch, error) {
+	tableId uint64, databaseId uint64, databaseName string, rowid types.Rowid, needRowid bool, m *mpool.MPool) (*batch.Batch, error) {
 	_ = sql //TODO delete this param if not required
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
@@ -237,11 +238,28 @@ func genCreateTableTuple(tbl *txnTable, sql string, accountId, userId, roleId ui
 		if err := vector.AppendBytes(bat.Vecs[idx], tbl.constraint, false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_TABLES_VERSION_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // schema_version
+		if err := vector.AppendFixed(bat.Vecs[idx], uint32(0), false, m); err != nil {
+			return nil, err
+		}
+	}
+	if needRowid {
+		//add the rowid vector as the first one in the batch
+		vec := vector.NewVec(types.T_Rowid.ToType())
+		if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	}
 	return bat, nil
 }
 
-func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
+// genCreateColumnTuple yields a batch for insertion into mo_columns.
+// rowid: rowid of the row.
+// needRowid: true -- there is a rowid vector in position 0 of the batch.
+func genCreateColumnTuple(col column, rowid types.Rowid, needRowid bool, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 	bat.SetZs(1, m)
@@ -357,12 +375,44 @@ func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 		if err := vector.AppendFixed(bat.Vecs[idx], col.isClusterBy, false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_COLUMNS_ATT_SEQNUM_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_seqnum
+		if err := vector.AppendFixed(bat.Vecs[idx], col.seqnum, false, m); err != nil {
+			return nil, err
+		}
 
+	}
+	if needRowid {
+		//add the rowid vector as the first one in the batch
+		vec := vector.NewVec(types.T_Rowid.ToType())
+		if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	}
 	return bat, nil
 }
 
-func genDropTableTuple(id, databaseId uint64, name, databaseName string,
+// genDropColumnTuple generates the batch for deletion on mo_columns.
+// the batch has rowid vector.
+func genDropColumnTuple(rowid types.Rowid, m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{catalog.Row_ID}
+	bat.SetZs(1, m)
+
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
+	}
+	bat.Vecs[0] = vec
+	return bat, nil
+}
+
+// genDropTableTuple generates the batch for deletion on mo_tables.
+// the batch has rowid vector.
+func genDropTableTuple(rowid types.Rowid, id, databaseId uint64, name, databaseName string,
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
@@ -389,10 +439,19 @@ func genDropTableTuple(id, databaseId uint64, name, databaseName string,
 			return nil, err
 		}
 	}
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
+	}
+	bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+	bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	return bat, nil
 }
 
-func genTruncateTableTuple(id, databaseId uint64, name, databaseName string,
+// genTruncateTableTuple generates the batch for the trunacte.
+// it needs deletion on mo_tables. the batch has rowid vector.
+func genTruncateTableTuple(rowid types.Rowid, id, databaseId uint64, name, databaseName string,
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
@@ -419,6 +478,13 @@ func genTruncateTableTuple(id, databaseId uint64, name, databaseName string,
 			return nil, err
 		}
 	}
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	if err := vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
+	}
+	bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+	bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	return bat, nil
 }
 
@@ -655,6 +721,17 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByDN{})
 	for _, e := range writes {
+		//SKIP update/delete on mo_columns
+		//The DN does not counsume the update/delete on mo_columns.
+		//there are update/delete entries on mo_columns just after one on mo_tables.
+		//case 1: (DELETE,MO_TABLES),(UPDATE/DELETE,MO_COLUMNS),(UPDATE/DELETE,MO_COLUMNS),...
+		//there is none update/delete entries on mo_columns just after one on mo_tables.
+		//case 2: (DELETE,MO_TABLES),...
+		if (e.typ == DELETE || e.typ == UPDATE) &&
+			e.databaseId == catalog.MO_DATABASE_ID &&
+			e.tableId == catalog.MO_COLUMNS_ID {
+			continue
+		}
 		if e.bat.Length() == 0 {
 			continue
 		}
@@ -672,7 +749,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
 	for k := range mp {
-		payload, err := types.Encode(api.PrecommitWriteCmd{EntryList: mp[k]})
+		payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: mp[k]})
 		if err != nil {
 			return nil, err
 		}
@@ -872,8 +949,10 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			databaseName: databaseName,
 			num:          num,
 			comment:      attrDef.Attr.Comment,
+			seqnum:       uint16(num - 1),
 		}
 		attrDef.Attr.ID = uint64(num)
+		attrDef.Attr.Seqnum = uint16(num - 1)
 		col.hasDef = 0
 		if attrDef.Attr.Default != nil {
 			defaultExpr, err := types.Encode(attrDef.Attr.Default)
@@ -985,41 +1064,41 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 }
 */
 
-func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
-	txn := tbl.db.txn
-	parts := tbl.getParts()
-	bats := make([]*batch.Batch, len(parts))
-	for i := range bats {
-		bats[i] = batch.New(true, bat.Attrs)
-		for j := range bats[i].Vecs {
-			bats[i].SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-		}
-	}
-	vec := bat.GetVector(0)
-	vs := vector.MustFixedCol[types.Rowid](vec)
-	for i, v := range vs {
-		for j, part := range parts {
-			var blks []BlockMeta
+// func partitionDeleteBatch(tbl *txnTable, bat *batch.Batch) ([]*batch.Batch, error) {
+// 	txn := tbl.db.txn
+// 	parts := tbl.getParts()
+// 	bats := make([]*batch.Batch, len(parts))
+// 	for i := range bats {
+// 		bats[i] = batch.New(true, bat.Attrs)
+// 		for j := range bats[i].Vecs {
+// 			bats[i].SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
+// 		}
+// 	}
+// 	vec := bat.GetVector(0)
+// 	vs := vector.MustFixedCol[types.Rowid](vec)
+// 	for i, v := range vs {
+// 		for j, part := range parts {
+// 			var blks []BlockMeta
 
-			if tbl.meta != nil {
-				blks = tbl.meta.blocks[j]
-			}
-			if inPartition(v, part, txn.meta.SnapshotTS, blks) {
-				if err := bats[j].GetVector(0).UnionOne(vec, int64(i), txn.proc.Mp()); err != nil {
-					for _, bat := range bats {
-						bat.Clean(txn.proc.Mp())
-					}
-					return nil, err
-				}
-				break
-			}
-		}
-	}
-	for i := range bats {
-		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
-	}
-	return bats, nil
-}
+// 			if tbl.meta != nil {
+// 				blks = tbl.meta.blocks[j]
+// 			}
+// 			if inPartition(v, part, txn.meta.SnapshotTS, blks) {
+// 				if err := bats[j].GetVector(0).UnionOne(vec, int64(i), txn.proc.Mp()); err != nil {
+// 					for _, bat := range bats {
+// 						bat.Clean(txn.proc.Mp())
+// 					}
+// 					return nil, err
+// 				}
+// 				break
+// 			}
+// 		}
+// 	}
+// 	for i := range bats {
+// 		bats[i].SetZs(bats[i].GetVector(0).Length(), txn.proc.Mp())
+// 	}
+// 	return bats, nil
+// }
 
 func genDatabaseKey(ctx context.Context, name string) databaseKey {
 	return databaseKey{
@@ -1038,93 +1117,6 @@ func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
 
 func genMetaTableName(id uint64) string {
 	return fmt.Sprintf("_%v_meta", id)
-}
-
-var metaTableMatchRegexp *regexp.Regexp
-
-func init() {
-	metaTableMatchRegexp, _ = regexp.Compile(`\_\d+\_meta`)
-}
-
-func isMetaTable(name string) bool {
-	return metaTableMatchRegexp.MatchString(name)
-}
-
-func genBlockMetas(
-	ctx context.Context,
-	blockInfos []catalog.BlockInfo,
-	columnLength int,
-	fs fileservice.FileService,
-	m *mpool.MPool, prefetch bool) ([]BlockMeta, error) {
-	{
-		mp := make(map[types.Blockid]catalog.BlockInfo) // block list
-		for i := range blockInfos {
-			if blk, ok := mp[blockInfos[i].BlockID]; ok {
-				if blk.CommitTs.Less(blockInfos[i].CommitTs) {
-					mp[blk.BlockID] = blockInfos[i]
-				}
-			} else {
-				mp[blockInfos[i].BlockID] = blockInfos[i]
-			}
-		}
-		blockInfos = blockInfos[:0]
-		for _, blk := range mp {
-			blockInfos = append(blockInfos, blk)
-		}
-	}
-
-	metas := make([]BlockMeta, len(blockInfos))
-
-	idxs := make([]uint16, columnLength)
-	for i := 0; i < columnLength; i++ {
-		idxs[i] = uint16(i)
-	}
-
-	for i, blockInfo := range blockInfos {
-		zm, rows, err := fetchZonemapAndRowsFromBlockInfo(ctx, idxs, blockInfo, fs, m)
-		if err != nil {
-			if prefetch {
-				continue
-			}
-			return nil, err
-		}
-		metas[i] = BlockMeta{
-			Rows:    int64(rows),
-			Info:    blockInfos[i],
-			Zonemap: zm,
-		}
-	}
-	return metas, nil
-}
-
-func inBlockMap(blk BlockMeta, blockMap map[types.Blockid]bool) bool {
-	_, ok := blockMap[blk.Info.BlockID]
-	return ok
-}
-
-func genModifedBlocks(ctx context.Context, deletes map[types.Blockid][]int, orgs, modfs []BlockMeta,
-	expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []ModifyBlockMeta {
-	blks := make([]ModifyBlockMeta, 0, len(orgs)-len(modfs))
-
-	lenblks := len(modfs)
-	blockMap := make(map[types.Blockid]bool, lenblks)
-	for i := 0; i < lenblks; i++ {
-		blockMap[modfs[i].Info.BlockID] = true
-	}
-
-	exprMono := plantool.CheckExprIsMonotonic(ctx, expr)
-	columnMap, columns, maxCol := plantool.GetColumnsByExpr(expr, tableDef)
-	for i, blk := range orgs {
-		if !inBlockMap(blk, blockMap) {
-			if !exprMono || needRead(ctx, expr, blk, tableDef, columnMap, columns, maxCol, proc) {
-				blks = append(blks, ModifyBlockMeta{
-					meta:    orgs[i],
-					deletes: deletes[orgs[i].Info.BlockID],
-				})
-			}
-		}
-	}
-	return blks
 }
 
 func genInsertBatch(bat *batch.Batch, m *mpool.MPool) (*api.Batch, error) {
@@ -1163,22 +1155,22 @@ func genColumnPrimaryKey(tableId uint64, name string) string {
 	return fmt.Sprintf("%v-%v", tableId, name)
 }
 
-func inPartition(v types.Rowid, part *PartitionState,
-	ts timestamp.Timestamp, blocks []BlockMeta) bool {
-	if part.RowExists(v, types.TimestampToTS(ts)) {
-		return true
-	}
-	if len(blocks) == 0 {
-		return false
-	}
-	blkId := v.GetBlockid()
-	for _, blk := range blocks {
-		if blk.Info.BlockID == blkId {
-			return true
-		}
-	}
-	return false
-}
+// func inPartition(v types.Rowid, part *PartitionState,
+// 	ts timestamp.Timestamp, blocks []BlockMeta) bool {
+// 	if part.RowExists(v, types.TimestampToTS(ts)) {
+// 		return true
+// 	}
+// 	if len(blocks) == 0 {
+// 		return false
+// 	}
+// 	blkId := v.GetBlockid()
+// 	for _, blk := range blocks {
+// 		if blk.Info.BlockID == blkId {
+// 			return true
+// 		}
+// 	}
+// 	return false
+// }
 
 func transferIval[T int32 | int64](v T, oid types.T) (bool, any) {
 	switch oid {
@@ -1336,4 +1328,62 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	default:
 		return false, nil
 	}
+}
+
+func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
+	var infos [][]*catalog.BlockInfo
+	objMap := make(map[string]int, 0)
+	lenObjs := 0
+	for i := range blocks {
+		block := blocks[i]
+		objName := block.MetaLocation().Name().String()
+		if idx, ok := objMap[objName]; ok {
+			infos[idx] = append(infos[idx], block)
+		} else {
+			objMap[objName] = lenObjs
+			lenObjs++
+			infos = append(infos, []*catalog.BlockInfo{block})
+		}
+	}
+	steps := make([]int, len(infos))
+	currentBlocks := 0
+	for i := range infos {
+		steps[i] = (currentBlocks-PREFETCH_THRESHOLD)/dop - PREFETCH_ROUNDS
+		if steps[i] < 0 {
+			steps[i] = 0
+		}
+		currentBlocks += len(infos[i])
+	}
+	return infos, steps
+}
+
+func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef, primarySeqnum int, ts timestamp.Timestamp, num int, expr *plan.Expr) []*blockReader {
+	rds := make([]*blockReader, num)
+	for i := 0; i < num; i++ {
+		rds[i] = &blockReader{
+			fs:            fs,
+			tableDef:      tblDef,
+			primarySeqnum: primarySeqnum,
+			expr:          expr,
+			ts:            ts,
+			ctx:           ctx,
+		}
+	}
+	return rds
+}
+
+func distributeBlocksToBlockReaders(rds []*blockReader, num int, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+	readerIndex := 0
+	for i := range infos {
+		//distribute objects and steps for prefetch
+		rds[readerIndex].steps = append(rds[readerIndex].steps, steps[i])
+		rds[readerIndex].infos = append(rds[readerIndex].infos, infos[i])
+		for j := range infos[i] {
+			//distribute block
+			rds[readerIndex].blks = append(rds[readerIndex].blks, infos[i][j])
+			readerIndex++
+			readerIndex = readerIndex % num
+		}
+	}
+	return rds
 }

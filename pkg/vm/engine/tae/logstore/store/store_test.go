@@ -85,6 +85,7 @@ func TestAppendRead(t *testing.T) {
 	defer wal.Close()
 
 	e := entry.GetBase()
+	e.SetType(entry.IOET_WALEntry_Test)
 	err := e.SetPayload([]byte("payload"))
 	if err != nil {
 		panic(err)
@@ -104,6 +105,7 @@ func TestAppendRead(t *testing.T) {
 
 func mockEntry() entry.Entry {
 	e := entry.GetBase()
+	e.SetType(entry.IOET_WALEntry_Test)
 	err := e.SetPayload([]byte(strconv.Itoa(rand.Intn(10))))
 	if err != nil {
 		panic(err)

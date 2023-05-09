@@ -16,23 +16,12 @@ package memorytable
 
 import (
 	"bytes"
-	"encoding/gob"
 	"fmt"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
-
-func init() {
-	gob.Register(ID(0))
-	gob.Register(Text(""))
-	gob.Register(Bool(true))
-	gob.Register(Int(0))
-	gob.Register(Uint(0))
-	gob.Register(Float(0))
-	gob.Register(Decimal{})
-}
 
 // ID represents a unique id
 type ID = memoryengine.ID

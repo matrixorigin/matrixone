@@ -72,6 +72,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return true, nil
 	}
 	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 	end, err := ap.ctr.process(ap, bat, proc)
@@ -83,19 +84,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
-	for i := 0; i < bat.VectorCount(); i++ {
-		vec := bat.GetVector(int32(i))
-		if vec.NeedDup() {
-			oldVec := bat.Vecs[i]
-			nvec, err := oldVec.Dup(proc.Mp())
-			if err != nil {
-				return false, err
-			}
-			bat.ReplaceVector(oldVec, nvec)
-			oldVec.Free(proc.Mp())
-		}
-	}
-
 	for i, f := range ap.Fs {
 		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 		if err != nil {

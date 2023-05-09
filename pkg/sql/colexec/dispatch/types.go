@@ -22,10 +22,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	maxMessageSizeToMoRpc = 64 * mpool.MB
+	procTimeout           = 10000 * time.Second
+	waitNotifyTimeout     = 45 * time.Second
+
+	// send to all reg functions
+	SendToAllLocalFunc = iota
+	SendToAllRemoteFunc
+	SendToAllFunc
+
+	// send to any reg functions
+	SendToAnyLocalFunc
+	SendToAnyRemoteFunc
+	SendToAnyFunc
+	
+	//shuffle to all reg functions
+	ShuffleToAllFunc
+	ShuffleToAllLocalFunc
 )
 
 type WrapperClientSession struct {
@@ -40,11 +61,9 @@ type container struct {
 	remoteReceivers []*WrapperClientSession
 	// sendFunc is the rule you want to send batch
 	sendFunc func(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error)
-}
 
-type Argument struct {
-	ctr *container
-
+	// isRemote specify it is a remote receiver or not
+	isRemote bool
 	// prepared specify waiting remote receiver ready or not
 	prepared bool
 
@@ -53,6 +72,10 @@ type Argument struct {
 	aliveRegCnt   int
 	localRegsCnt  int
 	remoteRegsCnt int
+}
+
+type Argument struct {
+	ctr *container
 
 	// FuncId means the sendFunc you want to call
 	FuncId int
@@ -63,12 +86,12 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if arg.FuncId == SendToAllFunc {
-		if !arg.prepared {
+	if arg.ctr.isRemote {
+		if !arg.ctr.prepared {
 			arg.waitRemoteRegsReady(proc)
 		}
 		for _, r := range arg.ctr.remoteReceivers {
-			timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			timeoutCtx, cancel := context.WithTimeout(context.Background(), procTimeout)
 			_ = cancel
 			message := cnclient.AcquireMessage()
 			{
@@ -78,7 +101,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 				message.Uuid = r.uuid[:]
 			}
 			if pipelineFailed {
-				err := moerr.NewInternalErrorNoCtx("pipeline failed")
+				err := moerr.NewInternalError(proc.Ctx, "pipeline failed")
 				message.Err = pipeline.EncodedMessageError(timeoutCtx, err)
 			}
 			r.cs.Write(timeoutCtx, message)
@@ -99,11 +122,12 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	}
 
 	for i := range arg.LocalRegs {
-		select {
-		case <-arg.LocalRegs[i].Ctx.Done():
-		case arg.LocalRegs[i].Ch <- nil:
+		if !pipelineFailed {
+			select {
+			case <-arg.LocalRegs[i].Ctx.Done():
+			case arg.LocalRegs[i].Ch <- nil:
+			}
 		}
 		close(arg.LocalRegs[i].Ch)
 	}
-
 }

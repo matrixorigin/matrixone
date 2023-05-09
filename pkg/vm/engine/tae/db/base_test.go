@@ -404,7 +404,7 @@ func getOneBlockMeta(rel handle.Relation) *catalog.BlockEntry {
 }
 
 func checkAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, applyDelete bool) {
-	schema := rel.GetMeta().(*catalog.TableEntry).GetSchema()
+	schema := rel.Schema().(*catalog.Schema)
 	for _, def := range schema.ColDefs {
 		rows := getColumnRowsByScan(t, rel, def.Idx, applyDelete)
 		assert.Equal(t, expectRows, rows)
@@ -566,7 +566,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 	segIt := rel.MakeSegmentIt()
 	for segIt.Valid() {
 		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
-		if seg.GetAppendableBlockCnt() == int(seg.GetTable().GetSchema().SegmentMaxBlocks) {
+		if seg.GetAppendableBlockCnt() == int(seg.GetTable().GetLastestSchema().SegmentMaxBlocks) {
 			segs = append(segs, seg)
 		}
 		segIt.Next()
@@ -577,7 +577,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		segHandle, err := rel.GetSegment(seg.ID)
+		segHandle, err := rel.GetSegment(&seg.ID)
 		if err != nil {
 			if skipConflict {
 				_ = txn.Rollback()

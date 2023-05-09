@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -37,6 +38,8 @@ type evalVector struct {
 }
 
 type container struct {
+	colexec.ReceiverOperator
+
 	state int
 
 	inBuckets []uint8
@@ -70,7 +73,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
 		ctr.cleanHashMap()
 	}
 }
