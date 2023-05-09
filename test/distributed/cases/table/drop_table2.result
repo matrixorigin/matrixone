@@ -1,0 +1,68 @@
+drop table if exists t1;
+create table t1(a int);
+show tables;
+Tables_in_drop_table2
+t1
+begin;
+show tables;
+Tables_in_drop_table2
+t1
+show columns from t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+drop table t1;
+show tables;
+Tables_in_drop_table2
+create table t1(a int,b int);
+show tables;
+Tables_in_drop_table2
+t1
+show columns from t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    INT(32)    YES        null        
+create table t2(a int);
+show tables;
+Tables_in_drop_table2
+t1
+t2
+show columns from t2;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+rollback;
+show tables;
+Tables_in_drop_table2
+t1
+show columns from t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+begin;
+show tables;
+Tables_in_drop_table2
+t1
+show columns from t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+drop table t1;
+show tables;
+Tables_in_drop_table2
+create table t1(a int, b int);
+show tables;
+Tables_in_drop_table2
+t1
+show columns from t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    INT(32)    YES        null        
+create table t2(a int);
+show tables;
+Tables_in_drop_table2
+t1
+t2
+commit;
+show tables;
+Tables_in_drop_table2
+t1
+t2
+drop table if exists t1;
+drop table if exists t2;

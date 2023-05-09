@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/ctl"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -38,22 +37,7 @@ func handleFlush() handleFunc {
 			parameters := strings.Split(parameter, ".")
 			txnOp := proc.TxnOperator
 			if proc.TxnOperator == nil {
-				v, err := proc.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
-				if err != nil {
-					return nil, err
-				}
-				txnOp = v
-				if err = proc.SessionInfo.StorageEngine.New(proc.Ctx, txnOp); err != nil {
-					return nil, err
-				}
-
-				defer func() {
-					if err := proc.SessionInfo.StorageEngine.Commit(proc.Ctx, txnOp); err != nil {
-						_ = txnOp.Rollback(proc.Ctx)
-					} else {
-						_ = txnOp.Commit(proc.Ctx)
-					}
-				}()
+				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
 			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, parameters[0], txnOp)
 			if err != nil {

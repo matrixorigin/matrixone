@@ -44,6 +44,7 @@ type ExternalParam struct {
 type ExParamConst struct {
 	IgnoreLine      int
 	IgnoreLineTag   int
+	ParallelLoad    bool
 	maxBatchSize    uint64
 	Idx             int
 	CreateSql       string

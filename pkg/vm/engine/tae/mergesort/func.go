@@ -114,7 +114,11 @@ func Merge[T any](
 func Shuffle(col containers.Vector, idx []uint32) containers.Vector {
 	ret := containers.MakeVector(*col.GetType())
 	for _, j := range idx {
-		ret.Append(col.Get(int(j)), col.IsNull(int(j)))
+		if col.IsNull(int(j)) {
+			ret.Append(nil, true)
+		} else {
+			ret.Append(col.Get(int(j)), false)
+		}
 	}
 	col.Close()
 	return ret
