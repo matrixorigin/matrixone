@@ -35,7 +35,7 @@ func mustVectorFromProto(v *api.Vector) *vector.Vector {
 	return ret
 }
 
-func mustVectorToProto(v *vector.Vector) *api.Vector {
+func MustVectorToProto(v *vector.Vector) *api.Vector {
 	ret, err := vector.VectorToProtoVector(v)
 	if err != nil {
 		panic(err)

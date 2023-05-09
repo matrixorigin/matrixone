@@ -75,9 +75,9 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		state.HandleRowsInsert(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
 			Vecs: []*api.Vector{
-				mustVectorToProto(rowIDVec),
-				mustVectorToProto(tsVec),
-				mustVectorToProto(vec1),
+				MustVectorToProto(rowIDVec),
+				MustVectorToProto(tsVec),
+				MustVectorToProto(vec1),
 			},
 		}, 0, packer)
 	}
@@ -127,9 +127,9 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		state.HandleRowsInsert(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
 			Vecs: []*api.Vector{
-				mustVectorToProto(rowIDVec),
-				mustVectorToProto(tsVec),
-				mustVectorToProto(vec1),
+				MustVectorToProto(rowIDVec),
+				MustVectorToProto(tsVec),
+				MustVectorToProto(vec1),
 			},
 		}, 0, packer)
 	}
@@ -160,8 +160,8 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
 			Vecs: []*api.Vector{
-				mustVectorToProto(rowIDVec),
-				mustVectorToProto(tsVec),
+				MustVectorToProto(rowIDVec),
+				MustVectorToProto(tsVec),
 			},
 		})
 	}
@@ -209,8 +209,8 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		state.HandleRowsDelete(ctx, &api.Batch{
 			Attrs: []string{"rowid", "time", "a"},
 			Vecs: []*api.Vector{
-				mustVectorToProto(rowIDVec),
-				mustVectorToProto(tsVec),
+				MustVectorToProto(rowIDVec),
+				MustVectorToProto(tsVec),
 			},
 		})
 	}

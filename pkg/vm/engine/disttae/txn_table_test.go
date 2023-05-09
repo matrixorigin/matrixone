@@ -171,25 +171,36 @@ func BenchmarkTxnTableInsert(b *testing.B) {
 }
 
 func BenchmarkLargeBlocksBtree(b *testing.B) {
-	mp := mpool.MustNewZero()
-	table := newTxnTableForTest(mp)
-	// add 100,000,000 block as non-append blocks
-	blockNums := 10000
+	pool := mpool.MustNewZero()
+	table := newTxnTableForTest(pool)
+	// add 1000000 block as non-append blocks
+	blockNums := 1000000
 	table.blockInfos = make([][]catalog.BlockInfo, 1)
-	parts := table.db.txn.engine.getPartitions(0, 0)
-	part, _ := parts[0].MutateState()
-	table.blockInfos[0] = make([]catalog.BlockInfo, blockNums)
+	state := logtailreplay.NewPartitionState(false)
+	sid := objectio.NewSegmentid()
+	table.blockInfos[0] = make([]catalog.BlockInfo, 0, blockNums)
+	// add blockInfo
+	for i := 0; i < blockNums; i++ {
+		table.blockInfos[0] = append(table.blockInfos[0], catalog.BlockInfo{
+			BlockID: *objectio.NewBlockid(sid, 0, uint16(i)),
+		})
+	}
+
+	// add 10000 blocks in dn_delete_metaLoc_batch
 	mp2 := make(map[types.Blockid][]*batch.Batch)
 	table.db.txn.blockId_dn_delete_metaLoc_batch = mp2
-	sid := objectio.NewSegmentid()
-	// add 10000 blocks in dn_delete_metaLoc_batch
 	for i := 0; i < 10000; i++ {
 		mp2[*objectio.NewBlockid(sid, 0, uint16(i))] = nil
 	}
 
+	// add non-append blocks into btree state
+	for _, info := range table.blockInfos[0] {
+		state.AddBlockId(info)
+	}
+
 	for i, max := int64(0), int64(b.N); i < max; i++ {
 		for blkId := range table.db.txn.blockId_dn_delete_metaLoc_batch {
-			if !part.BlockVisible(blkId, types.TimestampToTS(table.db.txn.meta.SnapshotTS)) {
+			if !state.BlockVisible(blkId, types.TimestampToTS(table.db.txn.meta.SnapshotTS)) {
 				// load dn memory data deletes
 				table.LoadDeletesForBlock(&blkId, nil, nil)
 			}
@@ -198,28 +209,41 @@ func BenchmarkLargeBlocksBtree(b *testing.B) {
 }
 
 func BenchmarkLargeBlocksMap(b *testing.B) {
-	mp := mpool.MustNewZero()
-	table := newTxnTableForTest(mp)
-	// add 100,000,000 block as non-append blocks
-	blockNums := 10000
+	pool := mpool.MustNewZero()
+	table := newTxnTableForTest(pool)
+	// add 1000000 block as non-append blocks
+	blockNums := 1000000
 	table.blockInfos = make([][]catalog.BlockInfo, 1)
-	table.blockInfos[0] = make([]catalog.BlockInfo, blockNums)
+	state := logtailreplay.NewPartitionState(false)
+	sid := objectio.NewSegmentid()
+	table.blockInfos[0] = make([]catalog.BlockInfo, 0, blockNums)
+	// add blockInfo
+	for i := 0; i < blockNums; i++ {
+		table.blockInfos[0] = append(table.blockInfos[0], catalog.BlockInfo{
+			BlockID: *objectio.NewBlockid(sid, 0, uint16(i)),
+		})
+	}
+
+	// add 10000 blocks in dn_delete_metaLoc_batch
 	mp2 := make(map[types.Blockid][]*batch.Batch)
 	table.db.txn.blockId_dn_delete_metaLoc_batch = mp2
-	sid := objectio.NewSegmentid()
-	// add 10000 blocks in dn_delete_metaLoc_batch
 	for i := 0; i < 10000; i++ {
 		mp2[*objectio.NewBlockid(sid, 0, uint16(i))] = nil
+	}
+
+	// add non-append blocks into btree state
+	for _, info := range table.blockInfos[0] {
+		state.AddBlockId(info)
 	}
 
 	for i, max := int64(0), int64(b.N); i < max; i++ {
 		// model each map
 		meta_blocks := make(map[types.Blockid]bool)
-		for blockId := range mp2 {
-			meta_blocks[blockId] = true
+		for _, info := range table.blockInfos[0] {
+			meta_blocks[info.BlockID] = true
 		}
 		for blkId := range table.db.txn.blockId_dn_delete_metaLoc_batch {
-			if meta_blocks[blkId] {
+			if !meta_blocks[blkId] {
 				// load dn memory data deletes
 				table.LoadDeletesForBlock(&blkId, nil, nil)
 			}
