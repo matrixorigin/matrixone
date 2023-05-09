@@ -726,6 +726,7 @@ var (
 		"mo_role_grant":               0,
 		"mo_role_privs":               0,
 		"mo_user_defined_function":    0,
+		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
 		catalog.AutoIncrTableName:     0,
 	}
@@ -872,6 +873,7 @@ var (
 		`create table mo_stored_procedure(
 				proc_id int auto_increment,
 				name     varchar(100),
+				creator  int unsigned,
 				args     text,
 				body     text,
 				db       varchar(100),
@@ -5002,7 +5004,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
-		*tree.ShowLocks, *tree.ShowFunctionStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
+		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
 		*tree.ShowBackendServers:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -7529,7 +7531,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		ses.GetTenantInfo().GetDefaultRoleID(),
 		string(argsJson),
 		cp.Body, dbName,
-		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	err = bh.Exec(ctx, initMoProcedure)
 	if err != nil {
 		goto handleFailed

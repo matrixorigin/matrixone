@@ -79,7 +79,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: e2e_docker-compose
+          name: multi-cn-e2e-docker-compose-log
           path: |
              ${{ github.workspace }}/docker-compose-log
           retention-days: 7
@@ -163,7 +163,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: e2e_docker-compose
+          name: multi-cn-e2e-push-docker-compose-log
           path: |
              ${{ github.workspace }}/multi-cn-docker-compose-log
           retention-days: 7

@@ -422,11 +422,33 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 	return expr
 }
 
+// deduction of new predicates for join on list. for example join on a=b and b=c, then a=c can be deduced
+func deduceNewOnList(onList []*plan.Expr) []*plan.Expr {
+	var newPreds []*plan.Expr
+	lenOnlist := len(onList)
+	for i := range onList {
+		ok1, col1, col2 := checkStrictJoinPred(onList[i])
+		if !ok1 {
+			continue
+		}
+		for j := i + 1; j < lenOnlist; j++ {
+			ok2, col3, col4 := checkStrictJoinPred(onList[j])
+			if ok2 {
+				ok, newPred := deduceTranstivity(onList[i], col1, col2, col3, col4)
+				if ok {
+					newPreds = append(newPreds, newPred)
+				}
+			}
+		}
+	}
+	return newPreds
+}
+
 // deduction of new predicates. for example join on a=b where b=1, then a=1 can be deduced
-func predsDeduction(filters, onList []*plan.Expr) []*plan.Expr {
+func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 	var newFilters []*plan.Expr
 	for _, onPred := range onList {
-		ret, col1, col2 := checkOnPred(onPred)
+		ret, col1, col2 := checkStrictJoinPred(onPred)
 		if !ret {
 			continue
 		}
@@ -499,7 +521,7 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 		switch exprImpl.F.Func.ObjName {
 		case "=", ">", "<", ">=", "<=":
 			switch exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_C:
+			case *plan.Expr_C, *plan.Expr_P:
 				return CheckFilter(exprImpl.F.Args[0])
 			default:
 				return false, nil
@@ -528,6 +550,18 @@ func CheckFilter(expr *plan.Expr) (bool, *ColRef) {
 	return false, nil
 }
 
+// for col1=col2 and col3 = col4, trying to deduce new pred
+// for example , if col1 and col3 are the same, then we can deduce that col2=col4
+func deduceTranstivity(expr *plan.Expr, col1, col2, col3, col4 *ColRef) (bool, *plan.Expr) {
+	if col1.String() == col3.String() || col1.String() == col4.String() || col2.String() == col3.String() || col2.String() == col4.String() {
+		retExpr := DeepCopyExpr(expr)
+		substituteMatchColumn(retExpr, col3, col4)
+		return true, retExpr
+	}
+	return false, nil
+}
+
+// if match col1 in expr, substitute it to col2. and othterwise
 func substituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) bool {
 	var ret bool
 	switch exprImpl := expr.Expr.(type) {
@@ -554,7 +588,7 @@ func substituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) bool
 	return ret
 }
 
-func checkOnPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
+func checkStrictJoinPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
 	//onPred must be equality, children must be column name
 	switch onPredImpl := onPred.Expr.(type) {
 	case *plan.Expr_F:
@@ -909,12 +943,11 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 
 // handle the filter list for zonemap. rewrite and constFold
 // return monotonic filters and number of nonMonotonic filters
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, int) {
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
 	if proc == nil || proc.Ctx == nil {
-		return nil, 0
+		return nil, nil
 	}
-	num := 0
-	var newExprList []*plan.Expr
+	var monoExprList, nonMonoExprList []*plan.Expr
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	for _, expr := range exprList {
@@ -923,13 +956,12 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Exp
 			expr = tmpexpr
 		}
 		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
-			newExprList = append(newExprList, expr)
+			monoExprList = append(monoExprList, expr)
 		} else {
-			num++
+			nonMonoExprList = append(nonMonoExprList, expr)
 		}
 	}
-	e := colexec.RewriteFilterExprList(newExprList)
-	return e, num
+	return colexec.RewriteFilterExprList(monoExprList), colexec.RewriteFilterExprList(nonMonoExprList)
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
@@ -1072,8 +1104,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= 100000 && constVal >= -100000
 		case types.T_float64:
 			//float64 has 15 significant digits.
-			//return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
-			return false // filtering zonemap is slow for now. will change this in the future
+			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		case types.T_decimal64:
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		default:
@@ -1107,8 +1138,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 			return constVal <= 100000
 		case types.T_float64:
 			//float64 has 15 significant digits.
-			//return constVal <= math.MaxUint32
-			return false // filtering zonemap is slow for now. will change this in the future
+			return constVal <= math.MaxUint32
 		case types.T_decimal64:
 			return constVal <= math.MaxInt32
 		default:

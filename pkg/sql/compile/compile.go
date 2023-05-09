@@ -18,11 +18,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -418,6 +422,30 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	if err != nil {
 		return nil, err
 	}
+	if c.info.Typ == plan2.ExecTypeAP {
+		client := cnclient.GetRPCClient()
+		if client != nil {
+			for i := 0; i < len(c.cnList); i++ {
+				_, _, err := net.SplitHostPort(c.cnList[i].Addr)
+				if err != nil {
+					logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
+				}
+				if isSameCN(c.addr, c.cnList[i].Addr) {
+					continue
+				}
+				logutil.Infof("ping start")
+				err = client.Ping(ctx, c.cnList[i].Addr)
+				logutil.Infof("ping err %+v\n", err)
+				// ping failed
+				if err != nil {
+					logutil.Infof("ping err %+v\n", err)
+					c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
+					i--
+				}
+			}
+		}
+	}
+
 	blkNum := 0
 	for _, n := range qry.Nodes {
 		if n.NodeType == plan.Node_TABLE_SCAN {
@@ -856,6 +884,19 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	return ds
 }
 
+func (c *Compile) constructLoadMergeScope() *Scope {
+	ds := &Scope{Magic: Merge}
+	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
+	ds.Proc.LoadTag = true
+	ds.appendInstruction(vm.Instruction{
+		Op:      vm.Merge,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     &merge.Argument{},
+	})
+	return ds
+}
+
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
@@ -868,12 +909,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	}
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
-	if param.Local {
-		if param.Parallel {
-			return nil, moerr.NewInvalidInput(ctx, "load local do not support parallel mode")
-		}
-		mcpu = 1
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -898,10 +933,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		if err := plan2.InitInfileParam(param); err != nil {
 			return nil, err
 		}
-	}
-
-	if n.ObjRef != nil {
-		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
 	}
 
 	param.FileService = c.proc.FileService
@@ -932,6 +963,13 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	} else {
 		fileList = []string{param.Filepath}
+	}
+	if len(fileList) == 0 {
+		return nil, nil
+	}
+
+	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
+		return c.compileExternScanParallel(n, param, fileList, fileSize, ctx)
 	}
 
 	var fileOffset [][]int64
@@ -974,6 +1012,40 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		pre += count
 	}
 
+	return ss, nil
+}
+
+// construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
+func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, ctx context.Context) ([]*Scope, error) {
+	param.Parallel = false
+	mcpu := c.cnList[0].Mcpu
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = c.constructLoadMergeScope()
+	}
+	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
+	for i := 0; i < len(fileList); i++ {
+		fileOffsetTmp[i] = &pipeline.FileOffset{}
+		fileOffsetTmp[i].Offset = make([]int64, 0)
+		fileOffsetTmp[i].Offset = append(fileOffsetTmp[i].Offset, []int64{0, -1}...)
+	}
+	extern := constructExternal(n, param, c.ctx, fileList, fileSize, fileOffsetTmp)
+	extern.Es.ParallelLoad = true
+	scope := c.constructScopeForExternal("", false)
+	scope.appendInstruction(vm.Instruction{
+		Op:      vm.External,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     extern,
+	})
+	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
+	arg.FuncId = dispatch.SendToAnyLocalFunc
+	scope.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: arg,
+	})
+	ss[0].PreScopes = append(ss[0].PreScopes, scope)
+	c.anal.isFirst = false
 	return ss, nil
 }
 
