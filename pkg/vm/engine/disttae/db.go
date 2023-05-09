@@ -290,10 +290,10 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 
 		state, doneMutate := part.MutateState()
 
-		for _, ckpt := range state.Checkpoints {
+		if err := state.ConsumeCheckpoints(func(checkpoint string) error {
 			entries, err := logtail.LoadCheckpointEntries(
 				ctx,
-				ckpt,
+				checkpoint,
 				tbl.tableId,
 				tbl.tableName,
 				tbl.db.databaseId,
@@ -307,8 +307,10 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 					return err
 				}
 			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		state.Checkpoints = state.Checkpoints[:0]
 
 		doneMutate()
 	}
