@@ -77,7 +77,7 @@ func (txn *Transaction) ReadOnly() bool {
 	return txn.readOnly.Load()
 }
 
-// Write used to write data to the transaction buffer
+// WriteBatch used to write data to the transaction buffer
 // insert/delete/update all use this api
 // insertBatchHasRowId : it denotes the batch has Rowid when the typ is INSERT.
 // if typ is not INSERT, it is always false.
@@ -100,7 +100,7 @@ func (txn *Transaction) WriteBatch(
 	if typ == INSERT && !insertBatchHasRowId {
 		txn.genBlock()
 		len := bat.Length()
-		vec := vector.NewVec(types.T_Rowid.ToType())
+		vec := txn.proc.GetVector(types.T_Rowid.ToType())
 		for i := 0; i < len; i++ {
 			if err := vector.AppendFixed(vec, txn.genRowId(), false,
 				txn.proc.Mp()); err != nil {
@@ -185,11 +185,11 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		if err != nil {
 			return err
 		}
-		s3Writer.InitBuffers(mp[key][0])
+		s3Writer.InitBuffers(txn.proc, mp[key][0])
 		for i := 0; i < len(mp[key]); i++ {
 			s3Writer.Put(mp[key][i], txn.proc)
 		}
-		err = s3Writer.MergeBlock(len(s3Writer.Bats), txn.proc, false)
+		err = s3Writer.MergeBlock(len(s3Writer.Bats), txn.proc)
 
 		if err != nil {
 			return err
@@ -221,7 +221,7 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 	}
 	s3Writer := &colexec.S3Writer{}
 	s3Writer.SetSortIdx(-1)
-	s3Writer.Init()
+	s3Writer.Init(txn.proc)
 	s3Writer.SetMp(attrs)
 	if sortIdx != -1 {
 		s3Writer.SetSortIdx(sortIdx)

@@ -217,7 +217,7 @@ func WriteUniqueTable(s3Writers []*S3Writer, proc *process.Process, updateBatch 
 			uIdx++
 		} else {
 			uIdx++
-			err := s3Writers[uIdx].WriteS3Batch(ukBatch, proc)
+			err := s3Writers[uIdx].WriteS3Batch(proc, ukBatch)
 			if err != nil {
 				return err
 			}
