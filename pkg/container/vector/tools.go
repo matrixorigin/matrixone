@@ -41,7 +41,7 @@ func MustFixedCol[T any](v *Vector) []T {
 }
 
 // Note: this function is not efficient, don't use it in the performance critical path.
-// Please run BenchmarkMustBytesCol to see the performance difference.
+// Please run BenchmarkProcessingBytes to see the performance difference.
 func MustBytesCol(v *Vector) [][]byte {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil
@@ -58,6 +58,9 @@ func MustBytesCol(v *Vector) [][]byte {
 	}
 }
 
+// Note: Don't use this function in the performance critical path.
+// It is very, very slow.
+// Please run BenchmarkProcessingBytes to see the performance difference.
 func MustStrCol(v *Vector) []string {
 	if v.GetType().Oid == types.T_any || len(v.data) == 0 {
 		return nil

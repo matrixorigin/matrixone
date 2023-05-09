@@ -1107,16 +1107,25 @@ func TestWindowWith(t *testing.T) {
 	vec3.Free(mp)
 }
 
-func BenchmarkMustBytesCol(b *testing.B) {
+func BenchmarkProcessingBytes(b *testing.B) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_char.ToType())
 	defer vec.Free(mp)
 
 	bs := bytes.Repeat([]byte("x"), 79)
 
-	for i := 0; i < 1; i++ {
+	for i := 0; i < 8092; i++ {
 		_ = AppendBytes(vec, bs, false, mp)
 	}
+	b.Run("MustStrCol", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			vs := MustStrCol(vec)
+			for j := 0; j < vec.Length(); j++ {
+				_ = vs[j]
+			}
+		}
+	})
 	b.Run("MustBytesCol", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
