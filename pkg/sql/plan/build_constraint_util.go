@@ -976,7 +976,7 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 			if _, ok := updateKeysMap[coldef.Name]; ok {
 				pos := newColPosMap[coldef.Name]
 				posExpr := lastNode.ProjectList[pos]
-				if posExpr.Typ == nil { // set col = default
+				if isDefaultExpr(posExpr) { // set col = default
 					lastNode.ProjectList[pos], err = getDefaultExpr(builder.GetContext(), coldef)
 					if err != nil {
 						return err
@@ -1027,6 +1027,18 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	}
 	info.idx = int32(len(info.projectList))
 	return nil
+}
+
+func isDefaultExpr(expr *Expr) bool {
+	c, ok := expr.Expr.(*plan.Expr_C)
+	if !ok {
+		return false
+	}
+	_, ok = c.C.Value.(*plan.Const_Defaultval)
+	if !ok {
+		return false
+	}
+	return true
 }
 
 func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, tableDef *TableDef, baseNodeId int32, rewriteIdx int) error {
