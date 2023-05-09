@@ -20,12 +20,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,21 +30,21 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("insert")
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.state = Process
 	if ap.ToWriteS3 {
 		// If the target is partition table, just only apply writers for all partitioned sub tables
 		if len(ap.InsertCtx.PartitionTableIDs) > 0 {
-			s3Writers, err := colexec.AllocPartitionS3Writer(ap.InsertCtx.TableDef)
+			s3Writers, err := colexec.AllocPartitionS3Writer(proc, ap.InsertCtx.TableDef)
 			if err != nil {
 				return err
 			}
 			ap.ctr.partitionS3Writers = s3Writers
 		} else {
 			// If the target is not partition table, you only need to operate the main table
-			s3Writer, err := colexec.AllocS3Writer(ap.InsertCtx.TableDef)
+			s3Writer, err := colexec.AllocS3Writer(proc, ap.InsertCtx.TableDef)
 			if err != nil {
 				return err
 			}
@@ -117,7 +114,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 
 			// write partition data to s3.
 			for pidx, writer := range ap.ctr.partitionS3Writers {
-				if err = writer.WriteS3Batch(insertBatches[pidx], proc); err != nil {
+				if err = writer.WriteS3Batch(proc, insertBatches[pidx]); err != nil {
 					ap.ctr.state = End
 					return false, err
 				}
@@ -134,7 +131,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			// Normal non partition table
 			s3Writer := ap.ctr.s3Writer
 			// write to s3.
-			if err := s3Writer.WriteS3Batch(bat, proc); err != nil {
+			if err := s3Writer.WriteS3Batch(proc, bat); err != nil {
 				ap.ctr.state = End
 				return false, err
 			}
@@ -195,8 +192,8 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	res := batch.NewWithSize(len(attrs))
 	res.SetAttributes(attrs)
-	res.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-	res.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	res.Vecs[0] = proc.GetVector(types.T_int16.ToType())
+	res.Vecs[1] = proc.GetVector(types.T_text.ToType())
 	for _, w := range s3Writers {
 		//deep copy.
 		res, err = res.Append(proc.Ctx, proc.GetMPool(), w.GetMetaLocBat())
@@ -204,7 +201,7 @@ func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err
 			return
 		}
 		res.Zs = append(res.Zs, w.GetMetaLocBat().Zs...)
-		w.ResetMetaLocBat()
+		w.ResetMetaLocBat(proc)
 	}
 	proc.SetInputBatch(res)
 	return

@@ -17,7 +17,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -75,7 +74,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 						insertBatch = batch.NewWithSize(len(bat.Attrs))
 						insertBatch.SetAttributes(bat.Attrs)
 						for i := range bat.Attrs {
-							vec := vector.NewVec(*bat.Vecs[i].GetType())
+							vec := proc.GetVector(*bat.Vecs[i].GetType())
 							if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 								return false, err
 							}
@@ -102,7 +101,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 						insertBatch = batch.NewWithSize(len(bat.Attrs))
 						insertBatch.SetAttributes(bat.Attrs)
 						for i := range bat.Attrs {
-							vec := vector.NewVec(*bat.Vecs[i].GetType())
+							vec := proc.GetVector(*bat.Vecs[i].GetType())
 							if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 								return false, err
 							}
@@ -132,7 +131,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 					insertBatch = batch.NewWithSize(len(bat.Attrs))
 					insertBatch.SetAttributes(bat.Attrs)
 					for i := range bat.Attrs {
-						vec := vector.NewVec(*bat.Vecs[i].GetType())
+						vec := proc.GetVector(*bat.Vecs[i].GetType())
 						if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 							return false, err
 						}
@@ -158,7 +157,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 					insertBatch = batch.NewWithSize(len(bat.Attrs))
 					insertBatch.SetAttributes(bat.Attrs)
 					for i := range bat.Attrs {
-						vec := vector.NewVec(*bat.Vecs[i].GetType())
+						vec := proc.GetVector(*bat.Vecs[i].GetType())
 						if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 							return false, err
 						}
