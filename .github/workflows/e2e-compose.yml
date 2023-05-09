@@ -27,6 +27,7 @@ jobs:
   
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |    
+          docker version
           docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
           sleep 10
