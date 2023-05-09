@@ -14,4 +14,4 @@ select * from db1.t1;
 a
 2
 drop database db1;
-drop account default_1
+drop account default_1;

@@ -14,4 +14,4 @@ insert into db1.t1 values(2);
 select * from db1.t1;
 drop database db1;
 -- @session
-drop account default_1
+drop account default_1;
