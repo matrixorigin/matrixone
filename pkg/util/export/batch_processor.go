@@ -506,7 +506,7 @@ func (c *MOCollector) Stop(graceful bool) error {
 	c.stopOnce.Do(func() {
 		for len(c.awakeCollect) > 0 && graceful {
 			c.logger.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)))
-			time.Sleep(250 * time.Second)
+			time.Sleep(250 * time.Millisecond)
 		}
 		c.mux.Lock()
 		for _, buffer := range c.buffers {

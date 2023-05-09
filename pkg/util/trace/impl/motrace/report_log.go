@@ -49,9 +49,18 @@ func (m *MOZapLog) GetName() string {
 	return logView.OriginTable.GetName()
 }
 
+// deltaContentLength approximate value that may gen as table record
+// timestamp: 26
+// level: 5
+// itemName: 8
+// nodeInfo: 40 /*36+4*/
+// spanInfo: 36+16
+const deltaContentLength = int64(26 + 5 + 8 + 40 + 36 + 16)
+
 // Size 计算近似值
 func (m *MOZapLog) Size() int64 {
-	return int64(unsafe.Sizeof(m) + unsafe.Sizeof(len(m.LoggerName)+len(m.Caller)+len(m.Message)+len(m.Extra)+len(m.Stack)))
+	return int64(unsafe.Sizeof(m)) + int64(len(m.LoggerName)+len(m.Caller)+len(m.Message)+len(m.Extra)+len(m.Stack)) +
+		deltaContentLength
 }
 
 func (m *MOZapLog) Free() {
@@ -67,8 +76,12 @@ func (m *MOZapLog) GetTable() *table.Table { return logView.OriginTable }
 func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, table.StringField(logView.Table))
-	row.SetColumnVal(traceIDCol, table.UuidField(m.SpanContext.TraceID[:]))
-	row.SetColumnVal(spanIDCol, table.BytesField(m.SpanContext.SpanID[:]))
+	if m.SpanContext.TraceID != trace.NilTraceID {
+		row.SetColumnVal(traceIDCol, table.UuidField(m.SpanContext.TraceID[:]))
+	}
+	if m.SpanContext.SpanID != trace.NilSpanID {
+		row.SetColumnVal(spanIDCol, table.BytesField(m.SpanContext.SpanID[:]))
+	}
 	row.SetColumnVal(spanKindCol, table.StringField(m.SpanContext.Kind.String()))
 	row.SetColumnVal(nodeUUIDCol, table.StringField(GetNodeResource().NodeUuid))
 	row.SetColumnVal(nodeTypeCol, table.StringField(GetNodeResource().NodeType))
