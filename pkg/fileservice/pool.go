@@ -47,6 +47,7 @@ func NewPool[T any](
 
 	pool.pool = make([]_PoolElem[T], capacity)
 	for i := uint32(0); i < capacity; i++ {
+		i := i
 		value := newFunc()
 		pool.pool[i] = _PoolElem[T]{
 			Value: value,
