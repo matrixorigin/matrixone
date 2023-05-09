@@ -30,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-
-
 func releaseBats(bat *batch.Batch, proc *process.Process) {
 	for i := range bat.Vecs {
 		bat.Vecs[i].Free(proc.Mp())
@@ -113,7 +111,6 @@ func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process
 	return false, nil
 }
 
-
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	refCountAdd := int64(len(ap.LocalRegs) - 1)
@@ -136,8 +133,14 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 
 // common sender: shuffle to all RemoteReceiver
 func shuffleToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	if !ap.prepared {
-		ap.waitRemoteRegsReady(proc)
+	if !ap.ctr.prepared {
+		end, err := ap.waitRemoteRegsReady(proc)
+		if err != nil {
+			return false, err
+		}
+		if end {
+			return true, nil
+		}
 	}
 
 	shuffledBats, err := getShuffledBats(bat, len(ap.ctr.remoteReceivers), proc)
@@ -152,7 +155,7 @@ func shuffleToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if errEncode != nil {
 				return false, errEncode
 			}
-			if err := sendBatchToClientSession(encodeData, r); err != nil {
+			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
 				return false, err
 			}
 		}

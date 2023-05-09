@@ -43,7 +43,7 @@ const (
 	SendToAnyLocalFunc
 	SendToAnyRemoteFunc
 	SendToAnyFunc
-	
+
 	//shuffle to all reg functions
 	ShuffleToAllFunc
 	ShuffleToAllLocalFunc
