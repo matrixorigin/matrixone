@@ -50,8 +50,8 @@ func BenchmarkBytesPool(b *testing.B) {
 	}, nil, nil)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		v, put := pool.Get()
-		put(v)
+		bs, put := pool.Get()
+		put(bs)
 	}
 }
 
@@ -63,8 +63,8 @@ func BenchmarkParallelBytesPool(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			v, put := pool.Get()
-			put(v)
+			bs, put := pool.Get()
+			put(bs)
 		}
 	})
 }
