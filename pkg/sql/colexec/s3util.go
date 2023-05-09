@@ -65,8 +65,6 @@ type S3Writer struct {
 	// size in tableBatches
 	Batsize uint64
 
-	sels []int64
-
 	typs []types.Type
 	ufs  []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
 }
@@ -115,10 +113,6 @@ func (w *S3Writer) SetMp(attrs []*engine.Attribute) {
 
 func (w *S3Writer) Init() {
 	w.pk = make(map[string]struct{})
-	w.sels = make([]int64, options.DefaultBlockMaxRows)
-	for i := 0; i < int(options.DefaultBlockMaxRows); i++ {
-		w.sels[i] = int64(i)
-	}
 	w.ResetMetaLocBat()
 }
 
@@ -141,10 +135,6 @@ func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
 			sortIndex: -1,
 			pk:        make(map[string]struct{}),
 			idx:       int16(i),
-			sels:      make([]int64, options.DefaultBlockMaxRows),
-		}
-		for j := 0; j < int(options.DefaultBlockMaxRows); j++ {
-			writers[i].sels[j] = int64(j)
 		}
 		writers[i].ResetMetaLocBat()
 		//handle origin/main table's sort index.
