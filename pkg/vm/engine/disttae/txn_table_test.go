@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -44,11 +47,15 @@ func newTxnTableForTest(
 				packer.FreeMem()
 			},
 		),
+		dnMap: make(map[string]int),
 	}
+	engine.dnMap["fakeDNStore"] = 0
+	engine.partitions = make(map[[2]uint64]logtailreplay.Partitions)
 	var dnStore DNStore
 	txn := &Transaction{
-		engine:   engine,
-		dnStores: []DNStore{dnStore},
+		engine:    engine,
+		dnStores:  []DNStore{dnStore},
+		createMap: new(sync.Map),
 	}
 	db := &txnDatabase{
 		txn: txn,
@@ -160,5 +167,62 @@ func BenchmarkTxnTableInsert(b *testing.B) {
 			makeBatchForTest(mp, i),
 		)
 		assert.Nil(b, err)
+	}
+}
+
+func BenchmarkLargeBlocksBtree(b *testing.B) {
+	mp := mpool.MustNewZero()
+	table := newTxnTableForTest(mp)
+	// add 100,000,000 block as non-append blocks
+	blockNums := 10000
+	table.blockInfos = make([][]catalog.BlockInfo, 1)
+	parts := table.db.txn.engine.getPartitions(0, 0)
+	part, _ := parts[0].MutateState()
+	table.blockInfos[0] = make([]catalog.BlockInfo, blockNums)
+	mp2 := make(map[types.Blockid][]*batch.Batch)
+	table.db.txn.blockId_dn_delete_metaLoc_batch = mp2
+	sid := objectio.NewSegmentid()
+	// add 10000 blocks in dn_delete_metaLoc_batch
+	for i := 0; i < 10000; i++ {
+		mp2[*objectio.NewBlockid(sid, 0, uint16(i))] = nil
+	}
+
+	for i, max := int64(0), int64(b.N); i < max; i++ {
+		for blkId := range table.db.txn.blockId_dn_delete_metaLoc_batch {
+			if !part.BlockVisible(blkId, types.TimestampToTS(table.db.txn.meta.SnapshotTS)) {
+				// load dn memory data deletes
+				table.LoadDeletesForBlock(&blkId, nil, nil)
+			}
+		}
+	}
+}
+
+func BenchmarkLargeBlocksMap(b *testing.B) {
+	mp := mpool.MustNewZero()
+	table := newTxnTableForTest(mp)
+	// add 100,000,000 block as non-append blocks
+	blockNums := 10000
+	table.blockInfos = make([][]catalog.BlockInfo, 1)
+	table.blockInfos[0] = make([]catalog.BlockInfo, blockNums)
+	mp2 := make(map[types.Blockid][]*batch.Batch)
+	table.db.txn.blockId_dn_delete_metaLoc_batch = mp2
+	sid := objectio.NewSegmentid()
+	// add 10000 blocks in dn_delete_metaLoc_batch
+	for i := 0; i < 10000; i++ {
+		mp2[*objectio.NewBlockid(sid, 0, uint16(i))] = nil
+	}
+
+	for i, max := int64(0), int64(b.N); i < max; i++ {
+		// model each map
+		meta_blocks := make(map[types.Blockid]bool)
+		for blockId := range mp2 {
+			meta_blocks[blockId] = true
+		}
+		for blkId := range table.db.txn.blockId_dn_delete_metaLoc_batch {
+			if meta_blocks[blkId] {
+				// load dn memory data deletes
+				table.LoadDeletesForBlock(&blkId, nil, nil)
+			}
+		}
 	}
 }

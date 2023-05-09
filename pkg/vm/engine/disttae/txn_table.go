@@ -972,6 +972,10 @@ func (tbl *txnTable) newReader(
 	txn := tbl.db.txn
 	ts := txn.meta.SnapshotTS
 	fs := txn.engine.fs
+	parts, err := tbl.getParts(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	if !txn.readOnly {
 		inserts = make([]*batch.Batch, 0, len(entries))
@@ -1000,7 +1004,7 @@ func (tbl *txnTable) newReader(
 		}
 
 		for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-			if !tbl._parts[0].BlockVisible(blkId, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
+			if !parts[partitionIndex].BlockVisible(blkId, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
 				// load dn memory data deletes
 				tbl.LoadDeletesForBlock(&blkId, nil, deletes)
 			}
@@ -1019,7 +1023,7 @@ func (tbl *txnTable) newReader(
 					continue
 				}
 				blkId := vs[0].GetBlockid()
-				if !tbl._parts[0].BlockVisible(*blkId, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
+				if !parts[partitionIndex].BlockVisible(*blkId, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
 					for _, v := range vs {
 						deletes[v] = 0
 					}
@@ -1043,11 +1047,6 @@ func (tbl *txnTable) newReader(
 			continue
 		}
 		mp[attr.Attr.Name] = attr.Attr.Type
-	}
-
-	parts, err := tbl.getParts(ctx)
-	if err != nil {
-		return nil, err
 	}
 
 	var iter logtailreplay.RowsIter
