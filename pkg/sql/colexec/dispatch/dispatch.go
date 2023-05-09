@@ -49,19 +49,15 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.prepareRemote(proc)
 
 	case ShuffleToAllFunc:
-		if ap.remoteRegsCnt == 0 {
+		if ctr.remoteRegsCnt == 0 {
 			return moerr.NewInternalError(proc.Ctx, "ShuffleToAllFunc should include RemoteRegs")
 		}
-		ap.prepared = false
-		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, ap.remoteRegsCnt)
 		if len(ap.LocalRegs) == 0 {
 			ap.ctr.sendFunc = shuffleToAllRemoteFunc
 		} else {
 			ap.ctr.sendFunc = shuffleToAllFunc
 		}
-		for _, rr := range ap.RemoteRegs {
-			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
-		}
+		ap.prepareRemote(proc)
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
@@ -82,12 +78,11 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.prepareLocal()
 
 	case ShuffleToAllLocalFunc:
-		if ap.remoteRegsCnt != 0 {
-			return moerr.NewInternalError(proc.Ctx, "SendToAllLocalFunc should not send to remote")
+		if ctr.remoteRegsCnt != 0 {
+			return moerr.NewInternalError(proc.Ctx, "ShuffleToAllLocalFunc should not send to remote")
 		}
-		ap.prepared = true
-		ap.ctr.remoteReceivers = nil
-		ap.ctr.sendFunc = shuffleToAllLocalFunc
+		ctr.sendFunc = shuffleToAllLocalFunc
+		ap.prepareLocal()
 
 	case SendToAnyLocalFunc:
 		if ctr.remoteRegsCnt != 0 {
