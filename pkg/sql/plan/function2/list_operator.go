@@ -1848,7 +1848,7 @@ var supportedOperators = []FuncNew{
 	{
 		functionId: ISNULL,
 		class:      plan.Function_PRODUCE_NO_NULL,
-		layout:     IS_NULL_EXPRESSION,
+		layout:     IS_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
 				return newCheckResultWithSuccess(0)
@@ -1873,7 +1873,7 @@ var supportedOperators = []FuncNew{
 	{
 		functionId: ISNOTNULL,
 		class:      plan.Function_PRODUCE_NO_NULL,
-		layout:     IS_NULL_EXPRESSION,
+		layout:     IS_NOT_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
 				return newCheckResultWithSuccess(0)
@@ -1898,7 +1898,7 @@ var supportedOperators = []FuncNew{
 	{
 		functionId: ISTRUE,
 		class:      plan.Function_PRODUCE_NO_NULL,
-		layout:     IS_NULL_EXPRESSION,
+		layout:     IS_EXPRESSION,
 		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
@@ -1919,7 +1919,7 @@ var supportedOperators = []FuncNew{
 	{
 		functionId: ISNOTTRUE,
 		class:      plan.Function_PRODUCE_NO_NULL,
-		layout:     IS_NULL_EXPRESSION,
+		layout:     IS_NOT_EXPRESSION,
 		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
@@ -1940,7 +1940,7 @@ var supportedOperators = []FuncNew{
 	{
 		functionId: ISFALSE,
 		class:      plan.Function_PRODUCE_NO_NULL,
-		layout:     IS_NULL_EXPRESSION,
+		layout:     IS_EXPRESSION,
 		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{
@@ -1961,7 +1961,7 @@ var supportedOperators = []FuncNew{
 	{
 		functionId: ISNOTFALSE,
 		class:      plan.Function_PRODUCE_NO_NULL,
-		layout:     IS_NULL_EXPRESSION,
+		layout:     IS_NOT_EXPRESSION,
 		checkFn:    fixedTypeMatch,
 
 		Overloads: []overload{

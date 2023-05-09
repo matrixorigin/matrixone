@@ -153,20 +153,22 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Clean(proc.Mp())
 			return err
 		}
-		exprVals := vector.MustFixedCol[bool](vec)
+
+		rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 		hasTrue := false
 		hasNull := false
 		if vec.IsConst() {
 			if vec.IsConstNull() {
 				hasNull = true
 			} else {
-				hasTrue = exprVals[0]
+				hasTrue, _ = rs.GetValue(0)
 			}
 		} else {
-			for j := range exprVals {
-				if vec.GetNulls().Contains(uint64(j)) {
+			for j := uint64(0); j < uint64(vec.Length()); j++ {
+				val, null := rs.GetValue(j)
+				if null {
 					hasNull = true
-				} else if exprVals[j] {
+				} else if val {
 					hasTrue = true
 				}
 			}

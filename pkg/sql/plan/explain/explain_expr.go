@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -245,12 +246,20 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			return result, err
 		}
 		result += funcExpr.F.Func.GetObjName() + "(" + describeExpr + ")"
-	case function2.IS_NULL_EXPRESSION:
+	case function2.IS_EXPRESSION:
 		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
 		if err != nil {
 			return result, err
 		}
-		result += "(" + describeExpr + " IS NULL)"
+		exprStr := funcExpr.F.Func.GetObjName()[2:]
+		result += fmt.Sprintf("("+describeExpr+" IS %s)", strings.ToUpper(exprStr))
+	case function2.IS_NOT_EXPRESSION:
+		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
+		if err != nil {
+			return result, err
+		}
+		exprStr := funcExpr.F.Func.GetObjName()[5:]
+		result += fmt.Sprintf("("+describeExpr+" IS NOT %s)", strings.ToUpper(exprStr))
 	case function2.NOPARAMETER_FUNCTION:
 		result += funcExpr.F.Func.GetObjName()
 	case function2.DATE_INTERVAL_EXPRESSION:

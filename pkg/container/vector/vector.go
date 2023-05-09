@@ -1628,7 +1628,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	switch typ.Oid {
 	case types.T_bool:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[bool](w)
@@ -1639,7 +1639,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_int8:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[int8](w)
@@ -1650,7 +1650,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_int16:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[int16](w)
@@ -1661,7 +1661,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_int32:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[int32](w)
@@ -1672,7 +1672,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_int64:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[int64](w)
@@ -1683,7 +1683,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_uint8:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[uint8](w)
@@ -1694,7 +1694,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_uint16:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[uint16](w)
@@ -1705,7 +1705,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_uint32:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return appendOneFixed(v, uint32(0), true, mp)
 			}
 			ws := MustFixedCol[uint32](w)
@@ -1716,7 +1716,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_uint64:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[uint64](w)
@@ -1727,7 +1727,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_float32:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[float32](w)
@@ -1738,7 +1738,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_float64:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[float64](w)
@@ -1749,7 +1749,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_date:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Date](w)
@@ -1760,7 +1760,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_datetime:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Datetime](w)
@@ -1771,7 +1771,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_time:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Time](w)
@@ -1782,7 +1782,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_timestamp:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Timestamp](w)
@@ -1793,7 +1793,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_decimal64:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Decimal64](w)
@@ -1804,7 +1804,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_decimal128:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Decimal128](w)
@@ -1815,7 +1815,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_uuid:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Uuid](w)
@@ -1826,7 +1826,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_TS:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.TS](w)
@@ -1837,7 +1837,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_Rowid:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Rowid](w)
@@ -1849,7 +1849,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Varlena](w)
@@ -1861,7 +1861,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 	case types.T_Blockid:
 		return func(v, w *Vector, sel int64, length int) error {
-			if w.IsConstNull() {
+			if w.IsConstNull() || w.nsp.Contains(uint64(sel)) {
 				return SetConstNull(v, length, mp)
 			}
 			ws := MustFixedCol[types.Blockid](w)
@@ -2251,6 +2251,7 @@ func (v *Vector) String() string {
 func SetConstNull(vec *Vector, len int, mp *mpool.MPool) error {
 	vec.Free(mp)
 	vec.class = CONSTANT
+	vec.SetLength(len)
 	return nil
 }
 
@@ -2260,6 +2261,7 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 			return err
 		}
 	}
+	vec.class = CONSTANT
 	col := vec.col.([]T)
 	col[0] = val
 	vec.SetLength(length)
@@ -2275,7 +2277,7 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 			return err
 		}
 	}
-
+	vec.class = CONSTANT
 	col := vec.col.([]types.Varlena)
 	va, vec.area, err = types.BuildVarlena(val, vec.area, mp)
 	if err != nil {

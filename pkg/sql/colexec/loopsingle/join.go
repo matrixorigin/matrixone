@@ -145,9 +145,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Clean(proc.Mp())
 			return err
 		}
-		bs := vector.MustFixedCol[bool](vec)
-		if len(bs) == 1 {
-			if bs[0] {
+
+		rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+		if vec.IsConst() {
+			b, null := rs.GetValue(0)
+			if !null && b {
 				if len(ctr.bat.Zs) > 1 {
 					return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 				}
@@ -163,8 +165,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 		} else {
-			for j, b := range bs {
-				if b {
+			l := vec.Length()
+			for j := uint64(0); j < uint64(l); j++ {
+				b, null := rs.GetValue(j)
+				if !null && b {
 					if !unmatched {
 						return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 					}
@@ -192,7 +196,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 		}
-		vec.Free(proc.Mp())
 	}
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {

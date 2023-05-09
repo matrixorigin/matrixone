@@ -118,9 +118,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Clean(proc.Mp())
 			return err
 		}
-		bs := vector.MustFixedCol[bool](vec)
-		for _, b := range bs {
-			if b {
+
+		rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+		for k := uint64(0); k < uint64(vec.Length()); k++ {
+			b, null := rs.GetValue(k)
+			if !null && b {
 				for k, pos := range ap.Result {
 					if err := rbat.Vecs[k].UnionOne(bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
 						vec.Free(proc.Mp())

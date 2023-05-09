@@ -28,10 +28,11 @@ const (
 	BETWEEN_AND_EXPRESSION     FuncExplainLayout = 8
 	IN_PREDICATE               FuncExplainLayout = 9  //query 'in' predicate
 	EXISTS_ANY_PREDICATE       FuncExplainLayout = 10 //query predicate,such as exist,all,any
-	IS_NULL_EXPRESSION         FuncExplainLayout = 11 // is null expression
+	IS_EXPRESSION              FuncExplainLayout = 11 // IS expression
 	NOPARAMETER_FUNCTION       FuncExplainLayout = 12 // noparameter function
 	DATE_INTERVAL_EXPRESSION   FuncExplainLayout = 13 // date expression,interval expression
 	EXTRACT_FUNCTION           FuncExplainLayout = 14 // extract function,such as extract(MONTH/DAY/HOUR/MINUTE/SECOND FROM p)
 	POSITION_FUNCTION          FuncExplainLayout = 15 // position function, such as POSITION(substr IN str)
 	UNKNOW_KIND_FUNCTION       FuncExplainLayout = 16
+	IS_NOT_EXPRESSION          FuncExplainLayout = 17 // IS NOT operator
 )

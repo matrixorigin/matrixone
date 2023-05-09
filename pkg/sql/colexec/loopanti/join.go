@@ -134,9 +134,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Clean(proc.Mp())
 			return err
 		}
-		bs := vector.MustFixedCol[bool](vec)
-		for _, b := range bs {
-			if b {
+
+		rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+		for k := uint64(0); k < uint64(vec.Length()); k++ {
+			b, null := rs.GetValue(k)
+			if !null && b {
 				matched = true
 				break
 			}
@@ -151,7 +153,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			rbat.Zs = append(rbat.Zs, bat.Zs[i])
 		}
-		vec.Free(proc.Mp())
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
