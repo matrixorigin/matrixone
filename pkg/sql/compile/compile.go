@@ -622,7 +622,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		bat := c.proc.PrepareBatch
-		if bat == nil {
+		if bat != nil {
+			bat.Cnt = bat.Cnt + 1
+		} else {
 			bat, err = constructValueScanBatch(ctx, c.proc, n)
 			if err != nil {
 				return nil, err
