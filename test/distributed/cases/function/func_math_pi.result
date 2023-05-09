@@ -17,7 +17,7 @@ INSERT INTO Circle(Radius )
 VALUES
 (2 ),(3),(10 ),(12.5 ),(6.80),
 (4.60 ),(6),(20),(25) ;
-invalid input: invalid default value
+invalid input: invalid default value for column 'circle_id'
 SELECT * FROM Circle;
 Circle_id	Radius
 SELECT Circle_id, Radius,

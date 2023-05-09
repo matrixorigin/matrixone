@@ -153,7 +153,7 @@ type FetchFunc = func(ctx context.Context, params fetchParams) (any, error)
 type PrefetchFunc = func(params prefetchParams) error
 
 func readColumns(ctx context.Context, params fetchParams) (any, error) {
-	return params.reader.ReadOneBlock(ctx, params.idxes, params.blk, nil)
+	return params.reader.ReadOneBlock(ctx, params.idxes, params.typs, params.blk, nil)
 }
 
 func noopPrefetch(params prefetchParams) error {
@@ -315,12 +315,12 @@ func (p *IoPipeline) onFetch(jobs ...any) {
 func (p *IoPipeline) schedulerPrefetch(job *tasks.Job) {
 	if err := p.prefetch.scheduler.Schedule(job); err != nil {
 		job.DoneWithErr(err)
-		logutil.Infof("err is %v", err.Error())
+		logutil.Debugf("err is %v", err.Error())
 		putJob(job)
 	} else {
 		if _, err := p.waitQ.Enqueue(job); err != nil {
 			job.DoneWithErr(err)
-			logutil.Infof("err is %v", err.Error())
+			logutil.Debugf("err is %v", err.Error())
 			putJob(job)
 		}
 	}

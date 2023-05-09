@@ -43,17 +43,25 @@ func checkDropColumnWithIndex(colName string, indexes []*plan.IndexDef, ctx Comp
 	return nil
 }
 
-func checkDropColumnWithForeignKey(colName string, fkeys []*ForeignKeyDef, ctx CompilerContext) error {
-	if len(fkeys) > 0 {
+func checkAlterColumnWithForeignKey(colName string, RefChildTbls []uint64, Fkeys []*ForeignKeyDef, ctx CompilerContext) error {
+	if len(RefChildTbls) > 0 || len(Fkeys) > 0 {
 		// We do not support drop column that dependent foreign keys constraints
-		return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column for partition table now")
+		return moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for foreign key table now")
 	}
 	return nil
 }
 
-func checkDropColumnWithPartitionKeys(colName string, tblInfo *TableDef, ctx CompilerContext) error {
+func checkAlterColumnWithPartitionKeys(colName string, tblInfo *TableDef, ctx CompilerContext) error {
 	if tblInfo.Partition != nil {
-		return moerr.NewInvalidInput(ctx.GetContext(), "can't drop column for partition table now")
+		return moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for partition table now")
+	}
+	return nil
+}
+
+func checkDropColumnWithCluster(colName string, tblInfo *TableDef, ctx CompilerContext) error {
+	if tblInfo.ClusterBy != nil {
+		// We do not support drop column that dependent foreign keys constraints
+		return moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for cluster table now")
 	}
 	return nil
 }
@@ -62,11 +70,16 @@ func checkIsDroppableColumn(tableDef *TableDef, colName string, ctx CompilerCont
 	// Check whether dropped column has existed.
 	col := FindColumn(tableDef.Cols, colName)
 	if col == nil {
-		//err = dbterror.ErrCantDropFieldOrKey.GenWithStackByArgs(colName)
 		return moerr.NewInvalidInput(ctx.GetContext(), "Can't DROP '%-.192s'; check that column/key exists", colName)
 	}
 
-	if len(tableDef.Cols) == 1 {
+	var colCnt int
+	for _, col := range tableDef.Cols {
+		if !col.Hidden {
+			colCnt++
+		}
+	}
+	if colCnt == 1 {
 		return moerr.NewInvalidInput(ctx.GetContext(), "can't drop only column %s in table %s", colName, tableDef.Name)
 	}
 
@@ -81,13 +94,51 @@ func checkIsDroppableColumn(tableDef *TableDef, colName string, ctx CompilerCont
 		return err
 	}
 	// We do not support drop column that contain foreign key columns now.
-	err = checkDropColumnWithForeignKey(colName, tableDef.Fkeys, ctx)
+	err = checkAlterColumnWithForeignKey(colName, tableDef.RefChildTbls, tableDef.Fkeys, ctx)
 	if err != nil {
 		return err
 	}
 
 	// We do not support drop column for partitioned table now
-	err = checkDropColumnWithPartitionKeys(colName, tableDef, ctx)
+	err = checkAlterColumnWithPartitionKeys(colName, tableDef, ctx)
+	if err != nil {
+		return err
+	}
+
+	// We do not support drop column for cluster table now
+	err = checkDropColumnWithCluster(colName, tableDef, ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func checkIsAddableColumn(tableDef *TableDef, colName string, colType *plan.Type, ctx CompilerContext) error {
+	// Check whether added column has existed.
+	col := FindColumn(tableDef.Cols, colName)
+	if col != nil {
+		return moerr.NewInvalidInput(ctx.GetContext(), "Can't add '%-.192s'; check that column/key exists", colName)
+	}
+
+	// We don not support add auto_incr col
+	if colType.AutoIncr {
+		return moerr.NewInvalidInput(ctx.GetContext(), "can' t add auto_incr col")
+	}
+
+	// We do not support add column that contain foreign key columns now.
+	err := checkAlterColumnWithForeignKey(colName, tableDef.RefChildTbls, tableDef.Fkeys, ctx)
+	if err != nil {
+		return err
+	}
+
+	// We do not support add column for partitioned table now
+	err = checkAlterColumnWithPartitionKeys(colName, tableDef, ctx)
+	if err != nil {
+		return err
+	}
+
+	// We do not support add column for cluster table now
+	err = checkDropColumnWithCluster(colName, tableDef, ctx)
 	if err != nil {
 		return err
 	}

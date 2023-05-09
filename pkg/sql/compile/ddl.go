@@ -287,7 +287,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 					if cols[idx].Name == constraintName {
 						drop := &plan.AlterDropCol{
 							Idx: uint32(idx),
-							Seq: 0,
+							Seq: cols[idx].Seqnum,
 						}
 						dropCol = append(dropCol, drop)
 						copy(cols[idx:], cols[idx+1:])
@@ -1454,6 +1454,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				ClusterBy:     col.ClusterBy,
 				AutoIncrement: col.Typ.GetAutoIncr(),
 				IsHidden:      col.Hidden,
+				Seqnum:        uint16(col.Seqnum),
 			},
 		}
 	}

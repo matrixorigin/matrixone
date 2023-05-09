@@ -23,25 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
-
-const (
-	maxMessageSizeToMoRpc = 64 * mpool.MB
-
-	// send to all reg functions
-	SendToAllLocalFunc = iota
-	SendToAllRemoteFunc
-	SendToAllFunc
-
-	// send to any reg functions
-	SendToAnyLocalFunc
-	SendToAnyRemoteFunc
-	SendToAnyFunc
 )
 
 // common sender: send to all LocalReceiver
@@ -82,7 +67,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 			return false, errEncode
 		}
 		for _, r := range ap.ctr.remoteReceivers {
-			if err := sendBatchToClientSession(encodeData, r); err != nil {
+			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
 				return false, err
 			}
 		}
@@ -159,7 +144,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 		regIdx := ap.ctr.sendCnt % ap.ctr.remoteRegsCnt
 		reg := ap.ctr.remoteReceivers[regIdx]
 
-		if err := sendBatchToClientSession(encodeData, reg); err != nil {
+		if err := sendBatchToClientSession(proc.Ctx, encodeData, reg); err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrStreamClosed) {
 				ap.ctr.remoteReceivers = append(ap.ctr.remoteReceivers[:regIdx], ap.ctr.remoteReceivers[regIdx+1:]...)
 				ap.ctr.remoteRegsCnt--
@@ -204,7 +189,7 @@ func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 
 }
 
-func sendBatchToClientSession(encodeBatData []byte, wcs *WrapperClientSession) error {
+func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *WrapperClientSession) error {
 	checksum := crc32.ChecksumIEEE(encodeBatData)
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)

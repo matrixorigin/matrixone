@@ -259,5 +259,6 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 		Pkidx:     int32(idx),
 		Comment:   attr.Comment,
 		ClusterBy: attr.ClusterBy,
+		Seqnum:    uint32(attr.Seqnum),
 	}
 }

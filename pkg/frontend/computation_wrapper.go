@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -253,10 +254,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 
 		//check privilege
+		/* prepare not need check privilege
 		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
 		if err != nil {
 			return nil, err
 		}
+		*/
 	} else {
 		var vp *plan2.VisitPlan
 		if cacheHit {
@@ -271,19 +274,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 
 	txnHandler := cwft.ses.GetTxnHandler()
-	txnCtx := requestCtx
-	if cacheHit && cwft.plan.NeedImplicitTxn() {
-		txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
-		if err != nil {
-			return nil, err
-		}
-	} else if cwft.plan.GetQuery().GetLoadTag() {
-		txnCtx, cwft.proc.TxnOperator = txnHandler.GetTxnOperator()
-	} else if cwft.plan.NeedImplicitTxn() {
-		txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
-		if err != nil {
-			return nil, err
-		}
+	var txnCtx context.Context
+	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+	if err != nil {
+		return nil, err
 	}
 	addr := ""
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {

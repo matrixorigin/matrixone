@@ -181,3 +181,55 @@ alter table t5 add constraint idx_6dotkott2kjsp8v unique key (col3);
 alter table t5 add constraint idx_6dotkott2kjsp8v unique key (col4);
 show index from t5;
 drop table t5;
+
+create table t5(a int);
+alter table t5 comment = "comment_1";
+show create table t5;
+alter table t5 comment = "comment_2", comment = "comment_3";
+show create table t5;
+alter table t5 add column a int;
+alter table t5 add column b tinyint, add column c smallint, add column d int, add column e bigint, add column f tinyint unsigned;
+alter table t5 add column g smallint unsigned, add column h int unsigned, add column i bigint unsigned, add column j float, add column k double;
+alter table t5 add column l varchar(255), add column m Date, add column n DateTime, add column o timestamp, add column p bool;
+alter table t5 add column q decimal(5,2), add column r text;
+show create table t5;
+show columns from t5;
+alter table t5 drop column b, drop column c, drop column d, drop column e, drop column f, drop column g, drop column h;
+show columns from t5;
+alter table t5 drop column i, drop column j, drop column k, drop column l, drop column m, drop column n, drop column o;
+show columns from t5;
+alter table t5 drop column p, drop column q, drop column r;
+show columns from t5;
+alter table t5 drop column a;
+alter table t5 add column b int first, add column c int after b, add column d int first, add column f int after b;
+show columns from t5;
+
+
+drop table t5;
+create table t5(a int primary key, b int, c int unique key);
+alter table t5 drop column a;
+alter table t5 drop column c;
+
+drop table t5;
+create table t5(a int, b int, primary key(a, b));
+alter table t5 drop column a;
+
+drop table t5;
+create table t5(a int primary key, b int);
+create table t6(b int, c int, foreign key(b) references t5(a));
+alter table t5 drop column b;
+alter table t5 add column c int;
+alter table t6 drop column b;
+alter table t6 add column d int;
+drop table t6;
+drop table t5;
+
+create table t5(a tinyint, b smallint, primary key(a))partition by hash(a) partitions 4;
+alter table t5 add column c int;
+alter table t5 drop column a;
+drop table t5;
+
+create table t5(a int, b int) cluster by a;
+alter table t5 add column c int;
+alter table t5 drop column a;
+drop table t5;

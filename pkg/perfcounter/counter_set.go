@@ -41,8 +41,11 @@ type FileServiceCounterSet struct {
 		Read   stats.Counter
 		Hit    stats.Counter
 		Memory struct {
-			Read stats.Counter
-			Hit  stats.Counter
+			Read      stats.Counter
+			Hit       stats.Counter
+			Capacity  stats.Counter
+			Used      stats.Counter
+			Available stats.Counter
 		}
 		Disk struct {
 			Read             stats.Counter
@@ -51,6 +54,7 @@ type FileServiceCounterSet struct {
 			SetFileContent   stats.Counter
 			OpenFile         stats.Counter
 			StatFile         stats.Counter
+			WriteFile        stats.Counter
 			Error            stats.Counter
 			Evict            stats.Counter
 			EvictPending     stats.Counter

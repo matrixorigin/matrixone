@@ -1961,6 +1961,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			if opt.Pos.PreColName != nil {
 				preName = opt.Pos.PreColName.Parts[0]
 			}
+			err = checkIsAddableColumn(tableDef, opt.Column.Name.Parts[0], colType, ctx)
+			if err != nil {
+				return nil, err
+			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AddCol{
 					AddCol: &plan.AlterAddCol{

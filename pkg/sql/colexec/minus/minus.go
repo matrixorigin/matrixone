@@ -109,6 +109,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 
 		// just an empty batch.
 		if len(bat.Zs) == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 		ana.Input(bat, isFirst)
@@ -150,6 +151,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		// just an empty batch.
 		if len(bat.Zs) == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 		ana.Input(bat, isFirst)

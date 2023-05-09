@@ -285,6 +285,11 @@ type PartitionBinder struct {
 	baseBinder
 }
 
+// SetBinder for 'set @var = expr'
+type SetBinder struct {
+	baseBinder
+}
+
 var _ Binder = (*TableBinder)(nil)
 var _ Binder = (*WhereBinder)(nil)
 var _ Binder = (*GroupBinder)(nil)

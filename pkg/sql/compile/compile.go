@@ -18,13 +18,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -420,6 +422,30 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	if err != nil {
 		return nil, err
 	}
+	if c.info.Typ == plan2.ExecTypeAP {
+		client := cnclient.GetRPCClient()
+		if client != nil {
+			for i := 0; i < len(c.cnList); i++ {
+				_, _, err := net.SplitHostPort(c.cnList[i].Addr)
+				if err != nil {
+					logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
+				}
+				if isSameCN(c.addr, c.cnList[i].Addr) {
+					continue
+				}
+				logutil.Infof("ping start")
+				err = client.Ping(ctx, c.cnList[i].Addr)
+				logutil.Infof("ping err %+v\n", err)
+				// ping failed
+				if err != nil {
+					logutil.Infof("ping err %+v\n", err)
+					c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
+					i--
+				}
+			}
+		}
+	}
+
 	blkNum := 0
 	for _, n := range qry.Nodes {
 		if n.NodeType == plan.Node_TABLE_SCAN {
@@ -858,6 +884,19 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	return ds
 }
 
+func (c *Compile) constructLoadMergeScope() *Scope {
+	ds := &Scope{Magic: Merge}
+	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
+	ds.Proc.LoadTag = true
+	ds.appendInstruction(vm.Instruction{
+		Op:      vm.Merge,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     &merge.Argument{},
+	})
+	return ds
+}
+
 func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope, error) {
 	ctx, span := trace.Start(ctx, "compileExternScan")
 	defer span.End()
@@ -870,12 +909,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	}
 	param := &tree.ExternParam{}
 	err := json.Unmarshal([]byte(n.TableDef.Createsql), param)
-	if param.Local {
-		if param.Parallel {
-			return nil, moerr.NewInvalidInput(ctx, "load local do not support parallel mode")
-		}
-		mcpu = 1
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -900,10 +933,6 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		if err := plan2.InitInfileParam(param); err != nil {
 			return nil, err
 		}
-	}
-
-	if n.ObjRef != nil {
-		param.SysTable = external.IsSysTable(n.ObjRef.SchemaName, n.TableDef.Name)
 	}
 
 	param.FileService = c.proc.FileService
@@ -934,6 +963,13 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		}
 	} else {
 		fileList = []string{param.Filepath}
+	}
+	if len(fileList) == 0 {
+		return nil, nil
+	}
+
+	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
+		return c.compileExternScanParallel(n, param, fileList, fileSize, ctx)
 	}
 
 	var fileOffset [][]int64
@@ -976,6 +1012,40 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 		pre += count
 	}
 
+	return ss, nil
+}
+
+// construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
+func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, ctx context.Context) ([]*Scope, error) {
+	param.Parallel = false
+	mcpu := c.cnList[0].Mcpu
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = c.constructLoadMergeScope()
+	}
+	fileOffsetTmp := make([]*pipeline.FileOffset, len(fileList))
+	for i := 0; i < len(fileList); i++ {
+		fileOffsetTmp[i] = &pipeline.FileOffset{}
+		fileOffsetTmp[i].Offset = make([]int64, 0)
+		fileOffsetTmp[i].Offset = append(fileOffsetTmp[i].Offset, []int64{0, -1}...)
+	}
+	extern := constructExternal(n, param, c.ctx, fileList, fileSize, fileOffsetTmp)
+	extern.Es.ParallelLoad = true
+	scope := c.constructScopeForExternal("", false)
+	scope.appendInstruction(vm.Instruction{
+		Op:      vm.External,
+		Idx:     c.anal.curr,
+		IsFirst: c.anal.isFirst,
+		Arg:     extern,
+	})
+	_, arg := constructDispatchLocalAndRemote(0, ss, c.addr)
+	arg.FuncId = dispatch.SendToAnyLocalFunc
+	scope.appendInstruction(vm.Instruction{
+		Op:  vm.Dispatch,
+		Arg: arg,
+	})
+	ss[0].PreScopes = append(ss[0].PreScopes, scope)
+	c.anal.isFirst = false
 	return ss, nil
 }
 
@@ -1046,6 +1116,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 				panic(e)
 			}
 		}
+		// defs has no rowid
 		defs, err := rel.TableDefs(ctx)
 		if err != nil {
 			panic(err)
@@ -1056,7 +1127,8 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			if attr, ok := def.(*engine.AttributeDef); ok {
 				name2index[attr.Attr.Name] = i
 				cols = append(cols, &plan.ColDef{
-					Name: attr.Attr.Name,
+					ColId: attr.Attr.ID,
+					Name:  attr.Attr.Name,
 					Typ: &plan.Type{
 						Id:       int32(attr.Attr.Type.Oid),
 						Width:    attr.Attr.Type.Width,
@@ -1068,6 +1140,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 					OnUpdate:  attr.Attr.OnUpdate,
 					Comment:   attr.Attr.Comment,
 					ClusterBy: attr.Attr.ClusterBy,
+					Seqnum:    uint32(attr.Attr.Seqnum),
 				})
 				i++
 			}
@@ -1075,6 +1148,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		tblDef = &plan.TableDef{
 			Cols:          cols,
 			Name2ColIndex: name2index,
+			Version:       n.TableDef.Version,
 			Name:          n.TableDef.Name,
 			TableType:     n.TableDef.GetTableType(),
 		}
@@ -1862,7 +1936,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 		Arg: constructDispatchLocal(false, extraRegisters(ss, 0)),
 	})
 	rs.IsEnd = true
-	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
+	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
 	regTransplant(s, rs, 0, 0)
 	return rs
 }
@@ -1882,7 +1956,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		Arg: constructDispatchLocal(true, extraRegisters(ss, 1)),
 	})
 	rs.IsEnd = true
-	rs.Proc = process.NewWithAnalyze(s.Proc, c.ctx, 1, c.anal.Nodes())
+	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
 	regTransplant(s, rs, 1, 0)
 	return rs
 }
@@ -2036,7 +2110,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	// some log for finding a bug.
 	tblId := rel.GetTableID(ctx)
 	expectedLen := len(ranges)
-	logutil.Infof("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
+	logutil.Debugf("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	// If ranges == 0, dont know what type of table is this
 	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
@@ -2162,7 +2236,7 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 	//to maxify locality, put blocks in the same s3 object in the same CN
 	lenCN := len(c.cnList)
 	for i, blk := range ranges {
-		unmarshalledBlockInfo := disttae.BlockInfoUnmarshal(ranges[i])
+		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		objName := unmarshalledBlockInfo.MetaLocation().Name()
 		index := plan2.SimpleHashToRange(objName, lenCN)
 		nodes[index].Data = append(nodes[index].Data, blk)
