@@ -29,7 +29,7 @@ import (
 // When third arg or nextval is true it will set or init the currval of this session.
 func Currval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// Get the table ids, and make key to retrieve from values stored in session.
-	tblnames := vector.MustStrCol(vecs[0])
+	tblnames := vecs[0]
 
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	txn := proc.TxnOperator
@@ -45,14 +45,15 @@ func Currval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		return nil, err
 	}
 
-	ress := make([]string, len(tblnames))
-	isNulls := make([]bool, len(tblnames))
-	for i := range tblnames {
-		if tblnames[i] == "" {
+	ress := make([]string, tblnames.Length())
+	isNulls := make([]bool, tblnames.Length())
+	for i := 0; i < tblnames.Length(); i++ {
+		name := tblnames.GetStringAt(i)
+		if name == "" {
 			isNulls[i] = true
 			continue
 		}
-		rel, err := dbHandler.Relation(proc.Ctx, tblnames[i])
+		rel, err := dbHandler.Relation(proc.Ctx, name)
 		if err != nil {
 			return nil, err
 		}
@@ -62,7 +63,7 @@ func Currval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		// If nextval called before this currval.Check add values
 		ss1, existsAdd := proc.SessionInfo.SeqAddValues[tblId]
 		if !exists && !existsAdd {
-			return nil, moerr.NewInternalError(proc.Ctx, "Currvalue of %s in current session is not initialized", tblnames[i])
+			return nil, moerr.NewInternalError(proc.Ctx, "Currvalue of %s in current session is not initialized", name)
 		}
 		// Assign the values of SeqAddValues first, cause this values is the updated curvals.
 		if existsAdd {

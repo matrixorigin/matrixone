@@ -30,6 +30,7 @@ func RegularSubstr(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		return vector.NewConstNull(rtyp, firstVector.Length(), proc.Mp()), nil
 	}
 
+	// TODO: remove MustStrCol
 	firstValues := vector.MustStrCol(firstVector)
 	secondValues := vector.MustStrCol(secondVector)
 

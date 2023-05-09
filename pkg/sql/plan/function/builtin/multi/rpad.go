@@ -32,9 +32,8 @@ func Rpad(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 	srcVals := vector.MustStrCol(srcVec)
 	tgtLenVals := vector.MustFixedCol[int64](tgtLenVec)
-	padVals := vector.MustStrCol(padVec)
 	if srcVec.IsConst() && tgtLenVec.IsConst() && padVec.IsConst() {
-		rval, isNull := doRpad(srcVals[0], tgtLenVals[0], padVals[0])
+		rval, isNull := doRpad(srcVals[0], tgtLenVals[0], padVec.GetStringAt(0))
 		if isNull {
 			return vector.NewConstNull(rtyp, srcVec.Length(), proc.Mp()), nil
 		}
@@ -62,7 +61,7 @@ func Rpad(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 		for i := 0; i < srcVec.Length(); i++ {
 			if !rvec.GetNulls().Contains(uint64(i)) {
-				rval, isNull := doRpad(srcVals[srcIdx], tgtLenVals[tgtLenIdx], padVals[padIdx])
+				rval, isNull := doRpad(srcVals[srcIdx], tgtLenVals[tgtLenIdx], padVec.GetStringAt(padIdx))
 				if isNull {
 					rvec.GetNulls().Set(uint64(i))
 				} else {

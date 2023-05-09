@@ -26,17 +26,16 @@ func Empty(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	if inputVector.IsConstNull() {
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
-	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
-		return vector.NewConstFixed(rtyp, len(ivals[0]) == 0, ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, len(inputVector.GetBytesAt(0)) == 0, ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, inputVector.Length(), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		rvals := vector.MustFixedCol[bool](rvec)
-		for i := range ivals {
-			rvals[i] = len(ivals[i]) == 0
+		for i := 0; i < inputVector.Length(); i++ {
+			rvals[i] = len(inputVector.GetBytesAt(i)) == 0
 		}
 		return rvec, nil
 	}

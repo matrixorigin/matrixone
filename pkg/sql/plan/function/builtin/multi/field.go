@@ -28,7 +28,6 @@ type number interface {
 
 func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec0 := ivecs[0]
-	vals0 := vector.MustStrCol(vec0)
 
 	vecLen := vec0.Length()
 
@@ -56,7 +55,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 			vec := ivecs[i]
 			if vec.IsConst() {
 				if !vec.IsConstNull() {
-					if vals0[0] == vec.GetStringAt(0) {
+					if vec0.GetStringAt(0) == vec.GetStringAt(0) {
 						return vector.NewConstFixed(rtyp, uint64(i), ivecs[0].Length(), proc.Mp()), err
 					}
 				}
@@ -73,9 +72,11 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 			vec := ivecs[i]
 			vals := vector.MustStrCol(vec)
 
+			v := vec0.GetStringAt(0)
+
 			if vec.IsConst() {
 				if !vec.IsConstNull() {
-					if vals0[0] == vals[0] {
+					if v == vals[0] {
 						for j := 0; j < vecLen; j++ {
 							if rvals[j] == 0 {
 								rvals[j] = uint64(i)
@@ -87,7 +88,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && vals0[0] == vals[j] {
+					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && v == vals[j] {
 						rvals[j] = uint64(i)
 						notFound--
 					}
@@ -110,12 +111,10 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 		for i := 1; i < len(ivecs); i++ {
 			vec := ivecs[i]
-			vals := vector.MustStrCol(vec)
-
 			if vec.IsConst() {
 				if !vec.IsConstNull() {
 					for j := 0; j < vecLen; j++ {
-						if rvals[j] == 0 && vals0[j] == vals[0] {
+						if rvals[j] == 0 && vec0.GetStringAt(j) == vec.GetStringAt(0) {
 							rvals[j] = uint64(i)
 							notFound--
 						}
@@ -123,7 +122,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && vals0[j] == vals[j] {
+					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && vec0.GetStringAt(j) == vec.GetStringAt(j) {
 						rvals[j] = uint64(i)
 						notFound--
 					}

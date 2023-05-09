@@ -657,7 +657,7 @@ func TestCopy(t *testing.T) {
 		}, nil, mp)
 		err := v.Copy(w, 2, 0, mp)
 		require.NoError(t, err)
-		require.Equal(t, MustStrCol(v), MustStrCol(w))
+		require.Equal(t, MustBytesCol(v), MustBytesCol(w))
 		v.Free(mp)
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())

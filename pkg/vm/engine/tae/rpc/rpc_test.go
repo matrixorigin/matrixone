@@ -384,10 +384,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	addS3BlkEntry1, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName1.String(), metaLocMoBat1)
 	assert.NoError(t, err)
-	loc1 := vector.MustStrCol(metaLocMoBat1.GetVector(0))[0]
-	loc2 := vector.MustStrCol(metaLocMoBat1.GetVector(0))[1]
-	assert.Equal(t, metaLoc1, loc1)
-	assert.Equal(t, metaLoc2, loc2)
+	loc1 := vector.MustBytesCol(metaLocMoBat1.GetVector(0))[0]
+	loc2 := vector.MustBytesCol(metaLocMoBat1.GetVector(0))[1]
+	assert.Equal(t, metaLoc1, string(loc1))
+	assert.Equal(t, metaLoc2, string(loc2))
 	entries = append(entries, addS3BlkEntry1)
 
 	//add one non-appendable block from S3 into "tbtest" table

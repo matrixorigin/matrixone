@@ -84,8 +84,8 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec := vector.NewVec(types.T_int64.ToType())
 	count := vecs[0].Length()
-	dbs := vector.MustStrCol(vecs[0])
-	tbls := vector.MustStrCol(vecs[1])
+	dbs := vecs[0]
+	tbls := vecs[1]
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if proc.TxnOperator == nil {
 		return nil, moerr.NewInternalError(proc.Ctx, "MoTableSize: txn operator is nil")
@@ -93,26 +93,28 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
 		var rel engine.Relation
-		if isClusterTable(dbs[i], tbls[i]) {
+		dbv := dbs.GetStringAt(i)
+		tbv := tbls.GetStringAt(i)
+		if isClusterTable(dbv, tbv) {
 			//if it is the cluster table in the general account, switch into the sys account
 			ctx := context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-			db, err := e.Database(ctx, dbs[i], txn)
+			db, err := e.Database(ctx, dbv, txn)
 			if err != nil {
 				return nil, err
 			}
 
-			rel, err = db.Relation(ctx, tbls[i])
+			rel, err = db.Relation(ctx, tbv)
 			if err != nil {
 				return nil, err
 			}
 
 		} else {
-			db, err := e.Database(proc.Ctx, dbs[i], txn)
+			db, err := e.Database(proc.Ctx, dbv, txn)
 			if err != nil {
 				return nil, err
 			}
 
-			rel, err = db.Relation(proc.Ctx, tbls[i])
+			rel, err = db.Relation(proc.Ctx, tbv)
 			if err != nil {
 				return nil, err
 			}

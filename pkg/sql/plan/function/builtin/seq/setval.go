@@ -48,8 +48,8 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 		return vector.NewConstNull(resultType, vecs[0].Length(), proc.Mp()), nil
 	}
 
-	tblnames := vector.MustStrCol(vecs[0])
-	setnums := vector.MustStrCol(vecs[1])
+	tblnames := vecs[0]
+	setnums := vecs[1]
 	iscalled := make([]bool, 1)
 	iscalled[0] = true
 
@@ -75,64 +75,61 @@ func Setval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 		return nil, err
 	}
 
-	ress := make([]string, len(tblnames))
-	isNulls := make([]bool, len(tblnames))
-	if len(tblnames) == 1 {
-		// When len(tblnames) == 1, left 2 params are 1 too.
-		for i := range tblnames {
-			if checkNulls(vecs[0], vecs[1], v3, 0, 0, 0) {
-				isNulls[i] = true
-				continue
-			}
-			s, err := setval(tblnames[0], setnums[0], iscalled[0], proc, txn, e)
+	ress := make([]string, tblnames.Length())
+	isNulls := make([]bool, tblnames.Length())
+	if tblnames.Length() == 1 {
+		if checkNulls(vecs[0], vecs[1], v3, 0, 0, 0) {
+			isNulls[0] = true
+		} else {
+			s, err := setval(tblnames.GetStringAt(0), setnums.GetStringAt(0), iscalled[0], proc, txn, e)
 			if err != nil {
 				return nil, err
 			}
-			ress[i] = s
+			ress[0] = s
 		}
-	} else if len(setnums) == 1 && len(iscalled) == 1 {
-		for i := range tblnames {
+	} else if setnums.Length() == 1 && len(iscalled) == 1 {
+		for i := 0; i < tblnames.Length(); i++ {
 			if checkNulls(vecs[0], vecs[1], v3, uint64(i), 0, 0) {
 				isNulls[i] = true
 				continue
 			}
-			s, err := setval(tblnames[i], setnums[0], iscalled[0], proc, txn, e)
+			s, err := setval(tblnames.GetStringAt(i), setnums.GetStringAt(0), iscalled[0], proc, txn, e)
 			if err != nil {
 				return nil, err
 			}
 			ress[i] = s
 		}
-	} else if len(setnums) == 1 {
-		for i := range tblnames {
+	} else if setnums.Length() == 1 {
+		for i := 0; i < tblnames.Length(); i++ {
 			if checkNulls(vecs[0], vecs[1], v3, uint64(i), 0, uint64(i)) {
 				isNulls[i] = true
 				continue
 			}
-			s, err := setval(tblnames[i], setnums[0], iscalled[i], proc, txn, e)
+			s, err := setval(tblnames.GetStringAt(i), setnums.GetStringAt(0), iscalled[i], proc, txn, e)
 			if err != nil {
 				return nil, err
 			}
 			ress[i] = s
 		}
 	} else if len(iscalled) == 1 {
-		for i := range tblnames {
+		for i := 0; i < tblnames.Length(); i++ {
 			if checkNulls(vecs[0], vecs[1], v3, uint64(i), uint64(i), 0) {
 				isNulls[i] = true
 				continue
 			}
-			s, err := setval(tblnames[i], setnums[i], iscalled[0], proc, txn, e)
+			s, err := setval(tblnames.GetStringAt(i), setnums.GetStringAt(i), iscalled[0], proc, txn, e)
 			if err != nil {
 				return nil, err
 			}
 			ress[i] = s
 		}
 	} else {
-		for i := range tblnames {
+		for i := 0; i < tblnames.Length(); i++ {
 			if checkNulls(vecs[0], vecs[1], v3, uint64(i), uint64(i), uint64(i)) {
 				isNulls[i] = true
 				continue
 			}
-			s, err := setval(tblnames[i], setnums[i], iscalled[i], proc, txn, e)
+			s, err := setval(tblnames.GetStringAt(i), setnums.GetStringAt(i), iscalled[i], proc, txn, e)
 			if err != nil {
 				return nil, err
 			}

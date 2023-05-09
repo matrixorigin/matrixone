@@ -90,21 +90,6 @@ func ExpandFixedCol[T any](v *Vector) []T {
 	return MustFixedCol[T](v)
 }
 
-func ExpandStrCol(v *Vector) []string {
-	if v.IsConst() {
-		vs := make([]string, v.Length())
-		if len(v.data) > 0 {
-			cols := v.col.([]types.Varlena)
-			ss := cols[0].GetString(v.area)
-			for i := range vs {
-				vs[i] = ss
-			}
-		}
-		return vs
-	}
-	return MustStrCol(v)
-}
-
 func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 	data = MustFixedCol[types.Varlena](v)
 	area = v.area

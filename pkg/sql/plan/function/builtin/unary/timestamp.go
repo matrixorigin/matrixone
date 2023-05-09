@@ -71,25 +71,24 @@ func TimestampToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vecto
 func DateStringToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := ivecs[0]
 	rtyp := types.New(types.T_timestamp, 0, 6)
-	ivals := vector.MustStrCol(inputVector)
 
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		ts, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, ivals[0], 6)
+		ts, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, inputVector.GetStringAt(0), 6)
 		if err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(rtyp, ts, ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, inputVector.Length(), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		rvals := vector.MustFixedCol[types.Timestamp](rvec)
-		for i := range ivals {
-			rvals[i], err = types.ParseTimestamp(proc.SessionInfo.TimeZone, ivals[i], 6)
+		for i := 0; i < inputVector.Length(); i++ {
+			rvals[i], err = types.ParseTimestamp(proc.SessionInfo.TimeZone, inputVector.GetStringAt(i), 6)
 			if err != nil {
 				return nil, err
 			}

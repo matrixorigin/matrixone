@@ -343,10 +343,9 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 	case types.T_char, types.T_varchar, types.T_json:
 		var n bool
 		var v string
-		vs := vector.MustStrCol(vec)
 		if nulls.Any(vec.GetNulls()) {
 			for i, sel := range sels {
-				w := vs[sel]
+				w := string(vec.GetBytesAt(int(sel)))
 				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
 				if n != isNull {
 					diffs[i] = true
@@ -359,7 +358,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 			break
 		}
 		for i, sel := range sels {
-			w := vs[sel]
+			w := string(vec.GetBytesAt(int(sel)))
 			diffs[i] = diffs[i] || (v != w)
 			v = w
 		}

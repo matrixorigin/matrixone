@@ -50,8 +50,8 @@ func TestSortKey(t *testing.T) {
 	res := []string{"a", "b", "c"}
 	err = sortByKey(proc, batch2, 0, proc.GetMPool())
 	require.NoError(t, err)
-	cols2 := vector.ExpandStrCol(batch2.Vecs[0])
+	cols2 := batch2.Vecs[0]
 	for i := range cols {
-		require.Equal(t, cols2[i], res[i])
+		require.Equal(t, cols2.GetStringAt(i), res[i])
 	}
 }

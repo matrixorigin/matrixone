@@ -201,12 +201,11 @@ func SerialWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vecto
 				}
 			}
 		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-			vs := vector.MustStrCol(v)
-			for i := range vs {
+			for i := 0; i < v.Length(); i++ {
 				if nulls.Contains(v.GetNulls(), uint64(i)) {
 					nulls.Add(bitMap, uint64(i))
 				} else {
-					ps[i].EncodeStringType([]byte(vs[i]))
+					ps[i].EncodeStringType(v.GetBytesAt(i))
 				}
 			}
 		}

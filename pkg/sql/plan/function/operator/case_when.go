@@ -352,7 +352,6 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 		whenv := vs[i]
 		thenv := vs[i+1]
 		whencols := vector.MustFixedCol[bool](whenv)
-		thencols := vector.MustStrCol(thenv)
 		switch {
 		case whenv.IsConst() && thenv.IsConst():
 			if !whenv.IsConstNull() && whencols[0] {
@@ -366,7 +365,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 				} else {
 					for idx := range results {
 						if !flag[idx] {
-							results[idx] = thencols[0]
+							results[idx] = thenv.GetStringAt(0)
 							flag[idx] = true
 						}
 					}
@@ -379,7 +378,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 						if nulls.Contains(thenv.GetNulls(), uint64(idx)) {
 							nsp.Np.Add(uint64(idx))
 						} else {
-							results[idx] = thencols[idx]
+							results[idx] = thenv.GetStringAt(idx)
 						}
 						flag[idx] = true
 					}
@@ -399,7 +398,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 				for idx := range results {
 					if !flag[idx] {
 						if !nulls.Contains(whenv.GetNulls(), uint64(idx)) && whencols[idx] {
-							results[idx] = thencols[0]
+							results[idx] = thenv.GetStringAt(0)
 							flag[idx] = true
 						}
 					}
@@ -412,7 +411,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 						if nulls.Contains(thenv.GetNulls(), uint64(idx)) {
 							nsp.Np.Add(uint64(idx))
 						} else {
-							results[idx] = thencols[idx]
+							results[idx] = thenv.GetStringAt(idx)
 						}
 						flag[idx] = true
 					}
@@ -431,11 +430,10 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 		}
 	} else {
 		ev := vs[len(vs)-1]
-		ecols := vector.MustStrCol(ev)
 		if ev.IsConst() {
 			for idx := range results {
 				if !flag[idx] {
-					results[idx] = ecols[0]
+					results[idx] = ev.GetStringAt(0)
 					flag[idx] = true
 				}
 			}
@@ -445,7 +443,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 					if nulls.Contains(ev.GetNulls(), uint64(idx)) {
 						nulls.Add(nsp, uint64(idx))
 					} else {
-						results[idx] = ecols[idx]
+						results[idx] = ev.GetStringAt(idx)
 					}
 					flag[idx] = true
 				}

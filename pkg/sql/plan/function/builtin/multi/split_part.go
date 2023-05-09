@@ -50,6 +50,7 @@ func SplitPart(ivecs []*vector.Vector, proc *process.Process) (vec *vector.Vecto
 		err = moerr.NewInvalidInput(proc.Ctx, "split_part: field contains non-positive integer")
 		return
 	}
+	// TODO: remove MustStrCol
 	s1, s2, s3 := vector.MustStrCol(v1), vector.MustStrCol(v2), vector.MustFixedCol[uint32](v3)
 	if v1.IsConst() && v2.IsConst() && v3.IsConst() {
 		ret, isNull := split_part.SplitSingle(s1[0], s2[0], s3[0])

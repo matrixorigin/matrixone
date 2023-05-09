@@ -45,9 +45,9 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		return nil, moerr.NewInternalError(proc.Ctx, "Nextval: txn operator is nil")
 	}
 	// nextval is the real implementation of nextval function.
-	tblnames := vector.MustStrCol(vecs[0])
-	restrings := make([]string, len(tblnames))
-	isNulls := make([]bool, len(tblnames))
+	tblnames := vecs[0]
+	restrings := make([]string, tblnames.Length())
+	isNulls := make([]bool, tblnames.Length())
 
 	res, err := proc.AllocVectorOfRows(types.T_varchar.ToType(), 0, nil)
 	if err != nil {
@@ -59,7 +59,7 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 			isNulls[i] = true
 			continue
 		}
-		s, err := nextval(tblnames[i], proc, e, txn)
+		s, err := nextval(tblnames.GetStringAt(i), proc, e, txn)
 		if err != nil {
 			return nil, err
 		}

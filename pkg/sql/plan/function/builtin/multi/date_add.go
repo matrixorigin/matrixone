@@ -215,7 +215,6 @@ func DatetimeAdd(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 func DateStringAdd(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	startVec := ivecs[0]
 	diffVec := ivecs[1]
-	starts := vector.MustStrCol(ivecs[0])
 	diffs := vector.MustFixedCol[int64](ivecs[1])
 	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
@@ -224,7 +223,7 @@ func DateStringAdd(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 	if startVec.IsConstNull() || diffVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
 	} else if startVec.IsConst() && diffVec.IsConst() {
-		rval, err := doDateStringAdd(starts[0], diffs[0], unit)
+		rval, err := doDateStringAdd(startVec.GetStringAt(0), diffs[0], unit)
 		if err != nil {
 			return nil, err
 		}
@@ -241,27 +240,27 @@ func DateStringAdd(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 				if rvec.GetNulls().Contains(uint64(i)) {
 					continue
 				}
-				rvals[i], err = doDateStringAdd(starts[0], diffs[i], unit)
+				rvals[i], err = doDateStringAdd(startVec.GetStringAt(0), diffs[i], unit)
 				if err != nil {
 					return nil, err
 				}
 			}
 		} else if !startVec.IsConst() && diffVec.IsConst() {
-			for i := range starts {
+			for i := 0; i < startVec.Length(); i++ {
 				if rvec.GetNulls().Contains(uint64(i)) {
 					continue
 				}
-				rvals[i], err = doDateStringAdd(starts[i], diffs[0], unit)
+				rvals[i], err = doDateStringAdd(startVec.GetStringAt(i), diffs[0], unit)
 				if err != nil {
 					return nil, err
 				}
 			}
 		} else {
-			for i := range starts {
+			for i := 0; i < startVec.Length(); i++ {
 				if rvec.GetNulls().Contains(uint64(i)) {
 					continue
 				}
-				rvals[i], err = doDateStringAdd(starts[i], diffs[i], unit)
+				rvals[i], err = doDateStringAdd(startVec.GetStringAt(i), diffs[i], unit)
 				if err != nil {
 					return nil, err
 				}

@@ -220,8 +220,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 		input := vs[i]
 		if input.IsConst() {
 			if !input.IsConstNull() {
-				cols := vector.MustStrCol(input)
-				vec := vector.NewConstBytes(typ, []byte(cols[0]), vecLen, proc.Mp())
+				vec := vector.NewConstBytes(typ, input.GetBytesAt(0), vecLen, proc.Mp())
 				return vec, nil
 			}
 		} else {
@@ -239,11 +238,11 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 		if input.IsConstNull() {
 			continue
 		}
-		cols := vector.MustStrCol(input)
+		v := input.GetStringAt(0)
 		if input.IsConst() {
 			for j := 0; j < vecLen; j++ {
 				if nsp.Contains(uint64(j)) {
-					rs[j] = cols[0]
+					rs[j] = v
 				}
 			}
 			nsp = nil
@@ -257,7 +256,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 				// all not null
 				for j := 0; j < vecLen; j++ {
 					if nsp.Contains(uint64(j)) {
-						rs[j] = cols[j]
+						rs[j] = input.GetStringAt(j)
 					}
 				}
 				nsp = nil
@@ -266,7 +265,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 				// some nulls
 				for j := 0; j < vecLen; j++ {
 					if nsp.Contains(uint64(j)) && !input.GetNulls().Contains(uint64(j)) {
-						rs[j] = cols[j]
+						rs[j] = input.GetStringAt(j)
 						nsp.Np.Remove(uint64(j))
 					}
 				}

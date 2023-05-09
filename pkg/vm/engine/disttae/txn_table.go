@@ -195,9 +195,9 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 
 func (tbl *txnTable) LoadDeletesForBlock(blockID *types.Blockid, deleteBlockId map[types.Blockid][]int, deletesRowId map[types.Rowid]uint8) error {
 	for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blockID] {
-		vs := vector.MustStrCol(bat.GetVector(0))
-		for _, metalLoc := range vs {
-			location, err := blockio.EncodeLocationFromString(metalLoc)
+		vs := bat.GetVector(0)
+		for i := 0; i < vs.Length(); i++ {
+			location, err := blockio.EncodeLocationFromString(vs.GetStringAt(i))
 			if err != nil {
 				return err
 			}

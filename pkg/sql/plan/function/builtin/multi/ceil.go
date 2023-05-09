@@ -34,13 +34,13 @@ func CeilInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 
 // Parse string to float instead of int.
 func CeilStr(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	values := vector.MustStrCol(vecs[0])
+	values := vecs[0]
 	floatvector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), 0, nil)
 	if err != nil {
 		return nil, err
 	}
-	for _, v := range values {
-		floatVal, err := strconv.ParseFloat(v, 64)
+	for i := 0; i < values.Length(); i++ {
+		floatVal, err := strconv.ParseFloat(values.GetStringAt(i), 64)
 		if err != nil {
 			return nil, err
 		}

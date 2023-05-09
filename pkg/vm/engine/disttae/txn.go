@@ -252,9 +252,8 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 }
 
 func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
-	metaLocs := vector.MustStrCol(vec)
-	for i, metaLoc := range metaLocs {
-		if location, err := blockio.EncodeLocationFromString(metaLoc); err != nil {
+	for i := 0; i < vec.Length(); i++ {
+		if location, err := blockio.EncodeLocationFromString(vec.GetStringAt(i)); err != nil {
 			return err
 		} else {
 			sid := location.Name().SegmentId()

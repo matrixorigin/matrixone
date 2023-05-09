@@ -163,6 +163,7 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			}
 		}
 	} else {
+		// TODO: remove MustStrCol
 		timestrs := vector.MustStrCol(dateVector)
 		rNsp := dateVector.GetNulls().Clone()
 		resCol, err := calcStrToTime(proc.Ctx, timestrs, formatMask, dateVector.GetNulls(), rNsp)

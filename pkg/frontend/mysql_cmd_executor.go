@@ -855,12 +855,12 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		}
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
-		v0 := vector.MustStrCol(bat.Vecs[0])
-		v1 := vector.MustStrCol(bat.Vecs[1])
-		rows = rows[:len(v0)]
-		for i := range v0 {
-			rows[i][0] = v0[i]
-			rows[i][1] = v1[i]
+		v0 := bat.Vecs[0]
+		v1 := bat.Vecs[1]
+		rows = rows[:v0.Length()]
+		for i := 0; i < v0.Length(); i++ {
+			rows[i][0] = v0.GetStringAt(i)
+			rows[i][1] = v1.GetStringAt(i)
 		}
 		bat.Clean(proc.Mp())
 	}

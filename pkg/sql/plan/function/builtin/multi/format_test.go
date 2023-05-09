@@ -352,7 +352,7 @@ func TestFormatWithThree(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, vector.MustStrCol(tc.expect), vector.MustStrCol(gotV))
+			require.Equal(t, vector.MustBytesCol(tc.expect), vector.MustBytesCol(gotV))
 		})
 	}
 }

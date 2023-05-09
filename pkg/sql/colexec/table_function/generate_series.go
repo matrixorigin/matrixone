@@ -115,10 +115,8 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if stepVec == nil {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series must specify step")
 		}
-		startSlice := vector.MustStrCol(startVec)
-		endSlice := vector.MustStrCol(endVec)
-		startStr := startSlice[0]
-		endStr := endSlice[0]
+		startStr := startVec.GetStringAt(0)
+		endStr := endVec.GetStringAt(0)
 		scale := int32(findScale(startStr, endStr))
 		rbat.Vecs[0].GetType().Scale = scale
 		start, err := types.ParseDatetime(startStr, scale)

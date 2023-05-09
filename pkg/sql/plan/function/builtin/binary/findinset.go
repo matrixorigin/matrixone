@@ -25,38 +25,40 @@ import (
 func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
 	rtyp := types.T_uint64.ToType()
-	leftValues, rightValues := vector.MustStrCol(left), vector.MustStrCol(right)
 	switch {
 	case left.IsConstNull() || right.IsConstNull():
 		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
 	case left.IsConst() && right.IsConst():
 		var rvals [1]uint64
-		findinset.FindInSetWithAllConst(leftValues[0], rightValues[0], rvals[:])
+		findinset.FindInSetWithAllConst(left.GetStringAt(0), right.GetStringAt(0), rvals[:])
 		return vector.NewConstFixed(rtyp, rvals[0], left.Length(), proc.Mp()), nil
 	case left.IsConst() && !right.IsConst():
-		rlen := len(rightValues)
-		rvec, err := proc.AllocVectorOfRows(rtyp, rlen, right.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, right.Length(), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
+		// TODO: remove MustStrCol
+		rightValues := vector.MustStrCol(right)
 		rvals := vector.MustFixedCol[uint64](rvec)
-		findinset.FindInSetWithLeftConst(leftValues[0], rightValues, rvals)
+		findinset.FindInSetWithLeftConst(left.GetStringAt(0), rightValues, rvals)
 		return rvec, nil
 	case !left.IsConst() && right.IsConst():
-		rlen := len(leftValues)
-		rvec, err := proc.AllocVectorOfRows(rtyp, rlen, left.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, right.Length(), left.GetNulls())
 		if err != nil {
 			return nil, err
 		}
+		// TODO: remove MustStrCol
+		leftValues := vector.MustStrCol(left)
 		rvals := vector.MustFixedCol[uint64](rvec)
-		findinset.FindInSetWithRightConst(leftValues, rightValues[0], rvals)
+		findinset.FindInSetWithRightConst(leftValues, right.GetStringAt(0), rvals)
 		return rvec, nil
 	}
-	resLen := len(leftValues)
-	rvec, err := proc.AllocVectorOfRows(rtyp, resLen, nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, left.Length(), nil)
 	if err != nil {
 		return nil, err
 	}
+	rightValues := vector.MustStrCol(right)
+	leftValues := vector.MustStrCol(left)
 	rvals := vector.MustFixedCol[uint64](rvec)
 	nulls.Or(left.GetNulls(), right.GetNulls(), rvec.GetNulls())
 	findinset.FindInSet(leftValues, rightValues, rvals)

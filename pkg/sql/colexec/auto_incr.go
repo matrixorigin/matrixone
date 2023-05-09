@@ -488,7 +488,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 		vs3 := vector.MustFixedCol[uint64](bat.Vecs[3])
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
-			str := vector.MustStrCol(bat.Vecs[1])[rowIndex]
+			str := bat.Vecs[1].GetStringAt(int(rowIndex))
 			if str == colName {
 				break
 			}
@@ -583,7 +583,7 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 		}
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
-			str := vector.MustStrCol(bat.Vecs[1])[rowIndex]
+			str := bat.Vecs[1].GetStringAt(int(rowIndex))
 			if str == colName {
 				currentNum := vector.MustFixedCol[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
 				/* XXX dangerous operation

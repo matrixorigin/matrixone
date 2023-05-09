@@ -82,17 +82,15 @@ func Concat_ws(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 }
 
 func concatWs(rtyp types.Type, inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
-	separators := vector.MustStrCol(separator)
-	length := len(separators)
 	resultNsp := new(nulls.Nulls)
-	rvals := make([]string, length)
-	for i := 0; i < length; i++ {
+	rvals := make([]string, separator.Length())
+	for i := 0; i < separator.Length(); i++ {
 		allNull := true
 		for j := range inputCleaned {
 			if vectorIsConst[j] {
 				allNull = false
 				if len(rvals[i]) > 0 {
-					rvals[i] += separators[i]
+					rvals[i] += separator.GetStringAt(i)
 				}
 				rvals[i] += inputCleaned[j].GetStringAt(0)
 			} else {
@@ -101,7 +99,7 @@ func concatWs(rtyp types.Type, inputCleaned []*vector.Vector, separator *vector.
 				}
 				allNull = false
 				if len(rvals[i]) > 0 {
-					rvals[i] += separators[i]
+					rvals[i] += separator.GetStringAt(i)
 				}
 				rvals[i] += inputCleaned[j].GetStringAt(i)
 			}
@@ -116,15 +114,13 @@ func concatWs(rtyp types.Type, inputCleaned []*vector.Vector, separator *vector.
 }
 
 func concatWsAllConst(rtyp types.Type, inputCleaned []*vector.Vector, separator *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	separators := vector.MustStrCol(separator)
-	length := len(separators)
 	resultNsp := new(nulls.Nulls)
-	rvals := make([]string, length)
-	for i := 0; i < length; i++ {
+	rvals := make([]string, separator.Length())
+	for i := 0; i < separator.Length(); i++ {
 		allNull := true
 		for j := range inputCleaned {
 			if len(rvals[i]) > 0 {
-				rvals[i] += separators[i]
+				rvals[i] += separator.GetStringAt(i)
 			}
 			allNull = false
 			rvals[i] += inputCleaned[j].GetStringAt(0)
