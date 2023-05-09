@@ -10,7 +10,7 @@ on:
 jobs:
   bvt-docker-compose:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ubuntu-latest
+    runs-on: x86-runner
     name: multi cn e2e bvt test docker compose
     timeout-minutes: 60
 
@@ -87,7 +87,7 @@ jobs:
 
   bvt-docker-compose-push:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ubuntu-latest
+    runs-on: x86-runner
     name: multi cn e2e bvt test docker compose(PUSH)
     timeout-minutes: 60
 
