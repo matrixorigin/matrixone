@@ -508,6 +508,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		steps = append(steps, scope)
 	}
 
+	debugstr := DebugShowScopes(steps)
+	logutil.Infof("!!!!!!!!!!%v", debugstr)
+
 	return steps, err
 }
 
