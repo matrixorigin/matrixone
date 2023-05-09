@@ -50,9 +50,9 @@ func NewPool[T any](
 		value := newFunc()
 		pool.pool = append(pool.pool, _PoolElem[T]{
 			Value: value,
-			Put: func(T) {
+			Put: func(resource T) {
 				if resetFunc != nil {
-					resetFunc(value)
+					resetFunc(resource)
 				}
 				if !atomic.CompareAndSwapUint32(&pool.pool[i].Taken, 1, 0) {
 					panic("bad put")
