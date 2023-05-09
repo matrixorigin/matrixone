@@ -28,13 +28,12 @@ func MoMemUsage(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	inputVector := ivecs[0]
 	rtyp := types.T_varchar.ToType()
-	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
 
-		memUsage := mpool.ReportMemUsage(ivals[0])
+		memUsage := mpool.ReportMemUsage(inputVector.GetStringAt(0))
 		return vector.NewConstBytes(rtyp, []byte(memUsage), ivecs[0].Length(), proc.Mp()), nil
 	} else {
 		panic(moerr.NewInvalidInput(proc.Ctx, "mo mem usage can only take scalar input"))

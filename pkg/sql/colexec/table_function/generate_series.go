@@ -313,8 +313,7 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, scale int32, proc 
 	if stepVec == nil {
 		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime must specify step")
 	}
-	stepSlice := vector.MustStrCol(stepVec)
-	step = stepSlice[0]
+	step = stepVec.GetStringAt(0)
 	res, err := generateDatetime(proc.Ctx, start, end, step)
 	if err != nil {
 		return err

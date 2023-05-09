@@ -70,13 +70,11 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 		for i := startIdx; i < len(ivecs); i++ {
 			vec := ivecs[i]
-			vals := vector.MustStrCol(vec)
-
 			v := vec0.GetStringAt(0)
 
 			if vec.IsConst() {
 				if !vec.IsConstNull() {
-					if v == vals[0] {
+					if v == vec.GetStringAt(0) {
 						for j := 0; j < vecLen; j++ {
 							if rvals[j] == 0 {
 								rvals[j] = uint64(i)
@@ -88,7 +86,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && v == vals[j] {
+					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && v == vec.GetStringAt(j) {
 						rvals[j] = uint64(i)
 						notFound--
 					}

@@ -34,8 +34,8 @@ import (
 func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec := vector.NewVec(types.T_int64.ToType())
 	count := vecs[0].Length()
-	dbs := vector.MustStrCol(vecs[0])
-	tbls := vector.MustStrCol(vecs[1])
+	dbs := vecs[0]
+	tbls := vecs[1]
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	if proc.TxnOperator == nil {
 		return nil, moerr.NewInternalError(proc.Ctx, "MoTableRows: txn operator is nil")
@@ -43,26 +43,28 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
 		var rel engine.Relation
-		if isClusterTable(dbs[i], tbls[i]) {
+		dbv := dbs.GetStringAt(i)
+		tbv := tbls.GetStringAt(i)
+		if isClusterTable(dbv, tbv) {
 			//if it is the cluster table in the general account, switch into the sys account
 			ctx := context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-			db, err := e.Database(ctx, dbs[i], txn)
+			db, err := e.Database(ctx, dbv, txn)
 			if err != nil {
 				return nil, err
 			}
 
-			rel, err = db.Relation(ctx, tbls[i])
+			rel, err = db.Relation(ctx, tbv)
 			if err != nil {
 				return nil, err
 			}
 
 		} else {
-			db, err := e.Database(proc.Ctx, dbs[i], txn)
+			db, err := e.Database(proc.Ctx, dbv, txn)
 			if err != nil {
 				return nil, err
 			}
 
-			rel, err = db.Relation(proc.Ctx, tbls[i])
+			rel, err = db.Relation(proc.Ctx, tbv)
 			if err != nil {
 				return nil, err
 			}
@@ -144,9 +146,9 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 // MoTableColMax return the max value of the column
 func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	count := vecs[0].Length()
-	dbs := vector.MustStrCol(vecs[0])
-	tbls := vector.MustStrCol(vecs[1])
-	cols := vector.MustStrCol(vecs[2])
+	dbs := vecs[0]
+	tbls := vecs[1]
+	cols := vecs[2]
 
 	rtyp := types.T_varchar.ToType()
 	var resultVec *vector.Vector = nil
@@ -167,19 +169,21 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	}
 	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
-		col := cols[i]
+		col := cols.GetStringAt(i)
 		if col == "__mo_rowid" {
 			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_max has bad input column", col)
 		}
-		if tbls[i] == "mo_database" || tbls[i] == "mo_tables" || tbls[i] == "mo_columns" || tbls[i] == "sys_async_task" {
-			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_max has bad input table", tbls[i])
+		tbv := tbls.GetStringAt(i)
+		if tbv == "mo_database" || tbv == "mo_tables" || tbv == "mo_columns" || tbv == "sys_async_task" {
+			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_max has bad input table", tbv)
 		}
 
-		db, err := e.Database(proc.Ctx, dbs[i], txn)
+		dbv := dbs.GetStringAt(i)
+		db, err := e.Database(proc.Ctx, dbv, txn)
 		if err != nil {
 			return nil, err
 		}
-		rel, err := db.Relation(proc.Ctx, tbls[i])
+		rel, err := db.Relation(proc.Ctx, tbv)
 		if err != nil {
 			return nil, err
 		}
@@ -212,9 +216,9 @@ func MoTableColMax(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 // MoTableColMax return the max value of the column
 func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	count := vecs[0].Length()
-	dbs := vector.MustStrCol(vecs[0])
-	tbls := vector.MustStrCol(vecs[1])
-	cols := vector.MustStrCol(vecs[2])
+	dbs := vecs[0]
+	tbls := vecs[1]
+	cols := vecs[2]
 
 	rtyp := types.T_varchar.ToType()
 	var resultVec *vector.Vector = nil
@@ -235,19 +239,20 @@ func MoTableColMin(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	}
 	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
-		col := cols[i]
+		col := cols.GetStringAt(i)
 		if col == "__mo_rowid" {
 			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_min has bad input column", col)
 		}
-		if tbls[i] == "mo_database" || tbls[i] == "mo_tables" || tbls[i] == "mo_columns" || tbls[i] == "sys_async_task" {
-			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_min has bad input table:", tbls[i])
+		tbv := tbls.GetStringAt(i)
+		if tbv == "mo_database" || tbv == "mo_tables" || tbv == "mo_columns" || tbv == "sys_async_task" {
+			return nil, moerr.NewInvalidArg(proc.Ctx, "mo_table_col_min has bad input table:", tbv)
 		}
 
-		db, err := e.Database(proc.Ctx, dbs[i], txn)
+		db, err := e.Database(proc.Ctx, dbs.GetStringAt(i), txn)
 		if err != nil {
 			return nil, err
 		}
-		rel, err := db.Relation(proc.Ctx, tbls[i])
+		rel, err := db.Relation(proc.Ctx, tbv)
 		if err != nil {
 			return nil, err
 		}

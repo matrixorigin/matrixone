@@ -364,14 +364,14 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_COLUMNS_ACCOUNT_ID_IDX + MO_OFF))
 	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX + MO_OFF))
-	tableNames := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF))
+	tableNames := bat.GetVector(catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF)
 	tableIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX + MO_OFF))
 	// get columns info
-	names := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATTNAME_IDX + MO_OFF))
-	comments := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_COMMENT_IDX + MO_OFF))
+	names := bat.GetVector(catalog.MO_COLUMNS_ATTNAME_IDX + MO_OFF)
+	comments := bat.GetVector(catalog.MO_COLUMNS_ATT_COMMENT_IDX + MO_OFF)
 	isHiddens := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX + MO_OFF))
 	isAutos := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX + MO_OFF))
-	constraintTypes := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX + MO_OFF))
+	constraintTypes := bat.GetVector(catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX + MO_OFF)
 	typs := bat.GetVector(catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF)
 	hasDefs := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATTHASDEF_IDX + MO_OFF))
 	defaultExprs := bat.GetVector(catalog.MO_COLUMNS_ATT_DEFAULT_IDX + MO_OFF)
@@ -382,7 +382,7 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	seqnums := vector.MustFixedCol[uint16](bat.GetVector(catalog.MO_COLUMNS_ATT_SEQNUM_IDX + MO_OFF))
 	for i, account := range accounts {
 		key.AccountId = account
-		key.Name = tableNames[i]
+		key.Name = tableNames.GetStringAt(i)
 		key.DatabaseId = databaseIds[i]
 		key.Ts = timestamps[i].ToTimestamp()
 		key.Id = tableIds[i]
@@ -396,13 +396,13 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		if _, ok := cc.tables.data.Get(key); ok {
 			col := column{
 				num:             nums[i],
-				name:            names[i],
-				comment:         comments[i],
+				name:            names.GetStringAt(i),
+				comment:         comments.GetStringAt(i),
 				isHidden:        isHiddens[i],
 				isAutoIncrement: isAutos[i],
 				hasDef:          hasDefs[i],
 				hasUpdate:       hasUpdates[i],
-				constraintType:  constraintTypes[i],
+				constraintType:  constraintTypes.GetStringAt(i),
 				isClusterBy:     clusters[i],
 				seqnum:          seqnums[i],
 			}

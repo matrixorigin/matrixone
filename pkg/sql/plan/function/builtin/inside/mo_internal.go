@@ -57,14 +57,12 @@ func InternalColumnCharacterSet(vectors []*vector.Vector, proc *process.Process)
 func generalInternalType(funName string, ivecs []*vector.Vector, proc *process.Process, typefunc typeFunc) (*vector.Vector, error) {
 	ivec := ivecs[0]
 	rtyp := types.T_int64.ToType()
-	ivals := vector.MustStrCol(ivec)
 	if ivec.IsConst() {
 		if ivec.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivec.Length(), proc.Mp()), nil
 		} else {
 			var typ types.Type
-			bytes := []byte(ivals[0])
-			err := types.Decode(bytes, &typ)
+			err := types.Decode(ivec.GetBytesAt(0), &typ)
 			if err != nil {
 				return nil, err
 			}
@@ -76,19 +74,18 @@ func generalInternalType(funName string, ivecs []*vector.Vector, proc *process.P
 			}
 		}
 	} else {
-		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), nil)
+		rvec, err := proc.AllocVectorOfRows(rtyp, ivec.Length(), nil)
 		nulls.Set(rvec.GetNulls(), ivec.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		rvals := vector.MustFixedCol[int64](rvec)
-		for i, typeValue := range ivals {
+		for i := 0; i < ivec.Length(); i++ {
 			if rvec.GetNulls().Contains(uint64(i)) {
 				continue
 			}
 			var typ types.Type
-			bytes := []byte(typeValue)
-			err = types.Decode(bytes, &typ)
+			err = types.Decode(ivec.GetBytesAt(i), &typ)
 			if err != nil {
 				return nil, err
 			}

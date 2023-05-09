@@ -140,7 +140,6 @@ func substrSrcConst(ivecs []*vector.Vector, proc *process.Process) (*vector.Vect
 	}
 
 	// XXX if this vector is const, then it is not expanded.  Really?
-	// TODO: remove MustStrCol
 	columnSrcCol := vector.MustStrCol(srcVector)
 
 	// request new memory space for result column
