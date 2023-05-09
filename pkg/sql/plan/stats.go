@@ -304,7 +304,7 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
-				outcnt = out1 * out2 / tableCnt
+				outcnt = andSelectivity(out1/tableCnt, out2/tableCnt) * tableCnt
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
@@ -715,4 +715,11 @@ func compareStats(stats1, stats2 *Stats) bool {
 		// todo we need to calculate ndv of outcnt here
 		return stats1.Outcnt < stats2.Outcnt
 	}
+}
+
+func andSelectivity(s1, s2 float64) float64 {
+	if s1 > 0.15 || s2 > 0.15 || s1*s2 > 0.1 {
+		return s1 * s2
+	}
+	return math.Min(s1, s2) * math.Max(math.Pow(s1, math.Pow(s2, 2)), math.Pow(s2, math.Pow(s1, 2)))
 }
