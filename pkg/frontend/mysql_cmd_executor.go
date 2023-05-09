@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/util/format"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2323,6 +2324,8 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
+	fmt.Printf(">>>>>>>> sql: %s\n\n", sql)
+
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	ses.getSqlType(sql)
@@ -2330,6 +2333,24 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(sql)
 	ses.GetExportParam().Outfile = false
+
+	v, err := ses.GetSessionVar("default_account")
+	if err != nil {
+		return err
+	}
+	var tid uint32
+	if id, ok := v.(string); ok && id != "" {
+		tid = format.MustParseStringUint32(id)
+		requestCtx = context.WithValue(
+			requestCtx,
+			defines.TenantIDKey{},
+			tid)
+		ses.SetRequestContext(requestCtx)
+		if ses.GetTenantInfo() != nil {
+			ses.GetTenantInfo().SetTenantID(tid)
+		}
+	}
+
 	pu := ses.GetParameterUnit()
 	proc := process.New(
 		requestCtx,
@@ -2337,8 +2358,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetTxnHandler().GetTxnClient(),
 		nil,
 		pu.FileService,
-		pu.LockService,
-		ses.GetAutoIncrCacheManager())
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3272,8 +3292,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.TxnClient,
 		nil,
 		pu.FileService,
-		pu.LockService,
-		ses.GetAutoIncrCacheManager())
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows

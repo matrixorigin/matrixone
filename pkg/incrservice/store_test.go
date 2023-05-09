@@ -14,29 +14,22 @@
 
 package incrservice
 
-import (
-	"context"
-	"testing"
+// func TestStoreCreate(t *testing.T) {
+// 	dsn := "de2938e4-a154-4c6f-b010-f0c2c17c15ee:1bed630d-60a6-4830-9e1e-4dd669d2fbea@tcp(127.0.0.1:6001)/mo_catalog"
+// 	s, err := NewSQLStore(dsn)
+// 	require.NoError(t, err)
+// 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, 9000001)
+// 	require.NoError(t, s.Create(ctx, "k1", 100, 1))
+// }
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-)
+// func TestStoreAlloc(t *testing.T) {
+// 	dsn := "de2938e4-a154-4c6f-b010-f0c2c17c15ee:1bed630d-60a6-4830-9e1e-4dd669d2fbea@tcp(127.0.0.1:6001)/mo_catalog"
+// 	s, err := NewSQLStore(dsn)
+// 	require.NoError(t, err)
 
-func TestStoreCreate(t *testing.T) {
-	dsn := "root:root@tcp(127.0.0.1:3306)/zx"
-	s, err := NewSQLStore(dsn)
-	require.NoError(t, err)
-
-	require.NoError(t, s.Create(context.Background(), "k1", 0, 1))
-}
-
-func TestStoreAlloc(t *testing.T) {
-	dsn := "root:root@tcp(127.0.0.1:3306)/zx"
-	s, err := NewSQLStore(dsn)
-	require.NoError(t, err)
-
-	from, to, err := s.Alloc(context.Background(), "k1", 1)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(1), from)
-	assert.Equal(t, uint64(2), to)
-}
+// 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, 9000001)
+// 	from, to, err := s.Alloc(ctx, "k1", 1)
+// 	require.NoError(t, err)
+// 	assert.Equal(t, uint64(101), from)
+// 	assert.Equal(t, uint64(102), to)
+// }

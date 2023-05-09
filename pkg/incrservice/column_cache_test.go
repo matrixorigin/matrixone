@@ -56,7 +56,7 @@ func TestColumnCacheAllocate(t *testing.T) {
 			c *columnCache) {
 			c.Lock()
 			require.NoError(t, c.waitPrevAllocatingLocked(ctx))
-			require.NoError(t, c.allocateLocked(ctx, 200))
+			require.NoError(t, c.allocateLocked(ctx, 0, 200))
 			c.Unlock()
 
 			c.Lock()
@@ -77,7 +77,7 @@ func TestColumnCacheInsert(t *testing.T) {
 			c *columnCache) {
 			c.Lock()
 			require.NoError(t, c.waitPrevAllocatingLocked(ctx))
-			require.NoError(t, c.allocateLocked(ctx, 200))
+			require.NoError(t, c.allocateLocked(ctx, 0, 200))
 			c.Unlock()
 
 			c.Lock()
@@ -300,7 +300,7 @@ func testColumnCacheInsert[T constraints.Integer](
 			ctx context.Context,
 			c *columnCache) {
 			require.NoError(t,
-				c.insertAutoValues(ctx, input, rows))
+				c.insertAutoValues(ctx, 0, input, rows))
 			assert.Equal(t,
 				vector.MustFixedCol[T](expect),
 				vector.MustFixedCol[T](input))
@@ -342,8 +342,16 @@ func runColumnCacheTests(
 		func(a valueAllocator) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			a.(*allocator).store.Create(ctx, "k1", 0, step)
-			fn(ctx, newColumnCache(ctx, "k1", capacity, step, a))
+			col := AutoColumn{
+				ColName: "k1",
+				Offset:  0,
+				Step:    uint64(step),
+			}
+			a.(*allocator).store.Create(
+				ctx,
+				0,
+				[]AutoColumn{col})
+			fn(ctx, newColumnCache(ctx, 0, col, capacity, a))
 		},
 	)
 }

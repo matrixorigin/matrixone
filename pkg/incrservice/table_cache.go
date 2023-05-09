@@ -16,17 +16,16 @@ package incrservice
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 type tableCache struct {
 	logger  *log.MOLogger
 	tableID uint64
+	cols    []AutoColumn
 
 	mu struct {
 		sync.RWMutex
@@ -34,63 +33,69 @@ type tableCache struct {
 	}
 }
 
-// compatible with the current design of hidden tables with
-// auto-incrementing columns
-func getStoreKey(tableID uint64, col string) string {
-	return fmt.Sprintf("%d_%s", tableID, col)
-}
-
 func newTableCache(
 	ctx context.Context,
 	tableID uint64,
-	autoColNames []string,
-	steps []int,
+	cols []AutoColumn,
 	count int,
 	allocator valueAllocator) incrTableCache {
 	c := &tableCache{
 		logger:  getLogger(),
 		tableID: tableID,
+		cols:    cols,
 	}
 	c.mu.cols = make(map[string]*columnCache, 1)
-	for i, col := range autoColNames {
-		key := getStoreKey(tableID, col)
-		c.mu.cols[col] = newColumnCache(ctx, key, count, steps[i], allocator)
+	for _, col := range cols {
+		c.mu.cols[col.ColName] = newColumnCache(
+			ctx,
+			tableID,
+			col,
+			count,
+			allocator)
 	}
 	return c
 }
 
 func (c *tableCache) insertAutoValues(
 	ctx context.Context,
-	tabelDef *plan.TableDef,
+	tableID uint64,
 	bat *batch.Batch) error {
-	for i, col := range tabelDef.Cols {
-		if col.Typ.AutoIncr {
-			cc := c.getColumnCache(col.Name)
-			if cc == nil {
-				panic("column cache should not be nil, " + col.Name)
-			}
-			rows := bat.Length()
-			vec := bat.GetVector(int32(i))
-			if err := cc.insertAutoValues(ctx, vec, rows); err != nil {
-				return err
-			}
+	for _, col := range c.cols {
+		cc := c.getColumnCache(col.ColName)
+		if cc == nil {
+			panic("column cache should not be nil, " + col.ColName)
+		}
+		rows := bat.Length()
+		vec := bat.GetVector(int32(col.ColIndex))
+		if err := cc.insertAutoValues(ctx, tableID, vec, rows); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func (c *tableCache) currentValue(
+	ctx context.Context,
+	tableID uint64,
+	targetCol string) (uint64, error) {
+	for _, col := range c.cols {
+		if col.ColName == targetCol {
+			cc := c.getColumnCache(col.ColName)
+			if cc == nil {
+				panic("column cache should not be nil, " + col.ColName)
+			}
+			return cc.current(ctx, tableID)
+		}
+	}
+	return 0, nil
 }
 
 func (c *tableCache) table() uint64 {
 	return c.tableID
 }
 
-func (c *tableCache) keys() []string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	keys := make([]string, 0, len(c.mu.cols))
-	for k := range c.mu.cols {
-		keys = append(keys, getStoreKey(c.tableID, k))
-	}
-	return keys
+func (c *tableCache) columns() []AutoColumn {
+	return c.cols
 }
 
 func (c *tableCache) getColumnCache(col string) *columnCache {

@@ -76,8 +76,18 @@ func TestAlloc(t *testing.T) {
 			}
 
 			for _, c := range cases {
-				require.NoError(t, a.(*allocator).store.Create(ctx, c.key, 0, c.step))
-				from, to, err := a.alloc(ctx, c.key, c.count)
+				require.NoError(t,
+					a.(*allocator).store.Create(
+						ctx,
+						0,
+						[]AutoColumn{
+							{
+								ColName: c.key,
+								Offset:  0,
+								Step:    uint64(c.step),
+							},
+						}))
+				from, to, err := a.alloc(ctx, 0, c.key, c.count)
 				require.NoError(t, err)
 				require.Equal(t, c.expectFrom, from)
 				require.Equal(t, c.expectTo, to)
@@ -137,11 +147,22 @@ func TestAsyncAlloc(t *testing.T) {
 			}
 
 			for _, c := range cases {
-				require.NoError(t, a.(*allocator).store.Create(ctx, c.key, 0, c.step))
+				require.NoError(t,
+					a.(*allocator).store.Create(
+						ctx,
+						0,
+						[]AutoColumn{
+							{
+								ColName: c.key,
+								Offset:  0,
+								Step:    uint64(c.step),
+							},
+						}))
 				var wg sync.WaitGroup
 				wg.Add(1)
 				a.asyncAlloc(
 					ctx,
+					0,
 					c.key,
 					c.count,
 					func(from, to uint64, err error) {

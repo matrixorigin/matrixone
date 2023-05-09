@@ -16,22 +16,43 @@ package incrservice
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
 
-// AutoColumn model
-type AutoColumn struct {
-	Name   string `gorm:"column:name;primaryKey"`
-	Offset uint64 `gorm:"column:offset"`
-	Step   uint64 `gorm:"column:step"`
-}
+var (
+	name               = "mo_increment_columns"
+	createMoIndexesSql = `create table if not exists mo_indexes(
+		id 			bigint unsigned not null,
+		table_id 	bigint unsigned not null,
+		database_id bigint unsigned not null,
+		name 		varchar(64) not null,
+		type        varchar(11) not null,
+		is_visible  tinyint not null,
+		hidden      tinyint not null,
+		comment 	varchar(2048) not null,
+		column_name    varchar(256) not null,
+		ordinal_position  int unsigned  not null,
+		options     text,
+		index_table_name varchar(5000),
+		primary key(id, column_name)
+	);`
+	createAutoTableSqlNew = fmt.Sprintf(`create table if not exists %s (
+		table_id   bigint unsigned, 
+		col_name     varchar(770), 
+		col_index      int,
+		offset     bigint unsigned, 
+		step       bigint unsigned,  
+		primary key(table_id, col_name)
+	);`, name)
+)
 
 func (c AutoColumn) TableName() string {
-	_ = catalog.AutoIncrTableName
+	// _ = catalog.AutoIncrTableName
 	return "mo_increment_columns"
 }
 
@@ -43,7 +64,7 @@ func NewSQLStore(dsn string) (IncrValueStore, error) {
 	db, err := gorm.Open(
 		mysql.Open(dsn),
 		&gorm.Config{
-			PrepareStmt: true,
+			PrepareStmt: false,
 			Logger:      gormlogger.Default.LogMode(gormlogger.Error),
 		})
 	if err != nil {
@@ -54,32 +75,41 @@ func NewSQLStore(dsn string) (IncrValueStore, error) {
 
 func (s *sqlStore) Create(
 	ctx context.Context,
-	key string,
-	value uint64,
-	step int) error {
-	col := AutoColumn{
-		Name:   key,
-		Offset: value,
-		Step:   uint64(step),
+	tableID uint64,
+	cols []AutoColumn) error {
+	db, err := s.getSession(ctx)
+	if err != nil {
+		return err
 	}
-	result := s.db.Create(&col)
-	if result.Error != nil {
-		return result.Error
+
+	if err := db.Exec(createMoIndexesSql).Error; err != nil {
+		return err
 	}
-	return nil
+	if err := db.Exec(createAutoTableSqlNew).Error; err != nil {
+		return err
+	}
+	return db.Create(&cols).Error
 }
 
 func (s *sqlStore) Alloc(
 	ctx context.Context,
+	tableID uint64,
 	key string,
 	count int) (uint64, uint64, error) {
+	db, err := s.getSession(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
 
 	var col AutoColumn
 	var curr, next uint64
 	ok := false
 	for {
-		err := s.db.Transaction(func(tx *gorm.DB) error {
-			result := tx.First(&col, "name = ?", key)
+		err := db.Transaction(func(tx *gorm.DB) error {
+			result := tx.First(
+				&col, "table_id = ? and col_name = ?",
+				tableID,
+				key)
 			if result.Error != nil {
 				return result.Error
 			}
@@ -87,7 +117,10 @@ func (s *sqlStore) Alloc(
 			curr = col.Offset
 			next = getNext(curr, count, int(col.Step))
 			result = tx.Model(&AutoColumn{}).
-				Where("offset = ?", curr).
+				Where("table_id = ? and col_name = ? and offset = ?",
+					tableID,
+					key,
+					curr).
 				Update("offset", next)
 			if result.Error != nil {
 				return result.Error
@@ -113,11 +146,42 @@ func (s *sqlStore) Alloc(
 
 func (s *sqlStore) Delete(
 	ctx context.Context,
-	keys []string) error {
+	tableID uint64) error {
+	db, err := s.getSession(ctx)
+	if err != nil {
+		return err
+	}
+	return db.Delete(&AutoColumn{}, "table_id = ?", tableID).Error
+}
 
-	return nil
+func (s *sqlStore) GetCloumns(
+	ctx context.Context,
+	tableID uint64) ([]AutoColumn, error) {
+	db, err := s.getSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var cols []AutoColumn
+	if err := db.Order("col_index").
+		Find(&cols, "table_id = ?", tableID).Error; err != nil {
+		return nil, err
+	}
+	return cols, nil
 }
 
 func (s *sqlStore) Close() {
 
+}
+
+func (s *sqlStore) getSession(ctx context.Context) (*gorm.DB, error) {
+	db := s.db.Session(&gorm.Session{PrepareStmt: false})
+	v := ctx.Value(defines.TenantIDKey{})
+	if v == nil {
+		return db, nil
+	}
+	err := db.Exec(fmt.Sprintf("SET SESSION default_account = '%d'", v)).Error
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
 }

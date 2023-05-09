@@ -31,7 +31,7 @@ import (
 type columnCache struct {
 	sync.RWMutex
 	logger      *log.MOLogger
-	key         string
+	col         AutoColumn
 	capacity    int
 	ranges      *ranges
 	allocator   valueAllocator
@@ -41,42 +41,56 @@ type columnCache struct {
 
 func newColumnCache(
 	ctx context.Context,
-	key string,
+	tableID uint64,
+	col AutoColumn,
 	capacity int,
-	step int,
 	allocator valueAllocator) *columnCache {
 	item := &columnCache{
 		logger:    getLogger(),
-		key:       key,
+		col:       col,
 		capacity:  capacity,
 		allocator: allocator,
-		ranges:    &ranges{step: uint64(step), values: make([]uint64, 0, 1)},
+		ranges:    &ranges{step: col.Step, values: make([]uint64, 0, 1)},
 	}
-	item.preAllocate(ctx, capacity)
+	item.preAllocate(ctx, tableID, capacity)
 	return item
+}
+
+func (col *columnCache) current(
+	ctx context.Context,
+	tableID uint64) (uint64, error) {
+	col.preAllocate(ctx, tableID, col.capacity)
+
+	col.Lock()
+	defer col.Unlock()
+	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
+		return 0, err
+	}
+	return col.ranges.current(), nil
 }
 
 func (col *columnCache) insertAutoValues(
 	ctx context.Context,
+	tableID uint64,
 	vec *vector.Vector,
 	rows int) error {
 	switch vec.GetType().Oid {
 	case types.T_int8:
-		insertAutoValues[int8](ctx, vec, rows, col)
+		insertAutoValues[int8](ctx, tableID, vec, rows, col)
 	case types.T_int16:
-		insertAutoValues[int16](ctx, vec, rows, col)
+		insertAutoValues[int16](ctx, tableID, vec, rows, col)
 	case types.T_int32:
-		insertAutoValues[int32](ctx, vec, rows, col)
+		insertAutoValues[int32](ctx, tableID, vec, rows, col)
 	case types.T_int64:
-		insertAutoValues[int64](ctx, vec, rows, col)
+		insertAutoValues[int64](ctx, tableID, vec, rows, col)
 	case types.T_uint8:
-		insertAutoValues[uint8](ctx, vec, rows, col)
+		insertAutoValues[uint8](ctx, tableID, vec, rows, col)
 	case types.T_uint16:
-		insertAutoValues[uint16](ctx, vec, rows, col)
+		insertAutoValues[uint16](ctx, tableID, vec, rows, col)
 	case types.T_uint32:
-		insertAutoValues[uint32](ctx, vec, rows, col)
+		insertAutoValues[uint32](ctx, tableID, vec, rows, col)
 	case types.T_uint64:
-		insertAutoValues[uint64](ctx, vec, rows, col)
+		insertAutoValues[uint64](ctx, tableID, vec, rows, col)
 	default:
 		return moerr.NewInvalidInput(ctx, "invalid auto_increment type '%v'", vec.GetType().Oid)
 	}
@@ -85,6 +99,7 @@ func (col *columnCache) insertAutoValues(
 
 func (col *columnCache) applyAutoValues(
 	ctx context.Context,
+	tableID uint64,
 	rows int,
 	apply func(int, uint64)) error {
 	col.Lock()
@@ -95,7 +110,7 @@ func (col *columnCache) applyAutoValues(
 
 	for i := 0; i < rows; i++ {
 		if col.ranges.empty() {
-			if err := col.allocateLocked(ctx, rows); err != nil {
+			if err := col.allocateLocked(ctx, tableID, rows); err != nil {
 				return err
 			}
 		}
@@ -106,6 +121,7 @@ func (col *columnCache) applyAutoValues(
 
 func (col *columnCache) applyAutoValuesWithManual(
 	ctx context.Context,
+	tableID uint64,
 	rows int,
 	manualValues *roaring64.Bitmap,
 	filter func(i int) bool,
@@ -120,7 +136,7 @@ func (col *columnCache) applyAutoValuesWithManual(
 	manualRowsCount := manualValues.GetCardinality()
 	wait := func() error {
 		if col.ranges.empty() {
-			if err := col.allocateLocked(ctx, rows); err != nil {
+			if err := col.allocateLocked(ctx, tableID, rows); err != nil {
 				return err
 			}
 		}
@@ -157,6 +173,7 @@ func (col *columnCache) applyAutoValuesWithManual(
 
 func (col *columnCache) preAllocate(
 	ctx context.Context,
+	tableID uint64,
 	count int) {
 	col.Lock()
 	defer col.Unlock()
@@ -173,9 +190,11 @@ func (col *columnCache) preAllocate(
 	if col.capacity > count {
 		count = col.capacity
 	}
+	// TODO: only tentenID need
 	col.allocator.asyncAlloc(
 		ctx,
-		col.key,
+		tableID,
+		col.col.ColName,
 		count,
 		func(from, to uint64, err error) {
 			if err == nil {
@@ -188,6 +207,7 @@ func (col *columnCache) preAllocate(
 
 func (col *columnCache) allocateLocked(
 	ctx context.Context,
+	tableID uint64,
 	count int) error {
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
@@ -204,7 +224,8 @@ func (col *columnCache) allocateLocked(
 		default:
 			from, to, err := col.allocator.alloc(
 				ctx,
-				col.key,
+				tableID,
+				col.col.ColName,
 				count)
 			if err == nil {
 				col.applyAllocateLocked(from, to)
@@ -230,7 +251,7 @@ func (col *columnCache) applyAllocateLocked(
 		col.ranges.add(from, to)
 		if col.logger.Enabled(zap.DebugLevel) {
 			col.logger.Debug("new range added",
-				zap.String("key", col.key),
+				zap.String("key", col.col.ColName),
 				zap.Uint64("from", from),
 				zap.Uint64("to", to))
 		}
@@ -257,13 +278,14 @@ func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
 
 func insertAutoValues[T constraints.Integer](
 	ctx context.Context,
+	tableID uint64,
 	vec *vector.Vector,
 	rows int,
 	col *columnCache) error {
 	// all values are filled after insert
 	defer vec.SetNulls(nil)
 
-	col.preAllocate(ctx, rows)
+	col.preAllocate(ctx, tableID, rows)
 	vs := vector.MustFixedCol[T](vec)
 	autoCount := nulls.Length(vec.GetNulls())
 	manualCount := rows - autoCount
@@ -272,6 +294,7 @@ func insertAutoValues[T constraints.Integer](
 	if autoCount == rows {
 		return col.applyAutoValues(
 			ctx,
+			tableID,
 			rows,
 			func(i int, v uint64) {
 				vs[i] = T(v)
@@ -297,6 +320,7 @@ func insertAutoValues[T constraints.Integer](
 	}
 	return col.applyAutoValuesWithManual(
 		ctx,
+		tableID,
 		rows,
 		manualValues,
 		func(i int) bool {

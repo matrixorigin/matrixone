@@ -21,8 +21,6 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -42,19 +40,18 @@ func TestCreate(t *testing.T) {
 			op := ops[0]
 
 			def := newTestTableDef(2)
-			require.NoError(t, s.Create(ctx, def, op))
+			require.NoError(t, s.Create(ctx, 0, def, op))
 
 			s.mu.Lock()
 			assert.Equal(t, 1, len(s.mu.tables))
 			assert.Equal(t, 1, len(s.mu.creates))
 			assert.Equal(t, 0, len(s.mu.deletes))
 			assert.Equal(t, 1, len(s.mu.creates[string(op.Txn().ID)]))
-			assert.Equal(t, 2, len(s.mu.tables[def.TblId].keys()))
-			assert.Equal(t, def.TblId, s.mu.tables[def.TblId].table())
+			assert.Equal(t, 2, len(s.mu.tables[0].columns()))
 			s.mu.Unlock()
 
 			s.store.(*memStore).Lock()
-			assert.Equal(t, 2, len(s.store.(*memStore).caches))
+			assert.Equal(t, 2, len(s.store.(*memStore).caches[0]))
 			s.store.(*memStore).Unlock()
 
 			require.NoError(t, op.Commit(ctx))
@@ -65,7 +62,7 @@ func TestCreate(t *testing.T) {
 			s.mu.Unlock()
 
 			s.store.(*memStore).Lock()
-			assert.Equal(t, 2, len(s.store.(*memStore).caches))
+			assert.Equal(t, 2, len(s.store.(*memStore).caches[0]))
 			s.store.(*memStore).Unlock()
 		})
 }
@@ -81,16 +78,16 @@ func TestCreateOnOtherService(t *testing.T) {
 			s := ss[0]
 			op := ops[0]
 			def := newTestTableDef(2)
-			require.NoError(t, s.Create(ctx, def, op))
+			require.NoError(t, s.Create(ctx, 0, def, op))
 			require.NoError(t, op.Commit(ctx))
 
 			s2 := ss[0]
-			require.NoError(t, s2.doCreate(ctx, def, nil, false))
+			_, err := s2.getCommittedTableCache(ctx, 0)
+			require.NoError(t, err)
 			s2.mu.Lock()
 			assert.Equal(t, 1, len(s2.mu.tables))
 			assert.Equal(t, 0, len(s2.mu.creates))
 			assert.Equal(t, 0, len(s2.mu.deletes))
-			assert.Equal(t, def.TblId, s2.mu.tables[def.TblId].table())
 			s2.mu.Unlock()
 		})
 }
@@ -106,19 +103,18 @@ func TestCreateWithTxnAborted(t *testing.T) {
 			s := ss[0]
 			op := ops[0]
 			def := newTestTableDef(2)
-			require.NoError(t, s.Create(ctx, def, op))
+			require.NoError(t, s.Create(ctx, 0, def, op))
 
 			s.mu.Lock()
 			assert.Equal(t, 1, len(s.mu.tables))
 			assert.Equal(t, 1, len(s.mu.creates))
 			assert.Equal(t, 0, len(s.mu.deletes))
 			assert.Equal(t, 1, len(s.mu.creates[string(op.Txn().ID)]))
-			assert.Equal(t, 2, len(s.mu.tables[def.TblId].keys()))
-			assert.Equal(t, def.TblId, s.mu.tables[def.TblId].table())
+			assert.Equal(t, 2, len(s.mu.tables[0].columns()))
 			s.mu.Unlock()
 
 			s.store.(*memStore).Lock()
-			assert.Equal(t, 2, len(s.store.(*memStore).caches))
+			assert.Equal(t, 2, len(s.store.(*memStore).caches[0]))
 			s.store.(*memStore).Unlock()
 
 			require.NoError(t, op.Rollback(ctx))
@@ -144,13 +140,13 @@ func TestDelete(t *testing.T) {
 			op := ops[0]
 
 			def := newTestTableDef(2)
-			require.NoError(t, s.Create(ctx, def, op))
+			require.NoError(t, s.Create(ctx, 0, def, op))
 			require.NoError(t, op.Commit(ctx))
 
 			waitStoreCachesCount(t, ctx, s.store.(*memStore), 2)
 
 			op2 := ops[1]
-			require.NoError(t, s.Delete(ctx, def, op2))
+			require.NoError(t, s.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
 			waitStoreCachesCount(t, ctx, s.store.(*memStore), 0)
 		})
@@ -168,13 +164,13 @@ func TestDeleteWithTxnAborted(t *testing.T) {
 			op := ops[0]
 
 			def := newTestTableDef(2)
-			require.NoError(t, s.Create(ctx, def, op))
+			require.NoError(t, s.Create(ctx, 0, def, op))
 			require.NoError(t, op.Commit(ctx))
 
 			waitStoreCachesCount(t, ctx, s.store.(*memStore), 2)
 
 			op2 := ops[1]
-			require.NoError(t, s.Delete(ctx, def, op2))
+			require.NoError(t, s.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Rollback(ctx))
 			assert.Equal(t, 0, len(s.deleteC))
 		})
@@ -192,13 +188,13 @@ func TestDeleteOnOtherService(t *testing.T) {
 			op := ops[0]
 
 			def := newTestTableDef(2)
-			require.NoError(t, s.Create(ctx, def, op))
+			require.NoError(t, s.Create(ctx, 0, def, op))
 			require.NoError(t, op.Commit(ctx))
 			waitStoreCachesCount(t, ctx, s.store.(*memStore), 2)
 
 			s2 := ss[1]
 			op2 := ops[1]
-			require.NoError(t, s2.Delete(ctx, def, op2))
+			require.NoError(t, s2.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
 			waitStoreCachesCount(t, ctx, s2.store.(*memStore), 0)
 		})
@@ -213,7 +209,7 @@ func runServiceTests(
 		tc client.TxnClient,
 		ts rpc.TxnSender) {
 		defer leaktest.AfterTest(t)()
-		store := newMemStore()
+		store := NewMemStore()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -237,21 +233,16 @@ func runServiceTests(
 	})
 }
 
-func newTestTableDef(autoCols int) *plan.TableDef {
-	def := &plan.TableDef{
-		TblId: 1,
-		Name:  "test",
-	}
+func newTestTableDef(autoCols int) []AutoColumn {
+	var cols []AutoColumn
 	for i := 0; i < autoCols; i++ {
-		def.Cols = append(def.Cols, &plan.ColDef{
-			Name: fmt.Sprintf("auto_%d", i),
-			Typ: &plan.Type{
-				AutoIncr: true,
-				Id:       int32(types.T_uint64),
-			},
+		cols = append(cols, AutoColumn{
+			ColName: fmt.Sprintf("auto_%d", i),
+			Step:    1,
+			Offset:  0,
 		})
 	}
-	return def
+	return cols
 }
 
 func waitStoreCachesCount(
@@ -265,7 +256,7 @@ func waitStoreCachesCount(
 			t.Fail()
 		default:
 			store.Lock()
-			if len(store.caches) == n {
+			if len(store.caches[0]) == n {
 				store.Unlock()
 				return
 			}

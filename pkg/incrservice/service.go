@@ -20,10 +20,8 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
@@ -34,15 +32,15 @@ type service struct {
 	cacheCapacity int
 	store         IncrValueStore
 	allocator     valueAllocator
-	deleteC       chan []string
+	deleteC       chan uint64
 	stopper       *stopper.Stopper
 
 	mu struct {
-		sync.RWMutex
+		sync.Mutex
 		closed  bool
 		tables  map[uint64]incrTableCache
 		creates map[string][]incrTableCache
-		deletes map[string][]plan.TableDef
+		deletes map[string][]uint64
 	}
 }
 
@@ -55,19 +53,20 @@ func NewIncrService(
 		cacheCapacity: cacheCapacity,
 		store:         store,
 		allocator:     newValueAllocator(store),
-		deleteC:       make(chan []string, 1024),
+		deleteC:       make(chan uint64, 1024),
 		stopper:       stopper.NewStopper("IncrService", stopper.WithLogger(logger.RawLogger())),
 	}
 	s.mu.tables = make(map[uint64]incrTableCache, 1024)
 	s.mu.creates = make(map[string][]incrTableCache, 1024)
-	s.mu.deletes = make(map[string][]plan.TableDef, 1024)
+	s.mu.deletes = make(map[string][]uint64, 1024)
 	s.stopper.RunTask(s.deleteTableCache)
 	return s
 }
 
 func (s *service) Create(
 	ctx context.Context,
-	table *plan.TableDef,
+	tableID uint64,
+	cols []AutoColumn,
 	txnOp client.TxnOperator) error {
 	if txnOp == nil {
 		panic("txn operator is nil")
@@ -77,16 +76,60 @@ func (s *service) Create(
 			client.ClosedEvent,
 			s.txnClosed)
 
-	return s.doCreate(
+	if err := s.store.Create(ctx, tableID, cols); err != nil {
+		s.logger.Error("create auto increment cache failed",
+			zap.Uint64("table-id", tableID),
+			zap.String("txn", hex.EncodeToString(txnOp.Txn().ID)),
+			zap.Error(err))
+		return err
+	}
+	c := newTableCache(
 		ctx,
-		table,
-		txnOp.Txn().ID,
-		true)
+		tableID,
+		cols,
+		s.cacheCapacity,
+		s.allocator)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := string(txnOp.Txn().ID)
+	s.mu.creates[key] = append(s.mu.creates[key], c)
+	return s.doCreateLocked(
+		tableID,
+		c,
+		txnOp.Txn().ID)
+}
+
+func (s *service) Reset(
+	ctx context.Context,
+	oldTableID,
+	newTableID uint64,
+	keep bool,
+	txnOp client.TxnOperator) error {
+	cols, err := s.store.GetCloumns(ctx, oldTableID)
+	if err != nil {
+		return err
+	}
+	if len(cols) == 0 {
+		return nil
+	}
+
+	if !keep {
+		for idx := range cols {
+			cols[idx].Offset = 0
+		}
+	}
+	if err := s.Delete(ctx, oldTableID, txnOp); err != nil {
+		return err
+	}
+	for idx := range cols {
+		cols[idx].TableID = newTableID
+	}
+	return s.Create(ctx, newTableID, cols, txnOp)
 }
 
 func (s *service) Delete(
 	ctx context.Context,
-	table *plan.TableDef,
+	tableID uint64,
 	txnOp client.TxnOperator) error {
 	if txnOp == nil {
 		panic("txn operator is nil")
@@ -100,10 +143,10 @@ func (s *service) Delete(
 	defer s.mu.Unlock()
 
 	key := string(txnOp.Txn().ID)
-	s.mu.deletes[key] = append(s.mu.deletes[key], *table)
+	s.mu.deletes[key] = append(s.mu.deletes[key], tableID)
 	if s.logger.Enabled(zap.DebugLevel) {
 		s.logger.Debug("ready to delete auto increment table cache",
-			zap.Uint64("table-id", table.TblId),
+			zap.Uint64("table-id", tableID),
 			zap.String("txn", hex.EncodeToString(txnOp.Txn().ID)))
 	}
 	return nil
@@ -111,19 +154,28 @@ func (s *service) Delete(
 
 func (s *service) InsertValues(
 	ctx context.Context,
-	tabelDef *plan.TableDef,
+	tableID uint64,
 	bat *batch.Batch) error {
-	ts := s.getCommittedTableCache(tabelDef.TblId)
-	if ts == nil {
-		if err := s.newCommittedTableCache(ctx, tabelDef); err != nil {
-			return err
-		}
-		ts = s.getCommittedTableCache(tabelDef.TblId)
+	ts, err := s.getCommittedTableCache(
+		ctx,
+		tableID)
+	if err != nil {
+		return err
 	}
-	if ts == nil {
-		return moerr.NewNoSuchTableNoCtx("", tabelDef.Name)
+	return ts.insertAutoValues(ctx, tableID, bat)
+}
+
+func (s *service) CurrentValue(
+	ctx context.Context,
+	tableID uint64,
+	col string) (uint64, error) {
+	ts, err := s.getCommittedTableCache(
+		ctx,
+		tableID)
+	if err != nil {
+		return 0, err
 	}
-	return ts.insertAutoValues(ctx, tabelDef, bat)
+	return ts.currentValue(ctx, tableID, col)
 }
 
 func (s *service) Close() {
@@ -141,75 +193,41 @@ func (s *service) Close() {
 	s.store.Close()
 }
 
-func (s *service) doCreate(
-	ctx context.Context,
-	table *plan.TableDef,
-	txnID []byte,
-	create bool) error {
-	var autoCols []string
-	var steps []int
-	for _, col := range table.Cols {
-		if col.Typ.AutoIncr {
-			autoCols = append(autoCols, col.Name)
-			// TODO: currently, step not supported in auto increment
-			steps = append(steps, 1)
-			if create {
-				if err := s.store.Create(
-					ctx,
-					getStoreKey(table.TblId, col.Name),
-					0,
-					1); err != nil {
-					s.logger.Error("create auto increment cache failed",
-						zap.String("table", table.Name),
-						zap.Uint64("table-id", table.TblId),
-						zap.Bool("create", create),
-						zap.String("txn", hex.EncodeToString(txnID)),
-						zap.Error(err))
-					return err
-				}
-			}
-		}
-	}
-
-	c := newTableCache(
-		ctx,
-		table.TblId,
-		autoCols,
-		steps,
-		s.cacheCapacity,
-		s.allocator)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if create {
-		key := string(txnID)
-		s.mu.creates[key] = append(s.mu.creates[key], c)
-	}
-	s.mu.tables[table.TblId] = c
+func (s *service) doCreateLocked(
+	tableID uint64,
+	c incrTableCache,
+	txnID []byte) error {
+	s.mu.tables[tableID] = c
 	if s.logger.Enabled(zap.DebugLevel) {
 		s.logger.Debug("auto increment cache created",
-			zap.String("table", table.Name),
-			zap.Uint64("table-id", table.TblId),
-			zap.Bool("create", create),
+			zap.Uint64("table-id", tableID),
 			zap.String("txn", hex.EncodeToString(txnID)))
 	}
 	return nil
 }
 
-func (s *service) getCommittedTableCache(tableID uint64) incrTableCache {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.mu.tables[tableID]
-}
-
-func (s *service) newCommittedTableCache(
+func (s *service) getCommittedTableCache(
 	ctx context.Context,
-	tabelDef *plan.TableDef) error {
-	return s.doCreate(
+	tableID uint64) (incrTableCache, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.mu.tables[tableID]
+	if ok {
+		return c, nil
+	}
+
+	cols, err := s.store.GetCloumns(ctx, tableID)
+	if err != nil {
+		return nil, err
+	}
+	c = newTableCache(
 		ctx,
-		tabelDef,
-		nil,
-		false)
+		tableID,
+		cols,
+		s.cacheCapacity,
+		s.allocator)
+	s.doCreateLocked(tableID, c, nil)
+	return c, nil
 }
 
 func (s *service) txnClosed(txnMeta txn.TxnMeta) {
@@ -255,32 +273,25 @@ func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) {
 			zap.Any("tables", tables))
 	}
 	if txnMeta.Status == txn.TxnStatus_Committed {
-		for _, def := range tables {
-			s.destroyTableCacheLocked(def)
+		for _, id := range tables {
+			s.destroyTableCacheLocked(id)
 		}
 	}
 	delete(s.mu.deletes, key)
 }
 
 func (s *service) destroyTableCacheAfterCreatedLocked(tableID uint64) {
-	c, ok := s.mu.tables[tableID]
-	if !ok {
+	if _, ok := s.mu.tables[tableID]; !ok {
 		panic("missing created incr table cache")
 	}
 
-	delete(s.mu.tables, c.table())
-	s.deleteC <- c.keys()
+	delete(s.mu.tables, tableID)
+	s.deleteC <- tableID
 }
 
-func (s *service) destroyTableCacheLocked(def plan.TableDef) {
-	delete(s.mu.tables, def.TblId)
-	keys := make([]string, 0, len(def.Cols))
-	for _, col := range def.Cols {
-		if col.Typ.AutoIncr {
-			keys = append(keys, getStoreKey(def.TblId, col.Name))
-		}
-	}
-	s.deleteC <- keys
+func (s *service) destroyTableCacheLocked(tableID uint64) {
+	delete(s.mu.tables, tableID)
+	s.deleteC <- tableID
 }
 
 func (s *service) deleteTableCache(ctx context.Context) {

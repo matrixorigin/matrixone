@@ -21,57 +21,82 @@ import (
 
 type memStore struct {
 	sync.Mutex
-	caches map[string]uint64
-	steps  map[string]int
+	caches map[uint64][]AutoColumn
 }
 
-func newMemStore() IncrValueStore {
+// NewMemStore new mem store
+func NewMemStore() IncrValueStore {
 	return &memStore{
-		caches: make(map[string]uint64),
-		steps:  make(map[string]int),
+		caches: make(map[uint64][]AutoColumn),
 	}
 }
 
 func (s *memStore) Create(
 	ctx context.Context,
-	key string,
-	value uint64,
-	step int) error {
+	tableID uint64,
+	cols []AutoColumn) error {
 	s.Lock()
 	defer s.Unlock()
-	if _, ok := s.caches[key]; ok {
-		return nil
+	caches := s.caches[tableID]
+	for _, col := range cols {
+		has := false
+		for _, cache := range caches {
+			if cache.ColName == col.ColName {
+				has = true
+				break
+			}
+		}
+		if !has {
+			caches = append(caches, col)
+		}
 	}
-	s.caches[key] = value
-	s.steps[key] = step
+	s.caches[tableID] = caches
 	return nil
+}
+
+func (s *memStore) GetCloumns(
+	ctx context.Context,
+	tableID uint64) ([]AutoColumn, error) {
+	s.Lock()
+	defer s.Unlock()
+	return s.caches[tableID], nil
 }
 
 func (s *memStore) Alloc(
 	ctx context.Context,
+	tableID uint64,
 	key string,
 	count int) (uint64, uint64, error) {
 	s.Lock()
 	defer s.Unlock()
-	curr, ok := s.caches[key]
+	cols, ok := s.caches[tableID]
 	if !ok {
 		panic("missing incr column record")
 	}
-	next := getNext(curr, count, s.steps[key])
-	s.caches[key] = next
-	from, to := getNextRange(curr, next, s.steps[key])
+
+	var c *AutoColumn
+	for i := range cols {
+		if cols[i].ColName == key {
+			c = &cols[i]
+		}
+	}
+	if !ok {
+		panic("missing incr column record")
+	}
+
+	curr := c.Offset
+	next := getNext(curr, count, int(c.Step))
+	c.Offset = next
+	from, to := getNextRange(curr, next, int(c.Step))
 	return from, to, nil
 }
 
 func (s *memStore) Delete(
 	ctx context.Context,
-	keys []string) error {
+	tableID uint64) error {
 	s.Lock()
 	defer s.Unlock()
-	for _, key := range keys {
-		delete(s.caches, key)
-		delete(s.steps, key)
-	}
+	delete(s.caches, tableID)
 	return nil
 }
 

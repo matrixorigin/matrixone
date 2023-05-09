@@ -748,11 +748,17 @@ var (
 		"mo_pubs":                     0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
-	createAutoTableSql           = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
-	createAutoTableSqlNew        = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableNameNew)
+	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
+		table_id   bigint unsigned, 
+		col_name     varchar(770), 
+		col_index      int,
+		offset     bigint unsigned, 
+		step       bigint unsigned,  
+		primary key(table_id, col_name)
+	);`, catalog.AutoIncrTableName)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
-	createMoIndexesSql = `create table mo_indexes(
+	createMoIndexesSql = `create table if not exists mo_indexes(
 				id 			bigint unsigned not null,
 				table_id 	bigint unsigned not null,
 				database_id bigint unsigned not null,
@@ -6400,7 +6406,7 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) error {
+func InitSysTenant(ctx context.Context) error {
 	var err error
 	var exists bool
 	pu := config.GetParameterUnit(ctx)
@@ -6425,7 +6431,7 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) erro
 	defer mpool.DeleteMPool(mp)
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	upstream := &Session{connectCtx: ctx, autoIncrCacheManager: aicm}
+	upstream := &Session{connectCtx: ctx}
 	bh := NewBackgroundHandler(ctx, upstream, mp, pu)
 	defer bh.Close()
 
@@ -6441,11 +6447,6 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) erro
 	}
 
 	err = bh.Exec(ctx, createAutoTableSql)
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, createAutoTableSqlNew)
 	if err != nil {
 		return err
 	}

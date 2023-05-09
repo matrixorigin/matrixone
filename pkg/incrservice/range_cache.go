@@ -49,6 +49,17 @@ func (r *ranges) next() uint64 {
 	return 0
 }
 
+func (r *ranges) current() uint64 {
+	n := r.rangeCount()
+	for i := 0; i < n; i++ {
+		from, to := r.values[2*i], r.values[2*i+1]
+		if from < to {
+			return from
+		}
+	}
+	return 0
+}
+
 func (r *ranges) left() int {
 	v := 0
 	n := r.rangeCount()

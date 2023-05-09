@@ -23,10 +23,11 @@ import (
 )
 
 type alloc struct {
-	ctx   context.Context
-	key   string
-	count int
-	apply func(uint64, uint64, error)
+	ctx     context.Context
+	tableID uint64
+	key     string
+	count   int
+	apply   func(uint64, uint64, error)
 }
 
 type allocator struct {
@@ -50,12 +51,13 @@ func newValueAllocator(store IncrValueStore) valueAllocator {
 
 func (a *allocator) adjust() {
 	if a.store == nil {
-		a.store = newMemStore()
+		a.store = NewMemStore()
 	}
 }
 
 func (a *allocator) alloc(
 	ctx context.Context,
+	tableID uint64,
 	key string,
 	count int) (uint64, uint64, error) {
 	select {
@@ -63,11 +65,12 @@ func (a *allocator) alloc(
 		return 0, 0, ctx.Err()
 	default:
 	}
-	return a.store.Alloc(ctx, key, count)
+	return a.store.Alloc(ctx, tableID, key, count)
 }
 
 func (a *allocator) asyncAlloc(
 	ctx context.Context,
+	tableID uint64,
 	key string,
 	count int,
 	apply func(uint64, uint64, error)) {
@@ -75,10 +78,11 @@ func (a *allocator) asyncAlloc(
 	case <-ctx.Done():
 		apply(0, 0, ctx.Err())
 	case a.c <- alloc{
-		ctx:   ctx,
-		key:   key,
-		count: count,
-		apply: apply,
+		ctx:     ctx,
+		tableID: tableID,
+		key:     key,
+		count:   count,
+		apply:   apply,
 	}:
 	}
 }
@@ -91,6 +95,7 @@ func (a *allocator) run(ctx context.Context) {
 		case alloc := <-a.c:
 			v, next, err := a.alloc(
 				alloc.ctx,
+				alloc.tableID,
 				alloc.key,
 				alloc.count)
 			if a.logger.Enabled(zap.DebugLevel) {

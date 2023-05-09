@@ -17,10 +17,20 @@ package incrservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
+
+// GetAutoIncrementService get increment service from process level runtime
+func GetAutoIncrementService() AutoIncrementService {
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrmentService)
+	if !ok {
+		return nil
+	}
+	return v.(AutoIncrementService)
+}
 
 // AutoIncrementService provides data service for the columns of auto-incremenet.
 // Each CN contains a service instance. Whenever a table containing an auto-increment
@@ -32,13 +42,18 @@ type AutoIncrementService interface {
 	// into catalog.AutoIncrTableName before the transaction that created the table is committed.
 	// When the transaction that created the table is rolled back, the corresponding records in
 	// catalog.AutoIncrTableName are deleted.
-	Create(ctx context.Context, table *plan.TableDef, txn client.TxnOperator) error
+	Create(ctx context.Context, tableID uint64, caches []AutoColumn, txn client.TxnOperator) error
+	// Reset consists of delete+create, if keep is true, then the new self-incrementing column cache
+	// will retain the value of the old cache
+	Reset(ctx context.Context, oldTableID, newTableID uint64, keep bool, txn client.TxnOperator) error
 	// Delete until the delete table transaction is committed, no operation is performed, only the
 	// records to be deleted are recorded. When the delete table transaction is committed, the
 	// delete operation is triggered.
-	Delete(ctx context.Context, table *plan.TableDef, txn client.TxnOperator) error
+	Delete(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// InsertValues insert auto columns values into bat.
-	InsertValues(ctx context.Context, tabelDef *plan.TableDef, bat *batch.Batch) error
+	InsertValues(ctx context.Context, tableID uint64, bat *batch.Batch) error
+	// CurrentValue return current incr column value.
+	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	// Close close the auto increment service
 	Close()
 }
@@ -76,24 +91,53 @@ type AutoIncrementService interface {
 // allocations for one write.
 type incrTableCache interface {
 	table() uint64
-	keys() []string
-	insertAutoValues(ctx context.Context, tabelDef *plan.TableDef, bat *batch.Batch) error
+	columns() []AutoColumn
+	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch) error
+	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 }
 
 type valueAllocator interface {
-	alloc(ctx context.Context, key string, count int) (uint64, uint64, error)
-	asyncAlloc(ctx context.Context, key string, count int, cb func(uint64, uint64, error))
+	alloc(ctx context.Context, tableID uint64, key string, count int) (uint64, uint64, error)
+	asyncAlloc(ctx context.Context, tableID uint64, key string, count int, cb func(uint64, uint64, error))
 	close()
 }
 
 // IncrValueStore is used to add and delete metadata records for auto-increment columns.
 type IncrValueStore interface {
+	// GetCloumns return auto columns of table.
+	GetCloumns(ctx context.Context, tableID uint64) ([]AutoColumn, error)
 	// Create add metadata records into catalog.AutoIncrTableName.
-	Create(ctx context.Context, key string, value uint64, step int) error
+	Create(ctx context.Context, tableID uint64, cols []AutoColumn) error
 	// Alloc alloc new range for auto-increment column.
-	Alloc(ctx context.Context, key string, count int) (uint64, uint64, error)
+	Alloc(ctx context.Context, tableID uint64, col string, count int) (uint64, uint64, error)
 	// Delete remove metadata records from catalog.AutoIncrTableName.
-	Delete(ctx context.Context, keys []string) error
+	Delete(ctx context.Context, tableID uint64) error
 	// Close the store
 	Close()
+}
+
+// AutoColumn model
+type AutoColumn struct {
+	TableID  uint64 `gorm:"column:table_id;primaryKey"`
+	ColName  string `gorm:"column:col_name;primaryKey"`
+	ColIndex int    `gorm:"column:col_index"`
+	Offset   uint64 `gorm:"column:offset"`
+	Step     uint64 `gorm:"column:step"`
+}
+
+// GetAutoColumnFromDef get auto columns from table def
+func GetAutoColumnFromDef(def *plan.TableDef) []AutoColumn {
+	var cols []AutoColumn
+	for i, col := range def.Cols {
+		if col.Typ.AutoIncr {
+			cols = append(cols, AutoColumn{
+				ColName:  col.Name,
+				TableID:  def.TblId,
+				Step:     1,
+				Offset:   0,
+				ColIndex: i,
+			})
+		}
+	}
+	return cols
 }

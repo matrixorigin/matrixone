@@ -23,12 +23,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -38,14 +40,24 @@ func NewProcess() *process.Process {
 	return NewProcessWithMPool(mp)
 }
 
+func SetupAutoIncrService() {
+	rt := runtime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
+		runtime.SetupProcessLevelRuntime(rt)
+	}
+	rt.SetGlobalVariables(runtime.AutoIncrmentService,
+		incrservice.NewIncrService(incrservice.NewMemStore(), 10))
+}
+
 func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
+	SetupAutoIncrService()
 	proc := process.New(
 		context.Background(),
 		mp,
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
-		nil,
 		nil,
 	)
 	proc.Lim.Size = 1 << 20

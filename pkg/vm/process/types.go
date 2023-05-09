@@ -26,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -171,6 +171,7 @@ type Process struct {
 
 	FileService fileservice.FileService
 	LockService lockservice.LockService
+	IncrService incrservice.AutoIncrementService
 
 	LoadTag bool
 
@@ -179,8 +180,6 @@ type Process struct {
 	LoadLocalReader *io.PipeReader
 
 	DispatchNotifyCh chan WrapCs
-
-	Aicm *defines.AutoIncrCacheManager
 }
 
 type vectorPool struct {
@@ -218,13 +217,6 @@ func (proc *Process) GetLastInsertID() uint64 {
 		return *proc.LastInsertID
 	}
 	return 0
-}
-
-func (proc *Process) SetCacheForAutoCol(name string) {
-	aicm := proc.Aicm
-	aicm.Mu.Lock()
-	defer aicm.Mu.Unlock()
-	aicm.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: 0, MaxNum: aicm.MaxSize, Step: 1}
 }
 
 type analyze struct {
