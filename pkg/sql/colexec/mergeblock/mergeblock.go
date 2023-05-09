@@ -40,7 +40,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return true, nil
 	}
 
+	defer proc.PutBatch(bat)
 	if len(bat.Zs) == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 

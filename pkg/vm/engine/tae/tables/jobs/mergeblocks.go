@@ -193,7 +193,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		// }
 	}
 
-	schema := task.mergedBlks[0].GetSchema()
+	// merge data according to the schema at startTs
+	schema := task.rel.Schema().(*catalog.Schema)
 	var view *model.ColumnView
 	sortVecs := make([]containers.Vector, 0)
 	rows := make([]uint32, 0)
@@ -213,12 +214,14 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
 
-	idxes := make([]uint16, 0)
+	idxes := make([]uint16, 0, len(schema.ColDefs)-1)
+	seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
 		}
 		idxes = append(idxes, uint16(def.Idx))
+		seqnums = append(seqnums, def.SeqNum)
 	}
 	for _, block := range task.compacted {
 		err = block.Prefetch(idxes)
@@ -329,7 +332,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 
 	name := objectio.BuildObjectName(&task.toSegEntry.ID, 0)
-	writer, err := blockio.NewBlockWriterNew(task.mergedBlks[0].GetBlockData().GetFs().Service, name)
+	writer, err := blockio.NewBlockWriterNew(task.mergedBlks[0].GetBlockData().GetFs().Service, name, schema.Version, seqnums)
 	if err != nil {
 		return err
 	}

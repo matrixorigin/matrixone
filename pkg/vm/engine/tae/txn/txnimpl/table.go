@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 	"fmt"
+	"runtime/trace"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -99,6 +100,8 @@ type txnTable struct {
 	entry        *catalog.TableEntry
 	schema       *catalog.Schema
 	logs         []wal.LogEntry
+
+	dedupedSegmentHint uint64
 
 	txnEntries *txnEntries
 	csnStart   uint32
@@ -603,6 +606,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 				bat, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
+					nil,
 					loc.ID(),
 					nil,
 				)
@@ -767,7 +771,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isN
 		panic(err)
 	}
 	block := meta.GetBlockData()
-	return block.GetValue(tbl.store.txn, int(row), int(col))
+	return block.GetValue(tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col))
 }
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
@@ -810,19 +814,18 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 
 func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
 	switch req.Kind {
-	case apipb.AlterKind_UpdateConstraint, apipb.AlterKind_UpdateComment:
+	case apipb.AlterKind_UpdateConstraint, apipb.AlterKind_UpdateComment, apipb.AlterKind_AddColumn, apipb.AlterKind_DropColumn:
 	default:
 		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.store.txn.GetMemo().AddCatalogChange()
-	isNewNode, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
+	isNewNode, newSchema, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
+	tbl.schema = newSchema // update new schema to txn local schema
 	if isNewNode {
 		tbl.txnEntries.Append(tbl.entry)
 	}
-	//TODO(aptend):
-	// 1.update local schema
-	// 2.handle written data in localseg, keep the batch aligned with the new schema
+	//TODO(aptend): handle written data in localseg, keep the batch aligned with the new schema
 	return err
 }
 
@@ -863,6 +866,15 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	}
 	return
 }
+func (tbl *txnTable) updateDedupedSegmentHint(hint uint64) {
+	if tbl.dedupedSegmentHint == 0 {
+		tbl.dedupedSegmentHint = hint
+		return
+	}
+	if tbl.dedupedSegmentHint > hint {
+		tbl.dedupedSegmentHint = hint
+	}
+}
 
 // DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
@@ -870,8 +882,13 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	h := newRelation(tbl)
 	it := newRelationBlockItOnSnap(h)
+	maxSegmentHint := uint64(0)
 	for it.Valid() {
 		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		segmentHint := blk.GetSegment().SortHint
+		if segmentHint > maxSegmentHint {
+			maxSegmentHint = segmentHint
+		}
 		blkData := blk.GetBlockData()
 		if blkData == nil {
 			it.Next()
@@ -891,6 +908,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 		}
 		it.Next()
 	}
+	tbl.updateDedupedSegmentHint(maxSegmentHint)
 	return
 }
 
@@ -927,6 +945,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 				bat, err := reader.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
+					nil,
 					loc.ID(),
 					nil,
 				)
@@ -956,67 +975,72 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
-	segIt := tbl.entry.MakeSegmentIt(false)
-	for segIt.Valid() {
-		seg := segIt.Get().GetPayload()
-		{
-			seg.RLock()
-			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
-			//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
-			//if needwait {
-			//	seg.RUnlock()
-			//	txnToWait.GetTxnState(true)
-			//	seg.RLock()
-			//}
-			shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
-			seg.RUnlock()
-			if shouldSkip {
+	trace.WithRegion(context.Background(), "DoPrecommitDedupByPK", func() {
+		segIt := tbl.entry.MakeSegmentIt(false)
+		for segIt.Valid() {
+			seg := segIt.Get().GetPayload()
+			if seg.SortHint < tbl.dedupedSegmentHint {
+				break
+			}
+			{
+				seg.RLock()
+				//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
+				//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+				//if needwait {
+				//	seg.RUnlock()
+				//	txnToWait.GetTxnState(true)
+				//	seg.RLock()
+				//}
+				shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
+				seg.RUnlock()
+				if shouldSkip {
+					segIt.Next()
+					continue
+				}
+			}
+			segData := seg.GetSegmentData()
+			// TODO: Add a new batch dedup method later
+			if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+				return
+			}
+			if err == nil {
 				segIt.Next()
 				continue
 			}
-		}
-		segData := seg.GetSegmentData()
-		// TODO: Add a new batch dedup method later
-		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			return
-		}
-		if err == nil {
+			var shouldSkip bool
+			err = nil
+			blkIt := seg.MakeBlockIt(false)
+			for blkIt.Valid() {
+				blk := blkIt.Get().GetPayload()
+				{
+					blk.RLock()
+					shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
+					blk.RUnlock()
+					if shouldSkip {
+						blkIt.Next()
+						continue
+					}
+				}
+				blkData := blk.GetBlockData()
+				var rowmask *roaring.Bitmap
+				if len(tbl.deleteNodes) > 0 {
+					if tbl.store.warChecker.HasConflict(blk.ID) {
+						continue
+					}
+					fp := blk.AsCommonID()
+					deleteNode := tbl.deleteNodes[*fp]
+					if deleteNode != nil {
+						rowmask = deleteNode.GetRowMaskRefLocked()
+					}
+				}
+				if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true); err != nil {
+					return
+				}
+				blkIt.Next()
+			}
 			segIt.Next()
-			continue
 		}
-		var shouldSkip bool
-		err = nil
-		blkIt := seg.MakeBlockIt(false)
-		for blkIt.Valid() {
-			blk := blkIt.Get().GetPayload()
-			{
-				blk.RLock()
-				shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
-				blk.RUnlock()
-				if shouldSkip {
-					blkIt.Next()
-					continue
-				}
-			}
-			blkData := blk.GetBlockData()
-			var rowmask *roaring.Bitmap
-			if len(tbl.deleteNodes) > 0 {
-				if tbl.store.warChecker.HasConflict(blk.ID) {
-					continue
-				}
-				fp := blk.AsCommonID()
-				deleteNode := tbl.deleteNodes[*fp]
-				if deleteNode != nil {
-					rowmask = deleteNode.GetRowMaskRefLocked()
-				}
-			}
-			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true); err != nil {
-				return
-			}
-			blkIt.Next()
-		}
-		segIt.Next()
-	}
+	})
 	return
 }
 

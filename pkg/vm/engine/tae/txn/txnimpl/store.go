@@ -15,6 +15,8 @@
 package txnimpl
 
 import (
+	"context"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -386,7 +388,14 @@ func (store *txnStore) ObserveTxn(
 				for _, node := range tbl.localSegment.nodes {
 					anode, ok := node.(*anode)
 					if ok {
-						visitAppend(anode.storage.mnode.data)
+						schema := anode.table.GetLocalSchema()
+						bat := &containers.BatchWithVersion{
+							Version:    schema.Version,
+							NextSeqnum: uint16(schema.Extra.NextColSeqnum),
+							Seqnums:    schema.AllSeqnums(),
+							Batch:      anode.storage.mnode.data,
+						}
+						visitAppend(bat)
 					}
 				}
 			}
@@ -578,12 +587,14 @@ func (store *txnStore) WaitPrepared() (err error) {
 			return
 		}
 	}
-	for _, e := range store.logs {
-		if err = e.WaitDone(); err != nil {
-			break
+	trace.WithRegion(context.Background(), "Wait for WAL to be flushed", func() {
+		for _, e := range store.logs {
+			if err = e.WaitDone(); err != nil {
+				break
+			}
+			e.Free()
 		}
-		e.Free()
-	}
+	})
 	store.wg.Wait()
 	return
 }

@@ -15,10 +15,15 @@
 package objectio
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 func ReadExtent(
@@ -114,6 +119,7 @@ func ReadOneBlockWithMeta(
 	name string,
 	blk uint16,
 	idxs []uint16,
+	typs []types.Type,
 	m *mpool.MPool,
 	fs fileservice.FileService,
 	factory CacheConstructorFactory,
@@ -122,8 +128,42 @@ func ReadOneBlockWithMeta(
 		FilePath: name,
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
-	for _, col := range idxs {
-		col := meta.GetColumnMeta(uint32(blk), col)
+	var filledEntries []fileservice.IOEntry
+	blkmeta := meta.GetBlockMeta(uint32(blk))
+	maxSeqnum := blkmeta.GetMaxSeqnum()
+	for i, seqnum := range idxs {
+		// special columns
+		if seqnum >= SEQNUM_UPPER {
+			metaColCnt := blkmeta.GetMetaColumnCount()
+			// read appendable block file, the last columns is commits and abort
+			if seqnum == SEQNUM_COMMITTS {
+				seqnum = metaColCnt - 2
+			} else if seqnum == SEQNUM_ABORT {
+				seqnum = metaColCnt - 1
+			} else {
+				panic(fmt.Sprintf("bad path to read special column %d", seqnum))
+			}
+			col := blkmeta.ColumnMeta(seqnum)
+			ext := col.Location()
+			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
+				Offset:        int64(ext.Offset()),
+				Size:          int64(ext.Length()),
+				ToObjectBytes: factory(int64(ext.OriginSize()), ext.Alg()),
+			})
+			continue
+		}
+
+		// need fill vector
+		if seqnum > maxSeqnum || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
+			filledEntries = make([]fileservice.IOEntry, len(idxs))
+			filledEntries[i] = fileservice.IOEntry{
+				Size: int64(seqnum), // a marker
+			}
+			continue
+		}
+
+		// read written normal column
+		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
 		ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 			Offset:        int64(ext.Offset()),
@@ -131,7 +171,39 @@ func ReadOneBlockWithMeta(
 			ToObjectBytes: factory(int64(ext.OriginSize()), ext.Alg()),
 		})
 	}
-	err = fs.Read(ctx, ioVec)
+	if len(ioVec.Entries) > 0 {
+		err = fs.Read(ctx, ioVec)
+		if err != nil {
+			return
+		}
+	}
+
+	if filledEntries != nil {
+		if len(typs) == 0 {
+			panic(fmt.Sprintf("block %s generate need typs", meta.BlockHeader().BlockID().String()))
+		}
+		length := int(blkmeta.GetRows())
+		readed := ioVec.Entries
+		// need to generate vector
+		for i := range filledEntries {
+			if filledEntries[i].Size == 0 {
+				filledEntries[i] = readed[0]
+				readed = readed[1:]
+			} else {
+				logutil.Infof("block %s generate seqnum %d %v",
+					meta.BlockHeader().BlockID().String(), filledEntries[i].Size, typs[i])
+				buf := &bytes.Buffer{}
+				buf.Write(EncodeIOEntryHeader(&IOEntryHeader{Type: IOET_ColData, Version: IOET_ColumnData_CurrVer}))
+				err = containers.FillCNConstVector(length, typs[i], nil, m).MarshalBinaryWithBuffer(buf)
+				if err != nil {
+					return
+				}
+				filledEntries[i].ObjectBytes = buf.Bytes()
+			}
+		}
+		ioVec.Entries = filledEntries
+	}
+
 	return
 }
 
@@ -150,8 +222,13 @@ func ReadMultiBlocksWithMeta(
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
 	for _, opt := range options {
-		for col := range opt.Idxes {
-			col := meta.GetColumnMeta(uint32(opt.Id), col)
+		for seqnum := range opt.Idxes {
+			blkmeta := meta.GetBlockMeta(uint32(opt.Id))
+			if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
+				// prefetch, do not generate
+				continue
+			}
+			col := blkmeta.ColumnMeta(seqnum)
 			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 				Offset: int64(col.Location().Offset()),
 				Size:   int64(col.Location().Length()),
@@ -181,8 +258,13 @@ func ReadAllBlocksWithMeta(
 		NoCache:  noLRUCache,
 	}
 	for blk := uint32(0); blk < meta.BlockCount(); blk++ {
-		for _, colIdx := range cols {
-			col := meta.GetColumnMeta(blk, colIdx)
+		for _, seqnum := range cols {
+			blkmeta := meta.GetBlockMeta(blk)
+			if seqnum > blkmeta.GetMaxSeqnum() || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
+				// prefetch, do not generate
+				panic("ReadAllBlocksWithMeta expect no schema changes")
+			}
+			col := blkmeta.ColumnMeta(seqnum)
 			ext := col.Location()
 			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
 				Offset: int64(ext.Offset()),

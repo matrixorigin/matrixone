@@ -19,12 +19,24 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
+
+func FillConstVector(length int, typ types.Type, defautV any) Vector {
+	// TODO(aptend): use default value
+	vec := movec.NewConstNull(typ, length, common.DefaultAllocator)
+	return ToDNVector(vec)
+}
+
+func FillCNConstVector(length int, typ types.Type, defautV any, m *mpool.MPool) *movec.Vector {
+	// TODO(aptend): use default value
+	return movec.NewConstNull(typ, length, m)
+}
 
 // ### Shallow copy Functions
 
@@ -526,6 +538,28 @@ func ForeachWindowFixed[T any](
 	sels *roaring.Bitmap,
 ) (err error) {
 	src := vec.(*vector[T])
+	if src.downstreamVector.IsConst() {
+		var v T
+		isnull := false
+		if src.downstreamVector.IsConstNull() {
+			isnull = true
+		} else {
+			v = movec.GetFixedAt[T](src.downstreamVector, 0)
+		}
+		for i := 0; i < length; i++ {
+			if op != nil {
+				if err = op(v, isnull, i+start); err != nil {
+					break
+				}
+			}
+			if opAny != nil {
+				if err = opAny(v, isnull, i+start); err != nil {
+					break
+				}
+			}
+		}
+		return
+	}
 	slice := movec.MustFixedCol[T](src.downstreamVector)[start : start+length]
 	if sels == nil || sels.IsEmpty() {
 		for i, v := range slice {
@@ -573,6 +607,28 @@ func ForeachWindowVarlen(
 	sels *roaring.Bitmap,
 ) (err error) {
 	src := vec.(*vector[[]byte])
+	if src.downstreamVector.IsConst() {
+		var v []byte
+		isnull := false
+		if src.downstreamVector.IsConstNull() {
+			isnull = true
+		} else {
+			v = src.downstreamVector.GetBytesAt(0)
+		}
+		for i := 0; i < length; i++ {
+			if op != nil {
+				if err = op(v, isnull, i+start); err != nil {
+					break
+				}
+			}
+			if opAny != nil {
+				if err = opAny(v, isnull, i+start); err != nil {
+					break
+				}
+			}
+		}
+		return
+	}
 	slice, area := movec.MustVarlenaRawData(src.downstreamVector)
 	slice = slice[start : start+length]
 	if sels == nil || sels.IsEmpty() {
