@@ -16,10 +16,11 @@ package insert
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
@@ -146,7 +147,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
 		insertBat.Attrs = ap.InsertCtx.Attrs
 		for i := range insertBat.Attrs {
-			vec := vector.NewVec(*bat.Vecs[i].GetType())
+			vec := proc.GetVector(*bat.Vecs[i].GetType())
 			if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
 				return false, err
 			}

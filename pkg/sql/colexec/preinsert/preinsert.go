@@ -16,9 +16,9 @@ package preinsert
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -55,7 +55,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	newBat.Attrs = make([]string, 0, len(arg.Attrs))
 	for idx := range arg.Attrs {
 		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
-		newBat.SetVector(int32(idx), vector.NewVec(*bat.GetVector(int32(idx)).GetType()))
+		newBat.SetVector(int32(idx), proc.GetVector(*bat.GetVector(int32(idx)).GetType()))
 	}
 	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
 		newBat.Clean(proc.GetMPool())
