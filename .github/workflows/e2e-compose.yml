@@ -27,8 +27,8 @@ jobs:
   
       - name: docker compose launch-tae-multi-CN-tae-DN
         run: |    
-          docker version
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
+          docker compose --help
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
           sleep 10
 
@@ -62,10 +62,10 @@ jobs:
         if: ${{ failure() }}
         run: |
           mkdir  -p ${{ github.workspace }}/docker-compose-log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log/cn-0.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/docker-compose-log/cn-1.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/docker-compose-log/dn.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logservice >  ${{ github.workspace }}/docker-compose-log/logservice.log
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/docker-compose-log/cn-0.log
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/docker-compose-log/cn-1.log
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/docker-compose-log/dn.log
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logservice >  ${{ github.workspace }}/docker-compose-log/logservice.log
           mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
@@ -73,7 +73,7 @@ jobs:
       - name: shutdown containers
         if: ${{ always() }}
         run: |
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
           docker volume rm launch-tae-compose_minio_storage
 
       - uses: actions/upload-artifact@v3
@@ -111,7 +111,7 @@ jobs:
           sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-compose/config/cn-1.toml
           cat ./etc/launch-tae-compose/config/cn-0.toml
           cat ./etc/launch-tae-compose/config/cn-1.toml
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
           # wait for ready
           sleep 10
 
@@ -145,10 +145,10 @@ jobs:
         if: ${{ failure() }}
         run: |
           mkdir -p ${{ github.workspace }}/multi-cn-docker-compose-log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/multi-cn-docker-compose-log/cn-0.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/multi-cn-docker-compose-log/cn-1.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/multi-cn-docker-compose-log/dn.log
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logservice >  ${{ github.workspace }}/multi-cn-docker-compose-log/logservice.log
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-0 >   ${{ github.workspace }}/multi-cn-docker-compose-log/cn-0.log
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs cn-1 >   ${{ github.workspace }}/multi-cn-docker-compose-log/cn-1.log
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs dn >  ${{ github.workspace }}/multi-cn-docker-compose-log/dn.log
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN logs logservice >  ${{ github.workspace }}/multi-cn-docker-compose-log/logservice.log
           mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/multi-cn-docker-compose-log
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/multi-cn-docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/multi-cn-docker-compose-log/cn-1-dump-stacks.log
@@ -157,7 +157,7 @@ jobs:
       - name: shutdown containers
         if: ${{ always() }}
         run: |
-          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
+          docker compose --file etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
           docker volume rm launch-tae-compose_minio_storage
 
       - uses: actions/upload-artifact@v3
