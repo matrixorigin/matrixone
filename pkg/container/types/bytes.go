@@ -101,7 +101,8 @@ func (v *Varlena) GetByteSlice(area []byte) []byte {
 
 // See the lifespan comment above.
 func (v *Varlena) GetString(area []byte) string {
-	return string(v.GetByteSlice(area))
+	b := v.GetByteSlice(area)
+	return *(*string)(unsafe.Pointer(&b))
 }
 
 func (v *Varlena) Reset() {
