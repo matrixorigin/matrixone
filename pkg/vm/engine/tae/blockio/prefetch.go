@@ -23,9 +23,10 @@ import (
 // provides the merge function, which can merge the prefetchParams requests of
 // multiple blocks in an object/file
 type prefetchParams struct {
-	ids map[uint16]*objectio.ReadBlockOptions
-	fs  fileservice.FileService
-	key objectio.Location
+	ids    map[uint16]*objectio.ReadBlockOptions
+	fs     fileservice.FileService
+	key    objectio.Location
+	reader *objectio.ObjectReader
 }
 
 func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (prefetchParams, error) {
@@ -38,6 +39,14 @@ func buildPrefetchParams(service fileservice.FileService, key objectio.Location)
 		ids: ids,
 		fs:  service,
 		key: key,
+	}
+}
+
+func buildPrefetchParamsByReader(reader *BlockReader) prefetchParams {
+	ids := make(map[uint16]*objectio.ReadBlockOptions)
+	return prefetchParams{
+		ids:    ids,
+		reader: reader.GetObjectReader(),
 	}
 }
 
@@ -71,7 +80,12 @@ func (p *prefetchParams) mergeIds(ids2 map[uint16]*objectio.ReadBlockOptions) {
 func mergePrefetch(processes []prefetchParams) map[string]prefetchParams {
 	pc := make(map[string]prefetchParams)
 	for _, p := range processes {
-		name := p.key.Name().String()
+		var name string
+		if p.reader != nil {
+			name = p.reader.GetName()
+		} else {
+			name = p.key.Name().String()
+		}
 		old, ok := pc[name]
 		if !ok {
 			pc[name] = p
