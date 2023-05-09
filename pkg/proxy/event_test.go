@@ -139,7 +139,7 @@ func TestKillQueryEvent(t *testing.T) {
 	clientProxy1, _ := net.Pipe()
 	serverProxy1, _ := net.Pipe()
 
-	cc1 := newMockClientConn(clientProxy1, "t1", labelInfo{}, tp.ru, tu1)
+	cc1 := newMockClientConn(clientProxy1, "t1", clientInfo{}, tp.ru, tu1)
 	require.NotNil(t, cc1)
 	sc1 := newMockServerConn(serverProxy1)
 	require.NotNil(t, sc1)
@@ -147,7 +147,7 @@ func TestKillQueryEvent(t *testing.T) {
 	clientProxy2, client2 := net.Pipe()
 	serverProxy2, _ := net.Pipe()
 
-	cc2 := newMockClientConn(clientProxy2, "t1", labelInfo{}, tp.ru, tu2)
+	cc2 := newMockClientConn(clientProxy2, "t1", clientInfo{}, tp.ru, tu2)
 	require.NotNil(t, cc2)
 	sc2 := newMockServerConn(serverProxy2)
 	require.NotNil(t, sc2)
@@ -301,7 +301,7 @@ func TestSetVarEvent(t *testing.T) {
 	clientProxy1, _ := net.Pipe()
 	serverProxy1, _ := net.Pipe()
 
-	cc1 := newMockClientConn(clientProxy1, "t1", labelInfo{}, tp.ru, tu1)
+	cc1 := newMockClientConn(clientProxy1, "t1", clientInfo{}, tp.ru, tu1)
 	require.NotNil(t, cc1)
 	sc1 := newMockServerConn(serverProxy1)
 	require.NotNil(t, sc1)
@@ -309,7 +309,7 @@ func TestSetVarEvent(t *testing.T) {
 	clientProxy2, client2 := net.Pipe()
 	serverProxy2, _ := net.Pipe()
 
-	cc2 := newMockClientConn(clientProxy2, "t1", labelInfo{}, tp.ru, tu2)
+	cc2 := newMockClientConn(clientProxy2, "t1", clientInfo{}, tp.ru, tu2)
 	require.NotNil(t, cc2)
 	sc2 := newMockServerConn(serverProxy2)
 	require.NotNil(t, sc2)

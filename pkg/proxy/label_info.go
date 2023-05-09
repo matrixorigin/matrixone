@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"net"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -32,6 +33,16 @@ type LabelHash string
 type labelInfo struct {
 	Tenant Tenant
 	Labels map[string]string
+}
+
+// clientInfo contains the information of client, e.g. Tenant of the client
+type clientInfo struct {
+	// labelInfo contains tenant and labels of the client
+	labelInfo
+	// username of the client, unique under each tenant
+	username string
+	// originIP that client used to communicate with server
+	originIP net.IP
 }
 
 // sessionVarName is the session variable name which defines the label info.

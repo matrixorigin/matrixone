@@ -53,11 +53,11 @@ func (c *clientConn) handleHandshakeResp() error {
 	}
 
 	// parse tenant information from client login request.
-	if err := c.account.parse(c.mysqlProto.GetUserName()); err != nil {
+	if err := c.clientInfo.parse(c.mysqlProto.GetUserName()); err != nil {
 		return err
 	}
 
-	c.labelInfo = newLabelInfo(c.account.tenant, c.mysqlProto.GetConnectAttrs())
+	c.clientInfo.Labels = c.mysqlProto.GetConnectAttrs()
 	return nil
 }
 

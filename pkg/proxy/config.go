@@ -56,6 +56,9 @@ type Config struct {
 		// RefreshInterval refresh cluster info from hakeeper interval
 		RefreshInterval toml.Duration `toml:"refresh-interval"`
 	}
+	// PluginBackend specifies an optional proxy plugin backend that provide
+	// external routing recommendations
+	PluginBackend *string `toml:"pluginBackend"`
 }
 
 // Option is used to set up configuration.
