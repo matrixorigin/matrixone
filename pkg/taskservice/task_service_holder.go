@@ -171,6 +171,11 @@ func (s *refreshableTaskStorage) Close() error {
 }
 
 func (s *refreshableTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
+	ci := get(ctx)
+	runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.Add begin", zap.String("ctxinfo", ci.String()))
+	defer func() {
+		runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.Add end", zap.String("ctxinfo", ci.String()))
+	}()
 	var v int
 	var err error
 	s.mu.RLock()
@@ -188,6 +193,11 @@ func (s *refreshableTaskStorage) Add(ctx context.Context, tasks ...task.Task) (i
 }
 
 func (s *refreshableTaskStorage) Update(ctx context.Context, tasks []task.Task, conditions ...Condition) (int, error) {
+	ci := get(ctx)
+	runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.Update begin", zap.String("ctxinfo", ci.String()))
+	defer func() {
+		runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.Update end", zap.String("ctxinfo", ci.String()))
+	}()
 	var v int
 	var err error
 	s.mu.RLock()
@@ -205,6 +215,11 @@ func (s *refreshableTaskStorage) Update(ctx context.Context, tasks []task.Task, 
 }
 
 func (s *refreshableTaskStorage) Delete(ctx context.Context, conditions ...Condition) (int, error) {
+	ci := get(ctx)
+	runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.Delete begin", zap.String("ctxinfo", ci.String()))
+	defer func() {
+		runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.Delete end", zap.String("ctxinfo", ci.String()))
+	}()
 	var v int
 	var err error
 	s.mu.RLock()
@@ -222,6 +237,11 @@ func (s *refreshableTaskStorage) Delete(ctx context.Context, conditions ...Condi
 }
 
 func (s *refreshableTaskStorage) Query(ctx context.Context, conditions ...Condition) ([]task.Task, error) {
+	ci := get(ctx)
+	runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.Query begin", zap.String("ctxinfo", ci.String()))
+	defer func() {
+		runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.Query end", zap.String("ctxinfo", ci.String()))
+	}()
 	var v []task.Task
 	var err error
 	s.mu.RLock()
@@ -239,6 +259,11 @@ func (s *refreshableTaskStorage) Query(ctx context.Context, conditions ...Condit
 }
 
 func (s *refreshableTaskStorage) AddCronTask(ctx context.Context, tasks ...task.CronTask) (int, error) {
+	ci := get(ctx)
+	runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.AddCronTask begin", zap.String("ctxinfo", ci.String()))
+	defer func() {
+		runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.AddCronTask end", zap.String("ctxinfo", ci.String()))
+	}()
 	var v int
 	var err error
 	s.mu.RLock()
@@ -256,6 +281,11 @@ func (s *refreshableTaskStorage) AddCronTask(ctx context.Context, tasks ...task.
 }
 
 func (s *refreshableTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
+	ci := get(ctx)
+	runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.QueryCronTask begin", zap.String("ctxinfo", ci.String()))
+	defer func() {
+		runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.QueryCronTask end", zap.String("ctxinfo", ci.String()))
+	}()
 	var v []task.CronTask
 	var err error
 	s.mu.RLock()
@@ -273,6 +303,11 @@ func (s *refreshableTaskStorage) QueryCronTask(ctx context.Context) ([]task.Cron
 }
 
 func (s *refreshableTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.CronTask, task task.Task) (int, error) {
+	ci := get(ctx)
+	runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.UpdateCronTask begin", zap.String("ctxinfo", ci.String()))
+	defer func() {
+		runtime.ProcessLevelRuntime().Logger().Info("refreshableTaskStorage.UpdateCronTask end", zap.String("ctxinfo", ci.String()))
+	}()
 	var v int
 	var err error
 	s.mu.RLock()

@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"sort"
 	"sync"
 
@@ -53,6 +54,7 @@ func (s *memTaskStorage) Close() error {
 }
 
 func (s *memTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
+	runtime.ProcessLevelRuntime().Logger().Info("memTaskStorage.Add begin")
 	s.Lock()
 	defer s.Unlock()
 
@@ -71,6 +73,7 @@ func (s *memTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, erro
 }
 
 func (s *memTaskStorage) Update(ctx context.Context, tasks []task.Task, conds ...Condition) (int, error) {
+	runtime.ProcessLevelRuntime().Logger().Info("memTaskStorage.Update begin")
 	if s.preUpdate != nil {
 		s.preUpdate()
 	}
@@ -94,6 +97,7 @@ func (s *memTaskStorage) Update(ctx context.Context, tasks []task.Task, conds ..
 }
 
 func (s *memTaskStorage) Delete(ctx context.Context, conds ...Condition) (int, error) {
+	runtime.ProcessLevelRuntime().Logger().Info("memTaskStorage.Delete begin")
 	c := conditions{}
 	for _, cond := range conds {
 		cond(&c)
@@ -117,6 +121,7 @@ func (s *memTaskStorage) Delete(ctx context.Context, conds ...Condition) (int, e
 }
 
 func (s *memTaskStorage) Query(ctx context.Context, conds ...Condition) ([]task.Task, error) {
+	runtime.ProcessLevelRuntime().Logger().Info("memTaskStorage.Query begin")
 	s.RLock()
 	defer s.RUnlock()
 
@@ -144,6 +149,7 @@ func (s *memTaskStorage) Query(ctx context.Context, conds ...Condition) ([]task.
 }
 
 func (s *memTaskStorage) AddCronTask(ctx context.Context, tasks ...task.CronTask) (int, error) {
+	runtime.ProcessLevelRuntime().Logger().Info("memTaskStorage.AddCronTask begin")
 	s.Lock()
 	defer s.Unlock()
 
@@ -162,6 +168,7 @@ func (s *memTaskStorage) AddCronTask(ctx context.Context, tasks ...task.CronTask
 }
 
 func (s *memTaskStorage) QueryCronTask(context.Context) ([]task.CronTask, error) {
+	runtime.ProcessLevelRuntime().Logger().Info("memTaskStorage.QueryCronTask begin")
 	s.Lock()
 	defer s.Unlock()
 
@@ -174,6 +181,7 @@ func (s *memTaskStorage) QueryCronTask(context.Context) ([]task.CronTask, error)
 }
 
 func (s *memTaskStorage) UpdateCronTask(ctx context.Context, cron task.CronTask, value task.Task) (int, error) {
+	runtime.ProcessLevelRuntime().Logger().Info("memTaskStorage.UpdateCronTask begin")
 	s.Lock()
 	defer s.Unlock()
 

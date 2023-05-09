@@ -16,6 +16,8 @@ package taskservice
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -246,4 +248,19 @@ type TaskServiceHolder interface {
 
 type TaskStorageFactory interface {
 	Create(address string) (TaskStorage, error)
+}
+
+type CtxKey struct {
+}
+
+type CtxInfo struct {
+	From     string
+	Uuid     string
+	Start    time.Time
+	Deadline time.Time
+}
+
+func (ci *CtxInfo) String() string {
+	return fmt.Sprintf("from: %s, fromUuid: %s, Start: %s fromStart:%v farawayToDeadline:%v",
+		ci.From, ci.Uuid, ci.Start, time.Since(ci.Start), ci.Deadline.Sub(time.Now()))
 }

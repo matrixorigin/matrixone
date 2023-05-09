@@ -16,6 +16,7 @@ package task
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -111,11 +112,26 @@ func (s *scheduler) queryTasks(status task.TaskStatus) []task.Task {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulerDefaultTimeout)
+	d, _ := ctx.Deadline()
+	ci := &taskservice.CtxInfo{
+		From:     "scheduler",
+		Uuid:     uuid.New().String(),
+		Start:    time.Now(),
+		Deadline: d,
+	}
+	ctx = context.WithValue(ctx, taskservice.CtxKey{}, ci)
 	defer cancel()
 
+	runtime.ProcessLevelRuntime().Logger().Info("ts.QueryTask",
+		zap.Int("scheduler.queryTasks", 1),
+		zap.String("ctxinfo", ci.String()))
 	tasks, err := ts.QueryTask(ctx, taskservice.WithTaskStatusCond(taskservice.EQ, status))
+	runtime.ProcessLevelRuntime().Logger().Info("ts.QueryTask",
+		zap.Int("scheduler.queryTasks", 2),
+		zap.String("ctxinfo", ci.String()))
 	if err != nil {
 		runtime.ProcessLevelRuntime().Logger().Error("failed to query tasks",
+			zap.String("ctxinfo", ci.String()),
 			zap.String("status", status.String()),
 			zap.Error(err))
 		return nil

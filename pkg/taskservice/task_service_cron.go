@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"sync"
 	"time"
 
@@ -85,16 +86,22 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 	timer := time.NewTimer(fetchInterval)
 	defer timer.Stop()
 
+	counter := 0
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
 			c, cancel := context.WithTimeout(ctx, time.Second*10)
+			f := zap.Int("counter", counter)
+			s.rt.Logger().Info("query cron tasks 1", f)
 			tasks, err := s.QueryCronTask(c)
+			s.rt.Logger().Info("query cron tasks 2", f)
 			cancel()
 			if err != nil {
 				s.rt.Logger().Error("query cron tasks failed",
+					f,
 					zap.Error(err))
 				break
 			}
@@ -106,6 +113,7 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 
 			s.crons.Lock()
 			s.rt.Logger().Info("new cron tasks fetched",
+				f,
 				zap.Int("current-count", len(s.crons.jobs)),
 				zap.Int("fetch-count", len(tasks)))
 
@@ -130,6 +138,7 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 			s.crons.Unlock()
 		}
 		timer.Reset(fetchInterval)
+		counter++
 	}
 }
 
@@ -298,6 +307,15 @@ func (j *cronJob) doRun() {
 	newTask.UpdateAt = now.UnixMilli()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	d, _ := ctx.Deadline()
+	ci := &CtxInfo{
+		From:     "cronjob",
+		Uuid:     uuid.New().String(),
+		Start:    time.Now(),
+		Deadline: d,
+	}
+	cii := ci.String()
+	ctx = context.WithValue(ctx, CtxKey{}, ci)
 	defer cancel()
 
 	newTask.TriggerTimes++
@@ -305,13 +323,16 @@ func (j *cronJob) doRun() {
 	value.ParentTaskID = value.Metadata.ID
 	value.Metadata.ID = fmt.Sprintf("%s:%d", value.ParentTaskID, newTask.TriggerTimes)
 
+	j.s.rt.Logger().Info("trigger cron task 1", zap.String("ctxinfo", cii))
 	_, err := j.s.store.UpdateCronTask(ctx, newTask, value)
 	if err != nil {
 		j.s.rt.Logger().Error("trigger cron task failed",
+			zap.String("ctxinfo", cii),
 			zap.String("cron-task", j.task.Metadata.ID),
 			zap.Error(err))
 		j.s.addToRetrySchedule(j.task)
 		return
 	}
+	j.s.rt.Logger().Info("trigger cron task 2", zap.String("ctxinfo", cii))
 	j.task = newTask
 }
