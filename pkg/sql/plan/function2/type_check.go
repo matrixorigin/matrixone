@@ -292,6 +292,20 @@ func setMaxScaleFromSource(t *types.Type, source []types.Type) {
 	}
 }
 
+func setMaxWidthFromSource(t *types.Type, source []types.Type) {
+	t.Width = -1
+	for i := range source {
+		if source[i].Oid == t.Oid || source[i].Oid.IsMySQLString() {
+			if source[i].Width > t.Width {
+				t.Width = source[i].Width
+			}
+		}
+	}
+	if t.Width == -1 {
+		t.Width = types.MaxVarBinaryLen
+	}
+}
+
 func setMaxScaleForAll(source []types.Type) {
 	maxScale := int32(math.MinInt32)
 	maxWidth := int32(math.MinInt32)
