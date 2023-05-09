@@ -26,23 +26,17 @@ func Length(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	if inputVector.IsConstNull() {
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
-	ivals := vector.MustStrCol(inputVector)
 	if inputVector.IsConst() {
-		return vector.NewConstFixed(rtyp, int64(len(ivals[0])), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstFixed(rtyp, int64(len(inputVector.GetBytesAt(0))), ivecs[0].Length(), proc.Mp()), nil
 	} else {
-		rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), inputVector.GetNulls())
+		rvec, err := proc.AllocVectorOfRows(rtyp, inputVector.Length(), inputVector.GetNulls())
 		if err != nil {
 			return nil, err
 		}
 		rvals := vector.MustFixedCol[int64](rvec)
-		strLength(ivals, rvals)
+		for i := 0; i < inputVector.Length(); i++ {
+			rvals[i] = int64(len(inputVector.GetBytesAt(i)))
+		}
 		return rvec, nil
 	}
-}
-
-func strLength(xs []string, rs []int64) []int64 {
-	for i, s := range xs {
-		rs[i] = int64(len(s))
-	}
-	return rs
 }
