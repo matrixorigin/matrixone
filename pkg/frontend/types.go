@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -83,10 +84,12 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	Name        string
-	PreparePlan *plan.Plan
-	PrepareStmt tree.Statement
-	ParamTypes  []byte
+	Name           string
+	PreparePlan    *plan.Plan
+	PrepareStmt    tree.Statement
+	ParamTypes     []byte
+	IsInsertValues bool
+	InsertBat      *batch.Batch
 }
 
 /*

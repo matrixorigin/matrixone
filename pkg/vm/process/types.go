@@ -181,6 +181,8 @@ type Process struct {
 	DispatchNotifyCh chan WrapCs
 
 	Aicm *defines.AutoIncrCacheManager
+
+	PrepareBatch *batch.Batch
 }
 
 type vectorPool struct {

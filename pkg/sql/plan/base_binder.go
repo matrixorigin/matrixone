@@ -1015,6 +1015,8 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	return retExpr, err
 }
 
+var BindFuncExprImplByPlanExpr = bindFuncExprImplByPlanExpr
+
 func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 

@@ -890,6 +890,27 @@ func (ses *Session) SetTenantInfo(ti *TenantInfo) {
 	ses.tenant = ti
 }
 
+func checkPlanIsInsertValues(p *plan.Plan) (bool, *batch.Batch) {
+	qry := p.GetQuery()
+	if qry != nil && qry.StmtType == plan.Query_INSERT {
+		for _, node := range qry.Nodes {
+			if node.NodeType == plan.Node_VALUE_SCAN {
+				colCount := len(node.TableDef.Cols)
+				bat := batch.NewWithSize(colCount)
+				attrs := make([]string, colCount)
+				for i := 0; i < colCount; i++ {
+					attrs[i] = node.TableDef.Cols[i].Name
+					vec := vector.NewVec(plan2.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ))
+					bat.SetVector(int32(i), vec)
+				}
+				bat.Attrs = attrs
+				return true, bat
+			}
+		}
+	}
+	return false, nil
+}
+
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -898,6 +919,12 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 			return moerr.NewInvalidState(ses.requestCtx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
 		}
 	}
+
+	plan := prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan()
+	isInsertValues, bat := checkPlanIsInsertValues(plan)
+	prepareStmt.IsInsertValues = isInsertValues
+	prepareStmt.InsertBat = bat
+
 	ses.prepareStmts[name] = prepareStmt
 	return nil
 }
