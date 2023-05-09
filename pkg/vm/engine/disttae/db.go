@@ -34,7 +34,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	defer e.Unlock()
 
 	packer, put := e.packerPool.Get()
-	defer put()
+	defer put(packer)
 
 	{
 		parts := make(logtailreplay.Partitions, len(e.dnMap))

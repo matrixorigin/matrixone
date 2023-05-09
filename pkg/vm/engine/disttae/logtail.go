@@ -32,7 +32,7 @@ func consumeEntry(
 ) error {
 
 	packer, put := engine.packerPool.Get()
-	defer put()
+	defer put(packer)
 	state.HandleLogtailEntry(ctx, e, primarySeqnum, packer)
 
 	if logtailreplay.IsMetaTable(e.TableName) {
