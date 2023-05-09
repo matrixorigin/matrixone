@@ -55,37 +55,45 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		// Y should be cast to a same type.
-		allYSame := true
-		t := inputs[1]
-
-		if l%2 == 1 {
-			if inputs[l-1].Oid != t.Oid {
-				allYSame = false
-			}
-		}
-		if allYSame {
-			for i := 1; i < l; i += 2 {
-				if t.Oid != inputs[i].Oid {
-					allYSame = false
-					break
-				}
-			}
-		}
+		//allYSame := true
+		//t := inputs[1]
+		//
+		//if l%2 == 1 {
+		//	if inputs[l-1].Oid != t.Oid {
+		//		allYSame = false
+		//	}
+		//}
+		//if allYSame {
+		//	for i := 1; i < l; i += 2 {
+		//		if t.Oid != inputs[i].Oid {
+		//			allYSame = false
+		//			break
+		//		}
+		//	}
+		//}
 
 		// XXX choose a supported Y type.
 		var source []types.Type
 		minCost := math.MaxInt32
 		retType := types.Type{}
-		if allYSame {
-			source = []types.Type{inputs[1]}
-		} else {
-			source = make([]types.Type, 0, (l+1)/2)
-			for j := 1; j < l; j += 2 {
-				source = append(source, inputs[j])
-			}
-			if l%2 == 1 {
-				source = append(source, inputs[l-1])
-			}
+		//if allYSame {
+		//	source = []types.Type{inputs[1]}
+		//} else {
+		//	source = make([]types.Type, 0, (l+1)/2)
+		//	for j := 1; j < l; j += 2 {
+		//		source = append(source, inputs[j])
+		//	}
+		//	if l%2 == 1 {
+		//		source = append(source, inputs[l-1])
+		//	}
+		//}
+
+		source = make([]types.Type, 0, (l+1)/2)
+		for j := 1; j < l; j += 2 {
+			source = append(source, inputs[j])
+		}
+		if l%2 == 1 {
+			source = append(source, inputs[l-1])
 		}
 
 		target := make([]types.T, len(source))
@@ -103,13 +111,15 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 				retType = rett.ToType()
 				if retType.Oid.IsDecimal() {
 					setMaxScaleFromSource(&retType, source)
+				} else if retType.Oid.IsMySQLString() {
+					setMaxWidthFromSource(&retType, source)
 				}
 			}
 		}
 		if minCost == math.MaxInt32 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if minCost == 0 && !needCast {
+		if minCost == 0 && !needCast && !retType.Oid.IsMySQLString() {
 			return newCheckResultWithSuccess(0)
 		}
 
@@ -339,6 +349,8 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				retType = rett.ToType()
 				if retType.Oid.IsDecimal() {
 					setMaxScaleFromSource(&retType, source)
+				} else if retType.Oid.IsMySQLString() {
+					setMaxWidthFromSource(&retType, source)
 				}
 			}
 		}
@@ -346,7 +358,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		if minCost == math.MaxInt32 {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		if minCost == 0 && !needCast {
+		if minCost == 0 && !needCast && !retType.Oid.IsMySQLString() {
 			return newCheckResultWithSuccess(0)
 		}
 		return newCheckResultWithCast(0, []types.Type{types.T_bool.ToType(), retType, retType})
