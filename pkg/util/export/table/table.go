@@ -467,6 +467,11 @@ func Float64Field(val float64) ColumnField {
 	return ColumnField{Type: TFloat64, Integer: int64(math.Float64bits(val))}
 }
 
+// JsonField will have same effect as StringField
+func JsonField(val string) ColumnField {
+	return ColumnField{Type: TJson, String: val}
+}
+
 func StringField(val string) ColumnField {
 	return ColumnField{Type: TVarchar, String: val}
 }
