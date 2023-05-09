@@ -48,24 +48,21 @@ func (txn *Transaction) getBlockInfos(
 		}
 		var objectName objectio.ObjectNameShort
 		state := states[i]
-		blocks[i] = make([]catalog.BlockInfo, 0, state.Blocks.Len())
-		iter := state.Blocks.Iter()
-		for ok := iter.First(); ok; ok = iter.Next() {
-			entry := iter.Item()
-			if !entry.Visible(ts) {
-				continue
-			}
-			location := entry.BlockInfo.MetaLocation()
+		iter := state.NewBlocksIter(ts)
+		for iter.Next() {
+			entry := iter.Entry()
+			location := entry.MetaLocation()
 			if !objectio.IsSameObjectLocVsShort(location, &objectName) {
 				// Prefetch object meta
 				if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
+					iter.Close()
 					return
 				}
 				objectName = *location.Name().Short()
 			}
 			blocks[i] = append(blocks[i], entry.BlockInfo)
 		}
-		iter.Release()
+		iter.Close()
 	}
 	return
 }
@@ -94,18 +91,20 @@ func (txn *Transaction) WriteBatch(
 	truncate bool) error {
 	txn.readOnly = false
 	bat.Cnt = 1
-	if typ == INSERT && !insertBatchHasRowId {
-		txn.genBlock()
-		len := bat.Length()
-		vec := vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < len; i++ {
-			if err := vector.AppendFixed(vec, txn.genRowId(), false,
-				txn.proc.Mp()); err != nil {
-				return err
+	if typ == INSERT {
+		if !insertBatchHasRowId {
+			txn.genBlock()
+			len := bat.Length()
+			vec := vector.NewVec(types.T_Rowid.ToType())
+			for i := 0; i < len; i++ {
+				if err := vector.AppendFixed(vec, txn.genRowId(), false,
+					txn.proc.Mp()); err != nil {
+					return err
+				}
 			}
+			bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+			bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 		}
-		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
-		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 		// for TestPrimaryKeyCheck
 		if txn.blockId_raw_batch != nil {
 			txn.blockId_raw_batch[*txn.getCurrentBlockId()] = bat

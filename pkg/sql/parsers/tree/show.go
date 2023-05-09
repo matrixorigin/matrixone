@@ -167,7 +167,6 @@ const (
 	ShowCharset
 	ShowCreateUser
 	ShowTriggers
-	ShowProcedureStatus
 	ShowConfig
 	ShowEvents
 	ShowPlugins
@@ -186,8 +185,6 @@ func (s ShowType) String() string {
 		return "create user"
 	case ShowTriggers:
 		return "triggers"
-	case ShowProcedureStatus:
-		return "procedure status"
 	case ShowConfig:
 		return "config"
 	case ShowEvents:
@@ -537,16 +534,21 @@ func NewShowIndex(t TableName, w *Where) *ShowIndex {
 	}
 }
 
-// show Function statement
+// show Function or Procedure statement
 
-type ShowFunctionStatus struct {
+type ShowFunctionOrProcedureStatus struct {
 	showImpl
-	Like  *ComparisonExpr
-	Where *Where
+	Like       *ComparisonExpr
+	Where      *Where
+	IsFunction bool
 }
 
-func (node *ShowFunctionStatus) Format(ctx *FmtCtx) {
-	ctx.WriteString("show function status")
+func (node *ShowFunctionOrProcedureStatus) Format(ctx *FmtCtx) {
+	if node.IsFunction {
+		ctx.WriteString("show function status")
+	} else {
+		ctx.WriteString("show procedure status")
+	}
 	if node.Like != nil {
 		ctx.WriteString(" like ")
 		node.Like.Format(ctx)
@@ -557,13 +559,16 @@ func (node *ShowFunctionStatus) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node *ShowFunctionStatus) GetStatementType() string { return "Show Function Status" }
-func (node *ShowFunctionStatus) GetQueryType() string     { return QueryTypeOth }
+func (node *ShowFunctionOrProcedureStatus) GetStatementType() string {
+	return "Show Function Or Procedure Status"
+}
+func (node *ShowFunctionOrProcedureStatus) GetQueryType() string { return QueryTypeOth }
 
-func NewShowFunctionStatus(l *ComparisonExpr, w *Where) *ShowFunctionStatus {
-	return &ShowFunctionStatus{
-		Like:  l,
-		Where: w,
+func NewShowFunctionOrProcedureStatus(l *ComparisonExpr, w *Where, i bool) *ShowFunctionOrProcedureStatus {
+	return &ShowFunctionOrProcedureStatus{
+		Like:       l,
+		Where:      w,
+		IsFunction: i,
 	}
 }
 

@@ -1150,7 +1150,7 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.ShowVariables{}, true},
 		{&tree.ShowStatus{}, true},
 		{&tree.ShowIndex{}, true},
-		{&tree.ShowFunctionStatus{}, true},
+		{&tree.ShowFunctionOrProcedureStatus{}, true},
 		{&tree.ShowNodeList{}, true},
 		{&tree.ShowLocks{}, true},
 		{&tree.ShowTableNumber{}, true},

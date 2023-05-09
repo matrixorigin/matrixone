@@ -823,16 +823,19 @@ func buildShowNodeList(stmt *tree.ShowNodeList, ctx CompilerContext) (*Plan, err
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
-func buildShowFunctionStatus(stmt *tree.ShowFunctionStatus, ctx CompilerContext) (*Plan, error) {
-	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
-	}
+func buildShowFunctionOrProcedureStatus(stmt *tree.ShowFunctionOrProcedureStatus, ctx CompilerContext) (*Plan, error) {
+	var sql string
+
 	ddlType := plan.DataDefinition_SHOW_TARGET
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError(ctx.GetContext(), "like clause and where clause cannot exist at the same time")
 	}
 
-	sql := fmt.Sprintf("SELECT db as `Db`, name as `Name`, type as `Type`, definer as `Definer`, modified_time as `Modified`, created_time as `Created`, security_type as `Security_type`, comment as `Comment`, character_set_client, collation_connection, database_collation as `Database Collation` FROM %s.mo_user_defined_function", MO_CATALOG_DB_NAME)
+	if stmt.IsFunction {
+		sql = fmt.Sprintf("SELECT db as `Db`, name as `Name`, type as `Type`, definer as `Definer`, modified_time as `Modified`, created_time as `Created`, security_type as `Security_type`, comment as `Comment`, character_set_client, collation_connection, database_collation as `Database Collation` FROM %s.mo_user_defined_function", MO_CATALOG_DB_NAME)
+	} else {
+		sql = fmt.Sprintf("SELECT db as `Db`, name as `Name`, type as `Type`, definer as `Definer`, modified_time as `Modified`, created_time as `Created`, security_type as `Security_type`, comment as `Comment`, character_set_client, collation_connection, database_collation as `Database Collation` FROM %s.mo_stored_procedure", MO_CATALOG_DB_NAME)
+	}
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

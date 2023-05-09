@@ -384,7 +384,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	nspLen := types.DecodeUint32(data[:4])
 	data = data[4:]
 	if nspLen > 0 {
-		if err := v.nsp.Read(data[:nspLen]); err != nil {
+		if err := v.nsp.ReadNoCopy(data[:nspLen]); err != nil {
 			return err
 		}
 		//data = data[nspLen:]

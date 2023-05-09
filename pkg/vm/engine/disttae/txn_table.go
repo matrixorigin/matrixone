@@ -244,6 +244,7 @@ func (tbl *txnTable) reset(newId uint64) {
 
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]byte, err error) {
+	tbl.db.txn.DumpBatch(false, 0)
 	tbl.db.txn.Lock()
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = len(tbl.db.txn.writes)
@@ -623,8 +624,8 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
 		return err
 	}
-	return nil
-	// return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
+
+	return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -1053,7 +1054,7 @@ func (tbl *txnTable) newReader(
 		return nil, err
 	}
 
-	var iter logtailreplay.PartitionStateIter
+	var iter logtailreplay.RowsIter
 	if len(encodedPrimaryKey) > 0 {
 		iter = parts[partitionIndex].NewPrimaryKeyIter(
 			types.TimestampToTS(ts),

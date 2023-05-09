@@ -17,6 +17,7 @@ package restrict
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -48,33 +49,36 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Start()
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
-	vec, err := colexec.EvalExpr(bat, proc, ap.E)
-	if err != nil {
-		bat.Clean(proc.Mp())
-		return false, err
-	}
-	defer vec.Free(proc.Mp())
-	if proc.OperatorOutofMemory(int64(vec.Size())) {
-		return false, moerr.NewOOM(proc.Ctx)
-	}
-	anal.Alloc(int64(vec.Size()))
-	if !vec.GetType().IsBoolean() {
-		return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
-	}
-	bs := vector.MustFixedCol[bool](vec)
-	if vec.IsConst() {
-		if vec.IsConstNull() || !bs[0] {
-			bat.Shrink(nil)
+	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
+	for i := range filterList {
+		vec, err := colexec.EvalExpr(bat, proc, filterList[i])
+		if err != nil {
+			bat.Clean(proc.Mp())
+			return false, err
 		}
-	} else {
-		sels := proc.Mp().GetSels()
-		for i, b := range bs {
-			if b && !vec.GetNulls().Contains(uint64(i)) {
-				sels = append(sels, int64(i))
+		defer vec.Free(proc.Mp())
+		if proc.OperatorOutofMemory(int64(vec.Size())) {
+			return false, moerr.NewOOM(proc.Ctx)
+		}
+		anal.Alloc(int64(vec.Size()))
+		if !vec.GetType().IsBoolean() {
+			return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
+		}
+		bs := vector.MustFixedCol[bool](vec)
+		if vec.IsConst() {
+			if vec.IsConstNull() || !bs[0] {
+				bat.Shrink(nil)
 			}
+		} else {
+			sels := proc.Mp().GetSels()
+			for i, b := range bs {
+				if b && !vec.GetNulls().Contains(uint64(i)) {
+					sels = append(sels, int64(i))
+				}
+			}
+			bat.Shrink(sels)
+			proc.Mp().PutSels(sels)
 		}
-		bat.Shrink(sels)
-		proc.Mp().PutSels(sels)
 	}
 	anal.Output(bat, isLast)
 	proc.SetInputBatch(bat)
