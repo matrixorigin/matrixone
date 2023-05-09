@@ -35,6 +35,11 @@ var (
 			return new(tasks.Job)
 		},
 	}
+	_readerPool = sync.Pool{
+		New: func() any {
+			return new(objectio.ObjectReader)
+		},
+	}
 )
 
 func getJob(
@@ -52,18 +57,10 @@ func putJob(job *tasks.Job) {
 	_jobPool.Put(job)
 }
 
-var (
-	_readerPool = sync.Pool{
-		New: func() any {
-			return new(objectio.ObjectReader)
-		},
-	}
-)
-
 func getReader(
 	fs fileservice.FileService,
 	location objectio.Location) *objectio.ObjectReader {
-	job := _jobPool.Get().(*objectio.ObjectReader)
+	job := _readerPool.Get().(*objectio.ObjectReader)
 	job.Init(location, fs)
 	return job
 }
