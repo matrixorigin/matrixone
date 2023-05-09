@@ -150,7 +150,7 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
-	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NULL) {
+	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
 	}
 
