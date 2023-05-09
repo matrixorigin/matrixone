@@ -45,10 +45,10 @@ func NewPool[T any](
 		finallyFunc: finallyFunc,
 	}
 
+	pool.pool = make([]_PoolElem[T], capacity)
 	for i := uint32(0); i < capacity; i++ {
-		i := i
 		value := newFunc()
-		pool.pool = append(pool.pool, _PoolElem[T]{
+		pool.pool[i] = _PoolElem[T]{
 			Value: value,
 			Put: func() {
 				if resetFunc != nil {
@@ -58,7 +58,7 @@ func NewPool[T any](
 					panic("bad put")
 				}
 			},
-		})
+		}
 	}
 
 	return pool

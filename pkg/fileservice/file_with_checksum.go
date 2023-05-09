@@ -105,7 +105,7 @@ func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error
 		var data []byte
 		var freeData func()
 		data, freeData, err = f.readBlock(blockOffset)
-		defer freeData()
+
 		if err != nil && err != io.EOF {
 			// read error
 			return
@@ -123,6 +123,7 @@ func (f *FileWithChecksum[T]) ReadAt(buf []byte, offset int64) (n int, err error
 			// no more data
 			break
 		}
+		freeData()
 	}
 	return
 }
@@ -144,7 +145,7 @@ func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err erro
 
 		blockOffset, offsetInBlock := f.contentOffsetToBlockOffset(offset)
 		data, freeData, err := f.readBlock(blockOffset)
-		defer freeData()
+
 		if err != nil && err != io.EOF {
 			return 0, err
 		}
@@ -183,6 +184,8 @@ func (f *FileWithChecksum[T]) WriteAt(buf []byte, offset int64) (n int, err erro
 
 		n += nBytes
 		offset += int64(nBytes)
+
+		freeData()
 	}
 
 	return
