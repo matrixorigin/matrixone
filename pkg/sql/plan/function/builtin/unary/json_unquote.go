@@ -47,7 +47,7 @@ func JsonUnquote(vecs []*vector.Vector, proc *process.Process) (ret *vector.Vect
 		return
 	}
 	if vec.IsConst() {
-		v := vector.MustBytesCol(vec)[0]
+		v := vec.GetBytesAt(0)
 		var r string
 		r, err = fSingle(v)
 		if err != nil {

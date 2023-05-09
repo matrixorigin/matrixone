@@ -105,7 +105,7 @@ func AsciiString(ivecs []*vector.Vector, proc *process.Process) (ret *vector.Vec
 		return
 	}
 	if vec.IsConst() {
-		v := vector.MustBytesCol(vec)[0]
+		v := vec.GetBytesAt(0)
 		ret = vector.NewConstFixed(rtyp, ascii.StringSingle(v), vec.Length(), proc.Mp())
 		return
 	}

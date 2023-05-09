@@ -347,23 +347,22 @@ func CompareString(ivecs []*vector.Vector, fn compStringFn, proc *process.Proces
 	}
 
 	if v1.IsConst() && v2.IsConst() {
-		col1, col2 := vector.MustBytesCol(v1), vector.MustBytesCol(v2)
-		return vector.NewConstFixed(boolType, fn(col1[0], col2[0], v1.GetType().Width, v2.GetType().Width), v1.Length(), proc.Mp()), nil
+		return vector.NewConstFixed(boolType, fn(v1.GetBytesAt(0), v2.GetBytesAt(0), v1.GetType().Width, v2.GetType().Width), v1.Length(), proc.Mp()), nil
 	}
 
 	if v1.IsConst() {
-		col1 := vector.MustBytesCol(v1)
 		col2, area := vector.MustVarlenaRawData(v2)
 		length := v2.Length()
 		vec := allocateBoolVector(length, proc)
 		veccol := vector.MustFixedCol[bool](vec)
+		v := v1.GetBytesAt(0)
 		if v2.GetArea() == nil {
 			for i := range veccol {
-				veccol[i] = fn(col1[0], (&col2[i]).ByteSlice(), v1.GetType().Width, v2.GetType().Width)
+				veccol[i] = fn(v, (&col2[i]).ByteSlice(), v1.GetType().Width, v2.GetType().Width)
 			}
 		} else {
 			for i := range veccol {
-				veccol[i] = fn(col1[0], (&col2[i]).GetByteSlice(area), v1.GetType().Width, v2.GetType().Width)
+				veccol[i] = fn(v, (&col2[i]).GetByteSlice(area), v1.GetType().Width, v2.GetType().Width)
 			}
 		}
 		nulls.Or(v2.GetNulls(), nil, vec.GetNulls())
@@ -372,17 +371,17 @@ func CompareString(ivecs []*vector.Vector, fn compStringFn, proc *process.Proces
 
 	if v2.IsConst() {
 		col1, area := vector.MustVarlenaRawData(v1)
-		col2 := vector.MustBytesCol(v2)
 		length := v1.Length()
 		vec := allocateBoolVector(length, proc)
 		veccol := vector.MustFixedCol[bool](vec)
+		v := v2.GetBytesAt(0)
 		if v1.GetArea() == nil {
 			for i := range veccol {
-				veccol[i] = fn((&col1[i]).ByteSlice(), col2[0], v1.GetType().Width, v2.GetType().Width)
+				veccol[i] = fn((&col1[i]).ByteSlice(), v, v1.GetType().Width, v2.GetType().Width)
 			}
 		} else {
 			for i := range veccol {
-				veccol[i] = fn((&col1[i]).GetByteSlice(area), col2[0], v1.GetType().Width, v2.GetType().Width)
+				veccol[i] = fn((&col1[i]).GetByteSlice(area), v, v1.GetType().Width, v2.GetType().Width)
 			}
 		}
 		nulls.Or(v1.GetNulls(), nil, vec.GetNulls())

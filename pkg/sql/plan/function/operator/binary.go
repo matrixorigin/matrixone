@@ -29,21 +29,20 @@ func Binary(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 	}
 
-	ivals := vector.MustBytesCol(ivecs[0])
 	if ivecs[0].IsConst() {
-		return vector.NewConstBytes(rtyp, doBinary(ivals[0]), ivecs[0].Length(), proc.Mp()), nil
+		return vector.NewConstBytes(rtyp, doBinary(ivecs[0].GetBytesAt(0)), ivecs[0].Length(), proc.Mp()), nil
 	}
 
-	rvec, err := proc.AllocVectorOfRows(rtyp, len(ivals), nil)
+	rvec, err := proc.AllocVectorOfRows(rtyp, ivecs[0].Length(), nil)
 	if err != nil {
 		return nil, err
 	}
 
 	nulls.Set(rvec.GetNulls(), ivecs[0].GetNulls())
-	for i, s := range ivals {
+	for i := 0; i < ivecs[0].Length(); i++ {
 		//Check nulls.
 		if !rvec.GetNulls().Contains(uint64(i)) {
-			vector.SetBytesAt(rvec, i, doBinary(s), proc.Mp())
+			vector.SetBytesAt(rvec, i, doBinary(ivecs[0].GetBytesAt(i)), proc.Mp())
 		}
 	}
 	return rvec, nil

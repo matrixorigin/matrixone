@@ -58,13 +58,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	// |  blk_id   |   batch.Marshal(int64 offset)     |  CNBlockOffset | CN Block
 	// |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | DN Blcok
 	// |  blk_id   |   batch.Marshal(int64 offset)     | RawBatchOffset | RawBatch (in txn workspace)
-	blkIds := vector.MustStrCol(bat.GetVector(0))
-	metaLocBats := vector.MustBytesCol(bat.GetVector(1))
+	blkIds := bat.GetVector(0)
+	metaLocBats := bat.GetVector(1)
 	typs := vector.MustFixedCol[int8](bat.GetVector(2))
 	for i := 0; i < bat.Length(); i++ {
-		name = fmt.Sprintf("%s|%d", blkIds[i], typs[i])
+		name = fmt.Sprintf("%s|%d", string(blkIds.GetBytesAt(i)), typs[i])
 		bat := &batch.Batch{}
-		if err := bat.UnmarshalBinary([]byte(metaLocBats[i])); err != nil {
+		if err := bat.UnmarshalBinary(metaLocBats.GetBytesAt(i)); err != nil {
 			return false, err
 		}
 		err = ap.DelSource.Delete(proc.Ctx, bat, name)

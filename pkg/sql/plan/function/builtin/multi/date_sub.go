@@ -215,7 +215,7 @@ func DatetimeSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 func DateStringSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	startVec := ivecs[0]
 	diffVec := ivecs[1]
-	starts := vector.MustStrCol(ivecs[0])
+	starts := ivecs[0]
 	diffs := vector.MustFixedCol[int64](ivecs[1])
 	unit := vector.MustFixedCol[int64](ivecs[2])[0]
 
@@ -224,7 +224,7 @@ func DateStringSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 	if startVec.IsConstNull() || diffVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
 	} else if startVec.IsConst() && diffVec.IsConst() {
-		rval, err := doDateStringSub(starts[0], diffs[0], unit)
+		rval, err := doDateStringSub(string(starts.GetBytesAt(0)), diffs[0], unit)
 		if err != nil {
 			return nil, err
 		}
@@ -241,27 +241,27 @@ func DateStringSub(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 				if rvec.GetNulls().Contains(uint64(i)) {
 					continue
 				}
-				rvals[i], err = doDateStringSub(starts[0], diffs[i], unit)
+				rvals[i], err = doDateStringSub(string(starts.GetBytesAt(0)), diffs[i], unit)
 				if err != nil {
 					return nil, err
 				}
 			}
 		} else if !startVec.IsConst() && diffVec.IsConst() {
-			for i := range starts {
+			for i := 0; i < starts.Length(); i++ {
 				if rvec.GetNulls().Contains(uint64(i)) {
 					continue
 				}
-				rvals[i], err = doDateStringSub(starts[i], diffs[0], unit)
+				rvals[i], err = doDateStringSub(string(starts.GetBytesAt(i)), diffs[0], unit)
 				if err != nil {
 					return nil, err
 				}
 			}
 		} else {
-			for i := range starts {
+			for i := 0; i < starts.Length(); i++ {
 				if rvec.GetNulls().Contains(uint64(i)) {
 					continue
 				}
-				rvals[i], err = doDateStringSub(starts[i], diffs[i], unit)
+				rvals[i], err = doDateStringSub(string(starts.GetBytesAt(i)), diffs[i], unit)
 				if err != nil {
 					return nil, err
 				}

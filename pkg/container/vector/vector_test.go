@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1104,4 +1105,42 @@ func TestWindowWith(t *testing.T) {
 	require.Equal(t, "uuu", string(vec3.GetBytesAt(2)))
 	require.True(t, vec3.GetNulls().Contains(uint64(1)))
 	vec3.Free(mp)
+}
+
+func BenchmarkMustBytesCol(b *testing.B) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_char.ToType())
+	defer vec.Free(mp)
+
+	bs := bytes.Repeat([]byte("x"), 79)
+
+	for i := 0; i < 1; i++ {
+		_ = AppendBytes(vec, bs, false, mp)
+	}
+	b.Run("MustBytesCol", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			vs := MustBytesCol(vec)
+			for j := 0; j < vec.Length(); j++ {
+				_ = vs[j]
+			}
+		}
+	})
+	b.Run("MustVarlenaRawData", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			vs, area := MustVarlenaRawData(vec)
+			for j := 0; j < vec.Length(); j++ {
+				_ = vs[j].GetByteSlice(area)
+			}
+		}
+	})
+	b.Run("GetBytesAt", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			for j := 0; j < vec.Length(); j++ {
+				_ = vec.GetBytesAt(j)
+			}
+		}
+	})
 }

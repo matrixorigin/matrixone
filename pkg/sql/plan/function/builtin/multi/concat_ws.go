@@ -158,8 +158,7 @@ func concatWsWithConstSeparatorAllConst(rtyp types.Type, inputCleaned []*vector.
 func concatWsWithConstSeparator(rtyp types.Type, inputCleaned []*vector.Vector, separator string, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
 	length := 0
 	for i := range inputCleaned {
-		inputI := vector.MustBytesCol(inputCleaned[i])
-		lengthI := len(inputI)
+		lengthI := inputCleaned[i].Length()
 		if lengthI == 0 {
 			length = 0 // this means that one column that needs to be concatenated is empty
 			break

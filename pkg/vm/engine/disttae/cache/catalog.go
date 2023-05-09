@@ -327,7 +327,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	viewDefs := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_VIEWDEF_IDX + MO_OFF))
 	partitioneds := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
 	paritions := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_PARTITION_INFO_IDX + MO_OFF))
-	constraints := vector.MustBytesCol(bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
+	constraints := bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF)
 	versions := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_VERSION_IDX + MO_OFF))
 
 	for i, account := range accounts {
@@ -339,7 +339,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.Ts = timestamps[i].ToTimestamp()
 		item.Kind = kinds[i]
 		item.ViewDef = viewDefs[i]
-		item.Constraint = constraints[i]
+		item.Constraint = constraints.GetBytesAt(i)
 		item.Comment = comments[i]
 		item.Partitioned = partitioneds[i]
 		item.Partition = paritions[i]
@@ -372,11 +372,11 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	isHiddens := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX + MO_OFF))
 	isAutos := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX + MO_OFF))
 	constraintTypes := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX + MO_OFF))
-	typs := vector.MustBytesCol(bat.GetVector(catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF))
+	typs := bat.GetVector(catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF)
 	hasDefs := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATTHASDEF_IDX + MO_OFF))
-	defaultExprs := vector.MustBytesCol(bat.GetVector(catalog.MO_COLUMNS_ATT_DEFAULT_IDX + MO_OFF))
+	defaultExprs := bat.GetVector(catalog.MO_COLUMNS_ATT_DEFAULT_IDX + MO_OFF)
 	hasUpdates := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX + MO_OFF))
-	updateExprs := vector.MustBytesCol(bat.GetVector(catalog.MO_COLUMNS_ATT_UPDATE_IDX + MO_OFF))
+	updateExprs := bat.GetVector(catalog.MO_COLUMNS_ATT_UPDATE_IDX + MO_OFF)
 	nums := vector.MustFixedCol[int32](bat.GetVector(catalog.MO_COLUMNS_ATTNUM_IDX + MO_OFF))
 	clusters := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_CLUSTERBY + MO_OFF))
 	seqnums := vector.MustFixedCol[uint16](bat.GetVector(catalog.MO_COLUMNS_ATT_SEQNUM_IDX + MO_OFF))
@@ -407,9 +407,9 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 				seqnum:          seqnums[i],
 			}
 			copy(col.rowid[:], rowids[i][:])
-			col.typ = append(col.typ, typs[i]...)
-			col.updateExpr = append(col.updateExpr, updateExprs[i]...)
-			col.defaultExpr = append(col.defaultExpr, defaultExprs[i]...)
+			col.typ = append(col.typ, typs.GetBytesAt(i)...)
+			col.updateExpr = append(col.updateExpr, updateExprs.GetBytesAt(i)...)
+			col.defaultExpr = append(col.defaultExpr, defaultExprs.GetBytesAt(i)...)
 			mp[tblKey] = append(mp[tblKey], col)
 		}
 	}
