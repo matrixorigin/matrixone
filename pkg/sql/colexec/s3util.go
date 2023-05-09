@@ -58,9 +58,7 @@ type S3Writer struct {
 
 	// tableBatchSizes are used to record the table_i's batches'
 	// size in tableBatches
-	Batsize uint64
-
-	sels []int64
+	batSize uint64
 
 	typs []types.Type
 	ufs  []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
@@ -110,10 +108,6 @@ func (w *S3Writer) SetMp(attrs []*engine.Attribute) {
 
 func (w *S3Writer) Init(proc *process.Process) {
 	w.pk = make(map[string]struct{})
-	w.sels = make([]int64, options.DefaultBlockMaxRows)
-	for i := 0; i < int(options.DefaultBlockMaxRows); i++ {
-		w.sels[i] = int64(i)
-	}
 	w.ResetMetaLocBat(proc)
 }
 
@@ -126,10 +120,6 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 		sortIndex: -1,
 		pk:        make(map[string]struct{}),
 		idx:       0,
-		sels:      make([]int64, options.DefaultBlockMaxRows),
-	}
-	for j := 0; j < int(options.DefaultBlockMaxRows); j++ {
-		writer.sels[j] = int64(j)
 	}
 	writer.ResetMetaLocBat(proc)
 
@@ -180,10 +170,6 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 			sortIndex: -1,
 			pk:        make(map[string]struct{}),
 			idx:       int16(i), // This value is aligned with the partition number
-			sels:      make([]int64, options.DefaultBlockMaxRows),
-		}
-		for j := 0; j < int(options.DefaultBlockMaxRows); j++ {
-			writers[i].sels[j] = int64(j)
 		}
 		writers[i].ResetMetaLocBat(proc)
 
@@ -263,7 +249,7 @@ func (w *S3Writer) Output(proc *process.Process) error {
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
-	if w.Batsize >= TagS3Size {
+	if w.batSize >= TagS3Size {
 		if err := w.MergeBlock(len(w.Bats), proc); err != nil {
 			return err
 		}
@@ -347,7 +333,7 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) int {
 			rbat.Zs = append(rbat.Zs, bat.Zs[j+start])
 		}
 		start += rows
-		if w.Batsize = w.Batsize + uint64(rbat.Size()); w.Batsize > WriteS3Threshold {
+		if w.batSize = w.batSize + uint64(rbat.Size()); w.batSize > WriteS3Threshold {
 			index = len(w.Bats)
 		}
 	}
@@ -485,7 +471,7 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process) error {
 	}
 	for i := 0; i < length; i++ {
 		w.putBatch(w.Bats[i])
-		w.Batsize -= uint64(w.Bats[i].Size())
+		w.batSize -= uint64(w.Bats[i].Size())
 	}
 	if length == len(w.Bats) {
 		w.Bats = w.Bats[:0]
