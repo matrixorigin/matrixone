@@ -554,14 +554,8 @@ func (r *Row) clean() {
 func (r *Row) Clone() *Row {
 	n := NewRow()
 	n.Table = r.Table
-	if len(r.Columns) > 0 {
-		n.Columns = make([]ColumnField, len(r.Columns))
-		copy(n.Columns[:], r.Columns[:])
-	}
-	if len(r.CsvColumns) > 0 {
-		n.CsvColumns = make([]string, len(r.CsvColumns))
-		copy(n.CsvColumns[:], r.CsvColumns[:])
-	}
+	n.Columns = r.Columns
+	n.CsvColumns = r.CsvColumns
 	return n
 }
 
