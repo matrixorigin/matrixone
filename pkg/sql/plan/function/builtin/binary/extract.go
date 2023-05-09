@@ -138,7 +138,7 @@ func ExtractFromTime(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
 	case left.IsConst() && right.IsConst():
 		var rvals [1]string
-		unit := left.GetStringAt(0)
+		unit := left.UnsafeGetStringAt(0)
 		_, err := extract.ExtractFromTime(unit, rightValues, rvals[:])
 		if err != nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
@@ -146,7 +146,7 @@ func ExtractFromTime(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		return vector.NewConstBytes(rtyp, []byte(rvals[0]), left.Length(), proc.Mp()), nil
 	case left.IsConst() && !right.IsConst():
 		rvals := make([]string, len(rightValues))
-		unit := left.GetStringAt(0)
+		unit := left.UnsafeGetStringAt(0)
 		rvals, err := extract.ExtractFromTime(unit, rightValues, rvals)
 		if err != nil {
 			return nil, err
@@ -168,7 +168,7 @@ func ExtractFromVarchar(vectors []*vector.Vector, proc *process.Process) (*vecto
 		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
 	case left.IsConst() && right.IsConst():
 		var rvals [1]string
-		unit := left.GetStringAt(0)
+		unit := left.UnsafeGetStringAt(0)
 		_, err := extract.ExtractFromString(unit, []string{right.GetStringAt(0)}, rvals[:], vectors[1].GetType().Scale)
 		if err != nil {
 			return nil, moerr.NewInternalError(proc.Ctx, "invalid input")
@@ -177,7 +177,7 @@ func ExtractFromVarchar(vectors []*vector.Vector, proc *process.Process) (*vecto
 	case left.IsConst() && !right.IsConst():
 		rightValues := vector.MustStrCol(right)
 		rvals := make([]string, len(rightValues))
-		unit := left.GetStringAt(0)
+		unit := left.UnsafeGetStringAt(0)
 		rvals, err := extract.ExtractFromString(unit, rightValues, rvals, vectors[1].GetType().Scale)
 		if err != nil {
 			return nil, err

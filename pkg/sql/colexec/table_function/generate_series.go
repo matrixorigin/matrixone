@@ -115,8 +115,8 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		if stepVec == nil {
 			return false, moerr.NewInvalidInput(proc.Ctx, "generate_series must specify step")
 		}
-		startStr := startVec.GetStringAt(0)
-		endStr := endVec.GetStringAt(0)
+		startStr := startVec.UnsafeGetStringAt(0)
+		endStr := endVec.UnsafeGetStringAt(0)
 		scale := int32(findScale(startStr, endStr))
 		rbat.Vecs[0].GetType().Scale = scale
 		start, err := types.ParseDatetime(startStr, scale)
@@ -313,7 +313,7 @@ func handleDatetime(startVec, endVec, stepVec *vector.Vector, scale int32, proc 
 	if stepVec == nil {
 		return moerr.NewInvalidInput(proc.Ctx, "generate_series datetime must specify step")
 	}
-	step = stepVec.GetStringAt(0)
+	step = stepVec.UnsafeGetStringAt(0)
 	res, err := generateDatetime(proc.Ctx, start, end, step)
 	if err != nil {
 		return err

@@ -79,7 +79,7 @@ func UnixTimestampVarcharToInt64(ivecs []*vector.Vector, proc *process.Process) 
 
 	if inVec.IsConst() {
 		var rs [1]int64
-		tms := [1]types.Timestamp{MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetStringAt(0))}
+		tms := [1]types.Timestamp{MustTimestamp(proc.SessionInfo.TimeZone, inVec.UnsafeGetStringAt(0))}
 		unixtimestamp.UnixTimestampToInt(tms[:], rs[:])
 		if rs[0] >= 0 {
 			return vector.NewConstFixed(rtyp, rs[0], inVec.Length(), proc.Mp()), nil
@@ -91,7 +91,7 @@ func UnixTimestampVarcharToInt64(ivecs []*vector.Vector, proc *process.Process) 
 	vlen := inVec.Length()
 	times := make([]types.Timestamp, vlen)
 	for i := 0; i < vlen; i++ {
-		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetStringAt(i))
+		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.UnsafeGetStringAt(i))
 	}
 	vec, err := proc.AllocVectorOfRows(rtyp, vlen, inVec.GetNulls())
 	if err != nil {
@@ -116,7 +116,7 @@ func UnixTimestampVarcharToFloat64(ivecs []*vector.Vector, proc *process.Process
 
 	if inVec.IsConst() {
 		var rs [1]float64
-		tms := [1]types.Timestamp{MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetStringAt(0))}
+		tms := [1]types.Timestamp{MustTimestamp(proc.SessionInfo.TimeZone, inVec.UnsafeGetStringAt(0))}
 		unixtimestamp.UnixTimestampToFloat(tms[:], rs[:])
 		if rs[0] >= 0 {
 			vec := vector.NewConstFixed(rtyp, rs[0], inVec.Length(), proc.Mp())
@@ -129,7 +129,7 @@ func UnixTimestampVarcharToFloat64(ivecs []*vector.Vector, proc *process.Process
 	vlen := inVec.Length()
 	times := make([]types.Timestamp, vlen)
 	for i := 0; i < vlen; i++ {
-		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetStringAt(i))
+		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.UnsafeGetStringAt(i))
 	}
 	vec, err := proc.AllocVectorOfRows(rtyp, vlen, inVec.GetNulls())
 	if err != nil {
@@ -158,7 +158,7 @@ func UnixTimestampVarcharToDecimal128(ivecs []*vector.Vector, proc *process.Proc
 
 	if inVec.IsConst() {
 		var rs [1]types.Decimal128
-		tms := [1]types.Timestamp{MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetStringAt(0))}
+		tms := [1]types.Timestamp{MustTimestamp(proc.SessionInfo.TimeZone, inVec.UnsafeGetStringAt(0))}
 		unixtimestamp.UnixTimestampToDecimal128(tms[:], rs[:])
 		if rs[0].Compare(types.Decimal128{B0_63: 0, B64_127: 0}) > 0 {
 			vec := vector.NewConstFixed(rtyp, rs[0], inVec.Length(), proc.Mp())
@@ -171,7 +171,7 @@ func UnixTimestampVarcharToDecimal128(ivecs []*vector.Vector, proc *process.Proc
 	vlen := inVec.Length()
 	times := make([]types.Timestamp, vlen)
 	for i := 0; i < vlen; i++ {
-		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetStringAt(i))
+		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.UnsafeGetStringAt(i))
 	}
 	vec, err := proc.AllocVectorOfRows(rtyp, vlen, inVec.GetNulls())
 	if err != nil {

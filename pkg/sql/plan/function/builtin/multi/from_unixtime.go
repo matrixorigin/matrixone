@@ -107,7 +107,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, proc *process.Process) (*ve
 		return vector.NewConstNull(rtyp, inVec.Length(), proc.Mp()), nil
 	}
 
-	formatMask := formatVec.GetStringAt(0)
+	formatMask := formatVec.UnsafeGetStringAt(0)
 	if inVec.IsConst() {
 		times := vector.MustFixedCol[int64](inVec)
 		rs := make([]types.Datetime, 1)
@@ -153,7 +153,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, proc *process.Process) (*
 		return vector.NewConstNull(rtyp, inVec.Length(), proc.Mp()), nil
 	}
 
-	formatMask := formatVec.GetStringAt(0)
+	formatMask := formatVec.UnsafeGetStringAt(0)
 	if inVec.IsConst() {
 		times := vector.MustFixedCol[float64](inVec)
 		rs := make([]types.Datetime, 1)
@@ -262,7 +262,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, proc *process.Process) (*v
 		return vector.NewConstNull(rtyp, inVec.Length(), proc.Mp()), nil
 	}
 
-	formatMask := formatVec.GetStringAt(0)
+	formatMask := formatVec.UnsafeGetStringAt(0)
 	if inVec.IsConst() {
 		times := vector.MustFixedCol[uint64](inVec)
 		rs := make([]types.Datetime, 1)

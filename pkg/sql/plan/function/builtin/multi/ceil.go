@@ -40,7 +40,7 @@ func CeilStr(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		return nil, err
 	}
 	for i := 0; i < values.Length(); i++ {
-		floatVal, err := strconv.ParseFloat(values.GetStringAt(i), 64)
+		floatVal, err := strconv.ParseFloat(values.UnsafeGetStringAt(i), 64)
 		if err != nil {
 			return nil, err
 		}

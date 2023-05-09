@@ -365,7 +365,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 				} else {
 					for idx := range results {
 						if !flag[idx] {
-							results[idx] = thenv.GetStringAt(0)
+							results[idx] = thenv.UnsafeGetStringAt(0)
 							flag[idx] = true
 						}
 					}
@@ -378,7 +378,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 						if nulls.Contains(thenv.GetNulls(), uint64(idx)) {
 							nsp.Np.Add(uint64(idx))
 						} else {
-							results[idx] = thenv.GetStringAt(idx)
+							results[idx] = thenv.UnsafeGetStringAt(idx)
 						}
 						flag[idx] = true
 					}
@@ -398,7 +398,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 				for idx := range results {
 					if !flag[idx] {
 						if !nulls.Contains(whenv.GetNulls(), uint64(idx)) && whencols[idx] {
-							results[idx] = thenv.GetStringAt(0)
+							results[idx] = thenv.UnsafeGetStringAt(0)
 							flag[idx] = true
 						}
 					}
@@ -411,7 +411,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 						if nulls.Contains(thenv.GetNulls(), uint64(idx)) {
 							nsp.Np.Add(uint64(idx))
 						} else {
-							results[idx] = thenv.GetStringAt(idx)
+							results[idx] = thenv.UnsafeGetStringAt(idx)
 						}
 						flag[idx] = true
 					}
@@ -433,7 +433,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 		if ev.IsConst() {
 			for idx := range results {
 				if !flag[idx] {
-					results[idx] = ev.GetStringAt(0)
+					results[idx] = ev.UnsafeGetStringAt(0)
 					flag[idx] = true
 				}
 			}
@@ -443,7 +443,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 					if nulls.Contains(ev.GetNulls(), uint64(idx)) {
 						nulls.Add(nsp, uint64(idx))
 					} else {
-						results[idx] = ev.GetStringAt(idx)
+						results[idx] = ev.UnsafeGetStringAt(idx)
 					}
 					flag[idx] = true
 				}

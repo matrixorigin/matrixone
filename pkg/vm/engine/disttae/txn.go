@@ -253,7 +253,7 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 
 func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
 	for i := 0; i < vec.Length(); i++ {
-		if location, err := blockio.EncodeLocationFromString(vec.GetStringAt(i)); err != nil {
+		if location, err := blockio.EncodeLocationFromString(vec.UnsafeGetStringAt(i)); err != nil {
 			return err
 		} else {
 			sid := location.Name().SegmentId()

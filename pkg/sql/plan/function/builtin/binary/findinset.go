@@ -30,17 +30,16 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		return vector.NewConstNull(rtyp, left.Length(), proc.Mp()), nil
 	case left.IsConst() && right.IsConst():
 		var rvals [1]uint64
-		findinset.FindInSetWithAllConst(left.GetStringAt(0), right.GetStringAt(0), rvals[:])
+		findinset.FindInSetWithAllConst(left.UnsafeGetStringAt(0), right.UnsafeGetStringAt(0), rvals[:])
 		return vector.NewConstFixed(rtyp, rvals[0], left.Length(), proc.Mp()), nil
 	case left.IsConst() && !right.IsConst():
 		rvec, err := proc.AllocVectorOfRows(rtyp, right.Length(), right.GetNulls())
 		if err != nil {
 			return nil, err
 		}
-		// TODO: remove MustStrCol
 		rightValues := vector.MustStrCol(right)
 		rvals := vector.MustFixedCol[uint64](rvec)
-		findinset.FindInSetWithLeftConst(left.GetStringAt(0), rightValues, rvals)
+		findinset.FindInSetWithLeftConst(left.UnsafeGetStringAt(0), rightValues, rvals)
 		return rvec, nil
 	case !left.IsConst() && right.IsConst():
 		rvec, err := proc.AllocVectorOfRows(rtyp, right.Length(), left.GetNulls())
@@ -50,7 +49,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		// TODO: remove MustStrCol
 		leftValues := vector.MustStrCol(left)
 		rvals := vector.MustFixedCol[uint64](rvec)
-		findinset.FindInSetWithRightConst(leftValues, right.GetStringAt(0), rvals)
+		findinset.FindInSetWithRightConst(leftValues, right.UnsafeGetStringAt(0), rvals)
 		return rvec, nil
 	}
 	rvec, err := proc.AllocVectorOfRows(rtyp, left.Length(), nil)

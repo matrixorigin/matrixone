@@ -197,7 +197,7 @@ func (tbl *txnTable) LoadDeletesForBlock(blockID *types.Blockid, deleteBlockId m
 	for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blockID] {
 		vs := bat.GetVector(0)
 		for i := 0; i < vs.Length(); i++ {
-			location, err := blockio.EncodeLocationFromString(vs.GetStringAt(i))
+			location, err := blockio.EncodeLocationFromString(vs.UnsafeGetStringAt(i))
 			if err != nil {
 				return err
 			}
@@ -647,7 +647,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	}
 	switch typ {
 	case deletion.FlushMetaLoc:
-		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].GetStringAt(0))
+		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].UnsafeGetStringAt(0))
 		if err != nil {
 			return err
 		}
@@ -702,7 +702,7 @@ func (tbl *txnTable) compaction() error {
 		}
 		mp[pos.idx] = append(mp[pos.idx], pos.offset)
 		// start compaction
-		metaLoc := tbl.db.txn.writes[pos.idx].bat.GetVector(0).GetStringAt(int(pos.offset))
+		metaLoc := tbl.db.txn.writes[pos.idx].bat.GetVector(0).UnsafeGetStringAt(int(pos.offset))
 		location, e := blockio.EncodeLocationFromString(metaLoc)
 		if e != nil {
 			err = e

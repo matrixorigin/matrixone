@@ -223,7 +223,7 @@ func DateStringAdd(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 	if startVec.IsConstNull() || diffVec.IsConstNull() {
 		return vector.NewConstNull(rtyp, startVec.Length(), proc.Mp()), nil
 	} else if startVec.IsConst() && diffVec.IsConst() {
-		rval, err := doDateStringAdd(startVec.GetStringAt(0), diffs[0], unit)
+		rval, err := doDateStringAdd(startVec.UnsafeGetStringAt(0), diffs[0], unit)
 		if err != nil {
 			return nil, err
 		}
@@ -240,7 +240,7 @@ func DateStringAdd(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 				if rvec.GetNulls().Contains(uint64(i)) {
 					continue
 				}
-				rvals[i], err = doDateStringAdd(startVec.GetStringAt(0), diffs[i], unit)
+				rvals[i], err = doDateStringAdd(startVec.UnsafeGetStringAt(0), diffs[i], unit)
 				if err != nil {
 					return nil, err
 				}
@@ -250,7 +250,7 @@ func DateStringAdd(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 				if rvec.GetNulls().Contains(uint64(i)) {
 					continue
 				}
-				rvals[i], err = doDateStringAdd(startVec.GetStringAt(i), diffs[0], unit)
+				rvals[i], err = doDateStringAdd(startVec.UnsafeGetStringAt(i), diffs[0], unit)
 				if err != nil {
 					return nil, err
 				}
@@ -260,7 +260,7 @@ func DateStringAdd(ivecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 				if rvec.GetNulls().Contains(uint64(i)) {
 					continue
 				}
-				rvals[i], err = doDateStringAdd(startVec.GetStringAt(i), diffs[i], unit)
+				rvals[i], err = doDateStringAdd(startVec.UnsafeGetStringAt(i), diffs[i], unit)
 				if err != nil {
 					return nil, err
 				}

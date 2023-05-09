@@ -58,12 +58,12 @@ func InternalAutoIncrement(ivecs []*vector.Vector, proc *process.Process) (*vect
 	defer eng.Rollback(proc.Ctx, txnOperator)
 	if isAllConst {
 		var rvec *vector.Vector
-		dbName := ivecs[0].GetStringAt(0)
+		dbName := ivecs[0].UnsafeGetStringAt(0)
 		database, err := eng.Database(proc.Ctx, dbName, txnOperator)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 		}
-		tableName := ivecs[1].GetStringAt(0)
+		tableName := ivecs[1].UnsafeGetStringAt(0)
 		relation, err := database.Relation(proc.Ctx, tableName)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)
@@ -94,13 +94,13 @@ func InternalAutoIncrement(ivecs []*vector.Vector, proc *process.Process) (*vect
 		resValues := vector.MustFixedCol[uint64](rvec)
 
 		for i := 0; i < rowCount; i++ {
-			dbName := ivecs[0].GetStringAt(i)
+			dbName := ivecs[0].UnsafeGetStringAt(i)
 			database, err := eng.Database(proc.Ctx, dbName, txnOperator)
 			if err != nil {
 				return nil, moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 			}
 
-			tableName := ivecs[1].GetStringAt(i)
+			tableName := ivecs[1].UnsafeGetStringAt(i)
 			relation, err := database.Relation(proc.Ctx, tableName)
 			if err != nil {
 				return nil, moerr.NewInvalidInput(proc.Ctx, "Table '%s' does not exist in database '%s'", tableName, dbName)

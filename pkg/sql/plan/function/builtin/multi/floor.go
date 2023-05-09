@@ -42,7 +42,7 @@ func FloorStr(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		return nil, err
 	}
 	for i := 0; i < values.Length(); i++ {
-		float, err := strconv.ParseFloat(values.GetStringAt(i), 64)
+		float, err := strconv.ParseFloat(values.UnsafeGetStringAt(i), 64)
 		if err != nil {
 			return nil, err
 		}

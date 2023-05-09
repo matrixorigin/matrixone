@@ -50,7 +50,7 @@ func concatWithAllConst(ivecs []*vector.Vector, proc *process.Process, vct types
 	//length := vectors[0].Length()
 	res := ""
 	for i := range ivecs {
-		res += ivecs[i].GetStringAt(0)
+		res += ivecs[i].UnsafeGetStringAt(0)
 	}
 	return vector.NewConstBytes(vct, []byte(res), ivecs[0].Length(), proc.Mp()), nil
 }
@@ -68,9 +68,9 @@ func concatWithSomeCols(ivecs []*vector.Vector, proc *process.Process, rtyp type
 		}
 		for j := range ivecs {
 			if ivecs[j].IsConst() {
-				val[i] += ivecs[j].GetStringAt(0)
+				val[i] += ivecs[j].UnsafeGetStringAt(0)
 			} else {
-				val[i] += ivecs[j].GetStringAt(i)
+				val[i] += ivecs[j].UnsafeGetStringAt(i)
 			}
 		}
 	}

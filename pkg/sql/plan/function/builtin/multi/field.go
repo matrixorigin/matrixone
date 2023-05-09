@@ -55,7 +55,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 			vec := ivecs[i]
 			if vec.IsConst() {
 				if !vec.IsConstNull() {
-					if vec0.GetStringAt(0) == vec.GetStringAt(0) {
+					if vec0.UnsafeGetStringAt(0) == vec.UnsafeGetStringAt(0) {
 						return vector.NewConstFixed(rtyp, uint64(i), ivecs[0].Length(), proc.Mp()), err
 					}
 				}
@@ -70,11 +70,11 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 
 		for i := startIdx; i < len(ivecs); i++ {
 			vec := ivecs[i]
-			v := vec0.GetStringAt(0)
+			v := vec0.UnsafeGetStringAt(0)
 
 			if vec.IsConst() {
 				if !vec.IsConstNull() {
-					if v == vec.GetStringAt(0) {
+					if v == vec.UnsafeGetStringAt(0) {
 						for j := 0; j < vecLen; j++ {
 							if rvals[j] == 0 {
 								rvals[j] = uint64(i)
@@ -86,7 +86,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && v == vec.GetStringAt(j) {
+					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && v == vec.UnsafeGetStringAt(j) {
 						rvals[j] = uint64(i)
 						notFound--
 					}
@@ -112,7 +112,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 			if vec.IsConst() {
 				if !vec.IsConstNull() {
 					for j := 0; j < vecLen; j++ {
-						if rvals[j] == 0 && vec0.GetStringAt(j) == vec.GetStringAt(0) {
+						if rvals[j] == 0 && vec0.UnsafeGetStringAt(j) == vec.UnsafeGetStringAt(0) {
 							rvals[j] = uint64(i)
 							notFound--
 						}
@@ -120,7 +120,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 				}
 			} else {
 				for j := 0; j < vecLen; j++ {
-					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && vec0.GetStringAt(j) == vec.GetStringAt(j) {
+					if !nulls.Contains(vec.GetNulls(), uint64(j)) && rvals[j] == 0 && vec0.UnsafeGetStringAt(j) == vec.UnsafeGetStringAt(j) {
 						rvals[j] = uint64(i)
 						notFound--
 					}

@@ -44,10 +44,10 @@ func StrToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 	}
 	// get the format string.
-	formatMask := formatVector.GetStringAt(0)
+	formatMask := formatVector.UnsafeGetStringAt(0)
 
 	if dateVector.IsConst() {
-		datestr := dateVector.GetStringAt(0)
+		datestr := dateVector.UnsafeGetStringAt(0)
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
 		success := strToDate(proc.Ctx, time, datestr, formatMask, ctx)
@@ -92,10 +92,10 @@ func StrToDateTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 	}
 	// get the format string.
-	formatMask := formatVector.GetStringAt(0)
+	formatMask := formatVector.UnsafeGetStringAt(0)
 
 	if dateVector.IsConst() {
-		datetimestr := dateVector.GetStringAt(0)
+		datetimestr := dateVector.UnsafeGetStringAt(0)
 		ctx := make(map[string]int)
 		time := NewGeneralTime()
 		success := strToDate(proc.Ctx, time, datetimestr, formatMask, ctx)
@@ -140,10 +140,10 @@ func StrToTime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		return vector.NewConstNull(rtyp, dateVector.Length(), proc.Mp()), nil
 	}
 	// get the format string.
-	formatMask := formatVector.GetStringAt(0)
+	formatMask := formatVector.UnsafeGetStringAt(0)
 
 	if dateVector.IsConst() {
-		timestr := dateVector.GetStringAt(0)
+		timestr := dateVector.UnsafeGetStringAt(0)
 
 		ctx := make(map[string]int)
 		time := NewGeneralTime()

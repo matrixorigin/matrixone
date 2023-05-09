@@ -238,7 +238,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 		if input.IsConstNull() {
 			continue
 		}
-		v := input.GetStringAt(0)
+		v := input.UnsafeGetStringAt(0)
 		if input.IsConst() {
 			for j := 0; j < vecLen; j++ {
 				if nsp.Contains(uint64(j)) {
@@ -256,7 +256,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 				// all not null
 				for j := 0; j < vecLen; j++ {
 					if nsp.Contains(uint64(j)) {
-						rs[j] = input.GetStringAt(j)
+						rs[j] = input.UnsafeGetStringAt(j)
 					}
 				}
 				nsp = nil
@@ -265,7 +265,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 				// some nulls
 				for j := 0; j < vecLen; j++ {
 					if nsp.Contains(uint64(j)) && !input.GetNulls().Contains(uint64(j)) {
-						rs[j] = input.GetStringAt(j)
+						rs[j] = input.UnsafeGetStringAt(j)
 						nsp.Np.Remove(uint64(j))
 					}
 				}

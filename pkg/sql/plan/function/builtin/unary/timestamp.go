@@ -76,7 +76,7 @@ func DateStringToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vect
 		if inputVector.IsConstNull() {
 			return vector.NewConstNull(rtyp, ivecs[0].Length(), proc.Mp()), nil
 		}
-		ts, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, inputVector.GetStringAt(0), 6)
+		ts, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, inputVector.UnsafeGetStringAt(0), 6)
 		if err != nil {
 			return nil, err
 		}
@@ -88,7 +88,7 @@ func DateStringToTimestamp(ivecs []*vector.Vector, proc *process.Process) (*vect
 		}
 		rvals := vector.MustFixedCol[types.Timestamp](rvec)
 		for i := 0; i < inputVector.Length(); i++ {
-			rvals[i], err = types.ParseTimestamp(proc.SessionInfo.TimeZone, inputVector.GetStringAt(i), 6)
+			rvals[i], err = types.ParseTimestamp(proc.SessionInfo.TimeZone, inputVector.UnsafeGetStringAt(i), 6)
 			if err != nil {
 				return nil, err
 			}

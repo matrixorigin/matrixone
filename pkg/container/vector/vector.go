@@ -157,6 +157,19 @@ func (v *Vector) GetStringAt(i int) string {
 	return bs[i].GetString(v.area)
 }
 
+// UnsafeGetBytesAt returns the byte slice of the i-th element in the vector.
+// It is about x10 faster than GetStringsAt.
+// It is unsafe because the returned byte slice is not copied. If you want to
+// keep the byte slice, you need to copy it.
+func (v *Vector) UnsafeGetStringAt(i int) string {
+	if v.IsConst() {
+		i = 0
+	}
+	bs := v.col.([]types.Varlena)
+	buf := bs[i].GetByteSlice(v.area)
+	return *(*string)(unsafe.Pointer(&buf))
+}
+
 func NewVec(typ types.Type) *Vector {
 	vec := &Vector{
 		typ:   typ,

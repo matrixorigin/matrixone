@@ -31,7 +31,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 			return got.IsConstNull()
 		} else {
 			if expected.GetType().IsVarlen() {
-				return reflect.DeepEqual(expected.GetStringAt(0), got.GetStringAt(0))
+				return reflect.DeepEqual(expected.UnsafeGetStringAt(0), got.UnsafeGetStringAt(0))
 			} else {
 				return bytes.Equal(expected.UnsafeGetRawData(), got.UnsafeGetRawData())
 			}
@@ -72,7 +72,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 					if nulls.Contains(got.GetNulls(), uint64(i)) {
 						return false
 					}
-					if expected.GetStringAt(i) != got.GetStringAt(i) {
+					if expected.UnsafeGetStringAt(i) != got.UnsafeGetStringAt(i) {
 						return false
 					}
 				}

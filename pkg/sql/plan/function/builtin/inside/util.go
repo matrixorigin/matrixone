@@ -124,7 +124,7 @@ func getTableAutoIncrValue(dbName string, colName string, eg engine.Engine, txn 
 
 		vs2 := vector.MustFixedCol[uint64](bat.Vecs[2])
 		for i := 0; i < bat.Length(); i++ {
-			str := bat.Vecs[1].GetStringAt(i)
+			str := bat.Vecs[1].UnsafeGetStringAt(i)
 			if str == colName {
 				bat.Clean(proc.Mp())
 				return vs2[i], nil

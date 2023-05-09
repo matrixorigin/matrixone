@@ -1160,4 +1160,12 @@ func BenchmarkProcessingBytes(b *testing.B) {
 			}
 		}
 	})
+	b.Run("UnsafeGetStringAt", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			for j := 0; j < vec.Length(); j++ {
+				_ = vec.UnsafeGetStringAt(j)
+			}
+		}
+	})
 }

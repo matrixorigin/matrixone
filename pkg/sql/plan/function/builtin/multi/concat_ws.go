@@ -51,7 +51,7 @@ func Concat_ws(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			}
 			inputCleaned = append(inputCleaned, ivecs[i])
 		}
-		separator := ivecs[0].GetStringAt(0)
+		separator := ivecs[0].UnsafeGetStringAt(0)
 		if AllConst {
 			return concatWsWithConstSeparatorAllConst(rtyp, inputCleaned, separator, proc.Mp())
 		}
@@ -90,18 +90,18 @@ func concatWs(rtyp types.Type, inputCleaned []*vector.Vector, separator *vector.
 			if vectorIsConst[j] {
 				allNull = false
 				if len(rvals[i]) > 0 {
-					rvals[i] += separator.GetStringAt(i)
+					rvals[i] += separator.UnsafeGetStringAt(i)
 				}
-				rvals[i] += inputCleaned[j].GetStringAt(0)
+				rvals[i] += inputCleaned[j].UnsafeGetStringAt(0)
 			} else {
 				if nulls.Contains(inputCleaned[j].GetNulls(), uint64(i)) {
 					continue
 				}
 				allNull = false
 				if len(rvals[i]) > 0 {
-					rvals[i] += separator.GetStringAt(i)
+					rvals[i] += separator.UnsafeGetStringAt(i)
 				}
-				rvals[i] += inputCleaned[j].GetStringAt(i)
+				rvals[i] += inputCleaned[j].UnsafeGetStringAt(i)
 			}
 		}
 		if allNull {
@@ -120,10 +120,10 @@ func concatWsAllConst(rtyp types.Type, inputCleaned []*vector.Vector, separator 
 		allNull := true
 		for j := range inputCleaned {
 			if len(rvals[i]) > 0 {
-				rvals[i] += separator.GetStringAt(i)
+				rvals[i] += separator.UnsafeGetStringAt(i)
 			}
 			allNull = false
-			rvals[i] += inputCleaned[j].GetStringAt(0)
+			rvals[i] += inputCleaned[j].UnsafeGetStringAt(0)
 		}
 		if allNull { // this check is redundant
 			nulls.Add(resultNsp, uint64(i))
@@ -138,7 +138,7 @@ func concatWsAllConst(rtyp types.Type, inputCleaned []*vector.Vector, separator 
 func concatWsWithConstSeparatorAllConst(rtyp types.Type, inputCleaned []*vector.Vector, separator string, mp *mpool.MPool) (*vector.Vector, error) {
 	res := ""
 	for i := range inputCleaned {
-		res = res + inputCleaned[i].GetStringAt(0)
+		res = res + inputCleaned[i].UnsafeGetStringAt(0)
 		if i+1 == len(inputCleaned) {
 			break
 		} else {
@@ -175,7 +175,7 @@ func concatWsWithConstSeparator(rtyp types.Type, inputCleaned []*vector.Vector, 
 					rvals[i] += separator
 				}
 				allNull = false
-				rvals[i] += inputCleaned[j].GetStringAt(0)
+				rvals[i] += inputCleaned[j].UnsafeGetStringAt(0)
 			} else {
 				if nulls.Contains(inputCleaned[j].GetNulls(), uint64(i)) {
 					continue
@@ -184,7 +184,7 @@ func concatWsWithConstSeparator(rtyp types.Type, inputCleaned []*vector.Vector, 
 					rvals[i] += separator
 				}
 				allNull = false
-				rvals[i] += inputCleaned[j].GetStringAt(i)
+				rvals[i] += inputCleaned[j].UnsafeGetStringAt(i)
 			}
 		}
 		if allNull {
