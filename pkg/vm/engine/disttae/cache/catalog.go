@@ -339,7 +339,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.Ts = timestamps[i].ToTimestamp()
 		item.Kind = kinds.GetStringAt(i)
 		item.ViewDef = viewDefs.GetStringAt(i)
-		item.Constraint = constraints.GetBytesAt(i)
+		item.Constraint = append(item.Constraint, constraints.GetBytesAt(i)...)
 		item.Comment = comments.GetStringAt(i)
 		item.Partitioned = partitioneds[i]
 		item.Partition = paritions.GetStringAt(i)
