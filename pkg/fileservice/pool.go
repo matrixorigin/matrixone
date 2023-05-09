@@ -28,7 +28,7 @@ type Pool[T any] struct {
 
 type _PoolElem[T any] struct {
 	Taken uint32
-	Put   func()
+	Put   func(value T)
 	Value T
 }
 
@@ -45,12 +45,12 @@ func NewPool[T any](
 		finallyFunc: finallyFunc,
 	}
 
-	pool.pool = make([]_PoolElem[T], capacity)
 	for i := uint32(0); i < capacity; i++ {
+		i := i
 		value := newFunc()
-		pool.pool[i] = _PoolElem[T]{
+		pool.pool = append(pool.pool, _PoolElem[T]{
 			Value: value,
-			Put: func() {
+			Put: func(T) {
 				if resetFunc != nil {
 					resetFunc(value)
 				}
@@ -58,13 +58,13 @@ func NewPool[T any](
 					panic("bad put")
 				}
 			},
-		}
+		})
 	}
 
 	return pool
 }
 
-func (p *Pool[T]) Get() (value T, put func()) {
+func (p *Pool[T]) Get() (value T, put func(value T)) {
 	for i := 0; i < 4; i++ {
 		idx := fastrand() % p.capacity
 		if atomic.CompareAndSwapUint32(&p.pool[idx].Taken, 0, 1) {
@@ -75,16 +75,16 @@ func (p *Pool[T]) Get() (value T, put func()) {
 	}
 	value = p.newFunc()
 	if p.finallyFunc == nil {
-		put = noopPut
+		put = p.noopPut
 	} else {
-		put = func() {
+		put = func(value T) {
 			p.finallyFunc(value)
 		}
 	}
 	return
 }
 
-func noopPut() {}
+func (p *Pool[T]) noopPut(value T) {}
 
 var bytesPoolDefaultBlockSize = NewPool(
 	1024,
