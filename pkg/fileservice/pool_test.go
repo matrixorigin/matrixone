@@ -21,7 +21,7 @@ import (
 )
 
 func TestBytesPool(t *testing.T) {
-	pool := NewPool(8, func() any {
+	pool := NewPool(8, func() *[]byte {
 		bs := make([]byte, 8)
 		return &bs
 	}, nil, nil)
@@ -33,9 +33,10 @@ func TestBytesPool(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 200; j++ {
-				bs, put := pool.Get()
+				var bs *[]byte
+				put := pool.Get(&bs)
 				defer put()
-				binary.PutUvarint(*bs.(*[]byte), uint64(i))
+				binary.PutUvarint(*bs, uint64(i))
 			}
 		}()
 	}
@@ -50,7 +51,8 @@ func BenchmarkBytesPool(b *testing.B) {
 	}, nil, nil)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, put := pool.Get()
+		var v any
+		put := pool.Get(&v)
 		put()
 	}
 }
@@ -63,7 +65,8 @@ func BenchmarkParallelBytesPool(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, put := pool.Get()
+			var v any
+			put := pool.Get(&v)
 			put()
 		}
 	})
