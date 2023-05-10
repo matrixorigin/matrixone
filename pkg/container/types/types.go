@@ -96,7 +96,7 @@ type Type struct {
 	// garbage data.  In theory these unused garbage should not be a problem, but
 	// it is.  Give it a name will zero fill it ...
 	Charset uint8
-	dummy1  uint8
+	notNull uint8
 	dummy2  uint8
 
 	Size int32
@@ -119,7 +119,7 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 	}
 	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
 	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
-	binary.BigEndian.PutUint16(data[4:], uint16(t.dummy1))
+	binary.BigEndian.PutUint16(data[4:], uint16(t.notNull))
 	binary.BigEndian.PutUint16(data[6:], uint16(t.dummy2))
 	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
 	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
@@ -150,7 +150,7 @@ func (t *Type) Unmarshal(data []byte) error {
 	}
 	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
 	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
-	t.dummy1 = uint8(binary.BigEndian.Uint16(data[4:]))
+	t.notNull = uint8(binary.BigEndian.Uint16(data[4:]))
 	t.dummy2 = uint8(binary.BigEndian.Uint16(data[6:]))
 	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
 	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
@@ -388,6 +388,17 @@ func CharsetType(oid T) uint8 {
 
 func TypeSize(oid T) int {
 	return oid.TypeLen()
+}
+
+func (t *Type) SetNotNull(b bool) {
+	if b {
+		t.notNull = 1
+	} else {
+		t.notNull = 0
+	}
+}
+func (t Type) GetNotNull() bool {
+	return t.notNull == 1
 }
 
 func (t Type) GetSize() int32 {
