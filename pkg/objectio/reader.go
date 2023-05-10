@@ -67,6 +67,22 @@ func newObjectReaderV1(
 	return reader, nil
 }
 
+func (r *objectReaderV1) Init(location Location, fs fileservice.FileService) {
+	oName := location.Name()
+	extent := location.Extent()
+	r.name = oName.String()
+	r.oname = &oName
+	r.metaExt = &extent
+	r.fs = fs
+	r.metaCache.Store(nil)
+}
+
+func (r *objectReaderV1) Reset() {
+	r.metaExt = nil
+	r.oname = nil
+	r.metaCache.Store(nil)
+}
+
 func (r *objectReaderV1) GetObject() *Object {
 	return &r.Object
 }
