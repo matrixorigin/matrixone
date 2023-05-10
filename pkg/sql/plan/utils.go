@@ -1012,8 +1012,25 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-// handle the filter list for zonemap. rewrite and constFold
-// return monotonic filters and number of nonMonotonic filters
+// handle the filter list for Stats. rewrite and constFold
+func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+	if proc == nil {
+		return nil
+	}
+	var newExprList []*plan.Expr
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	for _, expr := range exprList {
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
+		if tmpexpr != nil {
+			expr = tmpexpr
+		}
+		newExprList = append(newExprList, expr)
+	}
+	return colexec.RewriteFilterExprList(newExprList)
+}
+
+// this function will be deleted soon
 func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
 	if proc == nil || proc.Ctx == nil {
 		return nil, nil

@@ -64,7 +64,7 @@ func (sc *StatsInfoMap) NeedUpdate(currentBlockNum int) bool {
 	if sc.BlockNumber == 0 || sc.BlockNumber != currentBlockNum {
 		return true
 	}
-	return false
+	return true
 }
 
 func (sc *StatsCache) GetStatsInfoMap(tableID uint64) *StatsInfoMap {
@@ -88,6 +88,7 @@ type InfoFromZoneMap struct {
 	ColumnZMs  []objectio.ZoneMap
 	DataTypes  []types.Type
 	ColumnNDVs []float64
+	TableCnt   float64
 }
 
 func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
@@ -99,10 +100,10 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	return info
 }
 
-func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
+func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan.TableDef, s *StatsInfoMap) {
 	logutil.Infof("need to update statsCache for table %v", tableDef.Name)
 	s.BlockNumber = blockNumTotal
-	s.TableCnt = tableCnt
+	s.TableCnt = info.TableCnt
 	s.tableName = tableDef.Name
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
 	//set info in statsInfoMap
@@ -263,11 +264,12 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName string, tableCnt flo
 		}
 	}
 
-	return tableCnt / 3
+	return tableCnt / 10
 }
 
 // estimate output lines for a filter
-func EstimateOutCnt(expr *plan.Expr, tableCnt float64, s *StatsInfoMap) float64 {
+func EstimateOutCnt(expr *plan.Expr, s *StatsInfoMap) float64 {
+	tableCnt := s.TableCnt
 	if expr == nil {
 		return tableCnt
 	}
@@ -283,8 +285,8 @@ func EstimateOutCnt(expr *plan.Expr, tableCnt float64, s *StatsInfoMap) float64 
 			outcnt = estimateOutCntForNonEquality(expr, funcName, tableCnt, s)
 		case "and":
 			//get the smaller one of two children, and tune it down a little bit
-			out1 := EstimateOutCnt(exprImpl.F.Args[0], tableCnt, s)
-			out2 := EstimateOutCnt(exprImpl.F.Args[1], tableCnt, s)
+			out1 := EstimateOutCnt(exprImpl.F.Args[0], s)
+			out2 := EstimateOutCnt(exprImpl.F.Args[1], s)
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
@@ -292,8 +294,8 @@ func EstimateOutCnt(expr *plan.Expr, tableCnt float64, s *StatsInfoMap) float64 
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
-			out1 := EstimateOutCnt(exprImpl.F.Args[0], tableCnt, s)
-			out2 := EstimateOutCnt(exprImpl.F.Args[1], tableCnt, s)
+			out1 := EstimateOutCnt(exprImpl.F.Args[0], s)
+			out2 := EstimateOutCnt(exprImpl.F.Args[1], s)
 			if out1 == out2 {
 				outcnt = out1 + out2
 			} else {
@@ -570,21 +572,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
-			monoExpr, nonMonoExpr := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
-			node.Stats = builder.compCtx.Stats(node.ObjRef, monoExpr)
-
-			//if there is non monotonic filters
-			if nonMonoExpr != nil {
-				sc := builder.compCtx.GetStatsCache()
-				if sc != nil {
-					fixColumnName(node.TableDef, nonMonoExpr)
-					outcnt := EstimateOutCnt(nonMonoExpr, node.Stats.TableCnt, sc.GetStatsInfoMap(node.TableDef.TblId))
-					node.Stats.Selectivity *= (outcnt / node.Stats.TableCnt)
-					node.Stats.Outcnt = node.Stats.TableCnt * node.Stats.Selectivity
-					node.Stats.Cost = node.Stats.Outcnt
-					node.Stats.BlockNum = int32(node.Stats.Outcnt/8192 + 1)
-				}
-			}
+			node.Stats = builder.compCtx.Stats(node.ObjRef, rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess()))
 		}
 
 	case plan.Node_FILTER:
