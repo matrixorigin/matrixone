@@ -1219,6 +1219,9 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	copy(gn.GroupBy, n.ProjectList)
+	for i := range gn.GroupBy {
+		gn.GroupBy[i].Typ.NotNullable = false
+	}
 	idx := 0
 	for i := range rs {
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
