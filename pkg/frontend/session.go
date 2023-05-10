@@ -961,6 +961,9 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 func (ses *Session) RemovePrepareStmt(name string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if stmt, ok := ses.prepareStmts[name]; ok {
+		stmt.Close()
+	}
 	delete(ses.prepareStmts, name)
 }
 
