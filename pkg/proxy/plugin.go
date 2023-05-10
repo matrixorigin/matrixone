@@ -125,6 +125,10 @@ func (p *rpcPlugin) RecommendCN(ctx context.Context, ci clientInfo) (*plugin.Rec
 	return resp.Recommendation, nil
 }
 
+func (p *rpcPlugin) Close() {
+	p.client.Close()
+}
+
 func (p *rpcPlugin) request(ctx context.Context, req *plugin.Request) (*plugin.Response, error) {
 	cc, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()

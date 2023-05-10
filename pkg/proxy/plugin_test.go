@@ -16,7 +16,9 @@ package proxy
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"testing"
+	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -131,6 +133,66 @@ func TestPluginRouter_Route(t *testing.T) {
 				require.NotNil(t, cn)
 				require.Equal(t, cn.uuid, tt.expectUUID)
 			}
+		})
+	}
+}
+
+func TestRPCPlugin(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	tests := []struct {
+		name       string
+		response   *plugin.Recommendation
+		expectErr  bool
+		expectUUID string
+	}{{
+		name:     "plugin bypass",
+		response: &plugin.Recommendation{Action: plugin.Bypass},
+	}, {
+		name: "plugin select",
+		response: &plugin.Recommendation{
+			Action: plugin.Select,
+			CN: &metadata.CNService{
+				ServiceID: "cn0",
+			},
+		},
+	}, {
+		name: "plugin reject",
+		response: &plugin.Recommendation{
+			Action:  plugin.Reject,
+			Message: "boom",
+		},
+	},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			addr := "unix:///tmp/plugin.sock"
+			s, err := morpc.NewRPCServer("test-plugin-server",
+				addr,
+				morpc.NewMessageCodec(func() morpc.Message {
+					return &plugin.Request{}
+				}),
+			)
+			require.NoError(t, err)
+			s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+				r, ok := request.(*plugin.Request)
+				require.True(t, ok)
+				return cs.Write(ctx, &plugin.Response{
+					RequestID:      r.RequestID,
+					Recommendation: tt.response,
+				})
+			})
+			s.Start()
+			defer s.Close()
+			plugin, err := newRPCPlugin(addr, time.Second)
+			defer plugin.Close()
+			require.NoError(t, err)
+			rec, err := plugin.RecommendCN(ctx, clientInfo{})
+			require.NoError(t, err)
+			require.Equal(t, tt.response.Action, rec.Action)
 		})
 	}
 }
