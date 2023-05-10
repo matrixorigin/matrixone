@@ -268,7 +268,7 @@ func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 		return nil, err
 	}
 
-	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2,3}, nil, deltaloc.ID(), nil)
+	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, deltaloc.ID(), nil)
 	if err != nil {
 		return nil, err
 	}
