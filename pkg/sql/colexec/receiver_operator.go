@@ -28,14 +28,19 @@ import (
 // while Join/Intersect/Minus ... are not
 func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool) {
 	r.proc = proc
+	l := len(proc.Reg.MergeReceivers)
 	if isMergeType {
-		r.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
-		r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver)
+		r.aliveMergeReceiver = l
+		r.receiverListener = make([]reflect.SelectCase, l)
 		for i, mr := range proc.Reg.MergeReceivers {
 			r.receiverListener[i] = reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
 				Chan: reflect.ValueOf(mr.Ch),
 			}
+		}
+	} else {
+		for i := 0; i < l; i++ {
+			r.chClosed = append(r.chClosed, false)
 		}
 	}
 }
@@ -48,9 +53,29 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 		return nil, true, nil
 	case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
 		if !ok {
+			r.chClosed[regIdx] = true
 			return nil, true, nil
 		}
 		return bat, false, nil
+	}
+}
+
+func (r *ReceiverOperator) FreeAllReg() {
+	for i := range r.chClosed {
+		if !r.chClosed[i] {
+			r.FreeSingleReg(i)
+		}
+	}
+}
+
+// clean up the batch left in channel
+func (r *ReceiverOperator) FreeSingleReg(regIdx int) {
+	for {
+		bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch
+		if !ok || bat == nil {
+			break
+		}
+		bat.Clean(r.proc.GetMPool())
 	}
 }
 
@@ -69,7 +94,12 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 		chosen, value, ok := reflect.Select(r.receiverListener)
 		analyze.WaitStop(start)
 		if !ok {
-			logutil.Errorf("children pipeline closed unexpectedly")
+			select {
+			case <-r.proc.Ctx.Done():
+				logutil.Infof("process context done during merge receive")
+			default:
+				logutil.Errorf("children pipeline closed unexpectedly")
+			}
 			r.receiverListener = append(r.receiverListener[:chosen], r.receiverListener[chosen+1:]...)
 			r.aliveMergeReceiver--
 			return nil, true, nil
@@ -92,7 +122,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 	}
 }
 
-func (r *ReceiverOperator) FreeOperator(failed bool) {
+func (r *ReceiverOperator) FreeMergeTypeOperator(failed bool) {
 	for r.aliveMergeReceiver > 0 {
 		chosen, value, ok := reflect.Select(r.receiverListener)
 		if !ok {
