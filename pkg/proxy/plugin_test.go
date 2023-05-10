@@ -198,10 +198,12 @@ func TestRPCPlugin(t *testing.T) {
 			})
 			require.NoError(t, s.Start())
 			defer func() {
-				_ = s.Close()
+				require.NoError(t, s.Close())
 			}()
 			p, err := newRPCPlugin(addr, time.Second)
-			defer p.Close()
+			defer func() {
+				require.NoError(t, p.Close())
+			}()
 			require.NoError(t, err)
 			rec, err := p.RecommendCN(ctx, clientInfo{})
 			require.NoError(t, err)
