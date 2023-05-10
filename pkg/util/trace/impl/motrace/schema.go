@@ -118,7 +118,7 @@ var (
 	messageCol      = table.TextColumn("message", "log message")
 	extraCol        = table.JsonColumn("extra", "log dynamic fields")
 	errCodeCol      = table.StringDefaultColumn("err_code", `0`, "error code info")
-	stackCol        = table.StringWithScale("stack", 4096, "stack info")
+	stackCol        = table.StringWithScale("stack", 2048, "stack info")
 	traceIDCol      = table.UuidStringColumn("trace_id", "trace uniq id")
 	spanIDCol       = table.SpanIDStringColumn("span_id", "span uniq id")
 	spanKindCol     = table.StringColumn("span_kind", "span kind, enum: internal, statement, remote")

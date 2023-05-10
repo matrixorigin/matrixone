@@ -17,6 +17,8 @@ package blockio
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -31,6 +33,11 @@ var (
 	_jobPool = sync.Pool{
 		New: func() any {
 			return new(tasks.Job)
+		},
+	}
+	_readerPool = sync.Pool{
+		New: func() any {
+			return new(objectio.ObjectReader)
 		},
 	}
 )
@@ -48,6 +55,19 @@ func getJob(
 func putJob(job *tasks.Job) {
 	job.Reset()
 	_jobPool.Put(job)
+}
+
+func getReader(
+	fs fileservice.FileService,
+	location objectio.Location) *objectio.ObjectReader {
+	job := _readerPool.Get().(*objectio.ObjectReader)
+	job.Init(location, fs)
+	return job
+}
+
+func putReader(reader *objectio.ObjectReader) {
+	reader.Reset()
+	_readerPool.Put(reader)
 }
 
 // At present, the read and write operations of all modules of mo-service use blockio.
@@ -108,22 +128,35 @@ func jobFactory(
 	)
 }
 
+func fetchReader(params prefetchParams) (reader *objectio.ObjectReader) {
+	if params.reader != nil {
+		reader = params.reader
+	} else {
+		reader = getReader(params.fs, params.key)
+	}
+	return
+}
+
 // prefetch data job
 func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
+	reader := fetchReader(params)
 	return getJob(
 		ctx,
-		makeName(params.reader.GetName()),
+		makeName(reader.GetName()),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := params.reader.ReadMultiBlocks(ctx,
+			ioVectors, err := reader.ReadMultiBlocks(ctx,
 				params.ids, nil)
 			if err != nil {
 				res.Err = err
 				return
 			}
 			res.Res = ioVectors
+			if params.reader == nil {
+				putReader(reader)
+			}
 			return
 		},
 	)
@@ -131,19 +164,23 @@ func prefetchJob(ctx context.Context, params prefetchParams) *tasks.Job {
 
 // prefetch metadata job
 func prefetchMetaJob(ctx context.Context, params prefetchParams) *tasks.Job {
+	reader := fetchReader(params)
 	return getJob(
 		ctx,
-		makeName(params.reader.GetName()),
+		makeName(reader.GetName()),
 		JTLoad,
 		func(_ context.Context) (res *tasks.JobResult) {
 			// TODO
 			res = &tasks.JobResult{}
-			ioVectors, err := params.reader.ReadMeta(ctx, nil)
+			ioVectors, err := reader.ReadMeta(ctx, nil)
 			if err != nil {
 				res.Err = err
 				return
 			}
 			res.Res = ioVectors
+			if params.reader == nil {
+				putReader(reader)
+			}
 			return
 		},
 	)

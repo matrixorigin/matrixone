@@ -147,6 +147,7 @@ func (store *NoopTxnStore) ObserveTxn(
 	visitTable func(tbl any),
 	rotateTable func(dbName, tblName string, dbid, tid uint64),
 	visitMetadata func(block any),
+	visitSegment func(any),
 	visitAppend func(bat any),
 	visitDelete func(deletes []uint32, prefix []byte)) {
 }
