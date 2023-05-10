@@ -196,8 +196,10 @@ func TestRPCPlugin(t *testing.T) {
 					Recommendation: tt.response,
 				})
 			})
-			s.Start()
-			defer s.Close()
+			require.NoError(t, s.Start())
+			defer func() {
+				_ = s.Close()
+			}()
 			p, err := newRPCPlugin(addr, time.Second)
 			defer p.Close()
 			require.NoError(t, err)
