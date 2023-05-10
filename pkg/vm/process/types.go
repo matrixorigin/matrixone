@@ -151,8 +151,9 @@ type Process struct {
 	Reg Register
 	Lim Limitation
 
-	vp *vectorPool
-	mp *mpool.MPool
+	vp           *vectorPool
+	mp           *mpool.MPool
+	prepareBatch *batch.Batch
 
 	// unix timestamp
 	UnixTime int64

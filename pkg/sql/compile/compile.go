@@ -692,9 +692,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
-		bat, err := constructValueScanBatch(ctx, c.proc, n)
-		if err != nil {
-			return nil, err
+		bat := c.proc.GetPrepareBatch()
+		if bat == nil {
+			var err error
+
+			if bat, err = constructValueScanBatch(ctx, c.proc, n); err != nil {
+				return nil, err
+			}
 		}
 		ds := &Scope{
 			Magic:      Normal,
