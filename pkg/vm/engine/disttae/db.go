@@ -33,7 +33,8 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	e.Lock()
 	defer e.Unlock()
 
-	packer, put := e.packerPool.Get()
+	var packer *types.Packer
+	put := e.packerPool.Get(&packer)
 	defer put()
 
 	{
