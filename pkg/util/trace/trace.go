@@ -45,16 +45,23 @@ func IsEnable() bool {
 
 var gTracerHolder atomic.Value
 
+type ITracerHolder interface {
+	GetTracer() Tracer
+}
+
 type tracerHolder struct {
 	tracer Tracer
 }
 
+func (h *tracerHolder) GetTracer() Tracer { return h.tracer }
+
 func SetDefaultTracer(tracer Tracer) {
-	gTracerHolder.Store(&tracerHolder{tracer: tracer})
+	var holder ITracerHolder = &tracerHolder{tracer: tracer}
+	gTracerHolder.Store(holder)
 }
 
 func DefaultTracer() Tracer {
-	return gTracerHolder.Load().(*tracerHolder).tracer
+	return gTracerHolder.Load().(ITracerHolder).GetTracer()
 }
 
 func init() {

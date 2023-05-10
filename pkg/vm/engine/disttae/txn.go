@@ -126,15 +126,6 @@ func (txn *Transaction) WriteBatch(
 	return nil
 }
 
-func (txn *Transaction) CleanNilBatch() {
-	for i := 0; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
-			txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
-			i--
-		}
-	}
-}
-
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var size uint64
 
@@ -186,7 +177,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		for i := 0; i < len(mp[key]); i++ {
 			s3Writer.Put(mp[key][i], txn.proc)
 		}
-		err = s3Writer.MergeBlock(len(s3Writer.Bats), txn.proc, false)
+		err = s3Writer.SortAndFlush(txn.proc)
 
 		if err != nil {
 			return err
