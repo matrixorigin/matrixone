@@ -15,7 +15,6 @@
 package export
 
 import (
-	"bytes"
 	"context"
 	"time"
 
@@ -36,10 +35,7 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ena
 			options := []etl.FSWriterOption{
 				etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
 			}
-
-			csv := etl.NewCSVWriter(ctx, bytes.NewBuffer(nil), etl.NewFSWriter(ctx, fs, options...))
-			return etl.NewSqlWriter(ctx, tbl, csv)
-
+			return etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
 		}
 	case table.TaeExtension:
 		mp, err := mpool.NewMPool("etl_fs_writer", 0, mpool.NoFixed)

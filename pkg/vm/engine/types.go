@@ -66,6 +66,8 @@ type Attribute struct {
 	Comment string
 	// AutoIncrement is auto incr or not
 	AutoIncrement bool
+	// Seqnum, do not change during the whole lifetime of the table
+	Seqnum uint16
 }
 
 type PropertiesDef struct {
@@ -120,6 +122,10 @@ type CommentDef struct {
 	Comment string
 }
 
+type VersionDef struct {
+	Version uint32
+}
+
 type PartitionDef struct {
 	Partitioned int8
 	Partition   string
@@ -153,6 +159,7 @@ type TableDef interface {
 }
 
 func (*CommentDef) tableDef()    {}
+func (*VersionDef) tableDef()    {}
 func (*PartitionDef) tableDef()  {}
 func (*ViewDef) tableDef()       {}
 func (*AttributeDef) tableDef()  {}
@@ -165,6 +172,14 @@ func (def *CommentDef) ToPBVersion() TableDefPB {
 	return TableDefPB{
 		Def: &TableDefPB_CommentDef{
 			CommentDef: def,
+		},
+	}
+}
+
+func (def *VersionDef) ToPBVersion() TableDefPB {
+	return TableDefPB{
+		Def: &TableDefPB_VersionDef{
+			VersionDef: def,
 		},
 	}
 }

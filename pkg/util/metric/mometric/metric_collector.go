@@ -328,30 +328,30 @@ func (s *mfsetETL) GetBatch(ctx context.Context, buf *bytes.Buffer) table.Export
 		for _, metric := range mf.Metric {
 			// reserved labels
 			row.Reset()
-			row.SetColumnVal(metricNameColumn, mf.GetName())
-			row.SetColumnVal(metricNodeColumn, mf.GetNode())
-			row.SetColumnVal(metricRoleColumn, mf.GetRole())
+			row.SetColumnVal(metricNameColumn, table.StringField(mf.GetName()))
+			row.SetColumnVal(metricNodeColumn, table.StringField(mf.GetNode()))
+			row.SetColumnVal(metricRoleColumn, table.StringField(mf.GetRole()))
 			// custom labels
 			for _, lbl := range metric.Label {
-				row.SetVal(lbl.GetName(), lbl.GetValue())
+				row.SetVal(lbl.GetName(), table.StringField(lbl.GetValue()))
 			}
 
 			switch mf.GetType() {
 			case pb.MetricType_COUNTER:
 				time := localTime(metric.GetCollecttime())
-				row.SetColumnVal(metricCollectTimeColumn, time)
-				row.SetColumnVal(metricValueColumn, metric.Counter.GetValue())
+				row.SetColumnVal(metricCollectTimeColumn, table.TimeField(time))
+				row.SetColumnVal(metricValueColumn, table.Float64Field(metric.Counter.GetValue()))
 				_ = writeValues(row)
 			case pb.MetricType_GAUGE:
 				time := localTime(metric.GetCollecttime())
-				row.SetColumnVal(metricCollectTimeColumn, time)
-				row.SetColumnVal(metricValueColumn, metric.Gauge.GetValue())
+				row.SetColumnVal(metricCollectTimeColumn, table.TimeField(time))
+				row.SetColumnVal(metricValueColumn, table.Float64Field(metric.Gauge.GetValue()))
 				_ = writeValues(row)
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
 					time := localTime(sample.GetDatetime())
-					row.SetColumnVal(metricCollectTimeColumn, time)
-					row.SetColumnVal(metricValueColumn, sample.GetValue())
+					row.SetColumnVal(metricCollectTimeColumn, table.TimeField(time))
+					row.SetColumnVal(metricValueColumn, table.Float64Field(sample.GetValue()))
 					_ = writeValues(row)
 				}
 			default:

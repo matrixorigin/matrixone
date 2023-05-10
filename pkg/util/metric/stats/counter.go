@@ -28,6 +28,11 @@ func (c *Counter) Add(delta int64) (new int64) {
 	return c.global.Add(delta)
 }
 
+// Set swaps the global counter value
+func (c *Counter) Swap(n int64) int64 {
+	return c.global.Swap(n)
+}
+
 // Load return the global counter value
 func (c *Counter) Load() int64 {
 	return c.global.Load()

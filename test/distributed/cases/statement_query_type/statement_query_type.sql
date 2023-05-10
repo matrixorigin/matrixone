@@ -331,9 +331,7 @@ show collation;
 show collation like '%';
 load data infile '$resources/load_data/test.csv' into table test_table;
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
--- @bvt:issue#7772
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
--- @bvt:issue
 rollback ;
 drop account if exists query_type;

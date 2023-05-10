@@ -90,7 +90,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: multi-cn-e2e_linux_x86_reports
+          name: multi-cn-e2e-with-proxy-linux-x86-reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
