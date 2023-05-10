@@ -123,6 +123,10 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 				}
 			}
 
+			if err = executor.resultVector.PreExtendAndReset(1); err != nil {
+				return nil, err
+			}
+
 			err = executor.evalFn(executor.parameterResults, executor.resultVector, proc, 1)
 			if err == nil {
 				result := executor.resultVector.GetResultVector()
@@ -131,11 +135,6 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 				}
 
 				fixed.resultVector = result.ToConst(0, 1, proc.Mp())
-				//if result.IsConst() {
-				//	fixed.resultVector, err = result.Dup(proc.Mp())
-				//} else {
-				//	fixed.resultVector = result.ToConst(0, 1, proc.Mp())
-				//}
 
 				executor.Free()
 				return fixed, err
@@ -238,14 +237,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 			return nil, err
 		}
 	}
-	typ := expr.resultVector.GetResultVector().GetType()
-	expr.resultVector.GetResultVector().Reset(*typ)
 
-	if expr.resultVector.GetResultVector().Length() < batches[0].Length() {
-		if err = expr.resultVector.GetResultVector().PreExtend(batches[0].Length(), expr.m); err != nil {
-			return nil, err
-		}
+	if err = expr.resultVector.PreExtendAndReset(batches[0].Length()); err != nil {
+		return nil, err
 	}
+
 	if err = expr.evalFn(
 		expr.parameterResults, expr.resultVector, proc, batches[0].Length()); err != nil {
 		return nil, err

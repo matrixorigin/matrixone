@@ -16,6 +16,7 @@ package vector
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -238,6 +239,7 @@ func (p *FunctionParameterScalarNull[T]) UnSafeGetAllValue() []T {
 type FunctionResultWrapper interface {
 	GetResultVector() *Vector
 	Free()
+	PreExtendAndReset(size int) error
 }
 
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
@@ -245,6 +247,10 @@ var _ FunctionResultWrapper = &FunctionResult[int64]{}
 type FunctionResult[T types.FixedSizeT] struct {
 	vec *Vector
 	mp  *mpool.MPool
+
+	isVarlena bool
+	cols      []T
+	length    uint64
 }
 
 func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
@@ -255,18 +261,61 @@ func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *Func
 }
 
 func newResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResult[T] {
-	return &FunctionResult[T]{
+	f := &FunctionResult[T]{
 		vec: v,
 		mp:  mp,
 	}
+
+	var tempT T
+	var s interface{} = &tempT
+	if _, ok := s.(*types.Varlena); ok {
+		f.isVarlena = true
+	}
+	return f
+}
+
+func (fr *FunctionResult[T]) PreExtendAndReset(size int) error {
+	if fr.isVarlena {
+		if err := fr.vec.PreExtend(size, fr.mp); err != nil {
+			return err
+		}
+		fr.vec.Reset(*fr.vec.GetType())
+		return nil
+	}
+
+	fr.length = 0
+	if fr.vec.Capacity() < size {
+		if err := fr.vec.PreExtend(size, fr.mp); err != nil {
+			return err
+		}
+		fr.vec.Reset(*fr.vec.GetType())
+		fr.vec.SetLength(size)
+		fr.cols = MustFixedCol[T](fr.vec)
+		return nil
+	}
+
+	oldLength := fr.vec.Length()
+	fr.vec.Reset(*fr.vec.GetType())
+	fr.vec.SetLength(size)
+	if len(fr.cols) > 0 && size > oldLength {
+		fr.cols = MustFixedCol[T](fr.vec)
+	}
+	return nil
 }
 
 func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
-	if !fr.vec.IsConst() {
-		return AppendFixed(fr.vec, val, isnull, fr.mp)
-	} else if !isnull {
-		return SetConstFixed(fr.vec, val, fr.vec.Length(), fr.mp)
+	//if !fr.vec.IsConst() {
+	//	return AppendFixed(fr.vec, val, isnull, fr.mp)
+	//} else if !isnull {
+	//	return SetConstFixed(fr.vec, val, fr.vec.Length(), fr.mp)
+	//}
+	//return nil
+	if isnull {
+		nulls.Add(fr.vec.nsp, fr.length)
+	} else {
+		fr.cols[fr.length] = val
 	}
+	fr.length++
 	return nil
 }
 
@@ -382,10 +431,6 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, len
 
 func NewFunctionResultWrapper2(typ types.Type, mp *mpool.MPool) (FunctionResultWrapper, error) {
 	v := NewVec(typ)
-	err := v.PreExtend(16, mp)
-	if err != nil {
-		return nil, err
-	}
 
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:

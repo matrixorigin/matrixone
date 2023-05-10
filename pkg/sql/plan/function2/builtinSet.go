@@ -777,12 +777,7 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	vec := result.GetResultVector()
-	if vec.Length() < length {
-		err := vec.PreExtend(length, proc.Mp())
-		if err != nil {
-			return err
-		}
-	}
+	vec.SetLength(0)
 
 	keys := make([][]byte, hashmap.UnitLimit)
 	states := make([][3]uint64, hashmap.UnitLimit)

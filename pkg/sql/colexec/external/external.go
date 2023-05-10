@@ -700,6 +700,8 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 }
 
 func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) bool {
+	return true
+
 	_, span := trace.Start(ctx, "needRead")
 	defer span.End()
 	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
