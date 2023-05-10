@@ -1,0 +1,26 @@
+drop sequence if exists s1;
+create sequence s1 as smallint increment by -40 minvalue 30 maxvalue 100 cycle; 
+select nextval('s1');
+nextval(s1)
+100
+select nextval('s1');
+nextval(s1)
+60
+select nextval('s1');
+nextval(s1)
+100
+select currval('s1');
+currval(s1)
+100
+select lastval();
+lastval()
+100
+select setval('s1', 50);
+setval(s1, 50)
+50
+select lastval();
+lastval()
+50
+select nextval('s1');
+nextval(s1)
+100
