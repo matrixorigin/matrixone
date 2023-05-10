@@ -77,31 +77,33 @@ func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	sw.mux.Lock()
 	defer sw.mux.Unlock()
-	if len(sw.buffer) == 0 {
-		return 0, nil
-	}
-	var cnt int
-	var err error
-	// conditions that skip the flush
 	// 1. force is false and buffer size is less than BUFFER_FLUSH_LIMIT
+	// skip the flush
 	if !force && len(sw.buffer) < BUFFER_FLUSH_LIMIT {
 		return 0, nil
 	}
-	// 2. force is false and is rawlog table
-	if !force && sw.tbl.Table == "rawlog" {
-		return 0, nil
-	}
+	var err error
+	var cnt int
+
+	// 2. skip rawlog table direct insert
+	// flush to CSV for smooth out the write pressure
+	//if sw.tbl.Table == "rawlog" {
+	//	err = sw.dumpBufferToCSV()
+	//	if err == nil || force {
+	//		sw.buffer = sw.buffer[:0] // Clear the buffer
+	//	}
+	//	return 0, err
+	//}
 
 	cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
 	if err != nil {
-		if err := sw.dumpBufferToCSV(); err != nil {
-			return 0, err
+		// Need to clean the buffer anyway, no need to handle the error here
+		if force {
+			sw.dumpBufferToCSV()
 		}
-		return cnt, nil
 	}
-
 	sw.buffer = sw.buffer[:0] // Clear the buffer
-	return cnt, nil
+	return cnt, err
 }
 
 func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
@@ -112,7 +114,6 @@ func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
 	for _, row := range sw.buffer {
 		sw.csvWriter.WriteStrings(row)
 	}
-	sw.buffer = sw.buffer[:0] // Clear the buffer
 	return nil
 }
 
