@@ -161,7 +161,6 @@ func CalcStats(
 	expr *plan.Expr,
 	tableDef *plan.TableDef,
 	proc *process.Process,
-	sortKeyName string,
 	s *plan2.StatsInfoMap,
 ) (stats *plan.Stats, err error) {
 	var (
@@ -219,7 +218,7 @@ func CalcStats(
 	}
 
 	if expr != nil {
-		stats.Outcnt = plan2.EstimateOutCnt(expr, sortKeyName, stats.TableCnt, stats.Cost, s)
+		stats.Outcnt = plan2.EstimateOutCnt(expr, stats.TableCnt, stats.Cost, s)
 	} else {
 		stats.Outcnt = stats.TableCnt
 	}

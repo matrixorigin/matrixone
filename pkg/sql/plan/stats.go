@@ -197,7 +197,7 @@ func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builde
 	return -1
 }
 
-func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
+func estimateOutCntForEquality(expr *plan.Expr, tableCnt, cost float64, ndvMap map[string]float64) float64 {
 	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	ret, _ := CheckFilter(expr)
@@ -223,7 +223,7 @@ func calcOutCntByMinMax(funcName string, tableCnt, min, max, val float64) float6
 	return -1 // never reach here
 }
 
-func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string, tableCnt, cost float64, s *StatsInfoMap) float64 {
+func estimateOutCntForNonEquality(expr *plan.Expr, funcName string, tableCnt, cost float64, s *StatsInfoMap) float64 {
 	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	ret, _ := CheckFilter(expr)
@@ -254,7 +254,7 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string,
 }
 
 // estimate output lines for a filter
-func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, s *StatsInfoMap) float64 {
+func EstimateOutCnt(expr *plan.Expr, tableCnt, cost float64, s *StatsInfoMap) float64 {
 	if expr == nil {
 		return cost
 	}
@@ -264,14 +264,14 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
-			outcnt = estimateOutCntForEquality(expr, sortKeyName, tableCnt, cost, s.NdvMap)
+			outcnt = estimateOutCntForEquality(expr, tableCnt, cost, s.NdvMap)
 		case ">", "<", ">=", "<=":
 			//for filters like a>1, no good way to estimate, return 3 * equality
-			outcnt = estimateOutCntForNonEquality(expr, funcName, sortKeyName, tableCnt, cost, s)
+			outcnt = estimateOutCntForNonEquality(expr, funcName, tableCnt, cost, s)
 		case "and":
 			//get the smaller one of two children, and tune it down a little bit
-			out1 := EstimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, s)
-			out2 := EstimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, s)
+			out1 := EstimateOutCnt(exprImpl.F.Args[0], tableCnt, cost, s)
+			out2 := EstimateOutCnt(exprImpl.F.Args[1], tableCnt, cost, s)
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
@@ -279,8 +279,8 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
-			out1 := EstimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, s)
-			out2 := EstimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, s)
+			out1 := EstimateOutCnt(exprImpl.F.Args[0], tableCnt, cost, s)
+			out2 := EstimateOutCnt(exprImpl.F.Args[1], tableCnt, cost, s)
 			if out1 == out2 {
 				outcnt = out1 + out2
 			} else {
@@ -564,12 +564,8 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			if nonMonoExpr != nil {
 				sc := builder.compCtx.GetStatsCache()
 				if sc != nil {
-					var sortkeyName string
-					if node.TableDef.ClusterBy != nil {
-						sortkeyName = node.TableDef.ClusterBy.Name
-					}
 					fixColumnName(node.TableDef, nonMonoExpr)
-					outcnt := EstimateOutCnt(nonMonoExpr, sortkeyName, node.Stats.TableCnt, node.Stats.Cost, sc.GetStatsInfoMap(node.TableDef.TblId))
+					outcnt := EstimateOutCnt(nonMonoExpr, node.Stats.TableCnt, node.Stats.Cost, sc.GetStatsInfoMap(node.TableDef.TblId))
 					node.Stats.Selectivity *= (outcnt / node.Stats.TableCnt)
 					node.Stats.Outcnt = node.Stats.TableCnt * node.Stats.Selectivity
 					node.Stats.Cost = node.Stats.Outcnt
