@@ -21,13 +21,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-var metaTableMatchRegexp = regexp.MustCompile(`\_\d+\_meta`)
+var metaTableMatchRegexp = regexp.MustCompile(`\_\d+\_(meta|seg)`)
 var segTableMatchRegexp = regexp.MustCompile(`\_\d+\_seg`)
+var blkTableMatchRegexp = regexp.MustCompile(`\_\d+\_meta`)
 
 func IsMetaTable(name string) bool {
 	return metaTableMatchRegexp.MatchString(name)
 }
 
+func IsBlkTable(name string) bool {
+	return blkTableMatchRegexp.MatchString(name)
+}
 func IsSegTable(name string) bool {
 	return segTableMatchRegexp.MatchString(name)
 }
