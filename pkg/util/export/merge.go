@@ -331,6 +331,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 				reader.Close()
 				return err
 			}
+			reader.Close()
 			cacheFileData.Reset()
 		}
 		// delete empty file or file already uploaded

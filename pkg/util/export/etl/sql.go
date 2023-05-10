@@ -70,7 +70,7 @@ func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 
 func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 	sw.buffer = append(sw.buffer, row.ToStrings())
-	sw.flushBuffer(false)
+	//sw.flushBuffer(false)
 	return nil
 }
 
@@ -79,9 +79,9 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	defer sw.mux.Unlock()
 	// 1. force is false and buffer size is less than BUFFER_FLUSH_LIMIT
 	// skip the flush
-	if !force && len(sw.buffer) < BUFFER_FLUSH_LIMIT {
-		return 0, nil
-	}
+	//if !force && len(sw.buffer) < BUFFER_FLUSH_LIMIT {
+	//	return 0, nil
+	//}
 	var err error
 	var cnt int
 
@@ -98,9 +98,7 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
 	if err != nil {
 		// Need to clean the buffer anyway, no need to handle the error here
-		if force {
-			sw.dumpBufferToCSV()
-		}
+		sw.dumpBufferToCSV()
 	}
 	sw.buffer = sw.buffer[:0] // Clear the buffer
 	return cnt, err
@@ -185,9 +183,9 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 
 	err = tx.Commit() // Commit the transaction
 	// todo: adjust this sleep time
-	if tbl.Table == "rawlog" {
-		time.Sleep(10 * time.Second)
-	}
+	//if tbl.Table == "rawlog" {
+	//	time.Sleep(10 * time.Second)
+	//}
 	if err != nil {
 		return 0, err
 	}
