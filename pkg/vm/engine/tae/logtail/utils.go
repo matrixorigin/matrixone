@@ -586,7 +586,16 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 			continue
 		}
 		dbNode := node
+		var created, dropped bool
 		if dbNode.HasDropCommitted() {
+			dropped = true
+			if dbNode.CreatedAt.Equal(dbNode.DeletedAt) {
+				created = true
+			}
+		} else {
+			created = true
+		}
+		if dropped {
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(
 				collector.data.bats[DBDeleteIDX],
@@ -598,7 +607,8 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 				dbNode.GetEnd())
 			dbNode.TxnMVCCNode.AppendTuple(collector.data.bats[DBDeleteTxnIDX])
 			collector.data.bats[DBDeleteTxnIDX].GetVectorByName(SnapshotAttr_DBID).Append(entry.GetID(), false)
-		} else {
+		}
+		if created {
 			catalogEntry2Batch(collector.data.bats[DBInsertIDX],
 				entry,
 				node,
@@ -635,7 +645,16 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			continue
 		}
 		tblNode := node
-		if !tblNode.HasDropCommitted() {
+		var created, dropped bool
+		if tblNode.HasDropCommitted() {
+			dropped = true
+			if tblNode.CreatedAt.Equal(tblNode.DeletedAt) {
+				created = true
+			}
+		} else {
+			created = true
+		}
+		if created {
 			for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 				txnimpl.FillColumnRow(
 					entry,
@@ -674,7 +693,8 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			)
 
 			tblNode.TxnMVCCNode.AppendTuple(collector.data.bats[TBLInsertTxnIDX])
-		} else {
+		}
+		if dropped {
 			collector.data.bats[TBLDeleteTxnIDX].GetVectorByName(
 				SnapshotAttr_DBID).Append(entry.GetDB().GetID(), false)
 			collector.data.bats[TBLDeleteTxnIDX].GetVectorByName(
