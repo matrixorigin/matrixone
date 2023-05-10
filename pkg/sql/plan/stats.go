@@ -231,26 +231,25 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string,
 		return cost / 10
 	}
 
-	{
-		//check strict filter, otherwise can not estimate outcnt by min/max val
-		ret, col, constExpr, _ := CheckStrictFilter(expr)
-		if ret {
-			switch s.DataTypeMap[col.Name] {
-			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-				if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
-					return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.I64Val))
-				}
-			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-				if val, valOk := constExpr.Value.(*plan.Const_U64Val); valOk {
-					return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.U64Val))
-				}
-			case types.T_date:
-				if val, valOk := constExpr.Value.(*plan.Const_Dateval); valOk {
-					return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.Dateval))
-				}
+	//check strict filter, otherwise can not estimate outcnt by min/max val
+	ret, col, constExpr, _ := CheckStrictFilter(expr)
+	if ret {
+		switch s.DataTypeMap[col.Name] {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
+				return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.I64Val))
+			}
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			if val, valOk := constExpr.Value.(*plan.Const_U64Val); valOk {
+				return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.U64Val))
+			}
+		case types.T_date:
+			if val, valOk := constExpr.Value.(*plan.Const_Dateval); valOk {
+				return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.Dateval))
 			}
 		}
 	}
+
 	return cost / 2
 }
 
