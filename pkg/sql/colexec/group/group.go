@@ -261,7 +261,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		}
 		ctr.groupVecs[i].vec = vec
 		ctr.groupVecs[i].needFree = true
-		ctr.groupVecs[i].vec.GetType().SetNotNull(expr.Typ.NotNullable)
+
 		for j := range bat.Vecs {
 			if bat.Vecs[j] == vec {
 				ctr.groupVecs[i].needFree = false
@@ -281,6 +281,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
+			ctr.bat.Vecs[i].GetType().SetNotNull(!groupVecsNullable)
 			currentSize := vec.GetType().TypeSize()
 			switch currentSize {
 			case 1, 2, 4, 8, 16:
