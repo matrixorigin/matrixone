@@ -21,13 +21,13 @@ import (
 	"github.com/tidwall/btree"
 )
 
-type PartitionStateIter interface {
+type RowsIter interface {
 	Next() bool
 	Close() error
 	Entry() RowEntry
 }
 
-type partitionStateRowsIter struct {
+type rowsIter struct {
 	ts           types.TS
 	iter         btree.IterG[RowEntry]
 	firstCalled  bool
@@ -37,9 +37,9 @@ type partitionStateRowsIter struct {
 	iterDeleted  bool
 }
 
-func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *partitionStateRowsIter {
-	iter := p.Rows.Copy().Iter()
-	ret := &partitionStateRowsIter{
+func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
+	iter := p.rows.Copy().Iter()
+	ret := &rowsIter{
 		ts:          ts,
 		iter:        iter,
 		iterDeleted: iterDeleted,
@@ -51,7 +51,9 @@ func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDe
 	return ret
 }
 
-func (p *partitionStateRowsIter) Next() bool {
+var _ RowsIter = new(rowsIter)
+
+func (p *rowsIter) Next() bool {
 	for {
 
 		if !p.firstCalled {
@@ -98,16 +100,16 @@ func (p *partitionStateRowsIter) Next() bool {
 	}
 }
 
-func (p *partitionStateRowsIter) Entry() RowEntry {
+func (p *rowsIter) Entry() RowEntry {
 	return p.iter.Item()
 }
 
-func (p *partitionStateRowsIter) Close() error {
+func (p *rowsIter) Close() error {
 	p.iter.Release()
 	return nil
 }
 
-type partitionStatePrimaryKeyIter struct {
+type primaryKeyIter struct {
 	ts          types.TS
 	key         []byte
 	iter        btree.IterG[*PrimaryIndexEntry]
@@ -116,17 +118,19 @@ type partitionStatePrimaryKeyIter struct {
 	curRow      RowEntry
 }
 
-func (p *PartitionState) NewPrimaryKeyIter(ts types.TS, key []byte) *partitionStatePrimaryKeyIter {
-	iter := p.PrimaryIndex.Copy().Iter()
-	return &partitionStatePrimaryKeyIter{
+func (p *PartitionState) NewPrimaryKeyIter(ts types.TS, key []byte) *primaryKeyIter {
+	iter := p.primaryIndex.Copy().Iter()
+	return &primaryKeyIter{
 		ts:   ts,
 		key:  key,
 		iter: iter,
-		rows: p.Rows.Copy(),
+		rows: p.rows.Copy(),
 	}
 }
 
-func (p *partitionStatePrimaryKeyIter) Next() bool {
+var _ RowsIter = new(primaryKeyIter)
+
+func (p *primaryKeyIter) Next() bool {
 	for {
 
 		if !p.firstCalled {
@@ -186,11 +190,11 @@ func (p *partitionStatePrimaryKeyIter) Next() bool {
 	}
 }
 
-func (p *partitionStatePrimaryKeyIter) Entry() RowEntry {
+func (p *primaryKeyIter) Entry() RowEntry {
 	return p.curRow
 }
 
-func (p *partitionStatePrimaryKeyIter) Close() error {
+func (p *primaryKeyIter) Close() error {
 	p.iter.Release()
 	return nil
 }

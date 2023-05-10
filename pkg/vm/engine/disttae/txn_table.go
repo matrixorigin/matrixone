@@ -1054,7 +1054,7 @@ func (tbl *txnTable) newReader(
 		return nil, err
 	}
 
-	var iter logtailreplay.PartitionStateIter
+	var iter logtailreplay.RowsIter
 	if len(encodedPrimaryKey) > 0 {
 		iter = parts[partitionIndex].NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
