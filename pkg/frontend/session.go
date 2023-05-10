@@ -918,10 +918,12 @@ func checkPlanIsInsertValues(p *plan.Plan) (bool, *batch.Batch) {
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if _, ok := ses.prepareStmts[name]; !ok {
+	if stmt, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
 			return moerr.NewInvalidState(ses.requestCtx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
 		}
+	} else {
+		stmt.Close()
 	}
 
 	plan := prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan()
