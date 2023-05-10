@@ -526,21 +526,16 @@ true
 null
 drop table row04;
 drop table if exists row05;
-[unknown result because it is related to issue#9288]
 create table row05(col1 blob,col2 json,col3 binary(10) not null);
-[unknown result because it is related to issue#9288]
 insert into row05 values('abcdef','{"t1":"a"}',456);
-[unknown result because it is related to issue#9288]
 insert into row05 values('_bcdef','{"t1":"c"}',100000);
-[unknown result because it is related to issue#9288]
 insert into row05 values('__cdef',null,0);
-[unknown result because it is related to issue#9288]
 select (col1,col2) = ('abcdef','{"t1":"a"}') from row05;
-[unknown result because it is related to issue#9288]
-select (col1,col2) <> ('abcdef','{"t1":"a"}') from row05;
-[unknown result because it is related to issue#9288]
+(col1, col2) = (abcdef, {"t1":"a"})
+true
+false
+false
 select (col1,col2) != ('abcdef','{"ehyiuwqnve":"ashyiujewv"}') from row05;
-[unknown result because it is related to issue#9288]
+invalid argument operator <>, bad value [JSON JSON]
 drop table row05;
-[unknown result because it is related to issue#9288]
 drop database test;
