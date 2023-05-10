@@ -310,6 +310,7 @@ func (b *TxnLogtailRespBuilder) rotateTable(dbName, tableName string, dbid, tid 
 func (b *TxnLogtailRespBuilder) BuildResp() {
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaInsBatch, false)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_meta", b.currTableID), b.currDBName, blkMetaDelBatch, true)
+	b.buildLogtailEntry(b.currTableID, b.currDBID, fmt.Sprintf("_%d_seg", b.currTableID), b.currDBName, segMetaDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataDelBatch, true)
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
 

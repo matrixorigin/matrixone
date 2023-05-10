@@ -599,12 +599,10 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 				DebugBatchToString("data", batch, false, zap.InfoLevel))
 		case TableRespKind_Blk:
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
-			logutil.Infof("[Logtail] send block meta for %q", b.tname)
 			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
 		case TableRespKind_Seg:
 			tableName = fmt.Sprintf("_%d_seg", b.tid)
-			logutil.Infof("[Logtail] send seg meta for %q", b.tname)
 			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("segmeta", batch, false, zap.InfoLevel))
 		}
@@ -628,7 +626,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Blk, b.blkMetaDelBatch, 0); err != nil {
 		return empty, err
 	}
-	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Seg, b.segMetaDelBatch, 0); err != nil {
+	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Seg, b.segMetaDelBatch, 0); err != nil {
 		return empty, err
 	}
 	keys := make([]uint32, 0, len(b.dataInsBatches))
