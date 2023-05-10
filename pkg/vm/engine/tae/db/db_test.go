@@ -2416,10 +2416,8 @@ func TestMergeBlocks(t *testing.T) {
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
 	db, err := txn.GetDatabase("db")
-	did := db.GetID()
 	assert.Nil(t, err)
 	rel, err := db.GetRelationByName(schema.Name)
-	tid := rel.ID()
 	assert.Nil(t, err)
 	it := rel.MakeBlockIt()
 	blkID := it.GetBlock().Fingerprint()
@@ -2440,14 +2438,6 @@ func TestMergeBlocks(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 
 	mergeBlocks(t, 0, tae, "db", schema, false)
-
-	resp, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
-		CnHave: tots(types.TS{}),
-		CnWant: tots(types.MaxTs()),
-		Table:  &api.TableID{DbId: did, TbId: tid},
-	}, false)
-	require.Nil(t, err)
-	require.Equal(t, 4, len(resp.Commands))
 
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)

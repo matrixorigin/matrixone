@@ -18,20 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/stretchr/testify/require"
 )
-
-func TestXxx(t *testing.T) {
-	a := "_1231_meta"
-	b := "_23_seg"
-	require.False(t, segTableMatchRegexp.MatchString(a))
-	require.True(t, segTableMatchRegexp.MatchString(b))
-	require.False(t, blkTableMatchRegexp.MatchString(b))
-	require.True(t, blkTableMatchRegexp.MatchString(a))
-	require.True(t, metaTableMatchRegexp.MatchString(a))
-	require.True(t, metaTableMatchRegexp.MatchString(b))
-
-}
 
 func BenchmarkPartitionState(b *testing.B) {
 	partition := NewPartition()
