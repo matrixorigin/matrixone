@@ -221,7 +221,7 @@ func CalcStats(
 	}
 
 	if expr != nil {
-		stats.Outcnt = plan2.EstimateOutCnt(expr, stats.TableCnt, stats.Cost, s)
+		stats.Outcnt = plan2.EstimateOutCnt(expr, stats.TableCnt, s)
 	} else {
 		stats.Outcnt = stats.TableCnt
 	}
