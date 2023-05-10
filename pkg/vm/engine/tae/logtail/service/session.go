@@ -112,6 +112,7 @@ type message struct {
 // morpcStream describes morpc stream.
 type morpcStream struct {
 	streamID uint64
+	remote   string
 	limit    int
 	logger   *log.MOLogger
 	cs       morpc.ClientSession
@@ -206,7 +207,7 @@ func NewSession(
 	ss := &Session{
 		sessionCtx:        ctx,
 		cancelFunc:        cancel,
-		logger:            logger.With(zap.Uint64("stream-id", stream.streamID)),
+		logger:            logger.With(zap.Uint64("stream-id", stream.streamID), zap.String("remote", stream.remote)),
 		sendTimeout:       sendTimeout,
 		responses:         responses,
 		notifier:          notifier,
