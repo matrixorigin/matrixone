@@ -4202,6 +4202,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	var privLevel privilegeLevelType
 	var objId int64
 	var sql string
+	var userId uint32
 
 	err = normalizeNamesOfRoles(ctx, gp.Roles)
 	if err != nil {
@@ -4209,6 +4210,15 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	}
 
 	account := ses.GetTenantInfo()
+	if account == nil {
+		ctxUserId := ctx.Value(defines.UserIDKey{})
+		if id, ok := ctxUserId.(uint32); ok {
+			userId = id
+		}
+	} else {
+		userId = account.GetUserID()
+	}
+
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -4225,7 +4235,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 
 	for i, role := range gp.Roles {
 		//check Grant privilege on xxx yyy to moadmin(accountadmin)
-		if account.IsNameOfAdminRoles(role.UserName) {
+		if account != nil && account.IsNameOfAdminRoles(role.UserName) {
 			err = moerr.NewInternalError(ctx, "the privilege can not be granted to the role %s", role.UserName)
 			goto handleFailed
 		}
@@ -4327,12 +4337,12 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 			}
 
 			if choice == 1 { //update the record
-				sql = getSqlForUpdateRolePrivs(int64(account.GetUserID()),
+				sql = getSqlForUpdateRolePrivs(int64(userId),
 					types.CurrentTimestamp().String2(time.UTC, 0),
 					gp.GrantOption, role.id, objType, objId, int64(privType))
 			} else if choice == 2 { //insert new record
 				sql = getSqlForInsertRolePrivs(role.id, role.name, objType.String(), objId,
-					int64(privType), privType.String(), privLevel.String(), int64(account.GetUserID()),
+					int64(privType), privType.String(), privLevel.String(), int64(userId),
 					types.CurrentTimestamp().String2(time.UTC, 0), gp.GrantOption)
 			}
 
@@ -7851,4 +7861,55 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) err
 	// 2. plsql.run(args, sql body)
 	// 3. catch any error and return
 	return nil
+}
+
+func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+	var err error
+	var sql string
+	tenantInfo := ses.GetTenantInfo()
+	if tenantInfo == nil || tenantInfo.IsAdminRole() {
+		return err
+	}
+	currentRole := tenantInfo.GetDefaultRole()
+
+	// 1.first change to moadmin/accountAdmin
+	var tenantCtx context.Context
+	tenantInfo = ses.GetTenantInfo()
+	// if is system account
+	if tenantInfo.IsSysTenant() {
+		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, uint32(rootID))
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+	} else {
+		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+	}
+
+	// 2.grant database privilege
+	switch st := stmt.(type) {
+	case *tree.CreateDatabase:
+		sql = fmt.Sprintf(`grant ownership on database %s to %s;`, st.Name, currentRole)
+	case *tree.CreateTable:
+		// get database name
+		var dbName string
+		if len(st.Table.SchemaName) == 0 {
+			dbName = ses.GetDatabaseName()
+		} else {
+			dbName = string(st.Table.SchemaName)
+		}
+		// get table name
+		tableName := string(st.Table.ObjectName)
+		sql = fmt.Sprintf(`grant ownership on table %s.%s to %s;`, dbName, tableName, currentRole)
+	}
+
+	bh := ses.GetBackgroundExec(tenantCtx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+
+	return err
 }
