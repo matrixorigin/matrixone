@@ -16,7 +16,6 @@ package blockio
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -260,7 +259,7 @@ func PrefetchFile(service fileservice.FileService, name string) error {
 	if err != nil {
 		return err
 	}
-	params := buildPrefetchParams2(reader)
+	params := buildPrefetchParamsByReader(reader)
 	for i := range bs {
 		idxes := make([]uint16, bs[i].GetColumnCount())
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {
