@@ -261,6 +261,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		}
 		ctr.groupVecs[i].vec = vec
 		ctr.groupVecs[i].needFree = true
+		ctr.groupVecs[i].vec.GetType().SetNotNull(expr.Typ.NotNullable)
 		for j := range bat.Vecs {
 			if bat.Vecs[j] == vec {
 				ctr.groupVecs[i].needFree = false

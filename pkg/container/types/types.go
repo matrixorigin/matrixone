@@ -104,7 +104,8 @@ type Type struct {
 	// todo: need to add new attribute DisplayWidth ?
 	Width int32
 	// Scale means number of fractional digits for decimal, timestamp, float, etc.
-	Scale int32
+	Scale   int32
+	NotNull bool
 }
 
 // ProtoSize is used by gogoproto.
@@ -388,6 +389,13 @@ func CharsetType(oid T) uint8 {
 
 func TypeSize(oid T) int {
 	return oid.TypeLen()
+}
+
+func (t Type) SetNotNull(b bool) {
+	t.NotNull = b
+}
+func (t Type) GetNotNull() bool {
+	return t.NotNull
 }
 
 func (t Type) GetSize() int32 {
