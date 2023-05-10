@@ -17,6 +17,7 @@ package service
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
@@ -48,7 +49,7 @@ func (w *Waterliner) Advance(update timestamp.Timestamp) {
 	defer w.Unlock()
 
 	if update.Less(w.waterline) {
-		panic("timestamp rollback for waterline")
+		logutil.Fatalf("timestamp rollback for waterline, current: %v, update: %v", w.waterline.String(), update.String())
 	}
 
 	w.waterline = update
