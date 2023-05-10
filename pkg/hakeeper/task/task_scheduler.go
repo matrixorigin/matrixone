@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	taskSchedulerDefaultTimeout = 2 * time.Second
+	taskSchedulerDefaultTimeout = 10 * time.Second
 )
 
 type scheduler struct {
