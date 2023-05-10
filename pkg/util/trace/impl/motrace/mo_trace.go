@@ -107,15 +107,13 @@ func (s *MOSpan) Size() int64 {
 	return int64(unsafe.Sizeof(*s)) + int64(len(s.Name))
 }
 
-var zeroTime = time.Time{}
-
 func (s *MOSpan) Free() {
 	s.SpanConfig.Reset()
 	s.Parent = nil
 	s.Name = ""
 	s.tracer = nil
-	s.StartTime = zeroTime
-	s.EndTime = zeroTime
+	s.StartTime = table.ZeroTime
+	s.EndTime = table.ZeroTime
 	spanPool.Put(s)
 }
 
@@ -127,18 +125,21 @@ func (s *MOSpan) GetTable() *table.Table { return spanView.OriginTable }
 
 func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
-	row.SetColumnVal(rawItemCol, spanView.Table)
-	row.SetColumnVal(spanIDCol, s.SpanID.String())
-	row.SetColumnVal(traceIDCol, s.TraceID.String())
-	row.SetColumnVal(spanKindCol, s.Kind.String())
-	row.SetColumnVal(parentSpanIDCol, s.Parent.SpanContext().SpanID.String())
-	row.SetColumnVal(nodeUUIDCol, GetNodeResource().NodeUuid)
-	row.SetColumnVal(nodeTypeCol, GetNodeResource().NodeType)
-	row.SetColumnVal(spanNameCol, s.Name)
-	row.SetColumnVal(startTimeCol, s.StartTime)
-	row.SetColumnVal(endTimeCol, s.EndTime)
-	row.SetColumnVal(durationCol, uint64(s.EndTime.Sub(s.StartTime))) // Duration
-	row.SetColumnVal(resourceCol, s.tracer.provider.resource.String())
+	row.SetColumnVal(rawItemCol, table.StringField(spanView.Table))
+	row.SetColumnVal(spanIDCol, table.BytesField(s.SpanID[:]))
+	row.SetColumnVal(traceIDCol, table.UuidField(s.TraceID[:]))
+	row.SetColumnVal(spanKindCol, table.StringField(s.Kind.String()))
+	psc := s.Parent.SpanContext()
+	if psc.SpanID != trace.NilSpanID {
+		row.SetColumnVal(parentSpanIDCol, table.BytesField(psc.SpanID[:]))
+	}
+	row.SetColumnVal(nodeUUIDCol, table.StringField(GetNodeResource().NodeUuid))
+	row.SetColumnVal(nodeTypeCol, table.StringField(GetNodeResource().NodeType))
+	row.SetColumnVal(spanNameCol, table.StringField(s.Name))
+	row.SetColumnVal(startTimeCol, table.TimeField(s.StartTime))
+	row.SetColumnVal(endTimeCol, table.TimeField(s.EndTime))
+	row.SetColumnVal(durationCol, table.Uint64Field(uint64(s.EndTime.Sub(s.StartTime)))) // Duration
+	row.SetColumnVal(resourceCol, table.StringField(s.tracer.provider.resource.String()))
 }
 
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
