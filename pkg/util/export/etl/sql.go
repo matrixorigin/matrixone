@@ -136,10 +136,6 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	defer sb.Reset()
 
 	// Start a new transaction
-	tx, err := db.Begin()
-	if err != nil {
-		return 0, err
-	}
 
 	for idx, row := range records {
 		if len(row) == 0 {
@@ -169,9 +165,8 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 
 		if sb.Len() >= maxLen || idx == len(records)-1 {
 			stmt := baseStr + sb.String() + ";"
-			_, err := tx.Exec(stmt)
+			_, err := db.Exec(stmt)
 			if err != nil {
-				tx.Rollback() // Rollback the transaction on error
 				return 0, err
 			}
 			sb.Reset()
@@ -180,14 +175,10 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 		}
 	}
 
-	err = tx.Commit() // Commit the transaction
 	// todo: adjust this sleep time
 	//if tbl.Table == "rawlog" {
 	//	time.Sleep(10 * time.Second)
 	//}
-	if err != nil {
-		return 0, err
-	}
 
 	return len(records), nil
 }
