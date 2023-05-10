@@ -24,25 +24,25 @@ import (
 // multiple blocks in an object/file
 type prefetchParams struct {
 	ids    map[uint16]*objectio.ReadBlockOptions
+	fs     fileservice.FileService
+	key    objectio.Location
 	reader *objectio.ObjectReader
 }
 
 func BuildPrefetchParams(service fileservice.FileService, key objectio.Location) (prefetchParams, error) {
-	reader, err := NewObjectReader(service, key)
-	if err != nil {
-		return prefetchParams{}, err
-	}
-	return buildPrefetchParams(reader), nil
+	return buildPrefetchParams(service, key), nil
 }
 
-func buildPrefetchParams(reader *BlockReader) prefetchParams {
+func buildPrefetchParams(service fileservice.FileService, key objectio.Location) prefetchParams {
 	ids := make(map[uint16]*objectio.ReadBlockOptions)
 	return prefetchParams{
-		ids:    ids,
-		reader: reader.GetObjectReader(),
+		ids: ids,
+		fs:  service,
+		key: key,
 	}
 }
-func buildPrefetchParams2(reader *BlockReader) prefetchParams {
+
+func buildPrefetchParamsByReader(reader *BlockReader) prefetchParams {
 	ids := make(map[uint16]*objectio.ReadBlockOptions)
 	return prefetchParams{
 		ids:    ids,
@@ -80,7 +80,12 @@ func (p *prefetchParams) mergeIds(ids2 map[uint16]*objectio.ReadBlockOptions) {
 func mergePrefetch(processes []prefetchParams) map[string]prefetchParams {
 	pc := make(map[string]prefetchParams)
 	for _, p := range processes {
-		name := p.reader.GetName()
+		var name string
+		if p.reader != nil {
+			name = p.reader.GetName()
+		} else {
+			name = p.key.Name().String()
+		}
 		old, ok := pc[name]
 		if !ok {
 			pc[name] = p
