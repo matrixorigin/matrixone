@@ -18,15 +18,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
 
@@ -486,3 +488,108 @@ func getAccountId(ctx context.Context) uint32 {
 //	}
 //	return accountId, userId, roleId
 //}
+
+func rewriteExpr(
+	ctx context.Context,
+	proc *process.Process,
+	compileCtx plan2.CompilerContext,
+	emptyBatch *batch.Batch,
+	params []*plan.Expr,
+	e *plan.Expr) (*plan.Expr, error) {
+
+	var err error
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		needResetFunction := false
+		for i, arg := range exprImpl.F.Args {
+			if _, ok := arg.Expr.(*plan.Expr_P); ok {
+				needResetFunction = true
+			}
+			if _, ok := arg.Expr.(*plan.Expr_V); ok {
+				needResetFunction = true
+			}
+			exprImpl.F.Args[i], err = rewriteExpr(ctx, proc, compileCtx, emptyBatch, params, arg)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// reset function
+		if needResetFunction {
+			e, err = plan2.BindFuncExprImplByPlanExpr(ctx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return e, nil
+
+	case *plan.Expr_P:
+		return plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, params[int(exprImpl.P.Pos)])
+
+	case *plan.Expr_V:
+		return plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, e)
+	}
+
+	return e, nil
+}
+
+func rowsetDataToVector(
+	ctx context.Context,
+	proc *process.Process,
+	compileCtx plan2.CompilerContext,
+	exprs []*plan.Expr,
+	targeVec *vector.Vector,
+	emptyBatch *batch.Batch,
+	params []*plan.Expr,
+	uf func(*vector.Vector, *vector.Vector, int64) error,
+) error {
+	var exprImpl *plan.Expr
+	var typ = plan2.MakePlan2Type(targeVec.GetType())
+	var err error
+
+	for _, e := range exprs {
+		if expr, ok := e.Expr.(*plan.Expr_F); ok {
+			if expr.F.Func.ObjName == "cast" {
+				castTyp := expr.F.Args[1].Typ
+				if typ.Id == castTyp.Id && typ.Width == castTyp.Width && typ.Scale == castTyp.Scale {
+					e = expr.F.Args[0]
+				}
+			}
+		}
+
+		if expr, ok := e.Expr.(*plan.Expr_P); ok {
+			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, params[int(expr.P.Pos)])
+			if err != nil {
+				return err
+			}
+		} else if _, ok := e.Expr.(*plan.Expr_V); ok {
+			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, e)
+			if err != nil {
+				return err
+			}
+		} else if _, ok := e.Expr.(*plan.Expr_C); ok {
+			exprImpl = e
+		} else {
+			exprImpl = plan2.DeepCopyExpr(e)
+			exprImpl, err = rewriteExpr(ctx, proc, compileCtx, emptyBatch, params, exprImpl)
+			if err != nil {
+				return err
+			}
+		}
+
+		exprImpl, err = plan2.ForceCastExpr(ctx, exprImpl, typ)
+		if err != nil {
+			return err
+		}
+
+		vec, err := colexec.EvalExpr(emptyBatch, proc, exprImpl)
+		if err != nil {
+			return err
+		}
+		if err = uf(targeVec, vec, 1); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
