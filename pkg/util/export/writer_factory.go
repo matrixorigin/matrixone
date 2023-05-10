@@ -35,7 +35,12 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ena
 			options := []etl.FSWriterOption{
 				etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
 			}
-			return etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
+			cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
+			if enableSqlWriter {
+				return etl.NewSqlWriter(ctx, tbl, cw)
+			} else {
+				return cw
+			}
 		}
 	case table.TaeExtension:
 		mp, err := mpool.NewMPool("etl_fs_writer", 0, mpool.NoFixed)

@@ -537,9 +537,8 @@ func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath stri
 		return writer, nil
 	} else {
 		// CSV
-		//sw := sqlWriter.NewSqlWriter(ctx)
 		fsWriter := etl.NewFSWriter(ctx, fs, etl.WithFilePath(filePath))
-		return etl.NewCSVWriter(ctx, bytes.NewBuffer(buf), fsWriter), nil
+		return etl.NewCSVWriter(ctx, fsWriter), nil
 	}
 }
 
