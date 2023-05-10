@@ -130,13 +130,12 @@ func (txn *Transaction) WriteBatch(
 }
 
 func (txn *Transaction) CleanNilBatch() {
-	nonNilWrites := make([]Entry, 0, len(txn.writes))
-	for _, write := range txn.writes {
-		if write.bat != nil && write.bat.Length() > 0 {
-			nonNilWrites = append(nonNilWrites, write)
+	for i := 0; i < len(txn.writes); i++ {
+		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
+			txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
+			i--
 		}
 	}
-	txn.writes = nonNilWrites
 }
 
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
