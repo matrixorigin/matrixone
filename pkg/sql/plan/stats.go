@@ -250,6 +250,19 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName string, tableCnt, co
 		}
 	}
 
+	//check strict filter, otherwise can not estimate outcnt by min/max val
+	ret, col, constExpr, leftFuncName := CheckFunctionFilter(expr)
+	if ret {
+		switch leftFuncName {
+		case "year":
+			if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
+				minVal := types.Date(s.MinValMap[col.Name])
+				maxVal := types.Date(s.MaxValMap[col.Name])
+				return calcOutCntByMinMax(funcName, tableCnt, float64(minVal.Year()), float64(maxVal.Year()), float64(val.I64Val))
+			}
+		}
+	}
+
 	return cost / 2
 }
 

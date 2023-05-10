@@ -518,6 +518,42 @@ func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
 	return false
 }
 
+// function filter means func(col) compared to const. for example year(col1)>1991
+func CheckFunctionFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, childFuncName string) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName := exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=", ">", "<", ">=", "<=":
+			switch child0 := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_F:
+				childFuncName = child0.F.Func.ObjName
+				switch childFuncName {
+				case "year":
+					switch child := child0.F.Args[0].Expr.(type) {
+					case *plan.Expr_Col:
+						col = child.Col
+					}
+				}
+			default:
+				return false, nil, nil, childFuncName
+			}
+			switch child1 := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				constExpr = child1.C
+				b = true
+				return
+			default:
+				return false, nil, nil, childFuncName
+			}
+		default:
+			return false, nil, nil, childFuncName
+		}
+	default:
+		return false, nil, nil, childFuncName
+	}
+}
+
 // strict filter means col compared to const. for example col1>1
 // func(col1)=1 is not strict
 func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, funcName string) {
