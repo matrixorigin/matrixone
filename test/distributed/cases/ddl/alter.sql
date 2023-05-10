@@ -11,13 +11,22 @@ create table foreign01(col1 int primary key,
                        col2 varchar(20),
                        col3 int,
                        col4 bigint);
+insert into foreign01 values(1,'shujuku',100,3247984);
+insert into foreign01 values(2,'数据库',328932,32324423432);
 drop table if exists foreign02;
 create table foreign02(col1 int,
                        col2 int,
                        col3 int primary key,
                        constraint fk foreign key fk(col1) references foreign01(col1));
+insert into foreign02 values(1,1,1);
+insert into foreign02 values(2,2,2);
+delete from foreign01 where col3 = 100;
 
+show create table foreign02;
 alter table foreign02 drop foreign key fk;
+show create table foreign02;
+drop table foreign01;
+drop table foreign02;
 
 -- alter table add/drop foreign key
 drop table if exists ti1;
@@ -36,9 +45,20 @@ insert into tm2 values (1,1,1), (2,2,2);
 
 alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
 alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
+show create table ti1;
+show create table tm1;
+
+delete from ti2 where c = 1;
+delete from tm2 where c = 1;
 
 alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
+
+show create table ti1;
+show create table tm1;
+
+delete from ti2 where c = 1;
+delete from tm2 where c = 1;
 
 drop table  ti1;
 drop table  tm1;
@@ -52,14 +72,25 @@ create temporary table foreign01(col1 int primary key,
 					 col2 varchar(20),
 					 col3 int,
 					 col4 bigint);
+insert into foreign01 values(1,'shujuku',100,3247984);
+insert into foreign01 values(2,'数据库',328932,32324423432);
 drop table if exists foreign02;
 create temporary table foreign02(col1 int,
 					 col2 int,
 					 col3 int primary key,
 					 constraint fk foreign key fk(col1) references foreign01(col1));
+insert into foreign02 values(1,1,1);
+insert into foreign02 values(2,2,2);
+delete from foreign01 where col3 = 100;
 
+show create table foreign02;
 alter table foreign02 drop foreign key fk;
+show create table foreign02;
 
+drop table foreign01;
+drop table foreign02;
+
+-- alter table add/drop foreign key
 drop table if exists ti1;
 drop table if exists tm1;
 drop table if exists ti2;
@@ -76,9 +107,20 @@ insert into tm2 values (1,1,1), (2,2,2);
 
 alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
 alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
+show create table ti1;
+show create table tm1;
+
+delete from ti2 where c = 1;
+delete from tm2 where c = 1;
 
 alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
+
+show create table ti1;
+show create table tm1;
+
+delete from ti2 where c = 1;
+delete from tm2 where c = 1;
 
 drop table  ti1;
 drop table  tm1;
