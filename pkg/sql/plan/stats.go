@@ -572,7 +572,11 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
-			node.Stats = builder.compCtx.Stats(node.ObjRef, rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess()))
+			if !needStats(node.TableDef) {
+				node.Stats = DefaultStats()
+			} else {
+				node.Stats = builder.compCtx.Stats(node.ObjRef, rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess()))
+			}
 		}
 
 	case plan.Node_FILTER:
@@ -596,7 +600,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	}
 }
 
-func NeedStats(tableDef *TableDef) bool {
+func needStats(tableDef *TableDef) bool {
 	switch tableDef.TblId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return false

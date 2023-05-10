@@ -44,9 +44,6 @@ import (
 var _ engine.Relation = new(txnTable)
 
 func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
-	if !plan2.NeedStats(tbl.getTableDef()) {
-		return plan2.DefaultStats(), nil
-	}
 	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
 	if !ok {
 		return plan2.DefaultStats(), nil
