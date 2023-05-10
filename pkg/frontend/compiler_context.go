@@ -694,6 +694,9 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	// read meta's data
 	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, "", moerr.NewResultFileNotFound(proc.Ctx, makeResultMetaPath(proc.SessionInfo.Account, uuid))
+		}
 		return nil, "", err
 	}
 	// cols
@@ -745,4 +748,9 @@ func (tcc *TxnCompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta 
 
 func (tcc *TxnCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return isDbPublishing(tcc.GetContext(), dbName, tcc.GetSession())
+}
+
+// makeResultMetaPath gets query result meta path
+func makeResultMetaPath(accountName string, statementId string) string {
+	return fmt.Sprintf("query_result_meta/%s_%s.blk", accountName, statementId)
 }
