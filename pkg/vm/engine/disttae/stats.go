@@ -28,22 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func groupBlocksToObjectsForStats(blocks [][]catalog.BlockInfo) []*catalog.BlockInfo {
-	var objs []*catalog.BlockInfo
-	objMap := make(map[string]int, 0)
-	for i := range blocks {
-		for j := range blocks[i] {
-			block := blocks[i][j]
-			objName := block.MetaLocation().Name().String()
-			if _, ok := objMap[objName]; !ok {
-				objMap[objName] = 1
-				objs = append(objs, &block)
-			}
-		}
-	}
-	return objs
-}
-
 func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	switch t.Oid {
 	case types.T_bool:
@@ -97,40 +81,43 @@ func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, table
 
 	var err error
 	var objectMeta objectio.ObjectMeta
-	//group blocks to objects
-	objs := groupBlocksToObjectsForStats(blocks)
+	lenobjs := 0
 
 	var init bool
-	for i := range objs {
-		location := objs[i].MetaLocation()
-		if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
-			return nil, err
-		}
-		tableCnt += float64(objectMeta.BlockHeader().Rows())
-		if !init {
-			init = true
-			for idx, col := range tableDef.Cols[:lenCols] {
-				objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
-				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
-				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
-				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
-			}
-		} else {
-			for idx, col := range tableDef.Cols[:lenCols] {
-				objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
-				zm := objColMeta.ZoneMap().Clone()
-				if !zm.IsInited() {
-					continue
+	for i := range blocks {
+		for _, blk := range blocks[i] {
+			location := blk.MetaLocation()
+			if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
+				if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
+					return nil, err
 				}
-				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
-				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
-				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
+				lenobjs++
+				tableCnt += float64(objectMeta.BlockHeader().Rows())
+				if !init {
+					init = true
+					for idx, col := range tableDef.Cols[:lenCols] {
+						objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
+						info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
+						info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
+						info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
+					}
+				} else {
+					for idx, col := range tableDef.Cols[:lenCols] {
+						objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
+						zm := objColMeta.ZoneMap().Clone()
+						if !zm.IsInited() {
+							continue
+						}
+						index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
+						index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
+						info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
+					}
+				}
 			}
 		}
 	}
 
 	//adjust ndv
-	lenobjs := float64(len(objs))
 	if lenobjs > 1 {
 		for idx := range tableDef.Cols[:lenCols] {
 			rate := info.ColumnNDVs[idx] / tableCnt
@@ -138,7 +125,7 @@ func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, table
 				rate = 1
 			}
 			if rate < 0.1 {
-				info.ColumnNDVs[idx] /= math.Pow(lenobjs, (1 - rate))
+				info.ColumnNDVs[idx] /= math.Pow(float64(lenobjs), (1 - rate))
 			}
 			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
 			if ndvUsingZonemap != -1 && info.ColumnNDVs[idx] > ndvUsingZonemap {
