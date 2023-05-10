@@ -2,8 +2,8 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -95,7 +95,7 @@ func TestPluginRouter_Route(t *testing.T) {
 			}, nil
 		},
 		mockRouteFn: func(ctx context.Context, ci clientInfo) (*CNServer, error) {
-			return nil, errors.New("boom")
+			return nil, moerr.NewInternalErrorNoCtx("boom")
 		},
 		expectErr: true,
 	}}

@@ -64,12 +64,14 @@ type Config struct {
 	// NB: the connection between proxy and plugin is assumed to be stable, external orchestrators
 	// are responsible for ensuring the stability of rpc tunnels, for example, by deploying proxy and
 	// plugin in a same machine and communicate through local loopback address
-	Plugin *struct {
-		// Backend is the plugin backend URL
-		Backend string `toml:"backend"`
-		// Timeout is the rpc timeout when communicate with the plugin backend
-		Timeout time.Duration `toml:"timeout"`
-	} `toml:"plugin"`
+	Plugin *PluginConfig `toml:"plugin"`
+}
+
+type PluginConfig struct {
+	// Backend is the plugin backend URL
+	Backend string `toml:"backend"`
+	// Timeout is the rpc timeout when communicate with the plugin backend
+	Timeout time.Duration `toml:"timeout"`
 }
 
 // Option is used to set up configuration.
