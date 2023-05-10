@@ -28,19 +28,14 @@ import (
 // while Join/Intersect/Minus ... are not
 func (r *ReceiverOperator) InitReceiver(proc *process.Process, isMergeType bool) {
 	r.proc = proc
-	l := len(proc.Reg.MergeReceivers)
 	if isMergeType {
-		r.aliveMergeReceiver = l
-		r.receiverListener = make([]reflect.SelectCase, l)
+		r.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
+		r.receiverListener = make([]reflect.SelectCase, r.aliveMergeReceiver)
 		for i, mr := range proc.Reg.MergeReceivers {
 			r.receiverListener[i] = reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
 				Chan: reflect.ValueOf(mr.Ch),
 			}
-		}
-	} else {
-		for i := 0; i < l; i++ {
-			r.chClosed = append(r.chClosed, false)
 		}
 	}
 }
@@ -53,7 +48,6 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 		return nil, true, nil
 	case bat, ok := <-r.proc.Reg.MergeReceivers[regIdx].Ch:
 		if !ok {
-			r.chClosed[regIdx] = true
 			return nil, true, nil
 		}
 		return bat, false, nil
@@ -61,10 +55,8 @@ func (r *ReceiverOperator) ReceiveFromSingleReg(regIdx int, analyze process.Anal
 }
 
 func (r *ReceiverOperator) FreeAllReg() {
-	for i := range r.chClosed {
-		if !r.chClosed[i] {
-			r.FreeSingleReg(i)
-		}
+	for i := range r.proc.Reg.MergeReceivers {
+		r.FreeSingleReg(i)
 	}
 }
 
