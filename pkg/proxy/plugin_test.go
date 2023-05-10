@@ -115,16 +115,27 @@ func TestPluginRouter_Route(t *testing.T) {
 			return nil, moerr.NewInternalErrorNoCtx("boom")
 		},
 		expectErr: true,
+	}, {
+		name: "unknown action",
+		mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
+			return &plugin.Recommendation{
+				Action: -1,
+			}, nil
+		},
+		expectErr: true,
+	}, {
+		name: "error recommend",
+		mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
+			return nil, moerr.NewInternalErrorNoCtx("boom")
+		},
+		expectErr: true,
 	}}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &mockPlugin{mockRecommendCNFn: tt.mockRecommendCNFn}
 			r := &mockRouter{mockRouteFn: tt.mockRouteFn}
-			pr := &pluginRouter{
-				plugin: p,
-				Router: r,
-			}
+			pr := newPluginRouter(r, p)
 			cn, err := pr.Route(context.TODO(), clientInfo{})
 			if tt.expectErr {
 				require.Error(t, err)
@@ -187,10 +198,10 @@ func TestRPCPlugin(t *testing.T) {
 			})
 			s.Start()
 			defer s.Close()
-			plugin, err := newRPCPlugin(addr, time.Second)
-			defer plugin.Close()
+			p, err := newRPCPlugin(addr, time.Second)
+			defer p.Close()
 			require.NoError(t, err)
-			rec, err := plugin.RecommendCN(ctx, clientInfo{})
+			rec, err := p.RecommendCN(ctx, clientInfo{})
 			require.NoError(t, err)
 			require.Equal(t, tt.response.Action, rec.Action)
 		})

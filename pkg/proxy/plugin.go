@@ -32,15 +32,11 @@ type pluginRouter struct {
 	plugin Plugin
 }
 
-func newPluginRouter(r Router, backend string, timeout time.Duration) (*pluginRouter, error) {
-	p, err := newRPCPlugin(backend, timeout)
-	if err != nil {
-		return nil, err
-	}
+func newPluginRouter(r Router, p Plugin) *pluginRouter {
 	return &pluginRouter{
 		Router: r,
 		plugin: p,
-	}, nil
+	}
 }
 
 // Route implements Router.Route.
