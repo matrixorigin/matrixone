@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 // stats cache is small, no need to use LRU for now
@@ -143,24 +142,6 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableCnt float
 	}
 }
 
-func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
-	if sortOrder == -1 {
-		return cost
-	}
-	// coefficient is 0.1 when tableCnt equals cost, and 1 when tableCnt >> cost
-	coefficient := math.Pow(0.1, cost/tableCnt)
-
-	outCnt := cost * coefficient
-	if sortOrder == 0 {
-		return outCnt * 0.9
-	} else if sortOrder == 1 {
-		return outCnt * 0.7
-	} else {
-		return outCnt * 0.5
-	}
-
-}
-
 // cols in one table, return if ndv of  multi column is high enough
 func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool {
 	sc := builder.compCtx.GetStatsCache()
@@ -219,21 +200,16 @@ func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builde
 func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
 	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
-	ret, col := CheckFilter(expr)
+	ret, _ := CheckFilter(expr)
 	if !ret {
 		return cost / 100
 	}
-	sortOrder := util.GetClusterByColumnOrder(sortKeyName, col.Name)
-	//if col is clusterby, we assume most of the rows in blocks we read is needed
-	//otherwise, deduce selectivity according to ndv
-	if sortOrder != -1 {
-		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
-	} else {
-		ndv := getExprNdv(expr, ndvMap, 0, nil)
-		if ndv > 0 {
-			return tableCnt / ndv
-		}
+
+	ndv := getExprNdv(expr, ndvMap, 0, nil)
+	if ndv > 0 {
+		return tableCnt / ndv
 	}
+
 	return cost / 100
 }
 
@@ -250,16 +226,12 @@ func calcOutCntByMinMax(funcName string, tableCnt, min, max, val float64) float6
 func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string, tableCnt, cost float64, s *StatsInfoMap) float64 {
 	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
-	ret, col := CheckFilter(expr)
+	ret, _ := CheckFilter(expr)
 	if !ret {
 		return cost / 10
 	}
-	sortOrder := util.GetClusterByColumnOrder(sortKeyName, col.Name)
-	//if col is clusterby, we assume most of the rows in blocks we read is needed
-	//otherwise, deduce selectivity according to ndv
-	if sortOrder != -1 {
-		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
-	} else {
+
+	{
 		//check strict filter, otherwise can not estimate outcnt by min/max val
 		ret, col, constExpr, _ := CheckStrictFilter(expr)
 		if ret {

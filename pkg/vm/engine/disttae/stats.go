@@ -171,8 +171,6 @@ func CalcStats(
 		isMonoExpr                  bool
 		meta                        objectio.ObjectMeta
 		skipThisObject              bool
-		// defCols, exprCols           []int
-		// maxCol                      int
 	)
 	if isMonoExpr = plan2.CheckExprIsMonotonic(ctx, expr); isMonoExpr {
 		columnMap, _, _, _ = plan2.GetColumnsByExpr(expr, tableDef)
