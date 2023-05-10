@@ -1239,6 +1239,13 @@ const (
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s";`
 
+	getUserRolesExpectPublicRoleFormat = `select role.role_id, role.role_name 
+				from mo_catalog.mo_role role, mo_catalog.mo_user_grant mg 
+				where role.role_id = mg.role_id 
+					and role.role_id != %d  
+					and mg.user_id = %d 
+					order by role.role_id;`
+
 	checkUdfArgs = `select args,function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
 
 	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and args = '%s';`
@@ -1613,6 +1620,11 @@ func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId i
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
 }
+
+func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
+	return fmt.Sprintf(getUserRolesExpectPublicRoleFormat, pRoleId, userId)
+}
+
 func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid bool, account_id uint64) (string, error) {
 	if checkNameValid {
 		err := inputNameIsInvalid(ctx, dbName)
@@ -2698,6 +2710,73 @@ handleFailed:
 	return err
 }
 
+// doSetSecondaryRoleAll set the session role of the user with smallness role_id
+func doSetSecondaryRoleAll(ctx context.Context, ses *Session) error {
+	var err error
+	var sql string
+	var userId uint32
+	var erArray []ExecResult
+	var roleId int64
+	var roleName string
+
+	account := ses.GetTenantInfo()
+	// get current user_id
+	userId = account.GetUserID()
+
+	// init role_id and role_name
+	roleId = publicRoleID
+	roleName = publicRoleName
+
+	// step1:get all roles expect public
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	sql = getSqlForgetUserRolesExpectPublicRole(publicRoleID, userId)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+	if execResultArrayHasData(erArray) {
+		roleId, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			goto handleFailed
+		}
+
+		roleName, err = erArray[0].GetString(ctx, 0, 1)
+		if err != nil {
+			goto handleFailed
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	// step2 : switch the default role and role id;
+	account.SetDefaultRoleID(uint32(roleId))
+	account.SetDefaultRole(roleName)
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
 // doSwitchRole accomplishes the Use Role and Use Secondary Role statement
 func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 	var err error
@@ -2711,6 +2790,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 		//use secondary role all or none
 		switch sr.SecondaryRoleType {
 		case tree.SecondaryRoleTypeAll:
+			doSetSecondaryRoleAll(ctx, ses)
 			account.SetUseSecondaryRole(true)
 		case tree.SecondaryRoleTypeNone:
 			account.SetUseSecondaryRole(false)
