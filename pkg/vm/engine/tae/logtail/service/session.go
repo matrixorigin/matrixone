@@ -136,7 +136,7 @@ func (s *morpcStream) write(
 	}
 	chunks := Split(buf[:n], s.limit)
 
-	s.logger.Debug("start to send response by segment",
+	s.logger.Debug("send response by segment",
 		zap.Int("chunk-number", len(chunks)),
 		zap.Int("chunk-limit", s.limit),
 		zap.Int("message-size", size),
@@ -247,7 +247,6 @@ func NewSession(
 						ss.logger.Error("fail to send logtail response",
 							zap.Error(err),
 							zap.String("timeout", msg.timeout.String()),
-							zap.String("response", msg.response.String()),
 						)
 						return err
 					}
@@ -355,9 +354,6 @@ func (ss *Session) Publish(
 		ss.exactFrom = from
 	})
 
-	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
-	defer cancel()
-
 	qualified := ss.FilterLogtail(wraps...)
 	// if there's no incremental logtail, heartbeat by interval
 	if len(qualified) == 0 {
@@ -369,10 +365,8 @@ func (ss *Session) Publish(
 		}
 	}
 
-	ss.logger.Debug("publish incremental logtail",
-		zap.Any("From", from.String()),
-		zap.Any("To", to.String()),
-	)
+	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
+	defer cancel()
 
 	err := ss.SendUpdateResponse(sendCtx, ss.exactFrom, to, qualified...)
 	if err == nil {
