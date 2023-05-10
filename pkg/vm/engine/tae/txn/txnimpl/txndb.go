@@ -483,7 +483,7 @@ func (db *txnDB) PrePrepare() (err error) {
 	}
 	for _, table := range db.tables {
 		if err = table.PrePrepare(); err != nil {
-			panic(err)
+			return
 		}
 	}
 	return

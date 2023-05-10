@@ -303,7 +303,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
-		*tree.ShowLocks, *tree.ShowFunctionStatus:
+		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus:
 		s.Typ = int(astShowNone)
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		s.Typ = int(astExplain)
@@ -519,7 +519,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				break
 			}
 			tmpBatch.Clean(ses.GetMemPool())
-			bat, err := reader.LoadColumns(ctx, indexes, block.BlockHeader().BlockID().Sequence(), ses.GetMemPool())
+			bat, err := reader.LoadColumns(ctx, indexes, nil, block.BlockHeader().BlockID().Sequence(), ses.GetMemPool())
 			if err != nil {
 				return err
 			}

@@ -19,6 +19,7 @@ import (
 	"encoding"
 	"fmt"
 	"math/bits"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -375,6 +376,16 @@ func (n *Bitmap) Unmarshal(data []byte) {
 	size := int(types.DecodeUint64(data[:8]))
 	data = data[8:]
 	n.data = types.DecodeSlice[uint64](data[:size])
+}
+
+func (n *Bitmap) UnmarshalNoCopy(data []byte) {
+	n.emptyFlag = types.DecodeInt32(data[:4])
+	data = data[4:]
+	n.len = int64(types.DecodeUint64(data[:8]))
+	data = data[8:]
+	size := int(types.DecodeUint64(data[:8]))
+	data = data[8:]
+	n.data = unsafe.Slice((*uint64)(unsafe.Pointer(&data[0])), size/8)
 }
 
 func (n *Bitmap) String() string {

@@ -17,6 +17,7 @@ package catalog
 import (
 	"fmt"
 	"io"
+	"sync/atomic"
 )
 
 type TableMVCCNode struct {
@@ -39,7 +40,7 @@ func (e *TableMVCCNode) CloneData() *TableMVCCNode {
 }
 
 func (e *TableMVCCNode) String() string {
-	return fmt.Sprintf("schema.v.%d", e.Schema.Version)
+	return fmt.Sprintf("schema.v%d.s%d.c%d", e.Schema.Version, e.Schema.Extra.NextColSeqnum, len(e.Schema.ColDefs))
 }
 
 // for create drop in one txn
@@ -69,8 +70,7 @@ func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 
 type TableNode struct {
 	// The latest schema. A shortcut to the schema in the last mvvcnode.
-	// TODO(aptend): use atomic.Pointer?
-	schema *Schema
+	schema atomic.Pointer[Schema]
 }
 
 func (node *TableNode) WriteTo(w io.Writer) (n int64, err error) {

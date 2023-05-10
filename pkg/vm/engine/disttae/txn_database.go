@@ -16,9 +16,10 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -113,9 +114,12 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 	if v, ok := db.txn.tableMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*txnTable), nil
 	}
+	// get relation from the txn created tables cache: created by this txn
 	if v, ok := db.txn.createMap.Load(genTableKey(ctx, name, db.databaseId)); ok {
 		return v.(*txnTable), nil
 	}
+
+	// special tables
 	if db.databaseName == catalog.MO_CATALOG {
 		switch name {
 		case catalog.MO_DATABASE:
@@ -142,22 +146,24 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 	tbl := &txnTable{
-		db:           db,
-		tableId:      item.Id,
-		tableName:    item.Name,
-		defs:         item.Defs,
-		tableDef:     item.TableDef,
-		primaryIdx:   item.PrimaryIdx,
-		clusterByIdx: item.ClusterByIdx,
-		relKind:      item.Kind,
-		viewdef:      item.ViewDef,
-		comment:      item.Comment,
-		partitioned:  item.Partitioned,
-		partition:    item.Partition,
-		createSql:    item.CreateSql,
-		constraint:   item.Constraint,
-		rowid:        item.Rowid,
-		rowids:       item.Rowids,
+		db:            db,
+		tableId:       item.Id,
+		version:       item.Version,
+		tableName:     item.Name,
+		defs:          item.Defs,
+		tableDef:      item.TableDef,
+		primaryIdx:    item.PrimaryIdx,
+		primarySeqnum: item.PrimarySeqnum,
+		clusterByIdx:  item.ClusterByIdx,
+		relKind:       item.Kind,
+		viewdef:       item.ViewDef,
+		comment:       item.Comment,
+		partitioned:   item.Partitioned,
+		partition:     item.Partition,
+		createSql:     item.CreateSql,
+		constraint:    item.Constraint,
+		rowid:         item.Rowid,
+		rowids:        item.Rowids,
 	}
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
@@ -354,6 +360,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		}
 	}
 	tbl.primaryIdx = -1
+	tbl.primarySeqnum = -1
 	tbl.clusterByIdx = -1
 	tbl.rowids = make([]types.Rowid, len(cols))
 	for i, col := range cols {
@@ -370,6 +377,7 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		}
 		if col.constraintType == catalog.SystemColPKConstraint {
 			tbl.primaryIdx = i
+			tbl.primarySeqnum = i
 		}
 		if col.isClusterBy == 1 {
 			tbl.clusterByIdx = i
@@ -396,12 +404,13 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 func (db *txnDatabase) openSysTable(key tableKey, id uint64, name string,
 	defs []engine.TableDef) engine.Relation {
 	tbl := &txnTable{
-		db:           db,
-		tableId:      id,
-		tableName:    name,
-		defs:         defs,
-		primaryIdx:   -1,
-		clusterByIdx: -1,
+		db:            db,
+		tableId:       id,
+		tableName:     name,
+		defs:          defs,
+		primaryIdx:    -1,
+		primarySeqnum: -1,
+		clusterByIdx:  -1,
 	}
 	tbl.getTableDef()
 	return tbl

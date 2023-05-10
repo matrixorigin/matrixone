@@ -71,6 +71,8 @@ func (blk *block) PrepareCompact() bool {
 	return blk.meta.PrepareCompact()
 }
 
+func (blk *block) FreezeAppend() {}
+
 func (blk *block) Pin() *common.PinnedItem[*block] {
 	blk.Ref()
 	return &common.PinnedItem[*block]{
@@ -78,35 +80,18 @@ func (blk *block) Pin() *common.PinnedItem[*block] {
 	}
 }
 
-func (blk *block) GetColumnDataByNames(
-	txn txnif.AsyncTxn,
-	attrs []string,
-) (view *model.BlockView, err error) {
-	colIdxes := make([]int, len(attrs))
-	schema := blk.meta.GetSchema()
-	for i, attr := range attrs {
-		colIdxes[i] = schema.GetColIdx(attr)
-	}
-	return blk.GetColumnDataByIds(txn, colIdxes)
-}
-
-func (blk *block) GetColumnDataByName(
-	txn txnif.AsyncTxn,
-	attr string,
-) (view *model.ColumnView, err error) {
-	colIdx := blk.meta.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(txn, colIdx)
-}
-
 func (blk *block) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
+	readSchema any,
 	colIdxes []int,
 ) (view *model.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
+	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnDatas(
 		node.MustPNode(),
 		txn,
+		schema,
 		colIdxes,
 		false)
 }
@@ -116,14 +101,17 @@ func (blk *block) GetColumnDataByIds(
 // then all the block data pointed by meta location also be visible to txn;
 func (blk *block) GetColumnDataById(
 	txn txnif.AsyncTxn,
-	colIdx int,
+	readSchema any,
+	col int,
 ) (view *model.ColumnView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
+	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnData(
 		node.MustPNode(),
 		txn,
-		colIdx,
+		schema,
+		col,
 		false)
 }
 
@@ -150,12 +138,15 @@ func (blk *block) BatchDedup(
 
 func (blk *block) GetValue(
 	txn txnif.AsyncTxn,
+	readSchema any,
 	row, col int) (v any, isNull bool, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
+	schema := readSchema.(*catalog.Schema)
 	return blk.getPersistedValue(
 		node.MustPNode(),
 		txn,
+		schema,
 		row,
 		col,
 		false)
@@ -222,9 +213,9 @@ func (blk *block) getPersistedRowByFilter(
 		return
 	}
 	var sortKey containers.Vector
-	if sortKey, err = blk.LoadPersistedColumnData(
-		blk.meta.GetSchema().GetSingleSortKeyIdx(),
-	); err != nil {
+	schema := blk.meta.GetSchema()
+	idx := schema.GetSingleSortKeyIdx()
+	if sortKey, err = blk.LoadPersistedColumnData(schema, idx); err != nil {
 		return
 	}
 	defer sortKey.Close()

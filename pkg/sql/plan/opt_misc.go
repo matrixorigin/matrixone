@@ -420,8 +420,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 		if node.JoinType == plan.Node_INNER {
 			//only inner join can deduce new predicate
-			builder.pushdownFilters(node.Children[0], predsDeduction(rightPushdown, node.OnList), separateNonEquiConds)
-			builder.pushdownFilters(node.Children[1], predsDeduction(leftPushdown, node.OnList), separateNonEquiConds)
+			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
 		}
 
 		if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {

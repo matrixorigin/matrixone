@@ -375,6 +375,11 @@ func genCreateColumnTuple(col column, rowid types.Rowid, needRowid bool, m *mpoo
 		if err := vector.AppendFixed(bat.Vecs[idx], col.isClusterBy, false, m); err != nil {
 			return nil, err
 		}
+		idx = catalog.MO_COLUMNS_ATT_SEQNUM_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_seqnum
+		if err := vector.AppendFixed(bat.Vecs[idx], col.seqnum, false, m); err != nil {
+			return nil, err
+		}
 
 	}
 	if needRowid {
@@ -944,8 +949,10 @@ func genColumns(accountId uint32, tableName, databaseName string,
 			databaseName: databaseName,
 			num:          num,
 			comment:      attrDef.Attr.Comment,
+			seqnum:       uint16(num - 1),
 		}
 		attrDef.Attr.ID = uint64(num)
+		attrDef.Attr.Seqnum = uint16(num - 1)
 		col.hasDef = 0
 		if attrDef.Attr.Default != nil {
 			defaultExpr, err := types.Encode(attrDef.Attr.Default)
@@ -1350,16 +1357,16 @@ func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.Bl
 	return infos, steps
 }
 
-func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef, primaryIdx int, ts timestamp.Timestamp, num int, expr *plan.Expr) []*blockReader {
+func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef, primarySeqnum int, ts timestamp.Timestamp, num int, expr *plan.Expr) []*blockReader {
 	rds := make([]*blockReader, num)
 	for i := 0; i < num; i++ {
 		rds[i] = &blockReader{
-			fs:         fs,
-			tableDef:   tblDef,
-			primaryIdx: primaryIdx,
-			expr:       expr,
-			ts:         ts,
-			ctx:        ctx,
+			fs:            fs,
+			tableDef:      tblDef,
+			primarySeqnum: primarySeqnum,
+			expr:          expr,
+			ts:            ts,
+			ctx:           ctx,
 		}
 	}
 	return rds

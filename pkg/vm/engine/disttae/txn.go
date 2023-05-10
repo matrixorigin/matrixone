@@ -19,7 +19,6 @@ import (
 	"math"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -49,25 +46,23 @@ func (txn *Transaction) getBlockInfos(
 		if i >= len(states) {
 			continue
 		}
-		state := states[i]
-		iter := state.Blocks.Iter()
 		var objectName objectio.ObjectNameShort
-		for ok := iter.First(); ok; ok = iter.Next() {
-			entry := iter.Item()
-			if !entry.Visible(ts) {
-				continue
-			}
-			location := entry.BlockInfo.MetaLocation()
+		state := states[i]
+		iter := state.NewBlocksIter(ts)
+		for iter.Next() {
+			entry := iter.Entry()
+			location := entry.MetaLocation()
 			if !objectio.IsSameObjectLocVsShort(location, &objectName) {
 				// Prefetch object meta
 				if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
+					iter.Close()
 					return
 				}
 				objectName = *location.Name().Short()
 			}
 			blocks[i] = append(blocks[i], entry.BlockInfo)
 		}
-		iter.Release()
+		iter.Close()
 	}
 	return
 }
@@ -96,21 +91,23 @@ func (txn *Transaction) WriteBatch(
 	truncate bool) error {
 	txn.readOnly = false
 	bat.Cnt = 1
-	if typ == INSERT && !insertBatchHasRowId {
-		txn.genBlock()
-		len := bat.Length()
-		vec := vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < len; i++ {
-			if err := vector.AppendFixed(vec, txn.genRowId(), false,
-				txn.proc.Mp()); err != nil {
-				return err
+	if typ == INSERT {
+		if !insertBatchHasRowId {
+			txn.genBlock()
+			len := bat.Length()
+			vec := vector.NewVec(types.T_Rowid.ToType())
+			for i := 0; i < len; i++ {
+				if err := vector.AppendFixed(vec, txn.genRowId(), false,
+					txn.proc.Mp()); err != nil {
+					return err
+				}
 			}
+			bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+			bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 		}
-		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
-		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 		// for TestPrimaryKeyCheck
 		if txn.blockId_raw_batch != nil {
-			txn.blockId_raw_batch[txn.getCurrentBlockId()] = bat
+			txn.blockId_raw_batch[*txn.getCurrentBlockId()] = bat
 		}
 		txn.workspaceSize += uint64(bat.Size())
 	}
@@ -189,7 +186,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		for i := 0; i < len(mp[key]); i++ {
 			s3Writer.Put(mp[key][i], txn.proc)
 		}
-		err = s3Writer.MergeBlock(len(s3Writer.Bats), txn.proc, false)
+		err = s3Writer.SortAndFlush(txn.proc)
 
 		if err != nil {
 			return err
@@ -262,7 +259,7 @@ func (txn *Transaction) updatePosForCNBlock(vec *vector.Vector, idx int) error {
 		} else {
 			sid := location.Name().SegmentId()
 			blkid := objectio.NewBlockid(&sid, location.Name().Num(), uint16(location.ID()))
-			txn.cnBlkId_Pos[string(blkid[:])] = Pos{idx: idx, offset: int64(i)}
+			txn.cnBlkId_Pos[*blkid] = Pos{idx: idx, offset: int64(i)}
 		}
 	}
 	return nil
@@ -296,7 +293,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	} else {
 		// get uuid string
 		if typ == INSERT {
-			colexec.Srv.PutCnSegment(string(uid[:]), colexec.CnBlockIdType)
+			colexec.Srv.PutCnSegment(&uid, colexec.CnBlockIdType)
 		}
 	}
 	return nil
@@ -317,8 +314,8 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		deleteBlkId[blkid] = true
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
-		if colexec.Srv != nil && colexec.Srv.GetCnSegmentType(string(uid[:])) == colexec.CnBlockIdType {
-			txn.deletedBlocks.addDeletedBlocks(string(blkid[:]), []int64{int64(rowOffset)})
+		if colexec.Srv != nil && colexec.Srv.GetCnSegmentType(uid) == colexec.CnBlockIdType {
+			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
 		}
@@ -409,10 +406,9 @@ func (txn *Transaction) genBlock() {
 	txn.rowId[5] = INIT_ROWID_OFFSET
 }
 
-func (txn *Transaction) getCurrentBlockId() string {
+func (txn *Transaction) getCurrentBlockId() *types.Blockid {
 	rowId := types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
-	blkId := rowId.GetBlockid()
-	return string(blkId[:])
+	return rowId.GetBlockid()
 }
 
 func (txn *Transaction) genRowId() types.Rowid {
@@ -424,70 +420,32 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-// needRead determine if a block needs to be read
-func needRead(ctx context.Context, expr *plan.Expr, meta objectio.ObjectMeta, blkInfo catalog.BlockInfo, tableDef *plan.TableDef, columnMap map[int]int, columns []int, maxCol int, proc *process.Process) bool {
-	// TODO(CMS): I just removed the codes here. And will rewrite it tomorrow.
+func evalFilterExprWithZonemap(
+	ctx context.Context,
+	meta objectio.ColumnMetaFetcher,
+	expr *plan.Expr,
+	columnMap map[int]int,
+	proc *process.Process,
+) (selected bool) {
+	// TODO(CMS): just set true temporarily.
 	return true
 
-	var err error
 	if expr == nil {
-		return true
-	}
-	notReportErrCtx := errutil.ContextWithNoReport(ctx, true)
-
-	// if expr match no columns, just eval expr
-	if len(columns) == 0 {
-		return true
-
-		// XXX bad code will cause panic if expression is Expr_Col
-		//bat := batch.NewWithSize(0)
-		//defer bat.Clean(proc.Mp())
-		//ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
-		//if err != nil {
-		//	return true
-		//}
-		//return ifNeed
+		selected = true
+		return
 	}
 
-	// // get min max data from Meta
-	// datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
-	// if err != nil || datas == nil {
-	//  return true
-	// }
-
-	// // use all min/max data to build []vectors.
-	// buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
-	buildVectors, err := buildColumnsZMVectors(meta, int(blkInfo.MetaLocation().ID()), columns, tableDef, proc.Mp())
-	if err != nil || len(buildVectors) == 0 {
-		return true
+	if len(columnMap) == 0 {
+		selected = evalNoColumnFilterExpr(ctx, expr, proc)
+		return
 	}
-	bat := batch.NewWithSize(maxCol + 1)
-	defer bat.Clean(proc.Mp())
-	for k, v := range columnMap {
-		for i, realIdx := range columns {
-			if realIdx == v {
-				bat.SetVector(int32(k), buildVectors[i])
-				break
-			}
-		}
+	zm := colexec.EvalFilterByZonemap(ctx, meta, expr, columnMap, proc)
+	if !zm.IsInited() || zm.GetType() != types.T_bool {
+		selected = true
+	} else {
+		selected = types.DecodeBool(zm.GetMaxBuf())
 	}
-	bat.SetZs(buildVectors[0].Length(), proc.Mp())
-
-	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
-	if err != nil {
-		return true
-	}
-
-	return ifNeed
-}
-
-func blockInfoMarshal(meta catalog.BlockInfo) []byte {
-	sz := unsafe.Sizeof(meta)
-	return unsafe.Slice((*byte)(unsafe.Pointer(&meta)), sz)
-}
-
-func BlockInfoUnmarshal(data []byte) *catalog.BlockInfo {
-	return (*catalog.BlockInfo)(unsafe.Pointer(&data[0]))
+	return
 }
 
 /* used by multi-dn

@@ -824,8 +824,7 @@ WHERE a IN (SELECT 4 FROM t1 AS x2)
 )
 ) AS result
 FROM t1 AS x3;
-result
-false
+not supported: a quantified subquery's left operand can't contain subquery
 SELECT
 (
 (36, (SELECT 1 IN (SELECT 1 FROM t1 AS x1)))
@@ -836,8 +835,7 @@ WHERE a IN (SELECT 4 FROM t1 AS x2)
 )
 ) AS result
 FROM t1 AS x3;
-result
-false
+not supported: a quantified subquery's left operand can't contain subquery
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 CREATE TABLE t1 (

@@ -26,7 +26,7 @@ type Argument struct {
 }
 
 type container struct {
-	executors colexec.ExpressionExecutor
+	executors []colexec.ExpressionExecutor
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -36,7 +36,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 func (ctr *container) cleanExecutor() {
-	if ctr.executors != nil {
-		ctr.executors.Free()
+	for i := range ctr.executors {
+		if ctr.executors[i] != nil {
+			ctr.executors[i].Free()
+		}
 	}
 }

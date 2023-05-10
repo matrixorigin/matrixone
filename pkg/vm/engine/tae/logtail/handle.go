@@ -70,6 +70,7 @@ Main workflow:
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -272,14 +273,18 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 		if node.IsAborted() {
 			continue
 		}
-		tblNode := node
 		if b.scope == ScopeColumns {
 			var dstBatch *containers.Batch
-			if !tblNode.HasDropCommitted() {
+			if !node.HasDropCommitted() {
 				dstBatch = b.insBatch
 				// fill unique syscol fields if inserting
 				for _, syscol := range catalog.SystemColumnSchema.ColDefs {
-					txnimpl.FillColumnRow(entry, tblNode, syscol.Name, b.insBatch.GetVectorByName(syscol.Name))
+					txnimpl.FillColumnRow(entry, node, syscol.Name, b.insBatch.GetVectorByName(syscol.Name))
+				}
+				// send dropped column del
+				for _, name := range node.BaseNode.Schema.Extra.DroppedAttrs {
+					b.delBatch.GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name))), false)
+					b.delBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.GetEnd(), false)
 				}
 			} else {
 				dstBatch = b.delBatch
@@ -289,16 +294,16 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			rowidVec := dstBatch.GetVectorByName(catalog.AttrRowID)
 			commitVec := dstBatch.GetVectorByName(catalog.AttrCommitTs)
 			tableID := entry.GetID()
-			commitTs := tblNode.GetEnd()
+			commitTs := node.GetEnd()
 			for _, usercol := range node.BaseNode.Schema.ColDefs {
 				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))), false)
 				commitVec.Append(commitTs, false)
 			}
 		} else {
-			if tblNode.HasDropCommitted() {
-				catalogEntry2Batch(b.delBatch, entry, tblNode, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
+			if node.HasDropCommitted() {
+				catalogEntry2Batch(b.delBatch, entry, node, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), node.GetEnd())
 			} else {
-				catalogEntry2Batch(b.insBatch, entry, tblNode, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd())
+				catalogEntry2Batch(b.insBatch, entry, node, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), node.GetEnd())
 			}
 		}
 	}
@@ -390,7 +395,8 @@ type TableLogtailRespBuilder struct {
 	checkpoint      string
 	blkMetaInsBatch *containers.Batch
 	blkMetaDelBatch *containers.Batch
-	dataInsBatch    *containers.Batch
+	segMetaDelBatch *containers.Batch
+	dataInsBatches  map[uint32]*containers.Batch // schema version -> data batch
 	dataDelBatch    *containers.Batch
 }
 
@@ -402,27 +408,28 @@ func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.Ta
 		checkpoint:    ckp,
 	}
 	b.BlockFn = b.VisitBlk
-
-	// TODO(aptend): there can be more than one schema.
-	schema := tbl.GetLastestSchema()
+	b.SegmentFn = b.VisitSeg
 
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
 	b.dname = tbl.GetDB().GetName()
-	b.tname = schema.Name
+	b.tname = tbl.GetLastestSchema().Name
 
-	b.dataInsBatch = makeRespBatchFromSchema(schema)
+	b.dataInsBatches = make(map[uint32]*containers.Batch)
 	b.dataDelBatch = makeRespBatchFromSchema(DelSchema)
 	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema)
 	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema)
+	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema)
 	return b
 }
 
 func (b *TableLogtailRespBuilder) Close() {
-	if b.dataInsBatch != nil {
-		b.dataInsBatch.Close()
-		b.dataInsBatch = nil
+	for _, vec := range b.dataInsBatches {
+		if vec != nil {
+			vec.Close()
+		}
 	}
+	b.dataInsBatches = nil
 	if b.dataDelBatch != nil {
 		b.dataDelBatch.Close()
 		b.dataDelBatch = nil
@@ -437,6 +444,21 @@ func (b *TableLogtailRespBuilder) Close() {
 	}
 }
 
+func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
+	e.RLock()
+	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
+	e.RUnlock()
+
+	for _, node := range mvccNodes {
+		if node.HasDropCommitted() {
+			// send segment deletation event
+			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
+			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(segid2rowid(&e.ID), false)
+		}
+	}
+	return nil
+}
+
 // visitBlkMeta try to collect block metadata. It might prefetch and generate duplicated entry.
 // see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-prefetch
 func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData bool) {
@@ -444,7 +466,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 	e.RLock()
 	// try to find new end
 	if newest := e.GetLatestCommittedNode(); newest != nil {
-		latestPrepareTs := newest.CloneAll().GetPrepare()
+		latestPrepareTs := newest.GetPrepare()
 		if latestPrepareTs.Greater(b.end) {
 			newEnd = latestPrepareTs
 		}
@@ -520,8 +542,15 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 		return
 	}
 	if insBatch != nil && insBatch.Length() > 0 {
-		b.dataInsBatch.Extend(insBatch)
-		// insBatch is freed, don't use anymore
+		dest, ok := b.dataInsBatches[insBatch.Version]
+		if !ok {
+			// create new dest batch
+			dest = DataChangeToLogtailBatch(insBatch)
+			b.dataInsBatches[insBatch.Version] = dest
+		} else {
+			dest.Extend(insBatch.Batch)
+			// insBatch is freed, don't use anymore
+		}
 	}
 	delBatch, err := block.CollectDeleteInRange(b.start, b.end, false)
 	if err != nil {
@@ -543,9 +572,17 @@ func (b *TableLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) error {
 	return b.visitBlkData(entry)
 }
 
+type TableRespKind int
+
+const (
+	TableRespKind_Data TableRespKind = iota
+	TableRespKind_Blk
+	TableRespKind_Seg
+)
+
 func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	entries := make([]*api.Entry, 0)
-	tryAppendEntry := func(typ api.Entry_EntryType, metaChange bool, batch *containers.Batch) error {
+	tryAppendEntry := func(typ api.Entry_EntryType, kind TableRespKind, batch *containers.Batch, version uint32) error {
 		if batch.Length() == 0 {
 			return nil
 		}
@@ -554,17 +591,20 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			return err
 		}
 
-		tableName := b.tname
-		if metaChange {
-			tableName = fmt.Sprintf("_%d_meta", b.tid)
-			logutil.Infof("[Logtail] send block meta for %q", b.tname)
-		}
-		if metaChange {
-			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
-				DebugBatchToString("meta", batch, true, zap.InfoLevel))
-		} else {
-			logutil.Infof("[logtail] table data [%v] %d-%s: %s", typ, b.tid, b.tname,
+		tableName := ""
+		switch kind {
+		case TableRespKind_Data:
+			tableName = b.tname
+			logutil.Infof("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
 				DebugBatchToString("data", batch, false, zap.InfoLevel))
+		case TableRespKind_Blk:
+			tableName = fmt.Sprintf("_%d_meta", b.tid)
+			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+				DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
+		case TableRespKind_Seg:
+			tableName = fmt.Sprintf("_%d_seg", b.tid)
+			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+				DebugBatchToString("segmeta", batch, false, zap.InfoLevel))
 		}
 
 		entry := &api.Entry{
@@ -580,16 +620,26 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 
 	empty := api.SyncLogTailResp{}
-	if err := tryAppendEntry(api.Entry_Insert, true, b.blkMetaInsBatch); err != nil {
+	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Blk, b.blkMetaInsBatch, 0); err != nil {
 		return empty, err
 	}
-	if err := tryAppendEntry(api.Entry_Delete, true, b.blkMetaDelBatch); err != nil {
+	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Blk, b.blkMetaDelBatch, 0); err != nil {
 		return empty, err
 	}
-	if err := tryAppendEntry(api.Entry_Insert, false, b.dataInsBatch); err != nil {
+	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Seg, b.segMetaDelBatch, 0); err != nil {
 		return empty, err
 	}
-	if err := tryAppendEntry(api.Entry_Delete, false, b.dataDelBatch); err != nil {
+	keys := make([]uint32, 0, len(b.dataInsBatches))
+	for k := range b.dataInsBatches {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	for _, k := range keys {
+		if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Data, b.dataInsBatches[k], k); err != nil {
+			return empty, err
+		}
+	}
+	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Data, b.dataDelBatch, 0); err != nil {
 		return empty, err
 	}
 

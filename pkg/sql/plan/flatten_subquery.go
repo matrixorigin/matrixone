@@ -71,6 +71,10 @@ func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ct
 }
 
 func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext) (int32, *plan.Expr, error) {
+	if subquery.Child != nil && hasSubquery(subquery.Child) {
+		return 0, nil, moerr.NewNotSupported(builder.GetContext(), "a quantified subquery's left operand can't contain subquery")
+	}
+
 	subID := subquery.NodeId
 	subCtx := builder.ctxByNode[subID]
 
