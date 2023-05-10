@@ -19,11 +19,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"go.uber.org/zap"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -185,11 +182,7 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-	ci := get(ctx)
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Add begin", zap.String("ctxinfo", ci.String()))
-	defer func() {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Add end", zap.String("ctxinfo", ci.String()))
-	}()
+
 	if len(tasks) == 0 {
 		return 0, nil
 	}
@@ -238,17 +231,12 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 		return 0, nil
 	}
 	sqlStr = sqlStr[0 : len(sqlStr)-1]
-	begin := time.Now()
 	stmt, err := conn.PrepareContext(ctx, sqlStr)
 	if err != nil {
 		return 0, err
 	}
 	exec, err := stmt.ExecContext(ctx, vals...)
 	if err != nil {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Add error",
-			zap.String("time", time.Since(begin).String()),
-			zap.String("query", sqlStr),
-			zap.Error(err))
 		dup, err := removeDuplicateTasks(err, tasks)
 		if err != nil {
 			return 0, err
@@ -259,9 +247,6 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 		}
 		return add, nil
 	}
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Add ok",
-		zap.String("time", time.Since(begin).String()),
-		zap.String("query", sqlStr))
 	affected, err := exec.RowsAffected()
 	if err != nil {
 		return 0, err
@@ -274,11 +259,7 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-	ci := get(ctx)
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Update begin", zap.String("ctxinfo", ci.String()))
-	defer func() {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Update end", zap.String("ctxinfo", ci.String()))
-	}()
+
 	if len(tasks) == 0 {
 		return 0, nil
 	}
@@ -377,11 +358,7 @@ func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-	ci := get(ctx)
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Delete begin", zap.String("ctxinfo", ci.String()))
-	defer func() {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Delete end", zap.String("ctxinfo", ci.String()))
-	}()
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
@@ -415,42 +392,23 @@ func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (
 	return int(affected), nil
 }
 
-func get(ctx context.Context) (ci *CtxInfo) {
-	if r := ctx.Value(CtxKey{}); r != nil {
-		ci = r.(*CtxInfo)
-	} else {
-		ci = &CtxInfo{}
-		ci.From = "--empty--"
-		ci.Uuid = "--uuid--"
-	}
-	return
-}
-
 func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([]task.Task, error) {
 	if taskFrameworkDisabled() {
 		return nil, nil
 	}
-	ci := get(ctx)
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Query begin", zap.String("ctxinfo", ci.String()))
-	defer func() {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Query end", zap.String("ctxinfo", ci.String()))
-	}()
+
 	db, release, err := m.getDB()
 	if err != nil {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Query getDB error", zap.String("ctxinfo", ci.String()), zap.Error(err))
 		return nil, err
 	}
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Query getDB ok", zap.String("ctxinfo", ci.String()))
 	defer func() {
 		_ = release()
 	}()
 
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Query Conn error", zap.String("ctxinfo", ci.String()), zap.Error(err))
 		return nil, err
 	}
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Query Conn ok", zap.String("ctxinfo", ci.String()))
 	defer func() {
 		_ = conn.Close()
 	}()
@@ -470,25 +428,10 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 	query += buildOrderByClause(c)
 	query += buildLimitClause(c)
 
-	d, _ := ctx.Deadline()
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Query send",
-		zap.String("ctxinfo", ci.String()),
-		zap.String("deadline", d.String()),
-		zap.String("query", query))
-	begin := time.Now()
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Query get resp error",
-			zap.String("time", time.Since(begin).String()),
-			zap.String("ctxinfo", ci.String()),
-			zap.String("query", query),
-			zap.Error(err))
 		return nil, err
 	}
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.Query get resp ok",
-		zap.String("time", time.Since(begin).String()),
-		zap.String("ctxinfo", ci.String()),
-		zap.String("query", query))
 	defer func() {
 		_ = rows.Close()
 	}()
@@ -548,11 +491,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-	ci := get(ctx)
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.AddCronTask begin", zap.String("ctxinfo", ci.String()))
-	defer func() {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.AddCronTask end", zap.String("ctxinfo", ci.String()))
-	}()
+
 	if len(cronTask) == 0 {
 		return 0, nil
 	}
@@ -626,11 +565,7 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 	if taskFrameworkDisabled() {
 		return nil, nil
 	}
-	ci := get(ctx)
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.QueryCronTask begin", zap.String("ctxinfo", ci.String()))
-	defer func() {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.QueryCronTask end", zap.String("ctxinfo", ci.String()))
-	}()
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return nil, err
@@ -646,9 +581,8 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 	defer func() {
 		_ = conn.Close()
 	}()
-	begin := time.Now()
-	x := fmt.Sprintf(selectCronTask, m.dbname)
-	rows, err := conn.QueryContext(ctx, x)
+
+	rows, err := conn.QueryContext(ctx, fmt.Sprintf(selectCronTask, m.dbname))
 	defer func(rows *sql.Rows) {
 		if rows == nil {
 			return
@@ -656,16 +590,9 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 		_ = rows.Close()
 	}(rows)
 	if err != nil {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.QueryCronTask error",
-			zap.String("time", time.Since(begin).String()),
-			zap.String("query", x),
-			zap.Error(err))
 		return nil, err
 	}
 
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.QueryCronTask ok",
-		zap.String("time", time.Since(begin).String()),
-		zap.String("query", x))
 	tasks := make([]task.CronTask, 0)
 
 	for rows.Next() {
@@ -703,11 +630,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
-	ci := get(ctx)
-	runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.UpdateCronTask begin", zap.String("ctxinfo", ci.String()))
-	defer func() {
-		runtime.ProcessLevelRuntime().Logger().Info("mysqlTaskStorage.UpdateCronTask end", zap.String("ctxinfo", ci.String()))
-	}()
+
 	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
