@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -206,8 +205,6 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 	cnt, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
 		logutil.Error("sqlWriter bulk insert failed", zap.Error(err))
-		// Sleep few seconds before retrying
-		time.Sleep(10 * time.Second)
 		return 0, err
 	}
 	return cnt, nil
