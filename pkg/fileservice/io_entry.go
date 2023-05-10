@@ -155,7 +155,7 @@ func (e *IOEntry) ReadFromOSFile(file *os.File) error {
 	r := io.LimitReader(file, e.Size)
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return nil
+		return err
 	}
 	if len(data) != int(e.Size) {
 		return io.ErrUnexpectedEOF
