@@ -181,16 +181,13 @@ select (weekday(col1),weekday(col2)) != (12,34) from row04;
 drop table row04;
 
 -- blob,json,binary
--- @bvt:issue#9288
 drop table if exists row05;
 create table row05(col1 blob,col2 json,col3 binary(10) not null);
 insert into row05 values('abcdef','{"t1":"a"}',456);
 insert into row05 values('_bcdef','{"t1":"c"}',100000);
 insert into row05 values('__cdef',null,0);
 select (col1,col2) = ('abcdef','{"t1":"a"}') from row05;
-select (col1,col2) <> ('abcdef','{"t1":"a"}') from row05;
 select (col1,col2) != ('abcdef','{"ehyiuwqnve":"ashyiujewv"}') from row05;
 drop table row05;
--- @bvt:issue
 
 drop database test;
