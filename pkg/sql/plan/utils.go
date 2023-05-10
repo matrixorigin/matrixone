@@ -1017,7 +1017,7 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	if proc == nil {
 		return nil
 	}
-	var newExprList []*plan.Expr
+	newExprList := make([]*plan.Expr, len(exprList))
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	for _, expr := range exprList {

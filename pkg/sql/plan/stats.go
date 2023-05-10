@@ -596,17 +596,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	}
 }
 
-func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			fixColumnName(tableDef, arg)
-		}
-	case *plan.Expr_Col:
-		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
-	}
-}
-
 func NeedStats(tableDef *TableDef) bool {
 	switch tableDef.TblId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
