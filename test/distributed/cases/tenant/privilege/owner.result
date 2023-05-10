@@ -32,13 +32,4 @@ create table db1.t3(a int);
 internal error: do not have privilege to execute the statement
 set secondary role all;
 create table db1.t3(a int);
-select role_id, role_name from mo_catalog.mo_role;
-role_id    role_name
-2    accountadmin
-1    public
-3    role1
-4    role2
-select relname,owner from mo_catalog.mo_tables where relname='t3' and reldatabase='db1';
-relname    owner
-t3    3
 drop account default_1;

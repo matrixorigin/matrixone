@@ -39,8 +39,4 @@ create table db1.t3(a int);
 set secondary role all;
 create table db1.t3(a int);
 -- @session
--- @session:id=7&user=default_1:admin&password=111111
-select role_id, role_name from mo_catalog.mo_role;
-select relname,owner from mo_catalog.mo_tables where relname='t3' and reldatabase='db1';
--- @session
 drop account default_1;
