@@ -57,7 +57,7 @@ func (c *clientConn) handleHandshakeResp() error {
 		return err
 	}
 
-	c.clientInfo.Labels = c.mysqlProto.GetConnectAttrs()
+	c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, c.mysqlProto.GetConnectAttrs())
 	return nil
 }
 

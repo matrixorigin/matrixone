@@ -86,8 +86,8 @@ func newProxyHandler(
 
 	ru := newRouter(mc, re, false)
 	// Decorate the router if plugin is enabled
-	if cfg.PluginBackend != nil {
-		ru, err = newPluginRouter(ru, *cfg.PluginBackend)
+	if cfg.Plugin != nil {
+		ru, err = newPluginRouter(ru, cfg.Plugin.Backend, cfg.Plugin.Timeout)
 		if err != nil {
 			return nil, err
 		}

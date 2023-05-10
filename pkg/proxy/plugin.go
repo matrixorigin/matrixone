@@ -17,8 +17,8 @@ type pluginRouter struct {
 	plugin Plugin
 }
 
-func newPluginRouter(r Router, pluginBackend string) (*pluginRouter, error) {
-	p, err := newRPCPlugin(pluginBackend)
+func newPluginRouter(r Router, backend string, timeout time.Duration) (*pluginRouter, error) {
+	p, err := newRPCPlugin(backend, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -69,14 +69,15 @@ type Plugin interface {
 type rpcPlugin struct {
 	client  morpc.RPCClient
 	backend string
+	timeout time.Duration
 }
 
-func newRPCPlugin(backend string) (*rpcPlugin, error) {
+func newRPCPlugin(backend string, timeout time.Duration) (*rpcPlugin, error) {
 	codec := morpc.NewMessageCodec(func() morpc.Message {
 		return &plugin.Response{}
 	})
 	backendOpts := []morpc.BackendOption{
-		morpc.WithBackendConnectTimeout(time.Second),
+		morpc.WithBackendConnectTimeout(timeout),
 		morpc.WithBackendHasPayloadResponse(),
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("plugin-backend")),
 	}
@@ -92,15 +93,16 @@ func newRPCPlugin(backend string) (*rpcPlugin, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &rpcPlugin{client: cli}, nil
+	return &rpcPlugin{client: cli, backend: backend, timeout: timeout}, nil
 }
 
 func (p *rpcPlugin) RecommendCN(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
+
 	resp, err := p.request(ctx, &plugin.Request{ClientInfo: &plugin.ClientInfo{
 		Tenant:        string(ci.Tenant),
 		Username:      ci.username,
 		OriginIP:      ci.originIP.String(),
-		LabelSelector: ci.Labels,
+		LabelSelector: ci.labelInfo.allLabels(),
 	}})
 	if err != nil {
 		return nil, err
@@ -109,10 +111,13 @@ func (p *rpcPlugin) RecommendCN(ctx context.Context, ci clientInfo) (*plugin.Rec
 }
 
 func (p *rpcPlugin) request(ctx context.Context, req *plugin.Request) (*plugin.Response, error) {
-	f, err := p.client.Send(ctx, p.backend, req)
+	cc, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
+	f, err := p.client.Send(cc, p.backend, req)
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 	resp, err := f.Get()
 	if err != nil {
 		return nil, err
