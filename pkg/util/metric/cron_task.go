@@ -17,6 +17,8 @@ package metric
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"path"
 	"strings"
 	"sync/atomic"
@@ -74,7 +76,8 @@ func GetMetricStorageUsageExecutor(sqlExecutor func() ie.InternalExecutor) func(
 }
 
 const (
-	ShowAccountSQL    = "SHOW ACCOUNTS;"
+	ShowAllAccountSQL = "SHOW ACCOUNTS;"
+	ShowAccountSQL    = "SHOW ACCOUNTS like %q;"
 	ColumnAccountName = "account_name"
 	ColumnSize        = "size"
 )
@@ -110,12 +113,15 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 
 	next := time.NewTicker(time.Second)
 
+	go CheckNewAccountSize(ctx, logger, sqlExecutor)
+
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Info("receive context signal", zap.Error(ctx.Err()))
 			StorageUsageFactory.Reset() // clean CN data for next cron task.
 			return ctx.Err()
+
 		case <-next.C:
 			logger.Info("start next round")
 		}
@@ -129,7 +135,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
 		executor := sqlExecutor()
 		logger.Info("query storage size")
-		result := executor.Query(ctx, ShowAccountSQL, ie.NewOptsBuilder().Finish())
+		result := executor.Query(ctx, ShowAllAccountSQL, ie.NewOptsBuilder().Finish())
 		err = result.Error()
 		if err != nil {
 			return err
@@ -166,4 +172,93 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		}
 		logger.Info("wait next round")
 	}
+}
+
+func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor func() ie.InternalExecutor) {
+	var err error
+	ctx, span := trace.Start(ctx, "CheckNewAccountSize")
+	defer span.End()
+	defer func() {
+		logger.Info("CheckNewAccountSize exit", zap.Error(err))
+	}()
+
+	const ColumnAccountName = "account_name"
+	const ColumnCreatedTime = "created_time"
+	const ColumnStatus = "status"
+
+	opts := ie.NewOptsBuilder().Finish()
+
+	var now time.Time
+	var interval = time.Minute
+	var next = time.NewTicker(interval)
+	var lastCheckTime = time.Now().Add(-time.Second)
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("receive context signal", zap.Error(ctx.Err()))
+			return
+		case now = <-next.C:
+			logger.Info("start check account")
+		}
+
+		// mysql> select * from mo_catalog.mo_account;
+		// +------------+--------------+--------+---------------------+----------------+---------+----------------+
+		// | account_id | account_name | status | created_time        | comments       | version | suspended_time |
+		// +------------+--------------+--------+---------------------+----------------+---------+----------------+
+		// |          0 | sys          | open   | 2023-05-09 04:34:57 | system account |       1 | NULL           |
+		// +------------+--------------+--------+---------------------+----------------+---------+----------------+
+		executor := sqlExecutor()
+		logger.Info("query new account")
+		now := time.Now()
+		sql := fmt.Sprintf("select account_name, created_time, status from mo_account "+
+			"where create_time >= %q;",
+			table.Time2DatetimeString(lastCheckTime))
+		lastCheckTime = now
+		result := executor.Query(ctx, sql, opts)
+		err = result.Error()
+		if err != nil {
+			logger.Error("failed to fetch new created account", zap.Error(err))
+			continue
+		}
+
+		cnt := result.RowCount()
+		if cnt == 0 {
+			logger.Warn("got empty new account info, wait next round")
+			continue
+		}
+		logger.Info("collect new account cnt", zap.Uint64("cnt", cnt))
+		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
+
+			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
+			if err != nil {
+				continue
+			}
+
+			createdTime, err := result.StringValueByName(ctx, rowIdx, ColumnCreatedTime)
+			if err != nil {
+				continue
+			}
+
+			showSql := fmt.Sprintf(ShowAccountSQL, account)
+			showRet := executor.Query(ctx, showSql, opts)
+			err = showRet.Error()
+			if err != nil {
+				logger.Error("failed to fetch account size", zap.Error(err), zap.String("account", account))
+				continue
+			}
+
+			sizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSize)
+			if err != nil {
+				continue
+			}
+
+			logger.Info("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
+				zap.String("create_time", createdTime))
+			StorageUsage(account).Set(sizeMB)
+		}
+
+		// calculate next Round time.
+		next.Reset(interval)
+	}
+
 }
