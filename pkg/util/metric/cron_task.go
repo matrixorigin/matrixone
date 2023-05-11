@@ -210,8 +210,7 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		executor := sqlExecutor()
 		logger.Info("query new account")
 		now := time.Now()
-		sql := fmt.Sprintf("select account_name, created_time, status from mo_account "+
-			"where create_time >= %q;",
+		sql := fmt.Sprintf("select account_name, created_time, status from mo_account where create_time >= %q;",
 			table.Time2DatetimeString(lastCheckTime))
 		lastCheckTime = now
 		result := executor.Query(ctx, sql, opts)
@@ -243,11 +242,15 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			showRet := executor.Query(ctx, showSql, opts)
 			err = showRet.Error()
 			if err != nil {
-				logger.Error("failed to fetch account size", zap.Error(err), zap.String("account", account))
+				logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
 				continue
 			}
 
-			sizeMB, err := result.Float64ValueByName(ctx, rowIdx, ColumnSize)
+			if result.RowCount() == 0 {
+				logger.Warn("failed to fetch new account size, not exist.")
+				continue
+			}
+			sizeMB, err := showRet.Float64ValueByName(ctx, 0, ColumnSize)
 			if err != nil {
 				continue
 			}
@@ -259,6 +262,7 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 
 		// calculate next Round time.
 		next.Reset(interval)
+		logger.Info("wait next round, new account")
 	}
 
 }
