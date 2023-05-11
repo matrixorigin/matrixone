@@ -160,14 +160,14 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 			}
 			if !init {
 				for idx := range zms {
-					zms[idx] = meta.ObjectColumnMeta(uint16(cols[idx].Seqnum)).ZoneMap()
+					zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
 					tableTypes[idx] = uint8(cols[idx].Typ.Id)
 				}
 
 				init = true
 			} else {
 				for idx := range zms {
-					zm := meta.ObjectColumnMeta(uint16(cols[idx].Seqnum)).ZoneMap()
+					zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
 					if !zm.IsInited() {
 						continue
 					}
