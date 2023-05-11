@@ -1752,10 +1752,10 @@ func getSliceFromRight(s string, offset int64) string {
 	return string(substrRune)
 }
 
-func SubStringWith2Args[T number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
-	starts := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null1 := vs.GetStrValue(i)
@@ -1767,18 +1767,14 @@ func SubStringWith2Args[T number](ivecs []*vector.Vector, result vector.Function
 			}
 		} else {
 			var r string
-			start, err := castConstAsInt64(proc.Ctx, *ivecs[1].GetType(), s)
-			if err != nil {
-				return err
-			}
-			if start > 0 {
-				r = getSliceFromLeft(string(v), start-1)
-			} else if start < 0 {
-				r = getSliceFromRight(string(v), -start)
+			if s > 0 {
+				r = getSliceFromLeft(function2Util.QuickBytesToStr(v), s-1)
+			} else if s < 0 {
+				r = getSliceFromRight(function2Util.QuickBytesToStr(v), -s)
 			} else {
 				r = ""
 			}
-			if err = rs.AppendBytes([]byte(r), false); err != nil {
+			if err = rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
 				return err
 			}
 		}
@@ -1861,11 +1857,11 @@ func castConstAsInt64[T number](ctx context.Context, typ types.Type, val T) (int
 	return r, nil
 }
 
-func SubStringWith3Args[T1, T2 number](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
+func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
-	starts := vector.GenerateFunctionFixedTypeParameter[T1](ivecs[1])
-	lens := vector.GenerateFunctionFixedTypeParameter[T2](ivecs[2])
+	starts := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	lens := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null1 := vs.GetStrValue(i)
@@ -1878,22 +1874,14 @@ func SubStringWith3Args[T1, T2 number](ivecs []*vector.Vector, result vector.Fun
 			}
 		} else {
 			var r string
-			start, err := castConstAsInt64(proc.Ctx, *ivecs[1].GetType(), s)
-			if err != nil {
-				return err
-			}
-			lt, err := castConstAsInt64(proc.Ctx, *ivecs[2].GetType(), l)
-			if err != nil {
-				return err
-			}
-			if start > 0 {
-				r = getSliceFromLeftWithLength(string(v), start-1, lt)
-			} else if start < 0 {
-				r = getSliceFromRightWithLength(string(v), -start, lt)
+			if s > 0 {
+				r = getSliceFromLeftWithLength(function2Util.QuickBytesToStr(v), s-1, l)
+			} else if s < 0 {
+				r = getSliceFromRightWithLength(function2Util.QuickBytesToStr(v), -s, l)
 			} else {
 				r = ""
 			}
-			if err = rs.AppendBytes([]byte(r), false); err != nil {
+			if err = rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
 				return err
 			}
 		}

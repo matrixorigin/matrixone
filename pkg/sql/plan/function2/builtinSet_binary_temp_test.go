@@ -918,8 +918,8 @@ func initSubStrTestCase() []tcTemp {
 				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
-					[]uint64{5},
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5},
 					[]bool{false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
@@ -933,8 +933,8 @@ func initSubStrTestCase() []tcTemp {
 				testutil.NewFunctionTestInput(types.T_blob.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
-					[]uint64{7},
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{7},
 					[]bool{false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
@@ -948,8 +948,8 @@ func initSubStrTestCase() []tcTemp {
 				testutil.NewFunctionTestInput(types.T_text.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
-					[]uint64{11},
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{11},
 					[]bool{false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_text.ToType(), false,
@@ -964,8 +964,8 @@ func initSubStrTestCase() []tcTemp {
 				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"abcdefghijklmn"},
 					[]bool{false}),
-				testutil.NewFunctionTestInput(types.T_uint64.ToType(),
-					[]uint64{16},
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{16},
 					[]bool{false}),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
@@ -1111,10 +1111,10 @@ func TestSubStr(t *testing.T) {
 		switch tc.info {
 		case "2":
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, SubStringWith2Args[uint64])
+				tc.inputs, tc.expect, SubStringWith2Args)
 		case "3":
 			fcTC = testutil.NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, SubStringWith3Args[int64, int64])
+				tc.inputs, tc.expect, SubStringWith3Args)
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
