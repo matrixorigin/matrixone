@@ -3805,6 +3805,11 @@ func uuidToStr(
 					result = append(result, 0)
 				}
 			}
+			if toType.Oid == types.T_char || toType.Oid == types.T_varchar {
+				if int32(len(result)) > toType.Width {
+					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for char/varchar")
+				}
+			}
 			if err := to.AppendBytes([]byte(result), false); err != nil {
 				return err
 			}

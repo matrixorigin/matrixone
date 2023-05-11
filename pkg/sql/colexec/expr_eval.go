@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -221,55 +220,6 @@ func getConstVec(ctx context.Context, proc *process.Process, expr *plan.Expr, le
 		vec.SetIsBin(t.C.IsBin)
 	}
 	return vec, nil
-}
-
-func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
-	length := len(s.Zs)
-	e := expr.Expr
-	switch t := e.(type) {
-	case *plan.Expr_C:
-		return getConstVec(proc.Ctx, proc, expr, length)
-	case *plan.Expr_T:
-		// return a vector recorded type information but without real data
-		return vector.NewConstNull(types.New(types.T(t.T.Typ.GetId()), t.T.Typ.GetWidth(), t.T.Typ.GetScale()), length, proc.Mp()), nil
-	case *plan.Expr_Col:
-		if t.Col.RelPos == 0 {
-			return r.Vecs[t.Col.ColPos].ToConst(rRow, length, proc.Mp()), nil
-		}
-		return s.Vecs[t.Col.ColPos], nil
-	case *plan.Expr_List:
-		return getConstVecInList(proc.Ctx, proc, t.List.List)
-	case *plan.Expr_F:
-		var result *vector.Vector
-
-		fid := t.F.GetFunc().GetObj()
-		f, err := function.GetFunctionByID(proc.Ctx, fid)
-		if err != nil {
-			return nil, err
-		}
-
-		functionParameters := make([]*vector.Vector, len(t.F.Args))
-		for i := range functionParameters {
-			functionParameters[i], err = JoinFilterEvalExpr(r, s, rRow, proc, t.F.Args[i])
-			if err != nil {
-				break
-			}
-		}
-		if err != nil {
-			cleanVectorsExceptList(proc, functionParameters, append(r.Vecs, s.Vecs...))
-			return nil, err
-		}
-
-		result, err = evalFunction(proc, f, functionParameters, length)
-		cleanVectorsExceptList(proc, functionParameters, append(append(r.Vecs, s.Vecs...), result))
-		if err != nil {
-			return nil, err
-		}
-		return result, nil
-	default:
-		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("eval expr '%v'", t))
-	}
 }
 
 func getConstZM(
@@ -499,162 +449,6 @@ func EvalFilterByZonemap(
 	return
 }
 
-func EvalExprByZonemapBat(ctx context.Context, bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
-	length := len(bat.Zs)
-	if length == 0 {
-		return vector.NewConstNull(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), 1, proc.Mp()), nil
-	}
-
-	e := expr.Expr
-	switch t := e.(type) {
-	case *plan.Expr_C:
-		return getConstVec(ctx, proc, expr, length)
-	case *plan.Expr_T:
-		// return a vector recorded type information but without real data
-		return vector.NewConstNull(types.New(types.T(t.T.Typ.GetId()), t.T.Typ.GetWidth(), t.T.Typ.GetScale()), length, proc.Mp()), nil
-	case *plan.Expr_Col:
-		vec := bat.Vecs[t.Col.ColPos]
-		if vec.IsConstNull() {
-			vec.SetType(types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale))
-		}
-		return vec, nil
-	case *plan.Expr_F:
-		var result *vector.Vector
-
-		fid := t.F.GetFunc().GetObj()
-		f, err := function.GetFunctionByID(proc.Ctx, fid)
-		if err != nil {
-			return nil, err
-		}
-
-		functionParameters := make([]*vector.Vector, len(t.F.Args))
-		for i := range functionParameters {
-			functionParameters[i], err = EvalExprByZonemapBat(ctx, bat, proc, t.F.Args[i])
-			if err != nil {
-				break
-			}
-		}
-		if err != nil {
-			cleanVectorsExceptList(proc, functionParameters, bat.Vecs)
-			return nil, err
-		}
-
-		compareAndReturn := func(isTrue bool, err error) (*vector.Vector, error) {
-			if err != nil {
-				// if it can't compare, just return true.
-				// that means we don't know this filter expr's return, so you must readBlock
-				return vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp()), nil
-			}
-			return vector.NewConstFixed(types.T_bool.ToType(), isTrue, 1, proc.Mp()), nil
-		}
-
-		switch t.F.Func.ObjName {
-		case ">":
-			// if someone in left > someone in right, that will be true
-			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], ">"))
-		case "<":
-			// if someone in left < someone in right, that will be true
-			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], "<"))
-		case "=":
-			// if left intersect right, that will be true
-			return compareAndReturn(functionParameters[0].CompareAndCheckIntersect(functionParameters[1]))
-		case ">=":
-			// if someone in left >= someone in right, that will be true
-			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], ">="))
-		case "<=":
-			// if someone in left <= someone in right, that will be true
-			return compareAndReturn(functionParameters[0].CompareAndCheckAnyResultIsTrue(ctx, functionParameters[1], "<="))
-		case "and":
-			// if left has one true and right has one true, that will be true
-			cols1 := vector.MustFixedCol[bool](functionParameters[0])
-			cols2 := vector.MustFixedCol[bool](functionParameters[1])
-
-			for _, leftHasTrue := range cols1 {
-				if leftHasTrue {
-					for _, rightHasTrue := range cols2 {
-						if rightHasTrue {
-							return vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp()), nil
-						}
-					}
-					break
-				}
-			}
-			return vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp()), nil
-		case "or":
-			// if someone is true in left/right, that will be true
-			cols1 := vector.MustFixedCol[bool](functionParameters[0])
-			cols2 := vector.MustFixedCol[bool](functionParameters[1])
-			for _, flag := range cols1 {
-				if flag {
-					return vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp()), nil
-				}
-			}
-			for _, flag := range cols2 {
-				if flag {
-					return vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp()), nil
-				}
-			}
-			return vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp()), nil
-		}
-
-		result, err = evalFunction(proc, f, functionParameters, len(bat.Zs))
-		cleanVectorsExceptList(proc, functionParameters, append(bat.Vecs, result))
-		if err != nil {
-			return nil, err
-		}
-		return result, nil
-	default:
-		// *plan.Expr_Corr,  *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, moerr.NewNYI(ctx, fmt.Sprintf("unsupported eval expr '%v'", t))
-	}
-}
-
-func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
-	e := expr.Expr
-	switch t := e.(type) {
-	case *plan.Expr_C:
-		return getConstVec(proc.Ctx, proc, expr, 1)
-	case *plan.Expr_T:
-		// return a vector recorded type information but without real data
-		return vector.NewConstNull(types.New(types.T(t.T.Typ.GetId()), t.T.Typ.GetWidth(), t.T.Typ.GetScale()), 1, proc.Mp()), nil
-	case *plan.Expr_Col:
-		if t.Col.RelPos == 0 {
-			return r.Vecs[t.Col.ColPos].ToConst(rRow, 1, proc.Mp()), nil
-		}
-		return s.Vecs[t.Col.ColPos].ToConst(sRow, 1, proc.Mp()), nil
-	case *plan.Expr_F:
-		var result *vector.Vector
-
-		fid := t.F.GetFunc().GetObj()
-		f, err := function.GetFunctionByID(proc.Ctx, fid)
-		if err != nil {
-			return nil, err
-		}
-
-		functionParameters := make([]*vector.Vector, len(t.F.Args))
-		for i := range functionParameters {
-			functionParameters[i], err = JoinFilterEvalExprInBucket(r, s, rRow, sRow, proc, t.F.Args[i])
-			if err != nil {
-				break
-			}
-		}
-		if err != nil {
-			cleanVectorsExceptList(proc, functionParameters, append(r.Vecs, s.Vecs...))
-			return nil, err
-		}
-
-		result, err = evalFunction(proc, f, functionParameters, 1)
-		cleanVectorsExceptList(proc, functionParameters, append(append(r.Vecs, s.Vecs...), result))
-		if err != nil {
-			return nil, err
-		}
-		return result, nil
-	default:
-		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("eval expr '%v'", t))
-	}
-}
-
 func evalFunction(proc *process.Process, f *function.Function, args []*vector.Vector, length int) (*vector.Vector, error) {
 	if !f.UseNewFramework {
 		v, err := f.VecFn(args, proc)
@@ -690,11 +484,11 @@ func evalFunction(proc *process.Process, f *function.Function, args []*vector.Ve
 	}
 
 	if !f.Volatile && numScalar == len(args) {
-		resultWrapper = vector.NewFunctionResultWrapper(rTyp, proc.Mp(), true, length)
+		resultWrapper = vector.NewFunctionResultWrapper(rTyp, proc.Mp())
 		// XXX only evaluate the first row.
 		err = f.NewFn(args, resultWrapper, proc, 1)
 	} else {
-		resultWrapper = vector.NewFunctionResultWrapper(rTyp, proc.Mp(), false, length)
+		resultWrapper = vector.NewFunctionResultWrapper(rTyp, proc.Mp())
 		err = f.NewFn(args, resultWrapper, proc, length)
 	}
 	if err != nil {
@@ -704,25 +498,6 @@ func evalFunction(proc *process.Process, f *function.Function, args []*vector.Ve
 	rvec := resultWrapper.GetResultVector()
 	rvec.SetLength(length)
 	return rvec, nil
-}
-
-func cleanVectorsExceptList(proc *process.Process, vs []*vector.Vector, excepts []*vector.Vector) {
-	mp := proc.Mp()
-	for i := range vs {
-		if vs[i] == nil {
-			continue
-		}
-		needClean := true
-		for j := range excepts {
-			if excepts[j] == vs[i] {
-				needClean = false
-				break
-			}
-		}
-		if needClean {
-			vs[i].Free(mp)
-		}
-	}
 }
 
 // RewriteFilterExprList will convert an expression list to be an AndExpr

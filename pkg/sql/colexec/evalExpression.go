@@ -225,7 +225,7 @@ func (expr *FunctionExpressionExecutor) Init(
 	expr.parameterResults = make([]*vector.Vector, parameterNum)
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
 	// pre allocate
-	expr.resultVector, err = vector.NewFunctionResultWrapper2(retType, m)
+	expr.resultVector = vector.NewFunctionResultWrapper(retType, m)
 	return err
 }
 

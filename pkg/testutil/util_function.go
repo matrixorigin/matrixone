@@ -116,10 +116,10 @@ func NewFunctionTestCase(
 	}
 	// new the result
 	if len(f.parameters) == 0 {
-		f.result = vector.NewFunctionResultWrapper(wanted.typ, mp, false, 1)
+		f.result = vector.NewFunctionResultWrapper(wanted.typ, mp)
 		f.fnLength = 1
 	} else {
-		f.result = vector.NewFunctionResultWrapper(wanted.typ, mp, false, f.parameters[0].Length())
+		f.result = vector.NewFunctionResultWrapper(wanted.typ, mp)
 		f.fnLength = f.parameters[0].Length()
 	}
 	f.expected = wanted
