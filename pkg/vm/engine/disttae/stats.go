@@ -24,26 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-func groupBlocksToObjectsForStats(blocks [][]catalog.BlockInfo) []*catalog.BlockInfo {
-	var objs []*catalog.BlockInfo
-	objMap := make(map[string]int, 0)
-	for i := range blocks {
-		for j := range blocks[i] {
-			block := blocks[i][j]
-			objName := block.MetaLocation().Name().String()
-			if _, ok := objMap[objName]; !ok {
-				objMap[objName] = 1
-				objs = append(objs, &block)
-			}
-		}
-	}
-	return objs
-}
 
 func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 	switch t.Oid {
@@ -91,46 +74,50 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid
-func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, tableCnt float64, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
-
+func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
+	var tableCnt float64
 	lenCols := len(tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 
 	var err error
 	var objectMeta objectio.ObjectMeta
-	//group blocks to objects
-	objs := groupBlocksToObjectsForStats(blocks)
+	lenobjs := 0
 
 	var init bool
-	for i := range objs {
-		location := objs[i].MetaLocation()
-		if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
-			return nil, err
-		}
-		if !init {
-			init = true
-			for idx, col := range tableDef.Cols[:lenCols] {
-				objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
-				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
-				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
-				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
-			}
-		} else {
-			for idx, col := range tableDef.Cols[:lenCols] {
-				objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
-				zm := objColMeta.ZoneMap().Clone()
-				if !zm.IsInited() {
-					continue
+	for i := range blocks {
+		for _, blk := range blocks[i] {
+			location := blk.MetaLocation()
+			if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
+				if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
+					return nil, err
 				}
-				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
-				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
-				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
+				lenobjs++
+				tableCnt += float64(objectMeta.BlockHeader().Rows())
+				if !init {
+					init = true
+					for idx, col := range tableDef.Cols[:lenCols] {
+						objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
+						info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
+						info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
+						info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
+					}
+				} else {
+					for idx, col := range tableDef.Cols[:lenCols] {
+						objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
+						zm := objColMeta.ZoneMap().Clone()
+						if !zm.IsInited() {
+							continue
+						}
+						index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
+						index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
+						info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
+					}
+				}
 			}
 		}
 	}
 
 	//adjust ndv
-	lenobjs := float64(len(objs))
 	if lenobjs > 1 {
 		for idx := range tableDef.Cols[:lenCols] {
 			rate := info.ColumnNDVs[idx] / tableCnt
@@ -138,7 +125,7 @@ func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, table
 				rate = 1
 			}
 			if rate < 0.1 {
-				info.ColumnNDVs[idx] /= math.Pow(lenobjs, (1 - rate))
+				info.ColumnNDVs[idx] /= math.Pow(float64(lenobjs), (1 - rate))
 			}
 			ndvUsingZonemap := calcNdvUsingZonemap(info.ColumnZMs[idx], &info.DataTypes[idx])
 			if ndvUsingZonemap != -1 && info.ColumnNDVs[idx] > ndvUsingZonemap {
@@ -150,6 +137,8 @@ func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, table
 			}
 		}
 	}
+
+	info.TableCnt = tableCnt
 	return info, nil
 }
 
@@ -161,70 +150,34 @@ func CalcStats(
 	expr *plan.Expr,
 	tableDef *plan.TableDef,
 	proc *process.Process,
-	sortKeyName string,
 	s *plan2.StatsInfoMap,
 ) (stats *plan.Stats, err error) {
-	var (
-		blockNumNeed, blockNumTotal int
-		tableCnt, cost              int64
-		columnMap                   map[int]int
-		isMonoExpr                  bool
-		meta                        objectio.ObjectMeta
-		skipThisObject              bool
-		// defCols, exprCols           []int
-		// maxCol                      int
-	)
-	if isMonoExpr = plan2.CheckExprIsMonotonic(ctx, expr); isMonoExpr {
-		columnMap, _, _, _ = plan2.GetColumnsByExpr(expr, tableDef)
-	}
-	errCtx := errutil.ContextWithNoReport(ctx, true)
+	var blockNumTotal int
+
 	for i := range blocks {
 		blockNumTotal += len(blocks[i])
-		for _, blk := range blocks[i] {
-			location := blk.MetaLocation()
-			tableCnt += int64(location.Rows())
-			needed := true
-			if isMonoExpr {
-				if !objectio.IsSameObjectLocVsMeta(location, meta) {
-					if meta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
-						return
-					}
-					if skipThisObject = !evalFilterExprWithZonemap(errCtx, meta, expr, columnMap, proc); skipThisObject {
-						continue
-					}
-				}
-				needed = evalFilterExprWithZonemap(
-					errCtx,
-					meta.GetBlockMeta(uint32(location.ID())),
-					expr,
-					columnMap,
-					proc)
-			}
-			if needed {
-				cost += int64(location.Rows())
-				blockNumNeed++
-			}
-		}
+	}
+	if blockNumTotal == 0 {
+		return plan2.DefaultStats(), nil
 	}
 
-	stats = new(plan.Stats)
-	stats.BlockNum = int32(blockNumNeed)
-	stats.TableCnt = float64(tableCnt)
-	stats.Cost = float64(cost)
-
 	if s.NeedUpdate(blockNumTotal) {
-		info, err := getInfoFromZoneMap(ctx, blocks, float64(tableCnt), tableDef, proc)
+		info, err := getInfoFromZoneMap(ctx, blocks, tableDef, proc)
 		if err != nil {
 			return plan2.DefaultStats(), nil
 		}
-		plan2.UpdateStatsInfoMap(info, blockNumTotal, stats.TableCnt, tableDef, s)
+		plan2.UpdateStatsInfoMap(info, blockNumTotal, tableDef, s)
 	}
 
+	stats = new(plan.Stats)
+	stats.TableCnt = s.TableCnt
 	if expr != nil {
-		stats.Outcnt = plan2.EstimateOutCnt(expr, sortKeyName, stats.TableCnt, stats.Cost, s)
+		stats.Outcnt = plan2.EstimateOutCnt(expr, s)
 	} else {
 		stats.Outcnt = stats.TableCnt
 	}
 	stats.Selectivity = stats.Outcnt / stats.TableCnt
+	stats.Cost = stats.TableCnt
+	stats.BlockNum = int32(stats.Outcnt/8192 + 1)
 	return stats, nil
 }
