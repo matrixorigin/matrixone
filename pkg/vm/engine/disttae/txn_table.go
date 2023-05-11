@@ -44,9 +44,6 @@ import (
 var _ engine.Relation = new(txnTable)
 
 func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
-	if !plan2.NeedStats(tbl.getTableDef()) {
-		return plan2.DefaultStats(), nil
-	}
 	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
 	if !ok {
 		return plan2.DefaultStats(), nil
@@ -58,7 +55,7 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap an
 		}
 	}
 	if len(tbl.blockInfos) > 0 {
-		return CalcStats(ctx, tbl.blockInfos, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName(), s)
+		return CalcStats(ctx, tbl.blockInfos, expr, tbl.getTableDef(), tbl.db.txn.proc, s)
 	} else {
 		// no meta means not flushed yet, very small table
 		return plan2.DefaultStats(), nil
@@ -554,14 +551,6 @@ func (tbl *txnTable) TableColumns(ctx context.Context) ([]*engine.Attribute, err
 	return attrs, nil
 }
 
-func (tbl *txnTable) getCbName() string {
-	if tbl.clusterByIdx == -1 {
-		return ""
-	} else {
-		return tbl.tableDef.Cols[tbl.clusterByIdx].Name
-	}
-}
-
 func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	attrs := make([]*engine.Attribute, 0, 1)
 	for _, def := range tbl.defs {
@@ -619,7 +608,8 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
 	}
-	packer, put := tbl.db.txn.engine.packerPool.Get()
+	var packer *types.Packer
+	put := tbl.db.txn.engine.packerPool.Get(&packer)
 	defer put()
 	if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
 		return err
@@ -805,7 +795,8 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	}
 	bat.SetAttributes([]string{catalog.Row_ID})
 
-	packer, put := tbl.db.txn.engine.packerPool.Get()
+	var packer *types.Packer
+	put := tbl.db.txn.engine.packerPool.Get(&packer)
 	defer put()
 	if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
 		return err
@@ -887,7 +878,8 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
 		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
 		if ok {
-			packer, put := tbl.db.txn.engine.packerPool.Get()
+			var packer *types.Packer
+			put := tbl.db.txn.engine.packerPool.Get(&packer)
 			defer put()
 			encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
 		}
@@ -1054,7 +1046,7 @@ func (tbl *txnTable) newReader(
 		return nil, err
 	}
 
-	var iter logtailreplay.PartitionStateIter
+	var iter logtailreplay.RowsIter
 	if len(encodedPrimaryKey) > 0 {
 		iter = parts[partitionIndex].NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
