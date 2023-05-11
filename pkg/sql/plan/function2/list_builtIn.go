@@ -1285,287 +1285,67 @@ var supportedStringBuiltIns = []FuncNew{
 					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringWith2Args[int64]
+					return SubStringWith2Args
 				},
 			},
 			{
 				overloadId: 1,
-				args:       []types.T{types.T_varchar, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith2Args[uint64]
-				},
-			},
-			{
-				overloadId: 2,
 				args:       []types.T{types.T_char, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_char.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringWith2Args[int64]
+					return SubStringWith2Args
 				},
 			},
 			{
-				overloadId: 3,
-				args:       []types.T{types.T_char, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith2Args[uint64]
-				},
-			},
-			{
-				overloadId: 4,
-				args:       []types.T{types.T_char, types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith2Args[float64]
-				},
-			},
-			{
-				overloadId: 5,
-				args:       []types.T{types.T_varchar, types.T_float64, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[float64, int64]
-				},
-			},
-			{
-				overloadId: 6,
-				args:       []types.T{types.T_varchar, types.T_float64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[float64, uint64]
-				},
-			},
-			{
-				overloadId: 7,
-				args:       []types.T{types.T_varchar, types.T_int64, types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[int64, float64]
-				},
-			},
-			{
-				overloadId: 8,
-				args:       []types.T{types.T_varchar, types.T_uint64, types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[uint64, float64]
-				},
-			},
-			{
-				overloadId: 9,
-				args:       []types.T{types.T_varchar, types.T_float64, types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[float64, float64]
-				},
-			},
-			{
-				overloadId: 10,
+				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[int64, int64]
+					return SubStringWith3Args
 				},
 			},
 			{
-				overloadId: 11,
-				args:       []types.T{types.T_varchar, types.T_int64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[int64, uint64]
-				},
-			},
-			{
-				overloadId: 12,
-				args:       []types.T{types.T_varchar, types.T_uint64, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[uint64, int64]
-				},
-			},
-			{
-				overloadId: 13,
-				args:       []types.T{types.T_varchar, types.T_uint64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[uint64, uint64]
-				},
-			},
-			{
-				overloadId: 14,
+				overloadId: 3,
 				args:       []types.T{types.T_char, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_char.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[int64, int64]
+					return SubStringWith3Args
 				},
 			},
 			{
-				overloadId: 15,
-				args:       []types.T{types.T_char, types.T_int64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[int64, uint64]
-				},
-			},
-			{
-				overloadId: 16,
-				args:       []types.T{types.T_char, types.T_uint64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[int64, uint64]
-				},
-			},
-			{
-				overloadId: 17,
-				args:       []types.T{types.T_char, types.T_uint64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_char.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[uint64, uint64]
-				},
-			},
-			{
-				overloadId: 18,
+				overloadId: 4,
 				args:       []types.T{types.T_blob, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[int64, int64]
+					return SubStringWith3Args
 				},
 			},
 			{
-				overloadId: 19,
-				args:       []types.T{types.T_blob, types.T_int64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_blob.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[uint64, int64]
-				},
-			},
-			{
-				overloadId: 20,
-				args:       []types.T{types.T_blob, types.T_uint64, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_blob.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[uint64, int64]
-				},
-			},
-			{
-				overloadId: 21,
-				args:       []types.T{types.T_blob, types.T_uint64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_blob.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[uint64, uint64]
-				},
-			},
-			{
-				overloadId: 22,
+				overloadId: 5,
 				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[int64, int64]
+					return SubStringWith3Args
 				},
 			},
 			{
-				overloadId: 23,
-				args:       []types.T{types.T_text, types.T_int64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[int64, uint64]
-				},
-			},
-			{
-				overloadId: 24,
-				args:       []types.T{types.T_text, types.T_uint64, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[uint64, int64]
-				},
-			},
-			{
-				overloadId: 25,
-				args:       []types.T{types.T_text, types.T_uint64, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith3Args[uint64, int64]
-				},
-			},
-			{
-				overloadId: 26,
-				args:       []types.T{types.T_blob, types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_blob.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith2Args[float64]
-				},
-			},
-			{
-				overloadId: 27,
-				args:       []types.T{types.T_blob, types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_blob.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return SubStringWith2Args[uint64]
-				},
-			},
-			{
-				overloadId: 28,
+				overloadId: 6,
 				args:       []types.T{types.T_blob, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return SubStringWith2Args[int64]
+					return SubStringWith2Args
 				},
 			},
 		},

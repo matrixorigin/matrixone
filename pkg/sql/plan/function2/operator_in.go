@@ -64,7 +64,7 @@ func (op *opOperatorFixedIn[T]) init(tuple *vector.Vector) {
 		return
 	}
 
-	op.mp = make(map[T]bool)
+	op.mp = make(map[T]bool, tuple.Length())
 	for i := uint64(0); i < uint64(tuple.Length()); i++ {
 		v, null := p.GetValue(i)
 		if !null {
