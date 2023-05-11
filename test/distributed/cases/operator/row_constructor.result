@@ -536,6 +536,9 @@ true
 false
 false
 select (col1,col2) != ('abcdef','{"ehyiuwqnve":"ashyiujewv"}') from row05;
-invalid argument operator <>, bad value [JSON JSON]
+(col1, col2) != (abcdef, {"ehyiuwqnve":"ashyiujewv"})
+true
+true
+true
 drop table row05;
 drop database test;
