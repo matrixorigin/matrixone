@@ -3302,6 +3302,49 @@ func TestDropCreated2(t *testing.T) {
 	tae.restart()
 }
 
+func TestDropCreated3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	_, err = txn.CreateDatabase("db", "", "")
+	assert.Nil(t, err)
+	_, err = txn.DropDatabase("db")
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
+	assert.Nil(t, err)
+
+	tae.restart()
+}
+
+func TestDropCreated4(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	schema := catalog.MockSchemaAll(1, -1)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.CreateDatabase("db", "", "")
+	assert.Nil(t, err)
+	_, err = db.CreateRelation(schema)
+	assert.Nil(t, err)
+	_, err = db.DropRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
+	assert.Nil(t, err)
+
+	tae.restart()
+}
+
 // records create at 1 and commit
 // read by ts 1, err should be nil
 func TestReadEqualTS(t *testing.T) {
