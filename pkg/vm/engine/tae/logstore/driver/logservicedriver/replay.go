@@ -147,7 +147,6 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 	r.onReplayDriverLsn(intervals.GetMin())
 	r.d.dropRecordByLsn(logserviceLsn)
 	r.replayedLsn = record.GetMaxLsn()
-	record.baseEntry.Close()
 	r.inited = true
 	delete(r.driverLsnLogserviceLsnMap, lsn)
 	return nil

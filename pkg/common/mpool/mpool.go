@@ -108,7 +108,7 @@ func (s *MPoolStats) RecordManyFrees(tag string, nfree, sz int64) int64 {
 }
 
 const (
-	NumFixedPool = 6
+	NumFixedPool = 5
 	kMemHdrSz    = 16
 	kStripeSize  = 128
 	B            = 1
@@ -120,10 +120,10 @@ const (
 )
 
 // Pool emement size
-var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024, 2048}
+var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 
 // Zeros, enough for largest pool element
-var kZeroSlice = make([]byte, 2048)
+var kZeroSlice = make([]byte, 1024)
 
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {

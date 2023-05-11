@@ -255,12 +255,6 @@ func (r *baseEntry) Unmarshal(buf []byte) error {
 	return err
 }
 
-func (r *baseEntry) Close() {
-	// if r.payload != nil {
-	// 	common.LogAllocator.Free(r.payload)
-	// }
-}
-
 // read: logrecord -> meta+payload -> entry
 // write: entries+meta -> payload -> record
 type recordEntry struct {
