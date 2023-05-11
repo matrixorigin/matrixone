@@ -141,6 +141,26 @@ func TestRouter_SelectByLabel(t *testing.T) {
 	cn, err = ru.SelectByLabel(li3)
 	require.Error(t, err)
 	require.Nil(t, cn)
+
+	li4 := labelInfo{
+		Tenant: "",
+		Labels: map[string]string{
+			"k2": "v1",
+		},
+	}
+	cn, err = ru.SelectByLabel(li4)
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+
+	li5 := labelInfo{
+		Tenant: "sys",
+		Labels: map[string]string{
+			"k2": "v1",
+		},
+	}
+	cn, err = ru.SelectByLabel(li5)
+	require.NoError(t, err)
+	require.NotNil(t, cn)
 }
 
 func TestRouter_SelectByConnID(t *testing.T) {

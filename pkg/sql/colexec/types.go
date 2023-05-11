@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -67,7 +68,7 @@ type CnSegmentMap struct {
 	// segmentName => uuid + fileoffset
 	// 1.mp[segmentName] = 1 => txnWorkSpace
 	// 2.mp[segmentName] = 2 => Cn Blcok
-	mp map[string]int32
+	mp map[objectio.Segmentid]int32
 }
 
 // ReceiverOperator need to receive batch from proc.Reg.MergeReceivers

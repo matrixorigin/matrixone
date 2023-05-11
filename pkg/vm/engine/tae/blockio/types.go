@@ -69,7 +69,7 @@ func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 	objectSize := uint32(0)
 	for _, block := range blocks {
 		meta := block.GetMeta()
-		count := meta.BlockHeader().ColumnCount()
+		count := meta.BlockHeader().MetaColumnCount()
 		for i := 0; i < int(count); i++ {
 			col, err := block.GetColumn(uint16(i))
 			if err != nil {
@@ -120,7 +120,7 @@ func EncodeLocationFromString(info string) (objectio.Location, error) {
 	if err != nil {
 		return nil, err
 	}
-	name := objectio.BuildObjectName(uid, uint16(num))
+	name := objectio.BuildObjectName(&uid, uint16(num))
 	return objectio.BuildLocation(name, extent, uint32(rows), uint16(id)), nil
 }
 

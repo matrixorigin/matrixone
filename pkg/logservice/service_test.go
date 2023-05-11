@@ -819,8 +819,7 @@ func TestServiceHandleCNUpdateLabel(t *testing.T) {
 		req := pb.Request{
 			Method: pb.UPDATE_CN_LABEL,
 			CNStoreLabel: &pb.CNStoreLabel{
-				UUID:      uuid,
-				Operation: pb.SetLabel,
+				UUID: uuid,
 				Labels: map[string]metadata.LabelList{
 					"account": {Labels: []string{"a", "b"}},
 					"role":    {Labels: []string{"1", "2"}},
@@ -848,8 +847,7 @@ func TestServiceHandleCNUpdateLabel(t *testing.T) {
 		req = pb.Request{
 			Method: pb.UPDATE_CN_LABEL,
 			CNStoreLabel: &pb.CNStoreLabel{
-				UUID:      uuid,
-				Operation: pb.SetLabel,
+				UUID: uuid,
 				Labels: map[string]metadata.LabelList{
 					"account": {Labels: []string{"a", "b"}},
 					"role":    {Labels: []string{"1", "2"}},
@@ -881,10 +879,9 @@ func TestServiceHandleCNUpdateLabel(t *testing.T) {
 		req = pb.Request{
 			Method: pb.UPDATE_CN_LABEL,
 			CNStoreLabel: &pb.CNStoreLabel{
-				UUID:      uuid,
-				Operation: pb.DeleteLabel,
+				UUID: uuid,
 				Labels: map[string]metadata.LabelList{
-					"account": {Labels: []string{}},
+					"role": {Labels: []string{"1", "2"}},
 				},
 			},
 		}

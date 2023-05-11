@@ -1533,6 +1533,7 @@ type CNStoreLabel struct {
 	// UUID is the uuid of the CN store.
 	UUID string `protobuf:"bytes,1,opt,name=UUID,proto3" json:"UUID,omitempty"`
 	// Operation is the CN label operation.
+	// TODO(volgariver6): Unused field.
 	Operation CNLabelOp `protobuf:"varint,2,opt,name=Operation,proto3,enum=logservice.CNLabelOp" json:"Operation,omitempty"`
 	// Labels is the labels of the CN store.
 	Labels               map[string]metadata.LabelList `protobuf:"bytes,3,rep,name=Labels,proto3" json:"Labels" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`

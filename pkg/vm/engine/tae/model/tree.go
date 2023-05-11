@@ -410,7 +410,7 @@ func (ttree *TableTree) ReadFrom(r io.Reader) (n int64, err error) {
 	var tmpn int64
 	for i := 0; i < int(cnt); i++ {
 		id := objectio.NewSegmentid()
-		seg := NewSegmentTree(&id)
+		seg := NewSegmentTree(id)
 		if tmpn, err = seg.ReadFrom(r); err != nil {
 			return
 		}

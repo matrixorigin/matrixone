@@ -9,10 +9,12 @@ SET @@session.autocommit= 0;
 SELECT @@session.autocommit;
 @@autocommit
 0
+rollback;
 SET @@session.autocommit=OFF;
 SELECT @@session.autocommit;
 @@autocommit
 0
+rollback;
 SET @@session.autocommit=ON;
 SELECT @@session.autocommit;
 @@autocommit
@@ -370,47 +372,35 @@ start transaction;
 create table t5(a int);
 insert into t5 values(10),(20),(30);
 drop table t5;
-internal error: Only CREATE of DDL is supported in transactions
 start transaction;
 insert into t5 values(100),(2000),(3000);
+no such table autocommit_1.t5
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 set @autocommit=0;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 begin;
 select * from t5;
-a
-10
-20
-30
-100
-2000
-3000
+SQL parser error: table "t5" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into t5 values(1),(2),(3);
+no such table autocommit_1.t5
 rollback;
 select * from t5;
-a
-10
-20
-30
-100
-2000
-3000
+SQL parser error: table "t5" does not exist
 begin;
 select * from t5;
-a
-10
-20
-30
-100
-2000
-3000
+SQL parser error: table "t5" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into t5 values(100),(2000),(3000);
+no such table autocommit_1.t5
 delete from t5;
+no such table autocommit_1.t5
 begin;
 select * from t5;
-a
+SQL parser error: table "t5" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 rollback;
 select * from t5;
-a
+SQL parser error: table "t5" does not exist
 drop table t5
 start transaction;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 6 near "
@@ -485,9 +475,10 @@ a
 500
 1000
 drop table t7;
-internal error: Only CREATE of DDL is supported in transactions
 commit;
 drop table t7;
+no such table autocommit_1.t7
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 create table t8(a int);
 insert into t8 values (500);
 rollback;
@@ -503,4 +494,5 @@ select * from t9;
 a
 commit;
 drop table t9;
+rollback;
 set @@autocommit=on;

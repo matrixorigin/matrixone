@@ -389,7 +389,7 @@ func getAccountInfoOfClusterTable(ctx CompilerContext, accounts tree.IdentifierL
 
 func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	if !d.Default.NullAbility && d.Default.Expr == nil && !d.Typ.AutoIncr {
-		return nil, moerr.NewInvalidInput(ctx, "invalid default value")
+		return nil, moerr.NewInvalidInput(ctx, "invalid default value for column '%s'", d.Name)
 	}
 	if d.Default.Expr == nil {
 		return &Expr{

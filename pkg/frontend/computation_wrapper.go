@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -228,21 +229,48 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		if len(executePlan.Args) != len(preparePlan.ParamTypes) {
 			return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 		}
-		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
+		if prepareStmt.IsInsertValues {
+			for _, node := range preparePlan.Plan.GetQuery().Nodes {
+				if node.RowsetData != nil {
+					tableDef := node.TableDef
+					colCount := len(tableDef.Cols)
+					colsData := node.RowsetData.Cols
+					rowCount := len(colsData[0].Data)
 
-		// replace ? and @var with their values
-		resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
-		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
-		constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
-		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
-		err = vp.Visit(requestCtx)
-		if err != nil {
-			return nil, err
+					bat := prepareStmt.InsertBat
+					bat.CleanOnlyData()
+					for i := 0; i < colCount; i++ {
+						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
+							colsData[i].Data, bat.Vecs[i], prepareStmt.emptyBatch, executePlan.Args, prepareStmt.ufs[i]); err != nil {
+							return nil, err
+						}
+					}
+					bat.AddCnt(1)
+					for i := 0; i < rowCount; i++ {
+						bat.Zs = append(bat.Zs, 1)
+					}
+					cwft.proc.SetPrepareBatch(bat)
+					break
+				}
+			}
+			cwft.plan = preparePlan.Plan
+		} else {
+			newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
+
+			// replace ? and @var with their values
+			resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
+			resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
+			constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
+			vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
+			err = vp.Visit(requestCtx)
+			if err != nil {
+				return nil, err
+			}
+			cwft.plan = newPlan
 		}
 
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
-		cwft.plan = newPlan
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
 		case *tree.ShowTableStatus:
@@ -253,10 +281,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 
 		//check privilege
+		/* prepare not need check privilege
 		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
 		if err != nil {
 			return nil, err
 		}
+		*/
 	} else {
 		var vp *plan2.VisitPlan
 		if cacheHit {
@@ -271,19 +301,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 
 	txnHandler := cwft.ses.GetTxnHandler()
-	txnCtx := requestCtx
-	if cacheHit && cwft.plan.NeedImplicitTxn() {
-		txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
-		if err != nil {
-			return nil, err
-		}
-	} else if cwft.plan.GetQuery().GetLoadTag() {
-		txnCtx, cwft.proc.TxnOperator = txnHandler.GetTxnOperator()
-	} else if cwft.plan.NeedImplicitTxn() {
-		txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
-		if err != nil {
-			return nil, err
-		}
+	var txnCtx context.Context
+	txnCtx, cwft.proc.TxnOperator, err = txnHandler.GetTxn()
+	if err != nil {
+		return nil, err
 	}
 	addr := ""
 	if len(cwft.ses.GetParameterUnit().ClusterNodes) > 0 {

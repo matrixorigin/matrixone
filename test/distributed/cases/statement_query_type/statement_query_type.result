@@ -185,11 +185,8 @@ col2 varchar
 create view view_2 as select * from table_2;
 create index index_table_2 on table_2(col1);
 drop index index_table_2 on table_2;
-internal error: Only CREATE of DDL is supported in transactions
 drop view view_2;
-internal error: Only CREATE of DDL is supported in transactions
 drop table table_2;
-internal error: Only CREATE of DDL is supported in transactions
 drop database db2;
 internal error: CREATE/DROP of database is not supported in transactions
 select * from unnest('{"a":1}') as f;
@@ -706,8 +703,6 @@ utf8mb4_bin    utf8mb4    46    Yes    1
 load data infile '$resources/load_data/test.csv' into table test_table;
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
-[unknown result because it is related to issue#7772]
 delete from test_table where col1=3;
-[unknown result because it is related to issue#7772]
 rollback ;
 drop account if exists query_type;

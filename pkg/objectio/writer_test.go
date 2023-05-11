@@ -87,7 +87,7 @@ func TestNewObjectWriter(t *testing.T) {
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-	_, err = objectWriter.Write(bat2)
+	_, err = objectWriter.WriteWithoutSeqnum(bat2)
 	assert.Nil(t, err)
 	ts := time.Now()
 	option := WriteOptions{
@@ -115,14 +115,25 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, 0, pool)
+	typs := []types.Type{types.T_int8.ToType(), types.T_int32.ToType(), types.T_int64.ToType()}
+	vec, err := objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
 	assert.Nil(t, err)
-	vector1 := vec.Entries[0].Object.(*vector.Vector)
+
+	obj, err := Decode(vec.Entries[0].ObjectBytes)
+	assert.Nil(t, err)
+	vector1 := obj.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
-	vector2 := vec.Entries[1].Object.(*vector.Vector)
+
+	obj, err = Decode(vec.Entries[1].ObjectBytes)
+	assert.Nil(t, err)
+	vector2 := obj.(*vector.Vector)
 	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
-	vector3 := vec.Entries[2].Object.(*vector.Vector)
+
+	obj, err = Decode(vec.Entries[2].ObjectBytes)
+	assert.Nil(t, err)
+	vector3 := obj.(*vector.Vector)
 	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
+
 	blk, err := blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
 	buf := blk.ZoneMap()
@@ -145,13 +156,22 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, 0, pool)
+	vec, err = objectReader.ReadOneBlock(context.Background(), idxs, typs, 0, pool)
 	assert.Nil(t, err)
-	vector1 = vec.Entries[0].Object.(*vector.Vector)
+
+	obj, err = Decode(vec.Entries[0].ObjectBytes)
+	assert.Nil(t, err)
+	vector1 = obj.(*vector.Vector)
 	assert.Equal(t, int8(3), vector.MustFixedCol[int8](vector1)[3])
-	vector2 = vec.Entries[1].Object.(*vector.Vector)
+
+	obj, err = Decode(vec.Entries[1].ObjectBytes)
+	assert.Nil(t, err)
+	vector2 = obj.(*vector.Vector)
 	assert.Equal(t, int32(3), vector.MustFixedCol[int32](vector2)[3])
-	vector3 = vec.Entries[2].Object.(*vector.Vector)
+
+	obj, err = Decode(vec.Entries[2].ObjectBytes)
+	assert.Nil(t, err)
+	vector3 = obj.(*vector.Vector)
 	assert.Equal(t, int64(3), vector.GetFixedAt[int64](vector3, 3))
 	blk, err = blocks[0].GetColumn(idxs[0])
 	assert.Nil(t, err)
@@ -159,7 +179,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, uint8(0x1), buf[31])
 	assert.Equal(t, uint8(0xa), buf[63])
 	assert.True(t, nb0 == pool.CurrNB())
-	buf1, err := objectReader.ReadExtent(context.Background(), meta.BlockHeader().ZoneMapArea(), false)
+	buf1, err := objectReader.ReadExtent(context.Background(), meta.BlockHeader().ZoneMapArea())
 	assert.Nil(t, err)
 	zma := ZoneMapArea(buf1)
 	buf = zma.GetZoneMap(0, 0)

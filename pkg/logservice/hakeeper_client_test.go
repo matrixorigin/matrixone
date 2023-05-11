@@ -428,8 +428,7 @@ func TestHAKeeperClientUpdateCNLabel(t *testing.T) {
 		}()
 
 		label := pb.CNStoreLabel{
-			UUID:      s.ID(),
-			Operation: pb.SetLabel,
+			UUID: s.ID(),
 			Labels: map[string]metadata.LabelList{
 				"account": {Labels: []string{"a", "b"}},
 				"role":    {Labels: []string{"1", "2"}},
@@ -446,8 +445,7 @@ func TestHAKeeperClientUpdateCNLabel(t *testing.T) {
 		require.NoError(t, err)
 
 		label = pb.CNStoreLabel{
-			UUID:      s.ID(),
-			Operation: pb.SetLabel,
+			UUID: s.ID(),
 			Labels: map[string]metadata.LabelList{
 				"account": {Labels: []string{"a", "b"}},
 				"role":    {Labels: []string{"1", "2"}},
@@ -468,10 +466,9 @@ func TestHAKeeperClientUpdateCNLabel(t *testing.T) {
 		require.NoError(t, err)
 
 		label = pb.CNStoreLabel{
-			UUID:      s.ID(),
-			Operation: pb.DeleteLabel,
+			UUID: s.ID(),
 			Labels: map[string]metadata.LabelList{
-				"role": {Labels: []string{"1", "2"}},
+				"account": {Labels: []string{"a", "b"}},
 			},
 		}
 		err = c1.UpdateCNLabel(ctx, label)
