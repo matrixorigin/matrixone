@@ -46,7 +46,7 @@ var NewZM = index.NewZM
 var BuildZM = index.BuildZM
 
 type ColumnMetaFetcher interface {
-	MustGetColumn(idx uint16) ColumnMeta
+	MustGetColumn(seqnum uint16) ColumnMeta
 }
 
 type WriteOptions struct {
