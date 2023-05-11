@@ -118,7 +118,7 @@ func ReadOneBlockWithMeta(
 	meta *ObjectMeta,
 	name string,
 	blk uint16,
-	idxs []uint16,
+	seqnums []uint16,
 	typs []types.Type,
 	m *mpool.MPool,
 	fs fileservice.FileService,
@@ -131,7 +131,7 @@ func ReadOneBlockWithMeta(
 	var filledEntries []fileservice.IOEntry
 	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
-	for i, seqnum := range idxs {
+	for i, seqnum := range seqnums {
 		// special columns
 		if seqnum >= SEQNUM_UPPER {
 			metaColCnt := blkmeta.GetMetaColumnCount()
@@ -155,9 +155,11 @@ func ReadOneBlockWithMeta(
 
 		// need fill vector
 		if seqnum > maxSeqnum || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
-			filledEntries = make([]fileservice.IOEntry, len(idxs))
+			if filledEntries == nil {
+				filledEntries = make([]fileservice.IOEntry, len(seqnums))
+			}
 			filledEntries[i] = fileservice.IOEntry{
-				Size: int64(seqnum), // a marker
+				Size: int64(seqnum), // a marker, it can not be zero
 			}
 			continue
 		}
@@ -178,15 +180,15 @@ func ReadOneBlockWithMeta(
 		}
 	}
 
+	// need to generate vector
 	if filledEntries != nil {
 		if len(typs) == 0 {
 			panic(fmt.Sprintf("block %s generate need typs", meta.BlockHeader().BlockID().String()))
 		}
 		length := int(blkmeta.GetRows())
 		readed := ioVec.Entries
-		// need to generate vector
 		for i := range filledEntries {
-			if filledEntries[i].Size == 0 {
+			if filledEntries[i].Size == 0 { // we can tell it is the placeholder for the readed column
 				filledEntries[i] = readed[0]
 				readed = readed[1:]
 			} else {
