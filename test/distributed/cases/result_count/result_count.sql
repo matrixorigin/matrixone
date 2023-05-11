@@ -101,7 +101,7 @@ use system;
 -- test_tenant_1 wait 15s
 create account test_tenant_1 admin_name 'test_account' identified by '111';
 -- @session:id=2&user=test_tenant_1:test_account&password=111
-select sleep(30);
+select sleep(16);
 -- @session
 
 select statement, result_count from statement_info where user="dump" order by request_at desc limit 76;

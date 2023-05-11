@@ -204,8 +204,8 @@ use system;
 select sleep(1);
 sleep(1)
 0
-select sleep(30);
-sleep(30)
+select sleep(15);
+sleep(15)
 0
 select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="external_sql" and status != "Running" order by request_at desc limit 112;
 statement    query_type    sql_source_type
@@ -431,8 +431,8 @@ Project
 /* cloud_user */ select sleep(1);
 sleep(1)
 0
-select sleep(30);
-sleep(30)
+select sleep(15);
+sleep(15)
 0
 /* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" order by request_at desc limit 68;
 statement    query_type    sql_source_type
@@ -614,8 +614,8 @@ Project
 /* cloud_nonuser */ select sleep(1);
 sleep(1)
 0
-select sleep(30);
-sleep(30)
+select sleep(15);
+sleep(15)
 0
 /* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and status != "Running" order by request_at desc limit 68;
 statement    query_type    sql_source_type

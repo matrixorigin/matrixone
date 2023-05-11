@@ -20,8 +20,8 @@ set @uuid_hide_3 = last_uuid();
 1
 1
 set @uuid_hide_4 = last_uuid();
-select sleep(30);
-sleep(30)
+select sleep(16);
+sleep(16)
 0
 select account from system.statement_info where statement_id = @uuid_create_table;
 account

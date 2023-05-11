@@ -6,7 +6,7 @@ set @ts=now();
 use system;
 use mysql; select * from user limit 0;
 
-select sleep(30) as s;
+select sleep(15) as s;
 
 select count(1) as cnt, statement_id, statement, status from system.statement_info group by statement_id, statement, status having count(1) > 1;
 

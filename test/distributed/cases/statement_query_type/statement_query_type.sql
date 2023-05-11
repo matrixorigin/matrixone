@@ -154,7 +154,7 @@ rollback;
 use system;
 select sleep(1);
 -- @session:id=1&user=query_type:admin:accountadmin&password=123456
-select sleep(30);
+select sleep(15);
 -- @session
 select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="external_sql" and status != "Running" order by request_at desc limit 112;
 
@@ -237,7 +237,7 @@ select statement,query_type,sql_source_type from  system.statement_info where us
 
 /* cloud_user */ select sleep(1);
 -- @session:id=1&user=query_type:admin:accountadmin&password=123456
-select sleep(30);
+select sleep(15);
 -- @session
 /* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" order by request_at desc limit 68;
 
@@ -318,7 +318,7 @@ select sleep(30);
 /* cloud_nonuser */ drop database test_db;
 /* cloud_nonuser */ select sleep(1);
 -- @session:id=1&user=query_type:admin:accountadmin&password=123456
-select sleep(30);
+select sleep(15);
 -- @session
 /* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and status != "Running" order by request_at desc limit 68;
 
