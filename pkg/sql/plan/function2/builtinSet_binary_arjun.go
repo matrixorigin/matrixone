@@ -110,23 +110,23 @@ func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 				return err
 			}
 		}
-	} else {
-		v1str := string(v1)
-		for i := uint64(0); i < uint64(length); i++ {
-			v2, null2 := p2.GetValue(i)
-			if null2 {
-				if err = rs.Append(0, true); err != nil {
-					return err
-				}
-			} else {
-				res, _ := extractFromDate(v1str, v2)
-				if err = rs.Append(res, false); err != nil {
-					return err
-				}
+		return nil
+	}
+
+	unit := function2Util.QuickBytesToStr(v1)
+	for i := uint64(0); i < uint64(length); i++ {
+		v2, null2 := p2.GetValue(i)
+		if null2 {
+			if err = rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			res, _ := extractFromDate(unit, v2)
+			if err = rs.Append(res, false); err != nil {
+				return err
 			}
 		}
 	}
-
 	return nil
 }
 
@@ -176,19 +176,19 @@ func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 				return err
 			}
 		}
-	} else {
-		v1str := string(v1)
-		for i := uint64(0); i < uint64(length); i++ {
-			v2, null2 := p2.GetValue(i)
-			if null2 {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				res, _ := extractFromDatetime(v1str, v2)
-				if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
-					return err
-				}
+		return nil
+	}
+	unit := function2Util.QuickBytesToStr(v1)
+	for i := uint64(0); i < uint64(length); i++ {
+		v2, null2 := p2.GetValue(i)
+		if null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			res, _ := extractFromDatetime(unit, v2)
+			if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+				return err
 			}
 		}
 	}
@@ -285,19 +285,19 @@ func ExtractFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 				return err
 			}
 		}
-	} else {
-		v1str := string(v1)
-		for i := uint64(0); i < uint64(length); i++ {
-			v2, null2 := p2.GetValue(i)
-			if null2 {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				res, _ := extractFromTime(v1str, v2)
-				if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
-					return err
-				}
+		return nil
+	}
+	unit := function2Util.QuickBytesToStr(v1)
+	for i := uint64(0); i < uint64(length); i++ {
+		v2, null2 := p2.GetValue(i)
+		if null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			res, _ := extractFromTime(unit, v2)
+			if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+				return err
 			}
 		}
 	}
@@ -371,23 +371,23 @@ func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrap
 				return err
 			}
 		}
-	} else {
-		v1str := string(v1)
-		p2scale := p2.GetType().Scale
-		for i := uint64(0); i < uint64(length); i++ {
-			v2, null2 := p2.GetStrValue(i)
-			if null2 {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				res, err := extractFromVarchar(v1str, function2Util.QuickBytesToStr(v2), p2scale)
-				if err != nil {
-					return err
-				}
-				if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
-					return err
-				}
+		return nil
+	}
+	unit := function2Util.QuickBytesToStr(v1)
+	scale := p2.GetType().Scale
+	for i := uint64(0); i < uint64(length); i++ {
+		v2, null2 := p2.GetStrValue(i)
+		if null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			res, err := extractFromVarchar(unit, function2Util.QuickBytesToStr(v2), scale)
+			if err != nil {
+				return err
+			}
+			if err = rs.AppendBytes(function2Util.QuickStrToBytes(res), false); err != nil {
+				return err
 			}
 		}
 	}

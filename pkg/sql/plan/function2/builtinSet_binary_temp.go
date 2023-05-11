@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
@@ -711,12 +712,12 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	return nil
 }
 
-func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {
-	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
 	}
-	dt, success := start.ToDatetime().AddInterval(diff, types.IntervalType(unit), types.DateType)
+	dt, success := start.ToDatetime().AddInterval(diff, iTyp, types.DateType)
 	if success {
 		return dt.ToDate(), nil
 	} else {
@@ -724,12 +725,12 @@ func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {
 	}
 }
 
-func doTimeAdd(start types.Time, diff int64, unit int64) (types.Time, error) {
-	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+func doTimeAdd(start types.Time, diff int64, iTyp types.IntervalType) (types.Time, error) {
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
 	}
-	t, success := start.AddInterval(diff, types.IntervalType(unit))
+	t, success := start.AddInterval(diff, iTyp)
 	if success {
 		return t, nil
 	} else {
@@ -737,12 +738,12 @@ func doTimeAdd(start types.Time, diff int64, unit int64) (types.Time, error) {
 	}
 }
 
-func doDatetimeAdd(start types.Datetime, diff int64, unit int64) (types.Datetime, error) {
-	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
 	}
-	dt, success := start.AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
+	dt, success := start.AddInterval(diff, iTyp, types.DateTimeType)
 	if success {
 		return dt, nil
 	} else {
@@ -750,8 +751,8 @@ func doDatetimeAdd(start types.Datetime, diff int64, unit int64) (types.Datetime
 	}
 }
 
-func doDateStringAdd(startStr string, diff int64, unit int64) (types.Datetime, error) {
-	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
 	}
@@ -759,7 +760,7 @@ func doDateStringAdd(startStr string, diff int64, unit int64) (types.Datetime, e
 	if err != nil {
 		return 0, err
 	}
-	dt, success := start.AddInterval(diff, types.IntervalType(unit), types.DateType)
+	dt, success := start.AddInterval(diff, iTyp, types.DateType)
 	if success {
 		return dt, nil
 	} else {
@@ -767,12 +768,12 @@ func doDateStringAdd(startStr string, diff int64, unit int64) (types.Datetime, e
 	}
 }
 
-func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, unit int64) (types.Timestamp, error) {
-	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
 	}
-	dt, success := start.ToDatetime(loc).AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
+	dt, success := start.ToDatetime(loc).AddInterval(diff, iTyp, types.DateTimeType)
 	if success {
 		return dt.ToTimestamp(loc), nil
 	} else {
@@ -795,7 +796,7 @@ func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 				return err
 			}
 		} else {
-			val, err := doDateAdd(v1, v2, unit)
+			val, err := doDateAdd(v1, v2, types.IntervalType(unit))
 			if err != nil {
 				return err
 			}
@@ -814,7 +815,8 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	scale := ivecs[0].GetType().Scale
-	switch types.IntervalType(unit) {
+	iTyp := types.IntervalType(unit)
+	switch iTyp {
 	case types.MicroSecond:
 		scale = 6
 	}
@@ -828,7 +830,7 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 				return err
 			}
 		} else {
-			val, err := doDatetimeAdd(v1, v2, unit)
+			val, err := doDatetimeAdd(v1, v2, iTyp)
 			if err != nil {
 				return err
 			}
@@ -848,6 +850,7 @@ func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	starts := vector.GenerateFunctionStrParameter(ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs.TempSetType(types.New(types.T_datetime, 0, 6))
+	iTyp := types.IntervalType(unit)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := starts.GetStrValue(i)
 		v2, null2 := diffs.GetValue(i)
@@ -857,7 +860,7 @@ func DateStringAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				return err
 			}
 		} else {
-			val, err := doDateStringAdd(string(v1), v2, unit)
+			val, err := doDateStringAdd(string(v1), v2, iTyp)
 			if err != nil {
 				return err
 			}
@@ -876,7 +879,8 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	scale := ivecs[0].GetType().Scale
-	switch types.IntervalType(unit) {
+	iTyp := types.IntervalType(unit)
+	switch iTyp {
 	case types.MicroSecond:
 		scale = 6
 	}
@@ -890,7 +894,7 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 				return err
 			}
 		} else {
-			val, err := doTimestampAdd(proc.SessionInfo.TimeZone, v1, v2, unit)
+			val, err := doTimestampAdd(proc.SessionInfo.TimeZone, v1, v2, iTyp)
 			if err != nil {
 				return err
 			}
@@ -909,7 +913,8 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	scale := ivecs[0].GetType().Scale
-	switch types.IntervalType(unit) {
+	iTyp := types.IntervalType(unit)
+	switch iTyp {
 	case types.MicroSecond:
 		scale = 6
 	}
@@ -923,7 +928,7 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 				return err
 			}
 		} else {
-			val, err := doTimeAdd(v1, v2, unit)
+			val, err := doTimeAdd(v1, v2, iTyp)
 			if err != nil {
 				return err
 			}
@@ -1136,12 +1141,12 @@ func AbbrDayOfMonth(day int) string {
 	return str
 }
 
-func doDateSub(start types.Date, diff int64, unit int64) (types.Date, error) {
-	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
 	}
-	dt, success := start.ToDatetime().AddInterval(-diff, types.IntervalType(unit), types.DateType)
+	dt, success := start.ToDatetime().AddInterval(-diff, iTyp, types.DateType)
 	if success {
 		return dt.ToDate(), nil
 	} else {
@@ -1162,12 +1167,12 @@ func doTimeSub(start types.Time, diff int64, unit int64) (types.Time, error) {
 	}
 }
 
-func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime, error) {
-	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
 	}
-	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
+	dt, success := start.AddInterval(-diff, iTyp, types.DateTimeType)
 	if success {
 		return dt, nil
 	} else {
@@ -1175,8 +1180,8 @@ func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime
 	}
 }
 
-func doDateStringSub(startStr string, diff int64, unit int64) (types.Datetime, error) {
-	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
 	}
@@ -1184,7 +1189,7 @@ func doDateStringSub(startStr string, diff int64, unit int64) (types.Datetime, e
 	if err != nil {
 		return 0, err
 	}
-	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateType)
+	dt, success := start.AddInterval(-diff, iTyp, types.DateType)
 	if success {
 		return dt, nil
 	} else {
@@ -1192,12 +1197,12 @@ func doDateStringSub(startStr string, diff int64, unit int64) (types.Datetime, e
 	}
 }
 
-func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit int64) (types.Timestamp, error) {
-	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return 0, err
 	}
-	dt, success := start.ToDatetime(loc).AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
+	dt, success := start.ToDatetime(loc).AddInterval(-diff, iTyp, types.DateTimeType)
 	if success {
 		return dt.ToTimestamp(loc), nil
 	} else {
@@ -1211,6 +1216,7 @@ func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	iTyp := types.IntervalType(unit)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := starts.GetValue(i)
 		v2, null2 := diffs.GetValue(i)
@@ -1220,7 +1226,7 @@ func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 				return err
 			}
 		} else {
-			val, err := doDateSub(v1, v2, unit)
+			val, err := doDateSub(v1, v2, iTyp)
 			if err != nil {
 				return err
 			}
@@ -1239,7 +1245,8 @@ func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	scale := ivecs[0].GetType().Scale
-	switch types.IntervalType(unit) {
+	iTyp := types.IntervalType(unit)
+	switch iTyp {
 	case types.MicroSecond:
 		scale = 6
 	}
@@ -1253,7 +1260,7 @@ func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 				return err
 			}
 		} else {
-			val, err := doDatetimeSub(v1, v2, unit)
+			val, err := doDatetimeSub(v1, v2, iTyp)
 			if err != nil {
 				return err
 			}
@@ -1273,6 +1280,7 @@ func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	starts := vector.GenerateFunctionStrParameter(ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	rs.TempSetType(types.New(types.T_datetime, 0, 6))
+	iTyp := types.IntervalType(unit)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := starts.GetStrValue(i)
 		v2, null2 := diffs.GetValue(i)
@@ -1282,7 +1290,7 @@ func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				return err
 			}
 		} else {
-			val, err := doDateStringSub(string(v1), v2, unit)
+			val, err := doDateStringSub(function2Util.QuickBytesToStr(v1), v2, iTyp)
 			if err != nil {
 				return err
 			}
@@ -1301,7 +1309,8 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	starts := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
 	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	scale := ivecs[0].GetType().Scale
-	switch types.IntervalType(unit) {
+	iTyp := types.IntervalType(unit)
+	switch iTyp {
 	case types.MicroSecond:
 		scale = 6
 	}
@@ -1315,7 +1324,7 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 				return err
 			}
 		} else {
-			val, err := doTimestampSub(proc.SessionInfo.TimeZone, v1, v2, unit)
+			val, err := doTimestampSub(proc.SessionInfo.TimeZone, v1, v2, iTyp)
 			if err != nil {
 				return err
 			}

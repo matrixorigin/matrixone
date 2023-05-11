@@ -387,7 +387,7 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 				return err
 			}
 		} else {
-			d, e := types.ParseDatetime(string(v), 6)
+			d, e := types.ParseDatetime(function2Util.QuickBytesToStr(v), 6)
 			if e != nil {
 				return moerr.NewOutOfRangeNoCtx("date", "'%s'", v)
 			}
