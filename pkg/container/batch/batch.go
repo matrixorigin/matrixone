@@ -33,8 +33,16 @@ import (
 func New(ro bool, attrs []string) *Batch {
 	return &Batch{
 		Ro:    ro,
+		Cnt:   1,
 		Attrs: attrs,
 		Vecs:  make([]*vector.Vector, len(attrs)),
+	}
+}
+
+func NewWithSize(n int) *Batch {
+	return &Batch{
+		Cnt:  1,
+		Vecs: make([]*vector.Vector, n),
 	}
 }
 
@@ -68,13 +76,6 @@ func Cow(bat *Batch) {
 	copy(attrs, bat.Attrs)
 	bat.Ro = false
 	bat.Attrs = attrs
-}
-
-func NewWithSize(n int) *Batch {
-	return &Batch{
-		Cnt:  1,
-		Vecs: make([]*vector.Vector, n),
-	}
 }
 
 func (info *aggInfo) MarshalBinary() ([]byte, error) {
