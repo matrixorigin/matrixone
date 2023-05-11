@@ -17,9 +17,6 @@ package etl
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"fmt"
-	"strings"
 	"sync"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -125,61 +122,30 @@ func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
 	return cnt, err
 }
 
-func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
-	if len(records) == 0 {
-		return 0, nil
+func bulkInsert(sqldb *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
+	stmt, err := db.GetStatement(sqldb, tbl)
+	if err != nil {
+		return 0, err
 	}
-
-	baseStr := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
-
-	sb := strings.Builder{}
-	defer sb.Reset()
-
-	// Start a new transaction
-
-	for idx, row := range records {
-		if len(row) == 0 {
-			continue
-		}
-
-		sb.WriteString("(")
-		for i, field := range row {
-			if i != 0 {
-				sb.WriteString(",")
-			}
-			if tbl.Columns[i].ColType == table.TJson {
-				var js interface{}
-				_ = json.Unmarshal([]byte(field), &js)
-				escapedJSON, _ := json.Marshal(js)
-				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
-			} else {
-				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
-				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
-				} else {
-					sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
-				}
-			}
-		}
-		sb.WriteString(")")
-
-		if sb.Len() >= maxLen || idx == len(records)-1 {
-			stmt := baseStr + sb.String() + ";"
-			_, err := db.Exec(stmt)
-			if err != nil {
-				return 0, err
-			}
-			sb.Reset()
-		} else {
-			sb.WriteString(",")
-		}
+	txn, err := sqldb.Begin()
+	if err != nil {
+		return 0, err
 	}
+	for _, record := range records {
+		vals := make([]interface{}, len(record))
+		for i, v := range record {
+			vals[i] = v
+		}
+		_, err = stmt.Exec(vals...)
+		if err != nil {
+			txn.Rollback()
+			return 0, err
+		}
 
-	// todo: adjust this sleep time
-	//if tbl.Table == "rawlog" {
-	//	time.Sleep(10 * time.Second)
-	//}
-
+	}
+	if err := txn.Commit(); err != nil {
+		return 0, err
+	}
 	return len(records), nil
 }
 

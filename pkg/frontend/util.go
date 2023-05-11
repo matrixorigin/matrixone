@@ -423,6 +423,9 @@ func logError(ses *Session, info string, msg string, fields ...zap.Field) {
 }
 
 func logInfof(info string, msg string, fields ...interface{}) {
+	if strings.Contains(info, "sys:mo_logger") {
+		return
+	}
 	fields = append(fields, info)
 	logutil.Infof(msg+" %s", fields...)
 }
