@@ -83,7 +83,6 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.LockService = p.LockService
 	proc.Aicm = p.Aicm
 	proc.LoadTag = p.LoadTag
-	proc.PrepareBatch = p.PrepareBatch
 
 	// reg and cancel
 	proc.Ctx = newctx
