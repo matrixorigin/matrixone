@@ -206,6 +206,10 @@ func newTestClientSession(c chan morpc.Message) *testClientSession {
 	}
 }
 
+func (cs *testClientSession) RemoteAddress() string {
+	return ""
+}
+
 func (cs *testClientSession) Close() error {
 	return nil
 }

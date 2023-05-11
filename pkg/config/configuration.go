@@ -137,10 +137,10 @@ var (
 	defaultSessionTimeout = 24 * time.Hour
 
 	// defaultLogsExtension default: tae. Support val in [csv, tae]
-	defaultLogsExtension = "tae"
+	defaultLogsExtension = "csv"
 
 	// defaultMergedExtension default: tae. Support val in [csv, tae]
-	defaultMergedExtension = "tae"
+	defaultMergedExtension = "csv"
 
 	// defaultOBShowStatsInterval default: 1min
 	defaultOBShowStatsInterval = time.Minute

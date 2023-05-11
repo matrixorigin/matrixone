@@ -94,7 +94,7 @@ func TestTypeMarshalAndUnmarshal(t *testing.T) {
 	typ := Type{
 		Oid:     T(1),
 		Charset: 2,
-		dummy1:  3,
+		notNull: 0,
 		dummy2:  4,
 		Size:    5,
 		Width:   6,

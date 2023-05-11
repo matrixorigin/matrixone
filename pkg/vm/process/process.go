@@ -71,6 +71,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.Id = p.Id
 	proc.vp = p.vp
 	proc.mp = p.Mp()
+	proc.prepareBatch = p.prepareBatch
 	proc.Lim = p.Lim
 	proc.TxnClient = p.TxnClient
 	proc.TxnOperator = p.TxnOperator
@@ -140,6 +141,14 @@ func (proc *Process) GetMPool() *mpool.MPool {
 
 func (proc *Process) Mp() *mpool.MPool {
 	return proc.GetMPool()
+}
+
+func (proc *Process) SetPrepareBatch(bat *batch.Batch) {
+	proc.prepareBatch = bat
+}
+
+func (proc *Process) GetPrepareBatch() *batch.Batch {
+	return proc.prepareBatch
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {

@@ -80,7 +80,6 @@ internal error: do not have privilege to execute the statement
 drop table revoke_test_table_1;
 internal error: do not have privilege to execute the statement
 grant ownership on database revoke_db_01 to revoke_role_7;
-internal error: do not have privilege to execute the statement
 select * from revoke_db_01.revoke_table_1;
 SQL parser error: table "revoke_table_1" does not exist
 drop database if exists revoke_db_01;
