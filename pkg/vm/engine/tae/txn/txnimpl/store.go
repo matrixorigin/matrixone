@@ -354,6 +354,7 @@ func (store *txnStore) ObserveTxn(
 	visitTable func(tbl any),
 	rotateTable func(dbName, tblName string, dbid, tid uint64),
 	visitMetadata func(block any),
+	visitSegment func(seg any),
 	visitAppend func(bat any),
 	visitDelete func(deletes []uint32, prefix []byte)) {
 	for _, db := range store.dbs {
@@ -371,6 +372,8 @@ func (store *txnStore) ObserveTxn(
 			}
 			for _, iTxnEntry := range tbl.txnEntries.entries {
 				switch txnEntry := iTxnEntry.(type) {
+				case *catalog.SegmentEntry:
+					visitSegment(txnEntry)
 				case *catalog.BlockEntry:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:

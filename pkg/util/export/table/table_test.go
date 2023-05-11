@@ -18,11 +18,17 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	ZeroTime = time.Unix(0, 0)
+}
 
 func TestNoopTableOptions_FormatDdl(t *testing.T) {
 	type args struct {
@@ -128,7 +134,7 @@ func TestRow_SetFloat64(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r := tt.fields.Table.GetRow(context.TODO())
 			defer r.Free()
-			r.SetColumnVal(tt.args.col, tt.args.val)
+			r.SetColumnVal(tt.args.col, Float64Field(tt.args.val))
 		})
 	}
 }
@@ -152,9 +158,9 @@ func TestRow_ToStrings(t *testing.T) {
 			name: "nil",
 			fields: fields{Table: dummyTable,
 				prepare: func(r *Row) {
-					r.SetColumnVal(dummyStrColumn, "0")
-					r.SetColumnVal(dummyFloat64Column, 1.1)
-					r.SetColumnVal(dummyInt64Column, int64(1))
+					r.SetColumnVal(dummyStrColumn, StringField("0"))
+					r.SetColumnVal(dummyFloat64Column, Float64Field(1.1))
+					r.SetColumnVal(dummyInt64Column, Int64Field(1))
 				}},
 			want: []string{"0", "1", "1.1"},
 		},
@@ -308,5 +314,35 @@ func TestSetPathBuilder(t *testing.T) {
 		t.Logf("got ErrNotSupported normally")
 	} else {
 		t.Errorf("unexpect err: %v", err)
+	}
+}
+
+func TestColumnField_EncodedDatetime(t *testing.T) {
+	type fields struct {
+		cf ColumnField
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		wantT  time.Time
+		want   string
+	}{
+		{
+			name: "normal",
+			fields: fields{
+				cf: TimeField(ZeroTime),
+			},
+			wantT: ZeroTime,
+			want:  "1970-01-01 00:00:00.000000",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := tt.fields.cf.GetTime()
+			require.Equal(t, tt.wantT, buf)
+			var bbuf [64]byte
+			dst := tt.fields.cf.EncodedDatetime(bbuf[:0])
+			require.Equal(t, tt.want, string(dst))
+		})
 	}
 }
