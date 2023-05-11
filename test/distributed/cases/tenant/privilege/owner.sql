@@ -34,9 +34,21 @@ grant role1,role2 to user2;
 create table db1.t2(a int);
 set role role2;
 create table db1.t2(a int);
+insert into db1.t2 values(1);
+insert into db1.t2 values(2);
+insert into db1.t2 values(3);
 set role public;
 create table db1.t3(a int);
 set secondary role all;
 create table db1.t3(a int);
+-- @session
+-- @session:id=7&user=default_1:user2:role1&password=123456
+select * from db1.t2;
+-- @session
+-- @session:id=8&user=default_1:user2:role2&password=123456
+grant all on table db1.t2 to role1;
+-- @session
+-- @session:id=9&user=default_1:user2:role1&password=123456
+select * from db1.t2;
 -- @session
 drop account default_1;
