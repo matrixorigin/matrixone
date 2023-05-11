@@ -15,8 +15,13 @@
 package objectio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
+
+type BlockObject []byte
 
 func NewBlock(seqnums *Seqnums) BlockObject {
 	header := BuildBlockHeader()
@@ -38,26 +43,66 @@ func NewBlock(seqnums *Seqnums) BlockObject {
 	return blockMeta
 }
 
+func BuildBlockMeta(count uint16) BlockObject {
+	length := headerLen + uint32(count)*colMetaLen
+	buf := make([]byte, length)
+	meta := BlockObject(buf)
+	return meta
+}
+
+func (bm BlockObject) BlockHeader() BlockHeader {
+	return BlockHeader(bm[:headerLen])
+}
+
+func (bm BlockObject) SetBlockMetaHeader(header BlockHeader) {
+	copy(bm[:headerLen], header)
+}
+
+// ColumnMeta is for internal use only, it didn't consider the block does not
+// contain the seqnum
+func (bm BlockObject) ColumnMeta(seqnum uint16) ColumnMeta {
+	return GetColumnMeta(seqnum, bm)
+}
+
+func (bm BlockObject) AddColumnMeta(idx uint16, col ColumnMeta) {
+	offset := headerLen + uint32(idx)*colMetaLen
+	copy(bm[offset:offset+colMetaLen], col)
+}
+
+func (bm BlockObject) IsEmpty() bool {
+	return len(bm) == 0
+}
+
+func (bm BlockObject) ToColumnZoneMaps(seqnums []uint16) []ZoneMap {
+	maxseq := bm.GetMaxSeqnum()
+	zms := make([]ZoneMap, len(seqnums))
+	for i, idx := range seqnums {
+		if idx >= SEQNUM_UPPER {
+			panic(fmt.Sprintf("do not read special %d", idx))
+		}
+		if idx > maxseq {
+			zms[i] = index.DecodeZM(EmptyZm[:])
+		}
+		column := bm.MustGetColumn(idx)
+		zms[i] = index.DecodeZM(column.ZoneMap())
+	}
+	return zms
+}
+
 func (bm BlockObject) GetExtent() Extent {
 	return bm.BlockHeader().MetaLocation()
 }
 
+// MustGetColumn is for general use. it return a empty ColumnMeta if the block does not
+// contain the seqnum
 func (bm BlockObject) MustGetColumn(seqnum uint16) ColumnMeta {
-	meta, err := bm.GetColumn(seqnum)
-	if err != nil {
-		panic(err)
-	}
-	return meta
-}
-
-func (bm BlockObject) GetColumn(seqnum uint16) (ColumnMeta, error) {
 	if seqnum >= bm.BlockHeader().MetaColumnCount() {
-		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
-			"block: %d, column count: %d",
-			seqnum, bm.BlockHeader().Sequence(),
-			bm.BlockHeader().MetaColumnCount())
+		h := bm.BlockHeader()
+		logutil.Infof("ObjectIO: blk-%d genernate empty ColumnMeta for big seqnum %d, maxseq: %d, column count: %d",
+			h.Sequence(), seqnum, h.MaxSeqnum(), h.MetaColumnCount())
+		return BuildColumnMeta()
 	}
-	return bm.ColumnMeta(seqnum), nil
+	return bm.ColumnMeta(seqnum)
 }
 
 func (bm BlockObject) GetRows() uint32 {

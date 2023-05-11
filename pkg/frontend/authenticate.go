@@ -1078,6 +1078,8 @@ const (
 	//with_grant_option = true
 	checkRoleHasPrivilegeWGOFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d;`
 
+	checkRoleHasPrivilegeWGOOrWithOwnershipFormat = `select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d;`
+
 	updateRolePrivsFormat = `update mo_catalog.mo_role_privs set operation_user_id = %d, granted_time = "%s", with_grant_option = %v where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
 
 	insertRolePrivsFormat = `insert into mo_catalog.mo_role_privs(role_id,role_name,obj_type,obj_id,privilege_id,privilege_name,privilege_level,operation_user_id,granted_time,with_grant_option) 
@@ -1531,6 +1533,10 @@ func getSqlForCheckRoleHasPrivilege(roleId int64, objType objectType, objId, pri
 
 func getSqlForCheckRoleHasPrivilegeWGO(privilegeId int64) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOFormat, privilegeId)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(privilegeId, allPrivId, ownershipPrivId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipFormat, privilegeId, allPrivId, ownershipPrivId)
 }
 
 func getSqlForUpdateRolePrivs(userId int64, timestamp string, withGrantOption bool, roleId int64, objType objectType, objId, privilegeId int64) string {
@@ -6123,6 +6129,95 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 	return sql, err
 }
 
+// getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType return getSqlForCheckRoleHasPrivilegeWGO denpends on the pritype
+func getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType PrivilegeType) string {
+	switch privType {
+	// account level privleges
+	case PrivilegeTypeCreateAccount:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeDropAccount:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeAlterAccount:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeCreateUser:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeDropUser:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeAlterUser:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeCreateRole:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeDropRole:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeAlterRole:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeCreateDatabase:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeDropDatabase:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeShowDatabases:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeConnect:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeManageGrants:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeAccountAll:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeAccountOwnership:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+
+	// database level privileges
+	case PrivilegeTypeShowTables:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeCreateTable:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeDropTable:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeCreateView:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeDropView:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeAlterView:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeAlterTable:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeDatabaseAll:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeDatabaseOwnership:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+
+	// table level privileges
+	case PrivilegeTypeSelect:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeInsert:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeUpdate:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeTruncate:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeDelete:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeReference:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeIndex:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeTableAll:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeTableOwnership:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+
+	// other privileges
+	case PrivilegeTypeExecute:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+	case PrivilegeTypeValues:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+
+	default:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+	}
+
+}
+
 // getRoleSetThatPrivilegeGrantedToWGO gets all roles that the privilege granted to with with_grant_option = true
 // The algorithm 3
 func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec, privType PrivilegeType) (*btree.Set[int64], error) {
@@ -6130,7 +6225,7 @@ func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec,
 	var erArray []ExecResult
 	var id int64
 	rset := &btree.Set[int64]{}
-	sql := getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+	sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -7969,7 +8064,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	// 2.grant database privilege
 	switch st := stmt.(type) {
 	case *tree.CreateDatabase:
-		sql = fmt.Sprintf(`grant ownership on database %s to %s;`, st.Name, currentRole)
+		sql = fmt.Sprintf(`grant ownership on database %s to %s with grant option;`, st.Name, currentRole)
 	case *tree.CreateTable:
 		// get database name
 		var dbName string
@@ -7980,7 +8075,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		}
 		// get table name
 		tableName := string(st.Table.ObjectName)
-		sql = fmt.Sprintf(`grant ownership on table %s.%s to %s;`, dbName, tableName, currentRole)
+		sql = fmt.Sprintf(`grant ownership on table %s.%s to %s with grant option;`, dbName, tableName, currentRole)
 	}
 
 	bh := ses.GetBackgroundExec(tenantCtx)
