@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newTxnTableForTest(
@@ -171,6 +173,7 @@ func BenchmarkTxnTableInsert(b *testing.B) {
 }
 
 func BenchmarkLargeBlocksBtree(b *testing.B) {
+	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	table := newTxnTableForTest(pool)
 	// add 1000000 block as non-append blocks
@@ -192,11 +195,33 @@ func BenchmarkLargeBlocksBtree(b *testing.B) {
 	for i := 0; i < 10000; i++ {
 		mp2[*objectio.NewBlockid(sid, 0, uint16(i))] = nil
 	}
-
-	// add non-append blocks into btree state
+	// contruct api.batch
+	bat := batch.NewWithSize(9)
+	bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())      // meaningfulless vector
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())      // createTimeVector
+	bat.Vecs[2] = vector.NewVec(types.T_Blockid.ToType()) // blockIDVector
+	bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())    // entryStateVector
+	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType())    // sortedStateVector
+	bat.Vecs[5] = vector.NewVec(types.T_text.ToType())    // metaLocationVector
+	bat.Vecs[6] = vector.NewVec(types.T_text.ToType())    // deltaLocationVector
+	bat.Vecs[7] = vector.NewVec(types.T_TS.ToType())      // commitTimeVector
+	bat.Vecs[8] = vector.NewVec(types.T_uuid.ToType())    // segmentIDVector
+	// append data
 	for _, info := range table.blockInfos[0] {
-		state.AddBlockId(info)
+		vector.AppendFixed(bat.GetVector(1), types.TS{}, false, pool)
+		vector.AppendFixed(bat.GetVector(2), info.BlockID, false, pool)
+		vector.AppendFixed(bat.GetVector(3), false, false, pool)
+		vector.AppendFixed(bat.GetVector(4), false, false, pool)
+		vector.AppendBytes(bat.GetVector(5), []byte(""), false, pool)
+		vector.AppendBytes(bat.GetVector(6), []byte(""), false, pool)
+		vector.AppendFixed(bat.GetVector(7), types.TS{}, false, pool)
+		vector.AppendFixed(bat.GetVector(8), types.Uuid(uuid.Must(uuid.NewUUID())), false, pool)
 	}
+
+	pbBat, err := toPBBatch(bat)
+	require.Nil(b, err)
+	// add non-append blocks into btree state
+	state.HandleMetadataInsert(ctx, pbBat)
 
 	for i, max := int64(0), int64(b.N); i < max; i++ {
 		for blkId := range table.db.txn.blockId_dn_delete_metaLoc_batch {
@@ -209,6 +234,7 @@ func BenchmarkLargeBlocksBtree(b *testing.B) {
 }
 
 func BenchmarkLargeBlocksMap(b *testing.B) {
+	ctx := context.Background()
 	pool := mpool.MustNewZero()
 	table := newTxnTableForTest(pool)
 	// add 1000000 block as non-append blocks
@@ -231,10 +257,33 @@ func BenchmarkLargeBlocksMap(b *testing.B) {
 		mp2[*objectio.NewBlockid(sid, 0, uint16(i))] = nil
 	}
 
-	// add non-append blocks into btree state
+	// contruct api.batch
+	bat := batch.NewWithSize(9)
+	bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())      // meaningfulless vector
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())      // createTimeVector
+	bat.Vecs[2] = vector.NewVec(types.T_Blockid.ToType()) // blockIDVector
+	bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())    // entryStateVector
+	bat.Vecs[4] = vector.NewVec(types.T_bool.ToType())    // sortedStateVector
+	bat.Vecs[5] = vector.NewVec(types.T_text.ToType())    // metaLocationVector
+	bat.Vecs[6] = vector.NewVec(types.T_text.ToType())    // deltaLocationVector
+	bat.Vecs[7] = vector.NewVec(types.T_TS.ToType())      // commitTimeVector
+	bat.Vecs[8] = vector.NewVec(types.T_uuid.ToType())    // segmentIDVector
+	// append data
 	for _, info := range table.blockInfos[0] {
-		state.AddBlockId(info)
+		vector.AppendFixed(bat.GetVector(1), types.TS{}, false, pool)
+		vector.AppendFixed(bat.GetVector(2), info.BlockID, false, pool)
+		vector.AppendFixed(bat.GetVector(3), false, false, pool)
+		vector.AppendFixed(bat.GetVector(4), false, false, pool)
+		vector.AppendBytes(bat.GetVector(5), []byte(""), false, pool)
+		vector.AppendBytes(bat.GetVector(6), []byte(""), false, pool)
+		vector.AppendFixed(bat.GetVector(7), types.TS{}, false, pool)
+		vector.AppendFixed(bat.GetVector(8), types.Uuid(uuid.Must(uuid.NewUUID())), false, pool)
 	}
+
+	pbBat, err := toPBBatch(bat)
+	require.Nil(b, err)
+	// add non-append blocks into btree state
+	state.HandleMetadataInsert(ctx, pbBat)
 
 	for i, max := int64(0), int64(b.N); i < max; i++ {
 		// model each map
