@@ -44,9 +44,6 @@ import (
 var _ engine.Relation = new(txnTable)
 
 func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
-	if !plan2.NeedStats(tbl.getTableDef()) {
-		return plan2.DefaultStats(), nil
-	}
 	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
 	if !ok {
 		return plan2.DefaultStats(), nil
@@ -58,7 +55,7 @@ func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap an
 		}
 	}
 	if len(tbl.blockInfos) > 0 {
-		return CalcStats(ctx, tbl.blockInfos, expr, tbl.getTableDef(), tbl.db.txn.proc, tbl.getCbName(), s)
+		return CalcStats(ctx, tbl.blockInfos, expr, tbl.getTableDef(), tbl.db.txn.proc, s)
 	} else {
 		// no meta means not flushed yet, very small table
 		return plan2.DefaultStats(), nil
@@ -163,14 +160,14 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 			}
 			if !init {
 				for idx := range zms {
-					zms[idx] = meta.ObjectColumnMeta(uint16(cols[idx].Seqnum)).ZoneMap()
+					zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
 					tableTypes[idx] = uint8(cols[idx].Typ.Id)
 				}
 
 				init = true
 			} else {
 				for idx := range zms {
-					zm := meta.ObjectColumnMeta(uint16(cols[idx].Seqnum)).ZoneMap()
+					zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
 					if !zm.IsInited() {
 						continue
 					}
@@ -552,14 +549,6 @@ func (tbl *txnTable) TableColumns(ctx context.Context) ([]*engine.Attribute, err
 		}
 	}
 	return attrs, nil
-}
-
-func (tbl *txnTable) getCbName() string {
-	if tbl.clusterByIdx == -1 {
-		return ""
-	} else {
-		return tbl.tableDef.Cols[tbl.clusterByIdx].Name
-	}
 }
 
 func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {

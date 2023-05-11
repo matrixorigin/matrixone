@@ -318,32 +318,32 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(MO_ROWID_IDX))
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
-	names := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
+	names := bat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF)
 	ids := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_TABLES_REL_ID_IDX + MO_OFF))
 	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
-	kinds := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_RELKIND_IDX + MO_OFF))
-	comments := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_REL_COMMENT_IDX + MO_OFF))
-	createSqls := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_REL_CREATESQL_IDX + MO_OFF))
-	viewDefs := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_VIEWDEF_IDX + MO_OFF))
+	kinds := bat.GetVector(catalog.MO_TABLES_RELKIND_IDX + MO_OFF)
+	comments := bat.GetVector(catalog.MO_TABLES_REL_COMMENT_IDX + MO_OFF)
+	createSqls := bat.GetVector(catalog.MO_TABLES_REL_CREATESQL_IDX + MO_OFF)
+	viewDefs := bat.GetVector(catalog.MO_TABLES_VIEWDEF_IDX + MO_OFF)
 	partitioneds := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
-	paritions := vector.MustStrCol(bat.GetVector(catalog.MO_TABLES_PARTITION_INFO_IDX + MO_OFF))
-	constraints := vector.MustBytesCol(bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF))
+	paritions := bat.GetVector(catalog.MO_TABLES_PARTITION_INFO_IDX + MO_OFF)
+	constraints := bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF)
 	versions := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_TABLES_VERSION_IDX + MO_OFF))
 
 	for i, account := range accounts {
 		item := new(TableItem)
 		item.Id = ids[i]
-		item.Name = names[i]
+		item.Name = names.GetStringAt(i)
 		item.AccountId = account
 		item.DatabaseId = databaseIds[i]
 		item.Ts = timestamps[i].ToTimestamp()
-		item.Kind = kinds[i]
-		item.ViewDef = viewDefs[i]
-		item.Constraint = constraints[i]
-		item.Comment = comments[i]
+		item.Kind = kinds.GetStringAt(i)
+		item.ViewDef = viewDefs.GetStringAt(i)
+		item.Constraint = append(item.Constraint, constraints.GetBytesAt(i)...)
+		item.Comment = comments.GetStringAt(i)
 		item.Partitioned = partitioneds[i]
-		item.Partition = paritions[i]
-		item.CreateSql = createSqls[i]
+		item.Partition = paritions.GetStringAt(i)
+		item.CreateSql = createSqls.GetStringAt(i)
 		item.Version = versions[i]
 		item.PrimaryIdx = -1
 		item.PrimarySeqnum = -1
@@ -364,25 +364,25 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_COLUMNS_ACCOUNT_ID_IDX + MO_OFF))
 	databaseIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX + MO_OFF))
-	tableNames := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF))
+	tableNames := bat.GetVector(catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF)
 	tableIds := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX + MO_OFF))
 	// get columns info
-	names := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATTNAME_IDX + MO_OFF))
-	comments := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_COMMENT_IDX + MO_OFF))
+	names := bat.GetVector(catalog.MO_COLUMNS_ATTNAME_IDX + MO_OFF)
+	comments := bat.GetVector(catalog.MO_COLUMNS_ATT_COMMENT_IDX + MO_OFF)
 	isHiddens := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX + MO_OFF))
 	isAutos := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX + MO_OFF))
-	constraintTypes := vector.MustStrCol(bat.GetVector(catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX + MO_OFF))
-	typs := vector.MustBytesCol(bat.GetVector(catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF))
+	constraintTypes := bat.GetVector(catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX + MO_OFF)
+	typs := bat.GetVector(catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF)
 	hasDefs := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATTHASDEF_IDX + MO_OFF))
-	defaultExprs := vector.MustBytesCol(bat.GetVector(catalog.MO_COLUMNS_ATT_DEFAULT_IDX + MO_OFF))
+	defaultExprs := bat.GetVector(catalog.MO_COLUMNS_ATT_DEFAULT_IDX + MO_OFF)
 	hasUpdates := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_HAS_UPDATE_IDX + MO_OFF))
-	updateExprs := vector.MustBytesCol(bat.GetVector(catalog.MO_COLUMNS_ATT_UPDATE_IDX + MO_OFF))
+	updateExprs := bat.GetVector(catalog.MO_COLUMNS_ATT_UPDATE_IDX + MO_OFF)
 	nums := vector.MustFixedCol[int32](bat.GetVector(catalog.MO_COLUMNS_ATTNUM_IDX + MO_OFF))
 	clusters := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_CLUSTERBY + MO_OFF))
 	seqnums := vector.MustFixedCol[uint16](bat.GetVector(catalog.MO_COLUMNS_ATT_SEQNUM_IDX + MO_OFF))
 	for i, account := range accounts {
 		key.AccountId = account
-		key.Name = tableNames[i]
+		key.Name = tableNames.GetStringAt(i)
 		key.DatabaseId = databaseIds[i]
 		key.Ts = timestamps[i].ToTimestamp()
 		key.Id = tableIds[i]
@@ -396,20 +396,20 @@ func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
 		if _, ok := cc.tables.data.Get(key); ok {
 			col := column{
 				num:             nums[i],
-				name:            names[i],
-				comment:         comments[i],
+				name:            names.GetStringAt(i),
+				comment:         comments.GetStringAt(i),
 				isHidden:        isHiddens[i],
 				isAutoIncrement: isAutos[i],
 				hasDef:          hasDefs[i],
 				hasUpdate:       hasUpdates[i],
-				constraintType:  constraintTypes[i],
+				constraintType:  constraintTypes.GetStringAt(i),
 				isClusterBy:     clusters[i],
 				seqnum:          seqnums[i],
 			}
 			copy(col.rowid[:], rowids[i][:])
-			col.typ = append(col.typ, typs[i]...)
-			col.updateExpr = append(col.updateExpr, updateExprs[i]...)
-			col.defaultExpr = append(col.defaultExpr, defaultExprs[i]...)
+			col.typ = append(col.typ, typs.GetBytesAt(i)...)
+			col.updateExpr = append(col.updateExpr, updateExprs.GetBytesAt(i)...)
+			col.defaultExpr = append(col.defaultExpr, defaultExprs.GetBytesAt(i)...)
 			mp[tblKey] = append(mp[tblKey], col)
 		}
 	}
@@ -449,18 +449,18 @@ func (cc *CatalogCache) InsertDatabase(bat *batch.Batch) {
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(MO_ROWID_IDX))
 	timestamps := vector.MustFixedCol[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](bat.GetVector(catalog.MO_DATABASE_ACCOUNT_ID_IDX + MO_OFF))
-	names := vector.MustStrCol(bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF))
+	names := bat.GetVector(catalog.MO_DATABASE_DAT_NAME_IDX + MO_OFF)
 	ids := vector.MustFixedCol[uint64](bat.GetVector(catalog.MO_DATABASE_DAT_ID_IDX + MO_OFF))
-	typs := vector.MustStrCol(bat.GetVector(catalog.MO_DATABASE_DAT_TYPE_IDX + MO_OFF))
-	createSqls := vector.MustStrCol(bat.GetVector(catalog.MO_DATABASE_CREATESQL_IDX + MO_OFF))
+	typs := bat.GetVector(catalog.MO_DATABASE_DAT_TYPE_IDX + MO_OFF)
+	createSqls := bat.GetVector(catalog.MO_DATABASE_CREATESQL_IDX + MO_OFF)
 	for i, account := range accounts {
 		item := new(DatabaseItem)
 		item.Id = ids[i]
-		item.Name = names[i]
+		item.Name = names.GetStringAt(i)
 		item.AccountId = account
 		item.Ts = timestamps[i].ToTimestamp()
-		item.Typ = typs[i]
-		item.CreateSql = createSqls[i]
+		item.Typ = typs.GetStringAt(i)
+		item.CreateSql = createSqls.GetStringAt(i)
 		copy(item.Rowid[:], rowids[i][:])
 		cc.databases.data.Set(item)
 		cc.databases.rowidIndex.Set(item)

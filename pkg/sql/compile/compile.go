@@ -446,6 +446,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		}
 	}
 
+	c.info.CnNumbers = len(c.cnList)
 	blkNum := 0
 	for _, n := range qry.Nodes {
 		if n.NodeType == plan.Node_TABLE_SCAN {
@@ -1219,6 +1220,9 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	copy(gn.GroupBy, n.ProjectList)
+	for i := range gn.GroupBy {
+		gn.GroupBy[i].Typ.NotNullable = false
+	}
 	idx := 0
 	for i := range rs {
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
