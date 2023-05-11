@@ -107,18 +107,19 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 
 	if ctr.bat == nil {
 		size := 0
+		groupVecsNullable := false
 		for _, vec := range bat.Vecs {
-			switch vec.GetType().TypeSize() {
-			case 1:
-				size += 1 + 1
-			case 2:
-				size += 2 + 1
-			case 4:
-				size += 4 + 1
-			case 8:
-				size += 8 + 1
-			case 16:
-				size += 16 + 1
+			groupVecsNullable = groupVecsNullable || (!vec.GetType().GetNotNull())
+		}
+
+		for _, vec := range bat.Vecs {
+			currentSize := vec.GetType().TypeSize()
+			switch currentSize {
+			case 1, 2, 4, 8, 16:
+				size += currentSize
+				if groupVecsNullable {
+					size += 1
+				}
 			default:
 				size = 128
 			}
@@ -128,12 +129,12 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 			ctr.typ = H0
 		case size <= 8:
 			ctr.typ = H8
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, 0, 0, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
 				return err
 			}
 		default:
 			ctr.typ = HStr
-			if ctr.strHashMap, err = hashmap.NewStrMap(true, 0, 0, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
 				return err
 			}
 		}
