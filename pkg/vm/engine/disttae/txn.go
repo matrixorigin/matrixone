@@ -427,25 +427,7 @@ func evalFilterExprWithZonemap(
 	columnMap map[int]int,
 	proc *process.Process,
 ) (selected bool) {
-	// TODO(CMS): just set true temporarily.
-	return true
-
-	if expr == nil {
-		selected = true
-		return
-	}
-
-	if len(columnMap) == 0 {
-		selected = evalNoColumnFilterExpr(ctx, expr, proc)
-		return
-	}
-	zm := colexec.EvalFilterByZonemap(ctx, meta, expr, columnMap, proc)
-	if !zm.IsInited() || zm.GetType() != types.T_bool {
-		selected = true
-	} else {
-		selected = types.DecodeBool(zm.GetMaxBuf())
-	}
-	return
+	return colexec.EvaluateFilterByZoneMap(proc, expr, meta, columnMap)
 }
 
 /* used by multi-dn

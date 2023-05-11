@@ -16,14 +16,15 @@ package colexec
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -158,23 +159,6 @@ func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {
 	return true
 }
 
-// EvaluateExprWithoutExecutor can evaluate an expression without make an executor by developer.
-//
-// XXX I'm not sure if I should support this method.
-// There is a big problem that, user cannot get the executor,
-// and will be very hard to clean the memory.
-// because the result vector maybe just one column from bats.
-func EvaluateExprWithoutExecutor(proc *process.Process, planExpr *plan.Expr, bats []*batch.Batch) (*vector.Vector, error) {
-	executor, err := NewExpressionExecutor(proc, planExpr)
-	if err != nil {
-		if v, errEval := executor.Eval(proc, bats); errEval == nil {
-			return v, nil
-		}
-		executor.Free()
-	}
-	return nil, moerr.NewNotSupported(proc.Ctx, "can not evaluate expression %v", planExpr)
-}
-
 // FixedVectorExpressionExecutor
 // the content of its vector is fixed.
 // e.g.
@@ -265,17 +249,20 @@ func (expr *FunctionExpressionExecutor) SetParameter(index int, executor Express
 	expr.parameterExecutor[index] = executor
 }
 
-func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	relIndex := expr.relIndex
 	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
 	if len(batches) == 1 {
-		vec := batches[0].Vecs[expr.colIndex]
-		if vec.IsConstNull() {
-			vec.SetType(expr.typ)
-		}
-		return vec, nil
+		relIndex = 0
 	}
 
-	vec := batches[expr.relIndex].Vecs[expr.colIndex]
+	// protected code. In fact, we shouldn't receive a wrong index here.
+	// if happens, it means it's a bad expression for the input data that we cannot calculate it.
+	if len(batches) <= relIndex || len(batches[relIndex].Vecs) <= expr.colIndex {
+		return nil, moerr.NewInternalError(proc.Ctx, "unexpected input batch for column expression")
+	}
+
+	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
 		vec.SetType(expr.typ)
 	}
@@ -533,5 +520,169 @@ func SetJoinBatchValues(joinBat, bat *batch.Batch, sel int64, length int,
 		}
 	}
 	joinBat.Zs = joinBat.Zs[:length]
+	return nil
+}
+
+func EvaluateFilterByZoneMap(proc *process.Process, expr *plan.Expr, meta objectio.ColumnMetaFetcher, columnMap map[int]int) (selected bool) {
+	if expr == nil {
+		selected = true
+		return
+	}
+
+	if len(columnMap) == 0 {
+		executor, err := NewExpressionExecutor(proc, expr)
+		if err != nil {
+			return true
+		}
+		vec, err := executor.Eval(proc, []*batch.Batch{batch.NewWithSize(0)})
+		if err != nil {
+			return true
+		}
+		cols := vector.MustFixedCol[bool](vec)
+		for _, isNeed := range cols {
+			if isNeed {
+				return true
+			}
+		}
+		return false
+	}
+
+	zm := evaluateFilterByZoneMap(proc, expr, meta, columnMap)
+	if !zm.IsInited() || zm.GetType() != types.T_bool {
+		selected = true
+	} else {
+		selected = types.DecodeBool(zm.GetMaxBuf())
+	}
+	return
+}
+
+func evaluateFilterByZoneMap(
+	proc *process.Process,
+	expr *plan.Expr,
+	meta objectio.ColumnMetaFetcher,
+	columnMap map[int]int) (v objectio.ZoneMap) {
+	var err error
+
+	switch t := expr.Expr.(type) {
+	case *plan.Expr_C:
+		if v, err = getConstZM(proc.Ctx, expr, proc); err != nil {
+			v = objectio.NewZM(types.T_bool, 0)
+		}
+		return
+	case *plan.Expr_Col:
+		v = meta.MustGetColumn(uint16(columnMap[int(t.Col.ColPos)])).ZoneMap()
+		return
+	case *plan.Expr_F:
+		id := t.F.GetFunc().GetObj()
+		if overload, errGetFunc := function2.GetFunctionById(proc.Ctx, id); errGetFunc != nil {
+			v = objectio.NewZM(types.T_bool, 0)
+			return
+		} else {
+			params := make([]objectio.ZoneMap, len(t.F.Args))
+			for i := range params {
+				params[i] = evaluateFilterByZoneMap(proc, t.F.Args[i], meta, columnMap)
+				if !params[i].IsInited() {
+					return params[i]
+				}
+			}
+			var res, ok bool
+			switch t.F.Func.ObjName {
+			case ">":
+				if res, ok = params[0].AnyGT(params[1]); !ok {
+					v = objectio.NewZM(types.T_bool, 0)
+				} else {
+					v = index.BoolToZM(res)
+				}
+				return
+			case "<":
+				if res, ok = params[0].AnyLT(params[1]); !ok {
+					v = objectio.NewZM(types.T_bool, 0)
+				} else {
+					v = index.BoolToZM(res)
+				}
+				return
+			case ">=":
+				if res, ok = params[0].AnyGE(params[1]); !ok {
+					v = objectio.NewZM(types.T_bool, 0)
+				} else {
+					v = index.BoolToZM(res)
+				}
+				return
+			case "<=":
+				if res, ok = params[0].AnyLE(params[1]); !ok {
+					v = objectio.NewZM(types.T_bool, 0)
+				} else {
+					v = index.BoolToZM(res)
+				}
+				return
+			case "=":
+				if res, ok = params[0].Intersect(params[1]); !ok {
+					v = objectio.NewZM(types.T_bool, 0)
+				} else {
+					v = index.BoolToZM(res)
+				}
+				return
+			case "and":
+				if res, ok = params[0].And(params[1]); !ok {
+					v = objectio.NewZM(types.T_bool, 0)
+				} else {
+					v = index.BoolToZM(res)
+				}
+				return
+			case "or":
+				if res, ok = params[0].Or(params[1]); !ok {
+					v = objectio.NewZM(types.T_bool, 0)
+				} else {
+					v = index.BoolToZM(res)
+				}
+				return
+			case "+":
+				if v, ok = index.ZMPlus(params[0], params[1]); !ok {
+					v = objectio.NewZM(types.T_bool, 0)
+				}
+				return
+			case "-":
+				if v, ok = index.ZMMinus(params[0], params[1]); !ok {
+					v = objectio.NewZM(types.T_bool, 0)
+				}
+				return
+			case "*":
+				if v, ok = index.ZMMulti(params[0], params[1]); !ok {
+					v = objectio.NewZM(types.T_bool, 0)
+				}
+				return
+			}
+
+			vecParams := make([]*vector.Vector, len(params))
+			defer func() {
+				for i := range vecParams {
+					if vecParams[i] != nil {
+						vecParams[i].Free(proc.Mp())
+						vecParams[i] = nil
+					}
+				}
+			}()
+			for i := range vecParams {
+				if vecParams[i], err = index.ZMToVector(params[i], proc.Mp()); err != nil {
+					v = objectio.NewZM(types.T_bool, 0)
+					return
+				}
+			}
+
+			fn := overload.GetExecuteMethod()
+			typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+			result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+			err = result.PreExtendAndReset(2)
+			if err != nil {
+				v = objectio.NewZM(types.T_bool, 0)
+			}
+			if err = fn(vecParams, result, proc, 2); err != nil {
+				v = objectio.NewZM(types.T_bool, 0)
+				return
+			}
+			defer result.GetResultVector().Free(proc.Mp())
+			v = index.VectorToZM(result.GetResultVector())
+		}
+	}
 	return nil
 }
