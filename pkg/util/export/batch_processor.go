@@ -488,6 +488,7 @@ loop:
 			fields := make([]zap.Field, 0, 16)
 			fields = append(fields, zap.Int32("MaxBufferCnt", c.maxBufferCnt))
 			fields = append(fields, zap.Int32("TotalBufferCnt", c.bufferTotal.Load()))
+			fields = append(fields, zap.Int("QueueLength", len(c.awakeCollect)))
 			for _, b := range c.buffers {
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sBufferCnt", b.name), b.bufferCnt.Load()))
 			}
@@ -505,7 +506,7 @@ func (c *MOCollector) Stop(graceful bool) error {
 	c.stopOnce.Do(func() {
 		for len(c.awakeCollect) > 0 && graceful {
 			c.logger.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)))
-			time.Sleep(250 * time.Second)
+			time.Sleep(250 * time.Millisecond)
 		}
 		c.mux.Lock()
 		for _, buffer := range c.buffers {

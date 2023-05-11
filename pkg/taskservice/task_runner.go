@@ -171,7 +171,7 @@ func (r *taskRunner) adjust() {
 		r.options.fetchInterval = time.Second * 10
 	}
 	if r.options.fetchTimeout == 0 {
-		r.options.fetchTimeout = time.Second * 5
+		r.options.fetchTimeout = time.Second * 10
 	}
 	if r.options.heartbeatInterval == 0 {
 		r.options.heartbeatInterval = time.Second * 5

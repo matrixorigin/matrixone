@@ -732,7 +732,7 @@ func genWriteReqs(ctx context.Context, writes []Entry) ([]txn.TxnRequest, error)
 			e.tableId == catalog.MO_COLUMNS_ID {
 			continue
 		}
-		if e.bat.Length() == 0 {
+		if e.bat == nil || e.bat.Length() == 0 {
 			continue
 		}
 		if v != nil {
