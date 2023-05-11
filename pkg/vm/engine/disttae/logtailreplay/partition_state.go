@@ -445,12 +445,6 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	})
 }
 
-func (p *PartitionState) AddBlockId(info catalog.BlockInfo) {
-	p.blocks.Set(BlockEntry{
-		BlockInfo: info,
-	})
-}
-
 func (p *PartitionState) BlockVisible(blockID types.Blockid, ts types.TS) bool {
 	pivot := BlockEntry{
 		BlockInfo: catalog.BlockInfo{

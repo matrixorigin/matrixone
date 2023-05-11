@@ -197,7 +197,7 @@ func BenchmarkLargeBlocksBtree(b *testing.B) {
 	}
 	// contruct api.batch
 	bat := batch.NewWithSize(9)
-	bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())      // meaningfulless vector
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())   //
 	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())      // createTimeVector
 	bat.Vecs[2] = vector.NewVec(types.T_Blockid.ToType()) // blockIDVector
 	bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())    // entryStateVector
@@ -259,7 +259,7 @@ func BenchmarkLargeBlocksMap(b *testing.B) {
 
 	// contruct api.batch
 	bat := batch.NewWithSize(9)
-	bat.Vecs[0] = vector.NewVec(types.T_TS.ToType())      // meaningfulless vector
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())   //
 	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())      // createTimeVector
 	bat.Vecs[2] = vector.NewVec(types.T_Blockid.ToType()) // blockIDVector
 	bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())    // entryStateVector
