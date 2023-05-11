@@ -1,4 +1,5 @@
-create database if not exists db;
+drop database if exists db;
+create database db;
 use db;
 drop table if exists t;
 create table t (a int, b int, primary key (a));
@@ -24,84 +25,69 @@ mo_ctl(dn, flush, db.t)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select aplus from t;
 aplus
+null
+null
+null
+null
+null
 6
 7
-null
-null
-null
-null
-null
 update t set aplus = 11 where a = 1;
 update t set aplus = 61 where a = 6;
 select * from t;
 a    b    aplus
 1    1    11
 6    6    61
-7    7    7
 2    2    null
 3    3    null
 4    4    null
 5    5    null
+7    7    7
 select mo_ctl('dn', 'inspect', 'dropc -d db -b t -p 2');
 mo_ctl(dn, inspect, dropc -d db -b t -p 2)
 {\n  "method": "Inspect",\n  "result": [\n    {\n      "msg": "drop column success"\n    }\n  ]\n}\n
 select mo_ctl('dn', 'inspect', 'addc -d db -b t -n aminus -t samllint -p 0');
 mo_ctl(dn, inspect, addc -d db -b t -n aminus -t samllint -p 0)
 {\n  "method": "Inspect",\n  "result": [\n    {\n      "msg": "add column success"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'inspect', 'addc -d db -b t -n amul -t samllint -p 2');
+mo_ctl(dn, inspect, addc -d db -b t -n amul -t samllint -p 2)
+{\n  "method": "Inspect",\n  "result": [\n    {\n      "msg": "add column success"\n    }\n  ]\n}\n
 show columns from t;
 Field    Type    Null    Key    Default    Extra    Comment
 aminus    INT UNSIGNED(0)    YES        null        
 a    INT(32)    NO    PRI    null        
+amul    INT UNSIGNED(0)    YES        null        
 b    INT(32)    YES        null        
 select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
 attname    attr_seqnum
 __mo_rowid    65535
 a    0
 aminus    3
+amul    4
 b    1
 select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
 relname    rel_version
 %!%mo_increment_columns    0
-t    3
-insert into t values (12, 12, 12);
+t    4
+insert into t values (12, 12, 12, 12);
 select * from t;
-aminus    a    b
-null    1    1
-null    6    6
+aminus    a    amul    b
+null    1    null    1
+null    6    null    6
+12    12    12    12
+null    2    null    2
+null    3    null    3
+null    4    null    4
+null    5    null    5
+null    7    null    7
+select a,b,aminus from t where (a > 4 and b < 10) or aminus > 10;
+a    b    aminus
+6    6    null
 12    12    12
-null    7    7
-null    2    2
-null    3    3
-null    4    4
-null    5    5
-show tables;
-Tables_in_db
-t
-select mo_ctl('dn', 'inspect', 'renamet -d db -o t -n newt');
-mo_ctl(dn, inspect, renamet -d db -o t -n newt)
-{\n  "method": "Inspect",\n  "result": [\n    {\n      "msg": "rename table success"\n    }\n  ]\n}\n
-select * from t;
-SQL parser error: table "t" does not exist
-select * from newt;
-aminus    a    b
-null    1    1
-null    6    6
-12    12    12
-null    7    7
-null    2    2
-null    3    3
-null    4    4
-null    5    5
-select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
-attname    attr_seqnum
-select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "newt";
-attname    attr_seqnum
-__mo_rowid    65535
-a    0
-aminus    3
-b    1
-select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
-relname    rel_version
-%!%mo_increment_columns    0
-newt    4
-drop database db;
+5    5    null
+7    7    null
+select * from t where aminus < 10;
+aminus    a    amul    b
+select * from t where amul > 5;
+aminus    a    amul    b
+12    12    12    12

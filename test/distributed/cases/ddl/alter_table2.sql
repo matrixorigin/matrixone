@@ -1,4 +1,4 @@
-select mo_ctl('cn', 'task', 'disable');
+-- select mo_ctl('cn', 'task', 'disable');
 drop database if exists db;
 create database db;
 use db;
