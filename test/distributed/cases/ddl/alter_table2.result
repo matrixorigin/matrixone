@@ -91,3 +91,60 @@ aminus    a    amul    b
 select * from t where amul > 5;
 aminus    a    amul    b
 12    12    12    12
+show tables;
+Tables_in_db
+t
+select mo_ctl('dn', 'inspect', 'renamet -d db -o t -n newt');
+mo_ctl(dn, inspect, renamet -d db -o t -n newt)
+{\n  "method": "Inspect",\n  "result": [\n    {\n      "msg": "rename table success"\n    }\n  ]\n}\n
+select * from t;
+SQL parser error: table "t" does not exist
+select * from newt;
+aminus    a    amul    b
+null    1    null    1
+null    6    null    6
+12    12    12    12
+null    2    null    2
+null    3    null    3
+null    4    null    4
+null    5    null    5
+null    7    null    7
+select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
+attname    attr_seqnum
+select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "newt";
+attname    attr_seqnum
+__mo_rowid    65535
+a    0
+aminus    3
+amul    4
+b    1
+select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
+relname    rel_version
+%!%mo_increment_columns    0
+newt    5
+select mo_ctl('dn', 'inspect', 'renamet -d db -o newt -n t');
+mo_ctl(dn, inspect, renamet -d db -o newt -n t)
+{\n  "method": "Inspect",\n  "result": [\n    {\n      "msg": "rename table success"\n    }\n  ]\n}\n
+show tables;
+Tables_in_db
+t
+insert into t values (100, 100, 100, 100);
+select * from t;
+aminus    a    amul    b
+null    1    null    1
+null    6    null    6
+12    12    12    12
+100    100    100    100
+null    2    null    2
+null    3    null    3
+null    4    null    4
+null    5    null    5
+null    7    null    7
+select * from newt;
+SQL parser error: table "newt" does not exist
+drop database db;
+create database db;
+use db;
+show tables;
+Tables_in_db
+drop database db;

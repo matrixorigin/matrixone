@@ -61,13 +61,31 @@ select * from t where amul > 5;
 
 
 -- change table name
--- show tables;
--- -- @separator:table
--- select mo_ctl('dn', 'inspect', 'renamet -d db -o t -n newt');
+show tables;
+-- @separator:table
+select mo_ctl('dn', 'inspect', 'renamet -d db -o t -n newt');
 
--- select * from t;
--- select * from newt;
+select * from t;
+select * from newt;
 
--- select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
--- select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "newt";
--- select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
+select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "t";
+select attname, attr_seqnum from mo_catalog.mo_columns where att_relname = "newt";
+select relname, rel_version from mo_catalog.mo_tables where reldatabase = "db";
+
+-- @separator:table
+select mo_ctl('dn', 'inspect', 'renamet -d db -o newt -n t');
+
+show tables;
+
+insert into t values (100, 100, 100, 100);
+
+select * from t;
+select * from newt;
+
+drop database db;
+
+create database db;
+use db;
+show tables;
+
+drop database db;
