@@ -43,8 +43,7 @@ func BlockRead(
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
 	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
-
-	// read
+	logutil.Infof("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
 	columnBatch, err := BlockReadInner(
 		ctx, info, seqnums, colTypes,
 		types.TimestampToTS(ts), fs, mp, vp,
