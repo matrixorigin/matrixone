@@ -184,7 +184,7 @@ func (proc *Process) GetAnalyze(idx int) Analyze {
 }
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
-	vec := proc.GetVector(typ)
+	vec := vector.NewVec(typ)
 	vec.PreExtend(nele, proc.Mp())
 	vec.SetLength(nele)
 	if nsp != nil {

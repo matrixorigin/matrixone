@@ -638,7 +638,6 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 
 func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx int32, ns []*plan.Node) ([]*Scope, error) {
 	n := ns[curNodeIdx]
-	var err error
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		bat := c.proc.GetPrepareBatch()

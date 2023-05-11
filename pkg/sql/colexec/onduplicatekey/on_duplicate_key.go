@@ -49,16 +49,16 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
 
+	defer proc.PutBatch(bat)
 	rbat, err := resetInsertBatchForOnduplicateKey(proc, bat, arg)
 	if err != nil {
 		return false, err
 	}
-	bat.Clean(proc.Mp())
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return false, nil

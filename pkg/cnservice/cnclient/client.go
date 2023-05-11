@@ -54,7 +54,7 @@ func IsCNClientReady() bool {
 
 type CNClient struct {
 	localServiceAddress string
-	ready               atomic.Bool
+	ready               bool
 	config              *ClientConfig
 	client              morpc.RPCClient
 
@@ -84,7 +84,7 @@ func (c *CNClient) Close() error {
 		return nil
 	}
 
-	c.ready.Store(false)
+	c.ready = false
 	return c.client.Close()
 }
 

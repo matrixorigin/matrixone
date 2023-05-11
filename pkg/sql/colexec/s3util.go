@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
@@ -508,8 +507,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 // s3, but not immediately. We continue to wait until
 // no more data or the data size reaches 64M, at that time
 // we will trigger write s3.
-func (w *S3Writer) WriteS3Batch(bat *batch.Batch, proc *process.Process) error {
-	w.InitBuffers(bat)
+func (w *S3Writer) WriteS3Batch(proc *process.Process, bat *batch.Batch) error {
+	w.InitBuffers(proc, bat)
 	if w.Put(bat, proc) {
 		w.SortAndFlush(proc)
 	}
