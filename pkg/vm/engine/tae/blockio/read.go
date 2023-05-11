@@ -43,8 +43,7 @@ func BlockRead(
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
 	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
-
-	// read
+	logutil.Infof("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
 	columnBatch, err := BlockReadInner(
 		ctx, info, seqnums, colTypes,
 		types.TimestampToTS(ts), fs, mp, vp,
@@ -162,6 +161,7 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, []uint16,
 
 func preparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32, pool *mpool.MPool) (col *vector.Vector, err error) {
 	col = vector.NewVec(typ)
+	col.PreExtend(int(length), pool)
 	for i := uint32(0); i < length; i++ {
 		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
 		vector.AppendFixed(col, rowid, false, pool)
