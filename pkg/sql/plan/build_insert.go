@@ -46,6 +46,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
 	err = initInsertStmt(builder, bindCtx, stmt, rewriteInfo)

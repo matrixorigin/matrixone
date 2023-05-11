@@ -33,7 +33,11 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("processing on duplicate key before insert")
 }
 
-func Prepare(_ *proc, _ any) error {
+func Prepare(_ *proc, arg any) error {
+	ap := arg.(*Argument)
+	ap.ctr = &container{
+		emptyBat: &batch.Batch{},
+	}
 	return nil
 }
 
@@ -42,11 +46,24 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
 	anal.Start()
 	defer anal.Stop()
 
+	var err error
 	arg := x.(*Argument)
 	bat := proc.Reg.InputBatch
 	anal.Input(bat, isFirst)
 	if bat == nil {
-		proc.SetInputBatch(nil)
+		if arg.ctr.insertBat != nil {
+			newBat := batch.NewWithSize(len(arg.ctr.insertBat.Vecs))
+			newBat.Attrs = arg.ctr.insertBat.Attrs
+			for idx := range arg.ctr.insertBat.Vecs {
+				newBat.SetVector(int32(idx), proc.GetVector(*arg.ctr.insertBat.GetVector(int32(idx)).GetType()))
+			}
+			if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), arg.ctr.insertBat); err != nil {
+				newBat.Clean(proc.GetMPool())
+				return false, err
+			}
+			anal.Output(newBat, isLast)
+			proc.SetInputBatch(newBat)
+		}
 		return true, nil
 	}
 	if bat.Length() == 0 {
@@ -55,19 +72,17 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
 	}
 
 	defer proc.PutBatch(bat)
-	rbat, err := resetInsertBatchForOnduplicateKey(proc, bat, arg)
+	err = resetInsertBatchForOnduplicateKey(proc, bat, arg)
 	if err != nil {
 		return false, err
 	}
-	anal.Output(rbat, isLast)
-	proc.SetInputBatch(rbat)
+
+	anal.Output(arg.ctr.emptyBat, isLast)
+	proc.SetInputBatch(arg.ctr.emptyBat)
 	return false, nil
 }
 
-func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *Argument) (*batch.Batch, error) {
-	if len(insertArg.OnDuplicateIdx) == 0 {
-		return originBatch, nil
-	}
+func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch.Batch, insertArg *Argument) error {
 	//get rowid vec index
 	rowIdIdx := int32(-1)
 	for _, idx := range insertArg.OnDuplicateIdx {
@@ -77,7 +92,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		}
 	}
 	if rowIdIdx == -1 {
-		return nil, moerr.NewConstraintViolation(proc.Ctx, "can not find rowid when insert with on duplicate key")
+		return moerr.NewConstraintViolation(proc.Ctx, "can not find rowid when insert with on duplicate key")
 	}
 
 	tableDef := insertArg.TableDef
@@ -85,43 +100,52 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	uniqueCols := plan2.GetUniqueColAndIdxFromTableDef(tableDef)
 	checkExpr, err := plan2.GenUniqueColCheckExpr(proc.Ctx, tableDef, uniqueCols)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	attrs := make([]string, 0, len(originBatch.Vecs))
-	for i := 0; i < 2; i++ {
-		for j := 0; j < columnCount; j++ {
-			attrs = append(attrs, tableDef.Cols[j].Name)
+	if insertArg.ctr.insertBat == nil {
+		attrs := make([]string, 0, len(originBatch.Vecs))
+		for i := 0; i < 2; i++ {
+			for j := 0; j < columnCount; j++ {
+				attrs = append(attrs, tableDef.Cols[j].Name)
+			}
+		}
+		for i := len(attrs); i < len(originBatch.Vecs); i++ {
+			attrs = append(attrs, "")
+		}
+		insertArg.ctr.insertBat = batch.NewWithSize(len(attrs))
+		insertArg.ctr.insertBat.Attrs = attrs
+
+		insertArg.ctr.checkConflictBat = batch.NewWithSize(len(attrs))
+		insertArg.ctr.checkConflictBat.Attrs = append(insertArg.ctr.checkConflictBat.Attrs, attrs...)
+
+		for i, v := range originBatch.Vecs {
+			newVec := vector.NewVec(*v.GetType())
+			insertArg.ctr.insertBat.SetVector(int32(i), newVec)
+
+			ckVec := vector.NewVec(*v.GetType())
+			insertArg.ctr.checkConflictBat.SetVector(int32(i), ckVec)
 		}
 	}
-	for i := len(attrs); i < len(originBatch.Vecs); i++ {
-		attrs = append(attrs, "")
-	}
-	insertBatch := batch.NewWithSize(len(attrs))
-	insertBatch.Attrs = attrs
-	checkConflictBatch := batch.NewWithSize(len(attrs))
-	checkConflictBatch.Attrs = attrs
 
-	for i, v := range originBatch.Vecs {
-		newVec := vector.NewVec(*v.GetType())
-		insertBatch.SetVector(int32(i), newVec)
+	insertBatch := insertArg.ctr.insertBat
+	checkConflictBatch := insertArg.ctr.checkConflictBat
+	attrs := make([]string, len(insertBatch.Attrs))
+	copy(attrs, insertBatch.Attrs)
 
-		ckVec := vector.NewVec(*v.GetType())
-		checkConflictBatch.SetVector(int32(i), ckVec)
-	}
 	updateExpr := insertArg.OnDuplicateExpr
 	oldRowIdVec := vector.MustFixedCol[types.Rowid](originBatch.Vecs[rowIdIdx])
 
 	for i := 0; i < originBatch.Length(); i++ {
 		newBatch, err := fetchOneRowAsBatch(i, originBatch, proc, attrs)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// check if uniqueness conflict found in checkConflictBatch
 		oldConflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpr, uniqueCols, columnCount)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if oldConflictIdx > -1 {
 			// if conflict with origin row. and row_id is not equal row_id of insertBatch's inflict row. then throw error
@@ -129,7 +153,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				oldRowId := vector.MustFixedCol[types.Rowid](insertBatch.Vecs[rowIdIdx])[oldConflictIdx]
 				newRowId := vector.MustFixedCol[types.Rowid](newBatch.Vecs[rowIdIdx])[0]
 				if !bytes.Equal(oldRowId[:], newRowId[:]) {
-					return nil, moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
+					return moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
 				}
 			}
 
@@ -138,12 +162,12 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				toVec := newBatch.Vecs[j+columnCount]
 				err := toVec.Copy(fromVec, 0, int64(oldConflictIdx), proc.Mp())
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
 			newBatch, err := updateOldBatch(newBatch, updateExpr, proc, columnCount, attrs)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			// update the oldConflictIdx of insertBatch by newBatch
 			for j := 0; j < columnCount; j++ {
@@ -151,13 +175,13 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				toVec := insertBatch.Vecs[j]
 				err := toVec.Copy(fromVec, int64(oldConflictIdx), 0, proc.Mp())
 				if err != nil {
-					return nil, err
+					return err
 				}
 
 				toVec2 := checkConflictBatch.Vecs[j]
 				err = toVec2.Copy(fromVec, int64(oldConflictIdx), 0, proc.Mp())
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
 		} else {
@@ -168,14 +192,14 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			} else {
 				newBatch, err := updateOldBatch(newBatch, updateExpr, proc, columnCount, attrs)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				conflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpr, uniqueCols, columnCount)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				if conflictIdx > -1 {
-					return nil, moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
+					return moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
 				} else {
 					// append batch to insertBatch
 					insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
@@ -216,7 +240,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	// updateBatch.Zs = append(updateBatch.Zs, insertBatch.Zs...)
 	// insertBatch.Clean(proc.GetMPool())
 
-	return insertBatch, nil
+	return nil
 
 }
 

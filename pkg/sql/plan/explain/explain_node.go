@@ -113,6 +113,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert UniqueKey"
 	case plan.Node_PRE_DELETE:
 		pname = "PreDelete"
+	case plan.Node_ON_DUPLICATE_KEY:
+		pname = "On Duplicate Key"
 	default:
 		panic("error node type")
 	}
