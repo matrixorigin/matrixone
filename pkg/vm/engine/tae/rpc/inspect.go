@@ -121,6 +121,9 @@ func runAddC(cmd *addCCmd) error {
 	}
 	err := tbl.AlterTable(context.TODO(), api.NewAddColumnReq(0, 0, cmd.name, planTyp, int32(cmd.pos)))
 	if err != nil {
+		if txn.Rollback() != nil {
+			panic("rollback error are you kidding?")
+		}
 		return err
 	}
 	return txn.Commit()
@@ -149,6 +152,9 @@ func runDropC(cmd *dropCCmd) error {
 	seqnum := tbl.Schema().(*catalog.Schema).ColDefs[cmd.pos].SeqNum
 	err := tbl.AlterTable(context.TODO(), api.NewRemoveColumnReq(0, 0, uint32(cmd.pos), uint32(seqnum)))
 	if err != nil {
+		if txn.Rollback() != nil {
+			panic("rollback error are you kidding?")
+		}
 		return err
 	}
 	return txn.Commit()
@@ -175,6 +181,9 @@ func runRenameT(cmd *renameTCmd) error {
 	tbl, _ := db.GetRelationByName(cmd.old)
 	err := tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, cmd.old, cmd.new))
 	if err != nil {
+		if txn.Rollback() != nil {
+			panic("rollback error are you kidding?")
+		}
 		return err
 	}
 	return txn.Commit()
