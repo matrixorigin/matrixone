@@ -28,7 +28,7 @@ func (ht *StringHashMap) InsertStringBatchInBucket(states [][3]uint64, keys [][]
 	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		if states[i][0]%nbucket != ibucket {
+		if states[i][1]%nbucket != ibucket {
 			values[i] = 0
 			continue
 		}
@@ -113,7 +113,7 @@ func (ht *StringHashMap) InsertStringBatchWithRingInBucket(zValues []int64, stat
 		if zValues[i] == 0 {
 			continue
 		}
-		if states[i][0]%nbucket != ibucket {
+		if states[i][1]%nbucket != ibucket {
 			values[i] = 0
 			continue
 		}
@@ -204,7 +204,7 @@ func (ht *StringHashMap) FindStringBatchInBucket(states [][3]uint64, keys [][]by
 	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		if states[i][0]%nbucket != ibucket {
+		if states[i][1]%nbucket != ibucket {
 			inBuckets[i] = 0 // mark of 0 means it is not in the processed bucket
 			continue
 		}
@@ -217,7 +217,7 @@ func (ht *StringHashMap) FindStringBatchWithRingInBucket(states [][3]uint64, zVa
 	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
-		if states[i][0]%nbucket != ibucket {
+		if states[i][1]%nbucket != ibucket {
 			inBuckets[i] = 0 // mark of 0 means it is not in the processed bucket
 			continue
 		}
@@ -239,17 +239,15 @@ func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsa
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	keys := unsafe.Slice((*uint64)(keysPtr), n)
-
-	for i, key := range keys {
-		if hashes[i]%nbucket != ibucket {
+	for i, hash := range hashes {
+		if (hashes[i]>>16)%nbucket != ibucket {
 			values[i] = 0
 			continue
 		}
-		cell := ht.findCell(hashes[i], key)
+		cell := ht.findCell(hash)
 		if cell.Mapped == 0 {
 			ht.elemCnt++
-			cell.Key = key
+			cell.Key = hash
 			cell.Mapped = ht.elemCnt
 		}
 		values[i] = cell.Mapped
@@ -266,19 +264,18 @@ func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hash
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	keys := unsafe.Slice((*uint64)(keysPtr), n)
-	for i, key := range keys {
+	for i, hash := range hashes {
 		if zValues[i] == 0 {
 			continue
 		}
-		if hashes[i]%nbucket != ibucket {
+		if (hashes[i]>>16)%nbucket != ibucket {
 			values[i] = 0
 			continue
 		}
-		cell := ht.findCell(hashes[i], key)
+		cell := ht.findCell(hash)
 		if cell.Mapped == 0 {
 			ht.elemCnt++
-			cell.Key = key
+			cell.Key = hash
 			cell.Mapped = ht.elemCnt
 		}
 		values[i] = cell.Mapped
@@ -291,13 +288,12 @@ func (ht *Int64HashMap) FindBatchInBucket(n int, hashes []uint64, keysPtr unsafe
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	keys := unsafe.Slice((*uint64)(keysPtr), n)
-	for i, key := range keys {
-		if hashes[i]%nbucket != ibucket {
+	for i, hash := range hashes {
+		if (hashes[i]>>16)%nbucket != ibucket {
 			inBuckets[i] = 0 // mark of 0 means it is not in the processed bucket
 			continue
 		}
-		cell := ht.findCell(hashes[i], key)
+		cell := ht.findCell(hash)
 		values[i] = cell.Mapped
 	}
 }
@@ -307,9 +303,8 @@ func (ht *Int64HashMap) FindBatchWithRingInBucket(n int, zValues []int64, hashes
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	keys := unsafe.Slice((*uint64)(keysPtr), n)
-	for i, key := range keys {
-		if hashes[i]%nbucket != ibucket {
+	for i, hash := range hashes {
+		if (hashes[i]>>16)%nbucket != ibucket {
 			inBuckets[i] = 0 // mark of 0 means it is not in the processed bucket
 			continue
 		}
@@ -317,7 +312,7 @@ func (ht *Int64HashMap) FindBatchWithRingInBucket(n int, zValues []int64, hashes
 			values[i] = 0
 			continue
 		}
-		cell := ht.findCell(hashes[i], key)
+		cell := ht.findCell(hash)
 		values[i] = cell.Mapped
 	}
 }
