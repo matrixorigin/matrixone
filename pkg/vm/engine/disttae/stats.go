@@ -96,14 +96,14 @@ func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, table
 				if !init {
 					init = true
 					for idx, col := range tableDef.Cols[:lenCols] {
-						objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
+						objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
 						info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
 						info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
 						info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 					}
 				} else {
 					for idx, col := range tableDef.Cols[:lenCols] {
-						objColMeta := objectMeta.ObjectColumnMeta(uint16(col.Seqnum))
+						objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
 						zm := objColMeta.ZoneMap().Clone()
 						if !zm.IsInited() {
 							continue
