@@ -92,7 +92,7 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 		AccountId:  accountId,
 		DatabaseId: databaseId,
 	}
-	mp := make(map[uint64]uint8)
+	mp := make(map[string]uint8)
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
 		if item.AccountId != accountId {
 			return false
@@ -100,11 +100,13 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 		if item.DatabaseId != databaseId {
 			return false
 		}
+		// In previous table id is used to deduplicate, but this a corner case: rename table t to newt, and rename newt back to t.
+		// In this case newt is first found deleted and taking the place of active t's tableid.
 		if item.Ts.Greater(ts) {
 			return true
 		}
-		if _, ok := mp[item.Id]; !ok {
-			mp[item.Id] = 0
+		if _, ok := mp[item.Name]; !ok {
+			mp[item.Name] = 0
 			if !item.deleted {
 				rs = append(rs, item.Name)
 				rids = append(rids, item.Id)
@@ -358,6 +360,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 				Rowid:      exist.Rowid,
 				AccountId:  exist.AccountId,
 				DatabaseId: exist.DatabaseId,
+				Version:    exist.Version,
 				Ts:         item.Ts,
 			}
 			cc.tables.data.Set(newItem)
