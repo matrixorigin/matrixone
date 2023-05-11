@@ -246,7 +246,10 @@ func (r *baseEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 		return 0, err
 	}
 	n += n1
-	payload := make([]byte, r.meta.payloadSize)
+	payload, err := common.LogAllocator.Alloc(int(r.meta.payloadSize))
+	if err != nil {
+		return 0, err
+	}
 	n2, err := reader.Read(payload)
 	if err != nil {
 		return 0, err
@@ -262,6 +265,12 @@ func (r *baseEntry) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
 	_, err := r.ReadFrom(bbuf)
 	return err
+}
+
+func (r *baseEntry) Close() {
+	if r.payload != nil {
+		common.LogAllocator.Free(r.payload)
+	}
 }
 
 // read: logrecord -> meta+payload -> entry
@@ -282,10 +291,8 @@ func newRecordEntry() *recordEntry {
 }
 
 func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
-	payload := make([]byte, len(r.Payload()))
-	copy(payload, r.Payload())
 	return &recordEntry{
-		payload: payload,
+		payload: r.Payload(),
 		baseEntry: &baseEntry{
 			meta: newMeta(),
 		},
