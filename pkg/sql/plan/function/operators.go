@@ -2492,6 +2492,15 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.NeString,
 			},
+			{
+				Index: 24,
+				Args: []types.T{
+					types.T_json,
+					types.T_json,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NeString,
+			},
 		},
 	},
 

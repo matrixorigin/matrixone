@@ -33,22 +33,23 @@ import (
 // client each node will hold only one client.
 // It is responsible for sending messages to other nodes. and messages were received
 // and handled by cn-server.
-var client *CNClient
+var client atomic.Pointer[CNClient]
 
 func CloseCNClient() error {
-	return client.Close()
+	return client.Load().Close()
 }
 
 func GetStreamSender(backend string) (morpc.Stream, error) {
-	return client.NewStream(backend)
+	return client.Load().NewStream(backend)
 }
 
 func AcquireMessage() *pipeline.Message {
-	return client.acquireMessage().(*pipeline.Message)
+	return client.Load().acquireMessage().(*pipeline.Message)
 }
 
 func IsCNClientReady() bool {
-	return client != nil && client.ready.Load()
+	c := client.Load()
+	return c != nil && c.ready
 }
 
 type CNClient struct {
@@ -78,7 +79,8 @@ func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 func (c *CNClient) Close() error {
 	lock.Lock()
 	defer lock.Unlock()
-	if client == nil || !c.ready.Load() {
+	cli := client.Load()
+	if cli == nil || !cli.ready {
 		return nil
 	}
 
@@ -116,7 +118,7 @@ func NewCNClient(
 	cfg *ClientConfig) error {
 	lock.Lock()
 	defer lock.Unlock()
-	if client != nil {
+	if client.Load() != nil {
 		return nil
 	}
 
@@ -124,10 +126,11 @@ func NewCNClient(
 
 	var err error
 	cfg.Fill()
-	client = &CNClient{config: cfg, localServiceAddress: localServiceAddress}
-	client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
+	cli := &CNClient{config: cfg, localServiceAddress: localServiceAddress}
+	client.Store(cli)
+	cli.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
-	codec := morpc.NewMessageCodec(client.acquireMessage,
+	codec := morpc.NewMessageCodec(cli.acquireMessage,
 		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendGoettyOptions(
@@ -135,7 +138,7 @@ func NewCNClient(
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
 				m := v.(morpc.RPCMessage)
 				if !m.InternalMessage() {
-					client.releaseMessage(m.Message.(*pipeline.Message))
+					cli.releaseMessage(m.Message.(*pipeline.Message))
 				}
 			}),
 		),
@@ -143,12 +146,12 @@ func NewCNClient(
 		morpc.WithBackendLogger(logger),
 	)
 
-	client.client, err = morpc.NewClient(factory,
+	cli.client, err = morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
 		morpc.WithClientTag("cn-client"),
 		morpc.WithClientLogger(logger),
 	)
-	client.ready.Store(true)
+	cli.ready = true
 	return err
 }
 
@@ -178,4 +181,12 @@ func (cfg *ClientConfig) Fill() {
 	if cfg.TimeOutForEachConnect <= 0 {
 		cfg.TimeOutForEachConnect = dfConnectTimeout
 	}
+}
+
+func GetRPCClient() morpc.RPCClient {
+	cli := client.Load()
+	if cli == nil {
+		return nil
+	}
+	return cli.client
 }

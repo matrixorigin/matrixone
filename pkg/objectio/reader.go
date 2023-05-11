@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -66,6 +67,22 @@ func newObjectReaderV1(
 	return reader, nil
 }
 
+func (r *objectReaderV1) Init(location Location, fs fileservice.FileService) {
+	oName := location.Name()
+	extent := location.Extent()
+	r.name = oName.String()
+	r.oname = &oName
+	r.metaExt = &extent
+	r.fs = fs
+	r.metaCache.Store(nil)
+}
+
+func (r *objectReaderV1) Reset() {
+	r.metaExt = nil
+	r.oname = nil
+	r.metaCache.Store(nil)
+}
+
 func (r *objectReaderV1) GetObject() *Object {
 	return &r.Object
 }
@@ -89,7 +106,7 @@ func (r *objectReaderV1) CacheMetaExtent(ext *Extent) {
 func (r *objectReaderV1) ReadZM(
 	ctx context.Context,
 	blk uint16,
-	cols []uint16,
+	seqnums []uint16,
 	m *mpool.MPool,
 ) (zms []ZoneMap, err error) {
 	var meta objectMetaV1
@@ -97,7 +114,7 @@ func (r *objectReaderV1) ReadZM(
 		return
 	}
 	blkMeta := meta.GetBlockMeta(uint32(blk))
-	zms = blkMeta.ToColumnZoneMaps(cols)
+	zms = blkMeta.ToColumnZoneMaps(seqnums)
 	return
 }
 
@@ -132,6 +149,7 @@ func (r *objectReaderV1) ReadMeta(
 func (r *objectReaderV1) ReadOneBlock(
 	ctx context.Context,
 	idxs []uint16,
+	typs []types.Type,
 	blk uint16,
 	m *mpool.MPool,
 ) (ioVec *fileservice.IOVector, err error) {
@@ -139,7 +157,7 @@ func (r *objectReaderV1) ReadOneBlock(
 	if meta, err = r.ReadMeta(ctx, m); err != nil {
 		return
 	}
-	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, m, r.fs, constructorFactory)
+	return ReadOneBlockWithMeta(ctx, &meta, r.name, blk, idxs, typs, m, r.fs, constructorFactory)
 }
 
 func (r *objectReaderV1) ReadAll(

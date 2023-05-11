@@ -17,10 +17,12 @@ package objectio
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/pierrec/lz4/v4"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +32,8 @@ import (
 
 type objectWriterV1 struct {
 	sync.RWMutex
+	schemaVer   uint32
+	seqnums     *Seqnums
 	object      *Object
 	blocks      []blockData
 	totalRow    uint32
@@ -43,6 +47,7 @@ type objectWriterV1 struct {
 
 type blockData struct {
 	meta        BlockObject
+	seqnums     *Seqnums
 	data        [][]byte
 	bloomFilter []byte
 }
@@ -73,6 +78,7 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		name = BuildETLName()
 	}
 	writer := &objectWriterV1{
+		seqnums:  NewSeqnums(nil),
 		fileName: fileName,
 		name:     name,
 		object:   object,
@@ -83,31 +89,54 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 	return writer, nil
 }
 
-func newObjectWriterV1(name ObjectName, fs fileservice.FileService) (*objectWriterV1, error) {
+func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersion uint32, seqnums []uint16) (*objectWriterV1, error) {
 	fileName := name.String()
 	object := NewObject(fileName, fs)
 	writer := &objectWriterV1{
-		fileName: fileName,
-		name:     name,
-		object:   object,
-		buffer:   NewObjectBuffer(fileName),
-		blocks:   make([]blockData, 0),
-		lastId:   0,
+		schemaVer: schemaVersion,
+		seqnums:   NewSeqnums(seqnums),
+		fileName:  fileName,
+		name:      name,
+		object:    object,
+		buffer:    NewObjectBuffer(fileName),
+		blocks:    make([]blockData, 0),
+		lastId:    0,
 	}
 	return writer, nil
 }
 
+func (w *objectWriterV1) GetSeqnums() []uint16 {
+	return w.seqnums.Seqs
+}
+
+func (w *objectWriterV1) GetMaxSeqnum() uint16 {
+	return w.seqnums.MaxSeq
+}
+
 func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
-	block := NewBlock(uint16(len(batch.Vecs)))
-	w.AddBlock(block, batch)
+	if col := len(w.seqnums.Seqs); col == 0 {
+		w.seqnums.InitWithColCnt(len(batch.Vecs))
+	} else if col != len(batch.Vecs) {
+		panic(fmt.Sprintf("Unmatched Write Batch, expect %d, get %d, %v", col, len(batch.Vecs), batch.Attrs))
+	}
+	block := NewBlock(w.seqnums)
+	w.AddBlock(block, batch, w.seqnums)
 	return block, nil
 }
 
-func (w *objectWriterV1) UpdateBlockZM(blkIdx, colIdx int, zm ZoneMap) {
-	w.blocks[blkIdx].meta.ColumnMeta(uint16(colIdx)).SetZoneMap(zm)
+func (w *objectWriterV1) WriteWithoutSeqnum(batch *batch.Batch) (BlockObject, error) {
+	denseSeqnums := NewSeqnums(nil)
+	denseSeqnums.InitWithColCnt(len(batch.Vecs))
+	block := NewBlock(denseSeqnums)
+	w.AddBlock(block, batch, denseSeqnums)
+	return block, nil
 }
 
-func (w *objectWriterV1) WriteBF(blkIdx, colIdx int, buf []byte) (err error) {
+func (w *objectWriterV1) UpdateBlockZM(blkIdx int, seqnum uint16, zm ZoneMap) {
+	w.blocks[blkIdx].meta.ColumnMeta(seqnum).SetZoneMap(zm)
+}
+
+func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
 	w.blocks[blkIdx].bloomFilter = buf
 	return
 }
@@ -117,7 +146,7 @@ func (w *objectWriterV1) WriteObjectMeta(ctx context.Context, totalrow uint32, m
 	w.colmeta = metas
 }
 
-func (w *objectWriterV1) prepareObjectMeta(objectMeta ObjectMeta, offset uint32) ([]byte, Extent, error) {
+func (w *objectWriterV1) prepareObjectMeta(objectMeta ObjectMeta, offset uint32, seqnums *Seqnums) ([]byte, Extent, error) {
 	length := uint32(0)
 	blockCount := uint32(len(w.blocks))
 	objectMeta.BlockHeader().SetSequence(uint16(blockCount))
@@ -127,7 +156,7 @@ func (w *objectWriterV1) prepareObjectMeta(objectMeta ObjectMeta, offset uint32)
 	objectMeta.BlockHeader().SetRows(w.totalRow)
 	// write column meta
 	for i, colMeta := range w.colmeta {
-		objectMeta.AddColumnMeta(uint16(i), colMeta)
+		objectMeta.AddColumnMeta(seqnums.Seqs[i], colMeta)
 	}
 	length += objectMeta.Length()
 	blockIndex := BuildBlockIndex(blockCount)
@@ -165,9 +194,10 @@ func (w *objectWriterV1) prepareBlockMeta(offset uint32) uint32 {
 			if block.meta.BlockHeader().ColumnCount() <= idx {
 				continue
 			}
-			location := w.blocks[i].meta.ColumnMeta(uint16(idx)).Location()
+			blk := w.blocks[i]
+			location := blk.meta.ColumnMeta(blk.seqnums.Seqs[idx]).Location()
 			location.SetOffset(offset)
-			w.blocks[i].meta.ColumnMeta(uint16(idx)).setLocation(location)
+			blk.meta.ColumnMeta(blk.seqnums.Seqs[idx]).setLocation(location)
 			offset += location.Length()
 			size += location.Length()
 			oSize += location.OriginSize()
@@ -213,14 +243,14 @@ func (w *objectWriterV1) prepareZoneMapArea(blockCount uint32, offset uint32) ([
 	zoneMapAreaIndex.SetBlockCount(blockCount)
 	zoneMapAreaStart += zoneMapAreaIndex.Length()
 	for i, block := range w.blocks {
-		n := uint32(block.meta.GetColumnCount() * ZoneMapSize)
+		n := uint32(block.meta.GetMetaColumnCount() * ZoneMapSize)
 		zoneMapAreaIndex.SetBlockMetaPos(uint32(i), zoneMapAreaStart, n)
 		zoneMapAreaStart += n
 	}
 	buf.Write(zoneMapAreaIndex)
 	for _, block := range w.blocks {
-		for i := range block.data {
-			buf.Write(block.meta.ColumnMeta(uint16(i)).ZoneMap())
+		for seqnum := uint16(0); seqnum < block.meta.GetMetaColumnCount(); seqnum++ {
+			buf.Write(block.meta.ColumnMeta(seqnum).ZoneMap())
 		}
 	}
 	return w.WriteWithCompress(offset, buf.Bytes())
@@ -258,17 +288,26 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	defer w.RUnlock()
 	var columnCount uint16
 	columnCount = 0
+	metaColCnt := uint16(0)
+	maxSeqnum := uint16(0)
+	var seqnums *Seqnums
 	if len(w.blocks) == 0 {
 		logutil.Warn("object io: no block needs to be written")
 	} else {
 		columnCount = w.blocks[0].meta.GetColumnCount()
+		metaColCnt = w.blocks[0].meta.GetMetaColumnCount()
+		maxSeqnum = w.blocks[0].meta.GetMaxSeqnum()
+		seqnums = w.blocks[0].seqnums
 	}
 
 	objectHeader := BuildHeader()
+	objectHeader.SetSchemaVersion(w.schemaVer)
 
 	blockCount := uint32(len(w.blocks))
-	objectMeta := BuildObjectMeta(columnCount)
+	objectMeta := BuildObjectMeta(metaColCnt)
 	objectMeta.BlockHeader().SetColumnCount(columnCount)
+	objectMeta.BlockHeader().SetMetaColumnCount(metaColCnt)
+	objectMeta.BlockHeader().SetMaxSeqnum(maxSeqnum)
 
 	offset := w.prepareBlockMeta(HeaderSize)
 
@@ -289,7 +328,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 	offset += zoneMapAreaExtent.Length()
 
 	// prepare object meta and block index
-	meta, metaExtent, err := w.prepareObjectMeta(objectMeta, offset)
+	meta, metaExtent, err := w.prepareObjectMeta(objectMeta, offset, seqnums)
 	objectHeader.SetExtent(metaExtent)
 	// begin write
 
@@ -368,17 +407,25 @@ func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []by
 	return
 }
 
-func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch) error {
+func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) error {
 	w.Lock()
 	defer w.Unlock()
 	// CHANGE ME
 	// block.BlockHeader().SetBlockID(w.lastId)
 	blockMeta.BlockHeader().SetSequence(uint16(w.lastId))
 
-	block := blockData{meta: blockMeta}
+	block := blockData{meta: blockMeta, seqnums: seqnums}
 	var data []byte
 	var buf bytes.Buffer
+	var rows int
+	warned := 0
 	for i, vec := range bat.Vecs {
+		if i == 0 {
+			rows = vec.Length()
+		} else if rows != vec.Length() {
+			warned++
+			logutil.Warnf("%s unmatched length, expect %d, get %d", bat.Attrs[i], rows, vec.Length())
+		}
 		buf.Reset()
 		h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
 		buf.Write(EncodeIOEntryHeader(&h))
@@ -391,10 +438,14 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch) error
 			return err
 		}
 		block.data = append(block.data, data)
-		blockMeta.ColumnMeta(uint16(i)).setLocation(ext)
-		blockMeta.ColumnMeta(uint16(i)).setDataType(uint8(vec.GetType().Oid))
-		blockMeta.ColumnMeta(uint16(i)).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
+		blockMeta.ColumnMeta(seqnums.Seqs[i]).setLocation(ext)
+		blockMeta.ColumnMeta(seqnums.Seqs[i]).setDataType(uint8(vec.GetType().Oid))
+		if vec.GetType().Oid == types.T_any {
+			panic("any type batch")
+		}
+		blockMeta.ColumnMeta(seqnums.Seqs[i]).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
 	}
+	blockMeta.BlockHeader().SetRows(uint32(rows))
 	w.blocks = append(w.blocks, block)
 	w.lastId++
 	return nil

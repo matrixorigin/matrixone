@@ -240,19 +240,17 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 					bat := prepareStmt.InsertBat
 					bat.CleanOnlyData()
-
-					emptyBatch := batch.NewWithSize(0)
-					emptyBatch.Zs = []int64{1}
 					for i := 0; i < colCount; i++ {
-						err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx, colsData[i].Data, bat.Vecs[i], emptyBatch, executePlan.Args)
-						if err != nil {
-							emptyBatch.Clean(cwft.proc.Mp())
+						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
+							colsData[i].Data, bat.Vecs[i], prepareStmt.emptyBatch, executePlan.Args, prepareStmt.ufs[i]); err != nil {
 							return nil, err
 						}
 					}
-					emptyBatch.Clean(cwft.proc.Mp())
-					bat.SetZs(rowCount, cwft.proc.Mp())
-					cwft.proc.PrepareBatch = bat
+					bat.AddCnt(1)
+					for i := 0; i < rowCount; i++ {
+						bat.Zs = append(bat.Zs, 1)
+					}
+					cwft.proc.SetPrepareBatch(bat)
 					break
 				}
 			}

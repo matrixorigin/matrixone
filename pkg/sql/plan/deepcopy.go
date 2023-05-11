@@ -300,7 +300,6 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		ColId:     col.ColId,
 		Name:      col.Name,
 		Alg:       col.Alg,
-		Hidden:    col.Hidden,
 		Typ:       DeepCopyType(col.Typ),
 		Default:   DeepCopyDefault(col.Default),
 		Primary:   col.Primary,
@@ -308,6 +307,8 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		Comment:   col.Comment,
 		OnUpdate:  DeepCopyOnUpdate(col.OnUpdate),
 		ClusterBy: col.ClusterBy,
+		Hidden:    col.Hidden,
+		Seqnum:    col.Seqnum,
 	}
 }
 

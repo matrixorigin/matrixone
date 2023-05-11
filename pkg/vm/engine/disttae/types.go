@@ -253,13 +253,15 @@ type txnTable struct {
 	sync.Mutex
 
 	tableId   uint64
+	version   uint32
 	tableName string
 	dnList    []int
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
 	defs           []engine.TableDef
 	tableDef       *plan.TableDef
-	idxs           []uint16
+	seqnums        []uint16
+	typs           []types.Type
 	_parts         []*logtailreplay.PartitionState
 	modifiedBlocks [][]ModifyBlockMeta
 
@@ -273,15 +275,16 @@ type txnTable struct {
 	// specify whether the logtail is updated. once it is updated, it will not be updated again
 	logtailUpdated bool
 
-	primaryIdx   int // -1 means no primary key
-	clusterByIdx int // -1 means no clusterBy key
-	viewdef      string
-	comment      string
-	partitioned  int8   //1 : the table has partitions ; 0 : no partition
-	partition    string // the info about partitions when the table has partitions
-	relKind      string
-	createSql    string
-	constraint   []byte
+	primaryIdx    int // -1 means no primary key
+	primarySeqnum int // -1 means no primary key
+	clusterByIdx  int // -1 means no clusterBy key
+	viewdef       string
+	comment       string
+	partitioned   int8   //1 : the table has partitions ; 0 : no partition
+	partition     string // the info about partitions when the table has partitions
+	relKind       string
+	createSql     string
+	constraint    []byte
 
 	// use for skip rows
 	// snapshot for read
@@ -323,16 +326,17 @@ type column struct {
 	isAutoIncrement int8
 	hasUpdate       int8
 	updateExpr      []byte
+	seqnum          uint16
 }
 
 type blockReader struct {
-	blks       []*catalog.BlockInfo
-	ctx        context.Context
-	fs         fileservice.FileService
-	ts         timestamp.Timestamp
-	tableDef   *plan.TableDef
-	primaryIdx int
-	expr       *plan.Expr
+	blks          []*catalog.BlockInfo
+	ctx           context.Context
+	fs            fileservice.FileService
+	ts            timestamp.Timestamp
+	tableDef      *plan.TableDef
+	primarySeqnum int
+	expr          *plan.Expr
 
 	//used for prefetch
 	infos           [][]*catalog.BlockInfo
@@ -341,7 +345,7 @@ type blockReader struct {
 	prefetchColIdxs []uint16 //need to remove rowid
 
 	// cached meta data.
-	colIdxs        []uint16
+	seqnums        []uint16
 	colTypes       []types.Type
 	colNulls       []bool
 	pkidxInColIdxs int
@@ -361,7 +365,7 @@ type blockMergeReader struct {
 	tableDef *plan.TableDef
 
 	// cached meta data.
-	colIdxs  []uint16
+	seqnums  []uint16
 	colTypes []types.Type
 	colNulls []bool
 }

@@ -541,6 +541,7 @@ func rowsetDataToVector(
 	targeVec *vector.Vector,
 	emptyBatch *batch.Batch,
 	params []*plan.Expr,
+	uf func(*vector.Vector, *vector.Vector, int64) error,
 ) error {
 	var exprImpl *plan.Expr
 	var typ = plan2.MakePlan2Type(targeVec.GetType())
@@ -585,8 +586,8 @@ func rowsetDataToVector(
 		if err != nil {
 			return err
 		}
-		err = targeVec.Union(vec, []int32{1}, proc.GetMPool())
-		if err != nil {
+
+		if err = uf(targeVec, vec, 1); err != nil {
 			return err
 		}
 	}

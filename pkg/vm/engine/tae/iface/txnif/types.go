@@ -15,11 +15,11 @@
 package txnif
 
 import (
+	"context"
 	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"golang.org/x/net/context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -286,6 +286,7 @@ type TxnStore interface {
 		visitTable func(tbl any),
 		rotateTable func(dbName, tblName string, dbid, tid uint64),
 		visitMetadata func(block any),
+		visitSegment func(seg any),
 		visitAppend func(bat any),
 		visitDelete func(deletes []uint32, prefix []byte))
 	GetTransactionType() TxnType
