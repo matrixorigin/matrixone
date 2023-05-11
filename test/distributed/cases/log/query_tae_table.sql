@@ -26,7 +26,7 @@ set @uuid_hide_3 = last_uuid();
 /* cloud_user */select 1;
 set @uuid_hide_4 = last_uuid();
 
-select sleep(16);
+select sleep(30);
 
 select account from system.statement_info where statement_id = @uuid_create_table;
 
