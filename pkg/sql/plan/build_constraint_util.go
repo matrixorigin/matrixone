@@ -910,6 +910,8 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 	return nil
 }
 
+var ForceCastExpr = forceCastExpr
+
 func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil

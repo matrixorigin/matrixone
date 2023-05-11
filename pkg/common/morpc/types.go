@@ -110,6 +110,8 @@ type ClientSession interface {
 	DeleteCache(cacheID uint64)
 	// GetCache returns the message cache
 	GetCache(cacheID uint64) (MessageCache, error)
+	// RemoteAddress returns remote address, include ip and port
+	RemoteAddress() string
 }
 
 // MessageCache the client uses stream to send messages to the server, and when
