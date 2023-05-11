@@ -69,7 +69,8 @@ func NewFileWithChecksumOSFile(
 	blockContentSize int,
 	perfCounterSets []*perfcounter.CounterSet,
 ) (*FileWithChecksum[*os.File], func()) {
-	f, put := fileWithChecksumPoolOSFile.Get()
+	var f *FileWithChecksum[*os.File]
+	put := fileWithChecksumPoolOSFile.Get(&f)
 	f.ctx = ctx
 	f.underlying = underlying
 	f.blockSize = blockContentSize + _ChecksumSize
@@ -241,7 +242,7 @@ func (f *FileWithChecksum[T]) contentOffsetToBlockOffset(
 func (f *FileWithChecksum[T]) readBlock(offset int64) (data []byte, freeData func(), err error) {
 
 	if f.blockSize == _DefaultBlockSize {
-		data, freeData = bytesPoolDefaultBlockSize.Get()
+		freeData = bytesPoolDefaultBlockSize.Get(&data)
 	} else {
 		data = make([]byte, f.blockSize)
 		freeData = noopPut

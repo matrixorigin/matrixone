@@ -98,12 +98,12 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 		r.steps = r.steps[1:]
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat.SetAttributes(cols)
+	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
+	bat.SetAttributes(cols)
 
 	// if it's not sorted, just return
 	if !r.blks[0].Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
@@ -171,12 +171,12 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 		}
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat.SetAttributes(cols)
+	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
+	bat.SetAttributes(cols)
 	r.sels = r.sels[:0]
 	deletes := make([]int, len(r.blks[0].deletes))
 	copy(deletes, r.blks[0].deletes)
