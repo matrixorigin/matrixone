@@ -527,10 +527,14 @@ func genCreateColumnTuple(
 		if err := vector.AppendBytes(bat.Vecs[idx], col.updateExpr, false, m); err != nil {
 			return nil, err
 		}
-
 		idx = catalog.MO_COLUMNS_ATT_IS_CLUSTERBY
 		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_is_clusterby
 		if err := vector.AppendFixed(bat.Vecs[idx], col.clusterBy, false, m); err != nil {
+			return nil, err
+		}
+		idx = catalog.MO_COLUMNS_ATT_SEQNUM_IDX
+		bat.Vecs[idx] = vector.NewVec(catalog.MoColumnsTypes[idx]) // att_is_clusterby
+		if err := vector.AppendFixed(bat.Vecs[idx], uint16(0) /*just create*/, false, m); err != nil {
 			return nil, err
 		}
 

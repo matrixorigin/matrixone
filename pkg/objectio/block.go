@@ -18,15 +18,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-func NewBlock(colCnt uint16) BlockObject {
+func NewBlock(seqnums *Seqnums) BlockObject {
 	header := BuildBlockHeader()
-	header.SetColumnCount(colCnt)
-	blockMeta := BuildBlockMeta(colCnt)
+	header.SetColumnCount(uint16(len(seqnums.Seqs)))
+	metaColCnt := seqnums.MetaColCnt
+	header.SetMetaColumnCount(metaColCnt)
+	header.SetMaxSeqnum(seqnums.MaxSeq)
+	blockMeta := BuildBlockMeta(metaColCnt)
 	blockMeta.SetBlockMetaHeader(header)
-	for i := uint16(0); i < colCnt; i++ {
+	// create redundant columns to make reading O(1)
+	for i := uint16(0); i < metaColCnt; i++ {
 		col := BuildColumnMeta()
-		col.setIdx(i)
 		blockMeta.AddColumnMeta(i, col)
+	}
+
+	for i, seq := range seqnums.Seqs {
+		blockMeta.ColumnMeta(seq).setIdx(uint16(i))
 	}
 	return blockMeta
 }
@@ -35,22 +42,22 @@ func (bm BlockObject) GetExtent() Extent {
 	return bm.BlockHeader().MetaLocation()
 }
 
-func (bm BlockObject) MustGetColumn(idx uint16) ColumnMeta {
-	meta, err := bm.GetColumn(idx)
+func (bm BlockObject) MustGetColumn(seqnum uint16) ColumnMeta {
+	meta, err := bm.GetColumn(seqnum)
 	if err != nil {
 		panic(err)
 	}
 	return meta
 }
 
-func (bm BlockObject) GetColumn(idx uint16) (ColumnMeta, error) {
-	if idx >= bm.BlockHeader().ColumnCount() {
+func (bm BlockObject) GetColumn(seqnum uint16) (ColumnMeta, error) {
+	if seqnum >= bm.BlockHeader().MetaColumnCount() {
 		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
 			"block: %d, column count: %d",
-			idx, bm.BlockHeader().Sequence(),
-			bm.BlockHeader().ColumnCount())
+			seqnum, bm.BlockHeader().Sequence(),
+			bm.BlockHeader().MetaColumnCount())
 	}
-	return bm.ColumnMeta(idx), nil
+	return bm.ColumnMeta(seqnum), nil
 }
 
 func (bm BlockObject) GetRows() uint32 {
@@ -67,4 +74,12 @@ func (bm BlockObject) GetID() uint16 {
 
 func (bm BlockObject) GetColumnCount() uint16 {
 	return bm.BlockHeader().ColumnCount()
+}
+
+func (bm BlockObject) GetMetaColumnCount() uint16 {
+	return bm.BlockHeader().MetaColumnCount()
+}
+
+func (bm BlockObject) GetMaxSeqnum() uint16 {
+	return bm.BlockHeader().MaxSeqnum()
 }

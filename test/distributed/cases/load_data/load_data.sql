@@ -186,3 +186,9 @@ drop table t7;
 
 create table t8(a int, b int);
 load data infile '$resources/load_data/auto_increment_20.csv' into table t7 set col2=nullif(col2, '1');
+
+create table t9(a varchar, b varchar, c varchar, d varchar);
+load data infile {"filepath"="$resources/load_data/parallel.txt.gz", "compression"="gzip"} into table t9 FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+select * from t9;
+load data infile {"filepath"="$resources/load_data/parallel.txt.gz", "compression"="gzip"} into table t9 FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n' parallel 'true';
+select * from t9;

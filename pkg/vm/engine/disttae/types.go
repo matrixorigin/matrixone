@@ -140,9 +140,9 @@ type Transaction struct {
 
 	deletedBlocks *deletedBlocks
 	// blkId -> Pos
-	cnBlkId_Pos                     map[string]Pos
-	blockId_raw_batch               map[string]*batch.Batch
-	blockId_dn_delete_metaLoc_batch map[string][]*batch.Batch
+	cnBlkId_Pos                     map[types.Blockid]Pos
+	blockId_raw_batch               map[types.Blockid]*batch.Batch
+	blockId_dn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 }
 
 type Pos struct {
@@ -157,43 +157,43 @@ type deletedBlocks struct {
 
 	// used to store cn block's deleted rows
 	// blockId => deletedOffsets
-	offsets map[string][]int64
+	offsets map[types.Blockid][]int64
 }
 
-func (b *deletedBlocks) addDeletedBlocks(blockID string, offsets []int64) {
+func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64) {
 	b.Lock()
 	defer b.Unlock()
-	b.offsets[blockID] = append(b.offsets[blockID], offsets...)
+	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID string) []int64 {
+func (b *deletedBlocks) getDeletedOffsetsByBlock(blockID *types.Blockid) []int64 {
 	b.RLock()
 	defer b.RUnlock()
-	res := b.offsets[blockID]
+	res := b.offsets[*blockID]
 	offsets := make([]int64, len(res))
 	copy(offsets, res)
 	return offsets
 }
 
-func (b *deletedBlocks) removeBlockDeletedInfos(ids []string) {
+func (b *deletedBlocks) removeBlockDeletedInfos(ids []*types.Blockid) {
 	b.Lock()
 	defer b.Unlock()
 	for _, id := range ids {
-		delete(b.offsets, id)
+		delete(b.offsets, *id)
 	}
 }
 
-func (b *deletedBlocks) iter(fn func(string, []int64) bool) {
+func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 	b.RLock()
 	defer b.RUnlock()
 	for id, offsets := range b.offsets {
-		if !fn(id, offsets) {
+		if !fn(&id, offsets) {
 			return
 		}
 	}
 }
 
-func (txn *Transaction) PutCnBlockDeletes(blockId string, offsets []int64) {
+func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int64) {
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
@@ -250,28 +250,38 @@ type databaseKey struct {
 // txnTable represents an opened table in a transaction
 type txnTable struct {
 	tableId   uint64
+	version   uint32
 	tableName string
 	dnList    []int
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
-	defs              []engine.TableDef
-	tableDef          *plan.TableDef
-	idxs              []uint16
-	_parts            []*logtailreplay.PartitionState
-	modifiedBlocks    [][]ModifyBlockMeta
-	blockInfos        [][]catalog.BlockInfo
-	blockInfosUpdated bool
-	logtailUpdated    bool
+	defs           []engine.TableDef
+	tableDef       *plan.TableDef
+	seqnums        []uint16
+	typs           []types.Type
+	_parts         []*logtailreplay.PartitionState
+	modifiedBlocks [][]ModifyBlockMeta
 
-	primaryIdx   int // -1 means no primary key
-	clusterByIdx int // -1 means no clusterBy key
-	viewdef      string
-	comment      string
-	partitioned  int8   //1 : the table has partitions ; 0 : no partition
-	partition    string // the info about partitions when the table has partitions
-	relKind      string
-	createSql    string
-	constraint   []byte
+	// blockInfos stores all the block infos for this table of this transaction
+	// it is only generated when the table is not created by this transaction
+	// it is initialized by updateBlockInfos and once it is initialized, it will not be updated
+	blockInfos [][]catalog.BlockInfo
+
+	// specify whether the blockInfos is updated. once it is updated, it will not be updated again
+	blockInfosUpdated bool
+	// specify whether the logtail is updated. once it is updated, it will not be updated again
+	logtailUpdated bool
+
+	primaryIdx    int // -1 means no primary key
+	primarySeqnum int // -1 means no primary key
+	clusterByIdx  int // -1 means no clusterBy key
+	viewdef       string
+	comment       string
+	partitioned   int8   //1 : the table has partitions ; 0 : no partition
+	partition     string // the info about partitions when the table has partitions
+	relKind       string
+	createSql     string
+	constraint    []byte
 
 	// use for skip rows
 	// snapshot for read
@@ -313,16 +323,17 @@ type column struct {
 	isAutoIncrement int8
 	hasUpdate       int8
 	updateExpr      []byte
+	seqnum          uint16
 }
 
 type blockReader struct {
-	blks       []*catalog.BlockInfo
-	ctx        context.Context
-	fs         fileservice.FileService
-	ts         timestamp.Timestamp
-	tableDef   *plan.TableDef
-	primaryIdx int
-	expr       *plan.Expr
+	blks          []*catalog.BlockInfo
+	ctx           context.Context
+	fs            fileservice.FileService
+	ts            timestamp.Timestamp
+	tableDef      *plan.TableDef
+	primarySeqnum int
+	expr          *plan.Expr
 
 	//used for prefetch
 	infos           [][]*catalog.BlockInfo
@@ -331,7 +342,7 @@ type blockReader struct {
 	prefetchColIdxs []uint16 //need to remove rowid
 
 	// cached meta data.
-	colIdxs        []uint16
+	seqnums        []uint16
 	colTypes       []types.Type
 	colNulls       []bool
 	pkidxInColIdxs int
@@ -351,7 +362,7 @@ type blockMergeReader struct {
 	tableDef *plan.TableDef
 
 	// cached meta data.
-	colIdxs  []uint16
+	seqnums  []uint16
 	colTypes []types.Type
 	colNulls []bool
 }

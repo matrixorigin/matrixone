@@ -260,11 +260,11 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 		return e, nil
 	case *plan.Expr_V:
-		return getVarValue(e, rule)
+		return GetVarValue(rule.getContext(), rule.compCtx, rule.proc, rule.bat, e)
 	case *plan.Expr_C:
 		if exprImpl.C.Src != nil {
 			if _, ok := exprImpl.C.Src.Expr.(*plan.Expr_V); ok {
-				return getVarValue(exprImpl.C.Src, rule)
+				return GetVarValue(rule.getContext(), rule.compCtx, rule.proc, rule.bat, exprImpl.C.Src)
 			}
 		}
 		return e, nil
@@ -275,10 +275,16 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 func (rule *ResetVarRefRule) getContext() context.Context { return rule.compCtx.GetContext() }
 
-func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
+func GetVarValue(
+	ctx context.Context,
+	compCtx CompilerContext,
+	proc *process.Process,
+	emtpyBat *batch.Batch,
+	e *Expr,
+) (*plan.Expr, error) {
 	exprImpl := e.Expr.(*plan.Expr_V)
 	var expr *plan.Expr
-	getVal, err := r.compCtx.ResolveVariable(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+	getVal, err := compCtx.ResolveVariable(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
 	if err != nil {
 		return nil, err
 	}
@@ -308,12 +314,12 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 		// when we build plan with constant in float, we cast them to decimal.
 		// so we cast @float_var to decimal too.
 		strVal := strconv.FormatFloat(float64(val), 'f', -1, 64)
-		expr, err = makePlan2DecimalExprWithType(r.getContext(), strVal)
+		expr, err = makePlan2DecimalExprWithType(ctx, strVal)
 	case float64:
 		// when we build plan with constant in float, we cast them to decimal.
 		// so we cast @float_var to decimal too.
 		strVal := strconv.FormatFloat(val, 'f', -1, 64)
-		expr, err = makePlan2DecimalExprWithType(r.getContext(), strVal)
+		expr, err = makePlan2DecimalExprWithType(ctx, strVal)
 	case bool:
 		expr = makePlan2BoolConstExprWithType(val)
 	case nil:
@@ -332,15 +338,15 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 	case *Expr:
 		expr = DeepCopyExpr(val)
 	case types.Decimal64, types.Decimal128:
-		err = moerr.NewNYI(r.getContext(), "decimal var")
+		err = moerr.NewNYI(ctx, "decimal var")
 	default:
-		err = moerr.NewParseError(r.getContext(), "type of var %q is not supported now", exprImpl.V.Name)
+		err = moerr.NewParseError(ctx, "type of var %q is not supported now", exprImpl.V.Name)
 	}
 	if err != nil {
 		return nil, err
 	}
 	if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
-		expr, err = appendCastBeforeExpr(r.getContext(), expr, e.Typ)
+		expr, err = appendCastBeforeExpr(ctx, expr, e.Typ)
 	}
 	if err != nil {
 		return nil, err
@@ -348,7 +354,7 @@ func getVarValue(e *plan.Expr, r *ResetVarRefRule) (*plan.Expr, error) {
 	if c, ok := expr.Expr.(*plan.Expr_C); ok {
 		c.C.Src = e
 	} else if _, ok = expr.Expr.(*plan.Expr_F); ok {
-		vec, err := colexec.EvalExpr(r.bat, r.proc, expr)
+		vec, err := colexec.EvalExpr(emtpyBat, proc, expr)
 		if err != nil {
 			return nil, err
 		}

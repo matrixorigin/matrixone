@@ -455,7 +455,7 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 	for i := range colNames {
 		idxs[i] = uint16(i)
 	}
-	ioResult, err := reader.LoadColumns(cxt, idxs, id, nil)
+	ioResult, err := reader.LoadColumns(cxt, idxs, nil, id, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -586,7 +586,16 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 			continue
 		}
 		dbNode := node
+		var created, dropped bool
 		if dbNode.HasDropCommitted() {
+			dropped = true
+			if dbNode.CreatedAt.Equal(dbNode.DeletedAt) {
+				created = true
+			}
+		} else {
+			created = true
+		}
+		if dropped {
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(
 				collector.data.bats[DBDeleteIDX],
@@ -598,7 +607,8 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 				dbNode.GetEnd())
 			dbNode.TxnMVCCNode.AppendTuple(collector.data.bats[DBDeleteTxnIDX])
 			collector.data.bats[DBDeleteTxnIDX].GetVectorByName(SnapshotAttr_DBID).Append(entry.GetID(), false)
-		} else {
+		}
+		if created {
 			catalogEntry2Batch(collector.data.bats[DBInsertIDX],
 				entry,
 				node,
@@ -635,7 +645,16 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			continue
 		}
 		tblNode := node
-		if !tblNode.HasDropCommitted() {
+		var created, dropped bool
+		if tblNode.HasDropCommitted() {
+			dropped = true
+			if tblNode.CreatedAt.Equal(tblNode.DeletedAt) {
+				created = true
+			}
+		} else {
+			created = true
+		}
+		if created {
 			for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 				txnimpl.FillColumnRow(
 					entry,
@@ -644,9 +663,14 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 					collector.data.bats[TBLColInsertIDX].GetVectorByName(syscol.Name),
 				)
 			}
+			// send dropped column del
+			for _, name := range tblNode.BaseNode.Schema.Extra.DroppedAttrs {
+				collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrRowID).Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), name))), false)
+				collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrCommitTs).Append(tblNode.GetEnd(), false)
+			}
 			rowidVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrRowID)
 			commitVec := collector.data.bats[TBLColInsertIDX].GetVectorByName(catalog.AttrCommitTs)
-			for _, usercol := range entry.GetLastestSchema().ColDefs {
+			for _, usercol := range tblNode.BaseNode.Schema.ColDefs {
 				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))), false)
 				commitVec.Append(tblNode.GetEnd(), false)
 			}
@@ -655,11 +679,13 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 				SnapshotAttr_BlockMaxRow).Append(entry.GetLastestSchema().BlockMaxRows, false)
 			collector.data.bats[TBLInsertTxnIDX].GetVectorByName(
 				SnapshotAttr_SegmentMaxBlock).Append(entry.GetLastestSchema().SegmentMaxBlocks, false)
+			collector.data.bats[TBLInsertTxnIDX].GetVectorByName(
+				SnapshotAttr_SchemaExtra).Append(tblNode.BaseNode.Schema.MustGetExtraBytes(), false)
 
 			catalogEntry2Batch(
 				collector.data.bats[TBLInsertIDX],
 				entry,
-				node,
+				tblNode,
 				catalog.SystemTableSchema,
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
@@ -667,7 +693,8 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			)
 
 			tblNode.TxnMVCCNode.AppendTuple(collector.data.bats[TBLInsertTxnIDX])
-		} else {
+		}
+		if dropped {
 			collector.data.bats[TBLDeleteTxnIDX].GetVectorByName(
 				SnapshotAttr_DBID).Append(entry.GetDB().GetID(), false)
 			collector.data.bats[TBLDeleteTxnIDX].GetVectorByName(
@@ -675,7 +702,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 
 			rowidVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrRowID)
 			commitVec := collector.data.bats[TBLColDeleteIDX].GetVectorByName(catalog.AttrCommitTs)
-			for _, usercol := range entry.GetLastestSchema().ColDefs {
+			for _, usercol := range tblNode.BaseNode.Schema.ColDefs {
 				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", entry.GetID(), usercol.Name))), false)
 				commitVec.Append(tblNode.GetEnd(), false)
 			}
@@ -683,7 +710,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			catalogEntry2Batch(
 				collector.data.bats[TBLDeleteIDX],
 				entry,
-				node,
+				tblNode,
 				DelSchema,
 				txnimpl.FillTableRow,
 				u64ToRowID(entry.GetID()),
