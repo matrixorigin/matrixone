@@ -167,6 +167,8 @@ type Compile struct {
 	addr string
 	// db current database name.
 	db string
+	// tenant is the account name.
+	tenant string
 	// uid the user who initiated the sql.
 	uid string
 	// sql sql text.
@@ -186,6 +188,10 @@ type Compile struct {
 	s3CounterSet perfcounter.CounterSet
 
 	stepRegs map[int32][]*process.WaitRegister
+
+	isInternal bool
+	// cnLabel is the CN labels which is parsed from session variable "cn_label".
+	cnLabel map[string]string
 }
 
 type RemoteReceivRegInfo struct {
