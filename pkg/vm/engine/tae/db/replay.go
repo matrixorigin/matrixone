@@ -15,15 +15,10 @@
 package db
 
 import (
-
-	//"fmt"
-
 	"bytes"
-	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"sync"
@@ -96,9 +91,6 @@ func (replayer *Replayer) PreReplayWal() {
 
 func (replayer *Replayer) Replay() {
 	allocator := newReplayAllocator()
-	runtime.SetFinalizer(allocator, func(a *replayAllocator) {
-		logutil.Infof("gc allocator")
-	})
 	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry, allocator); err != nil {
 		panic(err)
 	}
