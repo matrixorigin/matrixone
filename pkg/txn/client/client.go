@@ -212,7 +212,7 @@ func (client *txnClient) determineTxnSnapshot(
 		// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 		// conflicts due to clock uncertainty.
 		now, _ := client.clock.Now()
-		return now, nil
+		return now.Next(), nil
 	}
 
 	if client.enableCNBasedConsistency {
