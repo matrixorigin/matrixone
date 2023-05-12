@@ -34,6 +34,8 @@ const MAX_CHUNK_SIZE = 1024 * 1024 * 4
 
 const MAX_ALLOWED_PACKET_ERROR = "packet for query is too large"
 
+const STATEMENT_INFO_TABLE = "statement_info"
+
 var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
 // DefaultSqlWriter SqlWriter is a writer that writes data to a SQL database.
@@ -83,14 +85,11 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	var stmt string
 	dbConn, err := db.InitOrRefreshDBConn(false)
 
-	stmt, cnt, err = generateInsertStatement(sw.buffer, sw.tbl)
-
 	if err != nil {
-		return 0, err
-	} else {
+		stmt, cnt, err = generateInsertStatement(sw.buffer, sw.tbl)
 		_, err = dbConn.Exec(stmt)
 		if err != nil {
-			if strings.Contains(err.Error(), MAX_ALLOWED_PACKET_ERROR) && sw.tbl.Table == "statement_info" {
+			if strings.Contains(err.Error(), MAX_ALLOWED_PACKET_ERROR) && sw.tbl.Table == STATEMENT_INFO_TABLE {
 				cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
 			}
 		}
