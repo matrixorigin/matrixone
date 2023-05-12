@@ -61,7 +61,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 			if ap.ctr.mp != nil {
@@ -80,7 +79,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 			} else {
 				proc.SetInputBatch(nil)
 			}
-			ap.Free(proc, false)
 			return true, nil
 		}
 	}

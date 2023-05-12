@@ -292,6 +292,10 @@ func mockBlockStream() morpc.ClientSession {
 	}
 }
 
+func (m *blockStream) RemoteAddress() string {
+	return "block"
+}
+
 func (m *blockStream) Write(ctx context.Context, message morpc.Message) error {
 	<-m.ch
 	return moerr.NewStreamClosedNoCtx()
@@ -324,6 +328,10 @@ func mockBrokenClientSession() morpc.ClientSession {
 	return &brokenStream{}
 }
 
+func (m *brokenStream) RemoteAddress() string {
+	return "broken"
+}
+
 func (m *brokenStream) Write(ctx context.Context, message morpc.Message) error {
 	return moerr.NewStreamClosedNoCtx()
 }
@@ -354,6 +362,10 @@ func mockNormalClientSession(logger *zap.Logger) morpc.ClientSession {
 	return &normalStream{
 		logger: logger,
 	}
+}
+
+func (m *normalStream) RemoteAddress() string {
+	return "normal"
 }
 
 func (m *normalStream) Write(ctx context.Context, message morpc.Message) error {
@@ -421,6 +433,7 @@ func mockMorpcStream(
 
 	return morpcStream{
 		streamID: id,
+		remote:   "mock",
 		limit:    segments.LeastEffectiveCapacity(),
 		logger:   mockMOLogger(),
 		cs:       cs,
