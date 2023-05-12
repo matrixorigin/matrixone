@@ -6044,6 +6044,174 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	//for Create User statement with default role.
 	//TODO:
 
+	// support dropdatabase and droptable for owner
+	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil && priv.kind == privilegeKindGeneral {
+		switch st := stmt.(type) {
+		case *tree.DropDatabase:
+			// get the databasename
+			dbName := st.Name
+			return checkRoleWhetherDatabaseOwner(ctx, ses, string(dbName), ok)
+		case *tree.DropTable:
+			// get the databasename and tablename
+			if len(st.Names) != 1 {
+				return ok, nil
+			}
+			dbName := string(st.Names[0].SchemaName)
+			if len(dbName) == 0 {
+				dbName = ses.GetDatabaseName()
+			}
+			tbName := string(st.Names[0].ObjectName)
+			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
+		}
+	}
+	return ok, nil
+}
+
+func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbName string, ok bool) (bool, error) {
+	var owner int64
+	var err error
+	var erArray []ExecResult
+	roles := make([]int64, 0)
+	tenantInfo := ses.GetTenantInfo()
+	// current user
+	currentUser := tenantInfo.GetUserID()
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// getOwner of the table
+	sql := fmt.Sprintf(`select owner from mo_catalog.mo_tables where reldatabase = '%s' and relname = '%s';`, dbName, tbName)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return ok, nil
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return ok, nil
+	}
+
+	if execResultArrayHasData(erArray) {
+		owner, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return ok, nil
+		}
+	} else {
+		return ok, nil
+	}
+
+	// check role
+	if tenantInfo.useAllSecondaryRole {
+		sql = fmt.Sprintf(`select role_id from mo_catalog.mo_user_grant where user_id = %d;`, currentUser)
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return ok, nil
+		}
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return ok, nil
+		}
+
+		if execResultArrayHasData(erArray) {
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				role, err := erArray[0].GetInt64(ctx, i, 0)
+				if err != nil {
+					return ok, nil
+				}
+				roles = append(roles, role)
+			}
+		} else {
+			return ok, nil
+		}
+
+		// check the role whether the table's owner
+		for _, role := range roles {
+			if role == owner {
+				return true, nil
+			}
+		}
+	} else {
+		currentRole := tenantInfo.GetDefaultRoleID()
+		if owner == int64(currentRole) {
+			return true, nil
+		}
+	}
+	return ok, nil
+
+}
+
+func checkRoleWhetherDatabaseOwner(ctx context.Context, ses *Session, dbName string, ok bool) (bool, error) {
+	var owner int64
+	var err error
+	var erArray []ExecResult
+	roles := make([]int64, 0)
+
+	tenantInfo := ses.GetTenantInfo()
+	// current user
+	currentUser := tenantInfo.GetUserID()
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// getOwner of the database
+	sql := fmt.Sprintf(`select owner from mo_catalog.mo_database where datname = '%s';`, dbName)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return ok, nil
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return ok, nil
+	}
+
+	if execResultArrayHasData(erArray) {
+		owner, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return ok, nil
+		}
+	} else {
+		return ok, nil
+	}
+
+	// check role
+	if tenantInfo.useAllSecondaryRole {
+		sql = fmt.Sprintf(`select role_id from mo_catalog.mo_user_grant where user_id = %d;`, currentUser)
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return ok, nil
+		}
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return ok, nil
+		}
+
+		if execResultArrayHasData(erArray) {
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				role, err := erArray[0].GetInt64(ctx, i, 0)
+				if err != nil {
+					return ok, nil
+				}
+				roles = append(roles, role)
+			}
+		} else {
+			return ok, nil
+		}
+
+		// check the role whether the database's owner
+		for _, role := range roles {
+			if role == owner {
+				return true, nil
+			}
+		}
+	} else {
+		currentRole := tenantInfo.GetDefaultRoleID()
+		if owner == int64(currentRole) {
+			return true, nil
+		}
+	}
 	return ok, nil
 }
 
