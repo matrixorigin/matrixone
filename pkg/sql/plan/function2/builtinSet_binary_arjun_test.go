@@ -68,14 +68,15 @@ func initTimeDiffInTimeTestCase() []tcTemp {
 	t102, _ := types.ParseTime("2562047787:59:59", 6)
 	r10, _ := types.ParseTime("00:00:00", 6)
 
+	bb := make([]bool, 10)
 	return []tcTemp{
 		{
 			info: "test timediff time 1",
 			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_time.ToType(), []types.Time{t11, t21, t31, t41, t51, t61, t71, t81, t91, t101}, []bool{}),
-				testutil.NewFunctionTestInput(types.T_time.ToType(), []types.Time{t12, t22, t32, t42, t52, t62, t72, t82, t92, t102}, []bool{}),
+				testutil.NewFunctionTestInput(types.T_time.ToType(), []types.Time{t11, t21, t31, t41, t51, t61, t71, t81, t91, t101}, bb),
+				testutil.NewFunctionTestInput(types.T_time.ToType(), []types.Time{t12, t22, t32, t42, t52, t62, t72, t82, t92, t102}, bb),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{r1, r2, r3, r4, r5, r6, r7, r8, r9, r10}, []bool{}),
+			expect: testutil.NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{r1, r2, r3, r4, r5, r6, r7, r8, r9, r10}, bb),
 		},
 	}
 }

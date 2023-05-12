@@ -133,7 +133,12 @@ func (fc *FunctionTestCase) GetResultVectorDirectly() *vector.Vector {
 
 // Run will run the function case and do the correctness check for result.
 func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
-	err := fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
+	err := fc.result.PreExtendAndReset(fc.fnLength)
+	if err != nil {
+		panic(err)
+	}
+
+	err = fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength)
 	if err != nil {
 		if fc.expected.wantErr {
 			return true, ""
