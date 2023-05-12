@@ -31,6 +31,9 @@ type Entry struct {
 	Ctx   any //for addr in batchstore
 	err   error
 	wg    *sync.WaitGroup
+
+	//for replay
+	isEnd bool
 }
 
 func NewEntry(e entry.Entry) *Entry {
@@ -48,6 +51,15 @@ func NewEmptyEntry() *Entry {
 	}
 	en.wg.Add(1)
 	return en
+}
+
+func NewEndEntry() *Entry {
+	return &Entry{
+		isEnd: true,
+	}
+}
+func (e *Entry) IsEnd() bool {
+	return e.isEnd
 }
 func (e *Entry) SetInfo() {
 	info := e.Entry.GetInfo()

@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -263,9 +262,6 @@ type recordEntry struct {
 	payload     []byte
 	unmarshaled atomic.Uint32
 	mashalMu    sync.RWMutex
-	//for replay
-	logserviceLsn uint64
-	isEnd         bool
 }
 
 func newRecordEntry() *recordEntry {
@@ -285,7 +281,7 @@ func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 		mashalMu: sync.RWMutex{}}
 }
 
-func (r *recordEntry) replay(h driver.ApplyHandle, allocator logstoreEntry.Allocator) (addr *common.ClosedIntervals) {
+func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) {
 	lsns := make([]uint64, 0)
 	offset := int64(0)
 	for lsn := range r.meta.addr {
@@ -296,8 +292,7 @@ func (r *recordEntry) replay(h driver.ApplyHandle, allocator logstoreEntry.Alloc
 			panic(err)
 		}
 		offset += n
-		h(e)
-		e.Entry.Free()
+		replayer.recordChan <- e
 	}
 	intervals := common.NewClosedIntervalsBySlice(lsns)
 	return intervals

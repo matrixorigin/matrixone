@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
@@ -47,7 +48,7 @@ type replayer struct {
 	d             *LogServiceDriver
 	appended      []uint64
 
-	recordChan chan *recordEntry
+	recordChan chan *entry.Entry
 	allocator  logstoreEntry.Allocator
 
 	applyDuration time.Duration
@@ -67,7 +68,7 @@ func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver, all
 		replayedLsn:               math.MaxUint64,
 		d:                         d,
 		appended:                  make([]uint64, 0),
-		recordChan:                make(chan *recordEntry, 100),
+		recordChan:                make(chan *entry.Entry, 100),
 		wg:                        sync.WaitGroup{},
 		allocator:                 allocator,
 		truncatedLogserviceLsn:    truncated,
@@ -92,9 +93,7 @@ func (r *replayer) replay() {
 
 	}
 	r.d.lsns = make([]uint64, 0)
-	r.recordChan <- &recordEntry{
-		isEnd: true,
-	}
+	r.recordChan <- entry.NewEndEntry()
 	r.wg.Wait()
 }
 
@@ -136,16 +135,14 @@ func (r *replayer) removeEntries(skipMap map[uint64]uint64) {
 func (r *replayer) replayRecords() {
 	defer r.wg.Done()
 	for {
-		record := <-r.recordChan
-		if record.isEnd {
+		e := <-r.recordChan
+		if e.IsEnd() {
 			break
 		}
 		t0 := time.Now()
-		intervals := record.replay(r.replayHandle, r.allocator)
+		r.replayHandle(e)
+		e.Entry.Free()
 		r.applyDuration += time.Since(t0)
-		r.d.onReplayRecordEntry(record.logserviceLsn, intervals)
-		r.onReplayDriverLsn(intervals.GetMax())
-		r.onReplayDriverLsn(intervals.GetMin())
 	}
 }
 
@@ -172,8 +169,10 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 	if err != nil {
 		panic(err)
 	}
-	record.logserviceLsn = logserviceLsn
-	r.recordChan <- record
+	intervals := record.replay(r)
+	r.d.onReplayRecordEntry(logserviceLsn, intervals)
+	r.onReplayDriverLsn(intervals.GetMax())
+	r.onReplayDriverLsn(intervals.GetMin())
 	r.d.dropRecordByLsn(logserviceLsn)
 	r.replayedLsn = record.GetMaxLsn()
 	r.inited = true
