@@ -15,6 +15,7 @@
 package logservicedriver
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -37,7 +38,7 @@ func initTest(t *testing.T) (*logservice.Service, *logservice.ClientConfig) {
 	return service, &ccfg
 }
 
-func restartDriver(t *testing.T, d *LogServiceDriver) *LogServiceDriver {
+func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *LogServiceDriver {
 	assert.NoError(t, d.Close())
 	t.Log("Addr:")
 	// preAddr:=d.addr
@@ -56,6 +57,9 @@ func restartDriver(t *testing.T, d *LogServiceDriver) *LogServiceDriver {
 			panic("logic err")
 		}
 		tempLsn = e.Lsn
+		if h != nil {
+			h(e)
+		}
 	}, nil)
 	assert.NoError(t, err)
 	t.Log("Addr:")
@@ -77,7 +81,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver) *LogServiceDriver {
 	return d
 }
 
-func TestAppendRead(t *testing.T) {
+func TestReplay1(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
@@ -85,52 +89,27 @@ func TestAppendRead(t *testing.T) {
 	driver := NewLogServiceDriver(cfg)
 
 	entryCount := 100
-	wg := &sync.WaitGroup{}
-	worker, _ := ants.NewPool(10)
 	entries := make([]*entry.Entry, entryCount)
-	appendfn := func(i int) func() {
-		return func() {
-			e := entry.MockEntry()
-			driver.Append(e)
-			entries[i] = e
-			wg.Done()
-		}
-	}
-
-	reanfn := func(i int) func() {
-		return func() {
-			e := entries[i]
-			e.WaitDone()
-			e2, err := driver.Read(e.Lsn, nil)
-			assert.NoError(t, err)
-			assert.Equal(t, e2.Lsn, e.Lsn)
-			_, lsn1 := e.Entry.GetLsn()
-			_, lsn2 := e2.Entry.GetLsn()
-			assert.Equal(t, lsn1, lsn2)
-			wg.Done()
-			e2.Entry.Free()
-		}
-	}
 
 	for i := 0; i < entryCount; i++ {
-		wg.Add(1)
-		worker.Submit(appendfn(i))
+		payload := []byte(fmt.Sprintf("payload %d", i))
+		e := entry.MockEntryWithPayload(payload)
+		driver.Append(e)
+		entries[i] = e
 	}
-	wg.Wait()
 
-	for i := 0; i < entryCount; i++ {
-		wg.Add(1)
-		worker.Submit(reanfn(i))
+	for _, e := range entries {
+		e.WaitDone()
 	}
-	wg.Wait()
 
-	driver = restartDriver(t, driver)
-
-	for i := 0; i < entryCount; i++ {
-		wg.Add(1)
-		worker.Submit(reanfn(i))
+	i := 0
+	h := func(e *entry.Entry) {
+		payload := []byte(fmt.Sprintf("payload %d", i))
+		assert.Equal(t, payload, e.Entry.GetPayload())
+		i++
 	}
-	wg.Wait()
+
+	driver = restartDriver(t, driver, h)
 
 	for _, e := range entries {
 		e.Entry.Free()
