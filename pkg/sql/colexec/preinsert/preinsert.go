@@ -56,11 +56,17 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	for idx := range arg.Attrs {
 		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
 		newBat.SetVector(int32(idx), proc.GetVector(*bat.GetVector(int32(idx)).GetType()))
+		err := newBat.Vecs[idx].UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
+		if err != nil {
+			return false, err
+		}
 	}
-	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
-		newBat.Clean(proc.GetMPool())
-		return false, err
-	}
+	newBat.Zs = append(newBat.Zs, bat.Zs...)
+
+	// if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
+	// 	newBat.Clean(proc.GetMPool())
+	// 	return false, err
+	// }
 
 	if !arg.IsUpdate {
 		if arg.HasAutoCol {
@@ -90,6 +96,16 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	if err != nil {
 		newBat.Clean(proc.GetMPool())
 		return false, err
+	}
+
+	if arg.IsUpdate {
+		idx := len(bat.Vecs) - 1
+		newBat.Attrs = append(newBat.Attrs, catalog.Row_ID)
+		newBat.SetVector(int32(idx), proc.GetVector(*bat.GetVector(int32(idx)).GetType()))
+		err := newBat.Vecs[idx].UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
+		if err != nil {
+			return false, err
+		}
 	}
 
 	//// calculate the partition expression and append the result vector to batch

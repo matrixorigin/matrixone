@@ -22,7 +22,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -578,24 +577,25 @@ func (blk *ablock) BatchDedup(
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
 	precommit bool) (err error) {
-	defer func() {
-		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
-		}
-	}()
-	node := blk.PinNode()
-	defer node.Unref()
-	if !node.IsPersisted() {
-		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask)
-	} else {
-		return blk.PersistedBatchDedup(
-			node.MustPNode(),
-			txn,
-			precommit,
-			keys,
-			rowmask,
-			true)
-	}
+	return nil
+	// defer func() {
+	// 	if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+	// 		logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
+	// 	}
+	// }()
+	// node := blk.PinNode()
+	// defer node.Unref()
+	// if !node.IsPersisted() {
+	// 	return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask)
+	// } else {
+	// 	return blk.PersistedBatchDedup(
+	// 		node.MustPNode(),
+	// 		txn,
+	// 		precommit,
+	// 		keys,
+	// 		rowmask,
+	// 		true)
+	// }
 }
 
 func (blk *ablock) persistedCollectAppendInRange(

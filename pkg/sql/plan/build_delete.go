@@ -64,11 +64,10 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			updateColLength: 0,
 			rowIdPos:        getRowIdPos(tableDef),
 		}
-		lastNodeId, err = buildDeletePlans(ctx, builder, deleteBindCtx, delPlanCtx)
+		err = buildDeletePlans(ctx, builder, deleteBindCtx, delPlanCtx)
 		if err != nil {
 			return nil, err
 		}
-		_ = builder.appendStep(lastNodeId)
 		beginIdx = beginIdx + len(tableDef.Cols)
 	}
 
