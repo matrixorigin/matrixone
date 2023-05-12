@@ -22,14 +22,26 @@ import (
 type Pool[T any] struct {
 	newFunc     func() T
 	finallyFunc func(T)
+	resetFunc   func(T)
 	pool        []_PoolElem[T]
 	capacity    uint32
 }
 
 type _PoolElem[T any] struct {
 	Taken atomic.Uint32
-	Put   func()
 	Value T
+}
+
+type PutBack[T any] struct {
+	idx  int
+	ptr  *T
+	pool *Pool[T]
+}
+
+func (pb PutBack[T]) Put() {
+	if pb.pool != nil {
+		pb.pool.Put(pb.idx, pb.ptr)
+	}
 }
 
 func NewPool[T any](
@@ -43,49 +55,45 @@ func NewPool[T any](
 		capacity:    capacity,
 		newFunc:     newFunc,
 		finallyFunc: finallyFunc,
+		resetFunc:   resetFunc,
 	}
+
+	pool.pool = make([]_PoolElem[T], capacity)
 
 	for i := uint32(0); i < capacity; i++ {
-		i := i
-		value := newFunc()
-		pool.pool = append(pool.pool, _PoolElem[T]{
-			Value: value,
-			Put: func() {
-				if resetFunc != nil {
-					resetFunc(value)
-				}
-				if !pool.pool[i].Taken.CompareAndSwap(1, 0) {
-					panic("bad put")
-				}
-			},
-		})
+		pool.pool[i].Value = newFunc()
 	}
-
 	return pool
 }
 
-func (p *Pool[T]) Get(ptr *T) (put func()) {
+func (p *Pool[T]) Get(ptr *T) PutBack[T] {
 	for i := 0; i < 4; i++ {
 		idx := fastrand() % p.capacity
 		if p.pool[idx].Taken.CompareAndSwap(0, 1) {
 			*ptr = p.pool[idx].Value
-			put = p.pool[idx].Put
-			return
+			return PutBack[T]{int(idx), &p.pool[idx].Value, p}
 		}
 	}
+
 	value := p.newFunc()
 	*ptr = value
-	if p.finallyFunc == nil {
-		put = noopPut
-	} else {
-		put = func() {
-			p.finallyFunc(value)
-		}
-	}
-	return
+	return PutBack[T]{-1, &value, p}
 }
 
-func noopPut() {}
+func (p *Pool[T]) Put(idx int, ptr *T) {
+	if idx >= 0 {
+		if p.resetFunc != nil {
+			p.resetFunc(p.pool[idx].Value)
+		}
+		if !p.pool[idx].Taken.CompareAndSwap(1, 0) {
+			panic("bad put")
+		}
+	} else {
+		if p.finallyFunc != nil {
+			p.finallyFunc(*ptr)
+		}
+	}
+}
 
 var bytesPoolDefaultBlockSize = NewPool(
 	1024,
