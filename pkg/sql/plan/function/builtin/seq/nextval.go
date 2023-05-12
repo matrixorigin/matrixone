@@ -79,6 +79,8 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 }
 
 func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.TxnOperator) (string, error) {
+	proc.Aicm.Mu.Lock()
+	defer proc.Aicm.Mu.Unlock()
 	db := proc.SessionInfo.Database
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {

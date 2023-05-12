@@ -2461,7 +2461,8 @@ func TestMergeBlocks(t *testing.T) {
 func TestSegDelLogtail(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, -1)
 	schema.BlockMaxRows = 10
@@ -2469,7 +2470,7 @@ func TestSegDelLogtail(t *testing.T) {
 	bat := catalog.MockBatch(schema, 30)
 	defer bat.Close()
 
-	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae.DB, "db", schema, bat, true)
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -2485,8 +2486,8 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	compactBlocks(t, 0, tae, "db", schema, false)
-	mergeBlocks(t, 0, tae, "db", schema, false)
+	compactBlocks(t, 0, tae.DB, "db", schema, false)
+	mergeBlocks(t, 0, tae.DB, "db", schema, false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	resp, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
@@ -2518,6 +2519,39 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
 	checkAllColRowsByScan(t, rel, bat.Length()-5, false)
 	assert.Nil(t, txn.Commit())
+
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	require.NoError(t, err)
+
+	check := func() {
+		ckpEntries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+		require.Equal(t, 1, len(ckpEntries))
+		entry := ckpEntries[0]
+		ins, del, cnins, segdel, err := entry.GetByTableID(tae.Fs, tid)
+		require.NoError(t, err)
+		require.Equal(t, uint32(6), ins.Vecs[0].Len)
+		require.Equal(t, uint32(6), del.Vecs[0].Len)
+		require.Equal(t, uint32(6), cnins.Vecs[0].Len)
+		require.Equal(t, uint32(1), segdel.Vecs[0].Len)
+		require.Equal(t, 2, len(del.Vecs))
+		require.Equal(t, 2, len(segdel.Vecs))
+	}
+	check()
+
+	tae.restart()
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
+	checkAllColRowsByScan(t, rel, bat.Length()-5, false)
+	assert.Nil(t, txn.Commit())
+
+	check()
+
 }
 
 // delete
@@ -4575,7 +4609,7 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
+			ins, del, _, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			t.Log(common.PrintApiBatch(ins, 3))
@@ -4586,7 +4620,7 @@ func TestReadCheckpoint(t *testing.T) {
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
+			ins, del, _, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			t.Log(common.PrintApiBatch(ins, 3))

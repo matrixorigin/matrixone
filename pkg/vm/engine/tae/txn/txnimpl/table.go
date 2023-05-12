@@ -599,15 +599,12 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 		if skip == txnif.PKDedupSkipNone {
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
-				reader, err := blockio.NewObjectReader(tbl.store.dataFactory.Fs.Service, loc)
-				if err != nil {
-					return err
-				}
-				bat, err := reader.LoadColumns(
+				bat, err := blockio.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
-					loc.ID(),
+					tbl.store.dataFactory.Fs.Service,
+					loc,
 					nil,
 				)
 				if err != nil {
@@ -938,15 +935,12 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 			//TODO::laod zm index first, then load pk column if necessary.
 			_, ok := loaded[i]
 			if !ok {
-				reader, err := blockio.NewObjectReader(tbl.store.dataFactory.Fs.Service, loc)
-				if err != nil {
-					return err
-				}
-				bat, err := reader.LoadColumns(
+				bat, err := blockio.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
-					loc.ID(),
+					tbl.store.dataFactory.Fs.Service,
+					loc,
 					nil,
 				)
 				if err != nil {
