@@ -85,7 +85,7 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	var stmt string
 	dbConn, err := db.InitOrRefreshDBConn(false)
 
-	if err != nil {
+	if err == nil {
 		stmt, cnt, err = generateInsertStatement(sw.buffer, sw.tbl)
 		_, err = dbConn.Exec(stmt)
 		if err != nil {
