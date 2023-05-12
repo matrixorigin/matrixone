@@ -15,11 +15,11 @@
 package explain
 
 import (
+	"bytes"
 	"context"
-	"strconv"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"strconv"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -483,25 +483,31 @@ func NewExprListDescribeImpl(ExprList []*plan.Expr) *ExprListDescribeImpl {
 
 func (e *ExprListDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
 	first := true
-	var result string
+	//var result string
+	//var buf bytes.Buffer
+	buf := bytes.NewBuffer(make([]byte, 0, 100*len(e.ExprList)))
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		for _, v := range e.ExprList {
 			if !first {
-				result += ", "
+				buf.WriteString(", ")
+				//result += ", "
 			}
 			first = false
 			descV, err := describeExpr(ctx, v, options)
 			if err != nil {
-				return result, err
+				return "", err
+				//return result, err
 			}
-			result += descV
+			buf.WriteString(descV)
+			//result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI(ctx, "explain format json")
+		return "", moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI(ctx, "explain format dot")
+		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
-	return result, nil
+	return buf.String(), nil
+	//return result, nil
 }
 
 type OrderByDescribeImpl struct {
@@ -515,29 +521,33 @@ func NewOrderByDescribeImpl(OrderBy []*plan.OrderBySpec) *OrderByDescribeImpl {
 }
 
 func (o *OrderByDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
-	var result string
+	//var result string
+	buf := bytes.NewBuffer(make([]byte, 0, 120))
 	if options.Format == EXPLAIN_FORMAT_TEXT || options.Format == EXPLAIN_FORMAT_JSON {
 		first := true
 		for _, v := range o.OrderBy {
 			if !first {
-				result += ", "
+				buf.WriteString(", ")
+				//result += ", "
 			}
 			first = false
 			descExpr, err := describeExpr(ctx, v.Expr, options)
 			if err != nil {
-				return result, err
+				return "", err
 			}
-			result += descExpr
+			buf.WriteString(descExpr)
+			//result += descExpr
 
 			flagKey := int32(v.Flag)
 			orderbyFlag := plan.OrderBySpec_OrderByFlag_name[flagKey]
-			result += " " + orderbyFlag
+			buf.WriteString(" " + orderbyFlag)
+			//result += " " + orderbyFlag
 		}
-		return result, nil
+		//return result, nil
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
-	return result, nil
+	return buf.String(), nil
 }
 
 type WinSpecDescribeImpl struct {
