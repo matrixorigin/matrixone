@@ -6063,6 +6063,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			if len(dbName) == 0 {
 				dbName = ses.GetDatabaseName()
 			}
+			if _, ok := sysDatabases[dbName]; ok {
+				return ok, nil
+			}
 			tbName := string(st.Names[0].ObjectName)
 			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
 		}
