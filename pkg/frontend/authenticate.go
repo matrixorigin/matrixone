@@ -6049,8 +6049,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		switch st := stmt.(type) {
 		case *tree.DropDatabase:
 			// get the databasename
-			dbName := st.Name
-			return checkRoleWhetherDatabaseOwner(ctx, ses, string(dbName), ok)
+			dbName := string(st.Name)
+			if _, ok := sysDatabases[dbName]; ok {
+				return ok, nil
+			}
+			return checkRoleWhetherDatabaseOwner(ctx, ses, dbName, ok)
 		case *tree.DropTable:
 			// get the databasename and tablename
 			if len(st.Names) != 1 {
