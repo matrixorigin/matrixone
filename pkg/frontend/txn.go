@@ -361,6 +361,14 @@ func (th *TxnHandler) GetTxn() (context.Context, TxnOperator, error) {
 	return txnCtx, txnOp, err
 }
 
+func (th *TxnHandler) cancelTxnCtx() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if th.txnCtxCancel != nil {
+		th.txnCtxCancel()
+	}
+}
+
 func (ses *Session) SetOptionBits(bit uint32) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
