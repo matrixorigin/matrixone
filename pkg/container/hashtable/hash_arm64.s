@@ -25,6 +25,9 @@ loop:
 	SUBS $8, R2
 	BLT  tail
 
+	VLD1 (R0), [V0.B16, V1.B16, V2.B16, V3.B16]
+	VST1 [V0.B16, V1.B16, V2.B16, V3.B16], (R1)
+
 	MOVD $-1, R3
 	MOVD $-1, R4
 	MOVD $-1, R5
@@ -48,10 +51,14 @@ loop:
 	CRC32CX R17, R9
 	CRC32CX R19, R10
 
-	STP.P (R3, R4), 16(R1)
-	STP.P (R5, R6), 16(R1)
-	STP.P (R7, R8), 16(R1)
-	STP.P (R9, R10), 16(R1)
+	MOVW.P R3, 8(R1)
+	MOVW.P R4, 8(R1)
+	MOVW.P R5, 8(R1)
+	MOVW.P R6, 8(R1)
+	MOVW.P R7, 8(R1)
+	MOVW.P R8, 8(R1)
+	MOVW.P R9, 8(R1)
+	MOVW.P R10, 8(R1)
 
 	JMP loop
 
@@ -61,70 +68,11 @@ tail:
 
 tailLoop:
 	MOVD    $-1, R3
+	MOVD    (R0), R5
 	MOVD.P  8(R0), R4
 	CRC32CX R4, R3
-	MOVD.P  R3, 8(R1)
-
-	SUBS $1, R2
-	BNE  tailLoop
-
-done:
-	RET
-
-// func crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
-// Requires: CRC32
-TEXT ·crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
-	MOVD data+0(FP), R0
-	MOVD hashes+8(FP), R1
-	MOVD length+16(FP), R2
-
-loop:
-	SUBS $8, R2
-	BLT  tail
-
-	MOVD $-1, R3
-	MOVD $-1, R4
-	MOVD $-1, R5
-	MOVD $-1, R6
-	MOVD $-1, R7
-	MOVD $-1, R8
-	MOVD $-1, R9
-	MOVD $-1, R10
-
-	MOVD.P 16(R0), R11
-	MOVD.P 16(R0), R12
-	MOVD.P 16(R0), R13
-	MOVD.P 16(R0), R14
-	MOVD.P 16(R0), R15
-	MOVD.P 16(R0), R16
-	MOVD.P 16(R0), R17
-	MOVD.P 16(R0), R19
-
-	CRC32CX R11, R3
-	CRC32CX R12, R4
-	CRC32CX R13, R5
-	CRC32CX R14, R6
-	CRC32CX R15, R7
-	CRC32CX R16, R8
-	CRC32CX R17, R9
-	CRC32CX R19, R10
-
-	STP.P (R3, R4), 16(R1)
-	STP.P (R5, R6), 16(R1)
-	STP.P (R7, R8), 16(R1)
-	STP.P (R9, R10), 16(R1)
-
-	JMP loop
-
-tail:
-	ADDS $8, R2
-	BEQ  done
-
-tailLoop:
-	MOVD    $-1, R4
-	MOVD.P  16(R0), R3
-	CRC32CX R3, R4
-	MOVD.P  R4, 8(R1)
+	MOVD    R5, (R1)
+	MOVW.P  R3, 8(R1)
 
 	SUBS $1, R2
 	BNE  tailLoop

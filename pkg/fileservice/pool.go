@@ -27,7 +27,7 @@ type Pool[T any] struct {
 }
 
 type _PoolElem[T any] struct {
-	Taken uint32
+	Taken atomic.Uint32
 	Put   func()
 	Value T
 }
@@ -54,7 +54,7 @@ func NewPool[T any](
 				if resetFunc != nil {
 					resetFunc(value)
 				}
-				if !atomic.CompareAndSwapUint32(&pool.pool[i].Taken, 1, 0) {
+				if !pool.pool[i].Taken.CompareAndSwap(1, 0) {
 					panic("bad put")
 				}
 			},
@@ -64,16 +64,17 @@ func NewPool[T any](
 	return pool
 }
 
-func (p *Pool[T]) Get() (value T, put func()) {
+func (p *Pool[T]) Get(ptr *T) (put func()) {
 	for i := 0; i < 4; i++ {
 		idx := fastrand() % p.capacity
-		if atomic.CompareAndSwapUint32(&p.pool[idx].Taken, 0, 1) {
-			value = p.pool[idx].Value
+		if p.pool[idx].Taken.CompareAndSwap(0, 1) {
+			*ptr = p.pool[idx].Value
 			put = p.pool[idx].Put
 			return
 		}
 	}
-	value = p.newFunc()
+	value := p.newFunc()
+	*ptr = value
 	if p.finallyFunc == nil {
 		put = noopPut
 	} else {

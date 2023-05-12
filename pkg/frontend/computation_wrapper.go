@@ -229,21 +229,48 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		if len(executePlan.Args) != len(preparePlan.ParamTypes) {
 			return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 		}
-		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
+		if prepareStmt.IsInsertValues {
+			for _, node := range preparePlan.Plan.GetQuery().Nodes {
+				if node.RowsetData != nil {
+					tableDef := node.TableDef
+					colCount := len(tableDef.Cols)
+					colsData := node.RowsetData.Cols
+					rowCount := len(colsData[0].Data)
 
-		// replace ? and @var with their values
-		resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
-		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
-		constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
-		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
-		err = vp.Visit(requestCtx)
-		if err != nil {
-			return nil, err
+					bat := prepareStmt.InsertBat
+					bat.CleanOnlyData()
+					for i := 0; i < colCount; i++ {
+						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
+							colsData[i].Data, bat.Vecs[i], prepareStmt.emptyBatch, executePlan.Args, prepareStmt.ufs[i]); err != nil {
+							return nil, err
+						}
+					}
+					bat.AddCnt(1)
+					for i := 0; i < rowCount; i++ {
+						bat.Zs = append(bat.Zs, 1)
+					}
+					cwft.proc.SetPrepareBatch(bat)
+					break
+				}
+			}
+			cwft.plan = preparePlan.Plan
+		} else {
+			newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
+
+			// replace ? and @var with their values
+			resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
+			resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
+			constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
+			vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
+			err = vp.Visit(requestCtx)
+			if err != nil {
+				return nil, err
+			}
+			cwft.plan = newPlan
 		}
 
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
-		cwft.plan = newPlan
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
 		case *tree.ShowTableStatus:
@@ -285,7 +312,25 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 	cwft.proc.Ctx = txnCtx
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
-	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), txnCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+
+	var tenant string
+	tInfo := cwft.ses.GetTenantInfo()
+	if tInfo != nil {
+		tenant = tInfo.GetTenant()
+	}
+	cwft.compile = compile.New(
+		addr,
+		cwft.ses.GetDatabaseName(),
+		cwft.ses.GetSql(),
+		tenant,
+		cwft.ses.GetUserName(),
+		txnCtx,
+		cwft.ses.GetStorage(),
+		cwft.proc,
+		cwft.stmt,
+		cwft.ses.isInternal,
+		cwft.ses.getCNLabels(),
+	)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }

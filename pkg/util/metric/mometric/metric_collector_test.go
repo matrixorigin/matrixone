@@ -15,7 +15,6 @@
 package mometric
 
 import (
-	"bytes"
 	"context"
 	"regexp"
 	"testing"
@@ -169,7 +168,7 @@ func (w *dummyStringWriter) GetContent() string { return "" }
 func newDummyFSWriterFactory(csvCh chan string) table.WriterFactory {
 	return table.WriterFactory(func(_ context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 		w := &dummyStringWriter{name: tbl.Table, ch: csvCh}
-		w.writer = etl.NewCSVWriter(context.TODO(), bytes.NewBuffer(nil), w)
+		w.writer = etl.NewCSVWriter(context.TODO(), w)
 		return w
 	})
 }

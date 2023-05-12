@@ -105,18 +105,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		}
 	}
 
-	if pipelineFailed {
-		for i := range arg.LocalRegs {
-			for len(arg.LocalRegs[i].Ch) > 0 {
-				bat := <-arg.LocalRegs[i].Ch
-				if bat == nil {
-					break
-				}
-				bat.Clean(proc.Mp())
-			}
-		}
-	}
-
 	for i := range arg.LocalRegs {
 		if !pipelineFailed {
 			select {
