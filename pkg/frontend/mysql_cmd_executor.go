@@ -1527,9 +1527,12 @@ func checkColModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool 
 				tblName := p.Query.Nodes[i].TableDef.Name
 				dbName := p.Query.Nodes[i].ObjRef.SchemaName
 				_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tblName)
+				if tableDef == nil {
+					return true
+				}
 				colCnt1, colCnt2 := 0, 0
-				for i := 0; i < len(p.Query.Nodes[i].TableDef.Cols); i++ {
-					if p.Query.Nodes[i].TableDef.Cols[i].Hidden {
+				for j := 0; j < len(p.Query.Nodes[i].TableDef.Cols); j++ {
+					if p.Query.Nodes[i].TableDef.Cols[j].Hidden {
 						continue
 					}
 					colCnt1++
@@ -3148,7 +3151,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				ses.AddSeqValues(proc)
 			}
 			ses.SetSeqLastValue(proc)
-		case *tree.CreateTable, *tree.DropTable,
+		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 			*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
 			*tree.CreateSequence, *tree.DropSequence,
@@ -3169,24 +3172,20 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if len(proc.SessionInfo.SeqDeleteKeys) != 0 {
 				ses.DeleteSeqValues(proc)
 			}
-			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-				return retErr
+
+			if st, ok := cw.GetAst().(*tree.CreateTable); ok {
+				doGrantPrivilegeImplicitly(requestCtx, ses, st)
 			}
 
-		case *tree.CreateDatabase:
-			insertRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
-			resp := mce.setResponse(i, len(cws), rspLen)
-			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-				return retErr
+			if st, ok := cw.GetAst().(*tree.CreateDatabase); ok {
+				insertRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+				doGrantPrivilegeImplicitly(requestCtx, ses, st)
 			}
 
-		case *tree.DropDatabase:
-			deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
-			resp := mce.setResponse(i, len(cws), rspLen)
+			if _, ok := cw.GetAst().(*tree.DropDatabase); ok {
+				deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+			}
+
 			if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
 				retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(requestCtx, ses, stmt, fail, retErr)

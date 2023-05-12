@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 // stats cache is small, no need to use LRU for now
@@ -89,6 +88,7 @@ type InfoFromZoneMap struct {
 	ColumnZMs  []objectio.ZoneMap
 	DataTypes  []types.Type
 	ColumnNDVs []float64
+	TableCnt   float64
 }
 
 func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
@@ -100,10 +100,10 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 	return info
 }
 
-func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableCnt float64, tableDef *plan.TableDef, s *StatsInfoMap) {
+func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan.TableDef, s *StatsInfoMap) {
 	logutil.Infof("need to update statsCache for table %v", tableDef.Name)
 	s.BlockNumber = blockNumTotal
-	s.TableCnt = tableCnt
+	s.TableCnt = info.TableCnt
 	s.tableName = tableDef.Name
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
 	//set info in statsInfoMap
@@ -141,24 +141,6 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableCnt float
 			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
 		}
 	}
-}
-
-func estimateOutCntBySortOrder(tableCnt, cost float64, sortOrder int) float64 {
-	if sortOrder == -1 {
-		return cost
-	}
-	// coefficient is 0.1 when tableCnt equals cost, and 1 when tableCnt >> cost
-	coefficient := math.Pow(0.1, cost/tableCnt)
-
-	outCnt := cost * coefficient
-	if sortOrder == 0 {
-		return outCnt * 0.9
-	} else if sortOrder == 1 {
-		return outCnt * 0.7
-	} else {
-		return outCnt * 0.5
-	}
-
 }
 
 // cols in one table, return if ndv of  multi column is high enough
@@ -216,25 +198,20 @@ func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builde
 	return -1
 }
 
-func estimateOutCntForEquality(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, ndvMap map[string]float64) float64 {
+func estimateOutCntForEquality(expr *plan.Expr, tableCnt float64, ndvMap map[string]float64) float64 {
 	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
-	ret, col := CheckFilter(expr)
+	ret, _ := CheckFilter(expr)
 	if !ret {
-		return cost / 100
+		return tableCnt / 100
 	}
-	sortOrder := util.GetClusterByColumnOrder(sortKeyName, col.Name)
-	//if col is clusterby, we assume most of the rows in blocks we read is needed
-	//otherwise, deduce selectivity according to ndv
-	if sortOrder != -1 {
-		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
-	} else {
-		ndv := getExprNdv(expr, ndvMap, 0, nil)
-		if ndv > 0 {
-			return tableCnt / ndv
-		}
+
+	ndv := getExprNdv(expr, ndvMap, 0, nil)
+	if ndv > 0 {
+		return tableCnt / ndv
 	}
-	return cost / 100
+
+	return tableCnt / 100
 }
 
 func calcOutCntByMinMax(funcName string, tableCnt, min, max, val float64) float64 {
@@ -247,45 +224,54 @@ func calcOutCntByMinMax(funcName string, tableCnt, min, max, val float64) float6
 	return -1 // never reach here
 }
 
-func estimateOutCntForNonEquality(expr *plan.Expr, funcName, sortKeyName string, tableCnt, cost float64, s *StatsInfoMap) float64 {
+func estimateOutCntForNonEquality(expr *plan.Expr, funcName string, tableCnt float64, s *StatsInfoMap) float64 {
 	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
-	ret, col := CheckFilter(expr)
+	ret, _ := CheckFilter(expr)
 	if !ret {
-		return cost / 10
+		return tableCnt / 10
 	}
-	sortOrder := util.GetClusterByColumnOrder(sortKeyName, col.Name)
-	//if col is clusterby, we assume most of the rows in blocks we read is needed
-	//otherwise, deduce selectivity according to ndv
-	if sortOrder != -1 {
-		return estimateOutCntBySortOrder(tableCnt, cost, sortOrder)
-	} else {
-		//check strict filter, otherwise can not estimate outcnt by min/max val
-		ret, col, constExpr, _ := CheckStrictFilter(expr)
-		if ret {
-			switch s.DataTypeMap[col.Name] {
-			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-				if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
-					return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.I64Val))
-				}
-			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-				if val, valOk := constExpr.Value.(*plan.Const_U64Val); valOk {
-					return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.U64Val))
-				}
-			case types.T_date:
-				if val, valOk := constExpr.Value.(*plan.Const_Dateval); valOk {
-					return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.Dateval))
-				}
+
+	//check strict filter, otherwise can not estimate outcnt by min/max val
+	ret, col, constExpr, _ := CheckStrictFilter(expr)
+	if ret {
+		switch s.DataTypeMap[col.Name] {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
+				return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.I64Val))
+			}
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			if val, valOk := constExpr.Value.(*plan.Const_U64Val); valOk {
+				return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.U64Val))
+			}
+		case types.T_date:
+			if val, valOk := constExpr.Value.(*plan.Const_Dateval); valOk {
+				return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.Dateval))
 			}
 		}
 	}
-	return cost / 2
+
+	//check strict filter, otherwise can not estimate outcnt by min/max val
+	ret, col, constExpr, leftFuncName := CheckFunctionFilter(expr)
+	if ret {
+		switch leftFuncName {
+		case "year":
+			if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
+				minVal := types.Date(s.MinValMap[col.Name])
+				maxVal := types.Date(s.MaxValMap[col.Name])
+				return calcOutCntByMinMax(funcName, tableCnt, float64(minVal.Year()), float64(maxVal.Year()), float64(val.I64Val))
+			}
+		}
+	}
+
+	return tableCnt / 10
 }
 
 // estimate output lines for a filter
-func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64, s *StatsInfoMap) float64 {
+func EstimateOutCnt(expr *plan.Expr, s *StatsInfoMap) float64 {
+	tableCnt := s.TableCnt
 	if expr == nil {
-		return cost
+		return tableCnt
 	}
 	var outcnt float64
 	switch exprImpl := expr.Expr.(type) {
@@ -293,14 +279,14 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
-			outcnt = estimateOutCntForEquality(expr, sortKeyName, tableCnt, cost, s.NdvMap)
+			outcnt = estimateOutCntForEquality(expr, tableCnt, s.NdvMap)
 		case ">", "<", ">=", "<=":
 			//for filters like a>1, no good way to estimate, return 3 * equality
-			outcnt = estimateOutCntForNonEquality(expr, funcName, sortKeyName, tableCnt, cost, s)
+			outcnt = estimateOutCntForNonEquality(expr, funcName, tableCnt, s)
 		case "and":
 			//get the smaller one of two children, and tune it down a little bit
-			out1 := EstimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, s)
-			out2 := EstimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, s)
+			out1 := EstimateOutCnt(exprImpl.F.Args[0], s)
+			out2 := EstimateOutCnt(exprImpl.F.Args[1], s)
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
@@ -308,8 +294,8 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
-			out1 := EstimateOutCnt(exprImpl.F.Args[0], sortKeyName, tableCnt, cost, s)
-			out2 := EstimateOutCnt(exprImpl.F.Args[1], sortKeyName, tableCnt, cost, s)
+			out1 := EstimateOutCnt(exprImpl.F.Args[0], s)
+			out2 := EstimateOutCnt(exprImpl.F.Args[1], s)
 			if out1 == out2 {
 				outcnt = out1 + out2
 			} else {
@@ -317,14 +303,14 @@ func EstimateOutCnt(expr *plan.Expr, sortKeyName string, tableCnt, cost float64,
 			}
 		default:
 			//no good way to estimate, just 0.15*cost
-			outcnt = cost * 0.15
+			outcnt = tableCnt * 0.15
 		}
 	case *plan.Expr_C:
-		outcnt = cost
+		outcnt = tableCnt
 	}
-	if outcnt > cost {
+	if outcnt > tableCnt {
 		//outcnt must be smaller than cost
-		outcnt = cost
+		outcnt = tableCnt
 	} else if outcnt < 1 {
 		outcnt = 1
 	}
@@ -586,24 +572,10 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
-			monoExpr, nonMonoExpr := HandleFiltersForZM(node.FilterList, builder.compCtx.GetProcess())
-			node.Stats = builder.compCtx.Stats(node.ObjRef, monoExpr)
-
-			//if there is non monotonic filters
-			if nonMonoExpr != nil {
-				sc := builder.compCtx.GetStatsCache()
-				if sc != nil {
-					var sortkeyName string
-					if node.TableDef.ClusterBy != nil {
-						sortkeyName = node.TableDef.ClusterBy.Name
-					}
-					fixColumnName(node.TableDef, nonMonoExpr)
-					outcnt := EstimateOutCnt(nonMonoExpr, sortkeyName, node.Stats.TableCnt, node.Stats.Cost, sc.GetStatsInfoMap(node.TableDef.TblId))
-					node.Stats.Selectivity *= (outcnt / node.Stats.TableCnt)
-					node.Stats.Outcnt = node.Stats.TableCnt * node.Stats.Selectivity
-					node.Stats.Cost = node.Stats.Outcnt
-					node.Stats.BlockNum = int32(node.Stats.Outcnt/8192 + 1)
-				}
+			if !needStats(node.TableDef) {
+				node.Stats = DefaultStats()
+			} else {
+				node.Stats = builder.compCtx.Stats(node.ObjRef, rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess()))
 			}
 		}
 
@@ -628,18 +600,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	}
 }
 
-func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			fixColumnName(tableDef, arg)
-		}
-	case *plan.Expr_Col:
-		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
-	}
-}
-
-func NeedStats(tableDef *TableDef) bool {
+func needStats(tableDef *TableDef) bool {
 	switch tableDef.TblId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return false

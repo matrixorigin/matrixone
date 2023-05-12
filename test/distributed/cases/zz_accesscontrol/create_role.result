@@ -165,9 +165,7 @@ execute stmt2;
 a
 55
 prepare stmt2 from 'update grant_table_30 set a=60';
-internal error: do not have privilege to execute the statement
 execute stmt2;
-invalid state prepared statement 'stmt2' does not exist
 prepare stmt2 from 'insert into grant_table_30 select 89';
 execute stmt2;
 prepare stmt3 from 'insert into grant_table_30 select * from grant_table_30';

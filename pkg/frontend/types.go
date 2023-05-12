@@ -16,10 +16,13 @@ package frontend
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -83,10 +86,15 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	Name        string
-	PreparePlan *plan.Plan
-	PrepareStmt tree.Statement
-	ParamTypes  []byte
+	Name           string
+	PreparePlan    *plan.Plan
+	PrepareStmt    tree.Statement
+	ParamTypes     []byte
+	IsInsertValues bool
+	mp             *mpool.MPool
+	InsertBat      *batch.Batch
+	emptyBatch     *batch.Batch                                        // use for expr eval
+	ufs            []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
 }
 
 /*
@@ -176,4 +184,11 @@ type outputPool interface {
 	getEmptyRow() ([]interface{}, error)
 
 	flush() error
+}
+
+func (prepareStmt *PrepareStmt) Close() {
+	if prepareStmt.InsertBat != nil {
+		prepareStmt.InsertBat.Clean(prepareStmt.mp)
+		prepareStmt.InsertBat = nil
+	}
 }

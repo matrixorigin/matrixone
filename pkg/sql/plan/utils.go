@@ -71,11 +71,46 @@ func hasCorrCol(expr *plan.Expr) bool {
 		return true
 
 	case *plan.Expr_F:
-		ret := false
 		for _, arg := range exprImpl.F.Args {
-			ret = ret || hasCorrCol(arg)
+			if hasCorrCol(arg) {
+				return true
+			}
 		}
-		return ret
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if hasCorrCol(arg) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return false
+	}
+}
+
+func hasSubquery(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		return true
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if hasSubquery(arg) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if hasSubquery(arg) {
+				return true
+			}
+		}
+		return false
 
 	default:
 		return false
@@ -483,6 +518,42 @@ func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
 	return false
 }
 
+// function filter means func(col) compared to const. for example year(col1)>1991
+func CheckFunctionFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, childFuncName string) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName := exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=", ">", "<", ">=", "<=":
+			switch child0 := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_F:
+				childFuncName = child0.F.Func.ObjName
+				switch childFuncName {
+				case "year":
+					switch child := child0.F.Args[0].Expr.(type) {
+					case *plan.Expr_Col:
+						col = child.Col
+					}
+				}
+			default:
+				return false, nil, nil, childFuncName
+			}
+			switch child1 := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				constExpr = child1.C
+				b = true
+				return
+			default:
+				return false, nil, nil, childFuncName
+			}
+		default:
+			return false, nil, nil, childFuncName
+		}
+	default:
+		return false, nil, nil, childFuncName
+	}
+}
+
 // strict filter means col compared to const. for example col1>1
 // func(col1)=1 is not strict
 func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, funcName string) {
@@ -828,7 +899,11 @@ func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 		dotIdx := strings.Index(colName, ".")
 		colName = colName[dotIdx+1:]
 		colIdx := tableDef.Name2ColIndex[colName]
-		(*columnMap)[int(idx)] = int(colIdx)
+		seqnum := int(colIdx) // for extenal scan case, tableDef has only Name2ColIndex, no Cols, leave seqnum as colIdx
+		if len(tableDef.Cols) > 0 {
+			seqnum = int(tableDef.Cols[colIdx].Seqnum)
+		}
+		(*columnMap)[int(idx)] = seqnum
 	}
 }
 
@@ -941,8 +1016,25 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-// handle the filter list for zonemap. rewrite and constFold
-// return monotonic filters and number of nonMonotonic filters
+// handle the filter list for Stats. rewrite and constFold
+func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+	if proc == nil {
+		return nil
+	}
+	newExprList := make([]*plan.Expr, len(exprList))
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	for i, expr := range exprList {
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
+		if tmpexpr != nil {
+			expr = tmpexpr
+		}
+		newExprList[i] = expr
+	}
+	return colexec.RewriteFilterExprList(newExprList)
+}
+
+// this function will be deleted soon
 func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
 	if proc == nil || proc.Ctx == nil {
 		return nil, nil
