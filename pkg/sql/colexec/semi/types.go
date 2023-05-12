@@ -68,6 +68,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanBatch(mp)
 		ctr.cleanEvalVectors(mp)
 		ctr.cleanHashMap()
+		ctr.FreeAllReg()
 	}
 }
 
