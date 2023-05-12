@@ -201,10 +201,6 @@ func readBlockData(
 	fs fileservice.FileService,
 	m *mpool.MPool,
 ) (bat *batch.Batch, rowid *vector.Vector, deletedRows []int64, err error) {
-	var reader *BlockReader
-	if reader, err = NewObjectReader(fs, info.MetaLocation()); err != nil {
-		return
-	}
 
 	hasRowId, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 	if hasRowId {
@@ -234,7 +230,7 @@ func readBlockData(
 			return
 		}
 
-		if loaded, err = reader.LoadColumns(ctx, cols, typs, info.MetaLocation().ID(), nil); err != nil {
+		if loaded, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m); err != nil {
 			return
 		}
 
@@ -285,12 +281,7 @@ func readBlockData(
 }
 
 func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (*batch.Batch, error) {
-	reader, err := NewObjectReader(fs, deltaloc)
-	if err != nil {
-		return nil, err
-	}
-
-	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, nil, deltaloc.ID(), nil)
+	bat, err := LoadColumns(ctx, []uint16{0, 1, 2}, nil, fs, deltaloc, nil)
 	if err != nil {
 		return nil, err
 	}
