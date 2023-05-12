@@ -246,27 +246,33 @@ func (tbl *txnTable) recurTransferDelete(
 	if err = tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
 		return
 	}
-	logutil.Infof("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
-		depth,
-		id.BlockID.String(),
-		row,
-		blockID.String(),
-		offset)
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
+			depth,
+			id.BlockID.String(),
+			row,
+			blockID.String(),
+			offset)
+	})
 	return
 }
 
 func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
-	logutil.Info("[Start]",
-		common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
-		common.OperationField("transfer-deletes"),
-		common.OperandField(id.BlockString()))
-	defer func() {
-		logutil.Info("[End]",
+	common.DoIfInfoEnabled(func() {
+		logutil.Info("[Start]",
 			common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
 			common.OperationField("transfer-deletes"),
-			common.OperandField(id.BlockString()),
-			common.ErrorField(err))
+			common.OperandField(id.BlockString()))
+	})
+	defer func() {
+		common.DoIfInfoEnabled(func() {
+			logutil.Info("[End]",
+				common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
+				common.OperationField("transfer-deletes"),
+				common.OperandField(id.BlockString()),
+				common.ErrorField(err))
+		})
 		for _, m := range memo {
 			m.Close()
 		}
