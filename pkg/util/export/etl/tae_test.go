@@ -131,12 +131,12 @@ func genLines(cnt int) (lines []*table.Row) {
 	defer r.Free()
 	for i := 0; i < cnt; i++ {
 		row := r.Clone()
-		row.SetColumnVal(dummyStrColumn, fmt.Sprintf("str_val_%d", i))
-		row.SetColumnVal(dummyInt64Column, int64(i))
-		row.SetColumnVal(dummyFloat64Column, float64(i))
-		row.SetColumnVal(dummyUInt64Column, uint64(i))
-		row.SetColumnVal(dummyDatetimeColumn, time.Now())
-		row.SetColumnVal(dummyJsonColumn, fmt.Sprintf(`{"cnt":"%d"}`, i))
+		row.SetColumnVal(dummyStrColumn, table.StringField(fmt.Sprintf("str_val_%d", i)))
+		row.SetColumnVal(dummyInt64Column, table.Int64Field(int64(i)))
+		row.SetColumnVal(dummyFloat64Column, table.Float64Field(float64(i)))
+		row.SetColumnVal(dummyUInt64Column, table.Uint64Field(uint64(i)))
+		row.SetColumnVal(dummyDatetimeColumn, table.TimeField(time.Now()))
+		row.SetColumnVal(dummyJsonColumn, table.StringField(fmt.Sprintf(`{"cnt":"%d"}`, i)))
 		lines = append(lines, row)
 	}
 

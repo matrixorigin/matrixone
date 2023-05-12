@@ -421,7 +421,6 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return nil
 	}
 	err := txn.DumpBatch(true, 0)
-	txn.CleanNilBatch()
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,331 @@
+create database test;
+use test;
+drop table if exists foreign01;
+create table foreign01(col1 int primary key,
+col2 varchar(20),
+col3 int,
+col4 bigint);
+insert into foreign01 values(1,'shujuku',100,3247984);
+insert into foreign01 values(2,'数据库',328932,32324423432);
+drop table if exists foreign02;
+create table foreign02(col1 int,
+col2 int,
+col3 int primary key,
+constraint fk foreign key fk(col1) references foreign01(col1));
+insert into foreign02 values(1,1,1);
+insert into foreign02 values(2,2,2);
+delete from foreign01 where col3 = 100;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+show create table foreign02;
+Table    Create Table
+foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `fk` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+alter table foreign02 drop foreign key fk;
+show create table foreign02;
+Table    Create Table
+foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`)\n)
+drop table foreign01;
+drop table foreign02;
+drop table if exists ti1;
+drop table if exists tm1;
+drop table if exists ti2;
+drop table if exists tm2;
+create  table ti1(a INT not null, b INT, c INT);
+create  table tm1(a INT not null, b INT, c INT);
+create  table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
+create  table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
+insert into ti1 values (1,1,1), (2,2,2);
+insert into ti2 values (1,1,1), (2,2,2);
+insert into tm1 values (1,1,1), (2,2,2);
+insert into tm2 values (1,1,1), (2,2,2);
+alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
+alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
+show create table ti1;
+Table    Create Table
+ti1    CREATE TABLE `ti1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT NULL,\n`c` INT DEFAULT NULL,\nCONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+show create table tm1;
+Table    Create Table
+tm1    CREATE TABLE `tm1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT NULL,\n`c` INT DEFAULT NULL,\nCONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+delete from ti2 where c = 1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from tm2 where c = 1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+alter table ti1 drop foreign key fi1;
+alter table tm1 drop foreign key fm1;
+show create table ti1;
+Table    Create Table
+ti1    CREATE TABLE `ti1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT NULL,\n`c` INT DEFAULT NULL\n)
+show create table tm1;
+Table    Create Table
+tm1    CREATE TABLE `tm1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT NULL,\n`c` INT DEFAULT NULL\n)
+delete from ti2 where c = 1;
+delete from tm2 where c = 1;
+drop table  ti1;
+drop table  tm1;
+drop table  ti2;
+drop table  tm2;
+drop table if exists foreign01;
+[unknown result because it is related to issue#9282]
+create temporary table foreign01(col1 int primary key,
+col2 varchar(20),
+col3 int,
+col4 bigint);
+[unknown result because it is related to issue#9282]
+insert into foreign01 values(1,'shujuku',100,3247984);
+[unknown result because it is related to issue#9282]
+insert into foreign01 values(2,'数据库',328932,32324423432);
+[unknown result because it is related to issue#9282]
+drop table if exists foreign02;
+[unknown result because it is related to issue#9282]
+create temporary table foreign02(col1 int,
+col2 int,
+col3 int primary key,
+constraint fk foreign key fk(col1) references foreign01(col1));
+[unknown result because it is related to issue#9282]
+insert into foreign02 values(1,1,1);
+[unknown result because it is related to issue#9282]
+insert into foreign02 values(2,2,2);
+[unknown result because it is related to issue#9282]
+delete from foreign01 where col3 = 100;
+[unknown result because it is related to issue#9282]
+show create table foreign02;
+[unknown result because it is related to issue#9282]
+alter table foreign02 drop foreign key fk;
+[unknown result because it is related to issue#9282]
+show create table foreign02;
+[unknown result because it is related to issue#9282]
+drop table foreign01;
+[unknown result because it is related to issue#9282]
+drop table foreign02;
+[unknown result because it is related to issue#9282]
+drop table if exists ti1;
+[unknown result because it is related to issue#9282]
+drop table if exists tm1;
+[unknown result because it is related to issue#9282]
+drop table if exists ti2;
+[unknown result because it is related to issue#9282]
+drop table if exists tm2;
+[unknown result because it is related to issue#9282]
+create temporary table ti1(a INT not null, b INT, c INT);
+[unknown result because it is related to issue#9282]
+create temporary table tm1(a INT not null, b INT, c INT);
+[unknown result because it is related to issue#9282]
+create temporary table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
+[unknown result because it is related to issue#9282]
+create temporary table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
+[unknown result because it is related to issue#9282]
+insert into ti1 values (1,1,1), (2,2,2);
+[unknown result because it is related to issue#9282]
+insert into ti2 values (1,1,1), (2,2,2);
+[unknown result because it is related to issue#9282]
+insert into tm1 values (1,1,1), (2,2,2);
+[unknown result because it is related to issue#9282]
+insert into tm2 values (1,1,1), (2,2,2);
+[unknown result because it is related to issue#9282]
+alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
+[unknown result because it is related to issue#9282]
+alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
+[unknown result because it is related to issue#9282]
+show create table ti1;
+[unknown result because it is related to issue#9282]
+show create table tm1;
+[unknown result because it is related to issue#9282]
+delete from ti2 where c = 1;
+[unknown result because it is related to issue#9282]
+delete from tm2 where c = 1;
+[unknown result because it is related to issue#9282]
+alter table ti1 drop foreign key fi1;
+[unknown result because it is related to issue#9282]
+alter table tm1 drop foreign key fm1;
+[unknown result because it is related to issue#9282]
+show create table ti1;
+[unknown result because it is related to issue#9282]
+show create table tm1;
+[unknown result because it is related to issue#9282]
+delete from ti2 where c = 1;
+[unknown result because it is related to issue#9282]
+delete from tm2 where c = 1;
+[unknown result because it is related to issue#9282]
+drop table  ti1;
+[unknown result because it is related to issue#9282]
+drop table  tm1;
+[unknown result because it is related to issue#9282]
+drop table  ti2;
+[unknown result because it is related to issue#9282]
+drop table  tm2;
+[unknown result because it is related to issue#9282]
+drop table if exists index01;
+create table index01(col1 int,key key1(col1));
+show index from index01;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index01    1    key1    1    col1    A    0    NULL    NULL    YES                YES    NULL
+alter table index01 drop index key1;
+show index from index01;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+alter table Index01 add index key1(col1) comment 'test';
+show index from index01;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index01    1    key1    1    col1    A    0    NULL    NULL    YES            test    YES    NULL
+alter table index01 alter index key1 invisible;
+show index from index01;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index01    1    key1    1    col1    A    0    NULL    NULL    YES            test    NO    NULL
+drop table index01;
+drop table if exists index02;
+create table index02(col1 int,key key1(col1) comment 'test');
+alter table index02 drop index key1;
+show index from index02;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+alter table index02 add index Key1(col1);
+alter table index02 alter index key1 invisible;
+show index from index02;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index02    1    key1    1    col1    A    0    NULL    NULL    YES                NO    NULL
+drop table index02;
+drop table if exists index03;
+create table index03(col1 int, col2 int, col3 int);
+alter table index03 add unique key(col1,col2) comment 'abcTest';
+show index from index03;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index03    0    col1    1    col1    A    0    NULL    NULL    YES            abcTest    YES    NULL
+index03    0    col1    2    col2    A    0    NULL    NULL    YES            abcTest    YES    NULL
+alter table index03 alter index col1 invisible;
+show index from index03;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index03    0    col1    1    col1    A    0    NULL    NULL    YES            abcTest    NO    NULL
+index03    0    col1    2    col2    A    0    NULL    NULL    YES            abcTest    NO    NULL
+drop table index03;
+drop table if exists index03;
+create table index03(fld1 int, key key1(fld1) comment 'test');
+show index from index03;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index03    1    key1    1    fld1    A    0    NULL    NULL    YES            test    YES    NULL
+alter table index03 drop index key1;
+show index from index03;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+drop table index03;
+drop table if exists index04;
+create table index04(col1 int, col2 char, col3 varchar(10),primary key(col1,col2));
+show index from index04;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index04    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+index04    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
+alter table index04 add index(col1);
+alter table index04 alter index col1 invisible;
+show index from index04;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index04    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+index04    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
+index04    1    col1    1    col1    A    0    NULL    NULL                    NO    NULL
+alter table index04 alter index col1 visible;
+show index from index04;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index04    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+index04    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
+index04    1    col1    1    col1    A    0    NULL    NULL                    YES    NULL
+drop table index04;
+ExpectedEOB
+drop table if exists index05;
+create table index05(col1 int, col2 bigint, col3 decimal);
+show index from index05;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+alter table index05 add unique key(col1,col2);
+show index from index05;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index05    0    col1    1    col1    A    0    NULL    NULL    YES                YES    NULL
+index05    0    col1    2    col2    A    0    NULL    NULL    YES                YES    NULL
+alter table index05 alter index col1 invisible;
+show index from index05;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index05    0    col1    1    col1    A    0    NULL    NULL    YES                NO    NULL
+index05    0    col1    2    col2    A    0    NULL    NULL    YES                NO    NULL
+drop table index05;
+drop table if exists index06;
+create table index06(col1 int not null,col2 binary, col3 float,unique key(col1));
+alter table index06 add unique index(col2);
+show index from index06;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index06    0    col1    1    col1    A    0    NULL    NULL                    YES    NULL
+index06    0    col2    1    col2    A    0    NULL    NULL    YES                YES    NULL
+alter table index06 alter index col2 invisible;
+show index from index06;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index06    0    col1    1    col1    A    0    NULL    NULL                    YES    NULL
+index06    0    col2    1    col2    A    0    NULL    NULL    YES                NO    NULL
+drop table index06;
+drop table if exists index07;
+CREATE TABLE index07(
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 VARCHAR(16) NOT NULL,
+col4 int unsigned NOT NULL,
+PRIMARY KEY(col1)
+);
+insert into index07 values(1, '1980-12-17','Abby', 21);
+insert into index07 values(2, '1981-02-20','Bob', 22);
+insert into index07 values(3, '1981-02-22','Carol', 23);
+alter table index07 add constraint unique key (col3, col4);
+alter table index07 add constraint unique key wwwww (col3, col4);
+alter table index07 add constraint abctestabbc unique key zxxxxx (col3);
+show index from index07;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index07    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+index07    0    col3    1    col3    A    0    NULL    NULL                    YES    NULL
+index07    0    col3    2    col4    A    0    NULL    NULL                    YES    NULL
+index07    0    wwwww    1    col3    A    0    NULL    NULL                    YES    NULL
+index07    0    wwwww    2    col4    A    0    NULL    NULL                    YES    NULL
+index07    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
+alter table index07 add unique key idx1(col3);
+show index from index07;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index07    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+index07    0    col3    1    col3    A    0    NULL    NULL                    YES    NULL
+index07    0    col3    2    col4    A    0    NULL    NULL                    YES    NULL
+index07    0    wwwww    1    col3    A    0    NULL    NULL                    YES    NULL
+index07    0    wwwww    2    col4    A    0    NULL    NULL                    YES    NULL
+index07    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
+index07    0    idx1    1    col3    A    0    NULL    NULL                    YES    NULL
+alter table index07 add constraint idx2 unique key (col3);
+alter table index07 add constraint idx2 unique key (col4);
+duplicate key name 'idx2'
+alter table index07 alter index wwwww invisible;
+show index from index07;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index07    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+index07    0    col3    1    col3    A    0    NULL    NULL                    YES    NULL
+index07    0    col3    2    col4    A    0    NULL    NULL                    YES    NULL
+index07    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
+index07    0    idx1    1    col3    A    0    NULL    NULL                    YES    NULL
+index07    0    idx2    1    col3    A    0    NULL    NULL                    YES    NULL
+index07    0    wwwww    1    col3    A    0    NULL    NULL                    NO    NULL
+index07    0    wwwww    2    col4    A    0    NULL    NULL                    NO    NULL
+drop table index07;
+drop table if exists index08;
+CREATE TABLE index08(
+col1 INT NOT NULL,
+col2 DATE NOT NULL,
+col3 VARCHAR(16) NOT NULL,
+col4 int unsigned NOT NULL,
+PRIMARY KEY(col1)
+);
+insert into index08 values(1, '1980-12-17','Abby', 21);
+insert into index08 values(2, '1981-02-20','Bob', 22);
+alter table index08 add constraint unique index (col3, col4);
+alter table index08 add constraint index wwwww (col3, col4);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 40 near " index wwwww (col3, col4);";
+alter table index08 add constraint unique index zxxxxx (col3);
+show index from index08;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index08    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+index08    0    col3    1    col3    A    0    NULL    NULL                    YES    NULL
+index08    0    col3    2    col4    A    0    NULL    NULL                    YES    NULL
+index08    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
+alter table index08 add index zxxxx(col3);
+show index from index08;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+index08    0    PRIMARY    1    col1    A    0    NULL    NULL                    YES    NULL
+index08    0    col3    1    col3    A    0    NULL    NULL                    YES    NULL
+index08    0    col3    2    col4    A    0    NULL    NULL                    YES    NULL
+index08    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
+index08    1    zxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
+drop table index08;
+drop database test;

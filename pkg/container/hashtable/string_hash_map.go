@@ -37,6 +37,7 @@ type StringHashMap struct {
 	blockCellCntBits uint8
 	blockCellCnt     uint64
 	blockMaxElemCnt  uint64
+	cellCntMask      uint64
 	//confCnt     uint64
 
 	cellCnt uint64
@@ -67,6 +68,7 @@ func (ht *StringHashMap) Init(m *mpool.MPool) (err error) {
 	ht.blockMaxElemCnt = kInitialCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
+	ht.cellCntMask = kInitialCellCnt - 1
 
 	ht.rawData = make([][]byte, 1)
 	ht.cells = make([][]StringHashMapCell, 1)
@@ -166,8 +168,7 @@ func (ht *StringHashMap) FindHashStateBatch(states [][3]uint64, values []uint64)
 }
 
 func (ht *StringHashMap) findCell(state *[3]uint64) *StringHashMapCell {
-	mask := ht.cellCnt - 1
-	for idx := state[0] & mask; true; idx = (idx + 1) & mask {
+	for idx := state[0] & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
 		blockId := idx / ht.blockCellCnt
 		cellId := idx % ht.blockCellCnt
 		cell := &ht.cells[blockId][cellId]
@@ -179,8 +180,7 @@ func (ht *StringHashMap) findCell(state *[3]uint64) *StringHashMapCell {
 }
 
 func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
-	mask := ht.cellCnt - 1
-	for idx := state[0] & mask; true; idx = (idx + 1) & mask {
+	for idx := state[0] & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
 		blockId := idx / ht.blockCellCnt
 		cellId := idx % ht.blockCellCnt
 		cell := &ht.cells[blockId][cellId]
@@ -217,6 +217,7 @@ func (ht *StringHashMap) resizeOnDemand(n uint64, m *mpool.MPool) error {
 			// update hashTable cnt.
 			ht.blockCellCntBits = newCellCntBits
 			ht.cellCnt = newCellCnt
+			ht.cellCntMask = ht.cellCnt - 1
 			ht.blockCellCnt = newCellCnt
 			ht.blockMaxElemCnt = newBlockMaxElemCnt
 
@@ -224,11 +225,7 @@ func (ht *StringHashMap) resizeOnDemand(n uint64, m *mpool.MPool) error {
 			if err != nil {
 				return err
 			}
-			blockData := ht.rawData[0]
-			for i := range blockData {
-				blockData[i] = 0
-			}
-			ht.cells[0] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&blockData[0])), ht.blockCellCnt)
+			ht.cells[0] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockCellCnt)
 
 			// rearrange the cells
 			for i := uint64(0); i < oldCellCnt; i++ {
@@ -246,35 +243,51 @@ func (ht *StringHashMap) resizeOnDemand(n uint64, m *mpool.MPool) error {
 
 	// double the blocks
 	oldBlockNum := len(ht.rawData)
-	oldCells := ht.cells
-	oldData := ht.rawData
+	blockNum := oldBlockNum * 2
 
-	ht.rawData = make([][]byte, oldBlockNum*2)
-	ht.cells = make([][]StringHashMapCell, oldBlockNum*2)
+	ht.rawData = append(ht.rawData, make([][]byte, oldBlockNum)...)
+	ht.cells = append(ht.cells, make([][]StringHashMapCell, oldBlockNum)...)
 	ht.cellCnt = ht.blockCellCnt * uint64(len(ht.rawData))
+	ht.cellCntMask = ht.cellCnt - 1
 
-	for i := range ht.rawData {
+	for i := oldBlockNum; i < blockNum; i++ {
 		ht.rawData[i], err = m.Alloc(int(ht.blockCellCnt) * int(strCellSize))
 		if err != nil {
 			return err
 		}
-		blockData := ht.rawData[i]
-		for j := range blockData {
-			blockData[j] = 0
-		}
-		ht.cells[i] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&blockData[0])), ht.blockCellCnt)
+		ht.cells[i] = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&ht.rawData[i][0])), ht.blockCellCnt)
 	}
 
 	// rearrange the cells
+	var block []StringHashMapCell
+	var emptyCell StringHashMapCell
+
 	for i := 0; i < oldBlockNum; i++ {
+		block = ht.cells[i]
 		for j := uint64(0); j < ht.blockCellCnt; j++ {
-			cell := &oldCells[i][j]
-			if cell.Mapped != 0 {
-				newCell := ht.findEmptyCell(&cell.HashState)
+			cell := &block[j]
+			if cell.Mapped == 0 {
+				continue
+			}
+			newCell := ht.findCell(&cell.HashState)
+			if newCell != cell {
 				*newCell = *cell
+				*cell = emptyCell
 			}
 		}
-		m.Free(oldData[i])
+	}
+
+	block = ht.cells[oldBlockNum]
+	for j := uint64(0); j < ht.blockCellCnt; j++ {
+		cell := &block[j]
+		if cell.Mapped == 0 {
+			break
+		}
+		newCell := ht.findCell(&cell.HashState)
+		if newCell != cell {
+			*newCell = *cell
+			*cell = emptyCell
+		}
 	}
 
 	return nil

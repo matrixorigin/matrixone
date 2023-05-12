@@ -19,6 +19,7 @@ import (
 	"context"
 	"math/rand"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -2457,6 +2458,102 @@ func TestMergeBlocks(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 }
 
+func TestSegDelLogtail(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, -1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 3
+	bat := catalog.MockBatch(schema, 30)
+	defer bat.Close()
+
+	createRelationAndAppend(t, 0, tae.DB, "db", schema, bat, true)
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.GetDatabase("db")
+	did := db.GetID()
+	assert.Nil(t, err)
+	rel, err := db.GetRelationByName(schema.Name)
+	tid := rel.ID()
+	assert.Nil(t, err)
+	it := rel.MakeBlockIt()
+	blkID := it.GetBlock().Fingerprint()
+	err = rel.RangeDelete(blkID, 5, 9, handle.DT_Normal)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	compactBlocks(t, 0, tae.DB, "db", schema, false)
+	mergeBlocks(t, 0, tae.DB, "db", schema, false)
+
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	resp, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+		CnHave: tots(types.TS{}),
+		CnWant: tots(types.MaxTs()),
+		Table:  &api.TableID{DbId: did, TbId: tid},
+	}, false)
+	require.Nil(t, err)
+	require.Equal(t, 3, len(resp.Commands)) // block insert + block delete + seg delete
+
+	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	require.True(t, strings.HasSuffix(resp.Commands[0].TableName, "meta"))
+	require.Equal(t, uint32(12), resp.Commands[0].Bat.Vecs[0].Len) /* 3 old blks(invalidation) + 3 old nblks (create) + 3 old nblks (invalidation) + 3 new merged nblks(create) */
+
+	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
+	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "meta"))
+	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 3 old ablks(delete) + 3 old nblks */
+
+	require.Equal(t, api.Entry_Delete, resp.Commands[2].EntryType)
+	require.True(t, strings.HasSuffix(resp.Commands[2].TableName, "seg"))
+	require.Equal(t, uint32(1), resp.Commands[2].Bat.Vecs[0].Len) /* 1 old segment */
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
+	checkAllColRowsByScan(t, rel, bat.Length()-5, false)
+	assert.Nil(t, txn.Commit())
+
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	require.NoError(t, err)
+
+	check := func() {
+		ckpEntries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+		require.Equal(t, 1, len(ckpEntries))
+		entry := ckpEntries[0]
+		ins, del, cnins, segdel, err := entry.GetByTableID(tae.Fs, tid)
+		require.NoError(t, err)
+		require.Equal(t, uint32(6), ins.Vecs[0].Len)
+		require.Equal(t, uint32(6), del.Vecs[0].Len)
+		require.Equal(t, uint32(6), cnins.Vecs[0].Len)
+		require.Equal(t, uint32(1), segdel.Vecs[0].Len)
+		require.Equal(t, 2, len(del.Vecs))
+		require.Equal(t, 2, len(segdel.Vecs))
+	}
+	check()
+
+	tae.restart()
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
+	checkAllColRowsByScan(t, rel, bat.Length()-5, false)
+	assert.Nil(t, txn.Commit())
+
+	check()
+
+}
+
 // delete
 // merge but not commit
 // delete
@@ -3235,6 +3332,49 @@ func TestDropCreated2(t *testing.T) {
 
 	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
 	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
+
+	tae.restart()
+}
+
+func TestDropCreated3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	_, err = txn.CreateDatabase("db", "", "")
+	assert.Nil(t, err)
+	_, err = txn.DropDatabase("db")
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
+	assert.Nil(t, err)
+
+	tae.restart()
+}
+
+func TestDropCreated4(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	schema := catalog.MockSchemaAll(1, -1)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.CreateDatabase("db", "", "")
+	assert.Nil(t, err)
+	_, err = db.CreateRelation(schema)
+	assert.Nil(t, err)
+	_, err = db.DropRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
+	assert.Nil(t, err)
 
 	tae.restart()
 }
@@ -4469,7 +4609,7 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
+			ins, del, _, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			t.Log(common.PrintApiBatch(ins, 3))
@@ -4480,7 +4620,7 @@ func TestReadCheckpoint(t *testing.T) {
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
+			ins, del, _, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			t.Log(common.PrintApiBatch(ins, 3))

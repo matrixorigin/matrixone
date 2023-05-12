@@ -302,6 +302,15 @@ func (nsp *Nulls) Read(data []byte) error {
 	return nil
 }
 
+func (nsp *Nulls) ReadNoCopy(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	nsp.Np = bitmap.New(0)
+	nsp.Np.UnmarshalNoCopy(data)
+	return nil
+}
+
 func (nsp *Nulls) Or(m *Nulls) *Nulls {
 	switch {
 	case m == nil:
