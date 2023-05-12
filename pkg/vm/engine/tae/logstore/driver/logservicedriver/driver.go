@@ -115,8 +115,8 @@ func (d *LogServiceDriver) Close() error {
 
 func (d *LogServiceDriver) Replay(h driver.ApplyHandle, allocator logstoreEntry.Allocator) error {
 	d.PreReplay()
-	r := newReplayer(h, ReplayReadSize, d)
-	r.replay(allocator)
+	r := newReplayer(h, ReplayReadSize, d, allocator)
+	r.replay()
 	d.onReplay(r)
 	r.d.resetReadCache()
 	d.PostReplay()

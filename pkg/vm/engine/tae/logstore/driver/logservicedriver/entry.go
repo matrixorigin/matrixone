@@ -263,6 +263,9 @@ type recordEntry struct {
 	payload     []byte
 	unmarshaled atomic.Uint32
 	mashalMu    sync.RWMutex
+	//for replay
+	logserviceLsn uint64
+	isEnd         bool
 }
 
 func newRecordEntry() *recordEntry {
