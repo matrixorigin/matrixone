@@ -503,7 +503,7 @@ func BenchmarkForeachVector(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			ForeachVectorWindow(int64s, 0, rows, func(int64, bool, int) (err error) {
 				return
-			}, nil)
+			}, nil, nil)
 		}
 	})
 
@@ -522,7 +522,7 @@ func BenchmarkForeachVector(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			ForeachVectorWindow(chars, 0, rows, func([]byte, bool, int) (err error) {
 				return
-			}, nil)
+			}, nil, nil)
 		}
 	})
 }
@@ -566,7 +566,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("func-new", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ForeachVectorWindow(vec, 0, vec.Length(), MakeForeachVectorOp(vec.GetType().Oid, funcs), nil)
+			ForeachVectorWindow(vec, 0, vec.Length(), MakeForeachVectorOp(vec.GetType().Oid, funcs), nil, nil)
 		}
 	})
 	b.Run("func-old", func(b *testing.B) {
@@ -649,7 +649,7 @@ func TestForeachSelectBitmap(t *testing.T) {
 		rows := roaring.New()
 		op := getOverload(vecType.Oid, t, rows, vec)
 
-		ForeachVectorWindow(vec, 0, vec.Length(), op, sels)
+		ForeachVectorWindow(vec, 0, vec.Length(), op, nil, sels)
 		assert.Equal(t, uint64(2), rows.GetCardinality())
 		assert.True(t, rows.Contains(2))
 		assert.True(t, rows.Contains(6))
@@ -658,4 +658,10 @@ func TestForeachSelectBitmap(t *testing.T) {
 		f(vecType, false)
 	}
 
+	vec2 := MockVector(types.T_int32.ToType(), 10, true, nil)
+	defer vec2.Close()
+
+	_ = ForeachVectorWindow(vec2, 0, 5, nil, func(_ any, _ bool, _ int) (err error) {
+		return
+	}, nil)
 }
