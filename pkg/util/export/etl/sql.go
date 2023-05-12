@@ -30,7 +30,7 @@ import (
 )
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
-const MAX_CHUNK_SIZE = 1024 * 1024 * 4
+const MAX_CHUNK_SIZE = 1024 * 1024 * 2
 
 const MAX_ALLOWED_PACKET_ERROR = "packet for query is too large"
 
@@ -82,18 +82,19 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 
 	var err error
 	var cnt int
-	var stmt string
-	dbConn, err := db.InitOrRefreshDBConn(false)
-
-	if dbConn != nil {
-		stmt, cnt, err = generateInsertStatement(sw.buffer, sw.tbl)
-		_, err = dbConn.Exec(stmt)
-		if err != nil {
-			if strings.Contains(err.Error(), MAX_ALLOWED_PACKET_ERROR) && sw.tbl.Table == STATEMENT_INFO_TABLE {
-				cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
-			}
-		}
-	}
+	cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
+	//var stmt string
+	//dbConn, err := db.InitOrRefreshDBConn(false)
+	//
+	//if dbConn != nil {
+	//	stmt, cnt, err = generateInsertStatement(sw.buffer, sw.tbl)
+	//	_, err = dbConn.Exec(stmt)
+	//	if err != nil {
+	//		if strings.Contains(err.Error(), MAX_ALLOWED_PACKET_ERROR) && sw.tbl.Table == STATEMENT_INFO_TABLE {
+	//
+	//		}
+	//	}
+	//}
 
 	if err != nil {
 		// Need to clean the buffer anyway, no need to handle the error here
