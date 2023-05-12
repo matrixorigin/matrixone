@@ -3621,7 +3621,8 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 		marshalPlan := explainQuery.BuildJsonPlan(ctx, uuid, options)
 		stats.RowsRead, stats.BytesScan = marshalPlan.StatisticsRead()
 		// data transform to json datastruct
-		buffer := &bytes.Buffer{}
+		// Provide a relatively balanced initial capacity [360] for byte slice to prevent multiple memory requests
+		buffer := bytes.NewBuffer(make([]byte, 0, 8192))
 		encoder := json.NewEncoder(buffer)
 		encoder.SetEscapeHTML(false)
 		err := encoder.Encode(marshalPlan)

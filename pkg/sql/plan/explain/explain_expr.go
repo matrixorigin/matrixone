@@ -26,97 +26,60 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions) (string, error) {
-	//var result string
-	buf := bytes.NewBuffer(make([]byte, 0, 160))
+func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions, buf *bytes.Buffer) error {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		if len(exprImpl.Col.Name) > 0 {
 			buf.WriteString(exprImpl.Col.Name)
-			//result += exprImpl.Col.Name
 		} else {
 			buf.WriteString("#[")
 			buf.WriteString(strconv.Itoa(int(exprImpl.Col.RelPos)))
 			buf.WriteString(",")
 			buf.WriteString(strconv.Itoa(int(exprImpl.Col.ColPos)))
 			buf.WriteString("]")
-
-			//result += "#["
-			//result += strconv.FormatInt(int64(exprImpl.Col.RelPos), 10)
-			//result += ","
-			//result += strconv.FormatInt(int64(exprImpl.Col.ColPos), 10)
-			//result += "]"
 		}
 	case *plan.Expr_C:
 		if exprImpl.C.Isnull {
 			buf.WriteString("(null)")
-			//result += "(null)"
 			break
 		}
 
 		switch val := exprImpl.C.Value.(type) {
 		case *plan.Const_I8Val:
 			fmt.Fprintf(buf, "%d", val.I8Val)
-			//buf.WriteString(strconv.FormatInt(int64(val.I8Val), 10))
-			//result += strconv.FormatInt(int64(val.I8Val), 10)
 		case *plan.Const_I16Val:
 			fmt.Fprintf(buf, "%d", val.I16Val)
-			//buf.WriteString(strconv.FormatInt(int64(val.I16Val), 10))
-			//result += strconv.FormatInt(int64(val.I16Val), 10)
 		case *plan.Const_I32Val:
 			fmt.Fprintf(buf, "%d", val.I32Val)
-			//buf.WriteString(strconv.FormatInt(int64(val.I32Val), 10))
-			//result += strconv.FormatInt(int64(val.I32Val), 10)
 		case *plan.Const_I64Val:
 			fmt.Fprintf(buf, "%d", val.I64Val)
-			//buf.WriteString(strconv.FormatInt(val.I64Val, 10))
-			//result += strconv.FormatInt(val.I64Val, 10)
 		case *plan.Const_U8Val:
 			fmt.Fprintf(buf, "%d", val.U8Val)
-			//buf.WriteString(strconv.FormatUint(uint64(val.U8Val), 10))
-			//result += strconv.FormatUint(uint64(val.U8Val), 10)
 		case *plan.Const_U16Val:
 			fmt.Fprintf(buf, "%d", val.U16Val)
-			//buf.WriteString(strconv.FormatUint(uint64(val.U16Val), 10))
-			//result += strconv.FormatUint(uint64(val.U16Val), 10)
 		case *plan.Const_U32Val:
 			fmt.Fprintf(buf, "%d", val.U32Val)
-			//buf.WriteString(strconv.FormatUint(uint64(val.U32Val), 10))
-			//result += strconv.FormatUint(uint64(val.U32Val), 10)
 		case *plan.Const_U64Val:
 			fmt.Fprintf(buf, "%d", val.U64Val)
-			//buf.WriteString(strconv.FormatUint(val.U64Val, 10))
-			//result += strconv.FormatUint(val.U64Val, 10)
-
 		case *plan.Const_Fval:
 			fmt.Fprintf(buf, "%.32f", val.Fval)
-			buf.WriteString(strconv.FormatFloat(float64(val.Fval), 'f', -1, 32))
-			//result += strconv.FormatFloat(float64(val.Fval), 'f', -1, 32)
 		case *plan.Const_Dval:
 			fmt.Fprintf(buf, "%.64f", val.Dval)
-			//buf.WriteString(strconv.FormatFloat(val.Dval, 'f', -1, 64))
-			//result += strconv.FormatFloat(val.Dval, 'f', -1, 64)
 		case *plan.Const_Sval:
 			buf.WriteString("'" + val.Sval + "'")
-			//result += "'" + val.Sval + "'"
 		case *plan.Const_Bval:
 			fmt.Fprintf(buf, "%v", val.Bval)
-			//buf.WriteString(strconv.FormatBool(val.Bval))
-			//result += strconv.FormatBool(val.Bval)
 		}
 
 	case *plan.Expr_F:
 		funcExpr := expr.Expr.(*plan.Expr_F)
-		funcDesc, err := funcExprExplain(ctx, funcExpr, expr.Typ, options)
+		err := funcExprExplain(ctx, funcExpr, expr.Typ, options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		buf.WriteString(funcDesc)
-		//result += funcDesc
 	case *plan.Expr_Sub:
 		subqryExpr := expr.Expr.(*plan.Expr_Sub)
 		buf.WriteString("subquery nodeId = " + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10))
-		//result += "subquery nodeId = " + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10)
 	case *plan.Expr_Corr:
 		buf.WriteString("#[")
 		buf.WriteString(strconv.FormatInt(int64(exprImpl.Corr.RelPos), 10))
@@ -125,26 +88,15 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions)
 		buf.WriteString(":")
 		buf.WriteString(strconv.FormatInt(int64(exprImpl.Corr.Depth), 10))
 		buf.WriteString("]")
-
-		//result += "#["
-		//result += strconv.FormatInt(int64(exprImpl.Corr.RelPos), 10)
-		//result += ","
-		//result += strconv.FormatInt(int64(exprImpl.Corr.ColPos), 10)
-		//result += ":"
-		//result += strconv.FormatInt(int64(exprImpl.Corr.Depth), 10)
-		//result += "]"
 	case *plan.Expr_V:
 		if exprImpl.V.System {
 			if exprImpl.V.Global {
 				buf.WriteString("@@global." + exprImpl.V.Name)
-				//result += "@@global." + exprImpl.V.Name
 			} else {
 				buf.WriteString("@@session." + exprImpl.V.Name)
-				//result += "@@session." + exprImpl.V.Name
 			}
 		} else {
 			buf.WriteString("@" + exprImpl.V.Name)
-			//result += "@" + exprImpl.V.Name
 		}
 	case *plan.Expr_P:
 		panic("unimplement Expr_P")
@@ -152,55 +104,45 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions)
 		exprlist := expr.Expr.(*plan.Expr_List)
 		if exprlist.List.List != nil {
 			exprListDescImpl := NewExprListDescribeImpl(exprlist.List.List)
-			desclist, err := exprListDescImpl.GetDescription(ctx, options)
+			err := exprListDescImpl.GetDescription(ctx, options, buf)
 			if err != nil {
-				return "", err
+				return err
 			}
-			buf.WriteString(desclist)
-			//result += desclist
 		}
 	default:
 		panic("error Expr")
 	}
-	return buf.String(), nil
-	//return result, nil
+	return nil
 }
 
 // generator function expression(Expr_F) explain information
-func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOptions) (string, error) {
+func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOptions, buf *bytes.Buffer) error {
 	// SysFunsAndOperatorsMap
-	//var result string
-	buf := bytes.NewBuffer(make([]byte, 0, 100))
 	funcName := funcExpr.F.GetFunc().GetObjName()
 	funcDef := funcExpr.F.GetFunc()
 
 	funcProtoType, err := function.GetFunctionByID(ctx, funcDef.Obj&function.DistinctMask)
 	if err != nil {
-		return "", moerr.NewInvalidInput(ctx, "invalid function or opreator '%s'", funcName)
+		return moerr.NewInvalidInput(ctx, "invalid function or opreator '%s'", funcName)
 	}
 
 	switch funcProtoType.GetLayout() {
 	case function.STANDARD_FUNCTION:
 		buf.WriteString(funcExpr.F.Func.GetObjName() + "(")
-		//result += funcExpr.F.Func.GetObjName() + "("
 		if len(funcExpr.F.Args) > 0 {
 			var first = true
 			for _, v := range funcExpr.F.Args {
 				if !first {
 					buf.WriteString(", ")
-					//result += ", "
 				}
 				first = false
-				exprDesc, err := describeExpr(ctx, v, options)
+				err = describeExpr(ctx, v, options, buf)
 				if err != nil {
-					return "", err
+					return err
 				}
-				buf.WriteString(exprDesc)
-				//result += exprDesc
 			}
 		}
 		buf.WriteString(")")
-		//result += ")"
 	case function.UNARY_ARITHMETIC_OPERATOR:
 		var opertator string
 		if funcExpr.F.Func.GetObjName() == "UNARY_PLUS" {
@@ -208,133 +150,129 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		} else {
 			opertator = "-"
 		}
-		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
+		buf.WriteString("(" + opertator)
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		buf.WriteString("(" + opertator + describeExpr + ")")
-		//result += "(" + opertator + describeExpr + ")"
+		buf.WriteString(")")
 	case function.UNARY_LOGICAL_OPERATOR:
-		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
+		buf.WriteString("(" + funcExpr.F.Func.GetObjName() + " ")
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		buf.WriteString("(" + funcExpr.F.Func.GetObjName() + " " + describeExpr + ")")
+		buf.WriteString(")")
 		//result += "(" + funcExpr.F.Func.GetObjName() + " " + describeExpr + ")"
 	case function.BINARY_ARITHMETIC_OPERATOR:
 		fallthrough
 	case function.BINARY_LOGICAL_OPERATOR:
 		fallthrough
 	case function.COMPARISON_OPERATOR:
-		left, err := describeExpr(ctx, funcExpr.F.Args[0], options)
+		buf.WriteString("(")
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		right, err := describeExpr(ctx, funcExpr.F.Args[1], options)
+		buf.WriteString(" " + funcExpr.F.Func.GetObjName() + " ")
+		err = describeExpr(ctx, funcExpr.F.Args[1], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		buf.WriteString("(" + left + " " + funcExpr.F.Func.GetObjName() + " " + right + ")")
-		//result += "(" + left + " " + funcExpr.F.Func.GetObjName() + " " + right + ")"
+		buf.WriteString(")")
 	case function.CAST_EXPRESSION:
-		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
+		buf.WriteString("CAST(")
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
 		tt := types.T(Typ.Id)
 		if tt == types.T_decimal64 || tt == types.T_decimal128 {
-			buf.WriteString(fmt.Sprintf("CAST(%s AS %s(%d, %d))", describeExpr, tt.String(), Typ.Width, Typ.Scale))
-			//result += fmt.Sprintf("CAST(%s AS %s(%d, %d))", describeExpr, tt.String(), Typ.Width, Typ.Scale)
+			fmt.Fprintf(buf, " AS %s(%d, %d))", tt.String(), Typ.Width, Typ.Scale)
 		} else {
-			buf.WriteString("CAST(" + describeExpr + " AS " + tt.String() + ")")
-			//result += "CAST(" + describeExpr + " AS " + tt.String() + ")"
+			fmt.Fprintf(buf, " AS %s)", tt.String())
 		}
 	case function.CASE_WHEN_EXPRESSION:
 		// TODO need rewrite to deal with case is nil
 		buf.WriteString("CASE")
-		//result += "CASE"
 		// case when expression has two part(case when condition and else exression)
 		condSize := len(funcExpr.F.Args) / 2
 		for i := 0; i < condSize; i++ {
 			whenExpr := funcExpr.F.Args[i]
 			thenExpr := funcExpr.F.Args[i+1]
-			whenExprDesc, err := describeExpr(ctx, whenExpr, options)
+			buf.WriteString(" WHEN ")
+			err = describeExpr(ctx, whenExpr, options, buf)
 			if err != nil {
-				return "", err
+				return err
 			}
-			thenExprDesc, err := describeExpr(ctx, thenExpr, options)
+			buf.WriteString(" THEN ")
+			err = describeExpr(ctx, thenExpr, options, buf)
 			if err != nil {
-				return "", err
+				return err
 			}
-			buf.WriteString(" WHEN " + whenExprDesc + " THEN " + thenExprDesc)
-			//result += " WHEN " + whenExprDesc + " THEN " + thenExprDesc
 		}
 
 		if len(funcExpr.F.Args)%2 == 1 {
 			lastIndex := len(funcExpr.F.Args) - 1
 			elseExpr := funcExpr.F.Args[lastIndex]
 			// get else expression
-			elseExprDesc, err := describeExpr(ctx, elseExpr, options)
+			buf.WriteString(" ELSE ")
+			err = describeExpr(ctx, elseExpr, options, buf)
 			if err != nil {
-				return "", err
+				return err
 			}
-			buf.WriteString(" ELSE " + elseExprDesc)
-			//result += " ELSE " + elseExprDesc
 		}
 		buf.WriteString(" END")
-		//result += " END"
 	case function.IN_PREDICATE:
 		if len(funcExpr.F.Args) != 2 {
 			panic("Nested query predicate,such as in,exist,all,any parameter number error!")
 		}
-		descExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		descExprlist, err := describeExpr(ctx, funcExpr.F.Args[1], options)
+		buf.WriteString(" " + funcExpr.F.Func.GetObjName() + "(")
+		err = describeExpr(ctx, funcExpr.F.Args[1], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		buf.WriteString(descExpr + " " + funcExpr.F.Func.GetObjName() + "(" + descExprlist + ")")
-		//result += descExpr + " " + funcExpr.F.Func.GetObjName() + "(" + descExprlist + ")"
+		buf.WriteString(")")
 	case function.EXISTS_ANY_PREDICATE:
-		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
+		buf.WriteString(funcExpr.F.Func.GetObjName() + "(")
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		buf.WriteString(funcExpr.F.Func.GetObjName() + "(" + describeExpr + ")")
-		//result += funcExpr.F.Func.GetObjName() + "(" + describeExpr + ")"
+		buf.WriteString(")")
 	case function.IS_NULL_EXPRESSION:
-		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
+		buf.WriteString("(")
+		err := describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		buf.WriteString("(" + describeExpr + " IS NULL)")
-		//result += "(" + describeExpr + " IS NULL)"
+		buf.WriteString(" IS NULL)")
 	case function.NOPARAMETER_FUNCTION:
 		buf.WriteString(funcExpr.F.Func.GetObjName())
-		//result += funcExpr.F.Func.GetObjName()
 	case function.DATE_INTERVAL_EXPRESSION:
-		describeExpr, err := describeExpr(ctx, funcExpr.F.Args[0], options)
+		buf.WriteString(funcExpr.F.Func.GetObjName() + " ")
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		buf.WriteString(funcExpr.F.Func.GetObjName() + " " + describeExpr + "")
-		//result += funcExpr.F.Func.GetObjName() + " " + describeExpr + ""
 	case function.EXTRACT_FUNCTION:
-		first, err := describeExpr(ctx, funcExpr.F.Args[0], options)
+		buf.WriteString(funcExpr.F.Func.GetObjName() + "(")
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		second, err := describeExpr(ctx, funcExpr.F.Args[1], options)
+		buf.WriteString(" from ")
+		err = describeExpr(ctx, funcExpr.F.Args[1], options, buf)
 		if err != nil {
-			return "", err
+			return err
 		}
-		buf.WriteString(funcExpr.F.Func.GetObjName() + "(" + first + " from " + second + ")")
-		//result += funcExpr.F.Func.GetObjName() + "(" + first + " from " + second + ")"
+		buf.WriteString(")")
 	case function.UNKNOW_KIND_FUNCTION:
-		return "", moerr.NewInvalidInput(ctx, "explain contains UNKNOW_KIND_FUNCTION")
+		return moerr.NewInvalidInput(ctx, "explain contains UNKNOW_KIND_FUNCTION")
 	}
-	return buf.String(), nil
-	//return result, nil
+	return nil
 }
