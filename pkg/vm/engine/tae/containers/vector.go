@@ -236,10 +236,7 @@ func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
 }
 
 func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
-	if vec.downstreamVector.GetType().IsVarlen() {
-		return ForeachWindowVarlen(vec, offset, length, nil, op, sels)
-	}
-	return ForeachWindowFixed[T](vec, offset, length, nil, op, sels)
+	return ForeachVectorWindow(vec, offset, length, nil, op, sels)
 }
 
 func (vec *vector[T]) Close() {
