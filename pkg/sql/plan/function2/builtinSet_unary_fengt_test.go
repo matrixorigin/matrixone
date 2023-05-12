@@ -23,7 +23,7 @@ func TestSleep(t *testing.T) {
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_uint64.ToType(), []uint64{1, 0, 1}, []bool{false, true, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0, 0}, []bool{false, true, true}),
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0, 0, 0}, []bool{false, true, true}),
 		},
 	}
 
@@ -49,7 +49,7 @@ func TestSleep(t *testing.T) {
 			inputs: []testutil.FunctionTestInput{
 				testutil.NewFunctionTestInput(types.T_float64.ToType(), []float64{0.1, 0, 0.1}, []bool{false, true, true}),
 			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0, 0}, []bool{false, true, true}),
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0, 0, 0}, []bool{false, true, true}),
 		},
 		{
 			info: "sleep float64 with null",

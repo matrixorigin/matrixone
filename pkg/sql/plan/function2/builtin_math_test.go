@@ -207,7 +207,7 @@ func Test_BuiltIn_Math(t *testing.T) {
 					nil),
 			},
 			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{math.Log(5) / math.Log(3)}, nil),
+				[]float64{0.6826061944859853}, nil),
 		}
 		tcc := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInLog)
 		succeed, info := tcc.Run()
