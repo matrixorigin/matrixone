@@ -228,7 +228,7 @@ func PrintApiBatch(apiBat *api.Batch, printN int) string {
 }
 
 func DebugMoBatch(moBat *batch.Batch) string {
-	if !logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+	if !logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		return "not debug level"
 	}
 	return PrintMoBatch(moBat, PrintN)
