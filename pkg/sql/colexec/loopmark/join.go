@@ -79,7 +79,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			return false, err
 
 		default:
-			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}

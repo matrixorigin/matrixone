@@ -80,12 +80,11 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	keys := unsafe.Slice((*uint64)(keysPtr), n)
-	for i, key := range keys {
-		cell := ht.findCell(hashes[i], key)
+	for i, hash := range hashes {
+		cell := ht.findCell(hash)
 		if cell.Mapped == 0 {
 			ht.elemCnt++
-			cell.Key = key
+			cell.Key = hash
 			cell.Mapped = ht.elemCnt
 		}
 		values[i] = cell.Mapped
@@ -102,15 +101,14 @@ func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uin
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	keys := unsafe.Slice((*uint64)(keysPtr), n)
-	for i, key := range keys {
+	for i, hash := range hashes {
 		if zValues[i] == 0 {
 			continue
 		}
-		cell := ht.findCell(hashes[i], key)
+		cell := ht.findCell(hash)
 		if cell.Mapped == 0 {
 			ht.elemCnt++
-			cell.Key = key
+			cell.Key = hash
 			cell.Mapped = ht.elemCnt
 		}
 		values[i] = cell.Mapped
@@ -123,9 +121,8 @@ func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	keys := unsafe.Slice((*uint64)(keysPtr), n)
-	for i, key := range keys {
-		cell := ht.findCell(hashes[i], key)
+	for i, hash := range hashes {
+		cell := ht.findCell(hash)
 		values[i] = cell.Mapped
 	}
 }
@@ -135,30 +132,29 @@ func (ht *Int64HashMap) FindBatchWithRing(n int, zValues []int64, hashes []uint6
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	keys := unsafe.Slice((*uint64)(keysPtr), n)
-	for i, key := range keys {
+	for i, hash := range hashes {
 		if zValues[i] == 0 {
 			values[i] = 0
 			continue
 		}
-		cell := ht.findCell(hashes[i], key)
+		cell := ht.findCell(hash)
 		values[i] = cell.Mapped
 	}
 }
 
-func (ht *Int64HashMap) findCell(hash uint64, key uint64) *Int64HashMapCell {
+func (ht *Int64HashMap) findCell(hash uint64) *Int64HashMapCell {
 	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
 		blockId := idx / ht.blockCellCnt
 		cellId := idx % ht.blockCellCnt
 		cell := &ht.cells[blockId][cellId]
-		if cell.Key == key || cell.Mapped == 0 {
+		if cell.Key == hash || cell.Mapped == 0 {
 			return cell
 		}
 	}
 	return nil
 }
 
-func (ht *Int64HashMap) findEmptyCell(hash uint64, key uint64) *Int64HashMapCell {
+func (ht *Int64HashMap) findEmptyCell(hash uint64) *Int64HashMapCell {
 	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
 		blockId := idx / ht.blockCellCnt
 		cellId := idx % ht.blockCellCnt
@@ -204,22 +200,15 @@ func (ht *Int64HashMap) resizeOnDemand(n int, m *mpool.MPool) error {
 			if err != nil {
 				return err
 			}
-			blockData := ht.rawData[0]
-			// This can be optimized to SIMD by Go compiler, according to https://codereview.appspot.com/137880043
-			for i := range blockData {
-				blockData[i] = 0
-			}
-			ht.cells[0] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&blockData[0])), ht.blockCellCnt)
+			ht.cells[0] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&ht.rawData[0][0])), ht.blockCellCnt)
 
 			// rearrange the cells
-			var hashes [256]uint64
 			for i := uint64(0); i < oldCellCnt; i += 256 {
 				cells := oldCells0[i : i+256]
-				Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], 256)
 				for j := range cells {
 					cell := &cells[j]
 					if cell.Mapped != 0 {
-						newCell := ht.findEmptyCell(hashes[j], cell.Key)
+						newCell := ht.findEmptyCell(cell.Key)
 						*newCell = *cell
 					}
 				}
@@ -232,42 +221,51 @@ func (ht *Int64HashMap) resizeOnDemand(n int, m *mpool.MPool) error {
 
 	// double the blocks
 	oldBlockNum := len(ht.rawData)
-	oldCells := ht.cells
-	oldData := ht.rawData
+	blockNum := oldBlockNum * 2
 
-	ht.rawData = make([][]byte, oldBlockNum*2)
-	ht.cells = make([][]Int64HashMapCell, oldBlockNum*2)
-	ht.cellCnt = ht.blockCellCnt * uint64(len(ht.rawData))
+	ht.rawData = append(ht.rawData, make([][]byte, oldBlockNum)...)
+	ht.cells = append(ht.cells, make([][]Int64HashMapCell, oldBlockNum)...)
+	ht.cellCnt = ht.blockCellCnt * uint64(blockNum)
 	ht.cellCntMask = ht.cellCnt - 1
 
-	for i := range ht.rawData {
+	for i := oldBlockNum; i < blockNum; i++ {
 		ht.rawData[i], err = m.Alloc(int(ht.blockCellCnt) * int(intCellSize))
 		if err != nil {
 			return err
 		}
-		blockData := ht.rawData[i]
-		for j := range blockData {
-			blockData[j] = 0
-		}
-		ht.cells[i] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&blockData[0])), ht.blockCellCnt)
+		ht.cells[i] = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&ht.rawData[i][0])), ht.blockCellCnt)
 	}
 
 	// rearrange the cells
-	var hashes [256]uint64
+	var block []Int64HashMapCell
+	var emptyCell Int64HashMapCell
 
 	for i := 0; i < oldBlockNum; i++ {
-		for j := uint64(0); j < ht.blockCellCnt; j += 256 {
-			cells := oldCells[i][j : j+256]
-			Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], 256)
-			for k := range cells {
-				cell := &cells[k]
-				if cell.Mapped != 0 {
-					newCell := ht.findEmptyCell(hashes[k], cell.Key)
-					*newCell = *cell
-				}
+		block = ht.cells[i]
+		for j := uint64(0); j < ht.blockCellCnt; j++ {
+			cell := &block[j]
+			if cell.Mapped == 0 {
+				continue
+			}
+			newCell := ht.findCell(cell.Key)
+			if newCell != cell {
+				*newCell = *cell
+				*cell = emptyCell
 			}
 		}
-		m.Free(oldData[i])
+	}
+
+	block = ht.cells[oldBlockNum]
+	for j := uint64(0); j < ht.blockCellCnt; j++ {
+		cell := &block[j]
+		if cell.Mapped == 0 {
+			break
+		}
+		newCell := ht.findCell(cell.Key)
+		if newCell != cell {
+			*newCell = *cell
+			*cell = emptyCell
+		}
 	}
 
 	return nil

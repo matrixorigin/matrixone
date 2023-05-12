@@ -16,6 +16,7 @@ package memoryengine
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -166,10 +167,16 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 	return nil
 }
 
-func (e *Engine) Nodes() (engine.Nodes, error) {
+func (e *Engine) Nodes(isInternal bool, tenant string, cnLabel map[string]string) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetCNService(clusterservice.NewSelector(),
+	var selector clusterservice.Selector
+	if isInternal || strings.ToLower(tenant) == "sys" {
+		selector = clusterservice.NewSelector()
+	} else {
+		selector = selector.SelectByLabel(cnLabel, clusterservice.EQ)
+	}
+	cluster.GetCNService(selector,
 		func(c metadata.CNService) bool {
 			nodes = append(nodes, engine.Node{
 				Mcpu: 1,

@@ -133,6 +133,7 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			writerMap[row.GetAccount()] = w
 		}
 		w.WriteRow(row)
+		row.Free()
 	}
 
 	for _, i := range in {
