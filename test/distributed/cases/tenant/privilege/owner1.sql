@@ -18,6 +18,7 @@ set role role2;
 create table db1.t2(a int);
 set secondary role all;
 create table db1.t3(a int);
+set role role2;
 drop table db1.t3;
 drop table db1.t2;
 -- @session
