@@ -528,7 +528,10 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 	{
 		// if pkPos := getPkPos(tableDef, true); pkPos != -1 {
 		// 	lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-
+		// isUpdate := updateColLength > 0
+		// if isUpdate {
+		// 	tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
+		// }
 		// 	pkColExpr := &plan.Expr{
 		// 		Typ: tableDef.Cols[pkPos].Typ,
 		// 		Expr: &plan.Expr_Col{
