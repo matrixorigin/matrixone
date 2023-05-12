@@ -276,7 +276,7 @@ func (zm ZM) ContainsKey(k []byte) bool {
 }
 
 func (zm ZM) IsInited() bool {
-	if len(zm) < 63 {
+	if len(zm) == 0 {
 		return false
 	}
 	return zm[62]&0x80 != 0

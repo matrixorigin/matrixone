@@ -18,13 +18,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"go.uber.org/zap"
 )
 
@@ -39,12 +37,7 @@ var (
 
 	db atomic.Value
 
-	dbMux             sync.Mutex
-	rawlogStmt        *sql.Stmt
-	statementInfoStmt *sql.Stmt
-	metricsStmt       *sql.Stmt
-
-	stmtMux sync.Mutex
+	dbMux sync.Mutex
 )
 
 const MOLoggerUser = "mo_logger"
@@ -122,43 +115,4 @@ func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 	}
 	dbConn := db.Load().(*sql.DB)
 	return dbConn, nil
-}
-
-func GetStatement(sqlDb *sql.DB, tbl *table.Table) (*sql.Stmt, error) {
-	stmtMux.Lock()
-	defer stmtMux.Unlock()
-	var stmt *sql.Stmt
-	var err error
-	switch tbl.Table {
-	case "rawlog":
-		stmt = rawlogStmt
-	case "statement_info":
-		stmt = statementInfoStmt
-	case "metrics":
-		stmt = metricsStmt
-	}
-	if stmt != nil {
-		return stmt, nil
-	}
-
-	placeholders := strings.Repeat("?,", len(tbl.Columns))
-	placeholders = placeholders[:len(placeholders)-1] // Remove trailing comma
-	stmtSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES (%s)",
-		tbl.Database,
-		tbl.Table,
-		placeholders,
-	)
-	stmt, err = sqlDb.Prepare(stmtSQL)
-	if err != nil {
-		return nil, err
-	}
-	switch tbl.Table {
-	case "rawlog":
-		rawlogStmt = stmt
-	case "statement_info":
-		statementInfoStmt = stmt
-	case "metrics":
-		metricsStmt = stmt
-	}
-	return stmt, nil
 }

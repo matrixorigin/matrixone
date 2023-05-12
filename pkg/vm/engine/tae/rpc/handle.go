@@ -93,15 +93,15 @@ func NewTAEHandle(path string, opt *options.Options) *Handle {
 func (h *Handle) HandleCommit(
 	ctx context.Context,
 	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
-	// start := time.Now()
+	start := time.Now()
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
-	//logutil.Infof("HandleCommit start : %X\n",
-	//	string(meta.GetID()))
+	logutil.Infof("HandleCommit start : %X\n",
+		string(meta.GetID()))
 	defer func() {
-		//logutil.Infof("HandleCommit end : %X, %s\n",
-		//	string(meta.GetID()), time.Since(start))
+		logutil.Infof("HandleCommit end : %X, %s\n",
+			string(meta.GetID()), time.Since(start))
 	}()
 	//Handle precommit-write command for 1PC
 	var txn txnif.AsyncTxn
@@ -641,10 +641,10 @@ func (h *Handle) HandleCreateDatabase(
 		return err
 	}
 
-	//logutil.Infof("[precommit] create database: %+v\n txn: %s\n", req, txn.String())
-	//defer func() {
-	//	logutil.Infof("[precommit] create database end txn: %s\n", txn.String())
-	//}()
+	logutil.Infof("[precommit] create database: %+v\n txn: %s\n", req, txn.String())
+	defer func() {
+		logutil.Infof("[precommit] create database end txn: %s\n", txn.String())
+	}()
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
@@ -674,10 +674,10 @@ func (h *Handle) HandleDropDatabase(
 		return err
 	}
 
-	//logutil.Infof("[precommit] drop database: %+v\n txn: %s\n", req, txn.String())
-	//defer func() {
-	//	logutil.Infof("[precommit] drop database end: %s\n", txn.String())
-	//}()
+	logutil.Infof("[precommit] drop database: %+v\n txn: %s\n", req, txn.String())
+	defer func() {
+		logutil.Infof("[precommit] drop database end: %s\n", txn.String())
+	}()
 
 	if _, err = txn.DropDatabaseByID(req.ID); err != nil {
 		return
@@ -698,10 +698,10 @@ func (h *Handle) HandleCreateRelation(
 		return
 	}
 
-	//logutil.Infof("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
-	//defer func() {
-	//	logutil.Infof("[precommit] create relation end txn: %s\n", txn.String())
-	//}()
+	logutil.Infof("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
+	defer func() {
+		logutil.Infof("[precommit] create relation end txn: %s\n", txn.String())
+	}()
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
@@ -731,10 +731,10 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		return
 	}
 
-	//logutil.Infof("[precommit] drop/truncate relation: %+v\n txn: %s\n", req, txn.String())
-	//defer func() {
-	//	logutil.Infof("[precommit] drop/truncate relation end txn: %s\n", txn.String())
-	//}()
+	logutil.Infof("[precommit] drop/truncate relation: %+v\n txn: %s\n", req, txn.String())
+	defer func() {
+		logutil.Infof("[precommit] drop/truncate relation end txn: %s\n", txn.String())
+	}()
 
 	db, err := txn.GetDatabaseByID(req.DatabaseID)
 	if err != nil {
@@ -768,15 +768,15 @@ func (h *Handle) HandleWrite(
 	if req.PkCheck == db.PKCheckDisable {
 		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
 	}
-	//logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
-	//	req.Type, req.TableID,
-	//	req.TableName, req.DatabaseId, req.DatabaseName,
-	//	txn.String(),
-	//)
+	logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
+		req.Type, req.TableID,
+		req.TableName, req.DatabaseId, req.DatabaseName,
+		txn.String(),
+	)
 	logutil.Debugf("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
-	//defer func() {
-	//	logutil.Infof("[precommit] handle write end txn: %s\n", txn.String())
-	//}()
+	defer func() {
+		logutil.Infof("[precommit] handle write end txn: %s\n", txn.String())
+	}()
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
@@ -885,7 +885,7 @@ func (h *Handle) HandleAlterTable(
 		return err
 	}
 
-	//logutil.Infof("[precommit] alter table: %v txn: %s\n", req.String(), txn.String())
+	logutil.Infof("[precommit] alter table: %v txn: %s\n", req.String(), txn.String())
 
 	dbase, err := txn.GetDatabaseByID(req.DbId)
 	if err != nil {
