@@ -30,10 +30,10 @@ import (
 )
 
 func initTest(t *testing.T) (*logservice.Service, *logservice.ClientConfig) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	fs := vfs.NewStrictMem()
 	service, ccfg, err := logservice.NewTestService(fs)
 	assert.NoError(t, err)
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	return service, &ccfg
 }
 

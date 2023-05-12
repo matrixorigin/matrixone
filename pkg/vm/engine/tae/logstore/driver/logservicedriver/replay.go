@@ -172,6 +172,8 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 	if err != nil {
 		panic(err)
 	}
+	record.logserviceLsn = logserviceLsn
+	r.recordChan <- record
 	r.d.dropRecordByLsn(logserviceLsn)
 	r.replayedLsn = record.GetMaxLsn()
 	r.inited = true
