@@ -54,10 +54,10 @@ func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataB
 	return nil
 }
 
-func (e *ExplainQueryImpl) BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions) *ExplainData {
-	nodes := e.QueryPlan.Nodes
+func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions, query *plan.Query) *ExplainData {
+	nodes := query.Nodes
 	expdata := NewExplainData(uuid)
-	for index, rootNodeId := range e.QueryPlan.Steps {
+	for index, rootNodeId := range query.Steps {
 		graphData := NewGraphData()
 		err := PreOrderPlan(ctx, nodes[rootNodeId], nodes, graphData, options)
 		if err != nil {

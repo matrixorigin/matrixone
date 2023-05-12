@@ -24,6 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+// The global variable is used to serialize plan and avoid objects being repeatedly created
+var MarshalPlanOptions = ExplainOptions{
+	Verbose: true,
+	Analyze: true,
+	Format:  EXPLAIN_FORMAT_TEXT,
+}
+
 func ConvertNode(ctx context.Context, node *plan.Node, options *ExplainOptions) (*Node, error) {
 	marshalNodeImpl := NewMarshalNodeImpl(node)
 	newNode := &Node{
