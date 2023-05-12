@@ -6050,7 +6050,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 		case *tree.DropDatabase:
 			// get the databasename
 			dbName := string(st.Name)
-			if _, ok := sysDatabases[dbName]; ok {
+			if _, inSet := sysDatabases[dbName]; inSet {
 				return ok, nil
 			}
 			return checkRoleWhetherDatabaseOwner(ctx, ses, dbName, ok)
@@ -6063,7 +6063,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			if len(dbName) == 0 {
 				dbName = ses.GetDatabaseName()
 			}
-			if _, ok := sysDatabases[dbName]; ok {
+			if _, inSet := sysDatabases[dbName]; inSet {
 				return ok, nil
 			}
 			tbName := string(st.Names[0].ObjectName)
