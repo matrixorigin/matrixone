@@ -835,26 +835,19 @@ func (h *Handle) HandleWrite(
 			_, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
 		}
 		columnIdx := 0
-		var reader *blockio.BlockReader
 		for _, key := range req.DeltaLocs {
 			var location objectio.Location
 			location, err = blockio.EncodeLocationFromString(key)
 			if err != nil {
 				return err
 			}
-			if reader == nil {
-				reader, err = blockio.NewObjectReader(
-					h.db.Fs.Service, location)
-				if err != nil {
-					return
-				}
-			}
 			var bat *batch.Batch
-			bat, err = reader.LoadColumns(
+			bat, err = blockio.LoadColumns(
 				ctx,
 				[]uint16{uint16(columnIdx)},
 				nil,
-				location.ID(),
+				h.db.Fs.Service,
+				location,
 				nil,
 			)
 			if err != nil {
