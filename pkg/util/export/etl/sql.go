@@ -125,7 +125,7 @@ func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
 	return cnt, err
 }
 
-func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
+func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
 	if len(records) == 0 {
 		return 0, nil
 	}
@@ -135,7 +135,10 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	sb := strings.Builder{}
 	defer sb.Reset()
 
-	// Start a new transaction
+	tx, err := sqlDb.Begin()
+	if err != nil {
+		return 0, err
+	}
 
 	for idx, row := range records {
 		if len(row) == 0 {
@@ -165,8 +168,9 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 
 		if sb.Len() >= maxLen || idx == len(records)-1 {
 			stmt := baseStr + sb.String() + ";"
-			_, err := db.Exec(stmt)
+			_, err := tx.Exec(stmt)
 			if err != nil {
+				tx.Rollback()
 				return 0, err
 			}
 			sb.Reset()
@@ -175,10 +179,9 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 		}
 	}
 
-	// todo: adjust this sleep time
-	//if tbl.Table == "rawlog" {
-	//	time.Sleep(10 * time.Second)
-	//}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
 
 	return len(records), nil
 }
