@@ -83,12 +83,12 @@ func TestRouter_SelectEmptyCN(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.SelectByLabel(li1)
+	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 }
 
-func TestRouter_SelectByLabel(t *testing.T) {
+func TestRouter_Route(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
@@ -118,7 +118,7 @@ func TestRouter_SelectByLabel(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.SelectByLabel(li1)
+	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 
@@ -128,7 +128,7 @@ func TestRouter_SelectByLabel(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.SelectByLabel(li2)
+	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li2})
 	require.Error(t, err)
 	require.Nil(t, cn)
 
@@ -138,7 +138,7 @@ func TestRouter_SelectByLabel(t *testing.T) {
 			"k2": "v1",
 		},
 	}
-	cn, err = ru.SelectByLabel(li3)
+	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li3})
 	require.Error(t, err)
 	require.Nil(t, cn)
 
@@ -148,7 +148,7 @@ func TestRouter_SelectByLabel(t *testing.T) {
 			"k2": "v1",
 		},
 	}
-	cn, err = ru.SelectByLabel(li4)
+	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li4})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 
@@ -158,7 +158,7 @@ func TestRouter_SelectByLabel(t *testing.T) {
 			"k2": "v1",
 		},
 	}
-	cn, err = ru.SelectByLabel(li5)
+	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li5})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 }
@@ -263,7 +263,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.SelectByLabel(li1)
+	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -278,7 +278,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.SelectByLabel(li2)
+	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li2})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -293,7 +293,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.SelectByLabel(li3)
+	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li3})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -367,7 +367,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.SelectByLabel(li1)
+	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -382,7 +382,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.SelectByLabel(li2)
+	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li2})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -397,7 +397,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.SelectByLabel(li3)
+	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li3})
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr

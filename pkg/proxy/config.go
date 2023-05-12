@@ -15,10 +15,13 @@
 package proxy
 
 import (
+	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
@@ -56,6 +59,19 @@ type Config struct {
 		// RefreshInterval refresh cluster info from hakeeper interval
 		RefreshInterval toml.Duration `toml:"refresh-interval"`
 	}
+	// Plugin specifies an optional proxy plugin backend
+	//
+	// NB: the connection between proxy and plugin is assumed to be stable, external orchestrators
+	// are responsible for ensuring the stability of rpc tunnels, for example, by deploying proxy and
+	// plugin in a same machine and communicate through local loopback address
+	Plugin *PluginConfig `toml:"plugin"`
+}
+
+type PluginConfig struct {
+	// Backend is the plugin backend URL
+	Backend string `toml:"backend"`
+	// Timeout is the rpc timeout when communicate with the plugin backend
+	Timeout time.Duration `toml:"timeout"`
 }
 
 // Option is used to set up configuration.
@@ -82,4 +98,23 @@ func (c *Config) FillDefault() {
 	if c.RebalanceToerance == 0 {
 		c.RebalanceToerance = defaultRebalanceTolerance
 	}
+	if c.Plugin != nil {
+		if c.Plugin.Timeout == 0 {
+			c.Plugin.Timeout = time.Second
+		}
+	}
+}
+
+// Validate validates the configuration of proxy server.
+func (c *Config) Validate() error {
+	noReport := errutil.ContextWithNoReport(context.Background(), true)
+	if c.Plugin != nil {
+		if c.Plugin.Backend == "" {
+			return moerr.NewInternalError(noReport, "proxy plugin backend must be set")
+		}
+		if c.Plugin.Timeout == 0 {
+			return moerr.NewInternalError(noReport, "proxy plugin backend timeout must be set")
+		}
+	}
+	return nil
 }

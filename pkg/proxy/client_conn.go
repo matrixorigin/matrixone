@@ -32,15 +32,8 @@ import (
 // clientBaseConnID is the base connection ID for client.
 var clientBaseConnID uint32 = 1000
 
-// accountInfo contains username and tenant. It is parsed from
-// user login information.
-type accountInfo struct {
-	tenant   Tenant
-	username string
-}
-
 // parse parses the account information from whole username.
-func (a *accountInfo) parse(full string) error {
+func (a *clientInfo) parse(full string) error {
 	var delimiter byte = ':'
 	if strings.IndexByte(full, '#') >= 0 {
 		delimiter = '#'
@@ -56,7 +49,7 @@ func (a *accountInfo) parse(full string) error {
 	if len(username) == 0 {
 		return moerr.NewInternalErrorNoCtx("invalid username '%s'", full)
 	}
-	a.tenant = Tenant(tenant)
+	a.labelInfo.Tenant = Tenant(tenant)
 	a.username = username
 	return nil
 }
@@ -107,10 +100,8 @@ type clientConn struct {
 	handshakePack *frontend.Packet
 	// connID records the connection ID.
 	connID uint32
-	// account is parsed from login information.
-	account accountInfo
-	// labelInfo is the information of labels.
-	labelInfo labelInfo
+	// clientInfo is the information of the client.
+	clientInfo clientInfo
 	// moCluster is the CN server cache, which used to filter CN servers
 	// by CN labels.
 	moCluster clusterservice.MOCluster
@@ -118,8 +109,6 @@ type clientConn struct {
 	router Router
 	// tun is the tunnel which this client connection belongs to.
 	tun *tunnel
-	// originIP is the original IP of client, which is used in whitelist.
-	originIP net.IP
 	// setVarStmts keeps all set user variable statements. When connection
 	// is transferred, set all these variables first.
 	setVarStmts []string
@@ -155,7 +144,9 @@ func newClientConn(
 		moCluster:  mc,
 		router:     router,
 		tun:        tun,
-		originIP:   originIP,
+		clientInfo: clientInfo{
+			originIP: originIP,
+		},
 	}
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
@@ -189,7 +180,7 @@ func (c *clientConn) RawConn() net.Conn {
 // GetTenant implements the ClientConn interface.
 func (c *clientConn) GetTenant() Tenant {
 	if c != nil {
-		return c.account.tenant
+		return c.clientInfo.Tenant
 	}
 	return EmptyTenant
 }
@@ -310,7 +301,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	// Select the best CN server from backend.
 	//
 	// NB: The selected CNServer must have label hash in it.
-	cn, err := c.router.SelectByLabel(c.labelInfo)
+	cn, err := c.router.Route(c.ctx, c.clientInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +323,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	}
 
 	// Set the label session variable.
-	if err := sc.ExecStmt(c.labelInfo.genSetVarStmt(), nil); err != nil {
+	if err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
 		return nil, err
 	}
 	// Set the use defined variables, including session variables and user variables.
@@ -353,7 +344,7 @@ func (c *clientConn) readPacket() (*frontend.Packet, error) {
 	}
 	if proxyAddr, ok := msg.(*ProxyAddr); ok {
 		if proxyAddr.SourceAddress != nil {
-			c.originIP = proxyAddr.SourceAddress
+			c.clientInfo.originIP = proxyAddr.SourceAddress
 		}
 		return c.readPacket()
 	}
