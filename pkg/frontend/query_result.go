@@ -581,6 +581,9 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	// read meta's data
 	bats, err := reader.LoadAllColumns(ctx, idxs, ses.GetMemPool())
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, moerr.NewResultFileNotFound(ctx, makeResultMetaPath(account.GetTenant(), queryId))
+		}
 		return nil, err
 	}
 	vec := bats[0].Vecs[0]
