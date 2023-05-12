@@ -54,4 +54,5 @@ select * from result_scan(last_query_id(-3)) as u;
 select * from meta_scan(last_query_id(-3)) as u;
 set role moadmin;
 drop role rrrqqq;
+select * from result_scan('d8fb97e7-e30e-11ed-8d80-d6aeb943c8b4') as u;
 set global save_query_result = off;
