@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type BlockT[T common.IRef] interface {
@@ -439,12 +438,6 @@ func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool)
 	defer blk.RUnlock()
 	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 	return
-}
-
-func (blk *baseBlock) CollectAppendLogIndexes(startTs, endTs types.TS) (indexes []*wal.Index, err error) {
-	blk.RLock()
-	defer blk.RUnlock()
-	return blk.mvcc.CollectAppendLogIndexesLocked(startTs, endTs)
 }
 
 func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *model.BlockView, err error) {
