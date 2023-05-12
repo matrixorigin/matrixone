@@ -41,6 +41,7 @@ func TestNulls(t *testing.T) {
 
 	ok := np.IsEmpty()
 	require.Equal(t, true, ok)
+	np.TryExpandWithSize(10)
 	np.Add(0)
 	ok = np.Contains(0)
 	require.Equal(t, true, ok)

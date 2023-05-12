@@ -204,6 +204,7 @@ func (n *Bitmap) IsEmpty() bool {
 	return true
 }
 
+// We always assume that bitmap has been extended to at least row.
 func (n *Bitmap) Add(row uint64) {
 	n.data[row>>6] |= 1 << (row & 0x3F)
 	n.emptyFlag = -1 //after add operation, must be not empty
