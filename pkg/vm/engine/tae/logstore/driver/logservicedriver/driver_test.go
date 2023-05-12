@@ -142,7 +142,7 @@ func TestReplay2(t *testing.T) {
 	i := 0
 	h := func(e *entry.Entry) {
 		if i == 0 {
-			
+
 		}
 		payload := []byte(fmt.Sprintf("payload %d", i))
 		assert.Equal(t, payload, e.Entry.GetPayload())

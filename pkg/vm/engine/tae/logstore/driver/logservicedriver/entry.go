@@ -286,12 +286,16 @@ func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 }
 
 func (r *recordEntry) replay(h driver.ApplyHandle, allocator logstoreEntry.Allocator) (addr *common.ClosedIntervals) {
-	bbuf := bytes.NewBuffer(r.baseEntry.payload)
 	lsns := make([]uint64, 0)
+	offset := int64(0)
 	for lsn := range r.meta.addr {
 		lsns = append(lsns, lsn)
 		e := entry.NewEmptyEntry()
-		e.ReadFromWithAllocator(bbuf, allocator)
+		n, err := e.UnmarshalBinary(r.baseEntry.payload[offset:])
+		if err != nil {
+			panic(err)
+		}
+		offset += n
 		h(e)
 		e.Entry.Free()
 	}

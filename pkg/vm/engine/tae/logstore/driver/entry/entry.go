@@ -67,6 +67,18 @@ func (e *Entry) ReadFromWithAllocator(r io.Reader, allocator entry.Allocator) (n
 	return
 }
 
+func (e *Entry) UnmarshalBinary(buf []byte) (n int64, err error) {
+	e.Lsn = types.DecodeUint64(buf[:8])
+	n += 8
+	n2, err := e.Entry.UnmarshalBinary(buf[n:])
+	if err != nil {
+		panic(err)
+	}
+	n += n2
+	e.Info = e.Entry.GetInfo().(*entry.Info)
+	return
+}
+
 func (e *Entry) ReadAt(r *os.File, offset int, allocator entry.Allocator) (int, error) {
 	lsnbuf := make([]byte, 8)
 	n, err := r.ReadAt(lsnbuf, int64(offset))

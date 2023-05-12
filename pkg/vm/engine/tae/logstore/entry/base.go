@@ -401,6 +401,29 @@ func (b *Base) ReadFromWithAllocator(r io.Reader, allocator Allocator) (int64, e
 	return int64(n1 + n2), nil
 }
 
+func (b *Base) UnmarshalBinary(buf []byte) (n int64, err error) {
+	copy(b.GetMetaBuf(), buf[:b.GetMetaSize()])
+	n += int64(b.GetMetaSize())
+
+	infoSize := b.GetInfoSize()
+	if infoSize != 0 {
+		head := objectio.DecodeIOEntryHeader(b.descBuf)
+		codec := objectio.GetIOEntryCodec(*head)
+		vinfo, err := codec.Decode(buf[n : n+int64(infoSize)])
+		info := vinfo.(*Info)
+		if err != nil {
+			return n, err
+		}
+		b.SetInfo(info)
+		n += int64(infoSize)
+	}
+
+	payloadSize := b.GetPayloadSize()
+	b.payload = buf[n : n+int64(payloadSize)]
+	n += int64(payloadSize)
+	return
+}
+
 func (b *Base) ReadAt(r *os.File, offset int, allocator Allocator) (int, error) {
 	metaBuf := b.GetMetaBuf()
 	n, err := r.ReadAt(metaBuf, int64(offset))
