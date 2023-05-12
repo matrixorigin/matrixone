@@ -95,6 +95,7 @@ func (r *replayer) replay() {
 	r.d.lsns = make([]uint64, 0)
 	r.recordChan <- entry.NewEndEntry()
 	r.wg.Wait()
+	close(r.recordChan)
 }
 
 func (r *replayer) readRecords() (readEnd bool) {
@@ -181,6 +182,7 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 }
 
 func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
+	logutil.Infof("skip %v", skipMap)
 	cmd := NewReplayCmd(skipMap)
 	recordEntry := newRecordEntry()
 	recordEntry.meta.metaType = TReplay

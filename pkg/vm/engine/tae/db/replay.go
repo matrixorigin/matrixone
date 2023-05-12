@@ -105,6 +105,7 @@ func (replayer *Replayer) Replay() {
 		panic(err)
 	}
 	replayer.txnCmdChan <- txnbase.NewLastTxnCmd()
+	close(replayer.txnCmdChan)
 	replayer.wg.Wait()
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),

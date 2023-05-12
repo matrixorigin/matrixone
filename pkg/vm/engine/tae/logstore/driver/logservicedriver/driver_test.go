@@ -120,6 +120,7 @@ func TestReplay2(t *testing.T) {
 	defer service.Close()
 
 	cfg := NewTestConfig(ccfg)
+	cfg.NewRecordSize = 100
 	driver := NewLogServiceDriver(cfg)
 
 	entryCount := 10000
@@ -135,15 +136,15 @@ func TestReplay2(t *testing.T) {
 	synced := driver.getSynced()
 	driver.Truncate(synced)
 
-	for _, e := range entries {
+	for i, e := range entries {
 		e.WaitDone()
+		assert.Equal(t, uint64(i+1), e.Lsn)
 	}
 
-	i := 0
+	i, err := driver.GetTruncated()
+	t.Logf("truncate %d", i)
+	assert.NoError(t, err)
 	h := func(e *entry.Entry) {
-		if i == 0 {
-
-		}
 		payload := []byte(fmt.Sprintf("payload %d", i))
 		assert.Equal(t, payload, e.Entry.GetPayload())
 		i++
