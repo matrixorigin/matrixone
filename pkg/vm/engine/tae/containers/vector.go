@@ -353,9 +353,12 @@ func (vec *vectorWrapper) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 }
 
 func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
+	if deletes == nil || deletes.IsEmpty() {
+		return
+	}
 	vec.tryCoW()
 
-	var dels []int64
+	dels := vec.mpool.GetSels()
 	itr := deletes.Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
@@ -363,6 +366,7 @@ func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
 	}
 
 	vec.downstreamVector.Shrink(dels, true)
+	vec.mpool.PutSels(dels)
 }
 
 func (vec *vectorWrapper) GetDownstreamVector() *cnVector.Vector {
