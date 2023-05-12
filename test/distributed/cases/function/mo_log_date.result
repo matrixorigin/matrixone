@@ -1,0 +1,433 @@
+select mo_log_date('2021/01/01');
+mo_log_date(2021/01/01)
+2021-01-01
+select mo_log_date('1997/01/13');
+mo_log_date(1997/01/13)
+1997-01-13
+select mo_log_date('1969/01/01');
+mo_log_date(1969/01/01)
+1969-01-01
+select mo_log_date('1988/1/3');
+mo_log_date(1988/1/3)
+1988-01-03
+select mo_log_date('1970/01/3');
+mo_log_date(1970/01/3)
+1970-01-03
+select mo_log_date('1970/9/29');
+mo_log_date(1970/9/29)
+1970-09-29
+select mo_log_date('20/12/12');
+mo_log_date(20/12/12)
+2020-12-12
+select mo_log_date('9/10/13');
+mo_log_date(9/10/13)
+2009-10-13
+select mo_log_date('00/12/13');
+mo_log_date(00/12/13)
+2000-12-13
+select mo_log_date('1/02/3');
+mo_log_date(1/02/3)
+2001-02-03
+select mo_log_date(null);
+mo_log_date(null)
+null
+select mo_log_date('1000/12/89');
+mo_log_date(1000/12/89)
+null
+select mo_log_date('2023/13/19');
+mo_log_date(2023/13/19)
+null
+select mo_log_date('12345/19/01');
+mo_log_date(12345/19/01)
+null
+select mo_log_date('2020-01-01');
+mo_log_date(2020-01-01)
+null
+select mo_log_date('1997-01-13');
+mo_log_date(1997-01-13)
+null
+select mo_log_date('1000/02/(*');
+mo_log_date(1000/02/(*)
+null
+select mo_log_date('1997-&*-10');
+mo_log_date(1997-&*-10)
+null
+select mo_log_date('&&()-01-13');
+mo_log_date(&&()-01-13)
+null
+select mo_log_date('2022-12-{}');
+mo_log_date(2022-12-{})
+null
+select mo_log_date('2021/01/01') between '2021-01-01' and '2021-01-02' as val;
+val
+true
+select mo_log_date('1998/01/01') between '2021-01-01' and '2021-01-02' as val;
+val
+false
+select mo_log_date('1999/01/13') between '1970-01-01' and '2020-12-13' as val;
+val
+true
+select mo_log_date('2023/1/13') between '2023-01-13' and '2023-12-13' as val;
+val
+true
+select mo_log_date('2023/11/9') between '2023-1-9' and '2025-12-19' as val;
+val
+true
+select mo_log_date('2023/01/03') > '2023-01-01' as val;
+val
+true
+select mo_log_date('1997/12/12') < '2023-12-12' as val;
+val
+true
+select mo_log_date('1995/12/30') > '1996-12-30' as val;
+val
+false
+select mo_log_date('2001/05/06') < '1997-07-03' as val;
+val
+false
+select mo_log_date('2020/01/06') > '2020-01-05' and mo_log_date('2020/01/06') < '2021-01-05';
+mo_log_date(2020/01/06) > 2020-01-05 and mo_log_date(2020/01/06) < 2021-01-05
+true
+select mo_log_date('2021-01-13') between '2020-01-13' and '2022-11-12';
+mo_log_date(2021-01-13) between 2020-01-13 and 2022-11-12
+null
+select mo_log_date('1997-01-13') between '1970-01-01' and '2023-04-24';
+mo_log_date(1997-01-13) between 1970-01-01 and 2023-04-24
+null
+select mo_log_date('数据库Database/table/2022/03/04/^&(*)(');
+mo_log_date(数据库Database/table/2022/03/04/^&(*)()
+2022-03-04
+select mo_log_date('hienrvkew/&*?/1970/01/01/uf893I');
+mo_log_date(hienrvkew/&*?/1970/01/01/uf893I)
+1970-01-01
+select mo_log_date('gyekucwheu3p2u4oi3k2if3u9i0ikvoi43kvk43io5juti4o3m48651/2023/2/28');
+mo_log_date(gyekucwheu3p2u4oi3k2if3u9i0ikvoi43kvk43io5juti4o3m48651/2023/2/28)
+2023-02-28
+select mo_log_date('yufiehw4&*(*)()_/1997/12/9/78weufiwhruewoijvriejbvrewkbe');
+mo_log_date(yufiehw4&*(*)()_/1997/12/9/78weufiwhruewoijvriejbvrewkbe)
+1997-12-09
+select mo_log_date('dhiuwnjdksnfv/2023/2025/2029/04/05/hiuewhrijvewoke&**');
+mo_log_date(dhiuwnjdksnfv/2023/2025/2029/04/05/hiuewhrijvewoke&**)
+2029-04-05
+select mo_log_date('dhiuwnjdksnfv/2023/04/05/09/hiuewhrijvewoke&**');
+mo_log_date(dhiuwnjdksnfv/2023/04/05/09/hiuewhrijvewoke&**)
+2023-04-05
+select mo_log_date('abc/def/github/com');
+mo_log_date(abc/def/github/com)
+null
+select mo_log_date('cuankjvar3242/ewhiuhj32i4jl3f/com/72989432');
+mo_log_date(cuankjvar3242/ewhiuhj32i4jl3f/com/72989432)
+null
+select mo_log_date('数据库Database/table/2022/chuiwne/03/04/6^&(*)(');
+mo_log_date(数据库Database/table/2022/chuiwne/03/04/6^&(*)()
+2003-04-06
+select mo_log_date('hvjwejkv/1970/3823/djkvmfeve/12/24/vckjwrvew');
+mo_log_date(hvjwejkv/1970/3823/djkvmfeve/12/24/vckjwrvew)
+null
+drop table if exists date01;
+create table date01(col1 char(10),col2 varchar(100));
+insert into date01 values('1990/1/02','数据库Database/table/2022/03/04/^&(*)(');
+insert into date01 values('2020/11/6','gyekucwheu3p2u4oi3k2if3u9i0ikvoi43kvk43io5juti4o3m48651/2023/2/28');
+insert into date01 values(NULL,'yufiehw4&*(*)()_/1997/12/9/78weufiwhruewoijvriejbvrewkbe');
+insert into date01 values('2023/04/24','abc/def/github/com');
+select * from date01;
+col1    col2
+1990/1/02    数据库Database/table/2022/03/04/^&(*)(
+2020/11/6    gyekucwheu3p2u4oi3k2if3u9i0ikvoi43kvk43io5juti4o3m48651/2023/2/28
+null    yufiehw4&*(*)()_/1997/12/9/78weufiwhruewoijvriejbvrewkbe
+2023/04/24    abc/def/github/com
+select mo_log_date(col1) from date01;
+mo_log_date(col1)
+1990-01-02
+2020-11-06
+null
+2023-04-24
+select mo_log_date(col2) from date01;
+mo_log_date(col2)
+2022-03-04
+2023-02-28
+1997-12-09
+null
+select date(mo_log_date(col1)) as date1,date(mo_log_date(col2)) as date2 from date01;
+date1    date2
+1990-01-02    2022-03-04
+2020-11-06    2023-02-28
+null    1997-12-09
+2023-04-24    null
+select date_add(mo_log_date(col1),interval 45 day) as date1 from date01;
+date1
+1990-02-16
+2020-12-21
+null
+2023-06-08
+select date_add(mo_log_date(col2), interval 30 day) as date2 from date01;
+date2
+2022-04-03
+2023-03-30
+1998-01-08
+null
+select date_format(mo_log_date(col1), '%W %M %Y') from date01;
+date_format(mo_log_date(col1), %W %M %Y)
+Tuesday January 1990
+Friday November 2020
+null
+Monday April 2023
+select date_format(mo_log_date(col2), '%D %y %a %d %m %b %j') from date01;
+date_format(mo_log_date(col2), %D %y %a %d %m %b %j)
+4th 22 Fri 04 03 Mar 063
+28th 23 Tue 28 02 Feb 059
+9th 97 Tue 09 12 Dec 343
+null
+select date_sub(mo_log_date(col1), interval 2 year) as date1, date_sub(mo_log_date(col2), interval 2 month) as date2 from date01;
+date1    date2
+1988-01-02    2022-01-04
+2018-11-06    2022-12-28
+null    1997-10-09
+2021-04-24    null
+select datediff(mo_log_date(col1),mo_log_date(col2)) from date01;
+datediff(mo_log_date(col1), mo_log_date(col2))
+-11749
+-844
+null
+null
+select day(mo_log_date(col1)),day(mo_log_date(col2)) from date01;
+day(mo_log_date(col1))    day(mo_log_date(col2))
+2    4
+6    28
+null    9
+24    null
+select dayofyear(mo_log_date(col1)),dayofyear(mo_log_date(col2)) from date01;
+dayofyear(mo_log_date(col1))    dayofyear(mo_log_date(col2))
+2    63
+311    59
+null    343
+114    null
+select extract(year from mo_log_date(col1)) as year1 from date01;
+year1
+1990
+2020
+null
+2023
+select extract(year from mo_log_date(col2)) as year2 from date01;
+year2
+2022
+2023
+1997
+null
+select extract(month from mo_log_date(col1)) as month from date01;
+month
+1
+11
+null
+4
+select date_format(mo_log_date(col1), '%X %V') from date01;
+date_format(mo_log_date(col1), %X %V)
+1989 53
+2020 44
+null
+2023 17
+select date_format(mo_log_date(col2), '%X %V') from date01;
+date_format(mo_log_date(col2), %X %V)
+2022 09
+2023 09
+1997 49
+null
+select month(mo_log_date(col1)),month(mo_log_date(col2)) from date01;
+month(mo_log_date(col1))    month(mo_log_date(col2))
+1    3
+11    2
+null    12
+4    null
+select weekday(mo_log_date(col1)),weekday(mo_log_date(col2)) from date01;
+weekday(mo_log_date(col1))    weekday(mo_log_date(col2))
+1    4
+4    1
+null    1
+0    null
+select year(mo_log_date(col1)),year(mo_log_date(col2)) from date01;
+year(mo_log_date(col1))    year(mo_log_date(col2))
+1990    2022
+2020    2023
+null    1997
+2023    null
+drop table date01;
+drop table if exists text01;
+create table text01(col1 tinytext not null, col2 mediumtext default null, col3 longtext);
+insert into text01 values('1878/02/23','euiwq32/2019/8d29f/03/04','tdyuh3n1iuhfiu4h2fiu432gig432jfcurenvu4hiu32hmvcke4mvn439809328093284092432/1990/38209483298432042/03/04/4328932094820941032fkiwjvklwegvre');
+insert into text01 values('1989/1/25',null,'789798888888888444451<>>?<></2020/12/13/14/89954454]\[\[]0');
+insert into text01 values('23/01/15','deuwiqjiq/20/12/12','897e7fwqefi38928749208492*(&^(&**)(*/199/11/25/ewpqorpewoeq');
+select * from text01;
+col1    col2    col3
+1878/02/23    euiwq32/2019/8d29f/03/04    tdyuh3n1iuhfiu4h2fiu432gig432jfcurenvu4hiu32hmvcke4mvn439809328093284092432/1990/38209483298432042/03/04/4328932094820941032fkiwjvklwegvre
+1989/1/25    null    789798888888888444451<>>?<></2020/12/13/14/89954454][[]0
+23/01/15    deuwiqjiq/20/12/12    897e7fwqefi38928749208492*(&^(&**)(*/199/11/25/ewpqorpewoeq
+select mo_log_date(col1) from text01;
+mo_log_date(col1)
+1878-02-23
+1989-01-25
+2023-01-15
+select mo_log_date(col2) from text01;
+mo_log_date(col2)
+null
+null
+2020-12-12
+select mo_log_date(col3) from text01;
+mo_log_date(col3)
+2042-03-04
+2020-12-13
+0199-11-25
+select date(mo_log_date(col1)) as date1,date(mo_log_date(col2)) as date2, date(mo_log_date(col3)) as date3 from text01;
+date1    date2    date3
+1878-02-23    null    2042-03-04
+1989-01-25    null    2020-12-13
+2023-01-15    2020-12-12    0199-11-25
+select date_add(mo_log_date(col1),interval 45 day) as date1 from text01;
+date1
+1878-04-09
+1989-03-11
+2023-03-01
+select date_add(mo_log_date(col2), interval 30 day) as date2 from text01;
+date2
+null
+null
+2021-01-11
+select date_add(mo_log_date(col3), interval 30 day) as date3 from text01;
+date3
+2042-04-03
+2021-01-12
+0199-12-25
+select date_format(mo_log_date(col1), '%W %M %Y') from text01;
+date_format(mo_log_date(col1), %W %M %Y)
+Saturday February 1878
+Wednesday January 1989
+Sunday January 2023
+select date_format(mo_log_date(col2), '%D %y %a %d %m %b %j') from text01;
+date_format(mo_log_date(col2), %D %y %a %d %m %b %j)
+null
+null
+12th 20 Sat 12 12 Dec 347
+select date_format(mo_log_date(col3), '%D %y %a %d %m %b %j') from text01;
+date_format(mo_log_date(col3), %D %y %a %d %m %b %j)
+4th 42 Tue 04 03 Mar 063
+13th 20 Sun 13 12 Dec 348
+25th 99 Mon 25 11 Nov 329
+select date_sub(mo_log_date(col1), interval 2 year) as date1, date_sub(mo_log_date(col2), interval 2 month) as date2,date_sub(mo_log_date(col3), interval 2 day) as date3 from text01;
+date1    date2    date3
+1876-02-23    null    2042-03-02
+1987-01-25    null    2020-12-11
+2021-01-15    2020-10-12    0199-11-23
+select datediff(mo_log_date(col1),mo_log_date(col2)) from text01;
+datediff(mo_log_date(col1), mo_log_date(col2))
+null
+null
+764
+select day(mo_log_date(col1)),day(mo_log_date(col2)),day(mo_log_date(col3)) from text01;
+day(mo_log_date(col1))    day(mo_log_date(col2))    day(mo_log_date(col3))
+23    null    4
+25    null    13
+15    12    25
+select dayofyear(mo_log_date(col1)),dayofyear(mo_log_date(col2)),dayofyear(mo_log_date(col3)) from text01;
+dayofyear(mo_log_date(col1))    dayofyear(mo_log_date(col2))    dayofyear(mo_log_date(col3))
+54    null    63
+25    null    348
+15    347    329
+select extract(year from mo_log_date(col1)) as year1 from text01;
+year1
+1878
+1989
+2023
+select extract(year from mo_log_date(col2)) as year2 from text01;
+year2
+null
+null
+2020
+select extract(month from mo_log_date(col1)) as month from text01;
+month
+2
+1
+1
+select extract(year from mo_log_date(col2)) as year from text01;
+year
+null
+null
+2020
+select date_format(mo_log_date(col1), '%X %V') from text01;
+date_format(mo_log_date(col1), %X %V)
+1878 07
+1989 04
+2023 03
+select date_format(mo_log_date(col2), '%X %V') from text01;
+date_format(mo_log_date(col2), %X %V)
+null
+null
+2020 49
+select date_format(mo_log_date(col3), '%X %V') from text01;
+date_format(mo_log_date(col3), %X %V)
+2042 09
+2020 50
+0199 47
+select month(mo_log_date(col1)),month(mo_log_date(col2)),month(mo_log_date(col3)) from text01;
+month(mo_log_date(col1))    month(mo_log_date(col2))    month(mo_log_date(col3))
+2    null    3
+1    null    12
+1    12    11
+select weekday(mo_log_date(col1)),weekday(mo_log_date(col2)),weekday(mo_log_date(col3)) from text01;
+weekday(mo_log_date(col1))    weekday(mo_log_date(col2))    weekday(mo_log_date(col3))
+5    null    1
+2    null    6
+6    5    0
+select year(mo_log_date(col1)),year(mo_log_date(col2)),year(mo_log_date(col3)) from text01;
+year(mo_log_date(col1))    year(mo_log_date(col2))    year(mo_log_date(col3))
+1878    null    2042
+1989    null    2020
+2023    2020    199
+drop table text01;
+select date(mo_log_date('hienrvkew/&*?/1970/01/01/uf893I'));
+date(mo_log_date(hienrvkew/&*?/1970/01/01/uf893I))
+1970-01-01
+select date_add(mo_log_date('数据库/2021/01/01/guanli系统'),interval 45 day);
+date_add(mo_log_date(数据库/2021/01/01/guanli系统), interval(45, day))
+2021-02-15
+select date_format(mo_log_date('dhiuwnjdksnfv/2023/2025/2029/04/05/hiuewhrijvewoke&**'), '%W %M %Y');
+date_format(mo_log_date(dhiuwnjdksnfv/2023/2025/2029/04/05/hiuewhrijvewoke&**), %W %M %Y)
+Thursday April 2029
+select date_format(mo_log_date('数据库Database/table/2022/03/04/^&(*)('), '%D %y %a %d %m %b %j');
+date_format(mo_log_date(数据库Database/table/2022/03/04/^&(*)(), %D %y %a %d %m %b %j)
+4th 22 Fri 04 03 Mar 063
+select date_sub(mo_log_date('2021/01/01'), interval 2 year);
+date_sub(mo_log_date(2021/01/01), interval(2, year))
+2019-01-01
+select datediff(mo_log_date('2023/04/25'),mo_log_date('2024/04/25'));
+datediff(mo_log_date(2023/04/25), mo_log_date(2024/04/25))
+-366
+select day(mo_log_date('新版本下个月发布/2045/1998/12/29/78/&**('));
+day(mo_log_date(新版本下个月发布/2045/1998/12/29/78/&**())
+29
+select dayofyear(mo_log_date('1996/12/29'));
+dayofyear(mo_log_date(1996/12/29))
+364
+select extract(year from mo_log_date('2029/01/14')) as year;
+year
+2029
+select extract(month from mo_log_date('2029/01/14')) as month;
+month
+1
+select date_format(mo_log_date('2029/01/14'), '%X %V');
+date_format(mo_log_date(2029/01/14), %X %V)
+2029 02
+select month(mo_log_date('1990/1/25'));
+month(mo_log_date(1990/1/25))
+1
+select weekday(mo_log_date('1258/2026/4/27/88ijmm'));
+weekday(mo_log_date(1258/2026/4/27/88ijmm))
+0
+select year(mo_log_date('1212/01/03'));
+year(mo_log_date(1212/01/03))
+1212
+drop table if exists date02;
+create table date02(col1 text);
+insert into date02 values('sfiuenhfwu8793u2r43r/2020/02/02');
+select mo_log_date(col1) from date02;
+mo_log_date(col1)
+2020-02-02
+drop table date02;
