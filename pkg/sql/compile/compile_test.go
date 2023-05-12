@@ -85,7 +85,7 @@ func TestCompile(t *testing.T) {
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
-		c := New("test", "test", tc.sql, "", context.TODO(), tc.e, tc.proc, tc.stmt)
+		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil)
 		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.GetAffectedRows()
@@ -103,7 +103,7 @@ func TestCompileWithFaults(t *testing.T) {
 	var ctx = context.Background()
 	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
-	c := New("test", "test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
+	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil)
 	err := c.Compile(ctx, tc.pn, nil, testPrint)
 	require.NoError(t, err)
 	c.GetAffectedRows()
