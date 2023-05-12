@@ -413,12 +413,13 @@ func (fr *FunctionResult[T]) TempSetType(t types.Type) {
 	fr.vec.SetType(t)
 }
 
-func (fr *FunctionResult[T]) DupFromParameter(fp FunctionParameterWrapper[T]) (err error) {
-	// clean the old memory
-	if fr.vec != fp.GetSourceVector() {
-		fr.Free()
+func (fr *FunctionResult[T]) DupFromParameter(fp FunctionParameterWrapper[T], length int) (err error) {
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := fp.GetValue(i)
+		if err = fr.Append(v, null); err != nil {
+			return err
+		}
 	}
-	fr.vec, err = fp.GetSourceVector().Dup(fr.mp)
 	return err
 }
 

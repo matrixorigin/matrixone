@@ -69,7 +69,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		rbat.Vecs[i] = vec
 	}
 
-	newAlloc, err := colexec.MinDup(proc, rbat)
+	newAlloc, err := colexec.ProjectionDupResult(proc, ap.ctr.projExecutors, rbat)
 	if err != nil {
 		bat.Clean(proc.Mp())
 		return false, err

@@ -450,13 +450,20 @@ func generateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 	return vec, nil
 }
 
-// MinDup do dup work for vectors of batch as few time as possible.
-func MinDup(proc *process.Process, bat *batch.Batch) (dupSize int, err error) {
+// ProjectionDupResult do dup work for vectors of batch as few time as possible.
+func ProjectionDupResult(proc *process.Process, executors []ExpressionExecutor, bat *batch.Batch) (dupSize int, err error) {
 	dupSize = 0
 
 	duped := make([]int, len(bat.Vecs))
 	for i := range duped {
 		duped[i] = -1
+	}
+
+	canGetNsp := make([]bool, len(executors))
+	for i := range executors {
+		if _, ok := executors[i].(*FunctionExpressionExecutor); ok {
+			canGetNsp[i] = true
+		}
 	}
 
 	dupedVectors := make([]*vector.Vector, 0, len(bat.Vecs))
@@ -466,12 +473,25 @@ func MinDup(proc *process.Process, bat *batch.Batch) (dupSize int, err error) {
 			if oldVec.GetType().Oid == types.T_any {
 				newVec = vector.NewConstNull(types.T_any.ToType(), oldVec.Length(), proc.Mp())
 			} else {
-				newVec, err = oldVec.Dup(proc.Mp())
-				if err != nil {
-					for j := range dupedVectors {
-						dupedVectors[j].Free(proc.Mp())
+				if canGetNsp[i] {
+					nsp := oldVec.GetNulls()
+					oldVec.SetNulls(nil)
+					newVec, err = oldVec.Dup(proc.Mp())
+					if err != nil {
+						for j := range dupedVectors {
+							dupedVectors[j].Free(proc.Mp())
+						}
+						return 0, err
 					}
-					return 0, err
+					newVec.SetNulls(nsp)
+				} else {
+					newVec, err = oldVec.Dup(proc.Mp())
+					if err != nil {
+						for j := range dupedVectors {
+							dupedVectors[j].Free(proc.Mp())
+						}
+						return 0, err
+					}
 				}
 			}
 			dupSize += newVec.Size()

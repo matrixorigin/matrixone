@@ -601,7 +601,7 @@ func rowsetDataToVector(
 			executor.Free()
 			return err
 		}
-		if err = uf(targeVec, vec, 1); err != nil {
+		if err = uf(targeVec, vec, 0); err != nil {
 			executor.Free()
 			return err
 		}
