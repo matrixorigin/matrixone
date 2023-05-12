@@ -16,15 +16,12 @@ package logservicedriver
 
 import (
 	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	"github.com/panjf2000/ants/v2"
 
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/stretchr/testify/assert"
@@ -88,7 +85,7 @@ func TestReplay1(t *testing.T) {
 	cfg := NewTestConfig(ccfg)
 	driver := NewLogServiceDriver(cfg)
 
-	entryCount := 100
+	entryCount := 10000
 	entries := make([]*entry.Entry, entryCount)
 
 	for i := 0; i < entryCount; i++ {
@@ -118,55 +115,45 @@ func TestReplay1(t *testing.T) {
 	driver.Close()
 }
 
-func TestTruncate(t *testing.T) {
+func TestReplay2(t *testing.T) {
 	service, ccfg := initTest(t)
 	defer service.Close()
 
 	cfg := NewTestConfig(ccfg)
 	driver := NewLogServiceDriver(cfg)
 
-	entryCount := 10
+	entryCount := 10000
 	entries := make([]*entry.Entry, entryCount)
-	wg := &sync.WaitGroup{}
-	worker, _ := ants.NewPool(20)
-	truncatefn := func(i int, dr *LogServiceDriver) func() {
-		return func() {
-			e := entries[i]
-			assert.NoError(t, e.WaitDone())
-			assert.NoError(t, dr.Truncate(e.Lsn))
-			testutils.WaitExpect(4000, func() bool {
-				trucated, err := dr.GetTruncated()
-				assert.NoError(t, err)
-				return trucated >= e.Lsn
-			})
-			truncated, err := dr.GetTruncated()
-			assert.NoError(t, err)
-			assert.GreaterOrEqual(t, truncated, e.Lsn)
-			wg.Done()
-		}
-	}
-	appendfn := func(i int, dr *LogServiceDriver) func() {
-		return func() {
-			e := entry.MockEntry()
-			dr.Append(e)
-			entries[i] = e
-			worker.Submit(truncatefn(i, dr))
-		}
-	}
 
 	for i := 0; i < entryCount; i++ {
-		wg.Add(1)
-		worker.Submit(appendfn(i, driver))
+		payload := []byte(fmt.Sprintf("payload %d", i))
+		e := entry.MockEntryWithPayload(payload)
+		driver.Append(e)
+		entries[i] = e
 	}
 
-	wg.Wait()
+	synced := driver.getSynced()
+	driver.Truncate(synced)
 
-	// driver = restartDriver(t, driver)
+	for _, e := range entries {
+		e.WaitDone()
+	}
 
-	// for i := 0; i < entryCount; i++ {
-	// 	wg.Add(1)
-	// 	worker.Submit(appendfn(i, driver))
-	// }
+	i := 0
+	h := func(e *entry.Entry) {
+		if i == 0 {
+			
+		}
+		payload := []byte(fmt.Sprintf("payload %d", i))
+		assert.Equal(t, payload, e.Entry.GetPayload())
+		i++
+	}
 
-	assert.NoError(t, driver.Close())
+	driver = restartDriver(t, driver, h)
+
+	for _, e := range entries {
+		e.Entry.Free()
+	}
+
+	driver.Close()
 }
