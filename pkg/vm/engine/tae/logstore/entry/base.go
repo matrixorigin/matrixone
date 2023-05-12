@@ -337,7 +337,7 @@ func (b *Base) SetPayload(buf []byte) error {
 
 func (b *Base) Unmarshal(buf []byte, allocator Allocator) error {
 	bbuf := bytes.NewBuffer(buf)
-	_, err := b.ReadFrom(bbuf, allocator)
+	_, err := b.ReadFromWithAllocator(bbuf, allocator)
 	return err
 }
 func (b *Base) GetLsn() (gid uint32, lsn uint64) {
@@ -359,7 +359,7 @@ func (b *Base) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (b *Base) ReadFrom(r io.Reader, allocator Allocator) (int64, error) {
+func (b *Base) ReadFromWithAllocator(r io.Reader, allocator Allocator) (int64, error) {
 	metaBuf := b.GetMetaBuf()
 	_, err := r.Read(metaBuf)
 	if err != nil {

@@ -17,7 +17,6 @@ package wal
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
 
@@ -43,7 +42,7 @@ type Driver interface {
 	LoadEntry(groupID uint32, lsn uint64) (LogEntry, error)
 	GetCurrSeqNum() uint64
 	GetPenddingCnt() uint64
-	Replay(handle store.ApplyHandle, allocator logstoreEntry.Allocator) error
+	Replay(handle store.ApplyHandle, allocator entry.Allocator) error
 	Start()
 	Close() error
 }

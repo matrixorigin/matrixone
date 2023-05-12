@@ -55,11 +55,11 @@ func (e *Entry) SetInfo() {
 		e.Info = info.(*entry.Info)
 	}
 }
-func (e *Entry) ReadFrom(r io.Reader, allocator entry.Allocator) (n int64, err error) {
+func (e *Entry) ReadFromWithAllocator(r io.Reader, allocator entry.Allocator) (n int64, err error) {
 	if _, err = r.Read(types.EncodeUint64(&e.Lsn)); err != nil {
 		return
 	}
-	_, err = e.Entry.ReadFrom(r, allocator)
+	_, err = e.Entry.ReadFromWithAllocator(r, allocator)
 	if err != nil {
 		panic(err)
 	}

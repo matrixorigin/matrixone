@@ -288,7 +288,7 @@ func (r *recordEntry) replay(h driver.ApplyHandle, allocator logstoreEntry.Alloc
 	for lsn := range r.meta.addr {
 		lsns = append(lsns, lsn)
 		e := entry.NewEmptyEntry()
-		e.ReadFrom(bbuf, allocator)
+		e.ReadFromWithAllocator(bbuf, allocator)
 		h(e)
 		e.Entry.Free()
 	}
@@ -335,7 +335,7 @@ func (r *recordEntry) readEntry(lsn uint64, allocator logstoreEntry.Allocator) *
 	offset := r.meta.addr[lsn]
 	bbuf := bytes.NewBuffer(r.baseEntry.payload[offset:])
 	e := entry.NewEmptyEntry()
-	e.ReadFrom(bbuf, allocator)
+	e.ReadFromWithAllocator(bbuf, allocator)
 	e.Lsn = lsn
 	return e
 }

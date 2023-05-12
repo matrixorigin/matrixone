@@ -16,7 +16,6 @@ package store
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 const (
@@ -35,7 +34,7 @@ type Store interface {
 	GetPendding(gid uint32) (cnt uint64)
 	GetCheckpointed(gid uint32) (lsn uint64)
 
-	Replay(h ApplyHandle, allocator logstoreEntry.Allocator) error
+	Replay(h ApplyHandle, allocator entry.Allocator) error
 	Close() error
 }
 

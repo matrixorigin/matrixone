@@ -59,7 +59,7 @@ type Entry interface {
 
 	Unmarshal(buf []byte, allocator Allocator) error
 	Marshal() (buf []byte, err error)
-	ReadFrom(r io.Reader, allocator Allocator) (int64, error)
+	ReadFromWithAllocator(r io.Reader, allocator Allocator) (int64, error)
 	ReadAt(r *os.File, offset int, allocator Allocator) (int, error)
 	WriteTo(io.Writer) (int64, error)
 	PrepareWrite()
