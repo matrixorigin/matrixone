@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type MVCCHandle struct {
@@ -182,30 +181,6 @@ func (n *MVCCHandle) CollectUncommittedANodesPreparedBefore(
 		}
 		return true
 	}, false)
-	return
-}
-
-func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs types.TS) (indexes []*wal.Index, err error) {
-	if n.appends.IsEmpty() {
-		return
-	}
-	indexes = make([]*wal.Index, 0)
-	n.appends.ForEach(func(an *AppendNode) bool {
-		needWait, txn := an.NeedWaitCommitting(endTs.Next())
-		if needWait {
-			n.RUnlock()
-			txn.GetTxnState(true)
-			n.RLock()
-		}
-		if an.Prepare.Less(startTs) {
-			return true
-		}
-		if an.Prepare.Greater(endTs) {
-			return false
-		}
-		indexes = append(indexes, an.GetLogIndex())
-		return true
-	}, true)
 	return
 }
 

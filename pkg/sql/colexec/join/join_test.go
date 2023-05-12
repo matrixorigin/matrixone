@@ -97,6 +97,8 @@ func TestJoin(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- bat
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 				break
@@ -219,6 +221,8 @@ func BenchmarkJoin(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- bat
+			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 					break

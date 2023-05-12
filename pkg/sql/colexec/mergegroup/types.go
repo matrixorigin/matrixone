@@ -57,7 +57,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()
-		ctr.FreeOperator(pipelineFailed)
+		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
 	}

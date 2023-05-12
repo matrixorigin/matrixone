@@ -584,8 +584,9 @@ type Engine interface {
 	// Database creates a handle for a database
 	Database(ctx context.Context, databaseName string, op client.TxnOperator) (Database, error)
 
-	// Nodes returns all nodes for worker jobs
-	Nodes() (cnNodes Nodes, err error)
+	// Nodes returns all nodes for worker jobs. isInternal, tenant, cnLabel are
+	// used to filter CN servers.
+	Nodes(isInternal bool, tenant string, cnLabel map[string]string) (cnNodes Nodes, err error)
 
 	// Hints returns hints of engine features
 	// return value should not be cached
