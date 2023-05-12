@@ -85,7 +85,11 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 
 	stmt, cnt, err = generateInsertStatement(sw.buffer, sw.tbl)
 
-	_, err = dbConn.Exec(stmt)
+	if err != nil {
+		return 0, err
+	} else {
+		_, err = dbConn.Exec(stmt)
+	}
 
 	if err != nil {
 		if strings.Contains(err.Error(), MAX_ALLOWED_PACKET_ERROR) && sw.tbl.Table == "statement_info" {
