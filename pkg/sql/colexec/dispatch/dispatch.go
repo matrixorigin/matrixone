@@ -106,7 +106,7 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 			return false, moerr.NewInternalErrorNoCtx("wait notify message timeout")
 		case <-proc.Ctx.Done():
 			arg.ctr.prepared = true
-			logutil.Errorf("conctx done during dispatch")
+			logutil.Infof("conctx done during dispatch")
 			return true, nil
 		case csinfo := <-proc.DispatchNotifyCh:
 			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{

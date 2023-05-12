@@ -16,11 +16,9 @@ package objectio
 
 import (
 	"bytes"
-	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var EmptyZm = [64]byte{}
@@ -41,10 +39,9 @@ func (o objectMetaV1) BlockHeader() BlockHeader {
 }
 
 func (o objectMetaV1) MustGetColumn(seqnum uint16) ColumnMeta {
-	return GetObjectColumnMeta(seqnum, o[headerLen:])
-}
-
-func (o objectMetaV1) ObjectColumnMeta(seqnum uint16) ColumnMeta {
+	if seqnum > o.BlockHeader().MaxSeqnum() {
+		return BuildObjectColumnMeta()
+	}
 	return GetObjectColumnMeta(seqnum, o[headerLen:])
 }
 
@@ -72,7 +69,7 @@ func (o objectMetaV1) GetBlockMeta(id uint32) BlockObject {
 }
 
 func (o objectMetaV1) GetColumnMeta(blk uint32, seqnum uint16) ColumnMeta {
-	return o.GetBlockMeta(blk).ColumnMeta(seqnum)
+	return o.GetBlockMeta(blk).MustGetColumn(seqnum)
 }
 
 func (o objectMetaV1) IsEmpty() bool {
@@ -119,8 +116,9 @@ func (oh BlockIndex) Length() uint32 {
 	return oh.BlockCount()*posLen + blockCountLen
 }
 
-func GetObjectColumnMeta(idx uint16, data []byte) ColumnMeta {
-	offset := uint32(idx) * colMetaLen
+// caller makes sure the data has column meta fot the given seqnum
+func GetObjectColumnMeta(seqnum uint16, data []byte) ColumnMeta {
+	offset := uint32(seqnum) * colMetaLen
 	return data[offset : offset+colMetaLen]
 }
 
@@ -158,52 +156,6 @@ const (
 	headerDummyLen     = 35
 	headerLen          = headerDummyOff + headerDummyLen
 )
-
-type BlockObject []byte
-
-func BuildBlockMeta(count uint16) BlockObject {
-	length := headerLen + uint32(count)*colMetaLen
-	buf := make([]byte, length)
-	meta := BlockObject(buf)
-	return meta
-}
-
-func (bm BlockObject) BlockHeader() BlockHeader {
-	return BlockHeader(bm[:headerLen])
-}
-
-func (bm BlockObject) SetBlockMetaHeader(header BlockHeader) {
-	copy(bm[:headerLen], header)
-}
-
-func (bm BlockObject) ColumnMeta(seqnum uint16) ColumnMeta {
-	return GetColumnMeta(seqnum, bm)
-}
-
-func (bm BlockObject) AddColumnMeta(idx uint16, col ColumnMeta) {
-	offset := headerLen + uint32(idx)*colMetaLen
-	copy(bm[offset:offset+colMetaLen], col)
-}
-
-func (bm BlockObject) IsEmpty() bool {
-	return len(bm) == 0
-}
-
-func (bm BlockObject) ToColumnZoneMaps(seqnums []uint16) []ZoneMap {
-	maxseq := bm.GetMaxSeqnum()
-	zms := make([]ZoneMap, len(seqnums))
-	for i, idx := range seqnums {
-		if idx >= SEQNUM_UPPER {
-			panic(fmt.Sprintf("do not read special %d", idx))
-		}
-		if idx > maxseq {
-			zms[i] = index.DecodeZM(EmptyZm[:])
-		}
-		column := bm.MustGetColumn(idx)
-		zms[i] = index.DecodeZM(column.ZoneMap())
-	}
-	return zms
-}
 
 type BlockHeader []byte
 
