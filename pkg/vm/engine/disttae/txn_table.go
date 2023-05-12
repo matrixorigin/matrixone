@@ -198,11 +198,7 @@ func (tbl *txnTable) LoadDeletesForBlock(blockID *types.Blockid, deleteBlockId m
 			if err != nil {
 				return err
 			}
-			s3BlockReader, err := blockio.NewObjectReader(tbl.db.txn.engine.fs, location)
-			if err != nil {
-				return err
-			}
-			rowIdBat, err := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, []uint16{0}, nil, location.ID(), tbl.db.txn.proc.GetMPool())
+			rowIdBat, err := blockio.LoadColumns(tbl.db.txn.proc.Ctx, []uint16{0}, nil, tbl.db.txn.engine.fs, location, tbl.db.txn.proc.GetMPool())
 			if err != nil {
 				return err
 			}
@@ -698,11 +694,6 @@ func (tbl *txnTable) compaction() error {
 			err = e
 			return false
 		}
-		s3BlockReader, e := blockio.NewObjectReader(tbl.db.txn.engine.fs, location)
-		if e != nil {
-			err = e
-			return false
-		}
 		if tbl.seqnums == nil {
 			n := len(tbl.tableDef.Cols) - 1
 			idxs := make([]uint16, 0, n)
@@ -715,7 +706,7 @@ func (tbl *txnTable) compaction() error {
 			tbl.seqnums = idxs
 			tbl.typs = typs
 		}
-		bat, e := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, tbl.seqnums, tbl.typs, location.ID(), tbl.db.txn.proc.GetMPool())
+		bat, e := blockio.LoadColumns(tbl.db.txn.proc.Ctx, tbl.seqnums, tbl.typs, tbl.db.txn.engine.fs, location, tbl.db.txn.proc.GetMPool())
 		if e != nil {
 			err = e
 			return false

@@ -312,7 +312,25 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 	cwft.proc.Ctx = txnCtx
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
-	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), txnCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+
+	var tenant string
+	tInfo := cwft.ses.GetTenantInfo()
+	if tInfo != nil {
+		tenant = tInfo.GetTenant()
+	}
+	cwft.compile = compile.New(
+		addr,
+		cwft.ses.GetDatabaseName(),
+		cwft.ses.GetSql(),
+		tenant,
+		cwft.ses.GetUserName(),
+		txnCtx,
+		cwft.ses.GetStorage(),
+		cwft.proc,
+		cwft.stmt,
+		cwft.ses.isInternal,
+		cwft.ses.getCNLabels(),
+	)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }

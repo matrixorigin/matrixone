@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"context"
 	"net"
 	"time"
 
@@ -32,11 +33,11 @@ const (
 
 // Router is an interface to select CN server and connects to it.
 type Router interface {
+	// Route selects the best CN server according to the clientInfo.
+	Route(ctx context.Context, client clientInfo) (*CNServer, error)
+
 	// SelectByConnID selects the CN server which has the connection ID.
 	SelectByConnID(connID uint32) (*CNServer, error)
-
-	// SelectByLabel selects the best CN server with the label.
-	SelectByLabel(label labelInfo) (*CNServer, error)
 
 	// Connect connects to the CN server and returns the connection.
 	// It should take a handshakeResp as a parameter, which is the auth
@@ -111,7 +112,7 @@ func newRouter(
 	}
 }
 
-// SelectByConnID implements the CNConnector interface.
+// SelectByConnID implements the Router interface.
 func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 	cn := r.rebalancer.connManager.getCNServer(connID)
 	if cn == nil {
@@ -125,17 +126,17 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 	}, nil
 }
 
-// SelectByLabel implements the CNConnector interface.
-func (r *router) SelectByLabel(label labelInfo) (*CNServer, error) {
+// Route implements the Router interface.
+func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
 	var cns []*CNServer
 	var cnEmpty, cnNotEmpty bool
-	selector := label.genSelector()
-	if label.isSuperTenant() {
+	selector := c.labelInfo.genSelector()
+	if c.labelInfo.isSuperTenant() {
 		selector = clusterservice.NewSelector()
 	}
 	r.moCluster.GetCNService(selector, func(s metadata.CNService) bool {
 		cns = append(cns, &CNServer{
-			reqLabel: label,
+			reqLabel: c.labelInfo,
 			cnLabel:  s.Labels,
 			uuid:     s.ServiceID,
 			addr:     s.SQLAddress,
@@ -154,7 +155,7 @@ func (r *router) SelectByLabel(label labelInfo) (*CNServer, error) {
 	}
 
 	// getHash returns same hash for same labels.
-	hash, err := label.getHash()
+	hash, err := c.labelInfo.getHash()
 	if err != nil {
 		return nil, err
 	}
