@@ -1335,7 +1335,10 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 		w := csv.NewWriter(buf)
 		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
 			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
-		if param.S3Param.Provider == "minio" {
+		if strings.ToLower(param.S3Param.Provider) != "" && strings.ToLower(param.S3Param.Provider) != "minio" {
+			return nil, "", moerr.NewBadConfig(param.Ctx, "the provider only support 'minio' now")
+		}
+		if strings.ToLower(param.S3Param.Provider) == "minio" {
 			opts = append(opts, "is-minio=true")
 		}
 		if err = w.Write(opts); err != nil {
