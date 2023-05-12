@@ -74,8 +74,6 @@ type Vector interface {
 	// NullCount will consider ConstNull and Const vector
 	NullCount() int
 
-	Slice() any
-
 	Close()
 
 	// Test functions

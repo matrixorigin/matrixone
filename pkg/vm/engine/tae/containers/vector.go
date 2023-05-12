@@ -32,15 +32,15 @@ import (
 // 2. Window - DN uses shared-memory Window
 // 3. Mpool  - DN stores mpool reference within the vector
 // 4. SharedMemory Logic - DN ResetWithData() doesn't allocate mpool memory unless Append() is called.
-type vector[T any] struct {
+type vector struct {
 	downstreamVector *cnVector.Vector
 
 	// Used in Append()
 	mpool *mpool.MPool
 }
 
-func NewVector[T any](typ types.Type, opts ...Options) *vector[T] {
-	vec := &vector[T]{
+func NewVector(typ types.Type, opts ...Options) *vector {
+	vec := &vector{
 		downstreamVector: cnVector.NewVec(typ),
 	}
 
@@ -57,7 +57,7 @@ func NewVector[T any](typ types.Type, opts ...Options) *vector[T] {
 	return vec
 }
 
-func (vec *vector[T]) Get(i int) any {
+func (vec *vector) Get(i int) any {
 	if vec.downstreamVector.IsConstNull() {
 		return nil
 	}
@@ -65,27 +65,27 @@ func (vec *vector[T]) Get(i int) any {
 		bs := vec.ShallowGet(i).([]byte)
 		ret := make([]byte, len(bs))
 		copy(ret, bs)
-		return any(ret).(T)
+		return any(ret)
 	}
 
 	return getNonNullValue(vec.downstreamVector, uint32(i))
 }
 
-func (vec *vector[T]) ShallowGet(i int) any {
+func (vec *vector) ShallowGet(i int) any {
 	return getNonNullValue(vec.downstreamVector, uint32(i))
 }
 
-func (vec *vector[T]) Length() int {
+func (vec *vector) Length() int {
 	return vec.downstreamVector.Length()
 }
 
-func (vec *vector[T]) Append(v any, isNull bool) {
+func (vec *vector) Append(v any, isNull bool) {
 	// innsert AppendAny will check IsConst
 	vec.tryCoW()
 
 	var err error
 	if isNull {
-		err = cnVector.AppendAny(vec.downstreamVector, types.DefaultVal[T](), true, vec.mpool)
+		err = cnVector.AppendAny(vec.downstreamVector, nil, true, vec.mpool)
 	} else {
 		err = cnVector.AppendAny(vec.downstreamVector, v, false, vec.mpool)
 	}
@@ -94,11 +94,11 @@ func (vec *vector[T]) Append(v any, isNull bool) {
 	}
 }
 
-func (vec *vector[T]) GetAllocator() *mpool.MPool {
+func (vec *vector) GetAllocator() *mpool.MPool {
 	return vec.mpool
 }
 
-func (vec *vector[T]) IsNull(i int) bool {
+func (vec *vector) IsNull(i int) bool {
 	inner := vec.downstreamVector
 	if inner.IsConstNull() {
 		return true
@@ -109,22 +109,22 @@ func (vec *vector[T]) IsNull(i int) bool {
 	return cnNulls.Contains(inner.GetNulls(), uint64(i))
 }
 
-func (vec *vector[T]) NullMask() *cnNulls.Nulls {
+func (vec *vector) NullMask() *cnNulls.Nulls {
 	return vec.downstreamVector.GetNulls()
 }
 
-func (vec *vector[T]) GetType() *types.Type {
+func (vec *vector) GetType() *types.Type {
 	return vec.downstreamVector.GetType()
 }
 
-func (vec *vector[T]) Extend(src Vector) {
+func (vec *vector) Extend(src Vector) {
 	if vec.downstreamVector.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("extend to const vector"))
 	}
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
 
-func (vec *vector[T]) Update(i int, v any, isNull bool) {
+func (vec *vector) Update(i int, v any, isNull bool) {
 	if vec.downstreamVector.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("update to const vector"))
 	}
@@ -132,11 +132,7 @@ func (vec *vector[T]) Update(i int, v any, isNull bool) {
 	UpdateValue(vec.downstreamVector, uint32(i), v, isNull)
 }
 
-func (vec *vector[T]) Slice() any {
-	return cnVector.MustFixedCol[T](vec.downstreamVector)
-}
-
-func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
+func (vec *vector) WriteTo(w io.Writer) (n int64, err error) {
 	var bs bytes.Buffer
 
 	var size int64
@@ -159,7 +155,7 @@ func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
+func (vec *vector) ReadFrom(r io.Reader) (n int64, err error) {
 	buf := make([]byte, 8)
 	if _, err = r.Read(buf); err != nil {
 		return
@@ -185,7 +181,7 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (vec *vector[T]) HasNull() bool {
+func (vec *vector) HasNull() bool {
 	if vec.downstreamVector.IsConstNull() {
 		return true
 	}
@@ -195,7 +191,7 @@ func (vec *vector[T]) HasNull() bool {
 	return vec.NullMask() != nil && vec.NullMask().Any()
 }
 
-func (vec *vector[T]) NullCount() int {
+func (vec *vector) NullCount() int {
 	if vec.downstreamVector.IsConstNull() {
 		return vec.Length()
 	}
@@ -209,9 +205,9 @@ func (vec *vector[T]) NullCount() int {
 }
 
 // conver a const vector to a normal one, getting ready to edit
-func (vec *vector[T]) TryConvertConst() Vector {
+func (vec *vector) TryConvertConst() Vector {
 	if vec.downstreamVector.IsConstNull() {
-		ret := NewVector[T](*vec.GetType())
+		ret := NewVector(*vec.GetType())
 		ret.mpool = vec.mpool
 		for i := 0; i < vec.Length(); i++ {
 			ret.Append(nil, true)
@@ -220,7 +216,7 @@ func (vec *vector[T]) TryConvertConst() Vector {
 	}
 
 	if vec.downstreamVector.IsConst() {
-		ret := NewVector[T](*vec.GetType())
+		ret := NewVector(*vec.GetType())
 		ret.mpool = vec.mpool
 		v := vec.Get(0)
 		for i := 0; i < vec.Length(); i++ {
@@ -231,19 +227,19 @@ func (vec *vector[T]) TryConvertConst() Vector {
 	return vec
 }
 
-func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) error {
+func (vec *vector) Foreach(op ItOp, sels *roaring.Bitmap) error {
 	return vec.ForeachWindow(0, vec.downstreamVector.Length(), op, sels)
 }
 
-func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+func (vec *vector) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	return ForeachVectorWindow(vec, offset, length, nil, op, sels)
 }
 
-func (vec *vector[T]) Close() {
+func (vec *vector) Close() {
 	vec.releaseDownstream()
 }
 
-func (vec *vector[T]) releaseDownstream() {
+func (vec *vector) releaseDownstream() {
 	if vec.downstreamVector == nil {
 		return
 	}
@@ -253,7 +249,7 @@ func (vec *vector[T]) releaseDownstream() {
 	vec.downstreamVector = nil
 }
 
-func (vec *vector[T]) Allocated() int {
+func (vec *vector) Allocated() int {
 	if vec.downstreamVector.NeedDup() {
 		return 0
 	}
@@ -261,7 +257,7 @@ func (vec *vector[T]) Allocated() int {
 }
 
 // When a new Append() is happening on a SharedMemory vector, we allocate the data[] from the mpool.
-func (vec *vector[T]) tryCoW() {
+func (vec *vector) tryCoW() {
 	if !vec.downstreamVector.NeedDup() {
 		return
 	}
@@ -273,12 +269,12 @@ func (vec *vector[T]) tryCoW() {
 	vec.downstreamVector = newCnVector
 }
 
-func (vec *vector[T]) Window(offset, length int) Vector {
+func (vec *vector) Window(offset, length int) Vector {
 	if vec.downstreamVector.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("foreach to const vector"))
 	}
 	var err error
-	win := new(vector[T])
+	win := new(vector)
 	win.mpool = vec.mpool
 	win.downstreamVector, err = vec.downstreamVector.Window(offset, offset+length)
 	if err != nil {
@@ -288,7 +284,7 @@ func (vec *vector[T]) Window(offset, length int) Vector {
 	return win
 }
 
-func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
+func (vec *vector) CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector {
 	opts := Options{}
 	if len(allocator) == 0 {
 		opts.Allocator = vec.GetAllocator()
@@ -296,7 +292,7 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 		opts.Allocator = allocator[0]
 	}
 
-	cloned := NewVector[T](*vec.GetType(), opts)
+	cloned := NewVector(*vec.GetType(), opts)
 	if vec.downstreamVector.IsConstNull() {
 		cloned.downstreamVector = cnVector.NewConstNull(*vec.GetType(), length, vec.GetAllocator())
 		return cloned
@@ -315,7 +311,7 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...*mpool.MPool)
 	return cloned
 }
 
-func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+func (vec *vector) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	if vec.downstreamVector.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("extend to const vector"))
 	}
@@ -333,7 +329,7 @@ func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	}
 }
 
-func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
+func (vec *vector) Compact(deletes *roaring.Bitmap) {
 	vec.tryCoW()
 
 	var dels []int64
@@ -346,11 +342,11 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	vec.downstreamVector.Shrink(dels, true)
 }
 
-func (vec *vector[T]) GetDownstreamVector() *cnVector.Vector {
+func (vec *vector) GetDownstreamVector() *cnVector.Vector {
 	return vec.downstreamVector
 }
 
-func (vec *vector[T]) setDownstreamVector(dsVec *cnVector.Vector) {
+func (vec *vector) setDownstreamVector(dsVec *cnVector.Vector) {
 	vec.downstreamVector = dsVec
 }
 
@@ -358,7 +354,7 @@ func (vec *vector[T]) setDownstreamVector(dsVec *cnVector.Vector) {
 
 // String value of vector
 // Deprecated: Only use for test functions
-func (vec *vector[T]) String() string {
+func (vec *vector) String() string {
 	s := fmt.Sprintf("DN Vector: Len=%d[Rows];Allocted:%d[Bytes]", vec.Length(), vec.Allocated())
 
 	end := 100
@@ -384,7 +380,7 @@ func (vec *vector[T]) String() string {
 
 // PPString Pretty Print
 // Deprecated: Only use for test functions
-func (vec *vector[T]) PPString(num int) string {
+func (vec *vector) PPString(num int) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("[T=%s][Len=%d][Data=(", vec.GetType().String(), vec.Length()))
 	limit := vec.Length()
@@ -417,7 +413,7 @@ func (vec *vector[T]) PPString(num int) string {
 
 // AppendMany appends multiple values
 // Deprecated: Only use for test functions
-func (vec *vector[T]) AppendMany(vs []any, isNulls []bool) {
+func (vec *vector) AppendMany(vs []any, isNulls []bool) {
 	for i, v := range vs {
 		vec.Append(v, isNulls[i])
 	}
@@ -425,14 +421,14 @@ func (vec *vector[T]) AppendMany(vs []any, isNulls []bool) {
 
 // Delete Deletes an item from vector
 // Deprecated: Only use for test functions
-func (vec *vector[T]) Delete(delRowId int) {
+func (vec *vector) Delete(delRowId int) {
 	deletes := roaring.BitmapOf(uint32(delRowId))
 	vec.Compact(deletes)
 }
 
 // Equals Compares two vectors
 // Deprecated: Only use for test functions
-func (vec *vector[T]) Equals(o Vector) bool {
+func (vec *vector) Equals(o Vector) bool {
 	if vec.Length() != o.Length() {
 		return false
 	}
@@ -448,34 +444,34 @@ func (vec *vector[T]) Equals(o Vector) bool {
 		}
 	}
 	mask := vec.NullMask()
+	typ := vec.downstreamVector.GetType()
 	for i := 0; i < vec.Length(); i++ {
 		if mask != nil && mask.Contains(uint64(i)) {
 			continue
 		}
-		var v T
-		if _, ok := any(v).([]byte); ok {
+		if typ.IsVarlen() {
 			if !bytes.Equal(vec.ShallowGet(i).([]byte), o.ShallowGet(i).([]byte)) {
 				return false
 			}
-		} else if _, ok := any(v).(types.Decimal64); ok {
+		} else if typ.Oid == types.T_decimal64 {
 			d := vec.Get(i).(types.Decimal64)
 			od := vec.Get(i).(types.Decimal64)
 			if d != od {
 				return false
 			}
-		} else if _, ok := any(v).(types.Decimal128); ok {
+		} else if typ.Oid == types.T_decimal128 {
 			d := vec.Get(i).(types.Decimal128)
 			od := vec.Get(i).(types.Decimal128)
 			if d != od {
 				return false
 			}
-		} else if _, ok := any(v).(types.TS); ok {
+		} else if typ.Oid == types.T_TS {
 			d := vec.Get(i).(types.TS)
 			od := vec.Get(i).(types.TS)
 			if types.CompareTSTSAligned(d, od) != 0 {
 				return false
 			}
-		} else if _, ok := any(v).(types.Rowid); ok {
+		} else if typ.Oid == types.T_Rowid {
 			d := vec.Get(i).(types.Rowid)
 			od := vec.Get(i).(types.Rowid)
 			if types.CompareRowidRowidAligned(d, od) != 0 {
