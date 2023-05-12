@@ -45,16 +45,29 @@ func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
 	}
 
 	// setting mpool variables
-	var alloc *mpool.MPool
+	var (
+		alloc    *mpool.MPool
+		capacity int
+	)
 	if len(opts) > 0 {
 		alloc = opts[0].Allocator
+		capacity = opts[0].Capacity
 	}
 	if alloc == nil {
 		alloc = common.DefaultAllocator
 	}
 	vec.mpool = alloc
-
+	if capacity > 0 {
+		if err := vec.downstreamVector.PreExtend(capacity, vec.mpool); err != nil {
+			panic(err)
+		}
+	}
 	return vec
+}
+
+func (vec *vectorWrapper) PreExtend(length int) (err error) {
+	vec.tryCoW()
+	return vec.downstreamVector.PreExtend(length, vec.mpool)
 }
 
 func (vec *vectorWrapper) Get(i int) any {
@@ -316,6 +329,16 @@ func (vec *vectorWrapper) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 		panic(moerr.NewInternalErrorNoCtx("extend to const vectorWrapper"))
 	}
 	if srcLen <= 0 {
+		return
+	}
+
+	if srcOff == 0 && srcLen == src.Length() {
+		if err := cnVector.GetUnionAllFunction(
+			*vec.GetType(),
+			vec.mpool,
+		)(vec.downstreamVector, src.GetDownstreamVector()); err != nil {
+			panic(err)
+		}
 		return
 	}
 

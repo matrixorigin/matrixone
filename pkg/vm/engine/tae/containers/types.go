@@ -41,6 +41,7 @@ type Vector interface {
 	Get(i int) any
 	Append(v any, isNull bool)
 	CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector
+	PreExtend(length int) error
 
 	WriteTo(w io.Writer) (int64, error)
 	ReadFrom(r io.Reader) (int64, error)
