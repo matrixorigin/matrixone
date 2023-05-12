@@ -172,6 +172,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		tbTestID,
 		dbTestID,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -361,6 +362,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		tbTestID,
 		dbTestID,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -636,6 +638,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		IDAlloc.NextTable(),
 		dbTestId,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -648,6 +651,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		IDAlloc.NextTable(),
 		dbTestId,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -884,6 +888,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		IDAlloc.NextTable(),
 		dbTestId,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -1177,6 +1182,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		IDAlloc.NextTable(),
 		dbTestId,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -1525,6 +1531,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		IDAlloc.NextTable(),
 		dbTestId,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
