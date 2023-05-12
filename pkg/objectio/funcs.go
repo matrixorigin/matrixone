@@ -113,6 +113,19 @@ func ReadObjectMeta(
 	return
 }
 
+func ReadOneBlock(
+	ctx context.Context,
+	meta *ObjectMeta,
+	name string,
+	blk uint16,
+	seqnums []uint16,
+	typs []types.Type,
+	m *mpool.MPool,
+	fs fileservice.FileService,
+) (ioVec *fileservice.IOVector, err error) {
+	return ReadOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, constructorFactory)
+}
+
 func ReadOneBlockWithMeta(
 	ctx context.Context,
 	meta *ObjectMeta,
