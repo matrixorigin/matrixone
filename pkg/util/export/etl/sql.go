@@ -89,11 +89,10 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 		return 0, err
 	} else {
 		_, err = dbConn.Exec(stmt)
-	}
-
-	if err != nil {
-		if strings.Contains(err.Error(), MAX_ALLOWED_PACKET_ERROR) && sw.tbl.Table == "statement_info" {
-			cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
+		if err != nil {
+			if strings.Contains(err.Error(), MAX_ALLOWED_PACKET_ERROR) && sw.tbl.Table == "statement_info" {
+				cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
+			}
 		}
 	}
 
