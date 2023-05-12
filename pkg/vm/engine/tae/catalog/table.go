@@ -532,6 +532,13 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
 
 	newSchema = node.BaseNode.Schema
+	if isNewNode {
+		// Extra info(except seqnnum) is meaningful to the previous version schema
+		// reset in new Schema
+		newSchema.Extra = &apipb.SchemaExtra{
+			NextColSeqnum: newSchema.Extra.NextColSeqnum,
+		}
+	}
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return
 	}

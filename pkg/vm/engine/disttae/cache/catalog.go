@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -100,7 +101,7 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 		if item.DatabaseId != databaseId {
 			return false
 		}
-		// In previous table id is used to deduplicate, but this a corner case: rename table t to newt, and rename newt back to t.
+		// In previous impl table id is used to deduplicate, but this a corner case: rename table t to newt, and rename newt back to t.
 		// In this case newt is first found deleted and taking the place of active t's tableid.
 		if item.Ts.Greater(ts) {
 			return true
@@ -353,6 +354,7 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		copy(item.Rowid[:], rowids[i][:])
 		// invalid old name table
 		if exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]}); ok && exist.Name != item.Name {
+			logutil.Infof("rename invalidate %d-%s,v%d@%s", exist.Id, exist.Name, exist.Version, item.Ts.String())
 			newItem := &TableItem{
 				deleted:    true,
 				Id:         exist.Id,
