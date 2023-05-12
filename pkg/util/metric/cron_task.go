@@ -78,8 +78,10 @@ func GetMetricStorageUsageExecutor(sqlExecutor func() ie.InternalExecutor) func(
 const (
 	ShowAllAccountSQL = "SHOW ACCOUNTS;"
 	ShowAccountSQL    = "SHOW ACCOUNTS like %q;"
-	ColumnAccountName = "account_name"
-	ColumnSize        = "size"
+	ColumnAccountName = "account_name" // result column in `show accounts`, or column in table mo_catalog.mo_account
+	ColumnSize        = "size"         // result column in `show accounts`, or column in table mo_catalog.mo_account
+	ColumnCreatedTime = "created_time" // column in table mo_catalog.mo_account
+	ColumnStatus      = "status"       // column in table mo_catalog.mo_account
 )
 
 var gUpdateStorageUsageInterval = defaultUpdateInterval()
@@ -111,9 +113,10 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		logger.Info("finished", zap.Error(err))
 	}()
 
-	next := time.NewTicker(time.Second)
-
+	// start background task to check new account
 	go CheckNewAccountSize(ctx, logger, sqlExecutor)
+
+	next := time.NewTicker(time.Second)
 
 	for {
 		select {
@@ -126,7 +129,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			logger.Info("start next round")
 		}
 
-		// main
+		// mysql> show accounts;
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
 		// | account_name    | admin_name | created             | status | suspended_time | db_count | table_count | row_count | size  | comment        |
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
@@ -182,10 +185,6 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		logger.Info("CheckNewAccountSize exit", zap.Error(err))
 	}()
 
-	const ColumnAccountName = "account_name"
-	const ColumnCreatedTime = "created_time"
-	const ColumnStatus = "status"
-
 	opts := ie.NewOptsBuilder().Finish()
 
 	var now time.Time
@@ -198,7 +197,7 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			logger.Info("receive context signal", zap.Error(ctx.Err()))
 			return
 		case now = <-next.C:
-			logger.Info("start check account")
+			logger.Info("start check new account")
 		}
 
 		// mysql> select * from mo_catalog.mo_account;
@@ -208,21 +207,22 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		// |          0 | sys          | open   | 2023-05-09 04:34:57 | system account |       1 | NULL           |
 		// +------------+--------------+--------+---------------------+----------------+---------+----------------+
 		executor := sqlExecutor()
-		logger.Info("query new account")
-		now := time.Now()
-		sql := fmt.Sprintf("select account_name, created_time, status from mo_account where create_time >= %q;",
-			table.Time2DatetimeString(lastCheckTime))
+		// tips: created_time column, in table mo_catalog.mo_account, always use UTC timestamp.
+		// more details in pkg/frontend/authenticate.go, function frontend.createTablesInMoCatalog
+		sql := fmt.Sprintf("select account_name, created_time from mo_catalog.mo_account where created_time >= %q;",
+			table.Time2DatetimeString(lastCheckTime.UTC()))
+		logger.Debug("query new account", zap.String("sql", sql))
 		lastCheckTime = now
 		result := executor.Query(ctx, sql, opts)
 		err = result.Error()
 		if err != nil {
-			logger.Error("failed to fetch new created account", zap.Error(err))
+			logger.Error("failed to fetch new created account", zap.Error(err), zap.String("sql", sql))
 			continue
 		}
 
 		cnt := result.RowCount()
 		if cnt == 0 {
-			logger.Warn("got empty new account info, wait next round")
+			logger.Info("got empty new account info, wait next round")
 			continue
 		}
 		logger.Info("collect new account cnt", zap.Uint64("cnt", cnt))
@@ -238,11 +238,13 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 				continue
 			}
 
+			// query single account's storage
 			showSql := fmt.Sprintf(ShowAccountSQL, account)
 			showRet := executor.Query(ctx, showSql, opts)
 			err = showRet.Error()
 			if err != nil {
-				logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
+				logger.Error("failed to exec query sql",
+					zap.Error(err), zap.String("account", account), zap.String("sql", showSql))
 				continue
 			}
 
@@ -252,17 +254,20 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			}
 			sizeMB, err := showRet.Float64ValueByName(ctx, 0, ColumnSize)
 			if err != nil {
+				logger.Error("failed to fetch new account size", zap.Error(err), zap.String("account", account))
 				continue
 			}
+			// done query.
 
+			// update new accounts metric
 			logger.Info("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
-				zap.String("create_time", createdTime))
+				zap.String("created_time", createdTime))
 			StorageUsage(account).Set(sizeMB)
 		}
 
-		// calculate next Round time.
+		// reset next Round
 		next.Reset(interval)
-		logger.Info("wait next round, new account")
+		logger.Info("wait next round, check new account")
 	}
 
 }
