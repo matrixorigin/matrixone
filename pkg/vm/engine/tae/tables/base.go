@@ -152,15 +152,12 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location.IsEmpty() {
 		return
 	}
-	reader, err := blockio.NewObjectReader(blk.fs.Service, location)
-	if err != nil {
-		return
-	}
-	bat, err := reader.LoadColumns(
+	bat, err := blockio.LoadColumns(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
-		location.ID(),
+		blk.fs.Service,
+		location,
 		nil,
 	)
 	if err != nil {
