@@ -70,4 +70,5 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		}
 		ctr.cnts = nil
 	}
+	ctr.FreeAllReg()
 }

@@ -79,10 +79,12 @@ func TestBuild(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, true, ok)
 			mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
+			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			mp.Free()
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			break
 		}
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -108,6 +110,7 @@ func BenchmarkBuild(b *testing.B) {
 				require.NoError(t, err)
 				require.Equal(t, true, ok)
 				mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
+				tc.proc.Reg.MergeReceivers[0].Ch <- nil
 				mp.Free()
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 				break
