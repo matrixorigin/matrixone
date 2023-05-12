@@ -630,7 +630,7 @@ func ForeachWindowFixed[T any](
 	opAny ItOp,
 	sels *roaring.Bitmap,
 ) (err error) {
-	src := vec.(*vector)
+	src := vec.(*vectorWrapper)
 	if src.downstreamVector.IsConst() {
 		var v T
 		isnull := false
@@ -699,7 +699,7 @@ func ForeachWindowVarlen(
 	opAny ItOp,
 	sels *roaring.Bitmap,
 ) (err error) {
-	src := vec.(*vector)
+	src := vec.(*vectorWrapper)
 	if src.downstreamVector.IsConst() {
 		var v []byte
 		isnull := false
