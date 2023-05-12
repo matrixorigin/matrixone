@@ -214,7 +214,7 @@ func (ses *Session) setRoutine(rt *Routine) {
 	ses.rt = rt
 }
 
-func (ses *Session) getRoutin() *Routine {
+func (ses *Session) getRoutine() *Routine {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.rt
@@ -1378,7 +1378,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		tenant.SetDefaultRole(defaultRole)
 	}
 	// record the id :routine pair in RoutineManager
-	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutin(), accountVersion)
+	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
 	logInfo(sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)
