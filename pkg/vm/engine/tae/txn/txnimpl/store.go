@@ -15,9 +15,10 @@
 package txnimpl
 
 import (
+	"context"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -116,7 +117,6 @@ func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) 
 	}
 	info := &entry.Info{
 		Group: wal.GroupC,
-		TxnId: store.txn.GetID(),
 	}
 	logEntry.SetInfo(info)
 	var lsn uint64
@@ -352,6 +352,7 @@ func (store *txnStore) ObserveTxn(
 	visitTable func(tbl any),
 	rotateTable func(dbName, tblName string, dbid, tid uint64),
 	visitMetadata func(block any),
+	visitSegment func(seg any),
 	visitAppend func(bat any),
 	visitDelete func(vnode txnif.DeleteNode)) {
 	for _, db := range store.dbs {
@@ -369,6 +370,8 @@ func (store *txnStore) ObserveTxn(
 			}
 			for _, iTxnEntry := range tbl.txnEntries.entries {
 				switch txnEntry := iTxnEntry.(type) {
+				case *catalog.SegmentEntry:
+					visitSegment(txnEntry)
 				case *catalog.BlockEntry:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
@@ -583,12 +586,14 @@ func (store *txnStore) WaitPrepared() (err error) {
 			return
 		}
 	}
-	for _, e := range store.logs {
-		if err = e.WaitDone(); err != nil {
-			break
+	trace.WithRegion(context.Background(), "Wait for WAL to be flushed", func() {
+		for _, e := range store.logs {
+			if err = e.WaitDone(); err != nil {
+				break
+			}
+			e.Free()
 		}
-		e.Free()
-	}
+	})
 	store.wg.Wait()
 	return
 }
@@ -635,7 +640,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 }
 
 func (store *txnStore) PreApplyCommit() (err error) {
-	now := time.Now()
+	// now := time.Now()
 	for _, db := range store.dbs {
 		if err = db.PreApplyCommit(); err != nil {
 			return
@@ -661,7 +666,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 			return
 		}
 	}
-	logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	// logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
 	return
 }
 

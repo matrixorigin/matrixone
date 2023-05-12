@@ -26,6 +26,7 @@ type ObjectColumnMetasBuilder struct {
 	metas    []objectio.ColumnMeta
 	sks      []*hll.Sketch
 	zms      []index.ZM
+	pkData   []containers.Vector
 }
 
 func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
@@ -34,9 +35,10 @@ func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
 		metas[i] = objectio.BuildObjectColumnMeta()
 	}
 	return &ObjectColumnMetasBuilder{
-		metas: metas,
-		sks:   make([]*hll.Sketch, colIdx),
-		zms:   make([]index.ZM, colIdx),
+		metas:  metas,
+		sks:    make([]*hll.Sketch, colIdx),
+		zms:    make([]index.ZM, colIdx),
+		pkData: make([]containers.Vector, 0),
 	}
 }
 
@@ -44,7 +46,11 @@ func (b *ObjectColumnMetasBuilder) AddRowCnt(rows int) {
 	b.totalRow += uint32(rows)
 }
 
-func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector) uint32 {
+func (b *ObjectColumnMetasBuilder) AddPKData(data containers.Vector) {
+	b.pkData = append(b.pkData, data)
+}
+
+func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector, isPK bool) {
 	if vec.HasNull() {
 		cnt := b.metas[idx].NullCnt()
 		cnt += uint32(vec.NullCount())
@@ -54,19 +60,19 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 	if b.zms[idx] == nil {
 		b.zms[idx] = index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 	}
+	if isPK {
+		return
+	}
 	if b.sks[idx] == nil {
 		b.sks[idx] = hll.New()
 	}
-	sks := hll.New()
 	containers.ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
 		if isNull {
 			return
 		}
 		b.sks[idx].Insert(v)
-		sks.Insert(v)
 		return
 	}, nil)
-	return uint32(sks.Estimate())
 }
 
 func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm index.ZM) {
@@ -77,6 +83,10 @@ func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm index.ZM) {
 	}
 	index.UpdateZM(b.zms[idx], zm.GetMinBuf())
 	index.UpdateZM(b.zms[idx], zm.GetMaxBuf())
+}
+
+func (b *ObjectColumnMetasBuilder) GetPKData() []containers.Vector {
+	return b.pkData
 }
 
 func (b *ObjectColumnMetasBuilder) Build() (uint32, []objectio.ColumnMeta) {

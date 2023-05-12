@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type BlockT[T common.IRef] interface {
@@ -164,15 +163,12 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location.IsEmpty() {
 		return
 	}
-	reader, err := blockio.NewObjectReader(blk.fs.Service, location)
-	if err != nil {
-		return
-	}
-	bat, err := reader.LoadColumns(
+	bat, err := blockio.LoadColumns(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
-		location.ID(),
+		blk.fs.Service,
+		location,
 		nil,
 	)
 	if err != nil {
@@ -350,10 +346,13 @@ func (blk *baseBlock) PersistedBatchDedup(
 	isCommitting bool,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
-	isAblk bool) (err error) {
+	isAblk bool,
+	zm []byte,
+) (err error) {
 	sels, err := pnode.BatchDedup(
 		keys,
 		nil,
+		zm,
 	)
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return
@@ -456,12 +455,6 @@ func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool)
 	defer blk.RUnlock()
 	found = blk.mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 	return
-}
-
-func (blk *baseBlock) CollectAppendLogIndexes(startTs, endTs types.TS) (indexes []*wal.Index, err error) {
-	blk.RLock()
-	defer blk.RUnlock()
-	return blk.mvcc.CollectAppendLogIndexesLocked(startTs, endTs)
 }
 
 func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *model.BlockView, err error) {

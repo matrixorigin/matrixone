@@ -16,6 +16,8 @@ package compile
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -64,6 +66,7 @@ func init() {
 		newTestCase("select count(distinct uid) from R", new(testing.T)),
 		newTestCase("insert into R values('1', '2', '3')", new(testing.T)),
 		newTestCase("insert into R select * from R", new(testing.T)),
+		newTestCase(fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' parallel 'true';", GetFilePath()), new(testing.T)),
 	}
 }
 
@@ -82,7 +85,7 @@ func TestCompile(t *testing.T) {
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	for _, tc := range tcs {
 		tc.proc.TxnClient = txnClient
-		c := New("test", "test", tc.sql, "", context.TODO(), tc.e, tc.proc, tc.stmt)
+		c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, tc.stmt, false, nil)
 		err := c.Compile(ctx, tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.GetAffectedRows()
@@ -100,7 +103,7 @@ func TestCompileWithFaults(t *testing.T) {
 	var ctx = context.Background()
 	fault.AddFaultPoint(ctx, "panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
-	c := New("test", "test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
+	c := New("test", "test", tc.sql, "", "", context.TODO(), tc.e, tc.proc, nil, false, nil)
 	err := c.Compile(ctx, tc.pn, nil, testPrint)
 	require.NoError(t, err)
 	c.GetAffectedRows()
@@ -125,4 +128,9 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 		pn:   pn,
 		stmt: stmts[0],
 	}
+}
+
+func GetFilePath() string {
+	dir, _ := os.Getwd()
+	return dir
 }

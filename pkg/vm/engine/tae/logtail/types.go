@@ -49,6 +49,8 @@ const (
 	SnapshotMetaAttr_BlockInsertBatchEnd   = "block_insert_batch_end"
 	SnapshotMetaAttr_BlockDeleteBatchStart = "block_delete_batch_start"
 	SnapshotMetaAttr_BlockDeleteBatchEnd   = "block_delete_batch_end"
+	SnapshotMetaAttr_SegDeleteBatchStart   = "seg_delete_batch_start"
+	SnapshotMetaAttr_SegDeleteBatchEnd     = "seg_delete_batch_end"
 
 	SnapshotAttr_SchemaExtra = catalog.SnapshotAttr_SchemaExtra
 )
@@ -191,9 +193,13 @@ var (
 		SnapshotMetaAttr_BlockInsertBatchEnd,
 		SnapshotMetaAttr_BlockDeleteBatchStart,
 		SnapshotMetaAttr_BlockDeleteBatchEnd,
+		SnapshotMetaAttr_SegDeleteBatchStart,
+		SnapshotMetaAttr_SegDeleteBatchEnd,
 	}
 	MetaShcemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_int32, 0, 0),
+		types.New(types.T_int32, 0, 0),
 		types.New(types.T_int32, 0, 0),
 		types.New(types.T_int32, 0, 0),
 		types.New(types.T_int32, 0, 0),

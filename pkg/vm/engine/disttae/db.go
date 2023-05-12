@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -33,8 +34,9 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	e.Lock()
 	defer e.Unlock()
 
-	packer, put := e.packerPool.Get()
-	defer put()
+	var packer *types.Packer
+	put := e.packerPool.Get(&packer)
+	defer put.Put()
 
 	{
 		parts := make(logtailreplay.Partitions, len(e.dnMap))
@@ -290,10 +292,10 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 
 		state, doneMutate := part.MutateState()
 
-		for _, ckpt := range state.Checkpoints {
+		if err := state.ConsumeCheckpoints(func(checkpoint string) error {
 			entries, err := logtail.LoadCheckpointEntries(
 				ctx,
-				ckpt,
+				checkpoint,
 				tbl.tableId,
 				tbl.tableName,
 				tbl.db.databaseId,
@@ -307,8 +309,10 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 					return err
 				}
 			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		state.Checkpoints = state.Checkpoints[:0]
 
 		doneMutate()
 	}

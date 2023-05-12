@@ -73,7 +73,6 @@ func (mgr *commandManager) ApplyTxnRecord(tid string, txn txnif.AsyncTxn) (logEn
 	}
 	info := &entry.Info{
 		Group: wal.GroupPrepare,
-		TxnId: tid,
 	}
 	logEntry.SetInfo(info)
 	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupPrepare, logEntry)

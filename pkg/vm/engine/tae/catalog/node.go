@@ -26,13 +26,13 @@ import (
 type nodeList[T any] struct {
 	common.SSLLNode
 	getter       func(uint64) *common.GenericDLNode[T]
-	visibilityFn func(*common.GenericDLNode[T], txnif.TxnReader) (bool, bool)
+	visibilityFn func(*common.GenericDLNode[T], txnif.TxnReader) (bool, bool, string)
 	rwlocker     *sync.RWMutex
 	name         string
 }
 
 func newNodeList[T any](getter func(uint64) *common.GenericDLNode[T],
-	visibilityFn func(*common.GenericDLNode[T], txnif.TxnReader) (bool, bool),
+	visibilityFn func(*common.GenericDLNode[T], txnif.TxnReader) (bool, bool, string),
 	rwlocker *sync.RWMutex,
 	name string) *nodeList[T] {
 	return &nodeList[T]{
@@ -134,19 +134,23 @@ func (n *nodeList[T]) GetNode() *common.GenericDLNode[T] {
 // 7. Txn3 commit
 // 8. Txn4 can still find "tb1"
 // 9. Txn5 start and cannot find "tb1"
-func (n *nodeList[T]) TxnGetNodeLocked(txn txnif.TxnReader) (
+func (n *nodeList[T]) TxnGetNodeLocked(txn txnif.TxnReader, targetName string) (
 	dn *common.GenericDLNode[T], err error) {
 	fn := func(nn *nameNode[T]) bool {
 		dlNode := nn.GetNode()
-		visible, dropped := n.visibilityFn(dlNode, txn)
+		visible, dropped, visibleName := n.visibilityFn(dlNode, txn)
 		if !visible {
+			// the txn is ancient, it is needed to check older history
 			return true
 		}
 		if dropped {
-			return false
+			return true
+		}
+		if targetName != visibleName {
+			return true
 		}
 		dn = dlNode
-		return true
+		return false
 	}
 	n.ForEachNodes(fn)
 	if dn == nil && err == nil {

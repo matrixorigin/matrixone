@@ -214,7 +214,7 @@ func (ses *Session) setRoutine(rt *Routine) {
 	ses.rt = rt
 }
 
-func (ses *Session) getRoutin() *Routine {
+func (ses *Session) getRoutine() *Routine {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.rt
@@ -391,6 +391,10 @@ func (ses *Session) Close() {
 	ses.sysVars = nil
 	ses.userDefinedVars = nil
 	ses.gSysVars = nil
+	for _, stmt := range ses.prepareStmts {
+		stmt.Close()
+
+	}
 	ses.prepareStmts = nil
 	ses.requestCtx = nil
 	ses.connectCtx = nil
@@ -890,14 +894,57 @@ func (ses *Session) SetTenantInfo(ti *TenantInfo) {
 	ses.tenant = ti
 }
 
+func checkPlanIsInsertValues(p *plan.Plan) (bool, *batch.Batch) {
+	qry := p.GetQuery()
+	if qry != nil && qry.StmtType == plan.Query_INSERT {
+		for _, node := range qry.Nodes {
+			if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
+				colCount := len(node.TableDef.Cols)
+				bat := batch.NewWithSize(colCount)
+				attrs := make([]string, colCount)
+				for i := 0; i < colCount; i++ {
+					attrs[i] = node.TableDef.Cols[i].Name
+					vec := vector.NewVec(plan2.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ))
+					bat.SetVector(int32(i), vec)
+				}
+				bat.Attrs = attrs
+				return true, bat
+			}
+		}
+	}
+	return false, nil
+}
+
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if _, ok := ses.prepareStmts[name]; !ok {
+	if stmt, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
 			return moerr.NewInvalidState(ses.requestCtx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession)
 		}
+	} else {
+		stmt.Close()
 	}
+
+	plan := prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan()
+	isInsertValues, bat := checkPlanIsInsertValues(plan)
+	prepareStmt.IsInsertValues = isInsertValues
+	prepareStmt.InsertBat = bat
+	if prepareStmt.IsInsertValues {
+		mp := ses.mp
+		if mp == nil {
+			mp = mpool.MustNewNoFixed("session-prepare-insert-values")
+		}
+		prepareStmt.mp = mp
+		emptyBatch := batch.NewWithSize(0)
+		emptyBatch.Zs = []int64{1}
+		prepareStmt.emptyBatch = emptyBatch
+		prepareStmt.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(bat.Vecs))
+		for i, vec := range bat.Vecs {
+			prepareStmt.ufs[i] = vector.GetUnionOneFunction(*vec.GetType(), mp)
+		}
+	}
+
 	ses.prepareStmts[name] = prepareStmt
 	return nil
 }
@@ -914,6 +961,9 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 func (ses *Session) RemovePrepareStmt(name string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if stmt, ok := ses.prepareStmts[name]; ok {
+		stmt.Close()
+	}
 	delete(ses.prepareStmts, name)
 }
 
@@ -1328,7 +1378,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		tenant.SetDefaultRole(defaultRole)
 	}
 	// record the id :routine pair in RoutineManager
-	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutin(), accountVersion)
+	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
 	logInfo(sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)
@@ -1638,4 +1688,26 @@ func (ses *Session) getLastCommitTS() timestamp.Timestamp {
 		}
 	}
 	return minTS
+}
+
+// getCNLabels parse the session variable and returns map[string]string.
+func (ses *Session) getCNLabels() map[string]string {
+	label, ok := ses.sysVars["cn_label"]
+	if !ok {
+		return nil
+	}
+	labelStr, ok := label.(string)
+	if !ok {
+		return nil
+	}
+	labels := strings.Split(labelStr, ",")
+	res := make(map[string]string, len(labels))
+	for _, kvStr := range labels {
+		kvs := strings.Split(kvStr, "=")
+		if len(kvs) != 2 {
+			continue
+		}
+		res[kvs[0]] = kvs[1]
+	}
+	return res
 }
