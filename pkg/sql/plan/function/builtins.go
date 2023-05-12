@@ -3256,6 +3256,32 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	ISEMPTY: {
+		Id:     ISEMPTY,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			if len(inputs) != 1 {
+				return wrongFunctionParameters, nil
+			}
+			return 0, inputs
+		},
+		Overloads: []Function{
+			{
+				Index:           0,
+				UseNewFramework: true,
+				Volatile:        false,
+				Args:            []types.T{types.T_any},
+				ReturnTyp:       types.T_bool,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					isEmpty := parameters[0].Length() == 0
+					res := vector.MustFunctionResult[bool](result)
+					res.Append(isEmpty, false)
+					return nil
+				},
+			},
+		},
+	},
 	ASSERT: {
 		Id:     ASSERT,
 		Flag:   plan.Function_STRICT,
