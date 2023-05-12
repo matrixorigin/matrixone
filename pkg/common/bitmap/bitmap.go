@@ -189,25 +189,25 @@ func (n *Bitmap) EmptyByFlag() bool {
 
 // IsEmpty returns true if no bit in the Bitmap is set, otherwise it will return false.
 func (n *Bitmap) IsEmpty() bool {
-	if n.emptyFlag == 1 {
+	if n.emptyFlag == kEmptyFlagEmpty {
 		return true
-	} else if n.emptyFlag == -1 {
+	} else if n.emptyFlag == kEmptyFlagNotEmpty {
 		return false
 	}
 	for i := 0; i < len(n.data); i++ {
 		if n.data[i] != 0 {
-			n.emptyFlag = -1
+			n.emptyFlag = kEmptyFlagNotEmpty
 			return false
 		}
 	}
-	n.emptyFlag = 1
+	n.emptyFlag = kEmptyFlagEmpty
 	return true
 }
 
 // We always assume that bitmap has been extended to at least row.
 func (n *Bitmap) Add(row uint64) {
 	n.data[row>>6] |= 1 << (row & 0x3F)
-	n.emptyFlag = -1 //after add operation, must be not empty
+	n.emptyFlag = kEmptyFlagNotEmpty
 
 }
 
@@ -215,7 +215,7 @@ func (n *Bitmap) AddMany(rows []uint64) {
 	for _, row := range rows {
 		n.data[row>>6] |= 1 << (row & 0x3F)
 	}
-	n.emptyFlag = -1 //after add operation, must be not empty
+	n.emptyFlag = kEmptyFlagNotEmpty
 
 }
 
@@ -224,8 +224,8 @@ func (n *Bitmap) Remove(row uint64) {
 		return
 	}
 	n.data[row>>6] &^= (uint64(1) << (row & 0x3F))
-	if n.emptyFlag == -1 {
-		n.emptyFlag = 0 //after remove operation, not sure
+	if n.emptyFlag == kEmptyFlagNotEmpty {
+		n.emptyFlag = kEmptyFlagUnknown
 	}
 }
 
@@ -267,8 +267,8 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 	i, j := start>>6, (end-1)>>6
 	if i == j {
 		n.data[i] &= ^((^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) % 0x3F)))
-		if n.emptyFlag == -1 {
-			n.emptyFlag = 0 //after removeRange operation, not sure
+		if n.emptyFlag == kEmptyFlagNotEmpty {
+			n.emptyFlag = kEmptyFlagUnknown
 		}
 		return
 	}
@@ -277,8 +277,8 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 		n.data[k] = 0
 	}
 	n.data[j] &= ^(^uint64(0) >> (uint(-end) & 0x3F))
-	if n.emptyFlag == -1 {
-		n.emptyFlag = 0 //after removeRange operation, not sure
+	if n.emptyFlag == kEmptyFlagNotEmpty {
+		n.emptyFlag = kEmptyFlagUnknown
 	}
 }
 
@@ -301,8 +301,8 @@ func (n *Bitmap) Or(m *Bitmap) {
 	for i := 0; i < size; i++ {
 		n.data[i] |= m.data[i]
 	}
-	if n.emptyFlag == 1 {
-		n.emptyFlag = 0 //after or operation, not sure
+	if n.emptyFlag == kEmptyFlagEmpty {
+		n.emptyFlag = kEmptyFlagUnknown
 	}
 }
 
@@ -315,8 +315,8 @@ func (n *Bitmap) And(m *Bitmap) {
 	for i := size; i < len(n.data); i++ {
 		n.data[i] = 0
 	}
-	if n.emptyFlag == -1 {
-		n.emptyFlag = 0 //after and operation, not sure
+	if n.emptyFlag == kEmptyFlagNotEmpty {
+		n.emptyFlag = kEmptyFlagUnknown
 	}
 }
 
@@ -350,16 +350,16 @@ func (n *Bitmap) Filter(sels []int64) *Bitmap {
 
 func (n *Bitmap) Count() int {
 	var cnt int
-	if n.emptyFlag == 1 { //must be empty
+	if n.emptyFlag == kEmptyFlagEmpty { //must be empty
 		return 0
 	}
 	for i := 0; i < len(n.data); i++ {
 		cnt += bits.OnesCount64(n.data[i])
 	}
 	if cnt > 0 {
-		n.emptyFlag = -1 //must be not empty
+		n.emptyFlag = kEmptyFlagNotEmpty
 	} else {
-		n.emptyFlag = 1 //must be empty
+		n.emptyFlag = kEmptyFlagEmpty
 	}
 	return cnt
 }
