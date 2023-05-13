@@ -19,58 +19,7 @@ import (
 )
 
 func MakeVector(typ types.Type, opts ...Options) (vec Vector) {
-	switch typ.Oid {
-	case types.T_any:
-		vec = NewVector[any](typ, opts...)
-	case types.T_bool:
-		vec = NewVector[bool](typ, opts...)
-	case types.T_int8:
-		vec = NewVector[int8](typ, opts...)
-	case types.T_int16:
-		vec = NewVector[int16](typ, opts...)
-	case types.T_int32:
-		vec = NewVector[int32](typ, opts...)
-	case types.T_int64:
-		vec = NewVector[int64](typ, opts...)
-	case types.T_uint8:
-		vec = NewVector[uint8](typ, opts...)
-	case types.T_uint16:
-		vec = NewVector[uint16](typ, opts...)
-	case types.T_uint32:
-		vec = NewVector[uint32](typ, opts...)
-	case types.T_uint64:
-		vec = NewVector[uint64](typ, opts...)
-	case types.T_decimal64:
-		vec = NewVector[types.Decimal64](typ, opts...)
-	case types.T_decimal128:
-		vec = NewVector[types.Decimal128](typ, opts...)
-	case types.T_uuid:
-		vec = NewVector[types.Uuid](typ, opts...)
-	case types.T_float32:
-		vec = NewVector[float32](typ, opts...)
-	case types.T_float64:
-		vec = NewVector[float64](typ, opts...)
-	case types.T_date:
-		vec = NewVector[types.Date](typ, opts...)
-	case types.T_timestamp:
-		vec = NewVector[types.Timestamp](typ, opts...)
-	case types.T_datetime:
-		vec = NewVector[types.Datetime](typ, opts...)
-	case types.T_time:
-		vec = NewVector[types.Time](typ, opts...)
-	case types.T_TS:
-		vec = NewVector[types.TS](typ, opts...)
-	case types.T_Rowid:
-		vec = NewVector[types.Rowid](typ, opts...)
-	case types.T_Blockid:
-		vec = NewVector[types.Blockid](typ, opts...)
-	case types.T_char, types.T_varchar, types.T_json,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		vec = NewVector[[]byte](typ, opts...)
-	default:
-		panic("not support")
-	}
-	return
+	return NewVector(typ, opts...)
 }
 
 func BuildBatch(attrs []string, colTypes []types.Type, opts Options) *Batch {
