@@ -57,7 +57,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 		if h != nil {
 			h(e)
 		}
-	}, nil)
+	})
 	assert.NoError(t, err)
 	t.Log("Addr:")
 	for lsn, intervals := range d.addr {

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 type replayer struct {
@@ -47,14 +48,13 @@ type replayer struct {
 	appended      []uint64
 
 	recordChan chan *entry.Entry
-	allocator  logstoreEntry.Allocator
 
 	applyDuration time.Duration
 
 	wg sync.WaitGroup
 }
 
-func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver, allocator logstoreEntry.Allocator) *replayer {
+func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
 	truncated := d.getLogserviceTruncate()
 	logutil.Infof("truncated %d", truncated)
 	return &replayer{
@@ -68,7 +68,6 @@ func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver, all
 		appended:                  make([]uint64, 0),
 		recordChan:                make(chan *entry.Entry, 100),
 		wg:                        sync.WaitGroup{},
-		allocator:                 allocator,
 		truncatedLogserviceLsn:    truncated,
 	}
 }
