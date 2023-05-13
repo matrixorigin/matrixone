@@ -75,9 +75,9 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _
 	case types.T_float64:
 		return valueEquals[float64](parameters, rs, uint64(length))
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return valueStrEquals(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), bytes.Equal)
 	case types.T_binary, types.T_varbinary:
-		return valueStrEquals(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), bytes.Equal)
 	case types.T_date:
 		return valueEquals[types.Date](parameters, rs, uint64(length))
 	case types.T_datetime:
@@ -109,14 +109,68 @@ func valueEquals[T bool | constraints.Integer | constraints.Float |
 	return nil
 }
 
-func valueStrEquals(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
+func valueStrCompare(
+	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
+	cmpFn func(a, b []byte) bool) error {
 	col1 := vector.GenerateFunctionStrParameter(params[0])
 	col2 := vector.GenerateFunctionStrParameter(params[1])
+
+	if params[0].IsConst() {
+		v1, null1 := col1.GetStrValue(0)
+		if null1 {
+			for i := uint64(0); i < length; i++ {
+				if err := result.Append(false, true); err != nil {
+					return err
+				}
+			}
+			return nil
+		} else {
+			for i := uint64(0); i < length; i++ {
+				v2, null2 := col2.GetStrValue(i)
+				if null2 {
+					if err := result.Append(false, true); err != nil {
+						return err
+					}
+				} else {
+					if err := result.Append(cmpFn(v1, v2), false); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
+	}
+
+	if params[1].IsConst() {
+		v2, null2 := col1.GetStrValue(0)
+		if null2 {
+			for i := uint64(0); i < length; i++ {
+				if err := result.Append(false, true); err != nil {
+					return err
+				}
+			}
+			return nil
+		} else {
+			for i := uint64(0); i < length; i++ {
+				v1, null1 := col1.GetStrValue(i)
+				if null1 {
+					if err := result.Append(false, true); err != nil {
+						return err
+					}
+				} else {
+					if err := result.Append(cmpFn(v1, v2), false); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
+	}
+
 	for i := uint64(0); i < length; i++ {
 		v1, null1 := col1.GetStrValue(i)
 		v2, null2 := col2.GetStrValue(i)
-		if err := result.Append(bytes.Equal(v1, v2), null1 || null2); err != nil {
+		if err := result.Append(cmpFn(v1, v2), null1 || null2); err != nil {
 			return err
 		}
 	}
@@ -232,9 +286,13 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	case types.T_float64:
 		return valueGreatThan1[float64](parameters, rs, uint64(length))
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return valueStrGreatThan(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+			return bytes.Compare(a, b) > 0
+		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrGreatThan(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+			return bytes.Compare(a, b) > 0
+		})
 	case types.T_date:
 		return valueGreatThan1[types.Date](parameters, rs, uint64(length))
 	case types.T_datetime:
@@ -378,26 +436,6 @@ func valueDec128GreatThan(
 	return nil
 }
 
-func valueStrGreatThan(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionStrParameter(params[0])
-	col2 := vector.GenerateFunctionStrParameter(params[1])
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := col1.GetStrValue(i)
-		v2, null2 := col2.GetStrValue(i)
-		if null1 || null2 {
-			if err := result.Append(false, true); err != nil {
-				return err
-			}
-		} else {
-			if err := result.Append(bytes.Compare(v1, v2) > 0, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
@@ -427,9 +465,13 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	case types.T_float64:
 		return valueGreatEqual1[float64](parameters, rs, uint64(length))
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return valueStrGreatEqual(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+			return bytes.Compare(a, b) >= 0
+		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrGreatEqual(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+			return bytes.Compare(a, b) >= 0
+		})
 	case types.T_date:
 		return valueGreatEqual1[types.Date](parameters, rs, uint64(length))
 	case types.T_datetime:
@@ -573,26 +615,6 @@ func valueDec128GreatEqual(
 	return nil
 }
 
-func valueStrGreatEqual(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionStrParameter(params[0])
-	col2 := vector.GenerateFunctionStrParameter(params[1])
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := col1.GetStrValue(i)
-		v2, null2 := col2.GetStrValue(i)
-		if null1 || null2 {
-			if err := result.Append(false, true); err != nil {
-				return err
-			}
-		} else {
-			if err := result.Append(bytes.Compare(v1, v2) >= 0, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
@@ -622,9 +644,13 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	case types.T_float64:
 		return valueNotEquals[float64](parameters, rs, uint64(length))
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return valueStrNotEquals(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+			return !bytes.Equal(a, b)
+		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrNotEquals(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+			return !bytes.Equal(a, b)
+		})
 	case types.T_date:
 		return valueNotEquals[types.Date](parameters, rs, uint64(length))
 	case types.T_datetime:
@@ -650,20 +676,6 @@ func valueNotEquals[T bool | constraints.Integer | constraints.Float |
 		v1, null1 := col1.GetValue(i)
 		v2, null2 := col2.GetValue(i)
 		if err := result.Append(v1 != v2, null1 || null2); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func valueStrNotEquals(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionStrParameter(params[0])
-	col2 := vector.GenerateFunctionStrParameter(params[1])
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := col1.GetStrValue(i)
-		v2, null2 := col2.GetStrValue(i)
-		if err := result.Append(!bytes.Equal(v1, v2), null1 || null2); err != nil {
 			return err
 		}
 	}
@@ -779,9 +791,13 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	case types.T_float64:
 		return valueLessThan1[float64](parameters, rs, uint64(length))
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return valueStrLessThan(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+			return bytes.Compare(a, b) < 0
+		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrLessThan(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+			return bytes.Compare(a, b) < 0
+		})
 	case types.T_date:
 		return valueLessThan1[types.Date](parameters, rs, uint64(length))
 	case types.T_datetime:
@@ -925,26 +941,6 @@ func valueDec128LessThan(
 	return nil
 }
 
-func valueStrLessThan(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionStrParameter(params[0])
-	col2 := vector.GenerateFunctionStrParameter(params[1])
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := col1.GetStrValue(i)
-		v2, null2 := col2.GetStrValue(i)
-		if null1 || null2 {
-			if err := result.Append(false, true); err != nil {
-				return err
-			}
-		} else {
-			if err := result.Append(bytes.Compare(v1, v2) < 0, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
@@ -974,9 +970,13 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	case types.T_float64:
 		return valueLessEqual[float64](parameters, rs, uint64(length))
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return valueStrLessEqual(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+			return bytes.Compare(a, b) <= 0
+		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrLessEqual(parameters, rs, uint64(length))
+		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+			return bytes.Compare(a, b) <= 0
+		})
 	case types.T_date:
 		return valueLessEqual[types.Date](parameters, rs, uint64(length))
 	case types.T_datetime:
@@ -1114,26 +1114,6 @@ func valueDec128LessEqual(
 				if err := result.Append(v1.Compare(y) <= 0, false); err != nil {
 					return err
 				}
-			}
-		}
-	}
-	return nil
-}
-
-func valueStrLessEqual(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionStrParameter(params[0])
-	col2 := vector.GenerateFunctionStrParameter(params[1])
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := col1.GetStrValue(i)
-		v2, null2 := col2.GetStrValue(i)
-		if null1 || null2 {
-			if err := result.Append(false, true); err != nil {
-				return err
-			}
-		} else {
-			if err := result.Append(bytes.Compare(v1, v2) <= 0, false); err != nil {
-				return err
 			}
 		}
 	}
