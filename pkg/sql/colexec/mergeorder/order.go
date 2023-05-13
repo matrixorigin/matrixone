@@ -127,7 +127,7 @@ func mergeSort(proc *process.Process, bat2 *batch.Batch,
 		}
 		if newColumn {
 			ctr.poses = append(ctr.poses, int32(len(bat2.Vecs)))
-			nv, err := vec.Dup(proc.Mp())
+			nv, err := colexec.SafeQuickDup(proc.Mp(), vec, ctr.executorsForOrderList[i])
 			if err != nil {
 				return err
 			}

@@ -65,7 +65,7 @@ func (v *Vector) Reset(typ types.Type) {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
-	v.nsp = &nulls.Nulls{}
+	nulls.Reset(v.nsp)
 	v.length = 0
 	//v.capacity = cap(v.data) / v.typ.TypeSize()
 }

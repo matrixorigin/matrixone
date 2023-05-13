@@ -293,7 +293,7 @@ func updateOldBatch(evalBatch *batch.Batch, rowIdx int, oldBatch *batch.Batch, u
 				newBatch.Clean(proc.Mp())
 				return nil, err
 			}
-			nv, err := newVec.Dup(proc.Mp())
+			nv, err := colexec.SafeQuickDup(proc.Mp(), newVec, executor)
 			executor.Free()
 			if err != nil {
 				return nil, err

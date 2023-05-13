@@ -507,10 +507,28 @@ func ProjectionDupResult(proc *process.Process, executors []ExpressionExecutor, 
 	}
 
 	// use new vector to replace the old vector.
-	for i, index := range duped {
-		bat.Vecs[i] = dupedVectors[index]
+	for i, idx := range duped {
+		bat.Vecs[i] = dupedVectors[idx]
 	}
 	return dupSize, nil
+}
+
+// SafeQuickDup if executor is function executor, we can get the nulls directly without copied.
+// because next reuse, the nsp will reset.
+func SafeQuickDup(mp *mpool.MPool, vec *vector.Vector, executor ExpressionExecutor) (*vector.Vector, error) {
+	if _, ok := executor.(*FunctionExpressionExecutor); ok {
+		nsp := vec.GetNulls()
+		vec.SetNulls(nil)
+		nv, err := vec.Dup(mp)
+		if err != nil {
+			vec.SetNulls(nsp)
+			return nil, err
+		}
+		nv.SetNulls(nsp)
+		return nv, nil
+	} else {
+		return vec.Dup(mp)
+	}
 }
 
 func NewJoinBatch(bat *batch.Batch, mp *mpool.MPool) (*batch.Batch,

@@ -119,7 +119,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				}
 			}
 			if flg {
-				nv, err := vec.Dup(proc.Mp())
+				nv, err := colexec.SafeQuickDup(proc.Mp(), vec, ctr.executorsForOrderList[i])
 				if err != nil {
 					return false, err
 				}
