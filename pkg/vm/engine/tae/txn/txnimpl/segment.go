@@ -26,7 +26,7 @@ import (
 )
 
 type txnSegment struct {
-	*txnbase.TxnSegment
+	txnbase.TxnSegment
 	entry *catalog.SegmentEntry
 	table *txnTable
 }
@@ -179,7 +179,7 @@ func (cit *composedSegmentIt) Next() {
 
 func newSegment(table *txnTable, meta *catalog.SegmentEntry) *txnSegment {
 	seg := &txnSegment{
-		TxnSegment: &txnbase.TxnSegment{
+		TxnSegment: txnbase.TxnSegment{
 			Txn: table.store.txn,
 		},
 		table: table,

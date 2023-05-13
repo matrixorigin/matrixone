@@ -29,7 +29,7 @@ import (
 )
 
 type txnBlock struct {
-	*txnbase.TxnBlock
+	txnbase.TxnBlock
 	isUncommitted bool
 	entry         *catalog.BlockEntry
 	table         *txnTable
@@ -129,7 +129,7 @@ func buildBlock(table *txnTable, meta *catalog.BlockEntry) handle.Block {
 
 func newBlock(table *txnTable, meta *catalog.BlockEntry) *txnBlock {
 	blk := &txnBlock{
-		TxnBlock: &txnbase.TxnBlock{
+		TxnBlock: txnbase.TxnBlock{
 			Txn: table.store.txn,
 		},
 		entry:         meta,
