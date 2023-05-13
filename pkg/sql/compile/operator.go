@@ -443,7 +443,6 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		AddAffectedRows:       oldCtx.AddAffectedRows,
 		PartitionTableIDs:     oldCtx.PartitionTableIds,
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
-		IsEnd:                 oldCtx.IsEnd,
 	}
 	// get the relation instance of the original table
 	rel, _, err := getRel(proc.Ctx, proc, eg, oldCtx.Ref, nil)
@@ -539,7 +538,6 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		Attrs:                 attrs,
 		PartitionTableIDs:     oldCtx.PartitionTableIds,
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
-		IsEnd:                 oldCtx.IsEnd,
 		TableDef:              oldCtx.TableDef,
 	}
 	if len(oldCtx.PartitionTableIds) > 0 {

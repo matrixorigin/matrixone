@@ -48,7 +48,6 @@ type InsertCtx struct {
 	PartitionTableIDs     []uint64          // Align array index with the partition number
 	PartitionIndexInBatch int               // The array index position of the partition expression column
 	PartitionSources      []engine.Relation // Align array index with the partition number
-	IsEnd                 bool
 	TableDef              *plan.TableDef
 }
 

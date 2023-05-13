@@ -39,7 +39,6 @@ type Argument struct {
 	// 3. used for ut_test, otherwise the batch will free,
 	// and we can't get the result to check
 	notFreeBatch bool
-	IsEnd        bool
 	container    *Container
 }
 

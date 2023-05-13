@@ -357,8 +357,6 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 	var lastNodeId int32
 	var err error
 
-	hasUniqueKey := haveUniqueKey(tableDef)
-
 	// make plan : sink_scan -> lock -> insert
 	{
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
@@ -404,7 +402,6 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 				TableDef:          tableDef,
 				PartitionTableIds: paritionTableIds,
 				PartitionIdx:      int32(partitionIdx),
-				IsEnd:             !hasUniqueKey, // if is end of pipeline. we need free mem
 			},
 			ProjectList: insertProjection,
 		}
@@ -619,7 +616,6 @@ func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, lastNodeId i
 			IsClusterTable:    delNodeInfo.IsClusterTable,
 			PartitionTableIds: delNodeInfo.partTableIDs,
 			PartitionIdx:      int32(delNodeInfo.partitionIdx),
-			IsEnd:             delNodeInfo.isEnd,
 		},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)
@@ -736,51 +732,51 @@ func appendSinkNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int3
 	return lastNodeId
 }
 
-//func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, colExpr *plan.Expr) (int32, error) {
-//	aggExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "starcount", []*Expr{colExpr})
-//	if err != nil {
-//		return -1, err
-//	}
-//
-//	countType := types.T_int64.ToType()
-//	groupByNode := &Node{
-//		NodeType: plan.Node_AGG,
-//		Children: []int32{lastNodeId},
-//		GroupBy:  []*Expr{colExpr},
-//		AggList:  []*Expr{aggExpr},
-//		ProjectList: []*Expr{{
-//			Typ: makePlan2Type(&countType),
-//			Expr: &plan.Expr_Col{
-//				Col: &plan.ColRef{
-//					RelPos: -2,
-//					ColPos: 1,
-//				},
-//			},
-//		}},
-//	}
-//	lastNodeId = builder.appendNode(groupByNode, bindCtx)
-//	return lastNodeId, nil
-//}
-//
-//func appendAssertEqNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, colExpr *plan.Expr, expectedInt int64) (int32, error) {
-//	eqCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{MakePlan2Int64ConstExprWithType(expectedInt), colExpr})
-//	if err != nil {
-//		return -1, err
-//	}
-//	filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, makePlan2StringConstExprWithType("duplicate check error")})
-//	if err != nil {
-//		return -1, err
-//	}
-//	filterNode := &Node{
-//		NodeType:    plan.Node_FILTER,
-//		Children:    []int32{lastNodeId},
-//		FilterList:  []*Expr{filterExpr},
-//		ProjectList: getProjectionByLastNode(builder, lastNodeId),
-//		IsEnd:       true,
-//	}
-//	lastNodeId = builder.appendNode(filterNode, bindCtx)
-//	return lastNodeId, nil
-//}
+func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, colExpr *plan.Expr) (int32, error) {
+	aggExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "starcount", []*Expr{colExpr})
+	if err != nil {
+		return -1, err
+	}
+
+	countType := types.T_int64.ToType()
+	groupByNode := &Node{
+		NodeType: plan.Node_AGG,
+		Children: []int32{lastNodeId},
+		GroupBy:  []*Expr{colExpr},
+		AggList:  []*Expr{aggExpr},
+		ProjectList: []*Expr{{
+			Typ: makePlan2Type(&countType),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: -2,
+					ColPos: 1,
+				},
+			},
+		}},
+	}
+	lastNodeId = builder.appendNode(groupByNode, bindCtx)
+	return lastNodeId, nil
+}
+
+func appendAssertEqNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, colExpr *plan.Expr, expectedInt int64) (int32, error) {
+	eqCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{MakePlan2Int64ConstExprWithType(expectedInt), colExpr})
+	if err != nil {
+		return -1, err
+	}
+	filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, makePlan2StringConstExprWithType("duplicate check error")})
+	if err != nil {
+		return -1, err
+	}
+	filterNode := &Node{
+		NodeType:    plan.Node_FILTER,
+		Children:    []int32{lastNodeId},
+		FilterList:  []*Expr{filterExpr},
+		ProjectList: getProjectionByLastNode(builder, lastNodeId),
+		IsEnd:       true,
+	}
+	lastNodeId = builder.appendNode(filterNode, bindCtx)
+	return lastNodeId, nil
+}
 
 func getPkPos(tableDef *TableDef, ignoreFakePK bool) int {
 	if tableDef.Pkey == nil {

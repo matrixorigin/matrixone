@@ -157,21 +157,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		}
 	}
 
-	newBat := batch.NewWithSize(len(bat.Vecs))
-	for j := range bat.Vecs {
-		newBat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-	}
-	if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
-		newBat.Clean(proc.GetMPool())
-		return false, err
-	}
-
-	if delCtx.IsEnd {
-		proc.SetInputBatch(nil)
-		newBat.Clean(proc.GetMPool())
-	} else {
-		proc.SetInputBatch(newBat)
-	}
+	proc.SetInputBatch(nil)
 
 	if delCtx.AddAffectedRows {
 		atomic.AddUint64(&p.affectedRows, affectedRows)

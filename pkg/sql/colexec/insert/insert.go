@@ -174,12 +174,8 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 		}
 
 		// `insertBat` does not include partition expression columns
-		if insertCtx.IsEnd {
-			proc.SetInputBatch(nil)
-			insertBat.Clean(proc.GetMPool())
-		} else {
-			proc.SetInputBatch(insertBat)
-		}
+		proc.SetInputBatch(nil)
+		insertBat.Clean(proc.GetMPool())
 	}
 
 	if ap.InsertCtx.AddAffectedRows {

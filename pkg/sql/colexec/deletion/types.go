@@ -87,7 +87,6 @@ type DeleteCtx struct {
 	Source                engine.Relation
 	Ref                   *plan.ObjectRef
 	AddAffectedRows       bool
-	IsEnd                 bool
 }
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;

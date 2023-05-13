@@ -819,16 +819,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		currentFirstFlag := c.anal.isFirst
 		toWriteS3 := n.Stats.GetCost()*float64(SingleLineSizeEstimate) >
 			float64(DistributedThreshold) || c.anal.qry.LoadTag
-		// todo:  make write s3 to support partition table
-		//if len(insertArg.InsertCtx.PartitionTableIDs) > 0 {
-		//	toWriteS3 = false
-		//}
 		insertArg.ToWriteS3 = toWriteS3
-		mergeBlockIsEnd := insertArg.InsertCtx.IsEnd
-
-		if toWriteS3 {
-			insertArg.InsertCtx.IsEnd = false
-		}
 
 		if toWriteS3 {
 			dataScope := c.newMergeScope(ss)
@@ -854,7 +845,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				if err != nil {
 					return nil, err
 				}
-				insertArg.InsertCtx.IsEnd = false
 				insertArg.ToWriteS3 = true
 				scopes[i].appendInstruction(vm.Instruction{
 					Op:      vm.Insert,
@@ -871,7 +861,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 				Arg: &mergeblock.Argument{
 					Tbl:              insertArg.InsertCtx.Rel,
 					PartitionSources: insertArg.InsertCtx.PartitionSources,
-					IsEnd:            mergeBlockIsEnd,
 				},
 			})
 			ss = []*Scope{rs}

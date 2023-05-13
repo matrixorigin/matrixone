@@ -59,7 +59,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}()
 	}
 
-	var insertBatch *batch.Batch
 	// If the target is a partition table
 	if len(ap.PartitionSources) > 0 {
 		// 'i' aligns with partition number
@@ -69,52 +68,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				if err = ap.PartitionSources[i].Write(proc.Ctx, ap.container.mp[i]); err != nil {
 					return false, err
 				}
-
-				if !ap.IsEnd {
-					if insertBatch == nil {
-						insertBatch = batch.NewWithSize(len(bat.Attrs))
-						insertBatch.SetAttributes(bat.Attrs)
-						for i := range bat.Attrs {
-							vec := proc.GetVector(*bat.Vecs[i].GetType())
-							if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
-								return false, err
-							}
-							insertBatch.SetVector(int32(i), vec)
-							insertBatch.Zs = append(insertBatch.Zs, bat.Zs...)
-						}
-					} else {
-						_, err := insertBatch.Append(proc.Ctx, proc.GetMPool(), bat)
-						if err != nil {
-							return false, err
-						}
-					}
-				}
 			}
 
 			for _, bat := range ap.container.mp2[i] {
 				// batches in mp2 will be deeply copied into txn's workspace.
 				if err = ap.PartitionSources[i].Write(proc.Ctx, bat); err != nil {
 					return false, err
-				}
-
-				if !ap.IsEnd {
-					if insertBatch == nil {
-						insertBatch = batch.NewWithSize(len(bat.Attrs))
-						insertBatch.SetAttributes(bat.Attrs)
-						for i := range bat.Attrs {
-							vec := proc.GetVector(*bat.Vecs[i].GetType())
-							if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
-								return false, err
-							}
-							insertBatch.SetVector(int32(i), vec)
-							insertBatch.Zs = append(insertBatch.Zs, bat.Zs...)
-						}
-					} else {
-						_, err := insertBatch.Append(proc.Ctx, proc.GetMPool(), bat)
-						if err != nil {
-							return false, err
-						}
-					}
 				}
 
 			}
@@ -127,25 +86,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			if err = ap.Tbl.Write(proc.Ctx, ap.container.mp[0]); err != nil {
 				return false, err
 			}
-			if !ap.IsEnd {
-				if insertBatch == nil {
-					insertBatch = batch.NewWithSize(len(bat.Attrs))
-					insertBatch.SetAttributes(bat.Attrs)
-					for i := range bat.Attrs {
-						vec := proc.GetVector(*bat.Vecs[i].GetType())
-						if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
-							return false, err
-						}
-						insertBatch.SetVector(int32(i), vec)
-						insertBatch.Zs = append(insertBatch.Zs, bat.Zs...)
-					}
-				} else {
-					_, err := insertBatch.Append(proc.Ctx, proc.GetMPool(), bat)
-					if err != nil {
-						return false, err
-					}
-				}
-			}
 		}
 
 		for _, bat := range ap.container.mp2[0] {
@@ -153,34 +93,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			if err = ap.Tbl.Write(proc.Ctx, bat); err != nil {
 				return false, err
 			}
-			if !ap.IsEnd {
-				if insertBatch == nil {
-					insertBatch = batch.NewWithSize(len(bat.Attrs))
-					insertBatch.SetAttributes(bat.Attrs)
-					for i := range bat.Attrs {
-						vec := proc.GetVector(*bat.Vecs[i].GetType())
-						if err := vec.UnionBatch(bat.Vecs[i], 0, bat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
-							return false, err
-						}
-						insertBatch.SetVector(int32(i), vec)
-						insertBatch.Zs = append(insertBatch.Zs, bat.Zs...)
-					}
-				} else {
-					_, err := insertBatch.Append(proc.Ctx, proc.GetMPool(), bat)
-					if err != nil {
-						return false, err
-					}
-				}
-			}
 		}
 		ap.container.mp2[0] = ap.container.mp2[0][:0]
 	}
 
-	if ap.IsEnd {
-		proc.SetInputBatch(nil)
-	} else {
-		proc.SetInputBatch(insertBatch)
-	}
-
+	proc.SetInputBatch(nil)
 	return false, nil
 }
