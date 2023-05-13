@@ -1634,7 +1634,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	if dop > plan2.MAXShuffleDOP {
 		dop = plan2.MAXShuffleDOP
 	}
-	rs := c.newScopeList(validScopeCount(ss), int(dop))
+	parent, children := c.newScopeListForGroup(validScopeCount(ss), int(dop))
 	shuffle := false
 	if len(n.GroupBy) == 1 && n.GroupBy[0].Typ.Id == int32(types.T_int64) {
 		shuffle = true
@@ -1649,16 +1649,25 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, rs, ss[i].NodeInfo.Addr, shuffle),
+				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, shuffle),
 			})
 			j++
 			ss[i].IsEnd = true
 		}
 	}
 
+	// saving the last operator of all children to make sure the connector setting in
+	// the right place
+	lastOperator := make([]vm.Instruction, 0, len(children))
+	for i := range children {
+		ilen := len(children[i].Instructions) - 1
+		lastOperator = append(lastOperator, children[i].Instructions[ilen])
+		children[i].Instructions = children[i].Instructions[:ilen]
+	}
+
 	if shuffle {
-		for i := range rs {
-			rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+		for i := range children {
+			children[i].Instructions = append(children[i].Instructions, vm.Instruction{
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
@@ -1666,33 +1675,38 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 			})
 		}
 	} else {
-		for i := range rs {
-			rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+		for i := range children {
+			children[i].Instructions = append(children[i].Instructions, vm.Instruction{
 				Op:      vm.Group,
 				Idx:     c.anal.curr,
 				IsFirst: currentIsFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], i, len(rs), true, c.proc),
+				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], i, len(children), true, c.proc),
 			})
 		}
 	}
 
-	rs = c.compileProjection(n, rs)
+	children = c.compileProjection(n, children)
+
+	// recovery the children's last operator
+	for i := range children {
+		children[i].Instructions = append(children[i].Instructions, lastOperator[i])
+	}
 
 	for i := range ss {
 		appended := false
-		for j := range rs {
-			if rs[j].NodeInfo.Addr == ss[i].NodeInfo.Addr {
-				rs[j].PreScopes = append(rs[j].PreScopes, ss[i])
+		for j := range children {
+			if children[j].NodeInfo.Addr == ss[i].NodeInfo.Addr {
+				children[j].PreScopes = append(children[j].PreScopes, ss[i])
 				appended = true
 				break
 			}
 		}
 		if !appended {
-			rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
+			children[0].PreScopes = append(children[0].PreScopes, ss[i])
 		}
 	}
 
-	return []*Scope{c.newMergeScope(rs)}
+	return []*Scope{c.newMergeScope(parent)}
 }
 
 func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {
@@ -1801,6 +1815,16 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 	return rs
 }
 
+func (c *Compile) newMergeRemoteScope(ss []*Scope, nodeinfo engine.Node) *Scope {
+	rs := c.newMergeScope(ss)
+	// reset rs's info to remote
+	rs.Magic = Remote
+	rs.NodeInfo.Addr = nodeinfo.Addr
+	rs.NodeInfo.Mcpu = nodeinfo.Mcpu
+
+	return rs
+}
+
 func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
 	var ss []*Scope
 
@@ -1810,6 +1834,20 @@ func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
 		ss = append(ss, c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)...)
 	}
 	return ss
+}
+
+func (c *Compile) newScopeListForGroup(childrenCount int, blocks int) ([]*Scope, []*Scope) {
+	var parent []*Scope
+	var children []*Scope
+
+	currentFirstFlag := c.anal.isFirst
+	for _, n := range c.cnList {
+		c.anal.isFirst = currentFirstFlag
+		scopes := c.newScopeListWithNode(c.generateCPUNumber(n.Mcpu, blocks), childrenCount, n.Addr)
+		children = append(children, scopes...)
+		parent = append(parent, c.newMergeRemoteScope(scopes, n))
+	}
+	return parent, children
 }
 
 func (c *Compile) newScopeListWithNode(mcpu, childrenCount int, addr string) []*Scope {
