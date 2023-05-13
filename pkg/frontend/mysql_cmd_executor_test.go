@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -1293,11 +1292,11 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	}
 
 	motrace.GetTracerProvider().SetEnable(true)
-	ctx := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, errors.New("test"))
+	ctx := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
 	si := motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 
-	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{externSql, externSql}, errors.New("test"))
+	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{externSql, externSql}, moerr.NewInternalErrorNoCtx("test"))
 	si = motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 
