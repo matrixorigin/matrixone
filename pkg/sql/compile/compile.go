@@ -1649,7 +1649,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, rs, c.addr, shuffle),
+				Arg: constructBroadcastDispatch(j, rs, ss[i].NodeInfo.Addr, shuffle),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -1678,7 +1678,20 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 
 	rs = c.compileProjection(n, rs)
 
-	return []*Scope{c.newMergeScope(append(rs, ss...))}
+	for i := range ss {
+		appended := false
+		for j := range rs {
+			if rs[j].NodeInfo.Addr == ss[i].NodeInfo.Addr {
+				rs[j].PreScopes = append(rs[j].PreScopes, ss[i])
+				break
+			}
+		}
+		if !appended {
+			rs[0].PreScopes = append(rs[0].PreScopes, ss[i])
+		}
+	}
+
+	return []*Scope{c.newMergeScope(rs)}
 }
 
 func (c *Compile) newInsertMergeScope(arg *insert.Argument, ss []*Scope) *Scope {

@@ -210,7 +210,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 					str += fmt.Sprintf(" unknow type dispatch [%s].", chs)
 				}
 
-				if arg.FuncId == dispatch.SendToAllFunc && len(arg.RemoteRegs) != 0 {
+				if len(arg.RemoteRegs) != 0 {
 					remoteChs := ""
 					for i, reg := range arg.RemoteRegs {
 						if i != 0 {
