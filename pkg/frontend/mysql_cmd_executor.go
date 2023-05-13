@@ -3608,16 +3608,11 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 
 func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
-		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
-		options := &explain.ExplainOptions{
-			Verbose: true,
-			Analyze: true,
-			Format:  explain.EXPLAIN_FORMAT_TEXT,
-		}
-		marshalPlan := explainQuery.BuildJsonPlan(ctx, uuid, options)
+		marshalPlan := explain.BuildJsonPlan(ctx, uuid, &explain.MarshalPlanOptions, queryPlan.GetQuery())
 		stats.RowsRead, stats.BytesScan = marshalPlan.StatisticsRead()
-		// data transform to json datastruct
-		buffer := &bytes.Buffer{}
+		// XXX, `buffer` can be used repeatedly as a global variable in the future
+		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
+		buffer := bytes.NewBuffer(make([]byte, 0, 8192))
 		encoder := json.NewEncoder(buffer)
 		encoder.SetEscapeHTML(false)
 		err := encoder.Encode(marshalPlan)
@@ -3632,6 +3627,7 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 			if len(marshalPlan.Steps) > 1 {
 				logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(marshalPlan.Steps))
 			}
+			// XXX, `buffer` can be used repeatedly as a global variable in the future
 			buffer := &bytes.Buffer{}
 			encoder := json.NewEncoder(buffer)
 			encoder.SetEscapeHTML(false)
