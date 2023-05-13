@@ -374,7 +374,7 @@ func TestFakeCNServer(t *testing.T) {
 		"k2": "v2",
 	})
 
-	cleanup := testStartClient(t, tp, li, cn1)
+	cleanup := testStartClient(t, tp, clientInfo{labelInfo: li}, cn1)
 	defer cleanup()
 }
 

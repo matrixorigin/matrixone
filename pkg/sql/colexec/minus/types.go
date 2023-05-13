@@ -52,6 +52,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	mp := proc.Mp()
 	arg.ctr.cleanBatch(mp)
 	arg.ctr.cleanHashMap()
+	arg.ctr.FreeAllReg()
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

@@ -40,6 +40,7 @@ type Routine struct {
 
 	cancelRoutineCtx  context.Context
 	cancelRoutineFunc context.CancelFunc
+	cancelRequestFunc context.CancelFunc
 
 	parameters *config.FrontendParameters
 
@@ -99,10 +100,12 @@ func (rt *Routine) execCallbackBasedOnRequest(want bool, callback func()) {
 	}
 }
 
-func (rt *Routine) getCancelRoutineFunc() context.CancelFunc {
+func (rt *Routine) releaseRoutineCtx() {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	return rt.cancelRoutineFunc
+	if rt.cancelRoutineFunc != nil {
+		rt.cancelRoutineFunc()
+	}
 }
 
 func (rt *Routine) getCancelRoutineCtx() context.Context {
@@ -145,6 +148,20 @@ func (rt *Routine) getSession() *Session {
 	return rt.ses
 }
 
+func (rt *Routine) setCancelRequestFunc(cf context.CancelFunc) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	rt.cancelRequestFunc = cf
+}
+
+func (rt *Routine) cancelRequestCtx() {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.cancelRequestFunc != nil {
+		rt.cancelRequestFunc()
+	}
+}
+
 func (rt *Routine) handleRequest(req *Request) error {
 	var ses *Session
 	var routineCtx context.Context
@@ -159,6 +176,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
 	executor := rt.getCmdExecutor()
 	executor.SetCancelFunc(cancelRequestFunc)
+	rt.setCancelRequestFunc(cancelRequestFunc)
 	ses = rt.getSession()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
@@ -221,10 +239,15 @@ func (rt *Routine) handleRequest(req *Request) error {
 // killQuery if there is a running query, just cancel it.
 func (rt *Routine) killQuery(killMyself bool, statementId string) {
 	if !killMyself {
-		executor := rt.getCmdExecutor()
-		if executor != nil {
-			//just cancel the request context.
-			executor.CancelRequest()
+		//1,cancel request ctx
+		rt.cancelRequestCtx()
+		//2.cancel txn ctx
+		ses := rt.getSession()
+		if ses != nil {
+			txnHandler := ses.GetTxnHandler()
+			if txnHandler != nil {
+				txnHandler.cancelTxnCtx()
+			}
 		}
 	}
 }
@@ -249,10 +272,7 @@ func (rt *Routine) killConnection(killMyself bool) {
 		//(includes the request context) derived from the root context.
 		//After the context is cancelled. In handleRequest, the network
 		//will be closed finally.
-		cancel := rt.getCancelRoutineFunc()
-		if cancel != nil {
-			cancel()
-		}
+		rt.releaseRoutineCtx()
 
 		//If it is in processing the request, it responds to the client normally
 		//before closing the network to avoid the mysql client to be hung.
@@ -287,10 +307,7 @@ func (rt *Routine) cleanup() {
 		//step C: cancel the root context of the connection.
 		//At the same time, it cancels all the contexts
 		//(includes the request context) derived from the root context.
-		cancel := rt.getCancelRoutineFunc()
-		if cancel != nil {
-			cancel()
-		}
+		rt.releaseRoutineCtx()
 
 		//step D: clean protocol
 		rt.protocol.Quit()

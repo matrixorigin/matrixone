@@ -899,7 +899,11 @@ func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 		dotIdx := strings.Index(colName, ".")
 		colName = colName[dotIdx+1:]
 		colIdx := tableDef.Name2ColIndex[colName]
-		(*columnMap)[int(idx)] = int(colIdx)
+		seqnum := int(colIdx) // for extenal scan case, tableDef has only Name2ColIndex, no Cols, leave seqnum as colIdx
+		if len(tableDef.Cols) > 0 {
+			seqnum = int(tableDef.Cols[colIdx].Seqnum)
+		}
+		(*columnMap)[int(idx)] = seqnum
 	}
 }
 
@@ -1331,7 +1335,10 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 		w := csv.NewWriter(buf)
 		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
 			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
-		if param.S3Param.Provider == "minio" {
+		if strings.ToLower(param.S3Param.Provider) != "" && strings.ToLower(param.S3Param.Provider) != "minio" {
+			return nil, "", moerr.NewBadConfig(param.Ctx, "the provider only support 'minio' now")
+		}
+		if strings.ToLower(param.S3Param.Provider) == "minio" {
 			opts = append(opts, "is-minio=true")
 		}
 		if err = w.Write(opts); err != nil {

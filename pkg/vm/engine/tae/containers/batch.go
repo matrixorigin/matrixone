@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -234,18 +235,21 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	var tmpn int64
 	buffer := MakeVector(types.T_varchar.ToType())
 	defer buffer.Close()
-	// 1. Vector cnt
-	// if nr, err = w.Write(types.EncodeFixed(uint16(len(bat.Vecs)))); err != nil {
-	// 	return
-	// }
-	// n += int64(nr)
-	buffer.Append(types.EncodeFixed(uint16(len(bat.Vecs))), false)
+	mp := buffer.GetAllocator()
+	bufVec := buffer.GetDownstreamVector()
+	if err = vector.AppendBytes(bufVec, types.EncodeFixed(uint16(len(bat.Vecs))), false, mp); err != nil {
+		return
+	}
 
 	// 2. Types and Names
 	for i, vec := range bat.Vecs {
-		buffer.Append([]byte(bat.Attrs[i]), false)
+		if err = vector.AppendBytes(bufVec, []byte(bat.Attrs[i]), false, mp); err != nil {
+			return
+		}
 		vt := vec.GetType()
-		buffer.Append(types.EncodeType(vt), false)
+		if err = vector.AppendBytes(bufVec, types.EncodeType(vt), false, mp); err != nil {
+			return
+		}
 	}
 	if tmpn, err = buffer.WriteTo(w); err != nil {
 		return

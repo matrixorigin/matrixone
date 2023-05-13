@@ -452,6 +452,10 @@ func newClientSession(
 	return cs
 }
 
+func (cs *clientSession) RemoteAddress() string {
+	return cs.conn.RemoteAddress()
+}
+
 func (cs *clientSession) Close() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
