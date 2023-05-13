@@ -16,7 +16,6 @@ package parsers
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -148,7 +147,7 @@ func SplitSqlBySemicolon(sql string) []string {
 
 	if len(ret) == 0 {
 		//!!!NOTE there is at least one element in ret slice
-		panic(fmt.Sprintf("there is at least one element"))
+		panic("there is at least one element")
 	}
 	//handle whitespace characters in the front and end of the sql
 	for i := range ret {
