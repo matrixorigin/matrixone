@@ -550,3 +550,98 @@ func GtUuid(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 func NeUuid(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareUuid(ivecs, CompareUuidNe, proc)
 }
+
+type compRowId func(v1, v2 [24]byte) bool
+
+func compareRowIdEq(v1, v2 [24]byte) bool {
+	return (*types.Rowid)(&v1).Equal(v2)
+}
+
+func compareRowIdLe(v1, v2 [24]byte) bool {
+	return compareRowIdLt(v1, v2) || compareRowIdEq(v1, v2)
+}
+
+func compareRowIdLt(v1, v2 [24]byte) bool {
+	return (*types.Rowid)(&v1).Less(v2)
+}
+
+func compareRowIdGe(v1, v2 [24]byte) bool {
+	return !compareRowIdLt(v1, v2)
+}
+
+func compareRowIdGt(v1, v2 [24]byte) bool {
+	return !compareRowIdLe(v1, v2)
+}
+
+func compareRowIdNe(v1, v2 [24]byte) bool {
+	return !compareRowIdEq(v1, v2)
+}
+
+func CompareRowId(ivecs []*vector.Vector, fn compRowId, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := ivecs[0], ivecs[1]
+	col1, col2 := vector.MustFixedCol[types.Rowid](v1), vector.MustFixedCol[types.Rowid](v2)
+	if v1.IsConstNull() || v2.IsConstNull() {
+		return handleScalarNull(v1, v2, proc)
+	}
+
+	if v1.IsConst() && v2.IsConst() {
+		vec := vector.NewConstFixed(boolType, fn(col1[0], col2[0]), v1.Length(), proc.Mp())
+		return vec, nil
+	}
+
+	if v1.IsConst() {
+		length := v2.Length()
+		vec := allocateBoolVector(length, proc)
+		veccol := vector.MustFixedCol[bool](vec)
+		for i := range veccol {
+			veccol[i] = fn(col1[0], col2[i])
+		}
+		nulls.Or(v2.GetNulls(), nil, vec.GetNulls())
+		return vec, nil
+	}
+
+	if v2.IsConst() {
+		length := v1.Length()
+		vec := allocateBoolVector(length, proc)
+		veccol := vector.MustFixedCol[bool](vec)
+		for i := range veccol {
+			veccol[i] = fn(col1[i], col2[0])
+		}
+		nulls.Or(v1.GetNulls(), nil, vec.GetNulls())
+		return vec, nil
+	}
+
+	// Vec Vec
+	length := v1.Length()
+	vec := allocateBoolVector(length, proc)
+	veccol := vector.MustFixedCol[bool](vec)
+	for i := range veccol {
+		veccol[i] = fn(col1[i], col2[i])
+	}
+	nulls.Or(v1.GetNulls(), v2.GetNulls(), vec.GetNulls())
+	return vec, nil
+}
+
+func EqRowId(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareRowId(ivecs, compareRowIdEq, proc)
+}
+
+func LeRowId(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareRowId(ivecs, compareRowIdLe, proc)
+}
+
+func LtRowId(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareRowId(ivecs, compareRowIdLt, proc)
+}
+
+func GeRowId(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareRowId(ivecs, compareRowIdGe, proc)
+}
+
+func GtRowId(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareRowId(ivecs, compareRowIdGt, proc)
+}
+
+func NeRowId(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareRowId(ivecs, compareRowIdNe, proc)
+}

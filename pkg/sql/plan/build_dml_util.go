@@ -40,7 +40,7 @@ func buildInsertPlans(
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32) error {
 
 	// add plan: -> preinsert -> sink
-	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, true)
+	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
 
@@ -526,25 +526,15 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 			if pkPos := getPkPos(tableDef, true); pkPos != -1 {
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 				isUpdate := updateColLength > 0
-				if isUpdate {
-					tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
-				}
-				pkColExpr := &plan.Expr{
+				pkColExpr := &Expr{
 					Typ: tableDef.Cols[pkPos].Typ,
 					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
+						Col: &ColRef{
 							ColPos: int32(pkPos),
 							Name:   tableDef.Cols[pkPos].Name,
 						},
 					},
 				}
-				rightId := builder.appendNode(&plan.Node{
-					NodeType:    plan.Node_TABLE_SCAN,
-					Stats:       &plan.Stats{},
-					ObjRef:      objRef,
-					TableDef:    tableDef,
-					ProjectList: []*Expr{pkColExpr},
-				}, bindCtx)
 				rightExpr := &Expr{
 					Typ: tableDef.Cols[pkPos].Typ,
 					Expr: &plan.Expr_Col{
@@ -558,41 +548,136 @@ func makeInsertPlan(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindCon
 				if err != nil {
 					return err
 				}
-				lastNodeId = builder.appendNode(&plan.Node{
-					NodeType:    plan.Node_JOIN,
-					Children:    []int32{lastNodeId, rightId},
-					JoinType:    plan.Node_SEMI,
-					OnList:      []*Expr{condExpr},
-					ProjectList: []*Expr{pkColExpr},
-				}, bindCtx)
 
-				colExpr := &Expr{
-					Typ: tableDef.Cols[pkPos].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							Name: tableDef.Cols[pkPos].Name,
+				if isUpdate {
+					rowIdDef := MakeRowIdColDef()
+					tableDef.Cols = append(tableDef.Cols, rowIdDef)
+
+					rowIdExpr := &Expr{
+						Typ: rowIdDef.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								ColPos: int32(len(tableDef.Cols) - 1),
+								Name:   rowIdDef.Name,
+							},
 						},
-					},
-				}
+					}
+					rightId := builder.appendNode(&Node{
+						NodeType:    plan.Node_TABLE_SCAN,
+						Stats:       &plan.Stats{},
+						ObjRef:      objRef,
+						TableDef:    tableDef,
+						ProjectList: []*Expr{pkColExpr, rowIdExpr},
+					}, bindCtx)
+					rightRowIdExpr := &Expr{
+						Typ: rowIdDef.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								RelPos: 1,
+								ColPos: 1,
+								Name:   rowIdDef.Name,
+							},
+						},
+					}
+					lastNodeId = builder.appendNode(&plan.Node{
+						NodeType:    plan.Node_JOIN,
+						Children:    []int32{lastNodeId, rightId},
+						JoinType:    plan.Node_INNER,
+						OnList:      []*Expr{condExpr},
+						ProjectList: []*Expr{rowIdExpr, rightRowIdExpr},
+					}, bindCtx)
 
-				isEmptyExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isempty", []*Expr{colExpr})
-				if err != nil {
-					return err
-				}
+					// append filter node
+					filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "!=", []*Expr{
+						{
+							Typ: rowIdDef.Typ,
+							Expr: &plan.Expr_Col{
+								Col: &ColRef{ColPos: 0, Name: rowIdDef.Name},
+							},
+						},
+						{
+							Typ: rowIdDef.Typ,
+							Expr: &plan.Expr_Col{
+								Col: &ColRef{ColPos: 1, Name: rowIdDef.Name},
+							},
+						},
+					})
+					colExpr := &Expr{
+						Typ: tableDef.Cols[pkPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								Name: rowIdDef.Name,
+							},
+						},
+					}
 
-				assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, makePlan2StringConstExprWithType("duplicate check error")})
-				if err != nil {
-					return err
+					lastNodeId = builder.appendNode(&Node{
+						NodeType:    plan.Node_FILTER,
+						Children:    []int32{lastNodeId},
+						FilterList:  []*Expr{filterExpr},
+						ProjectList: []*Expr{colExpr},
+					}, bindCtx)
+
+					// append assert node
+					isEmptyExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isempty", []*Expr{colExpr})
+					if err != nil {
+						return err
+					}
+					assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, makePlan2StringConstExprWithType("duplicate check error")})
+					if err != nil {
+						return err
+					}
+					lastNodeId = builder.appendNode(&Node{
+						NodeType:   plan.Node_FILTER,
+						Children:   []int32{lastNodeId},
+						FilterList: []*Expr{assertExpr},
+						IsEnd:      true,
+					}, bindCtx)
+					builder.appendStep(lastNodeId)
+				} else {
+					rightId := builder.appendNode(&plan.Node{
+						NodeType:    plan.Node_TABLE_SCAN,
+						Stats:       &plan.Stats{},
+						ObjRef:      objRef,
+						TableDef:    tableDef,
+						ProjectList: []*Expr{pkColExpr},
+					}, bindCtx)
+					lastNodeId = builder.appendNode(&plan.Node{
+						NodeType:    plan.Node_JOIN,
+						Children:    []int32{lastNodeId, rightId},
+						JoinType:    plan.Node_SEMI,
+						OnList:      []*Expr{condExpr},
+						ProjectList: []*Expr{pkColExpr},
+					}, bindCtx)
+
+					colExpr := &Expr{
+						Typ: tableDef.Cols[pkPos].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								Name: tableDef.Cols[pkPos].Name,
+							},
+						},
+					}
+
+					isEmptyExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "isempty", []*Expr{colExpr})
+					if err != nil {
+						return err
+					}
+
+					assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, makePlan2StringConstExprWithType("duplicate check error")})
+					if err != nil {
+						return err
+					}
+					filterNode := &Node{
+						NodeType:    plan.Node_FILTER,
+						Children:    []int32{lastNodeId},
+						FilterList:  []*Expr{assertExpr},
+						ProjectList: getProjectionByLastNode(builder, lastNodeId),
+						IsEnd:       true,
+					}
+					lastNodeId = builder.appendNode(filterNode, bindCtx)
+					builder.appendStep(lastNodeId)
 				}
-				filterNode := &Node{
-					NodeType:    plan.Node_FILTER,
-					Children:    []int32{lastNodeId},
-					FilterList:  []*Expr{assertExpr},
-					ProjectList: getProjectionByLastNode(builder, lastNodeId),
-					IsEnd:       true,
-				}
-				lastNodeId = builder.appendNode(filterNode, bindCtx)
-				builder.appendStep(lastNodeId)
 			}
 		}
 	*/
