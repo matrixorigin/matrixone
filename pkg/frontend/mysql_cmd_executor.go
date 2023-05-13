@@ -300,8 +300,6 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	}
 	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
-	si := motrace.StatementFromContext(ctx)
-	fmt.Println("xxxx 1", si != nil)
 	return ctx
 }
 
@@ -2402,14 +2400,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc, ses)
 	if err != nil {
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(sql), ses.sqlSourceType, err)
-		si := motrace.StatementFromContext(requestCtx)
-		fmt.Println("xxxx 2", si != nil)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
 		}
-		si = motrace.StatementFromContext(requestCtx)
-		fmt.Println("xxxx 3", si != nil)
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
 	}

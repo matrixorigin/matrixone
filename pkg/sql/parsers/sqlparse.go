@@ -16,6 +16,7 @@ package parsers
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -123,27 +124,48 @@ var HandleSqlForRecord = func(sql string) []string {
 
 func SplitSqlBySemicolon(sql string) []string {
 	var ret []string
+	if len(sql) == 0 {
+		// case 1 : "" => [""]
+		return []string{sql}
+	}
 	scanner := mysql.NewScanner(dialect.MYSQL, sql)
 	lastEnd := 0
-	sub := ""
 	for scanner.Pos < len(sql) {
 		typ, _ := scanner.Scan()
 		for scanner.Pos < len(sql) && typ != ';' {
 			typ, _ = scanner.Scan()
 		}
 		if typ == ';' {
-			sub = strings.TrimSpace(sql[lastEnd : scanner.Pos-1])
-			if len(sub) > 0 {
-				ret = append(ret, sub)
-			}
+			ret = append(ret, sql[lastEnd:scanner.Pos-1])
 			lastEnd = scanner.Pos
 		} else {
-			sub = strings.TrimSpace(sql[lastEnd:scanner.Pos])
-			if len(sub) > 0 {
-				ret = append(ret, sub)
-			}
-			return ret
+			ret = append(ret, sql[lastEnd:scanner.Pos])
 		}
 	}
+
+	if len(ret) == 0 {
+		//!!!NOTE there is at least one element in ret slice
+		panic(fmt.Sprintf("there is at least one element"))
+	}
+	//handle whitespace characters in the front and end of the sql
+	for i := range ret {
+		ret[i] = strings.TrimSpace(ret[i])
+	}
+	// do nothing
+	//if len(ret) == 1 {
+	//	//case 1 : "   " => [""]
+	//	//case 2 : " abc " = > ["abc"]
+	//	//case 3 : " /* abc */  " = > ["/* abc */"]
+	//}
+	if len(ret) > 1 {
+		last := len(ret) - 1
+		if len(ret[last]) == 0 {
+			//case 3 : "abc;   " => ["abc"]
+			//if the last one is empty, remove it
+			ret = ret[:last]
+		}
+		//case 4 : "abc; def; /* abc */  " => ["abc", "def", "/* abc */"]
+	}
+
 	return ret
 }
