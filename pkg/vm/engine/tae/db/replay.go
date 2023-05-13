@@ -25,7 +25,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -33,12 +32,11 @@ import (
 )
 
 type Replayer struct {
-	DataFactory  *tables.DataFactory
-	db           *DB
-	maxTs        types.TS
-	staleIndexes []*wal.Index
-	once         sync.Once
-	ckpedTS      types.TS
+	DataFactory *tables.DataFactory
+	db          *DB
+	maxTs       types.TS
+	once        sync.Once
+	ckpedTS     types.TS
 }
 
 type replayAllocator struct {
@@ -58,10 +56,9 @@ func (a *replayAllocator) Alloc(n int) ([]byte, error) {
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS) *Replayer {
 	return &Replayer{
-		DataFactory:  dataFactory,
-		db:           db,
-		staleIndexes: make([]*wal.Index, 0),
-		ckpedTS:      ckpedTS,
+		DataFactory: dataFactory,
+		db:          db,
+		ckpedTS:     ckpedTS,
 	}
 }
 
@@ -94,13 +91,6 @@ func (replayer *Replayer) Replay() {
 	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry, allocator); err != nil {
 		panic(err)
 	}
-	if _, err := replayer.db.Wal.Checkpoint(replayer.staleIndexes); err != nil {
-		panic(err)
-	}
-}
-
-func (replayer *Replayer) OnStaleIndex(idx *wal.Index) {
-	replayer.staleIndexes = append(replayer.staleIndexes, idx)
 }
 
 func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
@@ -108,7 +98,6 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 	if group != wal.GroupPrepare && group != wal.GroupC {
 		return
 	}
-	idxCtx := store.NewIndex(lsn, 0, 0)
 	head := objectio.DecodeIOEntryHeader(payload)
 	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(payload[4:])
@@ -117,7 +106,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 		panic(err)
 	}
 	defer txnCmd.Close()
-	replayer.OnReplayTxn(txnCmd, idxCtx, lsn)
+	replayer.OnReplayTxn(txnCmd, lsn)
 	if err != nil {
 		panic(err)
 	}
@@ -133,7 +122,7 @@ func (replayer *Replayer) OnTimeStamp(ts types.TS) {
 	}
 }
 
-func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, walIdx *wal.Index, lsn uint64) {
+func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	var err error
 	txnCmd := cmd.(*txnbase.TxnCmd)
 	if txnCmd.PrepareTS.LessEq(replayer.maxTs) {

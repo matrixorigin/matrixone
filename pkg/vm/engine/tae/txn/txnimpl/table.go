@@ -303,7 +303,7 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 	if err = node.PrepareRollback(); err != nil {
 		panic(err)
 	}
-	if err = node.ApplyRollback(nil); err != nil {
+	if err = node.ApplyRollback(); err != nil {
 		panic(err)
 	}
 
@@ -1284,7 +1284,7 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 		if node.Is1PC() {
 			continue
 		}
-		if err = node.ApplyCommit(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
+		if err = node.ApplyCommit(); err != nil {
 			break
 		}
 		csn++
@@ -1300,7 +1300,7 @@ func (tbl *txnTable) Apply1PCCommit() (err error) {
 		if !node.Is1PC() {
 			continue
 		}
-		if err = node.ApplyCommit(tbl.store.cmdMgr.MakeLogIndex(tbl.csnStart)); err != nil {
+		if err = node.ApplyCommit(); err != nil {
 			break
 		}
 		tbl.csnStart++
@@ -1316,7 +1316,7 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 		if node.Is1PC() {
 			continue
 		}
-		if err = node.ApplyRollback(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
+		if err = node.ApplyRollback(); err != nil {
 			break
 		}
 		csn++

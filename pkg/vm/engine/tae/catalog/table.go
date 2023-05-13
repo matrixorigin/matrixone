@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type TableDataFactory = func(meta *TableEntry) data.Table
@@ -454,8 +453,8 @@ Append Txn:
 	s-----------------------p---------c         Yes
 	           s----------------------p         No, schema at s is not same with schema at p
 */
-func (entry *TableEntry) ApplyCommit(index *wal.Index) (err error) {
-	err = entry.BaseEntryImpl.ApplyCommit(index)
+func (entry *TableEntry) ApplyCommit() (err error) {
+	err = entry.BaseEntryImpl.ApplyCommit()
 	if err != nil {
 		return
 	}

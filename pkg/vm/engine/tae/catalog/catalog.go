@@ -189,41 +189,36 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 func (catalog *Catalog) ReplayCmd(
 	txncmd txnif.TxnCmd,
 	dataFactory DataFactory,
-	idxCtx *wal.Index,
 	observer wal.ReplayObserver) {
 	switch txncmd.GetType() {
 	case txnbase.IOET_WALTxnCommand_Composed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
-		idxCtx.Size = cmds.CmdSize
-		for i, cmds := range cmds.Cmds {
-			idx := idxCtx.Clone()
-			idx.CSN = uint32(i)
-			catalog.ReplayCmd(cmds, dataFactory, idx, observer)
+		for _, cmds := range cmds.Cmds {
+			catalog.ReplayCmd(cmds, dataFactory, observer)
 		}
 	case IOET_WALTxnCommand_Database:
 		cmd := txncmd.(*EntryCommand[*EmptyMVCCNode, *DBNode])
-		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer)
+		catalog.onReplayUpdateDatabase(cmd, observer)
 	case IOET_WALTxnCommand_Table:
 		cmd := txncmd.(*EntryCommand[*TableMVCCNode, *TableNode])
-		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer)
+		catalog.onReplayUpdateTable(cmd, dataFactory, observer)
 	case IOET_WALTxnCommand_Segment:
 		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *SegmentNode])
-		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer)
+		catalog.onReplayUpdateSegment(cmd, dataFactory, observer)
 	case IOET_WALTxnCommand_Block:
 		cmd := txncmd.(*EntryCommand[*MetadataMVCCNode, *BlockNode])
-		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer)
+		catalog.onReplayUpdateBlock(cmd, dataFactory, observer)
 	default:
 		panic("unsupport")
 	}
 }
 
-func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode, *DBNode], idx *wal.Index, observer wal.ReplayObserver) {
+func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode, *DBNode], observer wal.ReplayObserver) {
 	catalog.OnReplayDBID(cmd.ID.DbID)
 	var err error
 	un := cmd.mvccNode
-	un.SetLogIndex(idx)
 	if un.Is1PC() {
-		if err := un.ApplyCommit(nil); err != nil {
+		if err := un.ApplyCommit(); err != nil {
 			panic(err)
 		}
 	}
@@ -333,7 +328,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	}
 	db.Insert(un)
 }
-func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *TableNode], dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *TableNode], dataFactory DataFactory, observer wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.ID.TableID)
 	// prepareTS := cmd.GetTs()
 	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
@@ -349,9 +344,8 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
 
 	un := cmd.mvccNode
-	un.SetLogIndex(idx)
 	if un.Is1PC() {
-		if err := un.ApplyCommit(nil); err != nil {
+		if err := un.ApplyCommit(); err != nil {
 			panic(err)
 		}
 	}
@@ -517,7 +511,6 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 func (catalog *Catalog) onReplayUpdateSegment(
 	cmd *EntryCommand[*MetadataMVCCNode, *SegmentNode],
 	dataFactory DataFactory,
-	idx *wal.Index,
 	observer wal.ReplayObserver) {
 	catalog.OnReplaySegmentID(cmd.node.SortHint)
 
@@ -533,9 +526,8 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 	seg, err := tbl.GetSegmentByID(cmd.ID.SegmentID())
 	un := cmd.mvccNode
-	un.SetLogIndex(idx)
 	if un.Is1PC() {
-		if err := un.ApplyCommit(nil); err != nil {
+		if err := un.ApplyCommit(); err != nil {
 			panic(err)
 		}
 	}
@@ -667,7 +659,6 @@ func (catalog *Catalog) onReplayDeleteSegment(
 func (catalog *Catalog) onReplayUpdateBlock(
 	cmd *EntryCommand[*MetadataMVCCNode, *BlockNode],
 	dataFactory DataFactory,
-	idx *wal.Index,
 	observer wal.ReplayObserver) {
 	// catalog.OnReplayBlockID(cmd.ID.BlockID)
 	prepareTS := cmd.GetTs()
@@ -685,9 +676,8 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	}
 	blk, err := seg.GetBlockEntryByID(&cmd.ID.BlockID)
 	un := cmd.mvccNode
-	un.SetLogIndex(idx)
 	if un.Is1PC() {
-		if err := un.ApplyCommit(nil); err != nil {
+		if err := un.ApplyCommit(); err != nil {
 			panic(err)
 		}
 	}
