@@ -107,7 +107,49 @@ func TestSplitSqlBySemicolon(t *testing.T) {
 	require.Equal(t, "", ret[1])
 	require.Equal(t, "", ret[2])
 
+	ret = SplitSqlBySemicolon(";;;  ")
+	require.Equal(t, 3, len(ret))
+	require.Equal(t, "", ret[0])
+	require.Equal(t, "", ret[1])
+	require.Equal(t, "", ret[2])
+
 	ret = SplitSqlBySemicolon(";")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "", ret[0])
+
+	ret = SplitSqlBySemicolon("")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "", ret[0])
+
+	ret = SplitSqlBySemicolon("   ;   ")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "", ret[0])
+
+	ret = SplitSqlBySemicolon("   ")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "", ret[0])
+
+	ret = SplitSqlBySemicolon("  ; /* abc */ ")
+	require.Equal(t, 2, len(ret))
+	require.Equal(t, "", ret[0])
+	require.Equal(t, "/* abc */", ret[1])
+
+	ret = SplitSqlBySemicolon(" /* cde */  ; /* abc */ ")
+	require.Equal(t, 2, len(ret))
+	require.Equal(t, "/* cde */", ret[0])
+	require.Equal(t, "/* abc */", ret[1])
+
+	ret = SplitSqlBySemicolon("   ;    ;  ")
+	require.Equal(t, 2, len(ret))
+	require.Equal(t, "", ret[0])
+	require.Equal(t, "", ret[1])
+
+	ret = SplitSqlBySemicolon("   ;    ;")
+	require.Equal(t, 2, len(ret))
+	require.Equal(t, "", ret[0])
+	require.Equal(t, "", ret[1])
+
+	ret = SplitSqlBySemicolon("   ;   ")
 	require.Equal(t, 1, len(ret))
 	require.Equal(t, "", ret[0])
 }
@@ -115,24 +157,6 @@ func TestSplitSqlBySemicolon(t *testing.T) {
 func TestHandleSqlForRecord(t *testing.T) {
 	// Test remove /* cloud_user */ prefix
 	var ret []string
-	ret = SplitSqlBySemicolon("")
-	require.Equal(t, 1, len(ret))
-
-	ret = SplitSqlBySemicolon("   ;   ")
-	require.Equal(t, 1, len(ret))
-
-	ret = SplitSqlBySemicolon("   ")
-	require.Equal(t, 1, len(ret))
-
-	ret = SplitSqlBySemicolon("  ; /* abc */ ")
-	require.Equal(t, 2, len(ret))
-
-	ret = SplitSqlBySemicolon(" /* cde */  ; /* abc */ ")
-	require.Equal(t, 2, len(ret))
-
-	ret = SplitSqlBySemicolon("   ;    ;  ")
-	require.Equal(t, 2, len(ret))
-
 	ret = HandleSqlForRecord(" ;   ;  ")
 	require.Equal(t, 2, len(ret))
 	require.Equal(t, "", ret[0])

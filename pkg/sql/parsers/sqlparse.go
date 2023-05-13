@@ -130,6 +130,7 @@ func SplitSqlBySemicolon(sql string) []string {
 	}
 	scanner := mysql.NewScanner(dialect.MYSQL, sql)
 	lastEnd := 0
+	endWithSemicolon := false
 	for scanner.Pos < len(sql) {
 		typ, _ := scanner.Scan()
 		for scanner.Pos < len(sql) && typ != ';' {
@@ -138,8 +139,10 @@ func SplitSqlBySemicolon(sql string) []string {
 		if typ == ';' {
 			ret = append(ret, sql[lastEnd:scanner.Pos-1])
 			lastEnd = scanner.Pos
+			endWithSemicolon = true
 		} else {
 			ret = append(ret, sql[lastEnd:scanner.Pos])
+			endWithSemicolon = false
 		}
 	}
 
@@ -159,9 +162,9 @@ func SplitSqlBySemicolon(sql string) []string {
 	//}
 	if len(ret) > 1 {
 		last := len(ret) - 1
-		if len(ret[last]) == 0 {
+		if !endWithSemicolon && len(ret[last]) == 0 {
 			//case 3 : "abc;   " => ["abc"]
-			//if the last one is empty, remove it
+			//if the last one is end empty, remove it
 			ret = ret[:last]
 		}
 		//case 4 : "abc; def; /* abc */  " => ["abc", "def", "/* abc */"]
