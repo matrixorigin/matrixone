@@ -53,7 +53,7 @@ func BenchmarkBytesPool(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		var v any
 		put := pool.Get(&v)
-		defer put.Put()
+		put.Put()
 	}
 }
 
