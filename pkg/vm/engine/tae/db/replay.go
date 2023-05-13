@@ -15,7 +15,6 @@
 package db
 
 import (
-	"bytes"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -45,21 +44,6 @@ type Replayer struct {
 	wg            sync.WaitGroup
 	applyDuration time.Duration
 	txnCmdChan    chan *txnbase.TxnCmd
-}
-
-type replayAllocator struct {
-	replayBuf bytes.Buffer
-}
-
-func newReplayAllocator() *replayAllocator {
-	return &replayAllocator{
-		replayBuf: bytes.Buffer{},
-	}
-}
-
-func (a *replayAllocator) Alloc(n int) ([]byte, error) {
-	a.replayBuf.Grow(n)
-	return a.replayBuf.Bytes(), nil
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS) *Replayer {
@@ -98,10 +82,9 @@ func (replayer *Replayer) PreReplayWal() {
 }
 
 func (replayer *Replayer) Replay() {
-	allocator := newReplayAllocator()
 	replayer.wg.Add(1)
 	go replayer.applyTxnCmds()
-	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry, allocator); err != nil {
+	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry); err != nil {
 		panic(err)
 	}
 	replayer.txnCmdChan <- txnbase.NewLastTxnCmd()

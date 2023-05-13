@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 type MetaType uint8
@@ -332,12 +331,12 @@ func (r *recordEntry) unmarshal() {
 	r.unmarshaled.Store(1)
 }
 
-func (r *recordEntry) readEntry(lsn uint64, allocator logstoreEntry.Allocator) *entry.Entry {
+func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
 	r.unmarshal()
 	offset := r.meta.addr[lsn]
 	bbuf := bytes.NewBuffer(r.baseEntry.payload[offset:])
 	e := entry.NewEmptyEntry()
-	e.ReadFromWithAllocator(bbuf, allocator)
+	e.ReadFrom(bbuf)
 	e.Lsn = lsn
 	return e
 }
