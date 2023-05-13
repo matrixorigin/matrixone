@@ -1354,7 +1354,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("net_buffer_length", 1024, 1048576, false),
-		Default:           16384,
+		Default:           int64(16384),
 	},
 }
 
