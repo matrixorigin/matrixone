@@ -31,6 +31,7 @@ import (
 )
 
 // TODO: Requires usage or update privilege on the sequence.
+var setEdge = true
 
 // Retrieve values of this sequence.
 // Set curval,lastval of current session.
@@ -39,9 +40,9 @@ import (
 func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 
-	txn, err := NewTxn(e, proc, proc.Ctx)
-	if err != nil {
-		return nil, err
+	txn := proc.TxnOperator
+	if txn == nil {
+		return nil, moerr.NewInternalError(proc.Ctx, "Nextval: txn operator is nil")
 	}
 	// nextval is the real implementation of nextval function.
 	tblnames := vector.MustStrCol(vecs[0])
@@ -50,9 +51,6 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 
 	res, err := proc.AllocVectorOfRows(types.T_varchar.ToType(), 0, nil)
 	if err != nil {
-		if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
-			return nil, err1
-		}
 		return nil, err
 	}
 
@@ -63,9 +61,6 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		}
 		s, err := nextval(tblnames[i], proc, e, txn)
 		if err != nil {
-			if err1 := RollbackTxn(e, txn, proc.Ctx); err1 != nil {
-				return nil, err1
-			}
 			return nil, err
 		}
 		restrings[i] = s
@@ -80,14 +75,12 @@ func Nextval(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 			break
 		}
 	}
-
-	if err = CommitTxn(e, txn, proc.Ctx); err != nil {
-		return nil, err
-	}
 	return res, nil
 }
 
 func nextval(tblname string, proc *process.Process, e engine.Engine, txn client.TxnOperator) (string, error) {
+	proc.Aicm.Mu.Lock()
+	defer proc.Aicm.Mu.Unlock()
 	db := proc.SessionInfo.Database
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {

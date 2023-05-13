@@ -164,7 +164,7 @@ func TestStreamServer(t *testing.T) {
 		st, err := c.NewStream(testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
-			assert.NoError(t, st.Close())
+			assert.NoError(t, st.Close(false))
 		}()
 
 		req := newTestMessage(st.ID())
@@ -220,7 +220,7 @@ func TestStreamServerWithCache(t *testing.T) {
 		st, err := c.NewStream(testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
-			assert.NoError(t, st.Close())
+			assert.NoError(t, st.Close(false))
 		}()
 
 		req1 := newTestMessage(st.ID())
@@ -266,7 +266,7 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 		st, err := c.NewStream(testAddr, false)
 		assert.NoError(t, err)
 		defer func() {
-			assert.NoError(t, st.Close())
+			assert.NoError(t, st.Close(false))
 		}()
 
 		assert.NoError(t, st.Send(ctx, newTestMessage(1)))
@@ -304,7 +304,7 @@ func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 		assert.NoError(t, err)
 		st := v.(*stream)
 		defer func() {
-			assert.NoError(t, st.Close())
+			assert.NoError(t, st.Close(false))
 		}()
 
 		st.sequence = 2

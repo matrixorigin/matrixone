@@ -433,6 +433,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		OnUpdate:  DeepCopyOnUpdate(col.OnUpdate),
 		ClusterBy: col.ClusterBy,
 		Hidden:    col.Hidden,
+		Seqnum:    col.Seqnum,
 	}
 }
 

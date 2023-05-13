@@ -15,42 +15,94 @@
 package objectio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-func NewBlock(colCnt uint16) BlockObject {
+type BlockObject []byte
+
+func NewBlock(seqnums *Seqnums) BlockObject {
 	header := BuildBlockHeader()
-	header.SetColumnCount(colCnt)
-	blockMeta := BuildBlockMeta(colCnt)
+	header.SetColumnCount(uint16(len(seqnums.Seqs)))
+	metaColCnt := seqnums.MetaColCnt
+	header.SetMetaColumnCount(metaColCnt)
+	header.SetMaxSeqnum(seqnums.MaxSeq)
+	blockMeta := BuildBlockMeta(metaColCnt)
 	blockMeta.SetBlockMetaHeader(header)
-	for i := uint16(0); i < colCnt; i++ {
+	// create redundant columns to make reading O(1)
+	for i := uint16(0); i < metaColCnt; i++ {
 		col := BuildColumnMeta()
-		col.setIdx(i)
 		blockMeta.AddColumnMeta(i, col)
 	}
+
+	for i, seq := range seqnums.Seqs {
+		blockMeta.ColumnMeta(seq).setIdx(uint16(i))
+	}
 	return blockMeta
+}
+
+func BuildBlockMeta(count uint16) BlockObject {
+	length := headerLen + uint32(count)*colMetaLen
+	buf := make([]byte, length)
+	meta := BlockObject(buf)
+	return meta
+}
+
+func (bm BlockObject) BlockHeader() BlockHeader {
+	return BlockHeader(bm[:headerLen])
+}
+
+func (bm BlockObject) SetBlockMetaHeader(header BlockHeader) {
+	copy(bm[:headerLen], header)
+}
+
+// ColumnMeta is for internal use only, it didn't consider the block does not
+// contain the seqnum
+func (bm BlockObject) ColumnMeta(seqnum uint16) ColumnMeta {
+	return GetColumnMeta(seqnum, bm)
+}
+
+func (bm BlockObject) AddColumnMeta(idx uint16, col ColumnMeta) {
+	offset := headerLen + uint32(idx)*colMetaLen
+	copy(bm[offset:offset+colMetaLen], col)
+}
+
+func (bm BlockObject) IsEmpty() bool {
+	return len(bm) == 0
+}
+
+func (bm BlockObject) ToColumnZoneMaps(seqnums []uint16) []ZoneMap {
+	maxseq := bm.GetMaxSeqnum()
+	zms := make([]ZoneMap, len(seqnums))
+	for i, idx := range seqnums {
+		if idx >= SEQNUM_UPPER {
+			panic(fmt.Sprintf("do not read special %d", idx))
+		}
+		if idx > maxseq {
+			zms[i] = index.DecodeZM(EmptyZm[:])
+		}
+		column := bm.MustGetColumn(idx)
+		zms[i] = index.DecodeZM(column.ZoneMap())
+	}
+	return zms
 }
 
 func (bm BlockObject) GetExtent() Extent {
 	return bm.BlockHeader().MetaLocation()
 }
 
-func (bm BlockObject) MustGetColumn(idx uint16) ColumnMeta {
-	meta, err := bm.GetColumn(idx)
-	if err != nil {
-		panic(err)
+// MustGetColumn is for general use. it return a empty ColumnMeta if the block does not
+// contain the seqnum
+func (bm BlockObject) MustGetColumn(seqnum uint16) ColumnMeta {
+	if seqnum >= bm.BlockHeader().MetaColumnCount() {
+		h := bm.BlockHeader()
+		logutil.Infof("ObjectIO: blk-%d genernate empty ColumnMeta for big seqnum %d, maxseq: %d, column count: %d",
+			h.Sequence(), seqnum, h.MaxSeqnum(), h.MetaColumnCount())
+		return BuildColumnMeta()
 	}
-	return meta
-}
-
-func (bm BlockObject) GetColumn(idx uint16) (ColumnMeta, error) {
-	if idx >= bm.BlockHeader().ColumnCount() {
-		return nil, moerr.NewInternalErrorNoCtx("ObjectIO: bad index: %d, "+
-			"block: %d, column count: %d",
-			idx, bm.BlockHeader().Sequence(),
-			bm.BlockHeader().ColumnCount())
-	}
-	return bm.ColumnMeta(idx), nil
+	return bm.ColumnMeta(seqnum)
 }
 
 func (bm BlockObject) GetRows() uint32 {
@@ -67,4 +119,12 @@ func (bm BlockObject) GetID() uint16 {
 
 func (bm BlockObject) GetColumnCount() uint16 {
 	return bm.BlockHeader().ColumnCount()
+}
+
+func (bm BlockObject) GetMetaColumnCount() uint16 {
+	return bm.BlockHeader().MetaColumnCount()
+}
+
+func (bm BlockObject) GetMaxSeqnum() uint16 {
+	return bm.BlockHeader().MaxSeqnum()
 }

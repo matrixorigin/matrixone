@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package logtailreplay
 
 import (
 	"fmt"
@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func encodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]byte) {
+func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]byte) {
 	packer.Reset()
 
 	if vec.IsConstNull() {
@@ -176,9 +176,8 @@ func encodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 
 	case types.T_json, types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_Rowid:
-		s := vector.MustStrCol(vec)
-		for _, v := range s {
-			packer.EncodeStringType([]byte(v))
+		for i := 0; i < vec.Length(); i++ {
+			packer.EncodeStringType(vec.GetBytesAt(i))
 			ret = append(ret, packer.Bytes())
 			packer.Reset()
 		}
@@ -203,7 +202,7 @@ func encodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 	return
 }
 
-func encodePrimaryKey(v any, packer *types.Packer) []byte {
+func EncodePrimaryKey(v any, packer *types.Packer) []byte {
 	packer.Reset()
 
 	switch v := v.(type) {

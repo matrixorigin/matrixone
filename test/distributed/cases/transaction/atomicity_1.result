@@ -63,7 +63,8 @@ show create table atomic_view_2;
 no such table atomicity_1.atomic_view_2
 begin;
 drop view atomic_view_2;
-internal error: Only CREATE of DDL is supported in transactions
+invalid view 'atomicity_1.atomic_view_2'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit ;
 drop view atomic_view_2;
 invalid view 'atomicity_1.atomic_view_2'
@@ -224,9 +225,7 @@ internal error: administrative command is unsupported in transactions
 grant create table ,drop table on database * to role1;
 internal error: administrative command is unsupported in transactions
 truncate table  t_code_rule;
-internal error: Only CREATE of DDL is supported in transactions
 drop table t_code_rule;
-internal error: Only CREATE of DDL is supported in transactions
 drop database atomic_1;
 internal error: CREATE/DROP of database is not supported in transactions
 drop role role1,role2;

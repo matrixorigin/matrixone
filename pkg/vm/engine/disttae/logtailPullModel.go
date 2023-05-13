@@ -26,17 +26,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 // updatePartitionOfPull the old method of log tail pull model.
 func updatePartitionOfPull(
-	primaryIdx int,
+	primarySeqnum int,
 	tbl *txnTable,
 	ctx context.Context,
 	op client.TxnOperator,
 	engine *Engine,
-	partition *Partition,
+	partition *logtailreplay.Partition,
 	dn DNStore,
 	req api.SyncLogTailReq,
 ) error {
@@ -53,7 +54,7 @@ func updatePartitionOfPull(
 	state, doneMutate := partition.MutateState()
 
 	for i := range logTails {
-		if err := consumeLogTailOfPull(primaryIdx, tbl, ctx, engine, state, logTails[i]); err != nil {
+		if err := consumeLogTailOfPull(primarySeqnum, tbl, ctx, engine, state, logTails[i]); err != nil {
 			logutil.Errorf("consume %d-%s logtail error: %v\n", tbl.tableId, tbl.tableName, err)
 			return err
 		}
@@ -83,11 +84,11 @@ func getLogTail(ctx context.Context, op client.TxnOperator, reqs []txn.TxnReques
 }
 
 func consumeLogTailOfPull(
-	primaryIdx int,
+	primarySeqnum int,
 	tbl *txnTable,
 	ctx context.Context,
 	engine *Engine,
-	state *PartitionState,
+	state *logtailreplay.PartitionState,
 	logTail *api.SyncLogTailResp,
 ) (err error) {
 	logutil.Debugf("consumeLogTailOfPull table %d %s", tbl.tableId, tbl.tableName)
@@ -104,14 +105,14 @@ func consumeLogTailOfPull(
 		return
 	}
 	for _, e := range entries {
-		if err = consumeEntry(ctx, primaryIdx,
+		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, e); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(logTail.Commands); i++ {
-		if err = consumeEntry(ctx, primaryIdx,
+		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, logTail.Commands[i]); err != nil {
 			return
 		}

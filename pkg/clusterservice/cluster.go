@@ -165,9 +165,8 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 		convert[k] = metadata.LabelList{Labels: v}
 	}
 	label := logpb.CNStoreLabel{
-		UUID:      uuid,
-		Operation: logpb.SetLabel,
-		Labels:    convert,
+		UUID:   uuid,
+		Labels: convert,
 	}
 	proxyClient := c.client.(logservice.ProxyHAKeeperClient)
 	if err := proxyClient.UpdateCNLabel(ctx, label); err != nil {

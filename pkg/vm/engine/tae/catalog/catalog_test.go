@@ -22,11 +22,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -371,4 +373,44 @@ func TestSegment1(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(seg1.String())
 	t.Log(tb.String())
+}
+
+func TestAlterSchema(t *testing.T) {
+	schema := MockSchema(10, 5)
+	req := api.NewAddColumnReq(0, 0, "xyz", types.NewProtoType(types.T_int32), 2)
+	require.NoError(t, schema.ApplyAlterTable(req))
+	require.Equal(t, 12, len(schema.NameMap))
+	require.Equal(t, 12, len(schema.SeqnumMap))
+
+	require.Equal(t, 2, schema.GetColIdx("xyz"))
+	require.Equal(t, uint16(10), schema.GetSeqnum("xyz"))
+	require.Equal(t, 2, schema.SeqnumMap[10])
+	require.Equal(t, 6, schema.GetColIdx("mock_5"))
+	require.Equal(t, uint16(5), schema.GetSeqnum("mock_5"))
+	require.Equal(t, 11, schema.GetColIdx(PhyAddrColumnName))
+	require.Equal(t, uint16(65535), schema.GetSeqnum(PhyAddrColumnName))
+	require.Equal(t, true, schema.HasPK())
+	require.Equal(t, true, schema.HasSortKey())
+	require.Equal(t, "mock_5", schema.GetSingleSortKey().Name)
+	require.Equal(t, uint16(5), schema.GetSingleSortKey().SeqNum)
+	require.Equal(t, 6, schema.GetSingleSortKeyIdx())
+
+	req = api.NewRemoveColumnReq(0, 0, 4, 3)
+	schema.ApplyAlterTable(req)
+	require.Equal(t, 11, len(schema.NameMap))
+	require.Equal(t, 11, len(schema.SeqnumMap))
+
+	require.Equal(t, 2, schema.GetColIdx("xyz"))
+	require.Equal(t, uint16(10), schema.GetSeqnum("xyz"))
+	require.Equal(t, 2, schema.SeqnumMap[10])
+	require.Equal(t, 5, schema.GetColIdx("mock_5"))
+	require.Equal(t, uint16(5), schema.GetSeqnum("mock_5"))
+	require.Equal(t, 10, schema.GetColIdx(PhyAddrColumnName))
+	require.Equal(t, uint16(65535), schema.GetSeqnum(PhyAddrColumnName))
+	require.Equal(t, true, schema.HasPK())
+	require.Equal(t, true, schema.HasSortKey())
+	require.Equal(t, "mock_5", schema.GetSingleSortKey().Name)
+	require.Equal(t, uint16(5), schema.GetSingleSortKey().SeqNum)
+	require.Equal(t, 5, schema.GetSingleSortKeyIdx())
+
 }

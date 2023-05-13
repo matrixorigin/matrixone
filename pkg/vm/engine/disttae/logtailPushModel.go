@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
@@ -860,10 +861,8 @@ func updatePartitionOfPush(
 	partition := partitions[dnId]
 
 	select {
-	case <-partition.lock:
-		defer func() {
-			partition.lock <- struct{}{}
-		}()
+	case <-partition.Lock():
+		defer partition.Unlock()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -873,17 +872,19 @@ func updatePartitionOfPush(
 	key := e.catalog.GetTableById(dbId, tblId)
 
 	if lazyLoad {
-		state.Checkpoints = append(state.Checkpoints, tl.CkpLocation)
+		if len(tl.CkpLocation) > 0 {
+			state.AppendCheckpoint(tl.CkpLocation)
+		}
 
 		err = consumeLogTailOfPushWithLazyLoad(
 			ctx,
-			key.PrimaryIdx,
+			key.PrimarySeqnum,
 			e,
 			state,
 			tl,
 		)
 	} else {
-		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimaryIdx, e, state, tl, dbId, key.Id, key.Name)
+		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
 	}
 
 	if err != nil {
@@ -891,7 +892,7 @@ func updatePartitionOfPush(
 		return err
 	}
 
-	partition.ts = *tl.Ts
+	partition.TS = *tl.Ts
 
 	doneMutate()
 
@@ -900,13 +901,13 @@ func updatePartitionOfPush(
 
 func consumeLogTailOfPushWithLazyLoad(
 	ctx context.Context,
-	primaryIdx int,
+	primarySeqnum int,
 	engine *Engine,
-	state *PartitionState,
+	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
 ) (err error) {
 	for i := 0; i < len(lt.Commands); i++ {
-		if err = consumeEntry(ctx, primaryIdx,
+		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, &lt.Commands[i]); err != nil {
 			return
 		}
@@ -916,9 +917,9 @@ func consumeLogTailOfPushWithLazyLoad(
 
 func consumeLogTailOfPushWithoutLazyLoad(
 	ctx context.Context,
-	primaryIdx int,
+	primarySeqnum int,
 	engine *Engine,
-	state *PartitionState,
+	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
 	databaseId uint64,
 	tableId uint64,
@@ -933,14 +934,14 @@ func consumeLogTailOfPushWithoutLazyLoad(
 		return
 	}
 	for _, entry := range entries {
-		if err = consumeEntry(ctx, primaryIdx,
+		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, entry); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(lt.Commands); i++ {
-		if err = consumeEntry(ctx, primaryIdx,
+		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, &lt.Commands[i]); err != nil {
 			return
 		}

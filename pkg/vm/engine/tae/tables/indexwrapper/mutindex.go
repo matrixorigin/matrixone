@@ -26,13 +26,13 @@ var _ Index = (*mutableIndex)(nil)
 
 type mutableIndex struct {
 	art     index.SecondaryIndex
-	zonemap *index.ZM
+	zonemap index.ZM
 }
 
 func NewPkMutableIndex(typ types.Type) *mutableIndex {
 	return &mutableIndex{
 		art:     index.NewSimpleARTMap(),
-		zonemap: index.NewZM(typ.Oid),
+		zonemap: index.NewZM(typ.Oid, typ.Scale),
 	}
 }
 
@@ -146,12 +146,12 @@ func (idx *mutableIndex) Close() error {
 var _ Index = (*nonPkMutIndex)(nil)
 
 type nonPkMutIndex struct {
-	zonemap *index.ZM
+	zonemap index.ZM
 }
 
 func NewMutableIndex(typ types.Type) *nonPkMutIndex {
 	return &nonPkMutIndex{
-		zonemap: index.NewZM(typ.Oid),
+		zonemap: index.NewZM(typ.Oid, typ.Scale),
 	}
 }
 

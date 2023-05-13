@@ -110,6 +110,8 @@ type ClientSession interface {
 	DeleteCache(cacheID uint64)
 	// GetCache returns the message cache
 	GetCache(cacheID uint64) (MessageCache, error)
+	// RemoteAddress returns remote address, include ip and port
+	RemoteAddress() string
 }
 
 // MessageCache the client uses stream to send messages to the server, and when
@@ -202,8 +204,8 @@ type Stream interface {
 	// Receive returns a channel to read stream message from server. If nil is received, the receive
 	// loop needs to exit. In any case, Stream.Close needs to be called.
 	Receive() (chan Message, error)
-	// Close close the stream.
-	Close() error
+	// Close close the stream. If closeConn is true, the underlying connection will be closed.
+	Close(closeConn bool) error
 }
 
 // ClientOption client options for create client

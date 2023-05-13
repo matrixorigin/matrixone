@@ -257,7 +257,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         continue-on-error: true
         with:
-          name: code_quality_reports
+          name: daily-code-quality-reports
           path: |
             ${{ github.workspace }}/matrixone/code_quality_reports.zip
           retention-days: 7
@@ -266,7 +266,7 @@ jobs:
         if: ${{ failure() }}
         continue-on-error: true
         with:
-          name: test_reports
+          name: daily-test-reports
           path: |
             ${{ github.workspace }}/matrixone
           retention-days: 7

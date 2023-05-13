@@ -1963,7 +1963,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				rows := [][]interface{}{
 					{ses.GetTenantInfo().GetDefaultRoleID()},
@@ -2071,7 +2071,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 				if i == 0 {
 					rows = [][]interface{}{}
 				} else {
@@ -2156,7 +2156,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				rows := [][]interface{}{
 					{ses.GetTenantInfo().GetDefaultRoleID()},
@@ -2244,7 +2244,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				if i == 0 {
 					rows = [][]interface{}{}
@@ -2310,7 +2310,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 				rows := [][]interface{}{
 					{ses.GetTenantInfo().GetDefaultRoleID()},
 				}
@@ -2377,7 +2377,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				if i == 0 {
 					rows = [][]interface{}{}
@@ -7472,7 +7472,7 @@ func TestGetSqlForGetDbIdAndType(t *testing.T) {
 	}{
 		{
 			pubName: "abc",
-			want:    "select dat_id,dat_type from mo_catalog.mo_database where datname = 'abc';",
+			want:    "select dat_id,dat_type from mo_catalog.mo_database where datname = 'abc' and account_id = 0;",
 			err:     false,
 		},
 		{
@@ -7482,7 +7482,7 @@ func TestGetSqlForGetDbIdAndType(t *testing.T) {
 		},
 	}
 	for _, k := range kases {
-		sql, err := getSqlForGetDbIdAndType(ctx, k.pubName, true)
+		sql, err := getSqlForGetDbIdAndType(ctx, k.pubName, true, 0)
 		require.Equal(t, k.err, err != nil)
 		require.Equal(t, k.want, sql)
 	}
@@ -7540,7 +7540,7 @@ func TestDoCreatePublication(t *testing.T) {
 		Comment:  "124",
 		Accounts: []tree.Identifier{"a1", "a2"},
 	}
-	sql1, err := getSqlForGetDbIdAndType(ctx, string(sa.Database), true)
+	sql1, err := getSqlForGetDbIdAndType(ctx, string(sa.Database), true, 0)
 	require.NoError(t, err)
 	bh := &backgroundExecTest{}
 	bh.init()
