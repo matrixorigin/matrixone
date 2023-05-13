@@ -268,22 +268,40 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt []string, sqlTypes []string, err error) context.Context {
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
+	envStmt []string, sqlTypes []string, err error) context.Context {
 	retErr := moerr.NewParseError(ctx, err.Error())
-	sqlType := sqlTypes[0]
-	for i, sql := range envStmt {
-		if i < len(sqlTypes) {
-			sqlType = sqlTypes[i]
+	/*
+		!!!NOTE: the sql may be empty string.
+		So, the sqlTypes may be empty slice.
+	*/
+	sqlType := ""
+	if len(sqlTypes) > 0 {
+		sqlType = sqlTypes[0]
+	} else {
+		sqlType = externSql
+	}
+	if len(envStmt) > 0 {
+		for i, sql := range envStmt {
+			if i < len(sqlTypes) {
+				sqlType = sqlTypes[i]
+			}
+			ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+			motrace.EndStatement(ctx, retErr, 0)
 		}
-		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+	} else {
+		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
 		motrace.EndStatement(ctx, retErr, 0)
 	}
+
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
 	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
+	si := motrace.StatementFromContext(ctx)
+	fmt.Println("xxxx 1", si != nil)
 	return ctx
 }
 
@@ -2384,10 +2402,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc, ses)
 	if err != nil {
 		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(sql), ses.sqlSourceType, err)
+		si := motrace.StatementFromContext(requestCtx)
+		fmt.Println("xxxx 2", si != nil)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
 		}
+		si = motrace.StatementFromContext(requestCtx)
+		fmt.Println("xxxx 3", si != nil)
 		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
 		return retErr
 	}

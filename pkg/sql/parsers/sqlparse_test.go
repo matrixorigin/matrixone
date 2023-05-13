@@ -157,6 +157,13 @@ func TestHandleSqlForRecord(t *testing.T) {
 	require.Equal(t, 1, len(ret))
 	require.Equal(t, "", ret[0])
 
+	ret = SplitSqlBySemicolon("")
+	require.Equal(t, 1, len(ret))
+
+	ret = HandleSqlForRecord("")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "", ret[0])
+
 	// Test hide secret key
 
 	ret = HandleSqlForRecord("create user u identified by '123456';")
