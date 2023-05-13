@@ -29,6 +29,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, false)
 	return nil
 }
 
@@ -42,13 +43,16 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 			ctr.state = Probe
 
 		case Probe:
-			bat := <-proc.Reg.MergeReceivers[0].Ch
+			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+			if err != nil {
+				return false, err
+			}
+
 			if bat == nil {
 				ctr.state = End
 				continue
@@ -69,7 +73,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			return false, nil
 
 		default:
-			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -77,7 +80,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	bat := <-proc.Reg.MergeReceivers[1].Ch
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	if err != nil {
+		return err
+	}
 	if bat != nil {
 		ctr.bat = bat
 	}

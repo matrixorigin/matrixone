@@ -77,7 +77,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		require.NoError(t1, err)
 		qry, err := opt.Optimize(stmts[0])
 		require.NoError(t1, err)
-		c := New("test", "test", sql, "", context.Background(), e, proc, nil)
+		c := New("test", "test", sql, "", "", context.Background(), e, proc, nil, false, nil)
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, nil, func(a any, batch *batch.Batch) error {
 			return nil
 		})
