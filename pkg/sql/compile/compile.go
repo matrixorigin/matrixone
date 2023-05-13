@@ -1683,6 +1683,7 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 		for j := range rs {
 			if rs[j].NodeInfo.Addr == ss[i].NodeInfo.Addr {
 				rs[j].PreScopes = append(rs[j].PreScopes, ss[i])
+				appended = true
 				break
 			}
 		}
