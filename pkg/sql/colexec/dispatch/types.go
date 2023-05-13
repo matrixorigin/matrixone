@@ -72,6 +72,10 @@ type container struct {
 	aliveRegCnt   int
 	localRegsCnt  int
 	remoteRegsCnt int
+
+	// for shuffle reuse memory
+	sels            [][]int32
+	lenshuffledSels []int
 }
 
 type Argument struct {

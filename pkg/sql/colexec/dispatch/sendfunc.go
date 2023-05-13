@@ -30,38 +30,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func releaseBats(bat *batch.Batch, proc *process.Process) {
-	for i := range bat.Vecs {
-		bat.Vecs[i].Free(proc.Mp())
-	}
-	bat = nil
-}
-
-func getShuffledBats(bat *batch.Batch, lenRegs int, proc *process.Process) ([]*batch.Batch, error) {
+func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.Process) ([]*batch.Batch, error) {
 
 	//release old bats
-	defer releaseBats(bat, proc)
+	defer proc.PutBatch(bat)
 
 	lenVecs := len(bat.Vecs)
-	preAllocLen := bat.Length() / lenRegs
-	if preAllocLen < 1024 {
-		preAllocLen = 1024
-	}
+
 	shuffledBats := make([]*batch.Batch, lenRegs)
-	sels := make([][]int32, lenRegs)
-	lenShuffledSels := make([]int, lenRegs)
-	for i := range sels {
-		sels[i] = make([]int32, preAllocLen)
-	}
+	sels, lenShuffledSels := ap.getSels()
 
 	groupByVector := vector.MustFixedCol[int64](bat.Vecs[0])
 	for row, v := range groupByVector {
 		regIndex := v % int64(lenRegs)
-		if lenShuffledSels[regIndex] < preAllocLen {
-			sels[regIndex][lenShuffledSels[regIndex]] = int32(row)
-		} else {
-			sels[regIndex] = append(sels[regIndex], int32(row))
-		}
+		sels[regIndex] = append(sels[regIndex], int32(row))
 		lenShuffledSels[regIndex]++
 	}
 
@@ -70,7 +52,7 @@ func getShuffledBats(bat *batch.Batch, lenRegs int, proc *process.Process) ([]*b
 		if lenShuffledSels[regIndex] > 0 {
 			shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
 			for j := range shuffledBats[regIndex].Vecs {
-				shuffledBats[regIndex].Vecs[j] = vector.NewVec(*bat.Vecs[j].GetType())
+				shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
 			}
 
 			b := shuffledBats[regIndex]
@@ -81,9 +63,9 @@ func getShuffledBats(bat *batch.Batch, lenRegs int, proc *process.Process) ([]*b
 					return nil, err
 				}
 			}
-			b.Zs = make([]int64, lenShuffledSels[regIndex])
+			b.Zs = proc.Mp().GetSels()
 			for i := 0; i < lenShuffledSels[regIndex]; i++ {
-				b.Zs[i] = bat.Zs[sels[regIndex][i]]
+				b.Zs = append(b.Zs, bat.Zs[sels[regIndex][i]])
 			}
 		}
 	}
@@ -93,7 +75,7 @@ func getShuffledBats(bat *batch.Batch, lenRegs int, proc *process.Process) ([]*b
 
 // common sender: shuffle to all LocalReceiver
 func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	shuffledBats, err := getShuffledBats(bat, len(ap.LocalRegs), proc)
+	shuffledBats, err := getShuffledBats(ap, bat, len(ap.LocalRegs), proc)
 	if err != nil {
 		return false, err
 	}
@@ -148,7 +130,7 @@ func shuffleToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 
-	shuffledBats, err := getShuffledBats(bat, len(ap.ctr.remoteReceivers), proc)
+	shuffledBats, err := getShuffledBats(ap, bat, len(ap.ctr.remoteReceivers), proc)
 	if err != nil {
 		return false, err
 	}

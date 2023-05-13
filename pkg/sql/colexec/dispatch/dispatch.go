@@ -58,6 +58,7 @@ func Prepare(proc *process.Process, arg any) error {
 			ap.ctr.sendFunc = shuffleToAllFunc
 		}
 		ap.prepareRemote(proc)
+		ap.initSelsForShuffleReuse()
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
@@ -83,6 +84,7 @@ func Prepare(proc *process.Process, arg any) error {
 		}
 		ctr.sendFunc = shuffleToAllLocalFunc
 		ap.prepareLocal()
+		ap.initSelsForShuffleReuse()
 
 	case SendToAnyLocalFunc:
 		if ctr.remoteRegsCnt != 0 {
@@ -153,4 +155,22 @@ func (arg *Argument) prepareLocal() {
 	arg.ctr.prepared = true
 	arg.ctr.isRemote = false
 	arg.ctr.remoteReceivers = nil
+}
+
+func (arg *Argument) initSelsForShuffleReuse() {
+	if arg.ctr.sels == nil {
+		arg.ctr.sels = make([][]int32, arg.ctr.aliveRegCnt)
+		for i := 0; i < arg.ctr.aliveRegCnt; i++ {
+			arg.ctr.sels[i] = make([]int32, 8192)
+		}
+		arg.ctr.lenshuffledSels = make([]int, arg.ctr.aliveRegCnt)
+	}
+}
+
+func (arg *Argument) getSels() ([][]int32, []int) {
+	for i := range arg.ctr.sels {
+		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
+		arg.ctr.lenshuffledSels[i] = 0
+	}
+	return arg.ctr.sels, arg.ctr.lenshuffledSels
 }
