@@ -205,8 +205,9 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	for i := range bat.Vecs {
 		if bat.Vecs[i] != nil {
 			if !bat.Vecs[i].IsConst() {
-				proc.vp.putVector(bat.Vecs[i])
-				bat.ReplaceVector(bat.Vecs[i], nil)
+				vec := bat.Vecs[i]
+				bat.ReplaceVector(vec, nil)
+				proc.vp.putVector(vec)
 			} else {
 				bat.Vecs[i].Free(proc.Mp())
 			}

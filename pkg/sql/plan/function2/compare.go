@@ -123,7 +123,6 @@ func valueStrCompare(
 					return err
 				}
 			}
-			return nil
 		} else {
 			for i := uint64(0); i < length; i++ {
 				v2, null2 := col2.GetStrValue(i)
@@ -137,19 +136,18 @@ func valueStrCompare(
 					}
 				}
 			}
-			return nil
 		}
+		return nil
 	}
 
 	if params[1].IsConst() {
-		v2, null2 := col1.GetStrValue(0)
+		v2, null2 := col2.GetStrValue(0)
 		if null2 {
 			for i := uint64(0); i < length; i++ {
 				if err := result.Append(false, true); err != nil {
 					return err
 				}
 			}
-			return nil
 		} else {
 			for i := uint64(0); i < length; i++ {
 				v1, null1 := col1.GetStrValue(i)
@@ -163,15 +161,21 @@ func valueStrCompare(
 					}
 				}
 			}
-			return nil
 		}
+		return nil
 	}
 
 	for i := uint64(0); i < length; i++ {
 		v1, null1 := col1.GetStrValue(i)
 		v2, null2 := col2.GetStrValue(i)
-		if err := result.Append(cmpFn(v1, v2), null1 || null2); err != nil {
-			return err
+		if null1 || null2 {
+			if err := result.Append(false, true); err != nil {
+				return err
+			}
+		} else {
+			if err := result.Append(cmpFn(v1, v2), false); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
