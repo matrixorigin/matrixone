@@ -540,6 +540,14 @@ func (ses *Session) UpdateDebugString() {
 	sb.WriteByte('|')
 	//session id
 	sb.WriteString(ses.uuid.String())
+	//current transaction's info
+	sb.WriteByte('|')
+	if ses.txnHandler != nil && ses.txnHandler.txnOperator != nil {
+		sb.WriteString(fmt.Sprintf("txn-meta:%s",
+			ses.txnHandler.txnOperator.Txn().DebugString()))
+	} else {
+		sb.WriteString("txn-meta:no txn")
+	}
 	ses.debugStr = sb.String()
 }
 
