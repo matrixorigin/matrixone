@@ -19,7 +19,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -337,13 +336,10 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(id)
-	readOnly := atomic.Bool{}
-	readOnly.Store(true)
 	txn := &Transaction{
 		op:              op,
 		proc:            proc,
 		engine:          e,
-		readOnly:        readOnly,
 		meta:            op.Txn(),
 		idGen:           e.idGen,
 		dnStores:        e.getDNServices(),
@@ -367,6 +363,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 	}
+	txn.readOnly.Store(true)
 	// TxnWorkSpace SegmentName
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)

@@ -109,7 +109,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 }
 
 func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
-	vs := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
+	vs := vector.MustFixedCol[types.Rowid](bat.GetVector(int32(arg.DeleteCtx.RowIdIdx)))
 	var bitmap *nulls.Nulls
 	arg.ctr.debug_len += uint32(len(vs))
 	for _, rowId := range vs {
