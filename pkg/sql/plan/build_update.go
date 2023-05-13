@@ -166,6 +166,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			isMulti:         tableInfo.isMulti,
 			rowIdPos:        rowIdPos,
 			updateColPosMap: updateColPosMap,
+			allDelTableIDs:  map[uint64]struct{}{},
 		}
 		for idx, col := range tableDef.Cols {
 			// row_id、compPrimaryKey、clusterByKey will not inserted from old data

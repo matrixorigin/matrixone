@@ -49,6 +49,10 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}
 	lastNodeId = builder.appendNode(sinkNode, queryBindCtx)
 	sourceStep = builder.appendStep(lastNodeId)
+	allDelTableIDs := make(map[uint64]struct{})
+	for _, tableDef := range tblInfo.tableDefs {
+		allDelTableIDs[tableDef.TblId] = struct{}{}
+	}
 
 	// append delete plans
 	beginIdx := 0
@@ -63,6 +67,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			isMulti:         tblInfo.isMulti,
 			updateColLength: 0,
 			rowIdPos:        getRowIdPos(tableDef),
+			allDelTableIDs:  allDelTableIDs,
 		}
 		err = buildDeletePlans(ctx, builder, deleteBindCtx, delPlanCtx)
 		if err != nil {

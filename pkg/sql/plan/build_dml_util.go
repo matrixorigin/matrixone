@@ -32,6 +32,7 @@ type dmlPlanCtx struct {
 	rowIdPos        int
 	insertColPos    []int
 	updateColPosMap map[string]int
+	allDelTableIDs  map[uint64]struct{}
 }
 
 // buildInsertPlans  build insert plan.
@@ -323,6 +324,93 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		return err
 	}
 	builder.appendStep(lastNodeId)
+
+	// if some table references to this table
+	if len(delCtx.tableDef.RefChildTbls) > 0 {
+		isUpdate := delCtx.updateColLength > 0
+		typMap := make(map[string]*plan.Type)
+		id2name := make(map[uint64]string)
+		for _, col := range delCtx.tableDef.Cols {
+			typMap[col.Name] = col.Typ
+			id2name[col.ColId] = col.Name
+		}
+
+		for _, tableId := range delCtx.tableDef.RefChildTbls {
+			// stmt: delete p, c from child_tbl c join parent_tbl p on c.pid = p.id , skip
+			if _, existInDelTable := delCtx.allDelTableIDs[tableId]; existInDelTable {
+				continue
+			}
+
+			_, childTableDef := builder.compCtx.ResolveById(tableId)
+			childPosMap := make(map[string]int32)
+			childTypMap := make(map[string]*plan.Type)
+			childId2name := make(map[uint64]string)
+			for idx, col := range childTableDef.Cols {
+				childPosMap[col.Name] = int32(idx)
+				childTypMap[col.Name] = col.Typ
+				childId2name[col.ColId] = col.Name
+			}
+			// childObjRef := &plan.ObjectRef{
+			// 	Obj:        int64(childTableDef.TblId),
+			// 	SchemaName: builder.compCtx.DefaultDatabase(),
+			// 	ObjName:    childTableDef.Name,
+			// }
+
+			for _, fk := range childTableDef.Fkeys {
+				if fk.ForeignTbl == delCtx.tableDef.TblId {
+					// update stmt: update the columns do not contains ref key, skip
+					if isUpdate {
+						updateRefColumn := false
+						for _, colId := range fk.ForeignCols {
+							updateName := id2name[colId]
+							if _, ok := delCtx.updateColPosMap[updateName]; ok {
+								updateRefColumn = true
+								break
+							}
+						}
+						if !updateRefColumn {
+							continue
+						}
+					}
+
+					//
+					var refAction plan.ForeignKeyDef_RefAction
+					if isUpdate {
+						refAction = fk.OnUpdate
+					} else {
+						refAction = fk.OnDelete
+					}
+
+					lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+
+					switch refAction {
+					case plan.ForeignKeyDef_NO_ACTION, plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_SET_DEFAULT:
+						// plan : sink_scan -> join(f1 semi join c1 & get f1's col) -> filter(assert(isempty(f1's col)))
+						// join
+						// filter
+
+					case plan.ForeignKeyDef_SET_NULL:
+						// plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & null] -> sink   then + updatePlans
+
+						lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+
+					case plan.ForeignKeyDef_CASCADE:
+						if isUpdate {
+							// update stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & update cols] -> sink   then + updatePlans
+
+							lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+						} else {
+							// delete stmt get plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.*] -> sink   then + deletePlans
+
+							lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+						}
+					}
+
+					builder.appendStep(lastNodeId)
+				}
+			}
+		}
+	}
 
 	return nil
 }
