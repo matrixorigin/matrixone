@@ -75,7 +75,7 @@ func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 
 // common sender: shuffle to all LocalReceiver
 func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	shuffledBats, err := getShuffledBats(ap, bat, len(ap.LocalRegs), proc)
+	shuffledBats, err := getShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
 	if err != nil {
 		return false, err
 	}
@@ -130,7 +130,7 @@ func shuffleToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 
-	shuffledBats, err := getShuffledBats(ap, bat, len(ap.ctr.remoteReceivers), proc)
+	shuffledBats, err := getShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
 	if err != nil {
 		return false, err
 	}
@@ -179,14 +179,45 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
 func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	_, remoteErr := shuffleToAllRemoteFunc(bat, ap, proc)
-	if remoteErr != nil {
-		return false, remoteErr
+	if !ap.ctr.prepared {
+		end, err := ap.waitRemoteRegsReady(proc)
+		if err != nil {
+			return false, err
+		}
+		if end {
+			return true, nil
+		}
 	}
 
-	_, localErr := shuffleToAllLocalFunc(bat, ap, proc)
-	if localErr != nil {
-		return false, localErr
+	shuffledBats, err := getShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
+	if err != nil {
+		return false, err
+	}
+	regIdx := 0
+	// send to remote regs
+	for _, r := range ap.ctr.remoteReceivers {
+		if shuffledBats[regIdx] != nil {
+			encodeData, errEncode := types.Encode(shuffledBats[regIdx])
+			if errEncode != nil {
+				return false, errEncode
+			}
+			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				return false, err
+			}
+		}
+		regIdx++
+	}
+
+	//send to all local regs
+	for _, reg := range ap.LocalRegs {
+		if shuffledBats[regIdx] != nil {
+			select {
+			case <-reg.Ctx.Done():
+				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+			case reg.Ch <- shuffledBats[regIdx]:
+			}
+		}
+		regIdx++
 	}
 
 	return false, nil
