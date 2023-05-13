@@ -46,13 +46,28 @@ func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, 
 	}
 }
 
+const (
+	stripCloudUser    = "/* cloud_user */"
+	stripCloudNonUser = "/* cloud_nonuser */"
+)
+
 var HandleSqlForRecord = func(sql string) []string {
 	split := SplitSqlBySemicolon(sql)
 	for i := range split {
+		//!!! remove method here assumes that the format of stripCloudUser or stripCloudNonUser
+		// can not be changed, otherwise, the following code will not work.
+		// It is case-sensitive and error-prone also.
+
 		// Remove /* cloud_user */ prefix
-		p0 := strings.Index(split[i], "/* cloud_user */")
+		p0 := strings.Index(split[i], stripCloudUser)
 		if p0 >= 0 {
-			split[i] = split[i][0:p0] + split[i][p0+16:len(split[i])]
+			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudUser):len(split[i])]
+		}
+
+		// remove /* cloud_nonuser */ prefix
+		p0 = strings.Index(split[i], stripCloudNonUser)
+		if p0 >= 0 {
+			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
 		}
 
 		// Hide secret key for split[i],

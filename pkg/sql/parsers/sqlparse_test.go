@@ -129,6 +129,20 @@ func TestHandleSqlForRecord(t *testing.T) {
 	require.Equal(t, 1, len(ret))
 	require.Equal(t, "", ret[0])
 
+	ret = HandleSqlForRecord(stripCloudNonUser + "select 1;")
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "select 1", ret[0])
+
+	ret = HandleSqlForRecord(stripCloudNonUser + "select * from t;" + stripCloudNonUser + "select * from t;" + stripCloudNonUser + "select * from t;")
+	require.Equal(t, 3, len(ret))
+	require.Equal(t, "select * from t", ret[0])
+	require.Equal(t, "select * from t", ret[1])
+	require.Equal(t, "select * from t", ret[2])
+
+	ret = HandleSqlForRecord(stripCloudNonUser)
+	require.Equal(t, 1, len(ret))
+	require.Equal(t, "", ret[0])
+
 	// Test hide secret key
 
 	ret = HandleSqlForRecord("create user u identified by '123456';")
