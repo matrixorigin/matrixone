@@ -547,13 +547,15 @@ func rowsetDataToVector(
 	proc *process.Process,
 	compileCtx plan2.CompilerContext,
 	exprs []*plan.Expr,
-	targeVec *vector.Vector,
+	tarBatch *batch.Batch,
+	tarIndex int,
+	tarType types.Type,
 	emptyBatch *batch.Batch,
 	params []*plan.Expr,
 	uf func(*vector.Vector, *vector.Vector, int64) error,
 ) error {
 	var exprImpl *plan.Expr
-	var typ = plan2.MakePlan2Type(targeVec.GetType())
+	var typ = plan2.MakePlan2Type(&tarType)
 	var err error
 
 	for _, e := range exprs {
@@ -591,21 +593,23 @@ func rowsetDataToVector(
 			return err
 		}
 
-		executor, err := colexec.NewExpressionExecutor(proc, exprImpl)
+		var vec *vector.Vector
+		vec, err = colexec.EvalExpressionOnce(proc, exprImpl, []*batch.Batch{emptyBatch})
 		if err != nil {
 			return err
 		}
 
-		vec, err := executor.Eval(proc, []*batch.Batch{emptyBatch})
-		if err != nil {
-			executor.Free()
+		if tarBatch.Vecs[tarIndex] == nil {
+			tarBatch.Vecs[tarIndex] = vector.NewVec(tarType)
+			if err = tarBatch.Vecs[tarIndex].PreExtend(vec.Length(), proc.Mp()); err != nil {
+				return err
+			}
+		}
+		if err = uf(tarBatch.Vecs[tarIndex], vec, 0); err != nil {
+			vec.Free(proc.Mp())
 			return err
 		}
-		if err = uf(targeVec, vec, 0); err != nil {
-			executor.Free()
-			return err
-		}
-		executor.Free()
+		vec.Free(proc.Mp())
 	}
 
 	return nil

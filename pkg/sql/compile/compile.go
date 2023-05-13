@@ -1460,15 +1460,11 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
-		executor, err := colexec.NewExpressionExecutor(c.proc, n.Limit)
+		vec, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
 		if err != nil {
 			panic(err)
 		}
-		vec, err := executor.Eval(c.proc, []*batch.Batch{constBat})
-		if err != nil {
-			panic(err)
-		}
-		defer executor.Free()
+		defer vec.Free(c.proc.Mp())
 		return c.compileTop(n, vector.MustFixedCol[int64](vec)[0], ss)
 
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
@@ -1476,26 +1472,18 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
 		// get limit
-		executor1, err := colexec.NewExpressionExecutor(c.proc, n.Limit)
+		vec1, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
 		if err != nil {
 			panic(err)
 		}
-		vec1, err := executor1.Eval(c.proc, []*batch.Batch{constBat})
-		if err != nil {
-			panic(err)
-		}
-		defer executor1.Free()
+		defer vec1.Free(c.proc.Mp())
 
 		// get offset
-		executor2, err := colexec.NewExpressionExecutor(c.proc, n.Offset)
+		vec2, err := colexec.EvalExpressionOnce(c.proc, n.Offset, []*batch.Batch{constBat})
 		if err != nil {
 			panic(err)
 		}
-		vec2, err := executor2.Eval(c.proc, []*batch.Batch{constBat})
-		if err != nil {
-			panic(err)
-		}
-		defer executor2.Free()
+		defer vec2.Free(c.proc.Mp())
 
 		limit, offset := vector.MustFixedCol[int64](vec1)[0], vector.MustFixedCol[int64](vec2)[0]
 		topN := limit + offset

@@ -152,6 +152,29 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", expr))
 }
 
+func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*batch.Batch) (*vector.Vector, error) {
+	executor, err := NewExpressionExecutor(proc, planExpr)
+	if err != nil {
+		return nil, err
+	}
+	defer executor.Free()
+
+	vec, err := executor.Eval(proc, batches)
+	if err != nil {
+		return nil, err
+	}
+	if e, ok := executor.(*FunctionExpressionExecutor); ok {
+		e.resultVector = nil
+		return vec, nil
+	} else {
+		nv, er := vec.Dup(proc.Mp())
+		if er != nil {
+			return nil, er
+		}
+		return nv, nil
+	}
+}
+
 func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {
 	for _, paramE := range executor.parameterExecutor {
 		if _, ok := paramE.(*FixedVectorExpressionExecutor); !ok {
@@ -236,12 +259,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 }
 
 func (expr *FunctionExpressionExecutor) Free() {
-	if expr.resultVector == nil {
-		return
+	if expr.resultVector != nil {
+		vec := expr.resultVector.GetResultVector()
+		vec.Free(expr.m)
+		expr.resultVector = nil
 	}
-	vec := expr.resultVector.GetResultVector()
-	vec.Free(expr.m)
-	expr.resultVector = nil
 	for _, p := range expr.parameterExecutor {
 		p.Free()
 	}

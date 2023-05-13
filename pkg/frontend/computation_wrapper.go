@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -241,7 +240,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 					bat.CleanOnlyData()
 					for i := 0; i < colCount; i++ {
 						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
-							colsData[i].Data, bat.Vecs[i], prepareStmt.emptyBatch, executePlan.Args, prepareStmt.ufs[i]); err != nil {
+							colsData[i].Data, bat, i, prepareStmt.typs[i], prepareStmt.emptyBatch, executePlan.Args, prepareStmt.ufs[i]); err != nil {
 							return nil, err
 						}
 					}
@@ -282,10 +281,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		//check privilege
 		/* prepare not need check privilege
-		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
-		if err != nil {
-			return nil, err
-		}
+		   err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
+		   if err != nil {
+		   	return nil, err
+		   }
 		*/
 	} else {
 		var vp *plan2.VisitPlan

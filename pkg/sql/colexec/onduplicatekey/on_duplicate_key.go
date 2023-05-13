@@ -283,18 +283,7 @@ func updateOldBatch(evalBatch *batch.Batch, rowIdx int, oldBatch *batch.Batch, u
 			runExpr := plan2.DeepCopyExpr(expr)
 			resetColPos(runExpr, columnCount)
 
-			executor, err := colexec.NewExpressionExecutor(proc, runExpr)
-			if err != nil {
-				return nil, err
-			}
-			newVec, err := executor.Eval(proc, []*batch.Batch{evalBatch})
-			if err != nil {
-				executor.Free()
-				newBatch.Clean(proc.Mp())
-				return nil, err
-			}
-			nv, err := colexec.SafeQuickDup(proc.Mp(), newVec, executor)
-			executor.Free()
+			nv, err := colexec.EvalExpressionOnce(proc, runExpr, []*batch.Batch{evalBatch})
 			if err != nil {
 				return nil, err
 			}

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"runtime"
 	"strings"
 	"sync"
@@ -940,8 +941,10 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 		emptyBatch.Zs = []int64{1}
 		prepareStmt.emptyBatch = emptyBatch
 		prepareStmt.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(bat.Vecs))
+		prepareStmt.typs = make([]types.Type, len(bat.Vecs))
 		for i, vec := range bat.Vecs {
-			prepareStmt.ufs[i] = vector.GetUnionOneFunction(*vec.GetType(), mp)
+			prepareStmt.typs[i] = *vec.GetType()
+			prepareStmt.ufs[i] = vector.GetUnionOneFunction(prepareStmt.typs[i], mp)
 		}
 	}
 
