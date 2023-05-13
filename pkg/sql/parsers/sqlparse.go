@@ -116,6 +116,7 @@ var HandleSqlForRecord = func(sql string) []string {
 			}
 			split[i] = builder.String()
 		}
+		split[i] = strings.TrimSpace(split[i])
 	}
 	return split
 }
@@ -124,16 +125,23 @@ func SplitSqlBySemicolon(sql string) []string {
 	var ret []string
 	scanner := mysql.NewScanner(dialect.MYSQL, sql)
 	lastEnd := 0
+	sub := ""
 	for scanner.Pos < len(sql) {
 		typ, _ := scanner.Scan()
 		for scanner.Pos < len(sql) && typ != ';' {
 			typ, _ = scanner.Scan()
 		}
 		if typ == ';' {
-			ret = append(ret, sql[lastEnd:scanner.Pos-1])
+			sub = strings.TrimSpace(sql[lastEnd : scanner.Pos-1])
+			if len(sub) > 0 {
+				ret = append(ret, sub)
+			}
 			lastEnd = scanner.Pos
 		} else {
-			ret = append(ret, sql[lastEnd:scanner.Pos])
+			sub = strings.TrimSpace(sql[lastEnd:scanner.Pos])
+			if len(sub) > 0 {
+				ret = append(ret, sub)
+			}
 			return ret
 		}
 	}
