@@ -506,6 +506,7 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 		SchemaName: schemaName,
 		TableDef:   preCtx.TableDef,
 		Attrs:      attrs,
+		IsUpdate:   preCtx.IsUpdate,
 	}, nil
 }
 

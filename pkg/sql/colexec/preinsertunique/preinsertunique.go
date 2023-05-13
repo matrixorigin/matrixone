@@ -25,6 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	indexColPos int32 = iota
+	pkColPos
+)
+
 func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString("pre processing insert unique key")
 }
@@ -50,26 +55,19 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 	}
 	defer proc.PutBatch(inputBat)
 
-	var insertUniqueBat *batch.Batch
 	var vec *vector.Vector
 	var bitMap *nulls.Nulls
 
 	uniqueColumnPos := argument.PreInsertCtx.Columns
 	pkPos := argument.PreInsertCtx.PkColumn
 
-	if pkPos == -1 {
-		// have no primary key
-		insertUniqueBat = batch.NewWithSize(1)
-		insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName}
-	} else {
-		insertUniqueBat = batch.NewWithSize(2)
-		insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
-	}
+	insertUniqueBat := batch.NewWithSize(2)
+	insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
 
 	colCount := len(uniqueColumnPos)
 
 	if colCount == 1 {
-		pos := uniqueColumnPos[0]
+		pos := uniqueColumnPos[indexColPos]
 		vec, bitMap = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
 	} else {
 		vs := make([]*vector.Vector, colCount)
@@ -78,14 +76,11 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 		}
 		vec, bitMap = util.SerialWithCompacted(vs, proc)
 	}
-	insertUniqueBat.SetVector(0, vec)
+	insertUniqueBat.SetVector(indexColPos, vec)
 	insertUniqueBat.SetZs(vec.Length(), proc.Mp())
 
-	if pkPos != -1 {
-		// have pk, append primary key vector
-		vec = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
-		insertUniqueBat.SetVector(1, vec)
-	}
+	vec = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
+	insertUniqueBat.SetVector(pkColPos, vec)
 	proc.SetInputBatch(insertUniqueBat)
 	return false, nil
 }

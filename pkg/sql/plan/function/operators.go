@@ -917,6 +917,15 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_varbinary,
 				Fn:        operator.EqString,
 			},
+			{
+				Index: 25,
+				Args: []types.T{
+					types.T_Rowid,
+					types.T_Rowid,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.EqRowId,
+			},
 		},
 	},
 
@@ -1592,6 +1601,15 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GtString,
 			},
+			{
+				Index: 24,
+				Args: []types.T{
+					types.T_Rowid,
+					types.T_Rowid,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GtRowId,
+			},
 		},
 	},
 
@@ -1816,6 +1834,15 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GeString,
+			},
+			{
+				Index: 24,
+				Args: []types.T{
+					types.T_Rowid,
+					types.T_Rowid,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GeRowId,
 			},
 		},
 	},
@@ -2042,6 +2069,15 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LtString,
 			},
+			{
+				Index: 24,
+				Args: []types.T{
+					types.T_Rowid,
+					types.T_Rowid,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LtRowId,
+			},
 		},
 	},
 
@@ -2266,6 +2302,15 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LeString,
+			},
+			{
+				Index: 24,
+				Args: []types.T{
+					types.T_Rowid,
+					types.T_Rowid,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LeRowId,
 			},
 		},
 	},
@@ -2500,6 +2545,15 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.NeString,
+			},
+			{
+				Index: 25,
+				Args: []types.T{
+					types.T_Rowid,
+					types.T_Rowid,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NeRowId,
 			},
 		},
 	},

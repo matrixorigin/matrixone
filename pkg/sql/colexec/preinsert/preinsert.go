@@ -51,8 +51,15 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	}
 
 	defer proc.PutBatch(bat)
-	newBat := batch.NewWithSize(len(arg.Attrs))
-	newBat.Attrs = make([]string, 0, len(arg.Attrs))
+
+	var newBat *batch.Batch
+	if arg.IsUpdate {
+		newBat = batch.NewWithSize(len(arg.Attrs) + 1)
+		newBat.Attrs = make([]string, 0, len(arg.Attrs)+1)
+	} else {
+		newBat = batch.NewWithSize(len(arg.Attrs))
+		newBat.Attrs = make([]string, 0, len(arg.Attrs))
+	}
 	for idx := range arg.Attrs {
 		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
 		newBat.SetVector(int32(idx), proc.GetVector(*bat.GetVector(int32(idx)).GetType()))
@@ -62,11 +69,6 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		}
 	}
 	newBat.Zs = append(newBat.Zs, bat.Zs...)
-
-	// if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), bat); err != nil {
-	// 	newBat.Clean(proc.GetMPool())
-	// 	return false, err
-	// }
 
 	if !arg.IsUpdate {
 		if arg.HasAutoCol {
@@ -108,15 +110,7 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 		}
 	}
 
-	//// calculate the partition expression and append the result vector to batch
-	//err = genPartitionExpr(newBat, proc, arg.TableDef)
-	//if err != nil {
-	//	newBat.Clean(proc.GetMPool())
-	//	return false, err
-	//}
-
 	proc.SetInputBatch(newBat)
-
 	return false, nil
 }
 
@@ -144,19 +138,3 @@ func genClusterBy(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 	}
 	return util.FillCompositeClusterByBatch(bat, clusterBy, proc)
 }
-
-// calculate the partition expression and append the result vector to batch
-//func genPartitionExpr(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
-//	// Check whether it is a partition table
-//	if tableDef.Partition == nil {
-//		return nil
-//	} else {
-//		partitionVec, err := colexec.EvalExpr(bat, proc, tableDef.Partition.PartitionExpression)
-//		if err != nil {
-//			return err
-//		}
-//		bat.Attrs = append(bat.Attrs, "__mo_partition_expr__")
-//		bat.Vecs = append(bat.Vecs, partitionVec)
-//	}
-//	return nil
-//}

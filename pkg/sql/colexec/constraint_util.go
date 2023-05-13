@@ -130,6 +130,9 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 
 func BatchDataNotNullCheck(tmpBat *batch.Batch, tableDef *plan.TableDef, ctx context.Context) error {
 	for j := range tmpBat.Vecs {
+		if tmpBat.Vecs[j] == nil {
+			continue
+		}
 		nsp := tmpBat.Vecs[j].GetNulls()
 		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility && nulls.Any(nsp) {
 			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
