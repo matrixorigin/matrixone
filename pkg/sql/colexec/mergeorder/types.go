@@ -52,7 +52,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanExecutors()
-		ctr.FreeOperator(pipelineFailed)
+		ctr.FreeMergeTypeOperator(pipelineFailed)
 	}
 }
 

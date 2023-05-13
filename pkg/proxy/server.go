@@ -46,6 +46,9 @@ type Server struct {
 // NB: runtime must be included in opts.
 func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, error) {
 	config.FillDefault()
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
 	s := &Server{
 		config:     config,
 		counterSet: newCounterSet(),

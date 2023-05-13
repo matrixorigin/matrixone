@@ -163,6 +163,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanEqVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
+		ctr.FreeAllReg()
 		arg.ctr = nil
 	}
 }

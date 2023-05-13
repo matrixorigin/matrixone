@@ -72,6 +72,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
+		ctr.FreeAllReg()
 	}
 }
 

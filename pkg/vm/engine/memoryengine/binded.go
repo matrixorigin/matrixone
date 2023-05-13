@@ -70,8 +70,8 @@ func (b *BindedEngine) New(ctx context.Context, _ client.TxnOperator) error {
 	return b.engine.New(ctx, b.txnOp)
 }
 
-func (b *BindedEngine) Nodes() (cnNodes engine.Nodes, err error) {
-	return b.engine.Nodes()
+func (b *BindedEngine) Nodes(isInternal bool, tenant string, cnLabel map[string]string) (cnNodes engine.Nodes, err error) {
+	return b.engine.Nodes(isInternal, tenant, cnLabel)
 }
 
 func (b *BindedEngine) Rollback(ctx context.Context, _ client.TxnOperator) error {

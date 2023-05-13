@@ -76,6 +76,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
+		ctr.FreeAllReg()
 	}
 }
 

@@ -56,7 +56,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 			ctr.state = Probe
@@ -80,13 +79,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			} else {
 				err = ctr.probe(bat, ap, proc, anal, isFirst, isLast)
 			}
-			if err != nil {
-				ap.Free(proc, true)
-			}
 			return false, err
 
 		default:
-			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}

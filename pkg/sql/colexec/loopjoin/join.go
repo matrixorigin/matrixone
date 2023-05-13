@@ -52,7 +52,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			if err := ctr.build(ap, proc, anal); err != nil {
 				return false, err
 			}
-			ctr.state = Probe
+			if ctr.bat == nil {
+				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
+				ctr.state = End
+			} else {
+				ctr.state = Probe
+			}
 
 		case Probe:
 			bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
@@ -76,7 +81,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			proc.PutBatch(bat)
 			return false, err
 		default:
-			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}

@@ -51,6 +51,7 @@ func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr := ap.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
+		ctr.FreeAllReg()
 		ap.ctr = nil
 	}
 }

@@ -458,7 +458,9 @@ func (db *txnDB) ApplyCommit() (err error) {
 			return
 		}
 	}
-	logutil.Debugf("Txn-%X ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("Txn-%X ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	})
 	return
 }
 
@@ -507,7 +509,9 @@ func (db *txnDB) PrepareCommit() (err error) {
 		}
 	}
 
-	logutil.Debugf("Txn-%X PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("Txn-%X PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	})
 
 	return
 }

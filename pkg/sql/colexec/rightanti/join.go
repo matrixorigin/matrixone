@@ -63,7 +63,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, analyze); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 			ctr.state = Probe
@@ -89,7 +88,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 
 			if err := ctr.probe(bat, ap, proc, analyze, isFirst, isLast); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 
@@ -102,7 +100,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				setNil, err := ctr.sendLast(ap, proc, analyze, isFirst, isLast)
 
 				if err != nil {
-					ap.Free(proc, true)
 					return false, err
 				}
 				ctr.state = End
@@ -114,7 +111,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 
 		default:
-			ap.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}

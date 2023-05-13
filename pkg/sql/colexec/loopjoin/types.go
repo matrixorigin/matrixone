@@ -48,7 +48,9 @@ type Argument struct {
 }
 
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if ctr := ap.ctr; ctr != nil {
+	ctr := ap.ctr
+	if ctr != nil {
+		ctr.FreeAllReg()
 		ctr.cleanBatch(proc.Mp())
 		ctr.cleanExprExecutor()
 		ap.ctr = nil
