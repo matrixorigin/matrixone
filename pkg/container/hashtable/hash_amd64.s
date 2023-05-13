@@ -25,6 +25,11 @@ loop:
 	SUBQ $8, CX
 	JL   tail
 
+	VMOVDQU (SI), Y0
+	VMOVDQU Y0, (DI)
+	VMOVDQU 0x20(SI), Y1
+	VMOVDQU Y1, 0x20(DI)
+
 	MOVQ $-1, R8
 	MOVQ $-1, R9
 	MOVQ $-1, R10
@@ -43,14 +48,14 @@ loop:
 	CRC32Q 0x30(SI), R14
 	CRC32Q 0x38(SI), R15
 
-	MOVQ R8, 0x00(DI)
-	MOVQ R9, 0x08(DI)
-	MOVQ R10, 0x10(DI)
-	MOVQ R11, 0x18(DI)
-	MOVQ R12, 0x20(DI)
-	MOVQ R13, 0x28(DI)
-	MOVQ R14, 0x30(DI)
-	MOVQ R15, 0x38(DI)
+	MOVL R8, 0x00(DI)
+	MOVL R9, 0x08(DI)
+	MOVL R10, 0x10(DI)
+	MOVL R11, 0x18(DI)
+	MOVL R12, 0x20(DI)
+	MOVL R13, 0x28(DI)
+	MOVL R14, 0x30(DI)
+	MOVL R15, 0x38(DI)
 
 	ADDQ $0x40, SI
 	ADDQ $0x40, DI
@@ -62,68 +67,12 @@ tail:
 
 tailLoop:
 	MOVQ   $-1, R8
+	MOVQ   (SI), R9
+	MOVQ   R9, (DI)
 	CRC32Q (SI), R8
-	MOVQ   R8, (DI)
+	MOVL   R8, (DI)
 
 	ADDQ $0x08, SI
-	ADDQ $0x08, DI
-	LOOP tailLoop
-
-done:
-	RET
-
-// func crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
-// Requires: SSE4.2
-TEXT ·crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
-	MOVQ data+0(FP), SI
-	MOVQ hashes+8(FP), DI
-	MOVQ length+16(FP), CX
-
-loop:
-	SUBQ $8, CX
-	JL   tail
-
-	MOVQ $-1, R8
-	MOVQ $-1, R9
-	MOVQ $-1, R10
-	MOVQ $-1, R11
-	MOVQ $-1, R12
-	MOVQ $-1, R13
-	MOVQ $-1, R14
-	MOVQ $-1, R15
-
-	CRC32Q 0x00(SI), R8
-	CRC32Q 0x10(SI), R9
-	CRC32Q 0x20(SI), R10
-	CRC32Q 0x30(SI), R11
-	CRC32Q 0x40(SI), R12
-	CRC32Q 0x50(SI), R13
-	CRC32Q 0x60(SI), R14
-	CRC32Q 0x70(SI), R15
-
-	MOVQ R8, 0x00(DI)
-	MOVQ R9, 0x08(DI)
-	MOVQ R10, 0x10(DI)
-	MOVQ R11, 0x18(DI)
-	MOVQ R12, 0x20(DI)
-	MOVQ R13, 0x28(DI)
-	MOVQ R14, 0x30(DI)
-	MOVQ R15, 0x38(DI)
-
-	ADDQ $0x80, SI
-	ADDQ $0x40, DI
-	JMP  loop
-
-tail:
-	ADDQ $8, CX
-	JE   done
-
-tailLoop:
-	MOVQ   $-1, R8
-	CRC32Q (SI), R8
-	MOVQ   R8, (DI)
-
-	ADDQ $0x10, SI
 	ADDQ $0x08, DI
 	LOOP tailLoop
 

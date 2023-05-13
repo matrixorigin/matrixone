@@ -33,6 +33,7 @@ grant create database on account * to r1;
 create database t;
 use t;
 create table A(a int);
+drop table A;
 -- @session
 
 grant create table on database * to r1;

@@ -48,24 +48,21 @@ func (txn *Transaction) getBlockInfos(
 		}
 		var objectName objectio.ObjectNameShort
 		state := states[i]
-		blocks[i] = make([]catalog.BlockInfo, 0, state.Blocks.Len())
-		iter := state.Blocks.Iter()
-		for ok := iter.First(); ok; ok = iter.Next() {
-			entry := iter.Item()
-			if !entry.Visible(ts) {
-				continue
-			}
-			location := entry.BlockInfo.MetaLocation()
+		iter := state.NewBlocksIter(ts)
+		for iter.Next() {
+			entry := iter.Entry()
+			location := entry.MetaLocation()
 			if !objectio.IsSameObjectLocVsShort(location, &objectName) {
 				// Prefetch object meta
 				if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
+					iter.Close()
 					return
 				}
 				objectName = *location.Name().Short()
 			}
 			blocks[i] = append(blocks[i], entry.BlockInfo)
 		}
-		iter.Release()
+		iter.Close()
 	}
 	return
 }
@@ -129,15 +126,6 @@ func (txn *Transaction) WriteBatch(
 	return nil
 }
 
-func (txn *Transaction) CleanNilBatch() {
-	for i := 0; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
-			txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
-			i--
-		}
-	}
-}
-
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var size uint64
 
@@ -189,7 +177,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		for i := 0; i < len(mp[key]); i++ {
 			s3Writer.Put(mp[key][i], txn.proc)
 		}
-		err = s3Writer.MergeBlock(len(s3Writer.Bats), txn.proc, false)
+		err = s3Writer.SortAndFlush(txn.proc)
 
 		if err != nil {
 			return err

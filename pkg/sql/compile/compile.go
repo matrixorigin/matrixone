@@ -70,19 +70,21 @@ const (
 )
 
 // New is used to new an object of compile
-func New(addr, db string, sql string, uid string, ctx context.Context,
-	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
+func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
+	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
 	return &Compile{
-		e:    e,
-		db:   db,
-		ctx:  ctx,
-		uid:  uid,
-		sql:  sql,
-		proc: proc,
-		stmt: stmt,
-		addr: addr,
-
-		stepRegs: make(map[int32][]*process.WaitRegister),
+		e:          e,
+		db:         db,
+		ctx:        ctx,
+		tenant:     tenant,
+		uid:        uid,
+		sql:        sql,
+		proc:       proc,
+		stmt:       stmt,
+		addr:       addr,
+		stepRegs:   make(map[int32][]*process.WaitRegister),
+		isInternal: isInternal,
+		cnLabel:    cnLabel,
 	}
 }
 
@@ -418,7 +420,7 @@ func (c *Compile) compileAttachedScope(ctx context.Context, attachedPlan *plan.P
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
-	c.cnList, err = c.e.Nodes()
+	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.cnLabel)
 	if err != nil {
 		return nil, err
 	}
@@ -446,6 +448,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		}
 	}
 
+	c.info.CnNumbers = len(c.cnList)
 	blkNum := 0
 	for _, n := range qry.Nodes {
 		if n.NodeType == plan.Node_TABLE_SCAN {
@@ -692,9 +695,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
-		bat, err := constructValueScanBatch(ctx, c.proc, n)
-		if err != nil {
-			return nil, err
+		bat := c.proc.GetPrepareBatch()
+		if bat == nil {
+			var err error
+
+			if bat, err = constructValueScanBatch(ctx, c.proc, n); err != nil {
+				return nil, err
+			}
 		}
 		ds := &Scope{
 			Magic:      Normal,
@@ -1216,6 +1223,9 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	copy(gn.GroupBy, n.ProjectList)
+	for i := range gn.GroupBy {
+		gn.GroupBy[i].Typ.NotNullable = false
+	}
 	idx := 0
 	for i := range rs {
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
