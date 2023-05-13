@@ -118,10 +118,10 @@ func mergeSort(proc *process.Process, bat2 *batch.Batch,
 			return err
 		}
 		newColumn := true
-		for i := range bat2.Vecs {
-			if bat2.Vecs[i] == vec {
+		for j := range bat2.Vecs {
+			if bat2.Vecs[j] == vec {
 				newColumn = false
-				ctr.poses = append(ctr.poses, int32(i))
+				ctr.poses = append(ctr.poses, int32(j))
 				break
 			}
 		}

@@ -38,6 +38,8 @@ type ExpressionExecutor interface {
 	// Free should release all memory of executor.
 	// it will be called after query has done.
 	Free()
+
+	ifResultMemoryReuse() bool
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -249,6 +251,10 @@ func (expr *FunctionExpressionExecutor) SetParameter(index int, executor Express
 	expr.parameterExecutor[index] = executor
 }
 
+func (expr *FunctionExpressionExecutor) ifResultMemoryReuse() bool {
+	return true
+}
+
 func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
 	relIndex := expr.relIndex
 	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
@@ -273,6 +279,10 @@ func (expr *ColumnExpressionExecutor) Free() {
 	// Nothing should do.
 }
 
+func (expr *ColumnExpressionExecutor) ifResultMemoryReuse() bool {
+	return false
+}
+
 func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
 	if !expr.fixed {
 		expr.resultVector.SetLength(batches[0].Length())
@@ -286,6 +296,10 @@ func (expr *FixedVectorExpressionExecutor) Free() {
 	}
 	expr.resultVector.Free(expr.m)
 	expr.resultVector = nil
+}
+
+func (expr *FixedVectorExpressionExecutor) ifResultMemoryReuse() bool {
+	return true
 }
 
 func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Const) (*vector.Vector, error) {
@@ -451,12 +465,13 @@ func generateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 }
 
 // ProjectionDupResult do dup work for vectors of batch as few time as possible.
-func ProjectionDupResult(proc *process.Process, executors []ExpressionExecutor, bat *batch.Batch) (dupSize int, err error) {
+func ProjectionDupResult(proc *process.Process, executors []ExpressionExecutor,
+	rbat *batch.Batch, sbat *batch.Batch) (dupSize int, err error) {
 	dupSize = 0
 
-	duped := make([]int, len(bat.Vecs))
-	for i := range duped {
-		duped[i] = -1
+	alreadySet := make([]int, len(rbat.Vecs))
+	for i := range alreadySet {
+		alreadySet[i] = -1
 	}
 
 	canGetNsp := make([]bool, len(executors))
@@ -466,49 +481,55 @@ func ProjectionDupResult(proc *process.Process, executors []ExpressionExecutor, 
 		}
 	}
 
-	dupedVectors := make([]*vector.Vector, 0, len(bat.Vecs))
-	for i, oldVec := range bat.Vecs {
-		if duped[i] < 0 {
+	finalVectors := make([]*vector.Vector, 0, len(rbat.Vecs))
+	for i, oldVec := range rbat.Vecs {
+		if alreadySet[i] < 0 {
 			newVec := (*vector.Vector)(nil)
 			if oldVec.GetType().Oid == types.T_any {
 				newVec = vector.NewConstNull(types.T_any.ToType(), oldVec.Length(), proc.Mp())
 			} else {
-				if canGetNsp[i] {
-					nsp := oldVec.GetNulls()
-					oldVec.SetNulls(nil)
-					newVec, err = oldVec.Dup(proc.Mp())
-					if err != nil {
-						for j := range dupedVectors {
-							dupedVectors[j].Free(proc.Mp())
+				if executors[i].ifResultMemoryReuse() {
+					if canGetNsp[i] {
+						nsp := oldVec.GetNulls()
+						oldVec.SetNulls(nil)
+						newVec, err = oldVec.Dup(proc.Mp())
+						if err != nil {
+							for j := range finalVectors {
+								finalVectors[j].Free(proc.Mp())
+							}
+							return 0, err
 						}
-						return 0, err
+						dupSize += newVec.Size()
+						newVec.SetNulls(nsp)
+					} else {
+						newVec, err = oldVec.Dup(proc.Mp())
+						if err != nil {
+							for j := range finalVectors {
+								finalVectors[j].Free(proc.Mp())
+							}
+							return 0, err
+						}
+						dupSize += newVec.Size()
 					}
-					newVec.SetNulls(nsp)
 				} else {
-					newVec, err = oldVec.Dup(proc.Mp())
-					if err != nil {
-						for j := range dupedVectors {
-							dupedVectors[j].Free(proc.Mp())
-						}
-						return 0, err
-					}
+					newVec = oldVec
+					sbat.ReplaceVector(oldVec, nil)
 				}
 			}
-			dupSize += newVec.Size()
 
-			dupedVectors = append(dupedVectors, newVec)
-			indexOfNewVec := len(dupedVectors) - 1
-			for j := range bat.Vecs {
-				if bat.Vecs[j] == oldVec {
-					duped[j] = indexOfNewVec
+			finalVectors = append(finalVectors, newVec)
+			indexOfNewVec := len(finalVectors) - 1
+			for j := range rbat.Vecs {
+				if rbat.Vecs[j] == oldVec {
+					alreadySet[j] = indexOfNewVec
 				}
 			}
 		}
 	}
 
 	// use new vector to replace the old vector.
-	for i, idx := range duped {
-		bat.Vecs[i] = dupedVectors[idx]
+	for i, idx := range alreadySet {
+		rbat.Vecs[i] = finalVectors[idx]
 	}
 	return dupSize, nil
 }
