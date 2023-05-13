@@ -6783,7 +6783,6 @@ func TestDiffCheckPoints(t *testing.T) {
 	seg, _ := rel.GetSegment(segid)
 	seg.SoftDeleteBlock(blkid)
 	txn.Commit()
-	
 
 	t.Log("===========")
 

@@ -648,6 +648,12 @@ func (store *txnStore) PreApplyCommit() (err error) {
 			return
 		}
 	}
+	// logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	return
+}
+
+func (store *txnStore) PrepareWAL() (err error) {
+	// now := time.Now()
 	if err = store.CollectCmd(); err != nil {
 		return
 	}
@@ -668,7 +674,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 			return
 		}
 	}
-	// logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	// logutil.Debugf("Txn-%X PrepareWAL Takes %s", store.txn.GetID(), time.Since(now))
 	return
 }
 
