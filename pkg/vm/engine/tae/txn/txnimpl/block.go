@@ -28,6 +28,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
+// var newBlockCnt atomic.Int64
+// var getBlockCnt atomic.Int64
+// var putBlockCnt atomic.Int64
+
+var (
+	_blockPool = sync.Pool{
+		New: func() any {
+			// newBlockCnt.Add(1)
+			return &txnBlock{}
+		},
+	}
+)
+
 type txnBlock struct {
 	txnbase.TxnBlock
 	isUncommitted bool
@@ -128,15 +141,27 @@ func buildBlock(table *txnTable, meta *catalog.BlockEntry) handle.Block {
 }
 
 func newBlock(table *txnTable, meta *catalog.BlockEntry) *txnBlock {
-	blk := &txnBlock{
-		TxnBlock: txnbase.TxnBlock{
-			Txn: table.store.txn,
-		},
-		entry:         meta,
-		table:         table,
-		isUncommitted: meta.GetSegment().IsLocal,
-	}
+	blk := _blockPool.Get().(*txnBlock)
+	// getBlockCnt.Add(1)
+	blk.Txn = table.store.txn
+	blk.entry = meta
+	blk.table = table
+	blk.isUncommitted = meta.GetSegment().IsLocal
 	return blk
+}
+
+func (blk *txnBlock) Reset() {
+	blk.entry = nil
+	blk.table = nil
+	blk.isUncommitted = false
+	blk.TxnBlock.Reset()
+}
+
+func (blk *txnBlock) Close() (err error) {
+	blk.Reset()
+	_blockPool.Put(blk)
+	// putBlockCnt.Add(1)
+	return
 }
 
 func (blk *txnBlock) GetMeta() any { return blk.entry }
@@ -263,6 +288,7 @@ func newRelationBlockItOnSnap(rel handle.Relation) *relBlockIt {
 		return it
 	}
 	seg := segmentIt.GetSegment()
+	defer seg.Close()
 	blockIt := seg.MakeBlockIt()
 	for !blockIt.Valid() {
 		segmentIt.Next()
@@ -271,6 +297,7 @@ func newRelationBlockItOnSnap(rel handle.Relation) *relBlockIt {
 			return it
 		}
 		seg = segmentIt.GetSegment()
+		defer seg.Close()
 		blockIt = seg.MakeBlockIt()
 	}
 	it.blockIt = blockIt
@@ -289,6 +316,7 @@ func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 		return it
 	}
 	seg := segmentIt.GetSegment()
+	defer seg.Close()
 	blockIt := seg.MakeBlockIt()
 	for !blockIt.Valid() {
 		segmentIt.Next()
@@ -297,6 +325,7 @@ func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 			return it
 		}
 		seg = segmentIt.GetSegment()
+		defer seg.Close()
 		blockIt = seg.MakeBlockIt()
 	}
 	it.blockIt = blockIt
@@ -342,6 +371,7 @@ func (it *relBlockIt) Valid() bool {
 			return false
 		}
 		seg = it.segmentIt.GetSegment()
+		defer seg.Close()
 		meta := seg.GetMeta().(*catalog.SegmentEntry)
 		meta.RLock()
 		cnt := meta.BlockCnt()
@@ -377,7 +407,9 @@ func (it *relBlockIt) Next() {
 		if !it.segmentIt.Valid() {
 			return
 		}
-		seg := it.segmentIt.GetSegment()
+		seg.Close()
+		seg = it.segmentIt.GetSegment()
 		it.blockIt = seg.MakeBlockIt()
 	}
+	seg.Close()
 }

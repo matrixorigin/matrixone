@@ -180,6 +180,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			appender, err := seg.tableHandle.GetAppender()
 			if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
 				segH, err := seg.table.CreateSegment(true)
+				defer segH.Close()
 				if err != nil {
 					return err
 				}
@@ -187,6 +188,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				if err != nil {
 					return err
 				}
+				defer blk.Close()
 				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
 			} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
 				id := appender.GetID()
@@ -194,6 +196,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				if err != nil {
 					return err
 				}
+				defer blk.Close()
 				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
 			}
 			if !appender.IsSameColumns(seg.table.GetLocalSchema()) {
