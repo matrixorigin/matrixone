@@ -288,7 +288,6 @@ func newRelationBlockItOnSnap(rel handle.Relation) *relBlockIt {
 		return it
 	}
 	seg := segmentIt.GetSegment()
-	defer seg.Close()
 	blockIt := seg.MakeBlockIt()
 	for !blockIt.Valid() {
 		segmentIt.Next()
@@ -296,10 +295,11 @@ func newRelationBlockItOnSnap(rel handle.Relation) *relBlockIt {
 			it.err = segmentIt.GetError()
 			return it
 		}
+		seg.Close()
 		seg = segmentIt.GetSegment()
-		defer seg.Close()
 		blockIt = seg.MakeBlockIt()
 	}
+	seg.Close()
 	it.blockIt = blockIt
 	it.segmentIt = segmentIt
 	it.rel = rel
@@ -316,7 +316,6 @@ func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 		return it
 	}
 	seg := segmentIt.GetSegment()
-	defer seg.Close()
 	blockIt := seg.MakeBlockIt()
 	for !blockIt.Valid() {
 		segmentIt.Next()
@@ -324,10 +323,11 @@ func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 			it.err = segmentIt.GetError()
 			return it
 		}
+		seg.Close()
 		seg = segmentIt.GetSegment()
-		defer seg.Close()
 		blockIt = seg.MakeBlockIt()
 	}
+	seg.Close()
 	it.blockIt = blockIt
 	it.segmentIt = segmentIt
 	it.rel = rel
@@ -370,8 +370,10 @@ func (it *relBlockIt) Valid() bool {
 			}
 			return false
 		}
+		if seg != nil {
+			seg.Close()
+		}
 		seg = it.segmentIt.GetSegment()
-		defer seg.Close()
 		meta := seg.GetMeta().(*catalog.SegmentEntry)
 		meta.RLock()
 		cnt := meta.BlockCnt()
@@ -379,6 +381,9 @@ func (it *relBlockIt) Valid() bool {
 		if cnt != 0 {
 			break
 		}
+	}
+	if seg != nil {
+		seg.Close()
 	}
 	it.blockIt = seg.MakeBlockIt()
 	if err = it.blockIt.GetError(); err != nil {

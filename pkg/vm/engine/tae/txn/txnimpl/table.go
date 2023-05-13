@@ -887,8 +887,8 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	maxSegmentHint := uint64(0)
 	for it.Valid() {
 		blkH := it.GetBlock()
-		defer blkH.Close()
 		blk := blkH.GetMeta().(*catalog.BlockEntry)
+		blkH.Close()
 		segmentHint := blk.GetSegment().SortHint
 		if segmentHint > maxSegmentHint {
 			maxSegmentHint = segmentHint
