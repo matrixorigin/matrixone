@@ -162,7 +162,7 @@ func dedupNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, bool, int) err
 	vs := vector.MustFixedCol[T](vec)
 	return func(v T, _ bool, row int) (err error) {
 		// logutil.Infof("row=%d,v=%v", row, v)
-		if _, existed := compute.GetOffsetOfOrdered2(
+		if _, existed := compute.GetOffsetOfOrdered(
 			vs,
 			v,
 			mask,

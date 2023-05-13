@@ -282,7 +282,7 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 			id.BlockID, row = model.DecodePhyAddrKey(&rid)
 			err = h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
 			return
-		}, nil)
+		}, nil, nil)
 	return
 }
 
