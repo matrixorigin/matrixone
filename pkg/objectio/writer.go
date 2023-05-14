@@ -43,6 +43,7 @@ type objectWriterV1 struct {
 	lastId      uint32
 	name        ObjectName
 	compressBuf []byte
+	bloomFilter []byte
 }
 
 type blockData struct {
@@ -141,6 +142,11 @@ func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err err
 	return
 }
 
+func (w *objectWriterV1) WriteObjectMetaBF(buf []byte) (err error) {
+	w.bloomFilter = buf
+	return
+}
+
 func (w *objectWriterV1) WriteObjectMeta(ctx context.Context, totalrow uint32, metas []ColumnMeta) {
 	w.totalRow = totalrow
 	w.colmeta = metas
@@ -219,19 +225,23 @@ func (w *objectWriterV1) prepareBloomFilter(blockCount uint32, offset uint32) ([
 	h := IOEntryHeader{IOET_BF, IOET_BloomFilter_CurrVer}
 	buf.Write(EncodeIOEntryHeader(&h))
 	bloomFilterStart := uint32(0)
-	bloomFilterIndex := BuildBlockIndex(blockCount)
-	bloomFilterIndex.SetBlockCount(blockCount)
+	bloomFilterIndex := BuildBlockIndex(blockCount + 1)
+	bloomFilterIndex.SetBlockCount(blockCount + 1)
 	bloomFilterStart += bloomFilterIndex.Length()
 	for i, block := range w.blocks {
 		n := uint32(len(block.bloomFilter))
 		bloomFilterIndex.SetBlockMetaPos(uint32(i), bloomFilterStart, n)
 		bloomFilterStart += n
 	}
+	bloomFilterIndex.SetBlockMetaPos(blockCount, bloomFilterStart, uint32(len(w.bloomFilter)))
 	buf.Write(bloomFilterIndex)
 	for _, block := range w.blocks {
 		buf.Write(block.bloomFilter)
 	}
-	return w.WriteWithCompress(offset, buf.Bytes())
+	buf.Write(w.bloomFilter)
+	length := uint32(len(buf.Bytes()))
+	extent := NewExtent(compress.None, offset, length, length)
+	return buf.Bytes(), extent, nil
 }
 
 func (w *objectWriterV1) prepareZoneMapArea(blockCount uint32, offset uint32) ([]byte, Extent, error) {
