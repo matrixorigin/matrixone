@@ -250,6 +250,9 @@ func PrintMoBatch(moBat *batch.Batch, printN int) string {
 }
 
 func PrintApiBatch(apiBat *api.Batch, printN int) string {
+	if apiBat == nil {
+		return ""
+	}
 	bat, _ := batch.ProtoBatchToBatch(apiBat)
 	return PrintMoBatch(bat, printN)
 }

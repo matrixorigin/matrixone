@@ -104,9 +104,7 @@ use s;
 drop table B;
 no such table s.b
 drop database t;
-internal error: do not have privilege to execute the statement
 drop database s;
-internal error: do not have privilege to execute the statement
 create database v;
 use v;
 grant create table,drop table on database v to r1;
@@ -157,7 +155,6 @@ internal error: do not have privilege to execute the statement
 drop database if exists s;
 internal error: do not have privilege to execute the statement
 drop database if exists v;
-internal error: do not have privilege to execute the statement
 grant drop database on account * to r1;
 drop database if exists t;
 drop database if exists s;
