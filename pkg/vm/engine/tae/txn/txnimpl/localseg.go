@@ -184,10 +184,12 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 					return err
 				}
 				blk, err := segH.CreateBlock(true)
+				segH.Close()
 				if err != nil {
 					return err
 				}
 				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+				blk.Close()
 			} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
 				id := appender.GetID()
 				blk, err := seg.table.CreateBlock(id.SegmentID(), true)
@@ -195,6 +197,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 					return err
 				}
 				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+				blk.Close()
 			}
 			if !appender.IsSameColumns(seg.table.GetLocalSchema()) {
 				return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")

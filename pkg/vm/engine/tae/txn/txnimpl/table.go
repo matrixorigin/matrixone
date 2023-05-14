@@ -735,13 +735,12 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 	blockIt := h.MakeBlockIt()
 	for blockIt.Valid() {
 		h := blockIt.GetBlock()
+		defer h.Close()
 		if h.IsUncommitted() {
 			blockIt.Next()
 			continue
 		}
 		offset, err = h.GetByFilter(filter)
-		// block := h.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		// offset, err = block.GetByFilter(tbl.store.txn, filter)
 		if err == nil {
 			id = h.Fingerprint()
 			break
@@ -887,7 +886,9 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	it := newRelationBlockItOnSnap(h)
 	maxSegmentHint := uint64(0)
 	for it.Valid() {
-		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		blkH := it.GetBlock()
+		blk := blkH.GetMeta().(*catalog.BlockEntry)
+		blkH.Close()
 		segmentHint := blk.GetSegment().SortHint
 		if segmentHint > maxSegmentHint {
 			maxSegmentHint = segmentHint

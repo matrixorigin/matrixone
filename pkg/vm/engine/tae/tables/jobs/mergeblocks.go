@@ -93,6 +93,7 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 		if err != nil {
 			return nil, err
 		}
+		defer seg.Close()
 		blk, err := seg.GetBlock(meta.ID)
 		if err != nil {
 			return nil, err
