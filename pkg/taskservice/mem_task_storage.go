@@ -52,7 +52,7 @@ func (s *memTaskStorage) Close() error {
 	return nil
 }
 
-func (m *memTaskStorage) Bootstrap(ctx context.Context) error {
+func (s *memTaskStorage) Bootstrap(ctx context.Context) error {
 	return nil
 }
 
