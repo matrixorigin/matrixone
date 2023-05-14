@@ -864,6 +864,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
+	var zm index.ZM
 	for _, node := range tbl.localSegment.nodes {
 		if node.IsPersisted() {
 			err = tbl.DoPrecommitDedupByNode(node)
@@ -877,8 +878,17 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 			return err
 		}
 		pkVec := bat.Vecs[tbl.schema.GetSingleSortKeyIdx()]
-		err = tbl.DoPrecommitDedupByPK(pkVec)
-		if err != nil {
+		if zm.Valid() {
+			zm.ResetMinMax()
+		} else {
+			pkType := pkVec.GetType()
+			zm = index.NewZM(pkType.Oid, pkType.Scale)
+		}
+		if err = index.BatchUpdateZM(zm, pkVec); err != nil {
+			bat.Close()
+			return err
+		}
+		if err = tbl.DoPrecommitDedupByPK(pkVec, zm); err != nil {
 			bat.Close()
 			return err
 		}
@@ -1000,7 +1010,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 //  2. it is called when txn dequeues from preparing queue.
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
-func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
+func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, zm index.ZM) (err error) {
 	trace.WithRegion(context.Background(), "DoPrecommitDedupByPK", func() {
 		segIt := tbl.entry.MakeSegmentIt(false)
 		for segIt.Valid() {
@@ -1059,7 +1069,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 						rowmask = deleteNode.GetRowMaskRefLocked()
 					}
 				}
-				if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true, []byte{}); err != nil {
+				if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true, zm); err != nil {
 					return
 				}
 				blkIt.Next()

@@ -34,6 +34,7 @@ const (
 )
 
 var MaxBytesValue []byte
+var zeroZM = make([]byte, ZMSize)
 
 func init() {
 	MaxBytesValue = bytes.Repeat([]byte{0xff}, 31)
@@ -60,6 +61,14 @@ func BuildZM(t types.T, v []byte) ZM {
 	zm.SetType(t)
 	zm.doInit(v)
 	return zm
+}
+
+func (zm ZM) ResetMinMax() {
+	t := zm.GetType()
+	scale := zm.GetScale()
+	copy(zm[:], zeroZM)
+	zm.SetType(t)
+	zm.SetScale(scale)
 }
 
 func (zm ZM) doInit(v []byte) {
