@@ -773,6 +773,7 @@ func initFixed1() {
 		{types.T_json, types.T_datetime, types.T_datetime, types.T_datetime},
 		{types.T_json, types.T_timestamp, types.T_timestamp, types.T_timestamp},
 		{types.T_json, types.T_char, types.T_json, types.T_json},
+		{types.T_json, types.T_varchar, types.T_json, types.T_json},
 		{types.T_json, types.T_uuid, types.T_uuid, types.T_uuid},
 		{types.T_json, types.T_binary, types.T_json, types.T_json},
 		{types.T_json, types.T_varbinary, types.T_json, types.T_json},
