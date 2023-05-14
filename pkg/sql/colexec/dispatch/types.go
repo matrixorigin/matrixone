@@ -87,6 +87,8 @@ type Argument struct {
 	LocalRegs []*process.WaitRegister
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
+	// for shuffle
+	ShuffleColIdx int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

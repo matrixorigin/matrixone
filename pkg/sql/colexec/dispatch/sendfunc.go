@@ -37,8 +37,8 @@ func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 	lenVecs := len(bat.Vecs)
 	shuffledBats := make([]*batch.Batch, lenRegs)
 	sels, lenShuffledSels := ap.getSels()
-	// todo : only support group by single column, and here we get the last vec
-	groupByVec := bat.Vecs[lenVecs-1]
+
+	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedCol[int64](groupByVec)

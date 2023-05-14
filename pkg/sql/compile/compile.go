@@ -742,13 +742,15 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			return nil, err
 		}
 		c.setAnalyzeCurrent(ss, curr)
-		if len(n.GroupBy) == 0 || n.Stats.HashmapSize < plan2.HashMapSizeForBucket {
-			ss = c.compileMergeGroup(n, ss, ns)
-			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
-		} else {
+
+		if plan2.NeedShuffle(n) {
 			ss = c.compileBucketGroup(n, ss, ns)
 			return c.compileSort(n, ss), nil
+		} else {
+			ss = c.compileMergeGroup(n, ss, ns)
+			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 		}
+
 	case plan.Node_JOIN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -1240,7 +1242,7 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	mergeChildren := c.newMergeScope(ss)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, false),
+		Arg: constructBroadcastDispatch(0, rs, c.addr, false, 0),
 	})
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
@@ -1630,16 +1632,9 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
-	dop := n.Stats.HashmapSize/plan2.HashMapSizeForBucket + 1
-	if dop > plan2.MAXShuffleDOP {
-		dop = plan2.MAXShuffleDOP
-	}
-	parent, children := c.newScopeListForGroup(validScopeCount(ss), int(dop))
-	shuffle := false
-	// todo : only support shuffle on group by single column and integer type for now
-	if len(n.GroupBy) == 1 && (n.GroupBy[0].Typ.Id == int32(types.T_int64) || n.GroupBy[0].Typ.Id == int32(types.T_int32)) {
-		shuffle = true
-	}
+	dop := plan2.GetShuffleDop(n)
+	parent, children := c.newScopeListForGroup(validScopeCount(ss), dop)
+
 	j := 0
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
@@ -1650,7 +1645,7 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node)
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, shuffle),
+				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, true, plan2.GetHashColumnIdx(n.GroupBy[0])),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -1666,24 +1661,13 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node)
 		children[i].Instructions = children[i].Instructions[:ilen]
 	}
 
-	if shuffle {
-		for i := range children {
-			children[i].Instructions = append(children[i].Instructions, vm.Instruction{
-				Op:      vm.Group,
-				Idx:     c.anal.curr,
-				IsFirst: currentIsFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
-			})
-		}
-	} else {
-		for i := range children {
-			children[i].Instructions = append(children[i].Instructions, vm.Instruction{
-				Op:      vm.Group,
-				Idx:     c.anal.curr,
-				IsFirst: currentIsFirst,
-				Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], i, len(children), true, c.proc),
-			})
-		}
+	for i := range children {
+		children[i].Instructions = append(children[i].Instructions, vm.Instruction{
+			Op:      vm.Group,
+			Idx:     c.anal.curr,
+			IsFirst: currentIsFirst,
+			Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, true, c.proc),
+		})
 	}
 
 	children = c.compileProjection(n, children)
@@ -1909,7 +1893,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	leftMerge := c.newMergeScope(ss)
 	leftMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, false),
+		Arg: constructBroadcastDispatch(0, rs, c.addr, false, 0),
 	})
 	leftMerge.IsEnd = true
 
@@ -1918,7 +1902,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	rightMerge := c.newMergeScope(children)
 	rightMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, false),
+		Arg: constructBroadcastDispatch(1, rs, c.addr, false, 0),
 	})
 	rightMerge.IsEnd = true
 
@@ -1999,7 +1983,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, false),
+		Arg: constructBroadcastDispatch(1, rs, c.addr, false, 0),
 	})
 	mergeChildren.IsEnd = true
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
