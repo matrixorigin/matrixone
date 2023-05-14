@@ -284,6 +284,8 @@ message SchemaExtra {
     // sending mo_columns deletes according to this.
     repeated string dropped_attrs = 2;
     bool column_changed = 3; 
+    // sending mo_tables deletes by this.
+    string old_name = 4;
 }
 
 // Int64Map mainly used in unit test
