@@ -101,6 +101,7 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 		sw.dumpBufferToCSV()
 	}
 	sw.buffer = sw.buffer[:0] // Clear the buffer
+	cnt, err = sw.csvWriter.FlushAndClose()
 	return cnt, err
 }
 
@@ -120,9 +121,9 @@ func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
 		return 0, nil
 	}
 	cnt, err := sw.flushBuffer(true)
-	cnt, err = sw.csvWriter.FlushAndClose()
 	sw.buffer = nil
 	sw.tbl = nil
+	sw.csvWriter = nil
 	return cnt, err
 }
 
