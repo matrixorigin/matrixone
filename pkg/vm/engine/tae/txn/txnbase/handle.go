@@ -78,8 +78,8 @@ func (rel *TxnRelation) AddBlksWithMetaLoc([]objectio.ZoneMap, []objectio.Locati
 }
 func (rel *TxnRelation) GetMeta() any                                                        { return nil }
 func (rel *TxnRelation) GetDB() (handle.Database, error)                                     { return nil, nil }
-func (rel *TxnRelation) GetSegment(id types.Uuid) (seg handle.Segment, err error)            { return }
-func (rel *TxnRelation) SoftDeleteSegment(id types.Uuid) (err error)                         { return }
+func (rel *TxnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error)      { return }
+func (rel *TxnRelation) SoftDeleteSegment(id *types.Segmentid) (err error)                   { return }
 func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)                  { return }
 func (rel *TxnRelation) CreateNonAppendableSegment(bool) (seg handle.Segment, err error)     { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, isNull bool, err error) { return }
@@ -103,6 +103,10 @@ func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (
 }
 func (rel *TxnRelation) AlterTable(context.Context, *apipb.AlterTableReq) (err error) { return }
 
+func (seg *TxnSegment) Reset() {
+	seg.Txn = nil
+	seg.Rel = nil
+}
 func (seg *TxnSegment) GetMeta() any                     { return nil }
 func (seg *TxnSegment) String() string                   { return "" }
 func (seg *TxnSegment) Close() error                     { return nil }
@@ -127,6 +131,10 @@ func (seg *TxnSegment) BatchDedup(containers.Vector) (err error)                
 
 // func (blk *TxnBlock) IsAppendable() bool                                   { return true }
 
+func (blk *TxnBlock) Reset() {
+	blk.Txn = nil
+	blk.Seg = nil
+}
 func (blk *TxnBlock) GetTotalChanges() int                                  { return 0 }
 func (blk *TxnBlock) IsAppendableBlock() bool                               { return true }
 func (blk *TxnBlock) Fingerprint() *common.ID                               { return &common.ID{} }

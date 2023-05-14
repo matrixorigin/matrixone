@@ -97,15 +97,15 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	copy(itr.mp.hashes[:count], zeroUint64[:count])
 	if itr.nbucket != 0 {
 		if itr.mp.hasNull {
-			err = itr.mp.hashMap.InsertBatchInBucket(count, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.ibucket, itr.nbucket, itr.m)
+			err = itr.mp.hashMap.InsertBatchInBucket(count, itr.mp.hashes[:count], unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.ibucket, itr.nbucket, itr.m)
 		} else {
-			err = itr.mp.hashMap.InsertBatchWithRingInBucket(count, itr.mp.zValues, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.ibucket, itr.nbucket, itr.m)
+			err = itr.mp.hashMap.InsertBatchWithRingInBucket(count, itr.mp.zValues, itr.mp.hashes[:count], unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.ibucket, itr.nbucket, itr.m)
 		}
 	} else {
 		if itr.mp.hasNull {
-			err = itr.mp.hashMap.InsertBatch(count, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.m)
+			err = itr.mp.hashMap.InsertBatch(count, itr.mp.hashes[:count], unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.m)
 		} else {
-			err = itr.mp.hashMap.InsertBatchWithRing(count, itr.mp.zValues, itr.mp.hashes, unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.m)
+			err = itr.mp.hashMap.InsertBatchWithRing(count, itr.mp.zValues, itr.mp.hashes[:count], unsafe.Pointer(&itr.mp.keys[0]), itr.mp.values, itr.m)
 		}
 	}
 	vs, zvs := itr.mp.values[:count], itr.mp.zValues[:count]

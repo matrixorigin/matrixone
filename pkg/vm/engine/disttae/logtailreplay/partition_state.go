@@ -43,10 +43,10 @@ func init() {
 
 type PartitionState struct {
 	// also modify the Copy method if adding fields
-	Rows         *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
-	Blocks       *btree.BTreeG[BlockEntry]
-	PrimaryIndex *btree.BTreeG[*PrimaryIndexEntry]
-	Checkpoints  []string
+	rows         *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
+	blocks       *btree.BTreeG[BlockEntry]
+	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
+	checkpoints  []string
 
 	// noData indicates whether to retain data batch
 	// for primary key dedup, reading data is not required
@@ -132,29 +132,31 @@ func NewPartitionState(noData bool) *PartitionState {
 	}
 	return &PartitionState{
 		noData:       noData,
-		Rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
-		Blocks:       btree.NewBTreeGOptions((BlockEntry).Less, opts),
-		PrimaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
+		blocks:       btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		primaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 	}
 }
 
 func (p *PartitionState) Copy() *PartitionState {
-	checkpoints := make([]string, len(p.Checkpoints))
-	copy(checkpoints, p.Checkpoints)
-	return &PartitionState{
-		Rows:         p.Rows.Copy(),
-		Blocks:       p.Blocks.Copy(),
-		PrimaryIndex: p.PrimaryIndex.Copy(),
-		Checkpoints:  checkpoints,
+	state := PartitionState{
+		rows:         p.rows.Copy(),
+		blocks:       p.blocks.Copy(),
+		primaryIndex: p.primaryIndex.Copy(),
 		noData:       p.noData,
 	}
+	if len(p.checkpoints) > 0 {
+		state.checkpoints = make([]string, len(p.checkpoints))
+		copy(state.checkpoints, p.checkpoints)
+	}
+	return &state
 }
 
 func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
-	iter := p.Rows.Iter()
+	iter := p.rows.Iter()
 	defer iter.Release()
 
-	blockID := rowID.GetBlockid()
+	blockID := *rowID.GetBlockid()
 	for ok := iter.Seek(RowEntry{
 		BlockID: blockID,
 		RowID:   rowID,
@@ -184,19 +186,21 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 func (p *PartitionState) HandleLogtailEntry(
 	ctx context.Context,
 	entry *api.Entry,
-	primaryKeyIndex int,
+	primarySeqnum int,
 	packer *types.Packer,
 ) {
 	switch entry.EntryType {
 	case api.Entry_Insert:
-		if IsMetaTable(entry.TableName) {
+		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataInsert(ctx, entry.Bat)
 		} else {
-			p.HandleRowsInsert(ctx, entry.Bat, primaryKeyIndex, packer)
+			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer)
 		}
 	case api.Entry_Delete:
-		if IsMetaTable(entry.TableName) {
+		if IsBlkTable(entry.TableName) {
 			p.HandleMetadataDelete(ctx, entry.Bat)
+		} else if IsSegTable(entry.TableName) {
+			// TODO p.HandleSegDelete(ctx, entry.Bat)
 		} else {
 			p.HandleRowsDelete(ctx, entry.Bat)
 		}
@@ -210,7 +214,7 @@ var nextRowEntryID = int64(1)
 func (p *PartitionState) HandleRowsInsert(
 	ctx context.Context,
 	input *api.Batch,
-	primaryKeyIndex int,
+	primarySeqnum int,
 	packer *types.Packer,
 ) (
 	primaryKeys [][]byte,
@@ -224,9 +228,9 @@ func (p *PartitionState) HandleRowsInsert(
 	if err != nil {
 		panic(err)
 	}
-	if primaryKeyIndex >= 0 {
+	if primarySeqnum >= 0 {
 		primaryKeys = EncodePrimaryKeyVector(
-			batch.Vecs[2+primaryKeyIndex],
+			batch.Vecs[2+primarySeqnum],
 			packer,
 		)
 	}
@@ -235,13 +239,13 @@ func (p *PartitionState) HandleRowsInsert(
 	for i, rowID := range rowIDVector {
 		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleInsert, func() {
 
-			blockID := rowID.GetBlockid()
+			blockID := *rowID.GetBlockid()
 			pivot := RowEntry{
 				BlockID: blockID,
 				RowID:   rowID,
 				Time:    timeVector[i],
 			}
-			entry, ok := p.Rows.Get(pivot)
+			entry, ok := p.rows.Get(pivot)
 			if !ok {
 				entry = pivot
 				entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
@@ -256,7 +260,7 @@ func (p *PartitionState) HandleRowsInsert(
 				entry.PrimaryIndexBytes = primaryKeys[i]
 			}
 
-			p.Rows.Set(entry)
+			p.rows.Set(entry)
 
 			if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
 				entry := &PrimaryIndexEntry{
@@ -265,7 +269,7 @@ func (p *PartitionState) HandleRowsInsert(
 					BlockID:    blockID,
 					RowID:      rowID,
 				}
-				p.PrimaryIndex.Set(entry)
+				p.primaryIndex.Set(entry)
 			}
 
 		})
@@ -296,13 +300,13 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	for i, rowID := range rowIDVector {
 		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleDel, func() {
 
-			blockID := rowID.GetBlockid()
+			blockID := *rowID.GetBlockid()
 			pivot := RowEntry{
 				BlockID: blockID,
 				RowID:   rowID,
 				Time:    timeVector[i],
 			}
-			entry, ok := p.Rows.Get(pivot)
+			entry, ok := p.rows.Get(pivot)
 			if !ok {
 				entry = pivot
 				entry.ID = atomic.AddInt64(&nextRowEntryID, 1)
@@ -314,7 +318,7 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 				entry.Offset = int64(i)
 			}
 
-			p.Rows.Set(entry)
+			p.rows.Set(entry)
 		})
 	}
 
@@ -333,8 +337,8 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
 	entryStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
 	sortedStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[4]))
-	metaLocationVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[5]))
-	deltaLocationVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[6]))
+	metaLocationVector := mustVectorFromProto(input.Vecs[5])
+	deltaLocationVector := mustVectorFromProto(input.Vecs[6])
 	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
 	segmentIDVector := vector.MustFixedCol[types.Uuid](mustVectorFromProto(input.Vecs[8]))
 
@@ -347,16 +351,16 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					BlockID: blockID,
 				},
 			}
-			entry, ok := p.Blocks.Get(pivot)
+			entry, ok := p.blocks.Get(pivot)
 			if !ok {
 				entry = pivot
 				numInserted++
 			}
 
-			if location := objectio.Location(metaLocationVector[i]); !location.IsEmpty() {
+			if location := objectio.Location(metaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
 				entry.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
-			if location := objectio.Location(deltaLocationVector[i]); !location.IsEmpty() {
+			if location := objectio.Location(deltaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
 				entry.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
 			if id := segmentIDVector[i]; objectio.IsEmptySegid(&id) {
@@ -371,10 +375,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 			}
 			entry.EntryState = entryStateVector[i]
 
-			p.Blocks.Set(entry)
+			p.blocks.Set(entry)
 
 			if entryStateVector[i] {
-				iter := p.Rows.Copy().Iter()
+				iter := p.rows.Copy().Iter()
 				pivot := RowEntry{
 					BlockID: blockID,
 				}
@@ -384,11 +388,11 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 						break
 					}
 					// delete row entry
-					p.Rows.Delete(entry)
+					p.rows.Delete(entry)
 					numDeleted++
 					// delete primary index entry
 					if len(entry.PrimaryIndexBytes) > 0 {
-						p.PrimaryIndex.Delete(&PrimaryIndexEntry{
+						p.primaryIndex.Delete(&PrimaryIndexEntry{
 							Bytes:      entry.PrimaryIndexBytes,
 							RowEntryID: entry.ID,
 						})
@@ -417,7 +421,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 
 	for i, rowID := range rowIDVector {
-		blockID := rowID.GetBlockid()
+		blockID := *rowID.GetBlockid()
 		trace.WithRegion(ctx, "handle a row", func() {
 
 			pivot := BlockEntry{
@@ -425,14 +429,14 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 					BlockID: blockID,
 				},
 			}
-			entry, ok := p.Blocks.Get(pivot)
+			entry, ok := p.blocks.Get(pivot)
 			if !ok {
 				panic(fmt.Sprintf("invalid block id. %x", rowID))
 			}
 
 			entry.DeleteTime = deleteTimeVector[i]
 
-			p.Blocks.Set(entry)
+			p.blocks.Set(entry)
 		})
 	}
 
@@ -441,4 +445,33 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.MetadataDeleteEntries.Add(1)
 	})
+}
+
+func (p *PartitionState) BlockVisible(blockID types.Blockid, ts types.TS) bool {
+	pivot := BlockEntry{
+		BlockInfo: catalog.BlockInfo{
+			BlockID: blockID,
+		},
+	}
+	entry, ok := p.blocks.Get(pivot)
+	if !ok {
+		return false
+	}
+	return entry.Visible(ts)
+}
+
+func (p *PartitionState) AppendCheckpoint(checkpoint string) {
+	p.checkpoints = append(p.checkpoints, checkpoint)
+}
+
+func (p *PartitionState) ConsumeCheckpoints(
+	fn func(checkpoint string) error,
+) error {
+	for _, checkpoint := range p.checkpoints {
+		if err := fn(checkpoint); err != nil {
+			return err
+		}
+	}
+	p.checkpoints = p.checkpoints[:0]
+	return nil
 }

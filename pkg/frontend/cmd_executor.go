@@ -275,7 +275,7 @@ func (bse *baseStmtExecutor) VerifyTxn(ctx context.Context, ses *Session) error 
 	*/
 	if ses.InActiveTransaction() {
 		stmt := bse.GetAst()
-		can, err = StatementCanBeExecutedInUncommittedTransaction(ses, stmt)
+		can, err = statementCanBeExecutedInUncommittedTransaction(ses, stmt)
 		if err != nil {
 			return err
 		}

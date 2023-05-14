@@ -224,10 +224,11 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 	blks := make([]handle.Block, len(entry.createdBlks))
 	for i, meta := range entry.createdBlks {
 		id := meta.AsCommonID()
-		seg, err := entry.relation.GetSegment(id.SegmentID)
+		seg, err := entry.relation.GetSegment(id.SegmentID())
 		if err != nil {
 			return err
 		}
+		defer seg.Close()
 		blk, err := seg.GetBlock(id.BlockID)
 		if err != nil {
 			return err

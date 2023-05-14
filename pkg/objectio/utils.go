@@ -133,3 +133,44 @@ func ReadBytes(r io.Reader) (buf []byte, n int64, err error) {
 	n = 4 + int64(strLen)
 	return
 }
+
+type Seqnums struct {
+	Seqs       []uint16
+	MaxSeq     uint16 // do not consider special column like rowid and committs
+	MetaColCnt uint16 // include special columns
+}
+
+func NewSeqnums(seqs []uint16) *Seqnums {
+	s := &Seqnums{
+		Seqs: make([]uint16, 0, len(seqs)),
+	}
+	if len(seqs) == 0 {
+		return s
+	}
+
+	for _, v := range seqs {
+		if v < SEQNUM_UPPER && v > s.MaxSeq {
+			s.MaxSeq = v
+		}
+	}
+
+	maxseq := s.MaxSeq
+	for _, v := range seqs {
+		if v >= SEQNUM_UPPER {
+			s.Seqs = append(s.Seqs, maxseq+1)
+			maxseq += 1
+		} else {
+			s.Seqs = append(s.Seqs, v)
+		}
+	}
+	s.MetaColCnt = maxseq + 1
+	return s
+}
+
+func (s *Seqnums) InitWithColCnt(colcnt int) {
+	for i := 0; i < colcnt; i++ {
+		s.Seqs = append(s.Seqs, uint16(i))
+	}
+	s.MaxSeq = uint16(colcnt) - 1
+	s.MetaColCnt = uint16(colcnt)
+}

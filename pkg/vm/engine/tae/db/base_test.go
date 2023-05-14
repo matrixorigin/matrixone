@@ -184,6 +184,7 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
+		defer blk.Close()
 		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName)
 		assert.NoError(e.t, err)
 		defer view.Close()
@@ -444,7 +445,9 @@ func forEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
 	it := rel.MakeBlockIt()
 	var err error
 	for it.Valid() {
-		if err = fn(it.GetBlock()); err != nil {
+		blk := it.GetBlock()
+		defer blk.Close()
+		if err = fn(blk); err != nil {
 			if errors.Is(err, handle.ErrIteratorEnd) {
 				return
 			} else {
@@ -459,7 +462,9 @@ func forEachSegment(rel handle.Relation, fn func(seg handle.Segment) error) {
 	it := rel.MakeSegmentIt()
 	var err error
 	for it.Valid() {
-		if err = fn(it.GetSegment()); err != nil {
+		seg := it.GetSegment()
+		defer seg.Close()
+		if err = fn(seg); err != nil {
 			if errors.Is(err, handle.ErrIteratorEnd) {
 				return
 			} else {
@@ -577,7 +582,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		segHandle, err := rel.GetSegment(seg.ID)
+		segHandle, err := rel.GetSegment(&seg.ID)
 		if err != nil {
 			if skipConflict {
 				_ = txn.Rollback()

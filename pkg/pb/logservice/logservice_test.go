@@ -344,8 +344,7 @@ func TestCNLabelUpdate(t *testing.T) {
 	state := CNState{Stores: map[string]CNStoreInfo{}}
 
 	label := CNStoreLabel{
-		UUID:      "cn-1",
-		Operation: SetLabel,
+		UUID: "cn-1",
 		Labels: map[string]metadata.LabelList{
 			"account": {
 				Labels: []string{"a1", "a2"},
@@ -373,8 +372,7 @@ func TestCNLabelUpdate(t *testing.T) {
 	})
 
 	label = CNStoreLabel{
-		UUID:      "cn-1",
-		Operation: SetLabel,
+		UUID: "cn-1",
 		Labels: map[string]metadata.LabelList{
 			"account": {
 				Labels: []string{"a1", "a2"},
@@ -401,11 +399,10 @@ func TestCNLabelUpdate(t *testing.T) {
 	})
 
 	label = CNStoreLabel{
-		UUID:      "cn-1",
-		Operation: DeleteLabel,
+		UUID: "cn-1",
 		Labels: map[string]metadata.LabelList{
-			"account": {
-				Labels: []string{"a1", "a2"},
+			"role": {
+				Labels: []string{"r1"},
 			},
 		},
 	}

@@ -117,7 +117,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.PrepareDoneNotifyMessage: // notify the dispatch executor
 		opProc, err := receiver.GetProcByUuid(receiver.messageUuid)
-		if err != nil {
+		if err != nil || opProc == nil {
 			return err
 		}
 
@@ -133,10 +133,14 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 		select {
 		case <-putCtx.Done():
-			return moerr.NewInternalErrorNoCtx("pass notify msg to dispatch operator timeout")
+			return moerr.NewInternalError(receiver.ctx, "send notify msg to dispatch operator timeout")
+		case <-receiver.ctx.Done():
+			logutil.Errorf("receiver conctx done during send notify to dispatch operator")
 		case <-opProc.Ctx.Done():
 			logutil.Errorf("dispatch operator context done")
 		case opProc.DispatchNotifyCh <- info:
+			// TODO: need fix. It may hung here if dispatch operator receive the info but
+			// end without close doneCh
 			<-doneCh
 		}
 		return nil
@@ -173,14 +177,22 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 }
 
 // receiveMessageFromCnServer deal the back message from cn-server.
-func receiveMessageFromCnServer(c *Compile, sender messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
+func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var err error
 	var dataBuffer []byte
 	var sequence uint64
+
+	if sender.receiveCh == nil {
+		sender.receiveCh, err = sender.streamSender.Receive()
+		if err != nil {
+			return err
+		}
+	}
+
 	for {
 		val, err = sender.receiveMessage()
-		if err != nil {
+		if err != nil || val == nil {
 			return err
 		}
 
@@ -243,13 +255,13 @@ func (s *Scope) remoteRun(c *Compile) error {
 	s.Instructions = append(s.Instructions, con)
 
 	// encode the process related information
-	pData, errEncodeProc := encodeProcessInfo(c.proc)
+	pData, errEncodeProc := encodeProcessInfo(s.Proc)
 	if errEncodeProc != nil {
 		return errEncodeProc
 	}
 
 	// new sender and do send work.
-	sender, err := newMessageSenderOnClient(c.proc.Ctx, s.NodeInfo.Addr)
+	sender, err := newMessageSenderOnClient(s.Proc.Ctx, s.NodeInfo.Addr)
 	if err != nil {
 		return err
 	}

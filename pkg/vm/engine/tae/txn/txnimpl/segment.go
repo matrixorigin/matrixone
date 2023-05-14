@@ -25,8 +25,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
+// var newSegmentCnt atomic.Int64
+// var getSegmentCnt atomic.Int64
+// var putSegmentCnt atomic.Int64
+// func GetStatsString() string {
+// 	return fmt.Sprintf(
+// 		"NewSeg: %d, GetSeg: %d, PutSeg: %d, NewBlk: %d, GetBlk: %d, PutBlk: %d",
+// 		newSegmentCnt.Load(),
+// 		getSegmentCnt.Load(),
+// 		putSegmentCnt.Load(),
+// 		newBlockCnt.Load(),
+// 		getBlockCnt.Load(),
+// 		putBlockCnt.Load())
+// }
+
+var (
+	_segPool = sync.Pool{
+		New: func() any {
+			// newSegmentCnt.Add(1)
+			return &txnSegment{}
+		},
+	}
+)
+
 type txnSegment struct {
-	*txnbase.TxnSegment
+	txnbase.TxnSegment
 	entry *catalog.SegmentEntry
 	table *txnTable
 }
@@ -68,15 +91,7 @@ func newSegmentItOnSnap(table *txnTable) handle.SegmentIt {
 		curr.RUnlock()
 		it.linkIt.Next()
 	}
-	//if table.localSegment != nil {
-	//	cit := &composedSegmentIt{
-	//		segmentIt:   it,
-	//		uncommitted: table.localSegment.entry,
-	//	}
-	//	return cit
-	//}
 	return it
-
 }
 
 func newSegmentIt(table *txnTable) handle.SegmentIt {
@@ -178,26 +193,36 @@ func (cit *composedSegmentIt) Next() {
 }
 
 func newSegment(table *txnTable, meta *catalog.SegmentEntry) *txnSegment {
-	seg := &txnSegment{
-		TxnSegment: &txnbase.TxnSegment{
-			Txn: table.store.txn,
-		},
-		table: table,
-		entry: meta,
-	}
+	seg := _segPool.Get().(*txnSegment)
+	// getSegmentCnt.Add(1)
+	seg.Txn = table.store.txn
+	seg.table = table
+	seg.entry = meta
 	return seg
 }
 
-func (seg *txnSegment) GetMeta() any      { return seg.entry }
-func (seg *txnSegment) String() string    { return seg.entry.String() }
-func (seg *txnSegment) GetID() types.Uuid { return seg.entry.ID }
-func (seg *txnSegment) getDBID() uint64   { return seg.entry.GetTable().GetDB().ID }
+func (seg *txnSegment) reset() {
+	seg.entry = nil
+	seg.table = nil
+	seg.TxnSegment.Reset()
+}
+
+func (seg *txnSegment) Close() (err error) {
+	seg.reset()
+	_segPool.Put(seg)
+	// putSegmentCnt.Add(1)
+	return
+}
+
+func (seg *txnSegment) GetMeta() any            { return seg.entry }
+func (seg *txnSegment) String() string          { return seg.entry.String() }
+func (seg *txnSegment) GetID() *types.Segmentid { return &seg.entry.ID }
 func (seg *txnSegment) MakeBlockIt() (it handle.BlockIt) {
 	return newBlockIt(seg.table, seg.entry)
 }
 
 func (seg *txnSegment) CreateNonAppendableBlock(opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.getDBID(), seg.entry.AsCommonID(), opts)
+	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.entry.AsCommonID(), opts)
 }
 
 func (seg *txnSegment) IsUncommitted() bool {
@@ -209,7 +234,7 @@ func (seg *txnSegment) IsAppendable() bool { return seg.entry.IsAppendable() }
 func (seg *txnSegment) SoftDeleteBlock(id types.Blockid) (err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id
-	return seg.Txn.GetStore().SoftDeleteBlock(seg.getDBID(), fp)
+	return seg.Txn.GetStore().SoftDeleteBlock(fp)
 }
 
 func (seg *txnSegment) GetRelation() (rel handle.Relation) {
@@ -219,9 +244,10 @@ func (seg *txnSegment) GetRelation() (rel handle.Relation) {
 func (seg *txnSegment) GetBlock(id types.Blockid) (blk handle.Block, err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id
-	return seg.Txn.GetStore().GetBlock(seg.getDBID(), fp)
+	return seg.Txn.GetStore().GetBlock(fp)
 }
 
 func (seg *txnSegment) CreateBlock(is1PC bool) (blk handle.Block, err error) {
-	return seg.Txn.GetStore().CreateBlock(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.ID, is1PC)
+	id := seg.entry.AsCommonID()
+	return seg.Txn.GetStore().CreateBlock(id, is1PC)
 }

@@ -29,7 +29,7 @@ type SegmentIt interface {
 
 type SegmentReader interface {
 	io.Closer
-	GetID() types.Uuid
+	GetID() *types.Segmentid
 	IsUncommitted() bool
 	IsAppendable() bool
 	MakeBlockIt() BlockIt

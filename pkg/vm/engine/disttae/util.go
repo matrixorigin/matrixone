@@ -19,18 +19,15 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -42,69 +39,16 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func loadObjectMeta(
+func evalNoColumnFilterExpr(
 	ctx context.Context,
-	location objectio.Location,
-	fs fileservice.FileService,
-	m *mpool.MPool,
-) (meta objectio.ObjectMeta, err error) {
-	return objectio.FastLoadObjectMeta(ctx, &location, fs)
-}
-
-func buildColumnZMVector(
-	zm objectio.ZoneMap,
-	mp *mpool.MPool,
-) (vec *vector.Vector, err error) {
-	t := zm.GetType().ToType()
-	vec = vector.NewVec(t)
-	defer func() {
-		if err != nil {
-			vec.Free(mp)
-		}
-	}()
-	appendFn := vector.MakeAppendBytesFunc(vec)
-	if err = appendFn(zm.GetMinBuf(), false, mp); err != nil {
-		return
-	}
-	err = appendFn(zm.GetMaxBuf(), false, mp)
-	return
-}
-
-func buildColumnsZMVectors(
-	meta objectio.ObjectMeta,
-	blknum int,
-	cols []int,
-	def *plan.TableDef,
-	mp *mpool.MPool,
-) (vecs []*vector.Vector, err error) {
-	toClean := false
-	vecs = make([]*vector.Vector, len(cols))
-	defer func() {
-		if toClean {
-			for i, vec := range vecs {
-				if vec != nil {
-					vec.Free(mp)
-					vecs[i] = nil
-				} else {
-					break
-				}
-			}
-			vecs = vecs[:0]
-		}
-	}()
-	var vec *vector.Vector
-	for i, colIdx := range cols {
-		zm := meta.GetColumnMeta(uint32(blknum), uint16(colIdx)).ZoneMap()
-		// colType := types.T(def.Cols[colIdx].Typ.Id)
-		if !zm.IsInited() {
-			toClean = true
-			return
-		}
-		if vec, err = buildColumnZMVector(zm, mp); err != nil {
-			toClean = true
-			return
-		}
-		vecs[i] = vec
+	expr *plan.Expr,
+	proc *process.Process,
+) (selected bool) {
+	bat := batch.NewWithSize(0)
+	defer bat.Clean(proc.Mp())
+	var err error
+	if selected, err = plan2.EvalFilterExpr(ctx, expr, bat, proc); err != nil {
+		selected = true
 	}
 	return
 }
@@ -765,16 +709,4 @@ func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 		infos = append(infos, txnMeta.DebugString())
 		logutil.Debugf(msg+" %s", infos...)
 	}
-}
-
-/*
-	RowId:
-
-| segmentId | blockId | offsetId |
-
-	18 bytes   2 bytes   4 bytes
-*/
-// SegmentId = Uuid + fileId
-func generateRowIdForCNBlock(blkid *types.Blockid, offset uint32) types.Rowid {
-	return objectio.NewRowid(blkid, offset)
 }

@@ -52,7 +52,6 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 		switch arg.ctr.state {
 		case build:
 			if err := arg.ctr.buildHashTable(proc, analyze, 1, isFirst); err != nil {
-				arg.Free(proc, true)
 				return false, err
 			}
 			if arg.ctr.hashTable != nil {
@@ -74,7 +73,6 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 			return false, nil
 
 		case end:
-			arg.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -96,6 +94,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 
 		// empty batch
 		if btc.Length() == 0 {
+			btc.Clean(proc.Mp())
 			continue
 		}
 
@@ -148,6 +147,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 		// empty batch
 		if btc.Length() == 0 {
+			btc.Clean(proc.Mp())
 			continue
 		}
 
