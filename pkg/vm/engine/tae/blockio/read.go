@@ -54,6 +54,7 @@ func BlockRead(
 	if err != nil {
 		return nil, err
 	}
+
 	columnBatch.SetZs(columnBatch.Vecs[0].Length(), mp)
 
 	return columnBatch, nil
