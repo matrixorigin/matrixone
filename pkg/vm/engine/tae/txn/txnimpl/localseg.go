@@ -180,24 +180,24 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			appender, err := seg.tableHandle.GetAppender()
 			if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
 				segH, err := seg.table.CreateSegment(true)
-				defer segH.Close()
 				if err != nil {
 					return err
 				}
 				blk, err := segH.CreateBlock(true)
+				segH.Close()
 				if err != nil {
 					return err
 				}
-				defer blk.Close()
 				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+				blk.Close()
 			} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
 				id := appender.GetID()
 				blk, err := seg.table.CreateBlock(id.SegmentID(), true)
 				if err != nil {
 					return err
 				}
-				defer blk.Close()
 				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+				blk.Close()
 			}
 			if !appender.IsSameColumns(seg.table.GetLocalSchema()) {
 				return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
