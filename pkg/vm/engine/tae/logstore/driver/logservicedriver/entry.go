@@ -21,7 +21,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -246,21 +245,13 @@ func (r *baseEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 		return 0, err
 	}
 	n += n1
-	payload := make([]byte, r.meta.payloadSize)
-	n2, err := reader.Read(payload)
-	if err != nil {
-		return 0, err
-	}
-	if n2 != int(r.meta.payloadSize) {
-		panic(moerr.NewInternalErrorNoCtx("logic err: err is %v, expect %d, get %d", err, r.meta.payloadSize, n2))
-	}
-	r.payload = payload
 	return
 }
 
 func (r *baseEntry) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
 	_, err := r.ReadFrom(bbuf)
+	r.payload = buf[len(buf)-int(r.payloadSize):]
 	return err
 }
 
@@ -282,10 +273,8 @@ func newRecordEntry() *recordEntry {
 }
 
 func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
-	payload := make([]byte, len(r.Payload()))
-	copy(payload, r.Payload())
 	return &recordEntry{
-		payload: payload,
+		payload: r.Payload(),
 		baseEntry: &baseEntry{
 			meta: newMeta(),
 		},
