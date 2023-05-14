@@ -16,7 +16,6 @@ package blockio
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -54,24 +53,6 @@ func BlockRead(
 	)
 	if err != nil {
 		return nil, err
-	}
-	var str string
-	for _, vec := range columnBatch.Vecs {
-		if vec.GetType().Oid == types.T_Rowid {
-			// output first 2 rows
-			rowIds := vector.MustFixedCol[types.Rowid](vec)
-			rows := 10
-			for i, rowId := range rowIds {
-				if i >= rows {
-					break
-				}
-				str += fmt.Sprintf("[rowId is %s]\n", rowId.String())
-			}
-			break
-		}
-	}
-	if str != "" {
-		logutil.Infof("block read rowId is %s", str)
 	}
 	columnBatch.SetZs(columnBatch.Vecs[0].Length(), mp)
 

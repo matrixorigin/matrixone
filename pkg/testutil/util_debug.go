@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 var _ = OperatorCatchBatch
@@ -55,4 +56,25 @@ func OperatorCatchBatch(operatorName string, bat *batch.Batch) string {
 		}
 	}
 	return str
+}
+
+func DebugBlockRowId(columnBatch *batch.Batch) {
+	var str string
+	for _, vec := range columnBatch.Vecs {
+		if vec.GetType().Oid == types.T_Rowid {
+			// output first 2 rows
+			rowIds := vector.MustFixedCol[types.Rowid](vec)
+			rows := 10
+			for i, rowId := range rowIds {
+				if i >= rows {
+					break
+				}
+				str += fmt.Sprintf("[rowId is %s]\n", rowId.String())
+			}
+			break
+		}
+	}
+	if str != "" {
+		logutil.Infof("block read rowId is %s", str)
+	}
 }

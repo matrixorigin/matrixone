@@ -103,6 +103,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	if err != nil {
 		return nil, err
 	}
+	testutil.DebugBlockRowId(bat)
 	bat.SetAttributes(cols)
 
 	// if it's not sorted, just return
@@ -176,6 +177,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	if err != nil {
 		return nil, err
 	}
+	testutil.DebugBlockRowId(bat)
 	bat.SetAttributes(cols)
 	r.sels = r.sels[:0]
 	deletes := make([]int, len(r.blks[0].deletes))
