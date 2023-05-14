@@ -135,7 +135,9 @@ func (blk *block) BatchDedup(
 		precommit,
 		keys,
 		rowmask,
-		false)
+		false,
+		zm,
+	)
 }
 
 func (blk *block) GetValue(

@@ -426,16 +426,21 @@ func (zm ZM) AnyLE(o ZM) (res bool, ok bool) {
 	return
 }
 
+func (zm ZM) FastIntersect(o ZM) (res bool) {
+	t := zm.GetType()
+	// zm.max >= o.min && zm.min <= v2.max
+	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), t, zm.GetScale(), o.GetScale()) >= 0 &&
+		compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), t, zm.GetScale(), o.GetScale()) <= 0
+	return
+}
+
 func (zm ZM) Intersect(o ZM) (res bool, ok bool) {
 	if !zm.compareCheck(o) {
 		ok = false
 		return
 	}
-	t := zm.GetType()
-	// zm.max >= o.min && zm.min <= v2.max
 	ok = true
-	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), t, zm.GetScale(), o.GetScale()) >= 0 &&
-		compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), t, zm.GetScale(), o.GetScale()) <= 0
+	res = zm.FastIntersect(o)
 	return
 }
 
