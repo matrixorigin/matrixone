@@ -816,17 +816,34 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 
 func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
 	switch req.Kind {
-	case apipb.AlterKind_UpdateConstraint, apipb.AlterKind_UpdateComment, apipb.AlterKind_AddColumn, apipb.AlterKind_DropColumn:
+	case apipb.AlterKind_UpdateConstraint,
+		apipb.AlterKind_UpdateComment,
+		apipb.AlterKind_AddColumn,
+		apipb.AlterKind_DropColumn,
+		apipb.AlterKind_RenameTable:
 	default:
 		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.store.txn.GetMemo().AddCatalogChange()
 	isNewNode, newSchema, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
-	tbl.schema = newSchema // update new schema to txn local schema
 	if isNewNode {
 		tbl.txnEntries.Append(tbl.entry)
 	}
+	if err != nil {
+		return err
+	}
+	if req.Kind == apipb.AlterKind_RenameTable {
+		rename := req.GetRenameTable()
+		// udpate name index in db entry
+		tenantID := newSchema.AcInfo.TenantID
+		err = tbl.entry.GetDB().RenameTableInTxn(rename.OldName, rename.NewName, tbl.entry.ID, tenantID, tbl.store.txn, isNewNode)
+		if err != nil {
+			return err
+		}
+	}
+
+	tbl.schema = newSchema // update new schema to txn local schema
 	//TODO(aptend): handle written data in localseg, keep the batch aligned with the new schema
 	return err
 }
