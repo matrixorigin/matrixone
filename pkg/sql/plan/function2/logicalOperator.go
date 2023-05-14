@@ -19,248 +19,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func andFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[1])
-	rs := vector.MustFunctionResult[bool](result)
+var andFn = optimizedTpsToTrFn[bool, bool](
+	func(v1 bool) (bool, bool) { return false, v1 }, false,
+	func(v2 bool) (bool, bool) { return false, v2 }, false,
+	func(v1, v2 bool) (bool, bool) { return v1 && v2, false }, true,
+	nil, true, true,
+)
 
-	if parameters[0].IsConst() {
-		v1, null1 := p1.GetValue(0)
-		if null1 {
-			for i := uint64(0); i < uint64(length); i++ {
-				v2, null2 := p2.GetValue(i)
-				if err := rs.Append(v2, v2 || null2); err != nil {
-					return err
-				}
-			}
-		} else {
-			if v1 {
-				for i := uint64(0); i < uint64(length); i++ {
-					v2, null2 := p2.GetValue(i)
-					if err := rs.Append(v2, null2); err != nil {
-						return err
-					}
-				}
-			} else {
-				for i := uint64(0); i < uint64(length); i++ {
-					if err := rs.Append(false, false); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
+var orFn = optimizedTpsToTrFn[bool, bool](
+	func(v1 bool) (bool, bool) { return v1, !v1 }, false,
+	func(v2 bool) (bool, bool) { return v2, !v2 }, false,
+	func(v1, v2 bool) (bool, bool) { return v1 || v2, false }, true,
+	nil, true, true,
+)
 
-	if parameters[1].IsConst() {
-		v2, null2 := p2.GetValue(0)
-		if null2 {
-			for i := uint64(0); i < uint64(length); i++ {
-				v1, null1 := p1.GetValue(i)
-				if err := rs.Append(v1, v1 || null1); err != nil {
-					return err
-				}
-			}
-		} else {
-			if v2 {
-				for i := uint64(0); i < uint64(length); i++ {
-					v1, null1 := p1.GetValue(i)
-					if err := rs.Append(v1, null1); err != nil {
-						return err
-					}
-				}
-			} else {
-				for i := uint64(0); i < uint64(length); i++ {
-					if err := rs.Append(false, false); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 {
-			if err := rs.Append(v2, v2 || null2); err != nil {
-				return err
-			}
-		} else {
-			if v1 {
-				if err := rs.Append(v2, null2); err != nil {
-					return err
-				}
-			} else {
-				if err := rs.Append(false, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func orFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[1])
-	rs := vector.MustFunctionResult[bool](result)
-
-	if parameters[0].IsConst() {
-		v1, null1 := p1.GetValue(0)
-		if v1 {
-			for i := uint64(0); i < uint64(length); i++ {
-				if err := rs.Append(true, false); err != nil {
-					return err
-				}
-			}
-		} else {
-			if null1 {
-				for i := uint64(0); i < uint64(length); i++ {
-					v2, _ := p2.GetValue(i)
-					if v2 {
-						if err := rs.Append(true, false); err != nil {
-							return err
-						}
-					} else {
-						if err := rs.Append(false, true); err != nil {
-							return err
-						}
-					}
-				}
-			} else {
-				for i := uint64(0); i < uint64(length); i++ {
-					v2, null2 := p2.GetValue(i)
-					if v2 {
-						if err := rs.Append(true, false); err != nil {
-							return err
-						}
-					} else {
-						if err := rs.Append(false, null2); err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	if parameters[1].IsConst() {
-		v2, null2 := p2.GetValue(0)
-		if v2 {
-			for i := uint64(0); i < uint64(length); i++ {
-				if err := rs.Append(true, false); err != nil {
-					return err
-				}
-			}
-		} else {
-			if null2 {
-				for i := uint64(0); i < uint64(length); i++ {
-					v1, _ := p1.GetValue(i)
-					if v1 {
-						if err := rs.Append(true, false); err != nil {
-							return err
-						}
-					} else {
-						if err := rs.Append(false, true); err != nil {
-							return err
-						}
-					}
-				}
-			} else {
-				for i := uint64(0); i < uint64(length); i++ {
-					v1, null1 := p1.GetValue(i)
-					if v1 {
-						if err := rs.Append(true, false); err != nil {
-							return err
-						}
-					} else {
-						if err := rs.Append(false, null1); err != nil {
-							return err
-						}
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if v1 || v2 {
-			if err := rs.Append(true, false); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(false, null1 || null2); err != nil {
-				return err
-			}
-		}
-
-	}
-	return nil
-}
-
-func xorFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[1])
-	rs := vector.MustFunctionResult[bool](result)
-
-	if parameters[0].IsConst() {
-		v1, null1 := p1.GetValue(0)
-		if null1 {
-			for i := uint64(0); i < uint64(length); i++ {
-				if err := rs.Append(false, true); err != nil {
-					return err
-				}
-			}
-		} else {
-			for i := uint64(0); i < uint64(length); i++ {
-				v2, null2 := p2.GetValue(i)
-				if err := rs.Append(v1 != v2, null2); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-
-	if parameters[1].IsConst() {
-		v2, null2 := p2.GetValue(0)
-		if null2 {
-			for i := uint64(0); i < uint64(length); i++ {
-				if err := rs.Append(false, true); err != nil {
-					return err
-				}
-			}
-		} else {
-			for i := uint64(0); i < uint64(length); i++ {
-				v1, null1 := p1.GetValue(i)
-				if err := rs.Append(v2 != v1, null1); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if err := rs.Append(v1 != v2, null1 || null2); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+var xorFn = optimizedTpsToTrFn[bool, bool](
+	nil, true,
+	nil, true,
+	func(v1, v2 bool) (bool, bool) { return v1 != v2, false }, true,
+	nil, true, true,
+)
 
 func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
 	rs := vector.MustFunctionResult[bool](result)
 
+	if !p1.WithAnyNullValue() {
+		rss := vector.MustFixedCol[bool](rs.GetResultVector())
+		for i := uint64(0); i < uint64(length); i++ {
+			rss[i], _ = p1.GetValue(i)
+		}
+		return nil
+	}
+	
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		if err := rs.Append(!v1, null1); err != nil {

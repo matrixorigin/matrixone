@@ -43,6 +43,8 @@ type FunctionParameterWrapper[T types.FixedSizeT] interface {
 	// UnSafeGetAllValue return all the values.
 	// please use it carefully because we didn't check the null situation.
 	UnSafeGetAllValue() []T
+
+	WithAnyNullValue() bool
 }
 
 var _ FunctionParameterWrapper[int64] = &FunctionParameterNormal[int64]{}
@@ -169,6 +171,10 @@ func (p *FunctionParameterNormal[T]) UnSafeGetAllValue() []T {
 	return p.values
 }
 
+func (p *FunctionParameterNormal[T]) WithAnyNullValue() bool {
+	return true
+}
+
 // FunctionParameterNormalSpecial1 is an optimized wrapper of string vector whose
 // string width <= types.VarlenaInlineSize
 type FunctionParameterNormalSpecial1[T types.FixedSizeT] struct {
@@ -201,6 +207,10 @@ func (p *FunctionParameterNormalSpecial1[T]) UnSafeGetAllValue() []T {
 	panic("not implement")
 }
 
+func (p *FunctionParameterNormalSpecial1[T]) WithAnyNullValue() bool {
+	return true
+}
+
 // FunctionParameterWithoutNull is a wrapper of normal vector but
 // without null value.
 type FunctionParameterWithoutNull[T types.FixedSizeT] struct {
@@ -231,6 +241,10 @@ func (p *FunctionParameterWithoutNull[T]) UnSafeGetAllValue() []T {
 	return p.values
 }
 
+func (p *FunctionParameterWithoutNull[T]) WithAnyNullValue() bool {
+	return false
+}
+
 // FunctionParameterWithoutNullSpecial1 is an optimized wrapper of string vector without null value and
 // whose string width <= types.VarlenaInlineSize
 type FunctionParameterWithoutNullSpecial1[T types.FixedSizeT] struct {
@@ -257,6 +271,10 @@ func (p *FunctionParameterWithoutNullSpecial1[T]) GetStrValue(idx uint64) ([]byt
 
 func (p *FunctionParameterWithoutNullSpecial1[T]) UnSafeGetAllValue() []T {
 	panic("not implement")
+}
+
+func (p *FunctionParameterWithoutNullSpecial1[T]) WithAnyNullValue() bool {
+	return false
 }
 
 // FunctionParameterScalar is a wrapper of scalar vector.
@@ -287,6 +305,10 @@ func (p *FunctionParameterScalar[T]) UnSafeGetAllValue() []T {
 	return []T{p.scalarValue}
 }
 
+func (p *FunctionParameterScalar[T]) WithAnyNullValue() bool {
+	return false
+}
+
 // FunctionParameterScalarNull is a wrapper of scalar null vector.
 type FunctionParameterScalarNull[T types.FixedSizeT] struct {
 	typ          types.Type
@@ -311,6 +333,10 @@ func (p *FunctionParameterScalarNull[T]) GetStrValue(_ uint64) ([]byte, bool) {
 
 func (p *FunctionParameterScalarNull[T]) UnSafeGetAllValue() []T {
 	return nil
+}
+
+func (p *FunctionParameterScalarNull[T]) WithAnyNullValue() bool {
+	return true
 }
 
 type FunctionResultWrapper interface {

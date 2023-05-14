@@ -17,6 +17,7 @@ package function2
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -277,41 +278,68 @@ func valueDec64Compare(
 
 	m := col2.GetType().Scale - col1.GetType().Scale
 
-	if params[0].IsConst() {
+	rsVec := result.GetResultVector()
+	rss := vector.MustFixedCol[bool](rsVec)
+
+	if params[0].IsConst() && params[1].IsConst() {
 		v1, null1 := col1.GetValue(0)
-		if null1 {
-			for i := uint64(0); i < length; i++ {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			}
+		v2, null2 := col2.GetValue(0)
+		if null1 || null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, length)
 		} else {
 			if m >= 0 {
 				x, _ := v1.Scale(m)
 				for i := uint64(0); i < length; i++ {
-					v2, null2 := col2.GetValue(i)
-					if null2 {
-						if err := result.Append(false, true); err != nil {
-							return err
+					rss[i] = cmpFn(x, v2)
+				}
+			} else {
+				y, _ := v2.Scale(-m)
+				for i := uint64(0); i < length; i++ {
+					rss[i] = cmpFn(v1, y)
+				}
+			}
+		}
+		return nil
+	}
+
+	if params[0].IsConst() {
+		v1, null1 := col1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, length)
+		} else {
+			if m >= 0 {
+				x, _ := v1.Scale(m)
+				if col2.WithAnyNullValue() {
+					rsVec.GetNulls().Or(params[1].GetNulls())
+					for i := uint64(0); i < length; i++ {
+						v2, null2 := col2.GetValue(i)
+						if null2 {
+							continue
 						}
-					} else {
-						if err := result.Append(cmpFn(x, v2), false); err != nil {
-							return err
-						}
+						rss[i] = cmpFn(x, v2)
+					}
+				} else {
+					for i := uint64(0); i < length; i++ {
+						v2, _ := col2.GetValue(i)
+						rss[i] = cmpFn(x, v2)
 					}
 				}
 			} else {
-				for i := uint64(0); i < length; i++ {
-					v2, null2 := col2.GetValue(i)
-					if null2 {
-						if err := result.Append(false, true); err != nil {
-							return err
+				if col2.WithAnyNullValue() {
+					rsVec.GetNulls().Or(params[1].GetNulls())
+					for i := uint64(0); i < length; i++ {
+						v2, null2 := col2.GetValue(i)
+						if null2 {
+							continue
 						}
-					} else {
 						y, _ := v2.Scale(-m)
-						if err := result.Append(cmpFn(v1, y), false); err != nil {
-							return err
-						}
+						rss[i] = cmpFn(v1, y)
+					}
+				} else {
+					for i := uint64(0); i < length; i++ {
+						v2, _ := col2.GetValue(i)
+						y, _ := v2.Scale(-m)
+						rss[i] = cmpFn(v1, y)
 					}
 				}
 			}
@@ -323,38 +351,41 @@ func valueDec64Compare(
 	if params[1].IsConst() {
 		v2, null2 := col2.GetValue(0)
 		if null2 {
-			for i := uint64(0); i < length; i++ {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			}
+			nulls.AddRange(rsVec.GetNulls(), 0, length)
 		} else {
 			if m >= 0 {
-				for i := uint64(0); i < length; i++ {
-					v1, null1 := col1.GetValue(i)
-					if null1 {
-						if err := result.Append(false, true); err != nil {
-							return err
+				if col1.WithAnyNullValue() {
+					rsVec.GetNulls().Or(params[1].GetNulls())
+					for i := uint64(0); i < length; i++ {
+						v1, null1 := col1.GetValue(i)
+						if null1 {
+							continue
 						}
-					} else {
 						x, _ := v1.Scale(m)
-						if err := result.Append(cmpFn(x, v2), false); err != nil {
-							return err
-						}
+						rss[i] = cmpFn(x, v1)
+					}
+				} else {
+					for i := uint64(0); i < length; i++ {
+						v1, _ := col1.GetValue(i)
+						x, _ := v1.Scale(m)
+						rss[i] = cmpFn(x, v2)
 					}
 				}
 			} else {
 				y, _ := v2.Scale(-m)
-				for i := uint64(0); i < length; i++ {
-					v1, null1 := col1.GetValue(i)
-					if null1 {
-						if err := result.Append(false, true); err != nil {
-							return err
+				if col1.WithAnyNullValue() {
+					rsVec.GetNulls().Or(params[1].GetNulls())
+					for i := uint64(0); i < length; i++ {
+						v1, null1 := col1.GetValue(i)
+						if null1 {
+							continue
 						}
-					} else {
-						if err := result.Append(cmpFn(v1, y), false); err != nil {
-							return err
-						}
+						rss[i] = cmpFn(v1, y)
+					}
+				} else {
+					for i := uint64(0); i < length; i++ {
+						v1, _ := col1.GetValue(i)
+						rss[i] = cmpFn(v1, y)
 					}
 				}
 			}
@@ -362,35 +393,46 @@ func valueDec64Compare(
 		return nil
 	}
 
+	if col1.WithAnyNullValue() || col1.WithAnyNullValue() {
+		nulls.Or(params[0].GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
+
+		if m >= 0 {
+			for i := uint64(0); i < length; i++ {
+				if rsVec.GetNulls().Contains(i) {
+					continue
+				}
+				v1, _ := col1.GetValue(i)
+				v2, _ := col2.GetValue(i)
+				x, _ := v1.Scale(m)
+				rss[i] = cmpFn(x, v2)
+			}
+		} else {
+			for i := uint64(0); i < length; i++ {
+				if rsVec.GetNulls().Contains(i) {
+					continue
+				}
+				v1, _ := col1.GetValue(i)
+				v2, _ := col2.GetValue(i)
+				y, _ := v2.Scale(-m)
+				rss[i] = cmpFn(v1, y)
+			}
+		}
+		return nil
+	}
+
 	if m >= 0 {
 		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(cmpFn(x, v2), false); err != nil {
-					return err
-				}
-			}
+			v1, _ := col1.GetValue(i)
+			v2, _ := col2.GetValue(i)
+			x, _ := v1.Scale(m)
+			rss[i] = cmpFn(x, v2)
 		}
 	} else {
 		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(cmpFn(v1, y), false); err != nil {
-					return err
-				}
-			}
+			v1, _ := col1.GetValue(i)
+			v2, _ := col2.GetValue(i)
+			y, _ := v2.Scale(-m)
+			rss[i] = cmpFn(v1, y)
 		}
 	}
 	return nil
@@ -404,41 +446,68 @@ func valueDec128Compare(
 
 	m := col2.GetType().Scale - col1.GetType().Scale
 
-	if params[0].IsConst() {
+	rsVec := result.GetResultVector()
+	rss := vector.MustFixedCol[bool](rsVec)
+
+	if params[0].IsConst() && params[1].IsConst() {
 		v1, null1 := col1.GetValue(0)
-		if null1 {
-			for i := uint64(0); i < length; i++ {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			}
+		v2, null2 := col2.GetValue(0)
+		if null1 || null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, length)
 		} else {
 			if m >= 0 {
 				x, _ := v1.Scale(m)
 				for i := uint64(0); i < length; i++ {
-					v2, null2 := col2.GetValue(i)
-					if null2 {
-						if err := result.Append(false, true); err != nil {
-							return err
+					rss[i] = cmpFn(x, v2)
+				}
+			} else {
+				y, _ := v2.Scale(-m)
+				for i := uint64(0); i < length; i++ {
+					rss[i] = cmpFn(v1, y)
+				}
+			}
+		}
+		return nil
+	}
+
+	if params[0].IsConst() {
+		v1, null1 := col1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, length)
+		} else {
+			if m >= 0 {
+				x, _ := v1.Scale(m)
+				if col2.WithAnyNullValue() {
+					rsVec.GetNulls().Or(params[1].GetNulls())
+					for i := uint64(0); i < length; i++ {
+						v2, null2 := col2.GetValue(i)
+						if null2 {
+							continue
 						}
-					} else {
-						if err := result.Append(cmpFn(x, v2), false); err != nil {
-							return err
-						}
+						rss[i] = cmpFn(x, v2)
+					}
+				} else {
+					for i := uint64(0); i < length; i++ {
+						v2, _ := col2.GetValue(i)
+						rss[i] = cmpFn(x, v2)
 					}
 				}
 			} else {
-				for i := uint64(0); i < length; i++ {
-					v2, null2 := col2.GetValue(i)
-					if null2 {
-						if err := result.Append(false, true); err != nil {
-							return err
+				if col2.WithAnyNullValue() {
+					rsVec.GetNulls().Or(params[1].GetNulls())
+					for i := uint64(0); i < length; i++ {
+						v2, null2 := col2.GetValue(i)
+						if null2 {
+							continue
 						}
-					} else {
 						y, _ := v2.Scale(-m)
-						if err := result.Append(cmpFn(v1, y), false); err != nil {
-							return err
-						}
+						rss[i] = cmpFn(v1, y)
+					}
+				} else {
+					for i := uint64(0); i < length; i++ {
+						v2, _ := col2.GetValue(i)
+						y, _ := v2.Scale(-m)
+						rss[i] = cmpFn(v1, y)
 					}
 				}
 			}
@@ -450,38 +519,41 @@ func valueDec128Compare(
 	if params[1].IsConst() {
 		v2, null2 := col2.GetValue(0)
 		if null2 {
-			for i := uint64(0); i < length; i++ {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			}
+			nulls.AddRange(rsVec.GetNulls(), 0, length)
 		} else {
 			if m >= 0 {
-				for i := uint64(0); i < length; i++ {
-					v1, null1 := col1.GetValue(i)
-					if null1 {
-						if err := result.Append(false, true); err != nil {
-							return err
+				if col1.WithAnyNullValue() {
+					rsVec.GetNulls().Or(params[1].GetNulls())
+					for i := uint64(0); i < length; i++ {
+						v1, null1 := col1.GetValue(i)
+						if null1 {
+							continue
 						}
-					} else {
 						x, _ := v1.Scale(m)
-						if err := result.Append(cmpFn(x, v2), false); err != nil {
-							return err
-						}
+						rss[i] = cmpFn(x, v1)
+					}
+				} else {
+					for i := uint64(0); i < length; i++ {
+						v1, _ := col1.GetValue(i)
+						x, _ := v1.Scale(m)
+						rss[i] = cmpFn(x, v2)
 					}
 				}
 			} else {
 				y, _ := v2.Scale(-m)
-				for i := uint64(0); i < length; i++ {
-					v1, null1 := col1.GetValue(i)
-					if null1 {
-						if err := result.Append(false, true); err != nil {
-							return err
+				if col1.WithAnyNullValue() {
+					rsVec.GetNulls().Or(params[1].GetNulls())
+					for i := uint64(0); i < length; i++ {
+						v1, null1 := col1.GetValue(i)
+						if null1 {
+							continue
 						}
-					} else {
-						if err := result.Append(cmpFn(v1, y), false); err != nil {
-							return err
-						}
+						rss[i] = cmpFn(v1, y)
+					}
+				} else {
+					for i := uint64(0); i < length; i++ {
+						v1, _ := col1.GetValue(i)
+						rss[i] = cmpFn(v1, y)
 					}
 				}
 			}
@@ -489,35 +561,46 @@ func valueDec128Compare(
 		return nil
 	}
 
+	if col1.WithAnyNullValue() || col1.WithAnyNullValue() {
+		nulls.Or(params[0].GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
+
+		if m >= 0 {
+			for i := uint64(0); i < length; i++ {
+				if rsVec.GetNulls().Contains(i) {
+					continue
+				}
+				v1, _ := col1.GetValue(i)
+				v2, _ := col2.GetValue(i)
+				x, _ := v1.Scale(m)
+				rss[i] = cmpFn(x, v2)
+			}
+		} else {
+			for i := uint64(0); i < length; i++ {
+				if rsVec.GetNulls().Contains(i) {
+					continue
+				}
+				v1, _ := col1.GetValue(i)
+				v2, _ := col2.GetValue(i)
+				y, _ := v2.Scale(-m)
+				rss[i] = cmpFn(v1, y)
+			}
+		}
+		return nil
+	}
+
 	if m >= 0 {
 		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(cmpFn(x, v2), false); err != nil {
-					return err
-				}
-			}
+			v1, _ := col1.GetValue(i)
+			v2, _ := col2.GetValue(i)
+			x, _ := v1.Scale(m)
+			rss[i] = cmpFn(x, v2)
 		}
 	} else {
 		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(cmpFn(v1, y), false); err != nil {
-					return err
-				}
-			}
+			v1, _ := col1.GetValue(i)
+			v2, _ := col2.GetValue(i)
+			y, _ := v2.Scale(-m)
+			rss[i] = cmpFn(v1, y)
 		}
 	}
 	return nil
