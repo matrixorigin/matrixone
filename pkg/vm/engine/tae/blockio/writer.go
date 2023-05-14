@@ -129,7 +129,7 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 	if w.objMetaBuilder != nil {
 		cnt, meta := w.objMetaBuilder.Build()
 		w.writer.WriteObjectMeta(ctx, cnt, meta)
-		columnsData := w.objMetaBuilder.GetColumnsData()
+		columnsData := w.objMetaBuilder.GetPKData()
 		bf, err := index.NewBinaryFuseFilterByVectors(columnsData)
 		if err != nil {
 			return nil, nil, err
