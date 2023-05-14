@@ -85,7 +85,7 @@ type Block interface {
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
 
-	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap, precommit bool) error
+	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap, precommit bool, zm []byte) error
 	//TODO::
 	//BatchDedupByMetaLoc(txn txnif.AsyncTxn, fs *objectio.ObjectFS,
 	//	metaLoc objectio.Location, rowmask *roaring.Bitmap, precommit bool) error
