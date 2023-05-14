@@ -54,7 +54,7 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 			rsVec := rs.GetResultVector()
 			rss := vector.MustFixedCol[T2](rsVec)
 
-			c1, c2 := parameters[0].IsConst(), parameters[0].IsConst()
+			c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 			if c1 && c2 {
 				v1, null1 := p1.GetValue(0)
 				v2, null2 := p2.GetValue(0)
@@ -76,7 +76,7 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 					nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 				} else {
 					if p2.WithAnyNullValue() {
-						rsVec.GetNulls().Or(parameters[1].GetNulls())
+						nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 						for i := uint64(0); i < uint64(length); i++ {
 							v2, null2 := p2.GetValue(i)
 							if null2 {
@@ -101,9 +101,9 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 					nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 				} else {
 					if p1.WithAnyNullValue() {
-						rsVec.GetNulls().Or(parameters[0].GetNulls())
+						nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
 						for i := uint64(0); i < uint64(length); i++ {
-							v1, null1 := p2.GetValue(i)
+							v1, null1 := p1.GetValue(i)
 							if null1 {
 								continue
 							}
@@ -144,7 +144,7 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 			rsVec := rs.GetResultVector()
 			rss := vector.MustFixedCol[T2](rsVec)
 
-			c1, c2 := parameters[0].IsConst(), parameters[0].IsConst()
+			c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 
 			if c1 && c2 {
 				v1, null1 := p1.GetValue(0)
@@ -161,7 +161,7 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 						}
 					}
 				} else if null2 {
-					v, rnull := fNullValue(v1)
+					v, rnull := fValueNull(v1)
 					if rnull {
 						nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 					} else {
@@ -183,7 +183,7 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 				v1, null1 := p1.GetValue(0)
 				if !null1 {
 					if p2.WithAnyNullValue() {
-						rsVec.GetNulls().Or(parameters[1].GetNulls())
+						nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 						for i := uint64(0); i < uint64(length); i++ {
 							v2, null2 := p2.GetValue(i)
 							if null2 {
@@ -202,17 +202,25 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 							rss[i], _ = fValueValue(v1, v2)
 						}
 					}
-					return nil
-
 				} else {
 					if p2.WithAnyNullValue() {
-						rsVec.GetNulls().Or(parameters[1].GetNulls())
-					}
-					for i := uint64(0); i < uint64(length); i++ {
-						v2, null2 := p2.GetValue(i)
-						if null2 {
-							continue
-						} else {
+						nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+						for i := uint64(0); i < uint64(length); i++ {
+							v2, null2 := p2.GetValue(i)
+							if null2 {
+								continue
+							} else {
+								r, ifnull := fNullValue(v2)
+								if ifnull {
+									rsVec.GetNulls().Np.Add(i)
+								} else {
+									rss[i] = r
+								}
+							}
+						}
+					} else {
+						for i := uint64(0); i < uint64(length); i++ {
+							v2, _ := p2.GetValue(i)
 							r, ifnull := fNullValue(v2)
 							if ifnull {
 								rsVec.GetNulls().Np.Add(i)
@@ -229,9 +237,9 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 				v2, null2 := p2.GetValue(0)
 				if !null2 {
 					if p1.WithAnyNullValue() {
-						rsVec.GetNulls().Or(parameters[0].GetNulls())
+						nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
 						for i := uint64(0); i < uint64(length); i++ {
-							v1, null1 := p2.GetValue(i)
+							v1, null1 := p1.GetValue(i)
 							if null1 {
 								r, ifnull := fNullValue(v2)
 								if !ifnull {
@@ -252,13 +260,23 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 
 				} else {
 					if p1.WithAnyNullValue() {
-						rsVec.GetNulls().Or(parameters[0].GetNulls())
-					}
-					for i := uint64(0); i < uint64(length); i++ {
-						v1, null1 := p1.GetValue(i)
-						if null1 {
-							continue
-						} else {
+						nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+						for i := uint64(0); i < uint64(length); i++ {
+							v1, null1 := p1.GetValue(i)
+							if null1 {
+								continue
+							} else {
+								r, ifnull := fValueNull(v1)
+								if ifnull {
+									rsVec.GetNulls().Np.Add(i)
+								} else {
+									rss[i] = r
+								}
+							}
+						}
+					} else {
+						for i := uint64(0); i < uint64(length); i++ {
+							v1, _ := p1.GetValue(i)
 							r, ifnull := fValueNull(v1)
 							if ifnull {
 								rsVec.GetNulls().Np.Add(i)
@@ -298,9 +316,6 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 			}
 
 			for i := uint64(0); i < uint64(length); i++ {
-				if rsVec.GetNulls().Contains(i) {
-					continue
-				}
 				v1, _ := p1.GetValue(i)
 				v2, _ := p2.GetValue(i)
 				rss[i], _ = fValueValue(v1, v2)
@@ -326,7 +341,7 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 
 	scale1 := p1.GetType().Scale
 	scale2 := p2.GetType().Scale
-	c1, c2 := parameters[0].IsConst(), parameters[0].IsConst()
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -351,7 +366,7 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() {
-				rsVec.GetNulls().Or(parameters[1].GetNulls())
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 				for i := uint64(0); i < uint64(length); i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
@@ -383,9 +398,9 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() {
-				rsVec.GetNulls().Or(parameters[0].GetNulls())
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
 				for i := uint64(0); i < uint64(length); i++ {
-					v1, null1 := p2.GetValue(i)
+					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
 					}
@@ -437,7 +452,7 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 
 	scale1 := p1.GetType().Scale
 	scale2 := p2.GetType().Scale
-	c1, c2 := parameters[0].IsConst(), parameters[0].IsConst()
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -462,7 +477,7 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() {
-				rsVec.GetNulls().Or(parameters[1].GetNulls())
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 				for i := uint64(0); i < uint64(length); i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
@@ -494,9 +509,9 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() {
-				rsVec.GetNulls().Or(parameters[0].GetNulls())
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
 				for i := uint64(0); i < uint64(length); i++ {
-					v1, null1 := p2.GetValue(i)
+					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
 					}
@@ -547,7 +562,7 @@ func optimizedTypeArith1[
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedCol[T2](rsVec)
 
-	c1, c2 := parameters[0].IsConst(), parameters[0].IsConst()
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	if c1 && c2 {
 		v1, null1 := p1.GetValue(0)
 		v2, null2 := p2.GetValue(0)
@@ -569,7 +584,7 @@ func optimizedTypeArith1[
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			if p2.WithAnyNullValue() {
-				rsVec.GetNulls().Or(parameters[1].GetNulls())
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 				for i := uint64(0); i < uint64(length); i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
@@ -593,9 +608,9 @@ func optimizedTypeArith1[
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
 			if p1.WithAnyNullValue() {
-				rsVec.GetNulls().Or(parameters[0].GetNulls())
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
 				for i := uint64(0); i < uint64(length); i++ {
-					v1, null1 := p2.GetValue(i)
+					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
 					}

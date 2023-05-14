@@ -101,43 +101,43 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return optimizedTypeArith1[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+		return optimizedTypeArith1[uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 + v2
 		})
 	case types.T_uint16:
-		return optimizedTypeArith1[uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+		return optimizedTypeArith1[uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
 			return v1 + v2
 		})
 	case types.T_uint32:
-		return optimizedTypeArith1[uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+		return optimizedTypeArith1[uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
 			return v1 + v2
 		})
 	case types.T_uint64:
-		return optimizedTypeArith1[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+		return optimizedTypeArith1[uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
 			return v1 + v2
 		})
 	case types.T_int8:
-		return optimizedTypeArith1[int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+		return optimizedTypeArith1[int8, int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
 			return v1 + v2
 		})
 	case types.T_int16:
-		return optimizedTypeArith1[int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+		return optimizedTypeArith1[int16, int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
 			return v1 + v2
 		})
 	case types.T_int32:
-		return optimizedTypeArith1[int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+		return optimizedTypeArith1[int32, int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
 			return v1 + v2
 		})
 	case types.T_int64:
-		return optimizedTypeArith1[int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+		return optimizedTypeArith1[int64, int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
 			return v1 + v2
 		})
 	case types.T_float32:
-		return optimizedTypeArith1[float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+		return optimizedTypeArith1[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
 			return v1 + v2
 		})
 	case types.T_float64:
-		return optimizedTypeArith1[float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+		return optimizedTypeArith1[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
 			return v1 + v2
 		})
 	case types.T_decimal64:
@@ -158,43 +158,43 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return optimizedTypeArith1[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+		return optimizedTypeArith1[uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 - v2
 		})
 	case types.T_uint16:
-		return optimizedTypeArith1[uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+		return optimizedTypeArith1[uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
 			return v1 - v2
 		})
 	case types.T_uint32:
-		return optimizedTypeArith1[uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+		return optimizedTypeArith1[uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
 			return v1 - v2
 		})
 	case types.T_uint64:
-		return optimizedTypeArith1[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+		return optimizedTypeArith1[uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
 			return v1 - v2
 		})
 	case types.T_int8:
-		return optimizedTypeArith1[int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+		return optimizedTypeArith1[int8, int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
 			return v1 - v2
 		})
 	case types.T_int16:
-		return optimizedTypeArith1[int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+		return optimizedTypeArith1[int16, int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
 			return v1 - v2
 		})
 	case types.T_int32:
-		return optimizedTypeArith1[int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+		return optimizedTypeArith1[int32, int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
 			return v1 - v2
 		})
 	case types.T_int64:
-		return optimizedTypeArith1[int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+		return optimizedTypeArith1[int64, int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
 			return v1 - v2
 		})
 	case types.T_float32:
-		return optimizedTypeArith1[float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+		return optimizedTypeArith1[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
 			return v1 - v2
 		})
 	case types.T_float64:
-		return optimizedTypeArith1[float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+		return optimizedTypeArith1[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
 			return v1 - v2
 		})
 	case types.T_decimal64:
@@ -223,43 +223,43 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return optimizedTypeArith1[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+		return optimizedTypeArith1[uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 * v2
 		})
 	case types.T_uint16:
-		return optimizedTypeArith1[uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+		return optimizedTypeArith1[uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
 			return v1 * v2
 		})
 	case types.T_uint32:
-		return optimizedTypeArith1[uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+		return optimizedTypeArith1[uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
 			return v1 * v2
 		})
 	case types.T_uint64:
-		return optimizedTypeArith1[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+		return optimizedTypeArith1[uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
 			return v1 * v2
 		})
 	case types.T_int8:
-		return optimizedTypeArith1[int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+		return optimizedTypeArith1[int8, int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
 			return v1 * v2
 		})
 	case types.T_int16:
-		return optimizedTypeArith1[int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+		return optimizedTypeArith1[int16, int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
 			return v1 * v2
 		})
 	case types.T_int32:
-		return optimizedTypeArith1[int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+		return optimizedTypeArith1[int32, int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
 			return v1 * v2
 		})
 	case types.T_int64:
-		return optimizedTypeArith1[int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+		return optimizedTypeArith1[int64, int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
 			return v1 * v2
 		})
 	case types.T_float32:
-		return optimizedTypeArith1[float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+		return optimizedTypeArith1[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
 			return v1 * v2
 		})
 	case types.T_float64:
-		return optimizedTypeArith1[float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+		return optimizedTypeArith1[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
 			return v1 * v2
 		})
 	case types.T_decimal64:

@@ -47,11 +47,12 @@ func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *
 	if !p1.WithAnyNullValue() {
 		rss := vector.MustFixedCol[bool](rs.GetResultVector())
 		for i := uint64(0); i < uint64(length); i++ {
-			rss[i], _ = p1.GetValue(i)
+			v, _ := p1.GetValue(i)
+			rss[i] = !v
 		}
 		return nil
 	}
-	
+
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		if err := rs.Append(!v1, null1); err != nil {

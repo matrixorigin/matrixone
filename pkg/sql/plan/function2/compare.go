@@ -310,7 +310,7 @@ func valueDec64Compare(
 			if m >= 0 {
 				x, _ := v1.Scale(m)
 				if col2.WithAnyNullValue() {
-					rsVec.GetNulls().Or(params[1].GetNulls())
+					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
 						v2, null2 := col2.GetValue(i)
 						if null2 {
@@ -326,7 +326,7 @@ func valueDec64Compare(
 				}
 			} else {
 				if col2.WithAnyNullValue() {
-					rsVec.GetNulls().Or(params[1].GetNulls())
+					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
 						v2, null2 := col2.GetValue(i)
 						if null2 {
@@ -355,14 +355,14 @@ func valueDec64Compare(
 		} else {
 			if m >= 0 {
 				if col1.WithAnyNullValue() {
-					rsVec.GetNulls().Or(params[1].GetNulls())
+					nulls.Or(rsVec.GetNulls(), params[0].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
 						v1, null1 := col1.GetValue(i)
 						if null1 {
 							continue
 						}
 						x, _ := v1.Scale(m)
-						rss[i] = cmpFn(x, v1)
+						rss[i] = cmpFn(x, v2)
 					}
 				} else {
 					for i := uint64(0); i < length; i++ {
@@ -374,7 +374,7 @@ func valueDec64Compare(
 			} else {
 				y, _ := v2.Scale(-m)
 				if col1.WithAnyNullValue() {
-					rsVec.GetNulls().Or(params[1].GetNulls())
+					nulls.Or(rsVec.GetNulls(), params[0].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
 						v1, null1 := col1.GetValue(i)
 						if null1 {
@@ -478,7 +478,7 @@ func valueDec128Compare(
 			if m >= 0 {
 				x, _ := v1.Scale(m)
 				if col2.WithAnyNullValue() {
-					rsVec.GetNulls().Or(params[1].GetNulls())
+					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
 						v2, null2 := col2.GetValue(i)
 						if null2 {
@@ -494,7 +494,7 @@ func valueDec128Compare(
 				}
 			} else {
 				if col2.WithAnyNullValue() {
-					rsVec.GetNulls().Or(params[1].GetNulls())
+					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
 						v2, null2 := col2.GetValue(i)
 						if null2 {
@@ -523,7 +523,7 @@ func valueDec128Compare(
 		} else {
 			if m >= 0 {
 				if col1.WithAnyNullValue() {
-					rsVec.GetNulls().Or(params[1].GetNulls())
+					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
 						v1, null1 := col1.GetValue(i)
 						if null1 {
@@ -542,7 +542,7 @@ func valueDec128Compare(
 			} else {
 				y, _ := v2.Scale(-m)
 				if col1.WithAnyNullValue() {
-					rsVec.GetNulls().Or(params[1].GetNulls())
+					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
 						v1, null1 := col1.GetValue(i)
 						if null1 {
