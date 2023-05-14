@@ -102,6 +102,7 @@ type txnTable struct {
 	logs         []wal.LogEntry
 
 	dedupedSegmentHint uint64
+	dedupedBlockID     *types.Blockid
 
 	txnEntries *txnEntries
 	csnStart   uint32
@@ -895,6 +896,16 @@ func (tbl *txnTable) updateDedupedSegmentHint(hint uint64) {
 	}
 }
 
+func (tbl *txnTable) updateDedupedBlockID(id *types.Blockid) {
+	if tbl.dedupedBlockID == nil {
+		tbl.dedupedBlockID = id
+		return
+	}
+	if tbl.dedupedBlockID.Compare(*id) > 0 {
+		tbl.dedupedBlockID = id
+	}
+}
+
 // DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
@@ -902,6 +913,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	h := newRelation(tbl)
 	it := newRelationBlockItOnSnap(h)
 	maxSegmentHint := uint64(0)
+	maxBlockID := &types.Blockid{}
 	for it.Valid() {
 		blkH := it.GetBlock()
 		blk := blkH.GetMeta().(*catalog.BlockEntry)
@@ -909,6 +921,9 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 		segmentHint := blk.GetSegment().SortHint
 		if segmentHint > maxSegmentHint {
 			maxSegmentHint = segmentHint
+		}
+		if blk.ID.Compare(*maxBlockID) > 0 {
+			maxBlockID = &blk.ID
 		}
 		blkData := blk.GetBlockData()
 		if blkData == nil {
@@ -930,6 +945,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 		it.Next()
 	}
 	tbl.updateDedupedSegmentHint(maxSegmentHint)
+	tbl.updateDedupedBlockID(maxBlockID)
 	return
 }
 
@@ -1030,6 +1046,11 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 			blkIt := seg.MakeBlockIt(false)
 			for blkIt.Valid() {
 				blk := blkIt.Get().GetPayload()
+				if seg.SortHint == tbl.dedupedSegmentHint {
+					if blk.ID.Compare(*tbl.dedupedBlockID) < 0 {
+						break
+					}
+				}
 				{
 					blk.RLock()
 					shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
