@@ -84,9 +84,9 @@ const (
 	ColumnStatus      = "status"       // column in table mo_catalog.mo_account
 )
 
-var gUpdateStorageUsageInterval = defaultUpdateInterval()
+var gUpdateStorageUsageInterval = defaultInterval()
 
-func defaultUpdateInterval() *atomic.Int64 {
+func defaultInterval() *atomic.Int64 {
 	v := new(atomic.Int64)
 	v.Store(int64(time.Minute))
 	return v
@@ -177,6 +177,16 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	}
 }
 
+var gCheckNewInterval = defaultInterval()
+
+func SetStorageUsageCheckNewInterval(interval time.Duration) {
+	gCheckNewInterval.Store(int64(interval))
+}
+
+func GetStorageUsageCheckNewInterval() time.Duration {
+	return time.Duration(gCheckNewInterval.Load())
+}
+
 func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor func() ie.InternalExecutor) {
 	var err error
 	ctx, span := trace.Start(ctx, "CheckNewAccountSize")
@@ -188,7 +198,7 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	opts := ie.NewOptsBuilder().Finish()
 
 	var now time.Time
-	var interval = time.Minute
+	var interval = GetStorageUsageCheckNewInterval()
 	var next = time.NewTicker(interval)
 	var lastCheckTime = time.Now().Add(-time.Second)
 	for {
@@ -266,7 +276,7 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 		}
 
 		// reset next Round
-		next.Reset(interval)
+		next.Reset(GetStorageUsageCheckNewInterval())
 		logger.Info("wait next round, check new account")
 	}
 
