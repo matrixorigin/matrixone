@@ -55,16 +55,13 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 
-	executor, err := colexec.NewExpressionExecutor(builder.compCtx.GetProcess(), exprs[0])
-	if err != nil {
-		return 0, err
-	}
-	vec, err := executor.Eval(builder.compCtx.GetProcess(), []*batch.Batch{bat})
+	vec, err := colexec.EvalExpressionOnce(builder.compCtx.GetProcess(), exprs[0], []*batch.Batch{bat})
 	if err != nil {
 		return 0, err
 	}
 	uuid := vector.MustFixedCol[types.Uuid](vec)[0]
-	executor.Free()
+	vec.Free(builder.compCtx.GetProcess().GetMPool())
+
 	// get cols
 	cols, path, err := builder.compCtx.GetQueryResultMeta(uuid.ToString())
 	if err != nil {

@@ -127,16 +127,12 @@ func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindCon
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 
-	executor, err := colexec.NewExpressionExecutor(builder.compCtx.GetProcess(), exprs[0])
-	if err != nil {
-		return 0, err
-	}
-	vec, err := executor.Eval(builder.compCtx.GetProcess(), []*batch.Batch{bat})
+	vec, err := colexec.EvalExpressionOnce(builder.compCtx.GetProcess(), exprs[0], []*batch.Batch{bat})
 	if err != nil {
 		return 0, err
 	}
 	uuid := vector.MustFixedCol[types.Uuid](vec)[0]
-	executor.Free()
+	vec.Free(builder.compCtx.GetProcess().GetMPool())
 
 	node := &plan.Node{
 		NodeType: plan.Node_FUNCTION_SCAN,

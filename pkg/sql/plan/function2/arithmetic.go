@@ -70,19 +70,6 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
-func divOperatorSupports(typ1, typ2 types.Type) bool {
-	if typ1.Oid != typ2.Oid {
-		return false
-	}
-	switch typ1.Oid {
-	case types.T_float32, types.T_float64:
-	case types.T_decimal64, types.T_decimal128:
-	default:
-		return false
-	}
-	return true
-}
-
 func integerDivOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
 		return false
@@ -114,344 +101,180 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return numericPlus[uint8](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+			return v1 + v2
+		})
 	case types.T_uint16:
-		return numericPlus[uint16](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+			return v1 + v2
+		})
 	case types.T_uint32:
-		return numericPlus[uint32](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+			return v1 + v2
+		})
 	case types.T_uint64:
-		return numericPlus[uint64](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 + v2
+		})
 	case types.T_int8:
-		return numericPlus[int8](parameters, result, uint64(length))
+		return optimizedTypeArith1[int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+			return v1 + v2
+		})
 	case types.T_int16:
-		return numericPlus[int16](parameters, result, uint64(length))
+		return optimizedTypeArith1[int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+			return v1 + v2
+		})
 	case types.T_int32:
-		return numericPlus[int32](parameters, result, uint64(length))
+		return optimizedTypeArith1[int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+			return v1 + v2
+		})
 	case types.T_int64:
-		return numericPlus[int64](parameters, result, uint64(length))
+		return optimizedTypeArith1[int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+			return v1 + v2
+		})
 	case types.T_float32:
-		return numericPlus[float32](parameters, result, uint64(length))
+		return optimizedTypeArith1[float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+			return v1 + v2
+		})
 	case types.T_float64:
-		return numericPlus[float64](parameters, result, uint64(length))
+		return optimizedTypeArith1[float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+			return v1 + v2
+		})
 	case types.T_decimal64:
-		return decimal64Plus(parameters, result, uint64(length))
+		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
+			r, _, err := v1.Add(v2, scale1, scale2)
+			return r, err
+		})
 	case types.T_decimal128:
-		return decimal128Plus(parameters, result, uint64(length))
+		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
+			r, _, err := v1.Add(v2, scale1, scale2)
+			return r, err
+		})
 	}
 	panic("unreached code")
-}
-
-func numericPlus[T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	rs := vector.MustFunctionResult[T](result)
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v1+v2, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func decimal64Plus(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[1])
-	rs := vector.MustFunctionResult[types.Decimal64](result)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			rt, _, err := v1.Add(v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(rt, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func decimal128Plus(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	emptyDec128 := types.Decimal128{}
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(emptyDec128, true); err != nil {
-				return err
-			}
-		} else {
-			rt, _, err := v1.Add(v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(rt, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return numericMinus[uint8](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+			return v1 - v2
+		})
 	case types.T_uint16:
-		return numericMinus[uint16](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+			return v1 - v2
+		})
 	case types.T_uint32:
-		return numericMinus[uint32](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+			return v1 - v2
+		})
 	case types.T_uint64:
-		return numericMinus[uint64](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 - v2
+		})
 	case types.T_int8:
-		return numericMinus[int8](parameters, result, uint64(length))
+		return optimizedTypeArith1[int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+			return v1 - v2
+		})
 	case types.T_int16:
-		return numericMinus[int16](parameters, result, uint64(length))
+		return optimizedTypeArith1[int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+			return v1 - v2
+		})
 	case types.T_int32:
-		return numericMinus[int32](parameters, result, uint64(length))
+		return optimizedTypeArith1[int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+			return v1 - v2
+		})
 	case types.T_int64:
-		return numericMinus[int64](parameters, result, uint64(length))
+		return optimizedTypeArith1[int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+			return v1 - v2
+		})
 	case types.T_float32:
-		return numericMinus[float32](parameters, result, uint64(length))
+		return optimizedTypeArith1[float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+			return v1 - v2
+		})
 	case types.T_float64:
-		return numericMinus[float64](parameters, result, uint64(length))
+		return optimizedTypeArith1[float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+			return v1 - v2
+		})
 	case types.T_decimal64:
-		return decimal64Minus(parameters, result, uint64(length))
+		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
+			r, _, err := v1.Sub(v2, scale1, scale2)
+			return r, err
+		})
 	case types.T_decimal128:
-		return decimal128Minus(parameters, result, uint64(length))
+		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
+			r, _, err := v1.Sub(v2, scale1, scale2)
+			return r, err
+		})
 	case types.T_date:
-		return builtInDateDiff(parameters, result, proc, length)
+		return optimizedTypeArith1[types.Date, int64](parameters, result, proc, length, func(v1, v2 types.Date) int64 {
+			return int64(v1 - v2)
+		})
 	case types.T_datetime:
-		return datetimeMinus(parameters, result, uint64(length))
+		return optimizedTypeArith1[types.Datetime, int64](parameters, result, proc, length, func(v1, v2 types.Datetime) int64 {
+			return v1.DatetimeMinusWithSecond(v2)
+		})
 	}
 	panic("unreached code")
-}
-
-func decimal64Minus(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[1])
-	rs := vector.MustFunctionResult[types.Decimal64](result)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			rt, _, err := v1.Sub(v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(rt, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func decimal128Minus(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	emptyDec128 := types.Decimal128{}
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(emptyDec128, true); err != nil {
-				return err
-			}
-		} else {
-			rt, _, err := v1.Sub(v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(rt, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func datetimeMinus(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[1])
-	rs := vector.MustFunctionResult[int64](result)
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v1.DatetimeMinusWithSecond(v2), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func numericMinus[T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	rs := vector.MustFunctionResult[T](result)
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v1-v2, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return numericMulti[uint8](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+			return v1 * v2
+		})
 	case types.T_uint16:
-		return numericMulti[uint16](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+			return v1 * v2
+		})
 	case types.T_uint32:
-		return numericMulti[uint32](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+			return v1 * v2
+		})
 	case types.T_uint64:
-		return numericMulti[uint64](parameters, result, uint64(length))
+		return optimizedTypeArith1[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 * v2
+		})
 	case types.T_int8:
-		return numericMulti[int8](parameters, result, uint64(length))
+		return optimizedTypeArith1[int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+			return v1 * v2
+		})
 	case types.T_int16:
-		return numericMulti[int16](parameters, result, uint64(length))
+		return optimizedTypeArith1[int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+			return v1 * v2
+		})
 	case types.T_int32:
-		return numericMulti[int32](parameters, result, uint64(length))
+		return optimizedTypeArith1[int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+			return v1 * v2
+		})
 	case types.T_int64:
-		return numericMulti[int64](parameters, result, uint64(length))
+		return optimizedTypeArith1[int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+			return v1 * v2
+		})
 	case types.T_float32:
-		return numericMulti[float32](parameters, result, uint64(length))
+		return optimizedTypeArith1[float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+			return v1 * v2
+		})
 	case types.T_float64:
-		return numericMulti[float64](parameters, result, uint64(length))
+		return optimizedTypeArith1[float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+			return v1 * v2
+		})
 	case types.T_decimal64:
-		return decimal64Multi(parameters, result, uint64(length))
-	case types.T_decimal128:
-		return decimal128Multi(parameters, result, uint64(length))
-	}
-	panic("unreached code")
-}
-
-func numericMulti[T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	rs := vector.MustFunctionResult[T](result)
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v1*v2, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func decimal64Multi(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[1])
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	emptyDec128 := types.Decimal128{}
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(emptyDec128, true); err != nil {
-				return err
-			}
-		} else {
+		return decimalArith2(parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal128, error) {
 			x, y := function2Util.ConvertD64ToD128(v1), function2Util.ConvertD64ToD128(v2)
 			rt, _, err := x.Mul(y, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(rt, false); err != nil {
-				return err
-			}
-		}
+			return rt, err
+		})
+	case types.T_decimal128:
+		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
+			r, _, err := v1.Mul(v2, scale1, scale2)
+			return r, err
+		})
 	}
-	return nil
-}
-
-func decimal128Multi(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	emptyDec128 := types.Decimal128{}
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(emptyDec128, true); err != nil {
-				return err
-			}
-		} else {
-			rt, _, err := v1.Mul(v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(rt, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	panic("unreached code")
 }
 
 func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
@@ -462,74 +285,18 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	case types.T_float64:
 		return floatDiv[float64](parameters, result, uint64(length))
 	case types.T_decimal64:
-		return decimal64Div(parameters, result, uint64(length))
-	case types.T_decimal128:
-		return decimal128Div(parameters, result, uint64(length))
-	}
-	panic("unreached code")
-}
-
-func decimal64Div(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[1])
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	emptyDec128 := types.Decimal128{}
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(emptyDec128, true); err != nil {
-				return err
-			}
-		} else {
-			if v2 == 0 {
-				return moerr.NewDivByZeroNoCtx()
-			}
+		return decimalArith2(parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal128, error) {
 			x, y := function2Util.ConvertD64ToD128(v1), function2Util.ConvertD64ToD128(v2)
 			rt, _, err := x.Div(y, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(rt, false); err != nil {
-				return err
-			}
-		}
+			return rt, err
+		})
+	case types.T_decimal128:
+		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
+			r, _, err := v1.Div(v2, scale1, scale2)
+			return r, err
+		})
 	}
-	return nil
-}
-
-func decimal128Div(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-
-	scale1 := p1.GetType().Scale
-	scale2 := p2.GetType().Scale
-	emptyDec128 := types.Decimal128{}
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(emptyDec128, true); err != nil {
-				return err
-			}
-		} else {
-			if v2.B0_63 == 0 && v2.B64_127 == 0 {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			rt, _, err := v1.Div(v2, scale1, scale2)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(rt, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	panic("unreached code")
 }
 
 func floatDiv[T float32 | float64](parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
@@ -591,7 +358,7 @@ func floatIntegerDiv[T float32 | float64](parameters []*vector.Vector, result ve
 	return nil
 }
 
-func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
@@ -615,9 +382,15 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *
 	case types.T_float64:
 		return floatMod[float64](parameters, result, uint64(length))
 	case types.T_decimal64:
-		return decimal64Mod(parameters, result, uint64(length))
+		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
+			r, _, err := v1.Mod(v2, scale1, scale2)
+			return r, err
+		})
 	case types.T_decimal128:
-		return decimal128Mod(parameters, result, uint64(length))
+		return decimalArith[types.Decimal128](parameters, result, proc, length, func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
+			r, _, err := v1.Mod(v2, scale1, scale2)
+			return r, err
+		})
 	}
 	panic("unreached code")
 }
@@ -668,54 +441,6 @@ func floatMod[T constraints.Float](parameters []*vector.Vector, result vector.Fu
 				if err := rs.Append(T(math.Mod(float64(v1), float64(v2))), false); err != nil {
 					return err
 				}
-			}
-		}
-	}
-	return nil
-}
-
-func decimal64Mod(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[1])
-	rs := vector.MustFunctionResult[types.Decimal64](result)
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(v1, true); err != nil {
-				return err
-			}
-		} else {
-			r, _, err := v1.Mod(v2, p1.GetType().Scale, p2.GetType().Scale)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(r, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func decimal128Mod(parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
-	rs := vector.MustFunctionResult[types.Decimal128](result)
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(v1, true); err != nil {
-				return err
-			}
-		} else {
-			r, _, err := v1.Mod(v2, p1.GetType().Scale, p2.GetType().Scale)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(r, false); err != nil {
-				return err
 			}
 		}
 	}
