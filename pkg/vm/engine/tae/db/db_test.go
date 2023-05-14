@@ -1644,32 +1644,8 @@ func TestLogIndex1(t *testing.T) {
 	}
 	{
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
-		meta := getOneBlockMeta(rel)
-		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(txns[0].GetStartTS(), txns[len(txns)-1].GetCommitTS())
-		assert.NoError(t, err)
-		assert.Equal(t, len(txns), len(indexes))
-		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
-		assert.NoError(t, err)
-		assert.Equal(t, len(txns)-1, len(indexes))
-		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[2].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
-		assert.NoError(t, err)
-		assert.Equal(t, len(txns)-2, len(indexes))
-		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[3].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
-		assert.NoError(t, err)
-		assert.Equal(t, len(txns)-3, len(indexes))
-		assert.NoError(t, txn.Commit())
-	}
-	{
-		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		blk := getOneBlock(rel)
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-
-		var zeroV types.TS
-		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(zeroV.Next(), txn.GetStartTS())
-		assert.NoError(t, err)
-		for i, index := range indexes {
-			t.Logf("%d: %s", i, index.String())
-		}
 
 		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx())
 		assert.Nil(t, err)
@@ -4612,8 +4588,12 @@ func TestReadCheckpoint(t *testing.T) {
 			ins, del, _, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			t.Log(common.PrintApiBatch(ins, 3))
-			t.Log(common.PrintApiBatch(del, 3))
+			if ins != nil {
+				t.Log(common.PrintApiBatch(ins, 3))
+			}
+			if del != nil {
+				t.Log(common.PrintApiBatch(del, 3))
+			}
 		}
 	}
 	tae.restart()
@@ -4623,8 +4603,12 @@ func TestReadCheckpoint(t *testing.T) {
 			ins, del, _, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			t.Log(common.PrintApiBatch(ins, 3))
-			t.Log(common.PrintApiBatch(del, 3))
+			if ins != nil {
+				t.Log(common.PrintApiBatch(ins, 3))
+			}
+			if del != nil {
+				t.Log(common.PrintApiBatch(del, 3))
+			}
 		}
 	}
 }

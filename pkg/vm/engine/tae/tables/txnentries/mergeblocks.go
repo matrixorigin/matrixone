@@ -228,6 +228,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 		if err != nil {
 			return err
 		}
+		defer seg.Close()
 		blk, err := seg.GetBlock(id.BlockID)
 		if err != nil {
 			return err

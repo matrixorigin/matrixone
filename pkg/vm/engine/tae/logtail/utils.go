@@ -348,34 +348,22 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *a
 	}
 
 	insInterval := meta.blkInsertOffset
-	if insInterval != nil {
+	if insInterval != nil && insInterval.End-insInterval.Start > 0 {
 		insOffset := insInterval.Start
 		insLength := insInterval.End - insInterval.Start
 		insTaeBat = data.bats[BLKMetaInsertIDX].Window(int(insOffset), int(insLength))
-	}
-
-	delInterval := meta.blkDeleteOffset
-	if delInterval != nil {
-		delOffset := delInterval.Start
-		delLength := delInterval.End - delInterval.Start
-		delTaeBat = data.bats[BLKMetaDeleteIDX].Window(int(delOffset), int(delLength))
-		cnInsTaeBat = data.bats[BLKCNMetaInsertIDX].Window(int(delOffset), int(delLength))
-	}
-
-	segDelInterval := meta.segDeleteOffset
-	if segDelInterval != nil {
-		segDelOffset := segDelInterval.Start
-		segDelLength := segDelInterval.End - segDelInterval.Start
-		segDelTaeBat = data.bats[SEGDeleteIDX].Window(int(segDelOffset), int(segDelLength))
-	}
-
-	if insTaeBat != nil {
 		ins, err = containersBatchToProtoBatch(insTaeBat)
 		if err != nil {
 			return
 		}
 	}
-	if delTaeBat != nil {
+
+	delInterval := meta.blkDeleteOffset
+	if delInterval != nil && delInterval.End-delInterval.Start > 0 {
+		delOffset := delInterval.Start
+		delLength := delInterval.End - delInterval.Start
+		delTaeBat = data.bats[BLKMetaDeleteIDX].Window(int(delOffset), int(delLength))
+		cnInsTaeBat = data.bats[BLKCNMetaInsertIDX].Window(int(delOffset), int(delLength))
 		del, err = containersBatchToProtoBatch(delTaeBat)
 		if err != nil {
 			return
@@ -385,7 +373,12 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *a
 			return
 		}
 	}
-	if segDelTaeBat != nil {
+
+	segDelInterval := meta.segDeleteOffset
+	if segDelInterval != nil && segDelInterval.End-segDelInterval.Start > 0 {
+		segDelOffset := segDelInterval.Start
+		segDelLength := segDelInterval.End - segDelInterval.Start
+		segDelTaeBat = data.bats[SEGDeleteIDX].Window(int(segDelOffset), int(segDelLength))
 		segDel, err = containersBatchToProtoBatch(segDelTaeBat)
 		if err != nil {
 			return
