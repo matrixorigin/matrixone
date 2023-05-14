@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
+	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
 
@@ -82,8 +83,8 @@ func (driver *walDriver) replayhandle(handle store.ApplyHandle) store.ApplyHandl
 		handle(group, commitId, payload, typ, nil)
 	}
 }
-func (driver *walDriver) Replay(handle store.ApplyHandle) error {
-	return driver.impl.Replay(driver.replayhandle(handle))
+func (driver *walDriver) Replay(handle store.ApplyHandle, allocator logstoreEntry.Allocator) error {
+	return driver.impl.Replay(driver.replayhandle(handle), allocator)
 }
 
 func (driver *walDriver) GetPenddingCnt() uint64 {
