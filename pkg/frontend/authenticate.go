@@ -855,6 +855,7 @@ var (
 				dat_name     varchar(5000) default NULL,
 				variable_name  varchar(300),
 				variable_value varchar(5000),
+				system_variables bool,
 				primary key(configuration_id)
 			);`,
 		`create table mo_pubs(
@@ -912,13 +913,13 @@ var (
 		account_name,
 		dat_name,
 		variable_name,
-		variable_value) values (%d, "%s", "%s", "%s", "%s");`
+		variable_value, system_variables) values (%d, "%s", "%s", "%s", "%s", %v);`
 
 	initMoMysqlCompatbilityModeWithoutDataBaseFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
 		account_name,
 		variable_name,
-		variable_value) values (%d, "%s", "%s", "%s");`
+		variable_value, system_variables) values (%d, "%s", "%s", "%s", %v);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1289,7 +1290,7 @@ const (
 
 	getSystemVariableValueWithDatabaseFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where dat_name = "%s" and variable_name = "%s";`
 
-	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d;`
+	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
@@ -6702,7 +6703,7 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default))
+			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
 	}
@@ -7069,7 +7070,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default))
+			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
 	}
@@ -7733,7 +7734,7 @@ func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 		}
 
 		//step 3: insert the record
-		sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, account_id, accountName, datname, variable_name, variable_value)
+		sql = fmt.Sprintf(initMoMysqlCompatbilityModeFormat, account_id, accountName, datname, variable_name, variable_value, false)
 
 		err = bh.Exec(ctx, sql)
 		if err != nil {
