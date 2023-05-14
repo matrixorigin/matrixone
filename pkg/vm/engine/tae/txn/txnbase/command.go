@@ -291,17 +291,6 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 }
 func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
-	c.ComposedCmd = NewComposedCmd()
-	var buf []byte
-	if buf, sn, err = objectio.ReadBytes(r); err != nil {
-		return
-	}
-	n += sn
-	cmd, err := BuildCommandFrom(buf)
-	if err != nil {
-		return
-	}
-	c.ComposedCmd = cmd.(*ComposedCmd)
 	if c.ID, sn, err = objectio.ReadString(r); err != nil {
 		return
 	}
@@ -348,7 +337,16 @@ func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
 	return
 }
 func (c *TxnCmd) UnmarshalBinary(buf []byte) (err error) {
-	bbuf := bytes.NewBuffer(buf)
+	c.ComposedCmd = NewComposedCmd()
+	composeedCmdBufLength := types.DecodeUint32(buf[:4])
+	n := 4
+	cmd, err := BuildCommandFrom(buf[n : n+int(composeedCmdBufLength)])
+	if err != nil {
+		return
+	}
+	c.ComposedCmd = cmd.(*ComposedCmd)
+	n += int(composeedCmdBufLength)
+	bbuf := bytes.NewBuffer(buf[n:])
 	_, err = c.ReadFrom(bbuf)
 	return err
 }
@@ -401,7 +399,20 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 
 func (cc *ComposedCmd) UnmarshalBinary(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
-	_, err = cc.ReadFrom(bbuf)
+	n, err := cc.ReadFrom(bbuf)
+	length := uint32(0)
+	length = types.DecodeUint32(buf[n : n+4])
+	n += 4
+	for i := 0; i < int(length); i++ {
+		bufLength := types.DecodeUint32(buf[n : n+4])
+		n += 4
+		subCmd, err := BuildCommandFrom(buf[n : n+int64(bufLength)])
+		if err != nil {
+			return err
+		}
+		n += int64(bufLength)
+		cc.AddCmd(subCmd.(txnif.TxnCmd))
+	}
 	return err
 }
 
@@ -444,24 +455,6 @@ func (cc *ComposedCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 4
-	length := uint32(0)
-	if _, err = r.Read(types.EncodeUint32(&length)); err != nil {
-		return
-	}
-	n += 4
-	for i := 0; i < int(length); i++ {
-		var buf []byte
-		var sn int64
-		if buf, sn, err = objectio.ReadBytes(r); err != nil {
-			return
-		}
-		n += sn
-		subCmd, err := BuildCommandFrom(buf)
-		if err != nil {
-			return n, err
-		}
-		cc.AddCmd(subCmd.(txnif.TxnCmd))
-	}
 	return
 }
 

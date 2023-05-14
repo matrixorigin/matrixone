@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 var suffix = ".rot"
@@ -167,7 +168,7 @@ func (rf *rotateFile) getEntryFromUncommitted(id int) (e *vFile) {
 	}
 	return nil
 }
-func (rf *rotateFile) Replay(r *replayer) error {
+func (rf *rotateFile) Replay(r *replayer, allocator logstoreEntry.Allocator) error {
 	entryIDs := rf.history.EntryIds()
 	for _, vf := range rf.uncommitted {
 		entryIDs = append(entryIDs, vf.Id())
@@ -182,7 +183,7 @@ func (rf *rotateFile) Replay(r *replayer) error {
 			entry = vf
 		}
 
-		err := entry.Replay(r)
+		err := entry.Replay(r, allocator)
 		if err != nil {
 			panic(err)
 		}
@@ -316,12 +317,12 @@ func (rf *rotateFile) Sync() error {
 	return lastFile.Sync()
 }
 
-func (rf *rotateFile) Load(ver int, groupId uint32, lsn uint64) (*entry.Entry, error) {
+func (rf *rotateFile) Load(ver int, groupId uint32, lsn uint64, allocator logstoreEntry.Allocator) (*entry.Entry, error) {
 	vf, err := rf.GetEntryByVersion(ver)
 	if err != nil {
 		return nil, err
 	}
-	return vf.Load(lsn)
+	return vf.Load(lsn, allocator)
 }
 
 func (rf *rotateFile) GetEntryByVersion(version int) (VFile, error) {
