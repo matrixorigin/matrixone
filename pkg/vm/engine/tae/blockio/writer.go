@@ -103,6 +103,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if !w.isSetPK || w.pk != uint16(i) {
 			continue
 		}
+		w.objMetaBuilder.AddPKData(columnData)
 		bf, err := index.NewBinaryFuseFilter(columnData)
 		if err != nil {
 			return nil, err
@@ -128,6 +129,16 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 	if w.objMetaBuilder != nil {
 		cnt, meta := w.objMetaBuilder.Build()
 		w.writer.WriteObjectMeta(ctx, cnt, meta)
+		columnsData := w.objMetaBuilder.GetColumnsData()
+		bf, err := index.NewBinaryFuseFilterByVectors(columnsData)
+		if err != nil {
+			return nil, nil, err
+		}
+		buf, err := bf.Marshal()
+		if err != nil {
+			return nil, nil, err
+		}
+		w.writer.WriteObjectMetaBF(buf)
 	}
 	blocks, err := w.writer.WriteEnd(ctx)
 	if len(blocks) == 0 {
