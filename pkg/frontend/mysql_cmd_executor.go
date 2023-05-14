@@ -2324,8 +2324,6 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
-	fmt.Printf(">>>>>>>> sql: %s\n\n", sql)
-
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	ses.getSqlType(sql)

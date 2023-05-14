@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
@@ -93,6 +94,7 @@ func TestInsertInt8(t *testing.T) {
 	testColumnCacheInsert[int8](
 		t,
 		8,
+		8,
 		newTestVector[int8](8, types.New(types.T_int8, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_int8, 0, 0), fillValues, fillRows),
 	)
@@ -102,11 +104,12 @@ func TestInsertInt8WithManual(t *testing.T) {
 	manualValues := []int8{6, 9}
 	manualRows := []int{0, 1}
 
-	fillValues := []int8{6, 9, 1, 2, 3, 4, 5, 7, 8}
+	fillValues := []int8{6, 9, 10, 11, 12, 13, 14, 15}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
 	testColumnCacheInsert[int8](
 		t,
 		8,
+		15,
 		newTestVector(8, types.New(types.T_int8, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_int8, 0, 0), fillValues, fillRows),
 	)
@@ -118,6 +121,7 @@ func TestInsertInt16(t *testing.T) {
 	testColumnCacheInsert[int16](
 		t,
 		8,
+		8,
 		newTestVector[int16](8, types.New(types.T_int16, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_int16, 0, 0), fillValues, fillRows),
 	)
@@ -127,11 +131,12 @@ func TestInsertInt16WithManual(t *testing.T) {
 	manualValues := []int16{6, 9}
 	manualRows := []int{0, 1}
 
-	fillValues := []int16{6, 9, 1, 2, 3, 4, 5, 7, 8}
+	fillValues := []int16{6, 9, 10, 11, 12, 13, 14, 15}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
 	testColumnCacheInsert[int16](
 		t,
 		8,
+		15,
 		newTestVector(8, types.New(types.T_int16, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_int16, 0, 0), fillValues, fillRows),
 	)
@@ -143,6 +148,7 @@ func TestInsertInt32(t *testing.T) {
 	testColumnCacheInsert[int32](
 		t,
 		8,
+		8,
 		newTestVector[int32](8, types.New(types.T_int32, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_int32, 0, 0), fillValues, fillRows),
 	)
@@ -152,11 +158,12 @@ func TestInsertInt32WithManual(t *testing.T) {
 	manualValues := []int32{6, 9}
 	manualRows := []int{0, 1}
 
-	fillValues := []int32{6, 9, 1, 2, 3, 4, 5, 7, 8}
+	fillValues := []int32{6, 9, 10, 11, 12, 13, 14, 15}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
 	testColumnCacheInsert[int32](
 		t,
 		8,
+		15,
 		newTestVector(8, types.New(types.T_int32, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_int32, 0, 0), fillValues, fillRows),
 	)
@@ -168,6 +175,7 @@ func TestInsertInt64(t *testing.T) {
 	testColumnCacheInsert[int64](
 		t,
 		8,
+		8,
 		newTestVector[int64](8, types.New(types.T_int64, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_int64, 0, 0), fillValues, fillRows),
 	)
@@ -177,11 +185,12 @@ func TestInsertInt64WithManual(t *testing.T) {
 	manualValues := []int64{6, 9}
 	manualRows := []int{0, 1}
 
-	fillValues := []int64{6, 9, 1, 2, 3, 4, 5, 7, 8}
+	fillValues := []int64{6, 9, 10, 11, 12, 13, 14, 15}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
 	testColumnCacheInsert[int64](
 		t,
 		8,
+		15,
 		newTestVector(8, types.New(types.T_int64, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_int64, 0, 0), fillValues, fillRows),
 	)
@@ -193,6 +202,7 @@ func TestInsertUint8(t *testing.T) {
 	testColumnCacheInsert[uint8](
 		t,
 		8,
+		8,
 		newTestVector[uint8](8, types.New(types.T_uint8, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_uint8, 0, 0), fillValues, fillRows),
 	)
@@ -202,11 +212,12 @@ func TestInsertUint8WithManual(t *testing.T) {
 	manualValues := []uint8{6, 9}
 	manualRows := []int{0, 1}
 
-	fillValues := []uint8{6, 9, 1, 2, 3, 4, 5, 7, 8}
+	fillValues := []uint8{6, 9, 10, 11, 12, 13, 14, 15}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
 	testColumnCacheInsert[uint8](
 		t,
 		8,
+		15,
 		newTestVector(8, types.New(types.T_uint8, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_uint8, 0, 0), fillValues, fillRows),
 	)
@@ -218,6 +229,7 @@ func TestInsertUint16(t *testing.T) {
 	testColumnCacheInsert[uint16](
 		t,
 		8,
+		8,
 		newTestVector[uint16](8, types.New(types.T_uint16, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_uint16, 0, 0), fillValues, fillRows),
 	)
@@ -227,11 +239,12 @@ func TestInsertUint16WithManual(t *testing.T) {
 	manualValues := []uint16{6, 9}
 	manualRows := []int{0, 1}
 
-	fillValues := []uint16{6, 9, 1, 2, 3, 4, 5, 7, 8}
+	fillValues := []uint16{6, 9, 10, 11, 12, 13, 14, 15}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
 	testColumnCacheInsert[uint16](
 		t,
 		8,
+		15,
 		newTestVector(8, types.New(types.T_uint16, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_uint16, 0, 0), fillValues, fillRows),
 	)
@@ -243,6 +256,7 @@ func TestInsertUint32(t *testing.T) {
 	testColumnCacheInsert[uint32](
 		t,
 		8,
+		8,
 		newTestVector[uint32](8, types.New(types.T_uint32, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_uint32, 0, 0), fillValues, fillRows),
 	)
@@ -252,11 +266,12 @@ func TestInsertUint32WithManual(t *testing.T) {
 	manualValues := []uint32{6, 9}
 	manualRows := []int{0, 1}
 
-	fillValues := []uint32{6, 9, 1, 2, 3, 4, 5, 7, 8}
+	fillValues := []uint32{6, 9, 10, 11, 12, 13, 14, 15}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
 	testColumnCacheInsert[uint32](
 		t,
 		8,
+		15,
 		newTestVector(8, types.New(types.T_uint32, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_uint32, 0, 0), fillValues, fillRows),
 	)
@@ -268,6 +283,7 @@ func TestInsertUint64(t *testing.T) {
 	testColumnCacheInsert[uint64](
 		t,
 		8,
+		8,
 		newTestVector[uint64](8, types.New(types.T_uint64, 0, 0), nil, nil),
 		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
 	)
@@ -277,30 +293,112 @@ func TestInsertUint64WithManual(t *testing.T) {
 	manualValues := []uint64{6, 9}
 	manualRows := []int{0, 1}
 
-	fillValues := []uint64{6, 9, 1, 2, 3, 4, 5, 7, 8}
+	fillValues := []uint64{6, 9, 10, 11, 12, 13, 14, 15}
 	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
 	testColumnCacheInsert[uint64](
 		t,
 		8,
+		15,
 		newTestVector(8, types.New(types.T_uint64, 0, 0), manualValues, manualRows),
 		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
 	)
 }
 
-func testColumnCacheInsert[T constraints.Integer](
-	t *testing.T,
-	rows int,
-	input *vector.Vector,
-	expect *vector.Vector) {
+func TestInsertWithManualMixed(t *testing.T) {
+	manualValues := []uint64{3, 6}
+	manualRows := []int{1, 3}
+
+	fillValues := []uint64{1, 3, 4, 6, 7, 8, 9, 10}
+	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	testColumnCacheInsert[uint64](
+		t,
+		8,
+		10,
+		newTestVector(8, types.New(types.T_uint64, 0, 0), manualValues, manualRows),
+		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
+	)
+}
+
+func TestLastInsertValueWithNoAutoInserted(t *testing.T) {
+	manualValues := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
+	manualRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	testColumnCacheInsert[uint64](
+		t,
+		8,
+		0,
+		newTestVector(8, types.New(types.T_uint64, 0, 0), manualValues, manualRows),
+		newTestVector(8, types.New(types.T_uint64, 0, 0), manualValues, manualRows),
+	)
+}
+
+func TestOverflow(t *testing.T) {
 	runColumnCacheTests(
 		t,
 		1,
 		1,
 		func(
 			ctx context.Context,
-			c *columnCache) {
+			cc *columnCache) {
+			require.NoError(t, cc.updateTo(ctx, 0, 1, math.MaxUint64))
+			require.True(t, cc.overflow)
+
 			require.NoError(t,
-				c.insertAutoValues(ctx, 0, input, rows))
+				cc.applyAutoValues(
+					ctx,
+					0,
+					1,
+					nil,
+					func(i int) bool { return false },
+					func(i int, u uint64) error {
+						require.Equal(t, uint64(0), u)
+						return nil
+					}))
+		},
+	)
+}
+
+func TestOverflowWithInit(t *testing.T) {
+	runColumnCacheTestsWithInitOffset(
+		t,
+		1,
+		1,
+		math.MaxUint64,
+		func(
+			ctx context.Context,
+			cc *columnCache) {
+			require.True(t, cc.overflow)
+
+			require.NoError(t,
+				cc.applyAutoValues(
+					ctx,
+					0,
+					1,
+					nil,
+					func(i int) bool { return false },
+					func(i int, u uint64) error {
+						require.Equal(t, uint64(0), u)
+						return nil
+					}))
+		},
+	)
+}
+
+func testColumnCacheInsert[T constraints.Integer](
+	t *testing.T,
+	rows int,
+	expecLastInsertValue uint64,
+	input *vector.Vector,
+	expect *vector.Vector) {
+	runColumnCacheTests(
+		t,
+		10,
+		1,
+		func(
+			ctx context.Context,
+			c *columnCache) {
+			lastInsertValue, err := c.insertAutoValues(ctx, 0, input, rows)
+			require.NoError(t, err)
+			assert.Equal(t, expecLastInsertValue, lastInsertValue)
 			assert.Equal(t,
 				vector.MustFixedCol[T](expect),
 				vector.MustFixedCol[T](input))
@@ -314,8 +412,8 @@ func newTestVector[T constraints.Integer](
 	fillValues []T,
 	fillRows []int) *vector.Vector {
 	fillMap := make(map[int]T)
-	for _, i := range fillRows {
-		fillMap[i] = fillValues[i]
+	for i, v := range fillRows {
+		fillMap[v] = fillValues[i]
 	}
 
 	vec := vector.NewVec(vecType)
@@ -335,6 +433,21 @@ func runColumnCacheTests(
 	step int,
 	fn func(context.Context, *columnCache),
 ) {
+	runColumnCacheTestsWithInitOffset(
+		t,
+		capacity,
+		step,
+		0,
+		fn)
+}
+
+func runColumnCacheTestsWithInitOffset(
+	t *testing.T,
+	capacity int,
+	step int,
+	offset uint64,
+	fn func(context.Context, *columnCache),
+) {
 	defer leaktest.AfterTest(t)()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	runAllocatorTests(
@@ -344,14 +457,16 @@ func runColumnCacheTests(
 			defer cancel()
 			col := AutoColumn{
 				ColName: "k1",
-				Offset:  0,
+				Offset:  offset,
 				Step:    uint64(step),
 			}
 			a.(*allocator).store.Create(
 				ctx,
 				0,
 				[]AutoColumn{col})
-			fn(ctx, newColumnCache(ctx, 0, col, capacity, a))
+			cc, err := newColumnCache(ctx, 0, col, capacity, a)
+			require.NoError(t, err)
+			fn(ctx, cc)
 		},
 	)
 }

@@ -207,7 +207,7 @@ func (proc *Process) InitSeq() {
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
-	if proc.LastInsertID != nil {
+	if proc.LastInsertID != nil && num > 0 {
 		*proc.LastInsertID = num
 	}
 }

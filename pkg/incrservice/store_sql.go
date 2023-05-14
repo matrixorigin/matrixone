@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -41,7 +42,7 @@ var (
 		index_table_name varchar(5000),
 		primary key(id, column_name)
 	);`
-	createAutoTableSqlNew = fmt.Sprintf(`create table if not exists %s (
+	createAutoTableSql = fmt.Sprintf(`create table if not exists %s (
 		table_id   bigint unsigned, 
 		col_name     varchar(770), 
 		col_index      int,
@@ -85,7 +86,7 @@ func (s *sqlStore) Create(
 	if err := db.Exec(createMoIndexesSql).Error; err != nil {
 		return err
 	}
-	if err := db.Exec(createAutoTableSqlNew).Error; err != nil {
+	if err := db.Exec(createAutoTableSql).Error; err != nil {
 		return err
 	}
 	return db.Create(&cols).Error
@@ -144,6 +145,28 @@ func (s *sqlStore) Alloc(
 	return from, to, nil
 }
 
+func (s *sqlStore) UpdateMinValue(
+	ctx context.Context,
+	tableID uint64,
+	col string,
+	minValue uint64) error {
+	db, err := s.getSession(ctx)
+	if err != nil {
+		return err
+	}
+
+	err = db.Model(&AutoColumn{}).
+		Where("table_id = ? and col_name = ? and offset < ?",
+			tableID,
+			col,
+			minValue).
+		Update("offset", minValue).Error
+	if err != nil {
+		logutil.Fatalf("2")
+	}
+	return err
+}
+
 func (s *sqlStore) Delete(
 	ctx context.Context,
 	tableID uint64) error {
@@ -151,7 +174,11 @@ func (s *sqlStore) Delete(
 	if err != nil {
 		return err
 	}
-	return db.Delete(&AutoColumn{}, "table_id = ?", tableID).Error
+	err = db.Delete(&AutoColumn{}, "table_id = ?", tableID).Error
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *sqlStore) GetCloumns(

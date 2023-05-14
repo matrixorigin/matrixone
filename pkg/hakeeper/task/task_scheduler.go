@@ -75,10 +75,15 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	s.allocateTasks(expiredTasks, orderedCN)
 }
 
-func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error {
+func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata, bootstrap bool) error {
 	ts := s.taskServiceGetter()
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "failed to get task service")
+	}
+	if bootstrap {
+		if err := ts.Bootstrap(ctx); err != nil {
+			return err
+		}
 	}
 	if err := ts.CreateBatch(ctx, tasks); err != nil {
 		runtime.ProcessLevelRuntime().Logger().Error("failed to create new tasks", zap.Error(err))

@@ -14,16 +14,30 @@
 
 package incrservice
 
-// func TestStoreCreate(t *testing.T) {
-// 	dsn := "de2938e4-a154-4c6f-b010-f0c2c17c15ee:1bed630d-60a6-4830-9e1e-4dd669d2fbea@tcp(127.0.0.1:6001)/mo_catalog"
-// 	s, err := NewSQLStore(dsn)
-// 	require.NoError(t, err)
-// 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, 9000001)
-// 	require.NoError(t, s.Create(ctx, "k1", 100, 1))
-// }
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestStoreCreate(t *testing.T) {
+	dsn := "dump:111@tcp(127.0.0.1:6001)/zx"
+	s, err := NewSQLStore(dsn)
+	require.NoError(t, err)
+	require.NoError(t, s.Create(context.Background(), 1, []AutoColumn{
+		{
+			TableID:  1,
+			ColName:  "col1",
+			ColIndex: 0,
+			Offset:   0,
+			Step:     1,
+		},
+	}))
+}
 
 // func TestStoreAlloc(t *testing.T) {
-// 	dsn := "de2938e4-a154-4c6f-b010-f0c2c17c15ee:1bed630d-60a6-4830-9e1e-4dd669d2fbea@tcp(127.0.0.1:6001)/mo_catalog"
+// 	dsn := "dump:111@tcp(127.0.0.1:6001)/zx"
 // 	s, err := NewSQLStore(dsn)
 // 	require.NoError(t, err)
 
@@ -33,3 +47,8 @@ package incrservice
 // 	assert.Equal(t, uint64(101), from)
 // 	assert.Equal(t, uint64(102), to)
 // }
+
+func TestGetNext(t *testing.T) {
+	v := uint64(9223372036854776807)
+	t.Fatalf("%d", v+uint64(1000))
+}

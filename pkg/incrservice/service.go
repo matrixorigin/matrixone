@@ -75,7 +75,6 @@ func (s *service) Create(
 		AppendEventCallback(
 			client.ClosedEvent,
 			s.txnClosed)
-
 	if err := s.store.Create(ctx, tableID, cols); err != nil {
 		s.logger.Error("create auto increment cache failed",
 			zap.Uint64("table-id", tableID),
@@ -83,12 +82,16 @@ func (s *service) Create(
 			zap.Error(err))
 		return err
 	}
-	c := newTableCache(
+	c, err := newTableCache(
 		ctx,
 		tableID,
 		cols,
 		s.cacheCapacity,
 		s.allocator)
+	if err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := string(txnOp.Txn().ID)
@@ -117,7 +120,13 @@ func (s *service) Reset(
 		for idx := range cols {
 			cols[idx].Offset = 0
 		}
+	} else if c := s.getTableCache(oldTableID); c != nil {
+		// reuse ids in cache
+		if err := c.adjust(ctx, cols); err != nil {
+			return err
+		}
 	}
+
 	if err := s.Delete(ctx, oldTableID, txnOp); err != nil {
 		return err
 	}
@@ -155,12 +164,12 @@ func (s *service) Delete(
 func (s *service) InsertValues(
 	ctx context.Context,
 	tableID uint64,
-	bat *batch.Batch) error {
+	bat *batch.Batch) (uint64, error) {
 	ts, err := s.getCommittedTableCache(
 		ctx,
 		tableID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	return ts.insertAutoValues(ctx, tableID, bat)
 }
@@ -185,6 +194,11 @@ func (s *service) Close() {
 		return
 	}
 	s.mu.closed = true
+	for _, tc := range s.mu.tables {
+		if err := tc.close(); err != nil {
+			panic(err)
+		}
+	}
 	s.mu.Unlock()
 
 	s.stopper.Stop()
@@ -220,12 +234,15 @@ func (s *service) getCommittedTableCache(
 	if err != nil {
 		return nil, err
 	}
-	c = newTableCache(
+	c, err = newTableCache(
 		ctx,
 		tableID,
 		cols,
 		s.cacheCapacity,
 		s.allocator)
+	if err != nil {
+		return nil, err
+	}
 	s.doCreateLocked(tableID, c, nil)
 	return c, nil
 }
@@ -245,15 +262,15 @@ func (s *service) handleCreatesLocked(txnMeta txn.TxnMeta) {
 		return
 	}
 
-	if s.logger.Enabled(zap.DebugLevel) {
-		s.logger.Debug("destroy creates table auto increment cache",
-			zap.String("resean", "txn aborted"),
-			zap.String("txn", hex.EncodeToString(txnMeta.ID)),
-			zap.Any("tables", tables))
-	}
 	if txnMeta.Status != txn.TxnStatus_Committed {
 		for _, c := range tables {
-			s.destroyTableCacheAfterCreatedLocked(c.table())
+			if s.logger.Enabled(zap.DebugLevel) {
+				s.logger.Debug("destroy creates table",
+					zap.String("resean", "txn aborted"),
+					zap.String("txn", hex.EncodeToString(txnMeta.ID)),
+					zap.Any("table", c.table()))
+			}
+			s.detroyTableCache(c.table(), true)
 		}
 	}
 	delete(s.mu.creates, key)
@@ -274,23 +291,18 @@ func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) {
 	}
 	if txnMeta.Status == txn.TxnStatus_Committed {
 		for _, id := range tables {
-			s.destroyTableCacheLocked(id)
+			s.detroyTableCache(id, false)
 		}
 	}
 	delete(s.mu.deletes, key)
 }
 
-func (s *service) destroyTableCacheAfterCreatedLocked(tableID uint64) {
-	if _, ok := s.mu.tables[tableID]; !ok {
+func (s *service) detroyTableCache(
+	tableID uint64,
+	mustExists bool) {
+	if _, ok := s.mu.tables[tableID]; !ok && mustExists {
 		panic("missing created incr table cache")
 	}
-
-	delete(s.mu.tables, tableID)
-	s.deleteC <- tableID
-}
-
-func (s *service) destroyTableCacheLocked(tableID uint64) {
-	delete(s.mu.tables, tableID)
 	s.deleteC <- tableID
 }
 
@@ -299,12 +311,25 @@ func (s *service) deleteTableCache(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case keys := <-s.deleteC:
-			for {
-				if err := s.store.Delete(ctx, keys); err == nil {
+		case tableID := <-s.deleteC:
+			s.mu.Lock()
+			if tc, ok := s.mu.tables[tableID]; ok {
+				_ = tc.close()
+				delete(s.mu.tables, tableID)
+			}
+			s.mu.Unlock()
+			for i := 0; i < 2; i++ {
+				if err := s.store.Delete(ctx, tableID); err == nil {
 					break
 				}
 			}
 		}
 	}
+}
+
+func (s *service) getTableCache(tableID uint64) incrTableCache {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.mu.tables[tableID]
 }

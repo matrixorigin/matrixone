@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"math"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -37,6 +38,7 @@ type columnCache struct {
 	allocator   valueAllocator
 	allocating  bool
 	allocatingC chan struct{}
+	overflow    bool
 }
 
 func newColumnCache(
@@ -44,23 +46,27 @@ func newColumnCache(
 	tableID uint64,
 	col AutoColumn,
 	capacity int,
-	allocator valueAllocator) *columnCache {
+	allocator valueAllocator) (*columnCache, error) {
 	item := &columnCache{
 		logger:    getLogger(),
 		col:       col,
 		capacity:  capacity,
 		allocator: allocator,
+		overflow:  col.Offset == math.MaxUint64,
 		ranges:    &ranges{step: col.Step, values: make([]uint64, 0, 1)},
 	}
 	item.preAllocate(ctx, tableID, capacity)
-	return item
+	item.Lock()
+	defer item.Unlock()
+	if err := item.waitPrevAllocatingLocked(ctx); err != nil {
+		return nil, err
+	}
+	return item, nil
 }
 
 func (col *columnCache) current(
 	ctx context.Context,
 	tableID uint64) (uint64, error) {
-	col.preAllocate(ctx, tableID, col.capacity)
-
 	col.Lock()
 	defer col.Unlock()
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
@@ -73,99 +79,209 @@ func (col *columnCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
 	vec *vector.Vector,
-	rows int) error {
+	rows int) (uint64, error) {
 	switch vec.GetType().Oid {
 	case types.T_int8:
-		insertAutoValues[int8](ctx, tableID, vec, rows, col)
+		return insertAutoValues[int8](
+			ctx,
+			tableID,
+			vec,
+			rows,
+			math.MaxInt8,
+			col,
+			func(v uint64) error {
+				return moerr.NewOutOfRange(
+					ctx,
+					"tinyint",
+					"value %v",
+					v)
+			})
 	case types.T_int16:
-		insertAutoValues[int16](ctx, tableID, vec, rows, col)
+		return insertAutoValues[int16](
+			ctx,
+			tableID,
+			vec,
+			rows,
+			math.MaxInt16,
+			col,
+			func(v uint64) error {
+				return moerr.NewOutOfRange(
+					ctx,
+					"smallint",
+					"value %v",
+					v)
+			})
 	case types.T_int32:
-		insertAutoValues[int32](ctx, tableID, vec, rows, col)
+		return insertAutoValues[int32](
+			ctx,
+			tableID,
+			vec, rows,
+			math.MaxInt32,
+			col,
+			func(v uint64) error {
+				return moerr.NewOutOfRange(
+					ctx,
+					"int",
+					"value %v",
+					v)
+			})
 	case types.T_int64:
-		insertAutoValues[int64](ctx, tableID, vec, rows, col)
+		return insertAutoValues[int64](
+			ctx,
+			tableID,
+			vec,
+			rows,
+			math.MaxInt64,
+			col,
+			func(v uint64) error {
+				return moerr.NewOutOfRange(
+					ctx,
+					"bigint",
+					"value %v",
+					v)
+			})
 	case types.T_uint8:
-		insertAutoValues[uint8](ctx, tableID, vec, rows, col)
+		return insertAutoValues[uint8](
+			ctx,
+			tableID,
+			vec,
+			rows,
+			math.MaxUint8,
+			col,
+			func(v uint64) error {
+				return moerr.NewOutOfRange(
+					ctx,
+					"tinyint unsigned",
+					"value %v",
+					v)
+			})
 	case types.T_uint16:
-		insertAutoValues[uint16](ctx, tableID, vec, rows, col)
+		return insertAutoValues[uint16](
+			ctx,
+			tableID,
+			vec,
+			rows,
+			math.MaxUint16,
+			col,
+			func(v uint64) error {
+				return moerr.NewOutOfRange(
+					ctx,
+					"smallint unsigned",
+					"value %v",
+					v)
+			})
 	case types.T_uint32:
-		insertAutoValues[uint32](ctx, tableID, vec, rows, col)
+		return insertAutoValues[uint32](
+			ctx,
+			tableID,
+			vec,
+			rows,
+			math.MaxUint32,
+			col,
+			func(v uint64) error {
+				return moerr.NewOutOfRange(
+					ctx,
+					"int unsigned",
+					"value %v",
+					v)
+			})
 	case types.T_uint64:
-		insertAutoValues[uint64](ctx, tableID, vec, rows, col)
+		return insertAutoValues[uint64](
+			ctx,
+			tableID,
+			vec,
+			rows,
+			math.MaxUint64,
+			col,
+			func(v uint64) error {
+				return moerr.NewOutOfRange(
+					ctx,
+					"bigint unsigned",
+					"auto_incrment column constant value overflows bigint unsigned",
+				)
+			})
 	default:
-		return moerr.NewInvalidInput(ctx, "invalid auto_increment type '%v'", vec.GetType().Oid)
+		return 0, moerr.NewInvalidInput(ctx, "invalid auto_increment type '%v'", vec.GetType().Oid)
 	}
-	return nil
+}
+
+func (col *columnCache) lockDo(fn func()) {
+	col.Lock()
+	defer col.Unlock()
+	fn()
+}
+
+func (col *columnCache) updateTo(
+	ctx context.Context,
+	tableID uint64,
+	count int,
+	manualValue uint64) error {
+	col.Lock()
+
+	contains := col.ranges.updateTo(manualValue)
+	// mark col next() is overflow
+	if manualValue == math.MaxUint64 {
+		col.overflow = true
+	}
+	col.Unlock()
+
+	if contains {
+		return nil
+	}
+
+	return col.allocator.updateMinValue(
+		ctx,
+		tableID,
+		col.col.ColName,
+		manualValue)
 }
 
 func (col *columnCache) applyAutoValues(
 	ctx context.Context,
 	tableID uint64,
 	rows int,
-	apply func(int, uint64)) error {
-	col.Lock()
-	defer col.Unlock()
-	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
-		return err
-	}
-
-	for i := 0; i < rows; i++ {
-		if col.ranges.empty() {
-			if err := col.allocateLocked(ctx, tableID, rows); err != nil {
-				return err
-			}
-		}
-		apply(i, col.ranges.next())
-	}
-	return nil
-}
-
-func (col *columnCache) applyAutoValuesWithManual(
-	ctx context.Context,
-	tableID uint64,
-	rows int,
-	manualValues *roaring64.Bitmap,
+	skipped *ranges,
 	filter func(i int) bool,
-	apply func(int, uint64)) error {
+	apply func(int, uint64) error) error {
 	col.Lock()
 	defer col.Unlock()
+
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
 	}
 
-	skipRows := uint64(0)
-	manualRowsCount := manualValues.GetCardinality()
-	wait := func() error {
+	wait := func() (bool, error) {
+		if col.overflow {
+			return true, nil
+		}
+
 		if col.ranges.empty() {
 			if err := col.allocateLocked(ctx, tableID, rows); err != nil {
-				return err
+				return false, err
 			}
 		}
-		return nil
+		return false, nil
 	}
 	for i := 0; i < rows; i++ {
 		if filter(i) {
 			continue
 		}
-		// all manual values are skipped, insert directly
-		if skipRows >= manualRowsCount {
-			if err := wait(); err != nil {
+		if skipped != nil &&
+			skipped.left() > 0 {
+			if err := apply(i, skipped.next()); err != nil {
 				return err
 			}
-			apply(i, col.ranges.next())
 			continue
 		}
-
-		// skip manual values
-		for {
-			if err := wait(); err != nil {
-				return err
-			}
-			v := col.ranges.next()
-			if !manualValues.Contains(v) {
-				apply(i, v)
-				break
-			}
-			skipRows++
+		overflow, err := wait()
+		if err != nil {
+			return err
+		}
+		if overflow {
+			return apply(i, 0)
+		}
+		if err := apply(i, col.ranges.next()); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -181,16 +297,16 @@ func (col *columnCache) preAllocate(
 	if col.ranges.left() >= count {
 		return
 	}
-	if col.allocating {
+
+	if col.allocating ||
+		col.overflow {
 		return
 	}
-
 	col.allocating = true
 	col.allocatingC = make(chan struct{})
 	if col.capacity > count {
 		count = col.capacity
 	}
-	// TODO: only tentenID need
 	col.allocator.asyncAlloc(
 		ctx,
 		tableID,
@@ -212,25 +328,21 @@ func (col *columnCache) allocateLocked(
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
 	}
+
 	col.allocating = true
 	col.allocatingC = make(chan struct{})
 	if col.capacity > count {
 		count = col.capacity
 	}
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			from, to, err := col.allocator.alloc(
-				ctx,
-				tableID,
-				col.col.ColName,
-				count)
-			if err == nil {
-				col.applyAllocateLocked(from, to)
-				return nil
-			}
+		from, to, err := col.allocator.alloc(
+			ctx,
+			tableID,
+			col.col.ColName,
+			count)
+		if err == nil {
+			col.applyAllocateLocked(from, to)
+			return nil
 		}
 	}
 }
@@ -251,7 +363,7 @@ func (col *columnCache) applyAllocateLocked(
 		col.ranges.add(from, to)
 		if col.logger.Enabled(zap.DebugLevel) {
 			col.logger.Debug("new range added",
-				zap.String("key", col.col.ColName),
+				zap.String("col", col.col.ColName),
 				zap.Uint64("from", from),
 				zap.Uint64("to", to))
 		}
@@ -276,57 +388,87 @@ func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
 	}
 }
 
+func (col *columnCache) close() error {
+	col.Lock()
+	defer col.Unlock()
+	return col.waitPrevAllocatingLocked(context.Background())
+}
+
 func insertAutoValues[T constraints.Integer](
 	ctx context.Context,
 	tableID uint64,
 	vec *vector.Vector,
 	rows int,
-	col *columnCache) error {
+	max T,
+	col *columnCache,
+	outOfRangeError func(v uint64) error) (uint64, error) {
 	// all values are filled after insert
 	defer vec.SetNulls(nil)
 
-	col.preAllocate(ctx, tableID, rows)
 	vs := vector.MustFixedCol[T](vec)
 	autoCount := nulls.Length(vec.GetNulls())
-	manualCount := rows - autoCount
+	lastInsertValue := uint64(0)
 
-	// no manual insert values
-	if autoCount == rows {
-		return col.applyAutoValues(
-			ctx,
-			tableID,
-			rows,
-			func(i int, v uint64) {
-				vs[i] = T(v)
-			})
-	}
-
-	// all values are manual insert values
-	if autoCount == 0 {
-		return nil
-	}
-
-	// add all manual values to bitmap for skip auto_increment values
-	manualValues := roaring64.New()
-	added := 0
-	for _, v := range vs {
-		if v > 0 {
-			manualValues.Add(uint64(v))
-			added++
-			if added == manualCount {
-				break
+	// has manual values, we reuse skipped auto values, and update cache max value to store
+	var skipped *ranges
+	if autoCount < rows {
+		skipped = &ranges{step: col.col.Step}
+		manuals := roaring64.NewBitmap()
+		maxValue := uint64(0)
+		col.lockDo(func() {
+			for _, v := range vs {
+				if v > 0 {
+					manuals.Add(uint64(v))
+				}
+			}
+			if manuals.GetCardinality() > 0 {
+				// use a bitmap to store the manually inserted values and iterate through these manual
+				// values in order to skip the automatic values.
+				iter := manuals.Iterator()
+				for {
+					if !iter.HasNext() {
+						break
+					}
+					maxValue = iter.Next()
+					col.ranges.setManual(maxValue, skipped)
+				}
+			}
+		})
+		if maxValue > 0 {
+			if err := col.updateTo(
+				ctx,
+				tableID,
+				rows,
+				maxValue); err != nil {
+				return 0, err
 			}
 		}
 	}
-	return col.applyAutoValuesWithManual(
+	col.preAllocate(ctx, tableID, rows)
+	err := col.applyAutoValues(
 		ctx,
 		tableID,
 		rows,
-		manualValues,
+		skipped,
 		func(i int) bool {
-			return vs[i] > 0
+			filter := autoCount < rows &&
+				!nulls.Contains(vec.GetNulls(), uint64(i))
+			if filter && skipped != nil {
+				skipped.updateTo(uint64(vs[i]))
+			}
+			return filter
 		},
-		func(i int, v uint64) {
+		func(i int, v uint64) error {
+			if v > uint64(max) ||
+				v == 0 {
+				return outOfRangeError(v)
+			}
 			vs[i] = T(v)
+			lastInsertValue = v
+			return nil
 		})
+	if err != nil {
+		return 0, err
+	}
+	return lastInsertValue, err
 }

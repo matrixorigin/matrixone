@@ -583,7 +583,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 		c.ctx,
 		dbSource,
 		qry.GetTableDef(),
-		c.proc.TxnOperator)
+		c.proc.TxnOperator,
+		nil)
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
@@ -665,7 +666,10 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		c.ctx,
 		tmpDBSource,
 		qry.GetTableDef(),
-		c.proc.TxnOperator)
+		c.proc.TxnOperator,
+		func() string {
+			return engine.GetTempTableName(dbName, tblName)
+		})
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {
@@ -1724,12 +1728,17 @@ func maybeCreateAutoIncrement(
 	ctx context.Context,
 	db engine.Database,
 	def *plan.TableDef,
-	txnOp client.TxnOperator) error {
-	tb, err := db.Relation(ctx, def.Name)
-	if err != nil {
-		return err
-	}
+	txnOp client.TxnOperator,
+	nameResolver func() string) error {
 	if def.TblId == 0 {
+		name := def.Name
+		if nameResolver != nil {
+			name = nameResolver()
+		}
+		tb, err := db.Relation(ctx, name)
+		if err != nil {
+			return err
+		}
 		def.TblId = tb.GetTableID(ctx)
 	}
 	cols := incrservice.GetAutoColumnFromDef(def)

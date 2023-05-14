@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"math"
 	"sync"
 )
 
@@ -91,6 +92,34 @@ func (s *memStore) Alloc(
 	return from, to, nil
 }
 
+func (s *memStore) UpdateMinValue(
+	ctx context.Context,
+	tableID uint64,
+	col string,
+	minValue uint64) error {
+	s.Lock()
+	defer s.Unlock()
+	cols, ok := s.caches[tableID]
+	if !ok {
+		panic("missing incr column record")
+	}
+
+	var c *AutoColumn
+	for i := range cols {
+		if cols[i].ColName == col {
+			c = &cols[i]
+		}
+	}
+	if !ok {
+		panic("missing incr column record")
+	}
+
+	if c != nil && c.Offset < minValue {
+		c.Offset = minValue
+	}
+	return nil
+}
+
 func (s *memStore) Delete(
 	ctx context.Context,
 	tableID uint64) error {
@@ -105,7 +134,12 @@ func (s *memStore) Close() {
 }
 
 func getNext(curr uint64, count, step int) uint64 {
-	return curr + uint64(count*step)
+	n := uint64(count * step)
+	diff := math.MaxUint64 - curr
+	if diff <= n {
+		return math.MaxUint64
+	}
+	return curr + n
 }
 
 // [from, to)

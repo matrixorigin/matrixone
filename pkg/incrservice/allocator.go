@@ -16,31 +16,24 @@ package incrservice
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"go.uber.org/zap"
 )
 
-type alloc struct {
-	ctx     context.Context
-	tableID uint64
-	key     string
-	count   int
-	apply   func(uint64, uint64, error)
-}
-
 type allocator struct {
 	logger  *log.MOLogger
 	store   IncrValueStore
-	c       chan alloc
+	c       chan action
 	stopper *stopper.Stopper
 }
 
 func newValueAllocator(store IncrValueStore) valueAllocator {
 	a := &allocator{
 		logger:  getLogger(),
-		c:       make(chan alloc, 1024),
+		c:       make(chan action, 1024),
 		stopper: stopper.NewStopper("valueAllocator"),
 		store:   store,
 	}
@@ -60,31 +53,68 @@ func (a *allocator) alloc(
 	tableID uint64,
 	key string,
 	count int) (uint64, uint64, error) {
-	select {
-	case <-ctx.Done():
-		return 0, 0, ctx.Err()
-	default:
-	}
-	return a.store.Alloc(ctx, tableID, key, count)
+	c := make(chan struct{})
+	var from, to uint64
+	var err error
+	a.asyncAlloc(
+		ctx,
+		tableID,
+		key,
+		count,
+		func(
+			v1, v2 uint64,
+			e error) {
+			from = v1
+			to = v2
+			err = e
+			close(c)
+		})
+	<-c
+	return from, to, err
 }
 
 func (a *allocator) asyncAlloc(
 	ctx context.Context,
 	tableID uint64,
-	key string,
+	col string,
 	count int,
 	apply func(uint64, uint64, error)) {
 	select {
 	case <-ctx.Done():
 		apply(0, 0, ctx.Err())
-	case a.c <- alloc{
-		ctx:     ctx,
-		tableID: tableID,
-		key:     key,
-		count:   count,
-		apply:   apply,
+	case a.c <- action{
+		actionType:    allocType,
+		tableID:       tableID,
+		col:           col,
+		count:         count,
+		applyAllocate: apply}:
+	}
+}
+
+func (a *allocator) updateMinValue(
+	ctx context.Context,
+	tableID uint64,
+	col string,
+	minValue uint64) error {
+	var err error
+	c := make(chan struct{})
+	fn := func(e error) {
+		err = e
+		close(c)
+	}
+	select {
+	case <-ctx.Done():
+		fn(ctx.Err())
+	case a.c <- action{
+		actionType:  updateType,
+		tableID:     tableID,
+		col:         col,
+		minValue:    minValue,
+		applyUpdate: fn,
 	}:
 	}
+	<-c
+	return err
 }
 
 func (a *allocator) run(ctx context.Context) {
@@ -92,27 +122,73 @@ func (a *allocator) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case alloc := <-a.c:
-			v, next, err := a.alloc(
-				alloc.ctx,
-				alloc.tableID,
-				alloc.key,
-				alloc.count)
-			if a.logger.Enabled(zap.DebugLevel) {
-				a.logger.Debug(
-					"allocate new range",
-					zap.String("key", alloc.key),
-					zap.Int("count", alloc.count),
-					zap.Uint64("value", v),
-					zap.Uint64("next", next),
-					zap.Error(err))
+		case act := <-a.c:
+			switch act.actionType {
+			case allocType:
+				a.doAllocate(act)
+			case updateType:
+				a.doUpdate(act)
 			}
-			alloc.apply(v, next, err)
 		}
 	}
+}
+
+func (a *allocator) doAllocate(act action) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	from, to, err := a.store.Alloc(
+		ctx,
+		act.tableID,
+		act.col,
+		act.count)
+	if a.logger.Enabled(zap.DebugLevel) {
+		a.logger.Debug(
+			"allocate new range",
+			zap.String("key", act.col),
+			zap.Int("count", act.count),
+			zap.Uint64("value", from),
+			zap.Uint64("next", to),
+			zap.Error(err))
+	}
+	act.applyAllocate(from, to, err)
+}
+
+func (a *allocator) doUpdate(act action) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	err := a.store.UpdateMinValue(
+		ctx,
+		act.tableID,
+		act.col,
+		act.minValue)
+	if a.logger.Enabled(zap.DebugLevel) {
+		a.logger.Debug(
+			"update range min value",
+			zap.String("key", act.col),
+			zap.Int("count", act.count),
+			zap.Uint64("min-value", act.minValue),
+			zap.Error(err))
+	}
+	act.applyUpdate(err)
 }
 
 func (a *allocator) close() {
 	a.stopper.Stop()
 	close(a.c)
+}
+
+var (
+	allocType  = 0
+	updateType = 1
+)
+
+type action struct {
+	actionType    int
+	tableID       uint64
+	col           string
+	count         int
+	minValue      uint64
+	applyAllocate func(uint64, uint64, error)
+	applyUpdate   func(error)
 }

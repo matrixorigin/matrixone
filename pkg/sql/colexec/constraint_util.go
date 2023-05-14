@@ -111,17 +111,15 @@ func FilterAndUpdateByRowId(
 
 			// fill auto incr column
 			if info.HasAutoCol {
-				cols := incrservice.GetAutoColumnFromDef(tableDef)
-				if len(cols) > 0 {
-					err := incrservice.GetAutoIncrementService().Create(
+				lastInsertID, err := incrservice.GetAutoIncrementService().
+					InsertValues(
 						proc.Ctx,
 						tableDef.TblId,
-						cols,
-						proc.TxnOperator)
-					if err != nil {
-						return 0, err
-					}
+						updateBatch)
+				if err != nil {
+					return 0, err
 				}
+				proc.SetLastInsertID(lastInsertID)
 			}
 
 			// check new rows not null

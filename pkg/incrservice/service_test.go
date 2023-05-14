@@ -119,12 +119,12 @@ func TestCreateWithTxnAborted(t *testing.T) {
 
 			require.NoError(t, op.Rollback(ctx))
 			s.mu.Lock()
-			assert.Equal(t, 0, len(s.mu.tables))
 			assert.Equal(t, 0, len(s.mu.creates))
 			assert.Equal(t, 0, len(s.mu.deletes))
 			s.mu.Unlock()
 
 			waitStoreCachesCount(t, ctx, s.store.(*memStore), 0)
+			assert.Equal(t, 0, len(s.mu.tables))
 		})
 }
 
@@ -142,13 +142,13 @@ func TestDelete(t *testing.T) {
 			def := newTestTableDef(2)
 			require.NoError(t, s.Create(ctx, 0, def, op))
 			require.NoError(t, op.Commit(ctx))
-
 			waitStoreCachesCount(t, ctx, s.store.(*memStore), 2)
 
+			s2 := ss[1]
 			op2 := ops[1]
 			require.NoError(t, s.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
-			waitStoreCachesCount(t, ctx, s.store.(*memStore), 0)
+			waitStoreCachesCount(t, ctx, s2.store.(*memStore), 0)
 		})
 }
 
@@ -209,14 +209,13 @@ func runServiceTests(
 		tc client.TxnClient,
 		ts rpc.TxnSender) {
 		defer leaktest.AfterTest(t)()
-		store := NewMemStore()
-
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		ss := make([]*service, 0, n)
 		ops := make([]client.TxnOperator, 0, n)
 		for i := 0; i < n; i++ {
+			store := NewMemStore()
 			ss = append(ss, NewIncrService(store, 1).(*service))
 
 			op, err := tc.New(ctx, timestamp.Timestamp{})

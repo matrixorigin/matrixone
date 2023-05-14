@@ -38,7 +38,7 @@ func newTableCache(
 	tableID uint64,
 	cols []AutoColumn,
 	count int,
-	allocator valueAllocator) incrTableCache {
+	allocator valueAllocator) (incrTableCache, error) {
 	c := &tableCache{
 		logger:  getLogger(),
 		tableID: tableID,
@@ -46,20 +46,25 @@ func newTableCache(
 	}
 	c.mu.cols = make(map[string]*columnCache, 1)
 	for _, col := range cols {
-		c.mu.cols[col.ColName] = newColumnCache(
+		cc, err := newColumnCache(
 			ctx,
 			tableID,
 			col,
 			count,
 			allocator)
+		if err != nil {
+			return nil, err
+		}
+		c.mu.cols[col.ColName] = cc
 	}
-	return c
+	return c, nil
 }
 
 func (c *tableCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
-	bat *batch.Batch) error {
+	bat *batch.Batch) (uint64, error) {
+	lastInsert := uint64(0)
 	for _, col := range c.cols {
 		cc := c.getColumnCache(col.ColName)
 		if cc == nil {
@@ -67,11 +72,13 @@ func (c *tableCache) insertAutoValues(
 		}
 		rows := bat.Length()
 		vec := bat.GetVector(int32(col.ColIndex))
-		if err := cc.insertAutoValues(ctx, tableID, vec, rows); err != nil {
-			return err
+		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows); err != nil {
+			return 0, err
+		} else {
+			lastInsert = v
 		}
 	}
-	return nil
+	return lastInsert, nil
 }
 
 func (c *tableCache) currentValue(
@@ -102,4 +109,34 @@ func (c *tableCache) getColumnCache(col string) *columnCache {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.mu.cols[col]
+}
+
+func (c *tableCache) close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, cc := range c.mu.cols {
+		if err := cc.close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *tableCache) adjust(
+	ctx context.Context,
+	cols []AutoColumn) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for idx := range c.cols {
+		v, err := c.mu.cols[c.cols[idx].ColName].current(
+			ctx,
+			c.tableID)
+		if err != nil {
+			return err
+		}
+		if v > 0 {
+			cols[idx].Offset = v - 1
+		}
+	}
+	return nil
 }

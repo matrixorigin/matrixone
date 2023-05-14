@@ -51,7 +51,7 @@ type AutoIncrementService interface {
 	// delete operation is triggered.
 	Delete(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// InsertValues insert auto columns values into bat.
-	InsertValues(ctx context.Context, tableID uint64, bat *batch.Batch) error
+	InsertValues(ctx context.Context, tableID uint64, bat *batch.Batch) (uint64, error)
 	// CurrentValue return current incr column value.
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	// Close close the auto increment service
@@ -92,13 +92,16 @@ type AutoIncrementService interface {
 type incrTableCache interface {
 	table() uint64
 	columns() []AutoColumn
-	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch) error
+	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
+	close() error
+	adjust(ctx context.Context, cols []AutoColumn) error
 }
 
 type valueAllocator interface {
-	alloc(ctx context.Context, tableID uint64, key string, count int) (uint64, uint64, error)
-	asyncAlloc(ctx context.Context, tableID uint64, key string, count int, cb func(uint64, uint64, error))
+	alloc(ctx context.Context, tableID uint64, col string, count int) (uint64, uint64, error)
+	asyncAlloc(ctx context.Context, tableID uint64, col string, count int, cb func(uint64, uint64, error))
+	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64) error
 	close()
 }
 
@@ -110,6 +113,8 @@ type IncrValueStore interface {
 	Create(ctx context.Context, tableID uint64, cols []AutoColumn) error
 	// Alloc alloc new range for auto-increment column.
 	Alloc(ctx context.Context, tableID uint64, col string, count int) (uint64, uint64, error)
+	// UpdateMinValue update auto column min value to specified value.
+	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.
 	Delete(ctx context.Context, tableID uint64) error
 	// Close the store

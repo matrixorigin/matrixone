@@ -15,8 +15,9 @@
 package incrservice
 
 type ranges struct {
-	step   uint64
-	values []uint64
+	step        uint64
+	values      []uint64
+	minCanAdded uint64
 }
 
 func (r *ranges) rangeCount() int {
@@ -70,9 +71,71 @@ func (r *ranges) left() int {
 	return v
 }
 
-func (r *ranges) add(from, to uint64) {
-	if len(r.values) > 0 && r.values[len(r.values)-1] > from {
-		panic("invalid range")
+func (r *ranges) setManual(
+	value uint64,
+	skipped *ranges) {
+	newValues := r.values[:0]
+	n := r.rangeCount()
+	for i := 0; i < n; i++ {
+		from, to := r.values[2*i], r.values[2*i+1]
+		if to <= value {
+			skipped.add(from, to)
+			continue
+		}
+		if from > value {
+			newValues = append(newValues, from, to)
+			continue
+		}
+		skipped.add(from, value)
+		if value+1 < to {
+			newValues = append(newValues, value+1, to)
+		}
 	}
-	r.values = append(r.values, from, to)
+	r.values = newValues
+}
+
+func (r *ranges) add(from, to uint64) {
+	if r.minCanAdded >= to {
+		return
+	}
+	if r.minCanAdded >= from {
+		from = r.minCanAdded
+	}
+	if from < to {
+		r.values = append(r.values, from, to)
+	}
+	r.minCanAdded = to
+}
+
+// updateTo after updateTo returns, make sure that the value
+// returned by ranges.next() must be greater than value.
+// Return true means the value is include in old ranges, otherwise
+// the value of this value must be updated to the store to avoid
+// skipping the value when restarting or other cache is allocated
+// next time.
+func (r *ranges) updateTo(value uint64) bool {
+	n := r.rangeCount()
+	compactTo := -1
+	contains := false
+	for i := 0; i < n; i++ {
+		from, to := r.values[2*i], r.values[2*i+1]
+		if from > value {
+			contains = true
+			break
+		}
+		if value >= to {
+			compactTo = 2*i + 2
+			continue
+		}
+		r.values[2*i] = value
+		contains = true
+		break
+	}
+	if compactTo != -1 {
+		r.values = r.values[compactTo:]
+	}
+	if !contains {
+		r.minCanAdded = value
+	}
+	return contains
 }

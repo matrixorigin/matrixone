@@ -3402,7 +3402,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	//step 6 : drop table mo_role_privs
 	//step 7 : drop table mo_user_defined_function
 	//step 8 : drop table mo_mysql_compatibility_mode
-	//step 9 : drop table %!%mo_increment_columns
+	//step 9 : drop table mo_increment_columns
 	for _, sql = range getSqlForDropAccount() {
 		err = bh.Exec(deleteCtx, sql)
 		if err != nil {

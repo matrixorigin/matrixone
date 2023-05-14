@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRangeCount(t *testing.T) {
@@ -56,6 +57,10 @@ func TestRangeNext(t *testing.T) {
 	r = &ranges{step: 1, values: []uint64{2, 2, 2, 3}}
 	assert.Equal(t, uint64(2), r.next())
 	assert.Equal(t, 0, len(r.values))
+
+	r = &ranges{step: 1, values: []uint64{1000, 1001}}
+	assert.Equal(t, uint64(1000), r.next())
+	assert.Equal(t, 0, len(r.values))
 }
 
 func TestRangeLeft(t *testing.T) {
@@ -82,12 +87,137 @@ func TestRangeAdd(t *testing.T) {
 	assert.Equal(t, 2, r.left())
 	assert.Equal(t, 4, len(r.values))
 
-	defer func() {
-		if err := recover(); err != nil {
-			assert.Equal(t, "invalid range", err)
-			return
-		}
-		t.Fail()
-	}()
 	r.add(1, 2)
+	assert.Equal(t, 2, r.left())
+	assert.Equal(t, 4, len(r.values))
+}
+
+func TestUpdateTo(t *testing.T) {
+	cases := []struct {
+		values   []uint64
+		updateTo uint64
+		expected []uint64
+		contains bool
+	}{
+		{
+			values:   []uint64{},
+			updateTo: 1,
+			contains: false,
+			expected: []uint64{},
+		},
+		{
+			values:   []uint64{1, 2},
+			updateTo: 1,
+			contains: true,
+			expected: []uint64{1, 2},
+		},
+		{
+			values:   []uint64{1, 3},
+			updateTo: 2,
+			contains: true,
+			expected: []uint64{2, 3},
+		},
+		{
+			values:   []uint64{1, 3},
+			updateTo: 3,
+			contains: false,
+			expected: []uint64{},
+		},
+		{
+			values:   []uint64{1, 2, 2, 4},
+			updateTo: 2,
+			contains: true,
+			expected: []uint64{2, 4},
+		},
+		{
+			values:   []uint64{1, 2, 2, 4},
+			updateTo: 3,
+			contains: true,
+			expected: []uint64{3, 4},
+		},
+		{
+			values:   []uint64{1, 2, 2, 4},
+			updateTo: 4,
+			contains: false,
+			expected: []uint64{},
+		},
+		{
+			values:   []uint64{101, 1001},
+			updateTo: 100,
+			contains: true,
+			expected: []uint64{101, 1001},
+		},
+	}
+
+	for _, c := range cases {
+		r := &ranges{values: c.values, step: 1}
+		require.Equal(t, c.contains, r.updateTo(c.updateTo))
+		assert.Equal(t, c.expected, r.values)
+	}
+}
+
+func TestSetManual(t *testing.T) {
+	cases := []struct {
+		values          []uint64
+		manual          uint64
+		expectedSkipped []uint64
+		expectLeft      []uint64
+	}{
+		{
+			values:          []uint64{},
+			manual:          1,
+			expectedSkipped: []uint64(nil),
+			expectLeft:      []uint64{},
+		},
+		{
+			values:          []uint64{2, 3},
+			manual:          1,
+			expectedSkipped: []uint64(nil),
+			expectLeft:      []uint64{2, 3},
+		},
+		{
+			values:          []uint64{2, 3},
+			manual:          2,
+			expectedSkipped: []uint64(nil),
+			expectLeft:      []uint64{},
+		},
+		{
+			values:          []uint64{1, 3},
+			manual:          2,
+			expectedSkipped: []uint64{1, 2},
+			expectLeft:      []uint64{},
+		},
+		{
+			values:          []uint64{1, 4},
+			manual:          2,
+			expectedSkipped: []uint64{1, 2},
+			expectLeft:      []uint64{3, 4},
+		},
+		{
+			values:          []uint64{1, 4},
+			manual:          3,
+			expectedSkipped: []uint64{1, 3},
+			expectLeft:      []uint64{},
+		},
+		{
+			values:          []uint64{1, 4},
+			manual:          4,
+			expectedSkipped: []uint64{1, 4},
+			expectLeft:      []uint64{},
+		},
+		{
+			values:          []uint64{1, 3},
+			manual:          4,
+			expectedSkipped: []uint64{1, 3},
+			expectLeft:      []uint64{},
+		},
+	}
+
+	for _, c := range cases {
+		r := &ranges{values: c.values, step: 1}
+		skipped := &ranges{}
+		r.setManual(c.manual, skipped)
+		require.Equal(t, c.expectedSkipped, skipped.values)
+		assert.Equal(t, c.expectLeft, r.values)
+	}
 }

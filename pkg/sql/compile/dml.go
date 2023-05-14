@@ -15,8 +15,6 @@
 package compile
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -57,7 +55,6 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 			}
 
 			// keep old offset.
-			fmt.Printf(">>>>>>>> old id: %d, new id: %d\n", oldId, newId)
 			err = incrservice.GetAutoIncrementService().Reset(
 				c.ctx,
 				oldId,
