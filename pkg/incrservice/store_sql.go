@@ -25,6 +25,8 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
+// FIXME: Due to the bootstrap system, the implementation here is very ugly. 0.9 needs to
+// be changed out.
 var (
 	name               = "mo_increment_columns"
 	createMoIndexesSql = `create table if not exists mo_indexes(
@@ -53,8 +55,7 @@ var (
 )
 
 func (c AutoColumn) TableName() string {
-	// _ = catalog.AutoIncrTableName
-	return "mo_increment_columns"
+	return name
 }
 
 type sqlStore struct {

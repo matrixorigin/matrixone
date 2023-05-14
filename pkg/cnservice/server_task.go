@@ -104,7 +104,9 @@ func (s *service) createIncrementService(
 	if err != nil {
 		panic(err)
 	}
-	incrService := incrservice.NewIncrService(store, 1000)
+	incrService := incrservice.NewIncrService(
+		store,
+		s.cfg.AutoIncrement)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(
 		runtime.AutoIncrmentService,
 		incrService)

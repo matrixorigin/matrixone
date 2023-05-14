@@ -28,12 +28,12 @@ import (
 )
 
 type service struct {
-	logger        *log.MOLogger
-	cacheCapacity int
-	store         IncrValueStore
-	allocator     valueAllocator
-	deleteC       chan uint64
-	stopper       *stopper.Stopper
+	logger    *log.MOLogger
+	cfg       Config
+	store     IncrValueStore
+	allocator valueAllocator
+	deleteC   chan uint64
+	stopper   *stopper.Stopper
 
 	mu struct {
 		sync.Mutex
@@ -46,15 +46,16 @@ type service struct {
 
 func NewIncrService(
 	store IncrValueStore,
-	cacheCapacity int) AutoIncrementService {
+	cfg Config) AutoIncrementService {
 	logger := getLogger()
+	cfg.adjust()
 	s := &service{
-		logger:        logger,
-		cacheCapacity: cacheCapacity,
-		store:         store,
-		allocator:     newValueAllocator(store),
-		deleteC:       make(chan uint64, 1024),
-		stopper:       stopper.NewStopper("IncrService", stopper.WithLogger(logger.RawLogger())),
+		logger:    logger,
+		cfg:       cfg,
+		store:     store,
+		allocator: newValueAllocator(store),
+		deleteC:   make(chan uint64, 1024),
+		stopper:   stopper.NewStopper("IncrService", stopper.WithLogger(logger.RawLogger())),
 	}
 	s.mu.tables = make(map[uint64]incrTableCache, 1024)
 	s.mu.creates = make(map[string][]incrTableCache, 1024)
@@ -86,7 +87,7 @@ func (s *service) Create(
 		ctx,
 		tableID,
 		cols,
-		s.cacheCapacity,
+		s.cfg,
 		s.allocator)
 	if err != nil {
 		return err
@@ -238,7 +239,7 @@ func (s *service) getCommittedTableCache(
 		ctx,
 		tableID,
 		cols,
-		s.cacheCapacity,
+		s.cfg,
 		s.allocator)
 	if err != nil {
 		return nil, err

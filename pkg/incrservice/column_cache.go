@@ -33,7 +33,7 @@ type columnCache struct {
 	sync.RWMutex
 	logger      *log.MOLogger
 	col         AutoColumn
-	capacity    int
+	cfg         Config
 	ranges      *ranges
 	allocator   valueAllocator
 	allocating  bool
@@ -45,17 +45,17 @@ func newColumnCache(
 	ctx context.Context,
 	tableID uint64,
 	col AutoColumn,
-	capacity int,
+	cfg Config,
 	allocator valueAllocator) (*columnCache, error) {
 	item := &columnCache{
 		logger:    getLogger(),
 		col:       col,
-		capacity:  capacity,
+		cfg:       cfg,
 		allocator: allocator,
 		overflow:  col.Offset == math.MaxUint64,
 		ranges:    &ranges{step: col.Step, values: make([]uint64, 0, 1)},
 	}
-	item.preAllocate(ctx, tableID, capacity)
+	item.preAllocate(ctx, tableID, cfg.CountPerAllocate)
 	item.Lock()
 	defer item.Unlock()
 	if err := item.waitPrevAllocatingLocked(ctx); err != nil {
@@ -304,8 +304,8 @@ func (col *columnCache) preAllocate(
 	}
 	col.allocating = true
 	col.allocatingC = make(chan struct{})
-	if col.capacity > count {
-		count = col.capacity
+	if col.cfg.CountPerAllocate > count {
+		count = col.cfg.CountPerAllocate
 	}
 	col.allocator.asyncAlloc(
 		ctx,
@@ -331,8 +331,8 @@ func (col *columnCache) allocateLocked(
 
 	col.allocating = true
 	col.allocatingC = make(chan struct{})
-	if col.capacity > count {
-		count = col.capacity
+	if col.cfg.CountPerAllocate > count {
+		count = col.cfg.CountPerAllocate
 	}
 	for {
 		from, to, err := col.allocator.alloc(
@@ -344,6 +344,15 @@ func (col *columnCache) allocateLocked(
 			col.applyAllocateLocked(from, to)
 			return nil
 		}
+	}
+}
+
+func (col *columnCache) maybeAllocate(tableID uint64) {
+	col.Lock()
+	low := col.ranges.left() <= col.cfg.LowCapacity
+	col.Unlock()
+	if low {
+		col.preAllocate(context.Background(), tableID, col.cfg.CountPerAllocate)
 	}
 }
 
@@ -403,7 +412,10 @@ func insertAutoValues[T constraints.Integer](
 	col *columnCache,
 	outOfRangeError func(v uint64) error) (uint64, error) {
 	// all values are filled after insert
-	defer vec.SetNulls(nil)
+	defer func() {
+		vec.SetNulls(nil)
+		col.maybeAllocate(tableID)
+	}()
 
 	vs := vector.MustFixedCol[T](vec)
 	autoCount := nulls.Length(vec.GetNulls())

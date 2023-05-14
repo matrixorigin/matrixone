@@ -37,7 +37,7 @@ func newTableCache(
 	ctx context.Context,
 	tableID uint64,
 	cols []AutoColumn,
-	count int,
+	cfg Config,
 	allocator valueAllocator) (incrTableCache, error) {
 	c := &tableCache{
 		logger:  getLogger(),
@@ -50,7 +50,7 @@ func newTableCache(
 			ctx,
 			tableID,
 			col,
-			count,
+			cfg,
 			allocator)
 		if err != nil {
 			return nil, err

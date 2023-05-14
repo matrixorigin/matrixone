@@ -464,7 +464,7 @@ func runColumnCacheTestsWithInitOffset(
 				ctx,
 				0,
 				[]AutoColumn{col})
-			cc, err := newColumnCache(ctx, 0, col, capacity, a)
+			cc, err := newColumnCache(ctx, 0, col, Config{CountPerAllocate: capacity}, a)
 			require.NoError(t, err)
 			fn(ctx, cc)
 		},

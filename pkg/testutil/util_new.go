@@ -46,8 +46,11 @@ func SetupAutoIncrService() {
 		rt = runtime.DefaultRuntime()
 		runtime.SetupProcessLevelRuntime(rt)
 	}
-	rt.SetGlobalVariables(runtime.AutoIncrmentService,
-		incrservice.NewIncrService(incrservice.NewMemStore(), 10))
+	rt.SetGlobalVariables(
+		runtime.AutoIncrmentService,
+		incrservice.NewIncrService(
+			incrservice.NewMemStore(),
+			incrservice.Config{}))
 }
 
 func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
