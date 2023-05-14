@@ -37,17 +37,19 @@ func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 	lenVecs := len(bat.Vecs)
 	shuffledBats := make([]*batch.Batch, lenRegs)
 	sels, lenShuffledSels := ap.getSels()
-	switch bat.Vecs[0].GetType().Oid {
+	// todo : only support group by single column, and here we get the last vec
+	groupByVec := bat.Vecs[lenVecs-1]
+	switch groupByVec.GetType().Oid {
 	case types.T_int64:
-		groupByVector := vector.MustFixedCol[int64](bat.Vecs[0])
-		for row, v := range groupByVector {
+		groupByCol := vector.MustFixedCol[int64](groupByVec)
+		for row, v := range groupByCol {
 			regIndex := v % int64(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 			lenShuffledSels[regIndex]++
 		}
 	case types.T_int32:
-		groupByVector := vector.MustFixedCol[int32](bat.Vecs[0])
-		for row, v := range groupByVector {
+		groupByCol := vector.MustFixedCol[int32](groupByVec)
+		for row, v := range groupByCol {
 			regIndex := v % int32(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 			lenShuffledSels[regIndex]++
