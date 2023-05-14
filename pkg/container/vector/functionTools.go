@@ -388,13 +388,10 @@ func (fr *FunctionResult[T]) PreExtendAndReset(size int) error {
 }
 
 func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
-	//if !fr.vec.IsConst() {
-	//	return AppendFixed(fr.vec, val, isnull, fr.mp)
-	//} else if !isnull {
-	//	return SetConstFixed(fr.vec, val, fr.vec.Length(), fr.mp)
-	//}
-	//return nil
 	if isnull {
+		// XXX LOW PERF
+		// if we can expand the nulls while appending null first times.
+		// or we can append from last to first. can reduce a lot of expansion.
 		nulls.Add(fr.vec.nsp, fr.length)
 	} else {
 		fr.cols[fr.length] = val

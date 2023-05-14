@@ -119,9 +119,13 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _
 			return a == b
 		})
 	case types.T_decimal64:
-		return valueDec64Equals(parameters, rs, uint64(length))
+		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
+			return a == b
+		})
 	case types.T_decimal128:
-		return valueDec128Equals(parameters, rs, uint64(length))
+		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
+			return a == b
+		})
 	}
 	panic("unreached code")
 }
@@ -265,12 +269,99 @@ func valueStrCompare(
 	return nil
 }
 
-func valueDec64Equals(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
+func valueDec64Compare(
+	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
+	cmpFn func(a, b types.Decimal64) bool) error {
 	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[0])
 	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[1])
 
 	m := col2.GetType().Scale - col1.GetType().Scale
+
+	if params[0].IsConst() {
+		v1, null1 := col1.GetValue(0)
+		if null1 {
+			for i := uint64(0); i < length; i++ {
+				if err := result.Append(false, true); err != nil {
+					return err
+				}
+			}
+		} else {
+			if m >= 0 {
+				x, _ := v1.Scale(m)
+				for i := uint64(0); i < length; i++ {
+					v2, null2 := col2.GetValue(i)
+					if null2 {
+						if err := result.Append(false, true); err != nil {
+							return err
+						}
+					} else {
+						if err := result.Append(cmpFn(x, v2), false); err != nil {
+							return err
+						}
+					}
+				}
+			} else {
+				for i := uint64(0); i < length; i++ {
+					v2, null2 := col2.GetValue(i)
+					if null2 {
+						if err := result.Append(false, true); err != nil {
+							return err
+						}
+					} else {
+						y, _ := v2.Scale(-m)
+						if err := result.Append(cmpFn(v1, y), false); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+
+		return nil
+	}
+
+	if params[1].IsConst() {
+		v2, null2 := col2.GetValue(0)
+		if null2 {
+			for i := uint64(0); i < length; i++ {
+				if err := result.Append(false, true); err != nil {
+					return err
+				}
+			}
+		} else {
+			if m >= 0 {
+				for i := uint64(0); i < length; i++ {
+					v1, null1 := col1.GetValue(i)
+					if null1 {
+						if err := result.Append(false, true); err != nil {
+							return err
+						}
+					} else {
+						x, _ := v1.Scale(m)
+						if err := result.Append(cmpFn(x, v2), false); err != nil {
+							return err
+						}
+					}
+				}
+			} else {
+				y, _ := v2.Scale(-m)
+				for i := uint64(0); i < length; i++ {
+					v1, null1 := col1.GetValue(i)
+					if null1 {
+						if err := result.Append(false, true); err != nil {
+							return err
+						}
+					} else {
+						if err := result.Append(cmpFn(v1, y), false); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		return nil
+	}
+
 	if m >= 0 {
 		for i := uint64(0); i < length; i++ {
 			v1, null1 := col1.GetValue(i)
@@ -281,7 +372,7 @@ func valueDec64Equals(
 				}
 			} else {
 				x, _ := v1.Scale(m)
-				if err := result.Append(x == v2, false); err != nil {
+				if err := result.Append(cmpFn(x, v2), false); err != nil {
 					return err
 				}
 			}
@@ -296,7 +387,7 @@ func valueDec64Equals(
 				}
 			} else {
 				y, _ := v2.Scale(-m)
-				if err := result.Append(v1 == y, false); err != nil {
+				if err := result.Append(cmpFn(v1, y), false); err != nil {
 					return err
 				}
 			}
@@ -305,12 +396,99 @@ func valueDec64Equals(
 	return nil
 }
 
-func valueDec128Equals(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
+func valueDec128Compare(
+	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
+	cmpFn func(a, b types.Decimal128) bool) error {
 	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[0])
 	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[1])
 
 	m := col2.GetType().Scale - col1.GetType().Scale
+
+	if params[0].IsConst() {
+		v1, null1 := col1.GetValue(0)
+		if null1 {
+			for i := uint64(0); i < length; i++ {
+				if err := result.Append(false, true); err != nil {
+					return err
+				}
+			}
+		} else {
+			if m >= 0 {
+				x, _ := v1.Scale(m)
+				for i := uint64(0); i < length; i++ {
+					v2, null2 := col2.GetValue(i)
+					if null2 {
+						if err := result.Append(false, true); err != nil {
+							return err
+						}
+					} else {
+						if err := result.Append(cmpFn(x, v2), false); err != nil {
+							return err
+						}
+					}
+				}
+			} else {
+				for i := uint64(0); i < length; i++ {
+					v2, null2 := col2.GetValue(i)
+					if null2 {
+						if err := result.Append(false, true); err != nil {
+							return err
+						}
+					} else {
+						y, _ := v2.Scale(-m)
+						if err := result.Append(cmpFn(v1, y), false); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+
+		return nil
+	}
+
+	if params[1].IsConst() {
+		v2, null2 := col2.GetValue(0)
+		if null2 {
+			for i := uint64(0); i < length; i++ {
+				if err := result.Append(false, true); err != nil {
+					return err
+				}
+			}
+		} else {
+			if m >= 0 {
+				for i := uint64(0); i < length; i++ {
+					v1, null1 := col1.GetValue(i)
+					if null1 {
+						if err := result.Append(false, true); err != nil {
+							return err
+						}
+					} else {
+						x, _ := v1.Scale(m)
+						if err := result.Append(cmpFn(x, v2), false); err != nil {
+							return err
+						}
+					}
+				}
+			} else {
+				y, _ := v2.Scale(-m)
+				for i := uint64(0); i < length; i++ {
+					v1, null1 := col1.GetValue(i)
+					if null1 {
+						if err := result.Append(false, true); err != nil {
+							return err
+						}
+					} else {
+						if err := result.Append(cmpFn(v1, y), false); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		return nil
+	}
+
 	if m >= 0 {
 		for i := uint64(0); i < length; i++ {
 			v1, null1 := col1.GetValue(i)
@@ -321,7 +499,7 @@ func valueDec128Equals(
 				}
 			} else {
 				x, _ := v1.Scale(m)
-				if err := result.Append(x == v2, false); err != nil {
+				if err := result.Append(cmpFn(x, v2), false); err != nil {
 					return err
 				}
 			}
@@ -336,7 +514,7 @@ func valueDec128Equals(
 				}
 			} else {
 				y, _ := v2.Scale(-m)
-				if err := result.Append(v1 == y, false); err != nil {
+				if err := result.Append(cmpFn(v1, y), false); err != nil {
 					return err
 				}
 			}
@@ -418,9 +596,13 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return a > b
 		})
 	case types.T_decimal64:
-		return valueDec64GreatThan(parameters, rs, uint64(length))
+		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
+			return a.Compare(b) > 0
+		})
 	case types.T_decimal128:
-		return valueDec128GreatThan(parameters, rs, uint64(length))
+		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
+			return a.Compare(b) > 0
+		})
 	}
 	panic("unreached code")
 }
@@ -452,86 +634,6 @@ func valueUuidGreatThan(
 		v2, null2 := col2.GetValue(i)
 		if err := result.Append(types.CompareUuid(v1, v2) > 0, null1 || null2); err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-func valueDec64GreatThan(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[1])
-
-	m := col2.GetType().Scale - col1.GetType().Scale
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(x.Compare(v2) > 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	} else {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(v1.Compare(y) > 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func valueDec128GreatThan(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[1])
-
-	m := col2.GetType().Scale - col1.GetType().Scale
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(x.Compare(v2) > 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	} else {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(v1.Compare(y) > 0, false); err != nil {
-					return err
-				}
-			}
 		}
 	}
 	return nil
@@ -610,9 +712,13 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 			return a >= b
 		})
 	case types.T_decimal64:
-		return valueDec64GreatEqual(parameters, rs, uint64(length))
+		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
+			return a.Compare(b) >= 0
+		})
 	case types.T_decimal128:
-		return valueDec128GreatEqual(parameters, rs, uint64(length))
+		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
+			return a.Compare(b) >= 0
+		})
 	}
 	panic("unreached code")
 }
@@ -644,86 +750,6 @@ func valueUuidGreatEqual(
 		v2, null2 := col2.GetValue(i)
 		if err := result.Append(types.CompareUuid(v1, v2) >= 0, null1 || null2); err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-func valueDec64GreatEqual(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[1])
-
-	m := col2.GetType().Scale - col1.GetType().Scale
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(x.Compare(v2) >= 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	} else {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(v1.Compare(y) >= 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func valueDec128GreatEqual(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[1])
-
-	m := col2.GetType().Scale - col1.GetType().Scale
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(x.Compare(v2) >= 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	} else {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(v1.Compare(y) >= 0, false); err != nil {
-					return err
-				}
-			}
 		}
 	}
 	return nil
@@ -806,91 +832,15 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return a != b
 		})
 	case types.T_decimal64:
-		return valueDec64NotEquals(parameters, rs, uint64(length))
+		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
+			return a != b
+		})
 	case types.T_decimal128:
-		return valueDec128NotEquals(parameters, rs, uint64(length))
+		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
+			return a != b
+		})
 	}
 	panic("unreached code")
-}
-
-func valueDec64NotEquals(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[1])
-
-	m := col2.GetType().Scale - col1.GetType().Scale
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(x != v2, false); err != nil {
-					return err
-				}
-			}
-		}
-	} else {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(v1 != y, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func valueDec128NotEquals(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[1])
-
-	m := col2.GetType().Scale - col1.GetType().Scale
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(x != v2, false); err != nil {
-					return err
-				}
-			}
-		}
-	} else {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(v1 != y, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
 }
 
 func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -966,9 +916,13 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return a < b
 		})
 	case types.T_decimal64:
-		return valueDec64LessThan(parameters, rs, uint64(length))
+		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
+			return a.Compare(b) < 0
+		})
 	case types.T_decimal128:
-		return valueDec128LessThan(parameters, rs, uint64(length))
+		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
+			return a.Compare(b) < 0
+		})
 	}
 	panic("unreached code")
 }
@@ -1000,86 +954,6 @@ func valueUuidLessThan(
 		v2, null2 := col2.GetValue(i)
 		if err := result.Append(types.CompareUuid(v1, v2) < 0, null1 || null2); err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-func valueDec64LessThan(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[1])
-
-	m := col2.GetType().Scale - col1.GetType().Scale
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(x.Compare(v2) < 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	} else {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(v1.Compare(y) < 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func valueDec128LessThan(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[1])
-
-	m := col2.GetType().Scale - col1.GetType().Scale
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(x.Compare(v2) < 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	} else {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(v1.Compare(y) < 0, false); err != nil {
-					return err
-				}
-			}
 		}
 	}
 	return nil
@@ -1158,9 +1032,13 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return a <= b
 		})
 	case types.T_decimal64:
-		return valueDec64LessEqual(parameters, rs, uint64(length))
+		return valueDec64Compare(parameters, rs, uint64(length), func(a, b types.Decimal64) bool {
+			return a.Compare(b) <= 0
+		})
 	case types.T_decimal128:
-		return valueDec128LessEqual(parameters, rs, uint64(length))
+		return valueDec128Compare(parameters, rs, uint64(length), func(a, b types.Decimal128) bool {
+			return a.Compare(b) <= 0
+		})
 	}
 	panic("unreached code")
 }
@@ -1192,86 +1070,6 @@ func valueUuidLessEqual(
 		v2, null2 := col2.GetValue(i)
 		if err := result.Append(types.CompareUuid(v1, v2) <= 0, null1 || null2); err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-func valueDec64LessEqual(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[1])
-
-	m := col2.GetType().Scale - col1.GetType().Scale
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(x.Compare(v2) <= 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	} else {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(v1.Compare(y) <= 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func valueDec128LessEqual(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[1])
-
-	m := col2.GetType().Scale - col1.GetType().Scale
-	if m >= 0 {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				x, _ := v1.Scale(m)
-				if err := result.Append(x.Compare(v2) <= 0, false); err != nil {
-					return err
-				}
-			}
-		}
-	} else {
-		for i := uint64(0); i < length; i++ {
-			v1, null1 := col1.GetValue(i)
-			v2, null2 := col2.GetValue(i)
-			if null1 || null2 {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				y, _ := v2.Scale(-m)
-				if err := result.Append(v1.Compare(y) <= 0, false); err != nil {
-					return err
-				}
-			}
 		}
 	}
 	return nil
