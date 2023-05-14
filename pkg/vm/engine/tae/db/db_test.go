@@ -5344,6 +5344,165 @@ func TestGCDropTable(t *testing.T) {
 	tae.restart()
 }
 
+func TestAlterRenameTbl(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	schema.Constraint = []byte("start version")
+	schema.Comment = "comment version"
+
+	{
+		var err error
+		txn, _ := tae.StartTxn(nil)
+		txn.CreateDatabase("xx", "", "")
+		require.NoError(t, txn.Commit())
+		txn1, _ := tae.StartTxn(nil)
+		txn2, _ := tae.StartTxn(nil)
+
+		db, _ := txn1.GetDatabase("xx")
+		_, err = db.CreateRelation(schema)
+		require.NoError(t, err)
+
+		db1, _ := txn2.GetDatabase("xx")
+		_, err = db1.CreateRelation(schema)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+		require.NoError(t, txn1.Rollback())
+		require.NoError(t, txn2.Rollback())
+
+	}
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db", "", "")
+	created, _ := db.CreateRelation(schema)
+	tid := created.ID()
+	txn.Commit()
+
+	// concurrent create and in txn alter check
+	txn0, _ := tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	tbl, _ := db.GetRelationByName("test") // 1002
+	require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "test", "ultra-test")))
+	_, err := db.GetRelationByName("test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	tbl, err = db.GetRelationByName("ultra-test")
+	require.NoError(t, err)
+	require.Equal(t, tid, tbl.ID())
+
+	require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "ultra-test", "ultraman-test")))
+	_, err = db.GetRelationByName("test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	_, err = db.GetRelationByName("ultra-test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	tbl, err = db.GetRelationByName("ultraman-test")
+	require.NoError(t, err)
+	require.Equal(t, tid, tbl.ID())
+
+	// concurrent txn should see test
+	txn1, _ := tae.StartTxn(nil)
+	db, err = txn1.GetDatabase("db")
+	require.NoError(t, err)
+	tbl, err = db.GetRelationByName("test")
+	require.NoError(t, err)
+	require.Equal(t, tid, tbl.ID())
+	_, err = db.GetRelationByName("ultraman-test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	require.NoError(t, txn1.Commit())
+
+	require.NoError(t, txn.Commit())
+
+	txn2, _ := tae.StartTxn(nil)
+	db, err = txn2.GetDatabase("db")
+	require.NoError(t, err)
+	_, err = db.GetRelationByName("test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	_, err = db.GetRelationByName("ultra-test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	tbl, err = db.GetRelationByName("ultraman-test")
+	require.NoError(t, err)
+	require.Equal(t, tid, tbl.ID())
+
+	require.NoError(t, txn2.Commit())
+
+	// should see test, not newest name
+	db, err = txn0.GetDatabase("db")
+	require.NoError(t, err)
+	_, err = db.GetRelationByName("ultraman-test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	_, err = db.GetRelationByName("ultra-test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	tbl, err = db.GetRelationByName("test")
+	require.NoError(t, err)
+	require.Equal(t, tid, tbl.ID())
+
+	txn3, _ := tae.StartTxn(nil)
+	db, _ = txn3.GetDatabase("db")
+	rel, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	require.NotEqual(t, rel.ID(), tid)
+	require.NoError(t, txn3.Commit())
+
+	t.Log(1, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		tbl, _ := db.GetRelationByName("test")
+		require.Error(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "unmatch", "yyyy")))
+		require.NoError(t, txn.Rollback())
+	}
+	// alter back to original schema
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		tbl, _ := db.GetRelationByName("test")
+		require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "test", "xx")))
+		require.NoError(t, txn.Commit())
+
+		t.Log(2, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
+		txn, _ = tae.StartTxn(nil)
+		db, _ = txn.GetDatabase("db")
+		tbl, _ = db.GetRelationByName("xx")
+		require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "xx", "test")))
+		require.NoError(t, txn.Commit())
+
+		t.Log(3, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
+	}
+
+	// rename duplicate and rollback
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		schema.Name = "other"
+		_, err := db.CreateRelation(schema)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit())
+
+		t.Log(4, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
+		txn, _ = tae.StartTxn(nil)
+		db, _ = txn.GetDatabase("db")
+		tbl, _ = db.GetRelationByName("test")
+		require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "test", "toBeRollback1")))
+		require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "toBeRollback1", "toBeRollback2")))
+		require.Error(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "toBeRollback2", "other"))) // duplicate
+		require.NoError(t, txn.Rollback())
+
+		t.Log(5, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
+	}
+	tae.restart()
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	dbentry := db.GetMeta().(*catalog.DBEntry)
+	t.Log(dbentry.PrettyNameIndex())
+	require.NoError(t, txn.Commit())
+}
+
 func TestAlterTableBasic(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)

@@ -436,74 +436,74 @@ sleep(15)
 0
 /* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" order by request_at desc limit 68;
 statement    query_type    sql_source_type
- select sleep(1)    DQL    cloud_user_sql
- drop database test_db    DDL    cloud_user_sql
- use system    Other    cloud_user_sql
- drop table test_01    DDL    cloud_user_sql
- truncate table test_01    DDL    cloud_user_sql
- delete from test_01 where a=1    DML    cloud_user_sql
- explain select * from test_01    Other    cloud_user_sql
- select * from test_01    DQL    cloud_user_sql
- update test_01 set a=100 where b='b'    DML    cloud_user_sql
- insert into test_01 values (2,'b')    DML    cloud_user_sql
- insert into test_01 values (1,'a')    DML    cloud_user_sql
- show create table test_01    Other    cloud_user_sql
- create table test_01(a int, b varchar)    DDL    cloud_user_sql
- drop table if exists test_01    DDL    cloud_user_sql
- deallocate prepare s1    Other    cloud_user_sql
- execute s1 using @a    Other    cloud_user_sql
- set @a=2    Other    cloud_user_sql
- prepare s1 from select * from test_table where col1=?    Other    cloud_user_sql
- select * from unnest('{"a":1}') as f    DQL    cloud_user_sql
- drop database db2    DDL    cloud_user_sql
- drop table table_2    DDL    cloud_user_sql
- drop view view_2    DDL    cloud_user_sql
- drop index index_table_2 on table_2    DDL    cloud_user_sql
- create index index_table_2 on table_2(col1)    DDL    cloud_user_sql
- create view view_2 as select * from table_2    DDL    cloud_user_sql
- create table table_2(col1 int,col2 varchar)    DDL    cloud_user_sql
- create database db2    DDL    cloud_user_sql
- drop database db1    DDL    cloud_user_sql
- drop account test_account    DCL    cloud_user_sql
- drop role test_role    DCL    cloud_user_sql
- drop user user_name    DCL    cloud_user_sql
- revoke test_role from user_name    DCL    cloud_user_sql
- grant create table,drop table on database *.* to test_role    DCL    cloud_user_sql
- create database if not exists db1    DDL    cloud_user_sql
- create user user_name identified by '******'    DCL    cloud_user_sql
- create role test_role    DCL    cloud_user_sql
- create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    cloud_user_sql
- delete from test_table where col1=3    DML    cloud_user_sql
- update test_table set col2='xxx' where col1=1    DML    cloud_user_sql
- insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    cloud_user_sql
- WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    cloud_user_sql
- values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    cloud_user_sql
- show index from test_table    Other    cloud_user_sql
- show collation like '%'    Other    cloud_user_sql
- show collation    Other    cloud_user_sql
- show tables    Other    cloud_user_sql
- show processlist    Other    cloud_user_sql
- show privileges    Other    cloud_user_sql
- show profiles    Other    cloud_user_sql
- show plugins    Other    cloud_user_sql
- show events    Other    cloud_user_sql
- show config    Other    cloud_user_sql
- show procedure status    Other    cloud_user_sql
- show triggers    Other    cloud_user_sql
- show create view test_view    Other    cloud_user_sql
- show create table test_table    Other    cloud_user_sql
- show create database test_db    Other    cloud_user_sql
- create view test_view as select * from test_table    DDL    cloud_user_sql
- create table test_table(col1 int,col2 varchar)    DDL    cloud_user_sql
- drop table if exists test_table    DDL    cloud_user_sql
- use test_db    Other    cloud_user_sql
- create database test_db    DDL    cloud_user_sql
- drop database if exists test_db    DDL    cloud_user_sql
- rollback    TCL    cloud_user_sql
- start transaction    TCL    cloud_user_sql
- commit    TCL    cloud_user_sql
- begin    TCL    cloud_user_sql
- use statement_query_type    Other    cloud_user_sql
+select sleep(1)    DQL    cloud_user_sql
+drop database test_db    DDL    cloud_user_sql
+use system    Other    cloud_user_sql
+drop table test_01    DDL    cloud_user_sql
+truncate table test_01    DDL    cloud_user_sql
+delete from test_01 where a=1    DML    cloud_user_sql
+explain select * from test_01    Other    cloud_user_sql
+select * from test_01    DQL    cloud_user_sql
+update test_01 set a=100 where b='b'    DML    cloud_user_sql
+insert into test_01 values (2,'b')    DML    cloud_user_sql
+insert into test_01 values (1,'a')    DML    cloud_user_sql
+show create table test_01    Other    cloud_user_sql
+create table test_01(a int, b varchar)    DDL    cloud_user_sql
+drop table if exists test_01    DDL    cloud_user_sql
+deallocate prepare s1    Other    cloud_user_sql
+execute s1 using @a    Other    cloud_user_sql
+set @a=2    Other    cloud_user_sql
+prepare s1 from select * from test_table where col1=?    Other    cloud_user_sql
+select * from unnest('{"a":1}') as f    DQL    cloud_user_sql
+drop database db2    DDL    cloud_user_sql
+drop table table_2    DDL    cloud_user_sql
+drop view view_2    DDL    cloud_user_sql
+drop index index_table_2 on table_2    DDL    cloud_user_sql
+create index index_table_2 on table_2(col1)    DDL    cloud_user_sql
+create view view_2 as select * from table_2    DDL    cloud_user_sql
+create table table_2(col1 int,col2 varchar)    DDL    cloud_user_sql
+create database db2    DDL    cloud_user_sql
+drop database db1    DDL    cloud_user_sql
+drop account test_account    DCL    cloud_user_sql
+drop role test_role    DCL    cloud_user_sql
+drop user user_name    DCL    cloud_user_sql
+revoke test_role from user_name    DCL    cloud_user_sql
+grant create table,drop table on database *.* to test_role    DCL    cloud_user_sql
+create database if not exists db1    DDL    cloud_user_sql
+create user user_name identified by '******'    DCL    cloud_user_sql
+create role test_role    DCL    cloud_user_sql
+create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    cloud_user_sql
+delete from test_table where col1=3    DML    cloud_user_sql
+update test_table set col2='xxx' where col1=1    DML    cloud_user_sql
+insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    cloud_user_sql
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    cloud_user_sql
+values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    cloud_user_sql
+show index from test_table    Other    cloud_user_sql
+show collation like '%'    Other    cloud_user_sql
+show collation    Other    cloud_user_sql
+show tables    Other    cloud_user_sql
+show processlist    Other    cloud_user_sql
+show privileges    Other    cloud_user_sql
+show profiles    Other    cloud_user_sql
+show plugins    Other    cloud_user_sql
+show events    Other    cloud_user_sql
+show config    Other    cloud_user_sql
+show procedure status    Other    cloud_user_sql
+show triggers    Other    cloud_user_sql
+show create view test_view    Other    cloud_user_sql
+show create table test_table    Other    cloud_user_sql
+show create database test_db    Other    cloud_user_sql
+create view test_view as select * from test_table    DDL    cloud_user_sql
+create table test_table(col1 int,col2 varchar)    DDL    cloud_user_sql
+drop table if exists test_table    DDL    cloud_user_sql
+use test_db    Other    cloud_user_sql
+create database test_db    DDL    cloud_user_sql
+drop database if exists test_db    DDL    cloud_user_sql
+rollback    TCL    cloud_user_sql
+start transaction    TCL    cloud_user_sql
+commit    TCL    cloud_user_sql
+begin    TCL    cloud_user_sql
+use statement_query_type    Other    cloud_user_sql
 /* cloud_nonuser */ use statement_query_type;
 /* cloud_nonuser */ begin;
 /* cloud_nonuser */ commit;
@@ -619,74 +619,74 @@ sleep(15)
 0
 /* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and status != "Running" order by request_at desc limit 68;
 statement    query_type    sql_source_type
-/* cloud_nonuser */ select sleep(1)    DQL    cloud_nonuser_sql
-/* cloud_nonuser */ drop database test_db    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ use system    Other    cloud_nonuser_sql
-/* cloud_nonuser */ drop table test_01    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ truncate table test_01    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ delete from test_01 where a=1    DML    cloud_nonuser_sql
-/* cloud_nonuser */ explain select * from test_01    Other    cloud_nonuser_sql
-/* cloud_nonuser */ select * from test_01    DQL    cloud_nonuser_sql
-/* cloud_nonuser */ update test_01 set a=100 where b='b'    DML    cloud_nonuser_sql
-/* cloud_nonuser */ insert into test_01 values (2,'b')    DML    cloud_nonuser_sql
-/* cloud_nonuser */ insert into test_01 values (1,'a')    DML    cloud_nonuser_sql
-/* cloud_nonuser */ show create table test_01    Other    cloud_nonuser_sql
-/* cloud_nonuser */ create table test_01(a int, b varchar)    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ drop table if exists test_01    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ deallocate prepare s1    Other    cloud_nonuser_sql
-/* cloud_nonuser */ execute s1 using @a    Other    cloud_nonuser_sql
-/* cloud_nonuser */ set @a=2    Other    cloud_nonuser_sql
-/* cloud_nonuser */ prepare s1 from select * from test_table where col1=?    Other    cloud_nonuser_sql
-/* cloud_nonuser */ select * from unnest('{"a":1}') as f    DQL    cloud_nonuser_sql
-/* cloud_nonuser */ drop database db2    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ drop table table_2    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ drop view view_2    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ drop index index_table_2 on table_2    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ create index index_table_2 on table_2(col1)    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ create view view_2 as select * from table_2    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ create table table_2(col1 int,col2 varchar)    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ create database db2    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ drop database db1    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ drop account test_account    DCL    cloud_nonuser_sql
-/* cloud_nonuser */ drop role test_role    DCL    cloud_nonuser_sql
-/* cloud_nonuser */ drop user user_name    DCL    cloud_nonuser_sql
-/* cloud_nonuser */ revoke test_role from user_name    DCL    cloud_nonuser_sql
-/* cloud_nonuser */ grant create table,drop table on database *.* to test_role    DCL    cloud_nonuser_sql
-/* cloud_nonuser */ create database if not exists db1    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ create user user_name identified by '******'    DCL    cloud_nonuser_sql
-/* cloud_nonuser */ create role test_role    DCL    cloud_nonuser_sql
-/* cloud_nonuser */ create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    cloud_nonuser_sql
-/* cloud_nonuser */ delete from test_table where col1=3    DML    cloud_nonuser_sql
-/* cloud_nonuser */ update test_table set col2='xxx' where col1=1    DML    cloud_nonuser_sql
-/* cloud_nonuser */ insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    cloud_nonuser_sql
-/* cloud_nonuser */ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    cloud_nonuser_sql
-/* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    cloud_nonuser_sql
-/* cloud_nonuser */ show index from test_table    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show collation like '%'    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show collation    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show tables    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show processlist    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show privileges    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show profiles    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show plugins    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show events    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show config    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show procedure status    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show triggers    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show create view test_view    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show create table test_table    Other    cloud_nonuser_sql
-/* cloud_nonuser */ show create database test_db    Other    cloud_nonuser_sql
-/* cloud_nonuser */ create view test_view as select * from test_table    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ create table test_table(col1 int,col2 varchar)    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ drop table if exists test_table    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ use test_db    Other    cloud_nonuser_sql
-/* cloud_nonuser */ create database test_db    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ drop database if exists test_db    DDL    cloud_nonuser_sql
-/* cloud_nonuser */ rollback    TCL    cloud_nonuser_sql
-/* cloud_nonuser */ start transaction    TCL    cloud_nonuser_sql
-/* cloud_nonuser */ commit    TCL    cloud_nonuser_sql
-/* cloud_nonuser */ begin    TCL    cloud_nonuser_sql
-/* cloud_nonuser */ use statement_query_type    Other    cloud_nonuser_sql
+select sleep(1)    DQL    cloud_nonuser_sql
+drop database test_db    DDL    cloud_nonuser_sql
+use system    Other    cloud_nonuser_sql
+drop table test_01    DDL    cloud_nonuser_sql
+truncate table test_01    DDL    cloud_nonuser_sql
+delete from test_01 where a=1    DML    cloud_nonuser_sql
+explain select * from test_01    Other    cloud_nonuser_sql
+select * from test_01    DQL    cloud_nonuser_sql
+update test_01 set a=100 where b='b'    DML    cloud_nonuser_sql
+insert into test_01 values (2,'b')    DML    cloud_nonuser_sql
+insert into test_01 values (1,'a')    DML    cloud_nonuser_sql
+show create table test_01    Other    cloud_nonuser_sql
+create table test_01(a int, b varchar)    DDL    cloud_nonuser_sql
+drop table if exists test_01    DDL    cloud_nonuser_sql
+deallocate prepare s1    Other    cloud_nonuser_sql
+execute s1 using @a    Other    cloud_nonuser_sql
+set @a=2    Other    cloud_nonuser_sql
+prepare s1 from select * from test_table where col1=?    Other    cloud_nonuser_sql
+select * from unnest('{"a":1}') as f    DQL    cloud_nonuser_sql
+drop database db2    DDL    cloud_nonuser_sql
+drop table table_2    DDL    cloud_nonuser_sql
+drop view view_2    DDL    cloud_nonuser_sql
+drop index index_table_2 on table_2    DDL    cloud_nonuser_sql
+create index index_table_2 on table_2(col1)    DDL    cloud_nonuser_sql
+create view view_2 as select * from table_2    DDL    cloud_nonuser_sql
+create table table_2(col1 int,col2 varchar)    DDL    cloud_nonuser_sql
+create database db2    DDL    cloud_nonuser_sql
+drop database db1    DDL    cloud_nonuser_sql
+drop account test_account    DCL    cloud_nonuser_sql
+drop role test_role    DCL    cloud_nonuser_sql
+drop user user_name    DCL    cloud_nonuser_sql
+revoke test_role from user_name    DCL    cloud_nonuser_sql
+grant create table,drop table on database *.* to test_role    DCL    cloud_nonuser_sql
+create database if not exists db1    DDL    cloud_nonuser_sql
+create user user_name identified by '******'    DCL    cloud_nonuser_sql
+create role test_role    DCL    cloud_nonuser_sql
+create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    cloud_nonuser_sql
+delete from test_table where col1=3    DML    cloud_nonuser_sql
+update test_table set col2='xxx' where col1=1    DML    cloud_nonuser_sql
+insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    cloud_nonuser_sql
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    cloud_nonuser_sql
+values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    cloud_nonuser_sql
+show index from test_table    Other    cloud_nonuser_sql
+show collation like '%'    Other    cloud_nonuser_sql
+show collation    Other    cloud_nonuser_sql
+show tables    Other    cloud_nonuser_sql
+show processlist    Other    cloud_nonuser_sql
+show privileges    Other    cloud_nonuser_sql
+show profiles    Other    cloud_nonuser_sql
+show plugins    Other    cloud_nonuser_sql
+show events    Other    cloud_nonuser_sql
+show config    Other    cloud_nonuser_sql
+show procedure status    Other    cloud_nonuser_sql
+show triggers    Other    cloud_nonuser_sql
+show create view test_view    Other    cloud_nonuser_sql
+show create table test_table    Other    cloud_nonuser_sql
+show create database test_db    Other    cloud_nonuser_sql
+create view test_view as select * from test_table    DDL    cloud_nonuser_sql
+create table test_table(col1 int,col2 varchar)    DDL    cloud_nonuser_sql
+drop table if exists test_table    DDL    cloud_nonuser_sql
+use test_db    Other    cloud_nonuser_sql
+create database test_db    DDL    cloud_nonuser_sql
+drop database if exists test_db    DDL    cloud_nonuser_sql
+rollback    TCL    cloud_nonuser_sql
+start transaction    TCL    cloud_nonuser_sql
+commit    TCL    cloud_nonuser_sql
+begin    TCL    cloud_nonuser_sql
+use statement_query_type    Other    cloud_nonuser_sql
 begin;
 use statement_query_type;
 create table test_table(col1 int,col2 varchar);
