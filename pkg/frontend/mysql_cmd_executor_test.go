@@ -1280,3 +1280,24 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 		require.Equal(t, "addr1", row[1])
 	})
 }
+
+func Test_RecordParseErrorStatement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetRequestContext(context.TODO())
+
+	proc := &process.Process{
+		Ctx: context.TODO(),
+	}
+
+	motrace.GetTracerProvider().SetEnable(true)
+	ctx := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
+	si := motrace.StatementFromContext(ctx)
+	require.NotNil(t, si)
+
+	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{externSql, externSql}, moerr.NewInternalErrorNoCtx("test"))
+	si = motrace.StatementFromContext(ctx)
+	require.NotNil(t, si)
+
+}

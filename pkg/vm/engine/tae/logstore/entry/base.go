@@ -56,11 +56,8 @@ type CommandInfo struct {
 }
 type Info struct {
 	Group       uint32
-	TxnId       string
 	Checkpoints []*CkpRanges
-	Uncommits   string
-
-	GroupLSN uint64
+	GroupLSN    uint64
 
 	TargetLsn uint64
 	Info      any
@@ -78,15 +75,6 @@ func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 8
-	var sn int64
-	if sn, err = objectio.WriteString(info.TxnId, w); err != nil {
-		return
-	}
-	n += sn
-	if sn, err = objectio.WriteString(info.Uncommits, w); err != nil {
-		return
-	}
-	n += sn
 	if _, err = w.Write(types.EncodeUint64(&info.TargetLsn)); err != nil {
 		return
 	}
@@ -153,15 +141,6 @@ func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 8
-	var sn int64
-	if info.TxnId, sn, err = objectio.ReadString(r); err != nil {
-		return
-	}
-	n += sn
-	if info.Uncommits, sn, err = objectio.ReadString(r); err != nil {
-		return
-	}
-	n += sn
 	if _, err = r.Read(types.EncodeUint64(&info.TargetLsn)); err != nil {
 		return
 	}
@@ -236,7 +215,7 @@ func (info *Info) ToString() string {
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	default:
-		s := fmt.Sprintf("customized entry G%d<%d>{T%s}", info.Group, info.GroupLSN, info.TxnId)
+		s := fmt.Sprintf("customized entry G%d<%d>", info.Group, info.GroupLSN)
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	}
