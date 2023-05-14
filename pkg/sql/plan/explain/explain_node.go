@@ -17,11 +17,10 @@ package explain
 import (
 	"bytes"
 	"context"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"strconv"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"strconv"
 )
 
@@ -372,14 +371,11 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
-<<<<<<< HEAD
+
 	if plan2.NeedShuffle(ndesc.Node) {
-		result += " shuffle: true "
+		buf.WriteString(" shuffle: true ")
 	}
-	return result, nil
-=======
 	return buf.String(), nil
->>>>>>> 3e791db379eab168d4a9bfada0f06a75d226bd72
 }
 
 func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *ExplainOptions) (string, error) {
