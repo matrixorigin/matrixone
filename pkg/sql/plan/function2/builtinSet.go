@@ -382,27 +382,28 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
-		}
-		expr := function2Util.QuickBytesToStr(v)
-		match, parsedInput, err := op.regMap.regularSubstr(regexpMask, expr, 1, 1)
-		if err != nil {
-			return err
-		}
-		if !match {
-			if err = rs.Append(0, true); err != nil {
+		} else {
+			expr := function2Util.QuickBytesToStr(v)
+			match, parsedInput, err := op.regMap.regularSubstr(regexpMask, expr, 1, 1)
+			if err != nil {
 				return err
 			}
-		} else {
-			generalTime.ResetTime()
-			success := coreStrToDate(proc.Ctx, generalTime, parsedInput, formatMask)
-			if success && types.ValidDate(int32(generalTime.year), generalTime.month, generalTime.day) {
-				val := types.DateFromCalendar(int32(generalTime.year), generalTime.month, generalTime.day)
-				if err = rs.Append(val, false); err != nil {
+			if !match {
+				if err = rs.Append(0, true); err != nil {
 					return err
 				}
 			} else {
-				if err = rs.Append(0, true); err != nil {
-					return err
+				generalTime.ResetTime()
+				success := coreStrToDate(proc.Ctx, generalTime, parsedInput, formatMask)
+				if success && types.ValidDate(int32(generalTime.year), generalTime.month, generalTime.day) {
+					val := types.DateFromCalendar(int32(generalTime.year), generalTime.month, generalTime.day)
+					if err = rs.Append(val, false); err != nil {
+						return err
+					}
+				} else {
+					if err = rs.Append(0, true); err != nil {
+						return err
+					}
 				}
 			}
 		}
