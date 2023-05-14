@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"bytes"
 	"context"
 	"strings"
 
@@ -39,7 +40,7 @@ type NodeDescribe interface {
 }
 
 type NodeElemDescribe interface {
-	GetDescription(ctx context.Context, options *ExplainOptions) (string, error)
+	GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error
 }
 
 type FormatSettings struct {

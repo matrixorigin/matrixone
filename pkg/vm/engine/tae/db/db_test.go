@@ -4588,8 +4588,12 @@ func TestReadCheckpoint(t *testing.T) {
 			ins, del, _, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			t.Log(common.PrintApiBatch(ins, 3))
-			t.Log(common.PrintApiBatch(del, 3))
+			if ins != nil {
+				t.Log(common.PrintApiBatch(ins, 3))
+			}
+			if del != nil {
+				t.Log(common.PrintApiBatch(del, 3))
+			}
 		}
 	}
 	tae.restart()
@@ -4599,8 +4603,12 @@ func TestReadCheckpoint(t *testing.T) {
 			ins, del, _, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			t.Log(common.PrintApiBatch(ins, 3))
-			t.Log(common.PrintApiBatch(del, 3))
+			if ins != nil {
+				t.Log(common.PrintApiBatch(ins, 3))
+			}
+			if del != nil {
+				t.Log(common.PrintApiBatch(del, 3))
+			}
 		}
 	}
 }

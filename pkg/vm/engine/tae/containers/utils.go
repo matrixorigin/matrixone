@@ -291,201 +291,294 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 }
 
 func ForeachVector(vec Vector, op any, sel *roaring.Bitmap) (err error) {
-	return ForeachVectorWindow(vec, 0, vec.Length(), op, sel)
+	return ForeachVectorWindow(vec, 0, vec.Length(), op, nil, sel)
 }
 
 func ForeachVectorWindow(
 	vec Vector,
 	start, length int,
-	op any,
+	op1 any,
+	op2 ItOp,
 	sel *roaring.Bitmap,
 ) (err error) {
 	typ := vec.GetType()
 	if typ.IsVarlen() {
+		var op func([]byte, bool, int) error
+		if op1 != nil {
+			op = op1.(func([]byte, bool, int) error)
+		}
 		return ForeachWindowVarlen(
 			vec,
 			start,
 			length,
-			op.(func([]byte, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	}
 	switch typ.Oid {
 	case types.T_bool:
+		var op func(bool, bool, int) error
+		if op1 != nil {
+			op = op1.(func(bool, bool, int) error)
+		}
 		return ForeachWindowFixed[bool](
 			vec,
 			start,
 			length,
-			op.(func(bool, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_int8:
+		var op func(int8, bool, int) error
+		if op1 != nil {
+			op = op1.(func(int8, bool, int) error)
+		}
 		return ForeachWindowFixed[int8](
 			vec,
 			start,
 			length,
-			op.(func(int8, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_int16:
+		var op func(int16, bool, int) error
+		if op1 != nil {
+			op = op1.(func(int16, bool, int) error)
+		}
 		return ForeachWindowFixed[int16](
 			vec,
 			start,
 			length,
-			op.(func(int16, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_int32:
+		var op func(int32, bool, int) error
+		if op1 != nil {
+			op = op1.(func(int32, bool, int) error)
+		}
 		return ForeachWindowFixed[int32](
 			vec,
 			start,
 			length,
-			op.(func(int32, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_int64:
+		var op func(int64, bool, int) error
+		if op1 != nil {
+			op = op1.(func(int64, bool, int) error)
+		}
 		return ForeachWindowFixed[int64](
 			vec,
 			start,
 			length,
-			op.(func(int64, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_uint8:
+		var op func(uint8, bool, int) error
+		if op1 != nil {
+			op = op1.(func(uint8, bool, int) error)
+		}
 		return ForeachWindowFixed[uint8](
 			vec,
 			start,
 			length,
-			op.(func(uint8, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_uint16:
+		var op func(uint16, bool, int) error
+		if op1 != nil {
+			op = op1.(func(uint16, bool, int) error)
+		}
 		return ForeachWindowFixed[uint16](
 			vec,
 			start,
 			length,
-			op.(func(uint16, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_uint32:
+		var op func(uint32, bool, int) error
+		if op1 != nil {
+			op = op1.(func(uint32, bool, int) error)
+		}
 		return ForeachWindowFixed[uint32](
 			vec,
 			start,
 			length,
-			op.(func(uint32, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_uint64:
+		var op func(uint64, bool, int) error
+		if op1 != nil {
+			op = op1.(func(uint64, bool, int) error)
+		}
 		return ForeachWindowFixed[uint64](
 			vec,
 			start,
 			length,
-			op.(func(uint64, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_decimal64:
+		var op func(types.Decimal64, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Decimal64, bool, int) error)
+		}
 		return ForeachWindowFixed[types.Decimal64](
 			vec,
 			start,
 			length,
-			op.(func(types.Decimal64, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_decimal128:
+		var op func(types.Decimal128, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Decimal128, bool, int) error)
+		}
 		return ForeachWindowFixed[types.Decimal128](
 			vec,
 			start,
 			length,
-			op.(func(types.Decimal128, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_decimal256:
+		var op func(types.Decimal256, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Decimal256, bool, int) error)
+		}
 		return ForeachWindowFixed[types.Decimal256](
 			vec,
 			start,
 			length,
-			op.(func(types.Decimal256, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_float32:
+		var op func(float32, bool, int) error
+		if op1 != nil {
+			op = op1.(func(float32, bool, int) error)
+		}
 		return ForeachWindowFixed[float32](
 			vec,
 			start,
 			length,
-			op.(func(float32, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_float64:
+		var op func(float64, bool, int) error
+		if op1 != nil {
+			op = op1.(func(float64, bool, int) error)
+		}
 		return ForeachWindowFixed[float64](
 			vec,
 			start,
 			length,
-			op.(func(float64, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_timestamp:
+		var op func(types.Timestamp, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Timestamp, bool, int) error)
+		}
 		return ForeachWindowFixed[types.Timestamp](
 			vec,
 			start,
 			length,
-			op.(func(types.Timestamp, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_date:
+		var op func(types.Date, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Date, bool, int) error)
+		}
 		return ForeachWindowFixed[types.Date](
 			vec,
 			start,
 			length,
-			op.(func(types.Date, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_time:
+		var op func(types.Time, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Time, bool, int) error)
+		}
 		return ForeachWindowFixed[types.Time](
 			vec,
 			start,
 			length,
-			op.(func(types.Time, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_datetime:
+		var op func(types.Datetime, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Datetime, bool, int) error)
+		}
 		return ForeachWindowFixed[types.Datetime](
 			vec,
 			start,
 			length,
-			op.(func(types.Datetime, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_TS:
+		var op func(types.TS, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.TS, bool, int) error)
+		}
 		return ForeachWindowFixed[types.TS](
 			vec,
 			start,
 			length,
-			op.(func(types.TS, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_Blockid:
+		var op func(types.Blockid, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Blockid, bool, int) error)
+		}
 		return ForeachWindowFixed[types.Blockid](
 			vec,
 			start,
 			length,
-			op.(func(types.Blockid, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_uuid:
+		var op func(types.Uuid, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Uuid, bool, int) error)
+		}
 		return ForeachWindowFixed[types.Uuid](
 			vec,
 			start,
 			length,
-			op.(func(types.Uuid, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	case types.T_Rowid:
+		var op func(types.Rowid, bool, int) error
+		if op1 != nil {
+			op = op1.(func(types.Rowid, bool, int) error)
+		}
 		return ForeachWindowFixed[types.Rowid](
 			vec,
 			start,
 			length,
-			op.(func(types.Rowid, bool, int) error),
-			nil,
+			op,
+			op2,
 			sel)
 	default:
 		panic(fmt.Sprintf("unsupported type: %s", typ.String()))
@@ -537,7 +630,7 @@ func ForeachWindowFixed[T any](
 	opAny ItOp,
 	sels *roaring.Bitmap,
 ) (err error) {
-	src := vec.(*vector[T])
+	src := vec.(*vectorWrapper)
 	if src.downstreamVector.IsConst() {
 		var v T
 		isnull := false
@@ -606,7 +699,7 @@ func ForeachWindowVarlen(
 	opAny ItOp,
 	sels *roaring.Bitmap,
 ) (err error) {
-	src := vec.(*vector[[]byte])
+	src := vec.(*vectorWrapper)
 	if src.downstreamVector.IsConst() {
 		var v []byte
 		isnull := false
