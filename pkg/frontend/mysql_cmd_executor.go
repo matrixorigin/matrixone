@@ -792,9 +792,9 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 
 	var sysVars map[string]interface{}
 	if sv.Global {
-		sysVars = make(map[string]interface{})
-		for k, v := range gSysVarsDefs {
-			sysVars[k] = v.Default
+		sysVars, err = doGetGlobalSystemVariable(ses.GetRequestContext(), ses)
+		if err != nil {
+			return err
 		}
 	} else {
 		sysVars = ses.CopyAllSessionVars()

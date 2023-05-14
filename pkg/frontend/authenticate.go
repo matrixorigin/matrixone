@@ -1292,6 +1292,8 @@ const (
 
 	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
+	getSystemVariableValueFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and variable_name = '%s';`
+
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
@@ -1693,8 +1695,12 @@ func getSqlForGetSystemVariableValueWithDatabase(dtname, variable_name string) s
 	return fmt.Sprintf(getSystemVariableValueWithDatabaseFormat, dtname, variable_name)
 }
 
-func getSystemVariablesWithAccount(account_id uint64) string {
-	return fmt.Sprintf(getSystemVariablesWithAccountFromat, account_id)
+func getSystemVariablesWithAccount(accountId uint64) string {
+	return fmt.Sprintf(getSystemVariablesWithAccountFromat, accountId)
+}
+
+func getSqlForgetSystemVariableValue(accountId uint64, varName string) string {
+	return fmt.Sprintf(getSystemVariableValueFormat, accountId, varName)
 }
 
 // isClusterTable decides a table is the index table or not
@@ -7868,4 +7874,73 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	}
 
 	return err
+}
+
+func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (map[string]interface{}, error) {
+	var err error
+	var sql string
+	var erArray []ExecResult
+	var sysVars map[string]interface{}
+	var accountId uint32
+	tenantInfo := ses.GetTenantInfo()
+
+	sysVars = make(map[string]interface{})
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	accountId = tenantInfo.GetTenantID()
+	sql = getSystemVariablesWithAccount(uint64(accountId))
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if execResultArrayHasData(erArray) {
+		if execResultArrayHasData(erArray) {
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				variable_name, err := erArray[0].GetString(ctx, i, 0)
+				if err != nil {
+					goto handleFailed
+				}
+				variable_value, err := erArray[0].GetString(ctx, i, 1)
+				if err != nil {
+					goto handleFailed
+				}
+
+				if sv, ok := gSysVarsDefs[variable_name]; ok {
+					val, err := sv.GetType().ConvertFromString(variable_value)
+					if err != nil {
+						goto handleFailed
+					}
+					sysVars[variable_name] = val
+				}
+			}
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return sysVars, nil
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return nil, rbErr
+	}
+	return nil, err
+
 }
