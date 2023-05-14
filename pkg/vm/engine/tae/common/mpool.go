@@ -25,7 +25,6 @@ import (
 var DefaultAllocator *mpool.MPool
 var MutMemAllocator *mpool.MPool
 var CacheAllocator *mpool.MPool
-var LogAllocator *mpool.MPool
 
 // init with zero fixed pool, for test.
 func init() {
@@ -50,11 +49,6 @@ func InitTAEMPool() {
 
 		mpool.DeleteMPool(CacheAllocator)
 		if CacheAllocator, err = mpool.NewMPool("tae_cache", 0, mpool.NoFixed); err != nil {
-			panic(err)
-		}
-
-		mpool.DeleteMPool(LogAllocator)
-		if LogAllocator, err = mpool.NewMPool("tae_log", 1024*1024*5, 0); err != nil {
 			panic(err)
 		}
 	}
