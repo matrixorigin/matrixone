@@ -118,7 +118,6 @@ func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) 
 	}
 	info := &entry.Info{
 		Group: wal.GroupC,
-		TxnId: store.txn.GetID(),
 	}
 	logEntry.SetInfo(info)
 	var lsn uint64
