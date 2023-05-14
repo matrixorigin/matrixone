@@ -50,7 +50,7 @@ func (b *ObjectColumnMetasBuilder) AddPKData(data containers.Vector) {
 	b.pkData = append(b.pkData, data)
 }
 
-func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector) {
+func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector, isPK bool) {
 	if vec.HasNull() {
 		cnt := b.metas[idx].NullCnt()
 		cnt += uint32(vec.NullCount())
@@ -59,6 +59,9 @@ func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector)
 
 	if b.zms[idx] == nil {
 		b.zms[idx] = index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
+	}
+	if isPK {
+		return
 	}
 	if b.sks[idx] == nil {
 		b.sks[idx] = hll.New()

@@ -239,7 +239,9 @@ func (w *objectWriterV1) prepareBloomFilter(blockCount uint32, offset uint32) ([
 		buf.Write(block.bloomFilter)
 	}
 	buf.Write(w.bloomFilter)
-	return w.WriteWithCompress(offset, buf.Bytes())
+	length := uint32(len(buf.Bytes()))
+	extent := NewExtent(compress.None, offset, length, length)
+	return buf.Bytes(), extent, nil
 }
 
 func (w *objectWriterV1) prepareZoneMapArea(blockCount uint32, offset uint32) ([]byte, Extent, error) {

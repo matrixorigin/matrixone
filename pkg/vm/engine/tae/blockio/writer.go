@@ -80,15 +80,19 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 	}
 	seqnums := w.writer.GetSeqnums()
 	for i, vec := range batch.Vecs {
+		isPK := false
 		if i == 0 {
 			w.objMetaBuilder.AddRowCnt(vec.Length())
 		}
 		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
 			continue
 		}
+		if w.isSetPK && w.pk == uint16(i) {
+			isPK = true
+		}
 		columnData := containers.ToDNVector(vec)
 		// update null count and distinct value
-		w.objMetaBuilder.InspectVector(i, columnData)
+		w.objMetaBuilder.InspectVector(i, columnData, isPK)
 
 		// Build ZM
 		zm := index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
