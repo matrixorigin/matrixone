@@ -576,6 +576,7 @@ func ScanCsvFile(ctx context.Context, param *ExternalParam, proc *process.Proces
 	finish := false
 	cnt, finish, err = plh.moCsvReader.ReadLimitSize(ONE_BATCH_MAX_ROW, proc.Ctx, param.maxBatchSize, plh.moCsvLineArray)
 	if err != nil {
+		logutil.Errorf("read external file meet error: %s", err.Error())
 		return nil, err
 	}
 
