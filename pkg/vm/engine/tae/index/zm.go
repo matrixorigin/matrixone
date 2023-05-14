@@ -105,6 +105,10 @@ func (zm ZM) IsString() bool {
 	return zm.GetType().FixedLength() < 0
 }
 
+func (zm ZM) Valid() bool {
+	return len(zm) == ZMSize && zm.IsInited()
+}
+
 func (zm ZM) SetType(t types.T) {
 	zm[63] &= 0x00
 	zm[63] |= byte(t)

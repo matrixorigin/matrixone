@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -904,6 +905,11 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	h := newRelation(tbl)
 	it := newRelationBlockItOnSnap(h)
 	maxSegmentHint := uint64(0)
+	pkType := keys.GetType()
+	inputZM := index.NewZM(pkType.Oid, pkType.Scale)
+	if err = index.BatchUpdateZM(inputZM, keys); err != nil {
+		return
+	}
 	for it.Valid() {
 		blkH := it.GetBlock()
 		blk := blkH.GetMeta().(*catalog.BlockEntry)
@@ -925,7 +931,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 				rowmask = deleteNode.GetRowMaskRefLocked()
 			}
 		}
-		if err = blkData.BatchDedup(tbl.store.txn, keys, rowmask, false); err != nil {
+		if err = blkData.BatchDedup(tbl.store.txn, keys, rowmask, false, inputZM); err != nil {
 			// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 			return
 		}
@@ -975,7 +981,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 				vec := containers.ToDNVector(bat.Vecs[0])
 				loaded[i] = vec
 			}
-			if err = blkData.BatchDedup(tbl.store.txn, loaded[i], rowmask, false); err != nil {
+			if err = blkData.BatchDedup(tbl.store.txn, loaded[i], rowmask, false, []byte{}); err != nil {
 				// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 				loaded[i].Close()
 				return
@@ -1053,7 +1059,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 						rowmask = deleteNode.GetRowMaskRefLocked()
 					}
 				}
-				if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true); err != nil {
+				if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true, []byte{}); err != nil {
 					return
 				}
 				blkIt.Next()
@@ -1132,7 +1138,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 					rowmask = deleteNode.GetRowMaskRefLocked()
 				}
 			}
-			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true); err != nil {
+			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true, []byte{}); err != nil {
 				return err
 			}
 			blkIt.Next()

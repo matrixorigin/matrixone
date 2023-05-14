@@ -119,7 +119,9 @@ func (blk *block) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
-	precommit bool) (err error) {
+	precommit bool,
+	zm []byte,
+) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
