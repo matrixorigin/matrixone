@@ -899,6 +899,8 @@ func (tbl *txnTable) updateDedupedSegmentHint(hint uint64) {
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
 func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
+	r := trace.StartRegion(context.Background(), "DedupSnapByPK")
+	defer r.End()
 	h := newRelation(tbl)
 	it := newRelationBlockItOnSnap(h)
 	maxSegmentHint := uint64(0)
