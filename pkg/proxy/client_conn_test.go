@@ -134,12 +134,12 @@ func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 		return nil, err
 	}
 	// Set the label session variable.
-	if err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
+	if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
 		return nil, err
 	}
 	// Set the use defined variables, including session variables and user variables.
 	for _, stmt := range c.setVarStmts {
-		if err := sc.ExecStmt(stmt, nil); err != nil {
+		if _, err := sc.ExecStmt(stmt, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -158,6 +158,26 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 	case *setVarEvent:
 		c.setVarStmts = append(c.setVarStmts, ev.stmt)
 		sendResp([]byte("ok"), resp)
+		return nil
+	case *suspendAccountEvent:
+		cns, err := c.router.SelectByTenant(ev.account)
+		if err != nil {
+			sendResp([]byte(err.Error()), resp)
+			return err
+		}
+		for _, cn := range cns {
+			sendResp([]byte(cn.addr), resp)
+		}
+		return nil
+	case *dropAccountEvent:
+		cns, err := c.router.SelectByTenant(ev.account)
+		if err != nil {
+			sendResp([]byte(err.Error()), resp)
+			return err
+		}
+		for _, cn := range cns {
+			sendResp([]byte(cn.addr), resp)
+		}
 		return nil
 	default:
 		sendResp([]byte("type not supported"), resp)
