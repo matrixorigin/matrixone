@@ -314,6 +314,7 @@ func (p *FunctionParameterScalarNull[T]) UnSafeGetAllValue() []T {
 }
 
 type FunctionResultWrapper interface {
+	SetResultVector(vec *Vector)
 	GetResultVector() *Vector
 	Free()
 	PreExtendAndReset(size int) error
@@ -322,6 +323,7 @@ type FunctionResultWrapper interface {
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
 
 type FunctionResult[T types.FixedSizeT] struct {
+	typ types.Type
 	vec *Vector
 	mp  *mpool.MPool
 
@@ -339,6 +341,7 @@ func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *Func
 
 func newResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResult[T] {
 	f := &FunctionResult[T]{
+		typ: *v.GetType(),
 		vec: v,
 		mp:  mp,
 	}
@@ -352,11 +355,15 @@ func newResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResu
 }
 
 func (fr *FunctionResult[T]) PreExtendAndReset(size int) error {
+	if fr.vec == nil {
+		fr.vec = NewVec(fr.typ)
+	}
+
 	if fr.isVarlena {
 		if err := fr.vec.PreExtend(size, fr.mp); err != nil {
 			return err
 		}
-		fr.vec.Reset(*fr.vec.GetType())
+		fr.vec.Reset(fr.typ)
 		return nil
 	}
 
@@ -365,14 +372,14 @@ func (fr *FunctionResult[T]) PreExtendAndReset(size int) error {
 		if err := fr.vec.PreExtend(size, fr.mp); err != nil {
 			return err
 		}
-		fr.vec.Reset(*fr.vec.GetType())
+		fr.vec.Reset(fr.typ)
 		fr.vec.SetLength(size)
 		fr.cols = MustFixedCol[T](fr.vec)
 		return nil
 	}
 
 	oldLength := fr.vec.Length()
-	fr.vec.Reset(*fr.vec.GetType())
+	fr.vec.Reset(fr.typ)
 	fr.vec.SetLength(size)
 	if len(fr.cols) > 0 && size > oldLength {
 		fr.cols = MustFixedCol[T](fr.vec)
@@ -423,6 +430,10 @@ func (fr *FunctionResult[T]) DupFromParameter(fp FunctionParameterWrapper[T], le
 	return err
 }
 
+func (fr *FunctionResult[T]) SetResultVector(v *Vector) {
+	fr.vec = v
+}
+
 func (fr *FunctionResult[T]) GetResultVector() *Vector {
 	return fr.vec
 }
@@ -436,7 +447,9 @@ func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameterWrapper[ty
 }
 
 func (fr *FunctionResult[T]) Free() {
-	fr.vec.Free(fr.mp)
+	if fr.vec != nil {
+		fr.vec.Free(fr.mp)
+	}
 }
 
 func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {

@@ -260,8 +260,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 
 func (expr *FunctionExpressionExecutor) Free() {
 	if expr.resultVector != nil {
-		vec := expr.resultVector.GetResultVector()
-		vec.Free(expr.m)
+		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
 	for _, p := range expr.parameterExecutor {
@@ -486,21 +485,15 @@ func generateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 	return vec, nil
 }
 
-// ProjectionDupResult do dup work for vectors of batch as few time as possible.
-func ProjectionDupResult(proc *process.Process, executors []ExpressionExecutor,
+// FixProjectionResult set result vector for rbat.
+// sbat is the source batch.
+func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
 	rbat *batch.Batch, sbat *batch.Batch) (dupSize int, err error) {
 	dupSize = 0
 
 	alreadySet := make([]int, len(rbat.Vecs))
 	for i := range alreadySet {
 		alreadySet[i] = -1
-	}
-
-	canGetNsp := make([]bool, len(executors))
-	for i := range executors {
-		if _, ok := executors[i].(*FunctionExpressionExecutor); ok {
-			canGetNsp[i] = true
-		}
 	}
 
 	finalVectors := make([]*vector.Vector, 0, len(rbat.Vecs))
@@ -511,18 +504,11 @@ func ProjectionDupResult(proc *process.Process, executors []ExpressionExecutor,
 				newVec = vector.NewConstNull(types.T_any.ToType(), oldVec.Length(), proc.Mp())
 			} else {
 				if executors[i].ifResultMemoryReuse() {
-					if canGetNsp[i] {
-						nsp := oldVec.GetNulls()
-						oldVec.SetNulls(nil)
-						newVec, err = oldVec.Dup(proc.Mp())
-						if err != nil {
-							for j := range finalVectors {
-								finalVectors[j].Free(proc.Mp())
-							}
-							return 0, err
-						}
-						dupSize += newVec.Size()
-						newVec.SetNulls(nsp)
+					if e, ok := executors[i].(*FunctionExpressionExecutor); ok {
+						// if projection, we can get the result directly
+						newVec = e.resultVector.GetResultVector()
+						e.resultVector.SetResultVector(nil)
+
 					} else {
 						newVec, err = oldVec.Dup(proc.Mp())
 						if err != nil {
@@ -534,8 +520,20 @@ func ProjectionDupResult(proc *process.Process, executors []ExpressionExecutor,
 						dupSize += newVec.Size()
 					}
 				} else {
-					newVec = oldVec
-					sbat.ReplaceVector(oldVec, nil)
+					if sbat.GetCnt() == 1 {
+						newVec = oldVec
+						sbat.ReplaceVector(oldVec, nil)
+					} else {
+						newVec = proc.GetVector(*oldVec.GetType())
+						err = vector.GetUnionAllFunction(*oldVec.GetType(), proc.Mp())(newVec, oldVec)
+						if err != nil {
+							for j := range finalVectors {
+								finalVectors[j].Free(proc.Mp())
+							}
+							return 0, err
+						}
+						dupSize += newVec.Size()
+					}
 				}
 			}
 
@@ -556,21 +554,27 @@ func ProjectionDupResult(proc *process.Process, executors []ExpressionExecutor,
 	return dupSize, nil
 }
 
-// SafeQuickDup if executor is function executor, we can get the nulls directly without copied.
+// SafeGetResult if executor is function executor, we can get the nulls directly without copied.
 // because next reuse, the nsp will reset.
-func SafeQuickDup(mp *mpool.MPool, vec *vector.Vector, executor ExpressionExecutor) (*vector.Vector, error) {
-	if _, ok := executor.(*FunctionExpressionExecutor); ok {
-		nsp := vec.GetNulls()
-		vec.SetNulls(nil)
-		nv, err := vec.Dup(mp)
+func SafeGetResult(proc *process.Process, vec *vector.Vector, executor ExpressionExecutor) (*vector.Vector, error) {
+	if executor.ifResultMemoryReuse() {
+		if e, ok := executor.(*FunctionExpressionExecutor); ok {
+			nv := e.resultVector.GetResultVector()
+			e.resultVector.SetResultVector(nil)
+			return nv, nil
+		}
+
+		nv, err := vec.Dup(proc.Mp())
 		if err != nil {
-			vec.SetNulls(nsp)
 			return nil, err
 		}
-		nv.SetNulls(nsp)
 		return nv, nil
 	} else {
-		return vec.Dup(mp)
+		if vec.IsConst() {
+			return vec.Dup(proc.Mp())
+		}
+		nv := proc.GetVector(*vec.GetType())
+		return nv, vector.GetUnionAllFunction(*vec.GetType(), proc.Mp())(nv, vec)
 	}
 }
 
@@ -604,6 +608,8 @@ func SetJoinBatchValues(joinBat, bat *batch.Batch, sel int64, length int,
 	return nil
 }
 
+var noColumnBatchForZoneMap = []*batch.Batch{batch.NewWithSize(0)}
+
 func EvaluateFilterByZoneMap(proc *process.Process, expr *plan.Expr, meta objectio.ColumnMetaFetcher, columnMap map[int]int) (selected bool) {
 	if expr == nil {
 		selected = true
@@ -611,20 +617,18 @@ func EvaluateFilterByZoneMap(proc *process.Process, expr *plan.Expr, meta object
 	}
 
 	if len(columnMap) == 0 {
-		executor, err := NewExpressionExecutor(proc, expr)
-		if err != nil {
-			return true
-		}
-		vec, err := executor.Eval(proc, []*batch.Batch{batch.NewWithSize(0)})
+		vec, err := EvalExpressionOnce(proc, expr, noColumnBatchForZoneMap)
 		if err != nil {
 			return true
 		}
 		cols := vector.MustFixedCol[bool](vec)
 		for _, isNeed := range cols {
 			if isNeed {
+				vec.Free(proc.Mp())
 				return true
 			}
 		}
+		vec.Free(proc.Mp())
 		return false
 	}
 

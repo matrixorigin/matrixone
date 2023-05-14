@@ -77,16 +77,12 @@ func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *p
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 
-	executor, err := colexec.NewExpressionExecutor(proc, funExpr)
-	if err != nil {
-		return false, 0
-	}
-	ret, err := executor.Eval(proc, []*batch.Batch{bat})
+	ret, err := colexec.EvalExpressionOnce(proc, funExpr, []*batch.Batch{bat})
 	if err != nil {
 		return false, 0
 	}
 	value := vector.MustFixedCol[int64](ret)[0]
-	executor.Free()
+	ret.Free(proc.Mp())
 
 	return true, uint64(value)
 }

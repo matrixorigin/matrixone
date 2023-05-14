@@ -94,7 +94,6 @@ type PrepareStmt struct {
 	mp             *mpool.MPool
 	InsertBat      *batch.Batch
 	emptyBatch     *batch.Batch                                        // use for expr eval
-	typs           []types.Type                                        // types of values.
 	ufs            []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
 }
 

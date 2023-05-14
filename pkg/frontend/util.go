@@ -547,15 +547,13 @@ func rowsetDataToVector(
 	proc *process.Process,
 	compileCtx plan2.CompilerContext,
 	exprs []*plan.Expr,
-	tarBatch *batch.Batch,
-	tarIndex int,
-	tarType types.Type,
+	tarVec *vector.Vector,
 	emptyBatch *batch.Batch,
 	params []*plan.Expr,
 	uf func(*vector.Vector, *vector.Vector, int64) error,
 ) error {
 	var exprImpl *plan.Expr
-	var typ = plan2.MakePlan2Type(&tarType)
+	var typ = plan2.MakePlan2Type(tarVec.GetType())
 	var err error
 
 	for _, e := range exprs {
@@ -599,13 +597,7 @@ func rowsetDataToVector(
 			return err
 		}
 
-		if tarBatch.Vecs[tarIndex] == nil {
-			tarBatch.Vecs[tarIndex] = vector.NewVec(tarType)
-			if err = tarBatch.Vecs[tarIndex].PreExtend(vec.Length(), proc.Mp()); err != nil {
-				return err
-			}
-		}
-		if err = uf(tarBatch.Vecs[tarIndex], vec, 0); err != nil {
+		if err = uf(tarVec, vec, 0); err != nil {
 			vec.Free(proc.Mp())
 			return err
 		}
