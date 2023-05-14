@@ -102,8 +102,8 @@ func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 			logutil.Info("sqlWriter db initialized failed", zap.String("address", dbAddress), zap.Error(err))
 			return err
 		}
-		newDBConn.SetMaxOpenConns(5)
-		newDBConn.SetMaxIdleConns(5)
+		newDBConn.SetMaxOpenConns(3)
+		newDBConn.SetMaxIdleConns(3)
 		db.Store(newDBConn)
 		return nil
 	}
