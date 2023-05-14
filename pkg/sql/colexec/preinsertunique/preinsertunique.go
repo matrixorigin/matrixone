@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -28,6 +29,7 @@ import (
 const (
 	indexColPos int32 = iota
 	pkColPos
+	rowIdColPos
 )
 
 func String(_ any, buf *bytes.Buffer) {
@@ -61,8 +63,15 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 	uniqueColumnPos := argument.PreInsertCtx.Columns
 	pkPos := argument.PreInsertCtx.PkColumn
 
-	insertUniqueBat := batch.NewWithSize(2)
-	insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+	var insertUniqueBat *batch.Batch
+	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
+	if isUpdate {
+		insertUniqueBat = batch.NewWithSize(3)
+		insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName, catalog.Row_ID}
+	} else {
+		insertUniqueBat = batch.NewWithSize(2)
+		insertUniqueBat.Attrs = []string{catalog.IndexTableIndexColName, catalog.IndexTablePrimaryColName}
+	}
 
 	colCount := len(uniqueColumnPos)
 
@@ -81,6 +90,16 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 
 	vec = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
 	insertUniqueBat.SetVector(pkColPos, vec)
+
+	if isUpdate {
+		idx := len(inputBat.Vecs) - 1
+		insertUniqueBat.SetVector(rowIdColPos, proc.GetVector(*inputBat.GetVector(int32(idx)).GetType()))
+		err := insertUniqueBat.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[idx], 0, inputBat.Vecs[idx].Length(), nil, proc.Mp())
+		if err != nil {
+			return false, err
+		}
+	}
+
 	proc.SetInputBatch(insertUniqueBat)
 	return false, nil
 }
