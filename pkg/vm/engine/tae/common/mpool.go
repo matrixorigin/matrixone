@@ -54,7 +54,7 @@ func InitTAEMPool() {
 		}
 
 		mpool.DeleteMPool(LogAllocator)
-		if LogAllocator, err = mpool.NewMPool("tae_log", 0, mpool.NoFixed); err != nil {
+		if LogAllocator, err = mpool.NewMPool("tae_log", 1024*1024*5, 0); err != nil {
 			panic(err)
 		}
 	}
