@@ -31,20 +31,29 @@ import (
 )
 
 func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.Process) ([]*batch.Batch, error) {
-
 	//release old bats
 	defer proc.PutBatch(bat)
 
 	lenVecs := len(bat.Vecs)
-
 	shuffledBats := make([]*batch.Batch, lenRegs)
 	sels, lenShuffledSels := ap.getSels()
-
-	groupByVector := vector.MustFixedCol[int64](bat.Vecs[0])
-	for row, v := range groupByVector {
-		regIndex := v % int64(lenRegs)
-		sels[regIndex] = append(sels[regIndex], int32(row))
-		lenShuffledSels[regIndex]++
+	switch bat.Vecs[0].GetType().Oid {
+	case types.T_int64:
+		groupByVector := vector.MustFixedCol[int64](bat.Vecs[0])
+		for row, v := range groupByVector {
+			regIndex := v % int64(lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+			lenShuffledSels[regIndex]++
+		}
+	case types.T_int32:
+		groupByVector := vector.MustFixedCol[int32](bat.Vecs[0])
+		for row, v := range groupByVector {
+			regIndex := v % int32(lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+			lenShuffledSels[regIndex]++
+		}
+	default:
+		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
 
 	//generate new shuffled bats

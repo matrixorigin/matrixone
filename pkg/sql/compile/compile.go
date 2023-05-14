@@ -743,10 +743,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		if len(n.GroupBy) == 0 || n.Stats.HashmapSize < plan2.HashMapSizeForBucket {
-			ss = c.compileAgg(n, ss, ns)
+			ss = c.compileMergeGroup(n, ss, ns)
 			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 		} else {
-			ss = c.compileGroup(n, ss, ns)
+			ss = c.compileBucketGroup(n, ss, ns)
 			return c.compileSort(n, ss), nil
 		}
 	case plan.Node_JOIN:
@@ -1602,7 +1602,7 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
@@ -1627,7 +1627,7 @@ func (c *Compile) compileAgg(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scop
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
 	dop := n.Stats.HashmapSize/plan2.HashMapSizeForBucket + 1
@@ -1636,7 +1636,8 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Sc
 	}
 	parent, children := c.newScopeListForGroup(validScopeCount(ss), int(dop))
 	shuffle := false
-	if len(n.GroupBy) == 1 && n.GroupBy[0].Typ.Id == int32(types.T_int64) {
+	// todo : only support shuffle on group by single column and integer type for now
+	if len(n.GroupBy) == 1 && (n.GroupBy[0].Typ.Id == int32(types.T_int64) || n.GroupBy[0].Typ.Id == int32(types.T_int32)) {
 		shuffle = true
 	}
 	j := 0
@@ -1837,8 +1838,8 @@ func (c *Compile) newScopeList(childrenCount int, blocks int) []*Scope {
 }
 
 func (c *Compile) newScopeListForGroup(childrenCount int, blocks int) ([]*Scope, []*Scope) {
-	var parent []*Scope
-	var children []*Scope
+	var parent = make([]*Scope, 0, len(c.cnList))
+	var children = make([]*Scope, 0, len(c.cnList))
 
 	currentFirstFlag := c.anal.isFirst
 	for _, n := range c.cnList {
