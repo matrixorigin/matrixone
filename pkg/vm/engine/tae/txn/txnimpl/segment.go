@@ -25,8 +25,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
+// var newSegmentCnt atomic.Int64
+// var getSegmentCnt atomic.Int64
+// var putSegmentCnt atomic.Int64
+// func GetStatsString() string {
+// 	return fmt.Sprintf(
+// 		"NewSeg: %d, GetSeg: %d, PutSeg: %d, NewBlk: %d, GetBlk: %d, PutBlk: %d",
+// 		newSegmentCnt.Load(),
+// 		getSegmentCnt.Load(),
+// 		putSegmentCnt.Load(),
+// 		newBlockCnt.Load(),
+// 		getBlockCnt.Load(),
+// 		putBlockCnt.Load())
+// }
+
+var (
+	_segPool = sync.Pool{
+		New: func() any {
+			// newSegmentCnt.Add(1)
+			return &txnSegment{}
+		},
+	}
+)
+
 type txnSegment struct {
-	*txnbase.TxnSegment
+	txnbase.TxnSegment
 	entry *catalog.SegmentEntry
 	table *txnTable
 }
@@ -68,15 +91,7 @@ func newSegmentItOnSnap(table *txnTable) handle.SegmentIt {
 		curr.RUnlock()
 		it.linkIt.Next()
 	}
-	//if table.localSegment != nil {
-	//	cit := &composedSegmentIt{
-	//		segmentIt:   it,
-	//		uncommitted: table.localSegment.entry,
-	//	}
-	//	return cit
-	//}
 	return it
-
 }
 
 func newSegmentIt(table *txnTable) handle.SegmentIt {
@@ -178,14 +193,25 @@ func (cit *composedSegmentIt) Next() {
 }
 
 func newSegment(table *txnTable, meta *catalog.SegmentEntry) *txnSegment {
-	seg := &txnSegment{
-		TxnSegment: &txnbase.TxnSegment{
-			Txn: table.store.txn,
-		},
-		table: table,
-		entry: meta,
-	}
+	seg := _segPool.Get().(*txnSegment)
+	// getSegmentCnt.Add(1)
+	seg.Txn = table.store.txn
+	seg.table = table
+	seg.entry = meta
 	return seg
+}
+
+func (seg *txnSegment) reset() {
+	seg.entry = nil
+	seg.table = nil
+	seg.TxnSegment.Reset()
+}
+
+func (seg *txnSegment) Close() (err error) {
+	seg.reset()
+	_segPool.Put(seg)
+	// putSegmentCnt.Add(1)
+	return
 }
 
 func (seg *txnSegment) GetMeta() any            { return seg.entry }

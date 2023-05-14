@@ -33,4 +33,4 @@ WORKDIR /
 
 EXPOSE 6001
 
-ENTRYPOINT [ "/mo-service", "-debug-http=:12345 -launch", "/etc/quickstart/launch.toml"]
+ENTRYPOINT [ "/mo-service", "-debug-http=:12345", "-launch", "/etc/quickstart/launch.toml"]
