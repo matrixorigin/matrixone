@@ -55,11 +55,11 @@ func (e *Entry) SetInfo() {
 		e.Info = info.(*entry.Info)
 	}
 }
-func (e *Entry) ReadFrom(r io.Reader) (n int64, err error) {
+func (e *Entry) ReadFromWithAllocator(r io.Reader, allocator entry.Allocator) (n int64, err error) {
 	if _, err = r.Read(types.EncodeUint64(&e.Lsn)); err != nil {
 		return
 	}
-	_, err = e.Entry.ReadFrom(r)
+	_, err = e.Entry.ReadFromWithAllocator(r, allocator)
 	if err != nil {
 		panic(err)
 	}
@@ -67,7 +67,7 @@ func (e *Entry) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (e *Entry) ReadAt(r *os.File, offset int) (int, error) {
+func (e *Entry) ReadAt(r *os.File, offset int, allocator entry.Allocator) (int, error) {
 	lsnbuf := make([]byte, 8)
 	n, err := r.ReadAt(lsnbuf, int64(offset))
 	if err != nil {
@@ -80,7 +80,7 @@ func (e *Entry) ReadAt(r *os.File, offset int) (int, error) {
 		return n, err
 	}
 
-	n2, err := e.Entry.ReadAt(r, offset)
+	n2, err := e.Entry.ReadAt(r, offset, allocator)
 	return n2 + n, err
 }
 

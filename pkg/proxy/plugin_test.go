@@ -16,12 +16,12 @@ package proxy
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -56,6 +56,10 @@ func (r *mockRouter) Route(ctx context.Context, ci clientInfo) (*CNServer, error
 }
 
 func (r *mockRouter) SelectByConnID(connID uint32) (*CNServer, error) {
+	return nil, nil
+}
+
+func (r *mockRouter) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
 	return nil, nil
 }
 

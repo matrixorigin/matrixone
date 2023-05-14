@@ -75,9 +75,9 @@ func (s *mockServerConn) RawConn() net.Conn { return s.conn }
 func (s *mockServerConn) HandleHandshake(_ *frontend.Packet) (*frontend.Packet, error) {
 	return nil, nil
 }
-func (s *mockServerConn) ExecStmt(stmt string, resp chan<- []byte) error {
+func (s *mockServerConn) ExecStmt(stmt string, resp chan<- []byte) (bool, error) {
 	sendResp(makeOKPacket(), resp)
-	return nil
+	return true, nil
 }
 func (s *mockServerConn) Close() error {
 	if s.conn != nil {
@@ -96,6 +96,8 @@ type testCNServer struct {
 	listener net.Listener
 	started  bool
 	quit     chan interface{}
+
+	globalVars map[string]string
 }
 
 type testHandler struct {
@@ -103,14 +105,16 @@ type testHandler struct {
 	connID      uint32
 	conn        goetty.IOSession
 	sessionVars map[string]string
+	server      *testCNServer
 }
 
 func startTestCNServer(t *testing.T, ctx context.Context, addr string) func() error {
 	b := &testCNServer{
-		ctx:    ctx,
-		scheme: "tcp",
-		addr:   addr,
-		quit:   make(chan interface{}),
+		ctx:        ctx,
+		scheme:     "tcp",
+		addr:       addr,
+		quit:       make(chan interface{}),
+		globalVars: make(map[string]string),
 	}
 	if strings.Contains(addr, "sock") {
 		b.scheme = "unix"
@@ -187,6 +191,7 @@ func (s *testCNServer) Start() error {
 					mysqlProto: frontend.NewMysqlClientProtocol(
 						cid, c, 0, &fp),
 					sessionVars: make(map[string]string),
+					server:      s,
 				}
 				go func(h *testHandler) {
 					testHandle(h)
@@ -220,6 +225,10 @@ func testHandle(h *testHandler) {
 				h.handleSetVar(packet)
 			} else if string(packet.Payload[1:]) == "show session variables" {
 				h.handleShowVar()
+			} else if string(packet.Payload[1:]) == "show global variables" {
+				h.handleShowGlobalVar()
+			} else if strings.HasPrefix(string(packet.Payload[1:]), "kill connection") {
+				h.handleKillConn()
 			} else {
 				h.handleCommon()
 			}
@@ -239,6 +248,12 @@ func (h *testHandler) handleSetVar(packet *frontend.Packet) {
 	words := strings.Split(string(packet.Payload[1:]), " ")
 	v := strings.Split(words[2], "=")
 	h.sessionVars[v[0]] = strings.Trim(v[1], "'")
+	h.mysqlProto.SetSequenceID(1)
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
+}
+
+func (h *testHandler) handleKillConn() {
+	h.server.globalVars["killed"] = "yes"
 	h.mysqlProto.SetSequenceID(1)
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
 }
@@ -276,6 +291,54 @@ func (h *testHandler) handleShowVar() {
 	}
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
 	for k, v := range h.sessionVars {
+		row := make([]interface{}, 2)
+		row[0] = k
+		row[1] = v
+		res.AddRow(row)
+	}
+	ses := &frontend.Session{}
+	ses.SetRequestContext(context.Background())
+	h.mysqlProto.SetSession(ses)
+	if err := h.mysqlProto.SendResultSetTextBatchRow(res, res.GetRowCount()); err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+}
+
+func (h *testHandler) handleShowGlobalVar() {
+	h.mysqlProto.SetSequenceID(1)
+	err := h.mysqlProto.SendColumnCountPacket(2)
+	if err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	cols := []*plan.ColDef{
+		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
+		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Value"},
+	}
+	columns := make([]interface{}, len(cols))
+	res := &frontend.MysqlResultSet{}
+	for i, col := range cols {
+		c := new(frontend.MysqlColumn)
+		c.SetName(col.Name)
+		c.SetOrgName(col.Name)
+		c.SetTable(col.Typ.Table)
+		c.SetOrgTable(col.Typ.Table)
+		c.SetAutoIncr(col.Typ.AutoIncr)
+		c.SetSchema("")
+		c.SetDecimal(col.Typ.Scale)
+		columns[i] = c
+		res.AddColumn(c)
+	}
+	for _, c := range columns {
+		if err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
+			_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+			return
+		}
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+	for k, v := range h.server.globalVars {
 		row := make([]interface{}, 2)
 		row[0] = k
 		row[1] = v
@@ -403,7 +466,7 @@ func TestServerConn_ExecStmt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, 0, int(sc.ConnID()))
 	resp := make(chan []byte, 10)
-	err = sc.ExecStmt("kill query", resp)
+	_, err = sc.ExecStmt("kill query", resp)
 	require.NoError(t, err)
 	res := <-resp
 	ok := isOKPacket(res)
