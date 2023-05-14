@@ -259,8 +259,10 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 	}
 }
 
+// XXX This emptyFlag thing is broken -- it simply cannot be used concurrently.
+// Make any an alias of EmptyByFlag, otherwise there will be hell lots of race conditions.
 func (nsp *Nulls) Any() bool {
-	return nsp != nil && !nsp.np.IsEmpty()
+	return nsp != nil && !nsp.np.EmptyByFlag()
 }
 
 func (nsp *Nulls) IsEmpty() bool {
