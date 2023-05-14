@@ -22,9 +22,7 @@ import (
 
 const (
 	GroupC uint32 = iota + 10
-	GroupUC
 	GroupPrepare
-	GroupCatalog
 )
 
 type Index = store.Index
