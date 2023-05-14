@@ -16,6 +16,7 @@ package explain
 
 import (
 	"context"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -371,6 +372,9 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return result, moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
 		return result, moerr.NewNYI(ctx, "explain format dot")
+	}
+	if plan2.NeedShuffle(ndesc.Node) {
+		result += " shuffle: true "
 	}
 	return result, nil
 }

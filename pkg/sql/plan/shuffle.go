@@ -55,6 +55,10 @@ func NeedShuffle(n *plan.Node) bool {
 	if n.Stats.HashmapSize < HashMapSizeForBucket {
 		return false
 	}
+	if n.Stats.Outcnt/n.Stats.Cost < 0.1 {
+		return false
+	}
+
 	if GetHashColumnIdx(n.GroupBy[0]) == -1 {
 		return false
 	}
