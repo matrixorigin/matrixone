@@ -58,15 +58,16 @@ func ReadPersistedBlockRow(location objectio.Location) int {
 }
 
 func LoadPersistedDeletes(
+	pkName string,
 	fs *objectio.ObjectFS,
 	location objectio.Location) (bat *containers.Batch, err error) {
-	movbat, err := blockio.LoadColumns(context.Background(), []uint16{0, 1, 2}, nil, fs.Service, location, nil)
+	movbat, err := blockio.LoadColumns(context.Background(), []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
 	if err != nil {
 		return
 	}
 	bat = containers.NewBatch()
-	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
-	for i := 0; i < 3; i++ {
+	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, pkName, catalog.AttrAborted}
+	for i := 0; i < 4; i++ {
 		bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
 	}
 	return
