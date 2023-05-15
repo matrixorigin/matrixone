@@ -149,17 +149,17 @@ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    1
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    3
 select 1 union select 2    2
 select 1    1
- drop database db2    0
- delete from t2 where a=1    0
- delete from t2 where a=5    0
- select * from t2 limit 3    3
- select * from t2    5
- update t2 set b='yy' where a=1    0
- update t2 set b='xx' where a=5    0
- insert into t2 values (1, 'a'),(1, 'b'),(3, 'c'),(4,'d'),(5,'e')    0
- create table t2(a int, b varchar)    0
- use db2    0
- create database db2    0
+drop database db2    0
+delete from t2 where a=1    0
+delete from t2 where a=5    0
+select * from t2 limit 3    3
+select * from t2    5
+update t2 set b='yy' where a=1    0
+update t2 set b='xx' where a=5    0
+insert into t2 values (1, 'a'),(1, 'b'),(3, 'c'),(4,'d'),(5,'e')    0
+create table t2(a int, b varchar)    0
+use db2    0
+create database db2    0
 drop database db2    0
 commit    0
 delete from t2 where a=1    0

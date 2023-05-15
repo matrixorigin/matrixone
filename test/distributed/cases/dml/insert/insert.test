@@ -254,11 +254,11 @@ insert into t select c,c from temp;
 select count(*) from t;
 # abort,duplicate key
 -- @bvt:issue#7682
-insert into t select * from t;
--- @bvt:issue#
+insert into t select * from t order by a, b;
+-- @bvt:issue
 # transaction test
 begin;
-insert into t select * from t;
+insert into t select * from t order by a, b;
 select count(*) from t;
 commit;
 select count(*) from t;
@@ -271,10 +271,10 @@ create table t(a int unique);
 insert into t select * from generate_series(1,200000) g;
 select count(*) from t;
 # abort,duplicate key
-insert into t select * from t;
+insert into t select * from t order by a;
 # transaction test
 begin;
-insert into t select * from t;
+insert into t select * from t order by a;
 select count(*) from t;
 commit;
 select count(*) from t;
@@ -288,6 +288,7 @@ insert into t(b) select * from generate_series(1,200000) g;
 select count(*) from t;
 select a from t where a > 199990;
 drop table t;
+-- @bvt:issue#9434
 # 6.all load goes through s3
 drop table if exists t1;
 create table t1(
@@ -323,3 +324,4 @@ select mo_ctl('dn', 'flush', 'ssb.t2');
 select * from t2;
 drop table t2;
 drop database ssb;
+-- @bvt:issue

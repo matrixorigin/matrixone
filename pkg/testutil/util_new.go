@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -88,7 +87,8 @@ func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch 
 	bat.InitZsOne(n)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
-		nulls.New(bat.Vecs[i].GetNulls(), n)
+		// XXX do we need to init nulls here?   can we be lazy?
+		bat.Vecs[i].GetNulls().InitWithSize(n)
 	}
 	return bat
 }
@@ -98,7 +98,7 @@ func NewBatchWithNulls(ts []types.Type, random bool, n int, m *mpool.MPool) *bat
 	bat.InitZsOne(n)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
-		nulls.New(bat.Vecs[i].GetNulls(), n)
+		bat.Vecs[i].GetNulls().InitWithSize(n)
 		nsp := bat.Vecs[i].GetNulls()
 		for j := 0; j < n; j++ {
 			if j%2 == 0 {

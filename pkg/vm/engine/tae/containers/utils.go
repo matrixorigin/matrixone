@@ -159,8 +159,8 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 		if err != nil {
 			panic(err)
 		}
-		if vec.GetNulls().Np != nil && vec.GetNulls().Np.Contains(uint64(row)) {
-			vec.GetNulls().Np.Remove(uint64(row))
+		if vec.GetNulls().Contains(uint64(row)) {
+			vec.GetNulls().Unset(uint64(row))
 		}
 	}
 }
@@ -173,8 +173,8 @@ func GenericUpdateBytes(vec *movec.Vector, row uint32, v any, isNull bool) {
 		if err != nil {
 			panic(err)
 		}
-		if vec.GetNulls().Np != nil && vec.GetNulls().Np.Contains(uint64(row)) {
-			vec.GetNulls().Np.Remove(uint64(row))
+		if vec.GetNulls().Contains(uint64(row)) {
+			vec.GetNulls().Unset(uint64(row))
 		}
 	}
 }
