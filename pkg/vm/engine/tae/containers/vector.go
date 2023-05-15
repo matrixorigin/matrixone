@@ -201,7 +201,7 @@ func (vec *vectorWrapper) HasNull() bool {
 	if vec.downstreamVector.IsConst() {
 		return false
 	}
-	return vec.NullMask() != nil && vec.NullMask().Any()
+	return vec.NullMask() != nil && !vec.NullMask().IsEmpty()
 }
 
 func (vec *vectorWrapper) NullCount() int {
