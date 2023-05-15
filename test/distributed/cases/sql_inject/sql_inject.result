@@ -4,7 +4,7 @@ drop user `foo"; drop table foo; select "1`;
 internal error: invalid input
 create role 'foo"; drop table foo; select "1';
 internal error: invalid input
-alter database `foo"; drop table foo; select "1` set global syspublications = "sys_pub_1";
+create database `foo"; drop table foo; select "1`;
 internal error: invalid input
 drop database `system";drop table system.statement_info;select "`;
 internal error: invalid input
