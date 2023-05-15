@@ -220,7 +220,8 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
-	defer put()
+	defer put.Put()
+
 	n, err := io.Copy(fileWithChecksum, newIOEntriesReader(ctx, vector.Entries))
 	if err != nil {
 		return err
@@ -343,7 +344,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 
 		if entry.WriterForRead != nil {
 			fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, file, _BlockContentSize, l.perfCounterSets)
-			defer put()
+			defer put.Put()
 
 			if entry.Offset > 0 {
 				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
@@ -427,7 +428,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 
 		} else {
 			fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, file, _BlockContentSize, l.perfCounterSets)
-			defer put()
+			defer put.Put()
 
 			if entry.Offset > 0 {
 				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
