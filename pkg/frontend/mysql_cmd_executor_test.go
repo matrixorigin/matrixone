@@ -803,6 +803,22 @@ func Test_handleShowVariables(t *testing.T) {
 
 		sv := &tree.ShowVariables{Global: false}
 		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+		bh.init()
+
+		sql := getSystemVariablesWithAccount(0)
+		rows := [][]interface{}{
+			{"syspublications", ""},
+		}
+
+		bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
+		sv = &tree.ShowVariables{Global: true}
+		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
 	})
 }
 
