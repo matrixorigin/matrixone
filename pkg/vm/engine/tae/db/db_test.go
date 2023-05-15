@@ -6750,6 +6750,7 @@ func TestDiffCheckPoints(t *testing.T) {
 	blkid := blk.ID
 	segid := blkid.Segment()
 	seg, err := rel.GetSegment(segid)
+	assert.Nil(t, err)
 	assert.NotNil(t, seg)
 	err = seg.SoftDeleteBlock(blkid)
 	assert.Nil(t, err)
