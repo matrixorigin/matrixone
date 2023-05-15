@@ -117,6 +117,10 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 	return vec.Get(row), vec.IsNull(row)
 }
 
+func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+	return node.data.Vecs[colIdx].Foreach(op, sels)
+}
+
 func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {
 	return node.pkIndex.GetActiveRow(key)
 }

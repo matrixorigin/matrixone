@@ -102,6 +102,18 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
+func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
+		blk.RLock()
+		defer blk.RUnlock()
+		return node.MustMNode().Foreach(colIdx, op, sels)
+	} else {
+		return node.MustPNode().Foreach(blk.meta.GetSchema(), colIdx, op, sels)
+	}
+}
+
 func (blk *baseBlock) TryUpgrade() (err error) {
 	node := blk.node.Load()
 	if node.IsPersisted() {
@@ -204,7 +216,9 @@ func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) 
 	if location.IsEmpty() {
 		return
 	}
+	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
 	return LoadPersistedDeletes(
+		pkName,
 		blk.fs,
 		location)
 }
@@ -217,7 +231,7 @@ func (blk *baseBlock) FillPersistedDeletes(
 		return nil
 	}
 	for i := 0; i < deletes.Length(); i++ {
-		abort := deletes.Vecs[2].Get(i).(bool)
+		abort := deletes.Vecs[3].Get(i).(bool)
 		if abort {
 			continue
 		}
@@ -456,13 +470,22 @@ func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 func (blk *baseBlock) CollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	rowID, ts, abort, abortedMap := blk.mvcc.CollectDelete(start, end)
+	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDelete(start, end)
 	if rowID == nil {
 		return
 	}
+	pkDef := blk.meta.GetSchema().GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	pkIdx := pkDef.Idx
+	blk.Foreach(pkIdx, func(v any, isNull bool, row int) error {
+		pkVec.Append(v, false)
+		return nil
+	}, deletes)
+	// batch: rowID, ts, pkVec, abort
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)
 	bat.AddVector(catalog.AttrCommitTs, ts)
+	bat.AddVector(pkDef.Name, pkVec)
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abort)
 	} else {
