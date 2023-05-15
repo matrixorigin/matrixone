@@ -32,8 +32,9 @@ type BlockEntry struct {
 	*BaseEntryImpl[*MetadataMVCCNode]
 	segment *SegmentEntry
 	*BlockNode
-	ID      types.Blockid
-	blkData data.Block
+	ID       types.Blockid
+	blkData  data.Block
+	Location objectio.Location
 }
 
 func NewReplayBlockEntry() *BlockEntry {
@@ -285,10 +286,6 @@ func (entry *BlockEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 		return
 	}
 	tableEntry.RUnlock()
-
-	// segmentEntry.RLock()
-	// terminated,ts = segmentEntry.TryGetTerminatedTS(true)
-	// segmentEntry.RUnlock()
 	return
 }
 
@@ -296,6 +293,9 @@ func (entry *BlockEntry) HasPersistedData() bool {
 	return !entry.GetMetaLoc().IsEmpty()
 }
 func (entry *BlockEntry) GetMetaLoc() objectio.Location {
+	if len(entry.Location) > 0 {
+		return entry.Location
+	}
 	entry.RLock()
 	defer entry.RUnlock()
 	if entry.GetLatestNodeLocked() == nil {
@@ -343,6 +343,7 @@ func (entry *BlockEntry) CreateWithLoc(ts types.TS, metaLoc objectio.Location, d
 		BaseNode:    baseNode.CloneAll(),
 	}
 	entry.Insert(node)
+	entry.Location = metaLoc
 }
 
 func (entry *BlockEntry) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc objectio.Location, deltaLoc objectio.Location) {
@@ -358,6 +359,7 @@ func (entry *BlockEntry) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc object
 		BaseNode:    baseNode.CloneAll(),
 	}
 	entry.Insert(node)
+	entry.Location = metaLoc
 }
 func (entry *BlockEntry) UpdateMetaLoc(txn txnif.TxnReader, metaLoc objectio.Location) (isNewNode bool, err error) {
 	entry.Lock()
@@ -378,6 +380,7 @@ func (entry *BlockEntry) UpdateMetaLoc(txn txnif.TxnReader, metaLoc objectio.Loc
 	var node *MVCCNode[*MetadataMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
 	node.BaseNode.Update(baseNode)
+	entry.Location = metaLoc
 	return
 }
 
