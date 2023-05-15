@@ -24,7 +24,7 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func compareOperatorSupports(typ1, typ2 types.Type) bool {
+func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
 		return false
 	}
@@ -37,8 +37,31 @@ func compareOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_char, types.T_varchar:
 	case types.T_date, types.T_datetime:
 	case types.T_timestamp, types.T_time:
-	case types.T_blob, types.T_text, types.T_json:
+	case types.T_blob, types.T_text:
 	case types.T_binary, types.T_varbinary:
+	case types.T_uuid:
+	default:
+		return false
+	}
+	return true
+}
+
+func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
+	if typ1.Oid != typ2.Oid {
+		return false
+	}
+	switch typ1.Oid {
+	case types.T_bool:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+	case types.T_float32, types.T_float64:
+	case types.T_decimal64, types.T_decimal128:
+	case types.T_char, types.T_varchar:
+	case types.T_date, types.T_datetime:
+	case types.T_timestamp, types.T_time:
+	case types.T_blob, types.T_text:
+	case types.T_binary, types.T_varbinary:
+	case types.T_json:
 	case types.T_uuid:
 	default:
 		return false
@@ -654,7 +677,7 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return valueCompare[float64](parameters, rs, uint64(length), func(a, b float64) bool {
 			return a > b
 		})
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
 			return bytes.Compare(a, b) > 0
 		})
@@ -770,7 +793,7 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		return valueCompare[float64](parameters, rs, uint64(length), func(a, b float64) bool {
 			return a >= b
 		})
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
 			return bytes.Compare(a, b) >= 0
 		})
@@ -974,7 +997,7 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return valueCompare[float64](parameters, rs, uint64(length), func(a, b float64) bool {
 			return a < b
 		})
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
 			return bytes.Compare(a, b) < 0
 		})
@@ -1090,7 +1113,7 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		return valueCompare[float64](parameters, rs, uint64(length), func(a, b float64) bool {
 			return a <= b
 		})
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
 		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
 			return bytes.Compare(a, b) <= 0
 		})

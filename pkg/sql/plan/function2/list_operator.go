@@ -33,7 +33,7 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if compareOperatorSupports(t1, t2) {
+					if equalAndNotEqualOperatorSupports(t1, t2) {
 						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {
 							if t1.Scale > t2.Scale {
 								t2.Scale = t1.Scale
@@ -44,7 +44,7 @@ var supportedOperators = []FuncNew{
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
-					if compareOperatorSupports(inputs[0], inputs[1]) {
+					if equalAndNotEqualOperatorSupports(inputs[0], inputs[1]) {
 						if inputs[0].Oid.IsDecimal() && inputs[0].Scale != inputs[0].Scale {
 							t1, t2 := inputs[0], inputs[1]
 							if t1.Scale > t2.Scale {
@@ -86,11 +86,11 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if compareOperatorSupports(t1, t2) {
+					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
-					if compareOperatorSupports(inputs[0], inputs[1]) {
+					if otherCompareOperatorSupports(inputs[0], inputs[1]) {
 						return newCheckResultWithSuccess(0)
 					}
 				}
@@ -123,11 +123,11 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if compareOperatorSupports(t1, t2) {
+					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
-					if compareOperatorSupports(inputs[0], inputs[1]) {
+					if otherCompareOperatorSupports(inputs[0], inputs[1]) {
 						return newCheckResultWithSuccess(0)
 					}
 				}
@@ -160,11 +160,11 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if compareOperatorSupports(t1, t2) {
+					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
-					if compareOperatorSupports(inputs[0], inputs[1]) {
+					if otherCompareOperatorSupports(inputs[0], inputs[1]) {
 						return newCheckResultWithSuccess(0)
 					}
 				}
@@ -197,11 +197,11 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if compareOperatorSupports(t1, t2) {
+					if otherCompareOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
-					if compareOperatorSupports(inputs[0], inputs[1]) {
+					if otherCompareOperatorSupports(inputs[0], inputs[1]) {
 						return newCheckResultWithSuccess(0)
 					}
 				}
@@ -234,11 +234,11 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
-					if compareOperatorSupports(t1, t2) {
+					if equalAndNotEqualOperatorSupports(t1, t2) {
 						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
 				} else {
-					if compareOperatorSupports(inputs[0], inputs[1]) {
+					if equalAndNotEqualOperatorSupports(inputs[0], inputs[1]) {
 						return newCheckResultWithSuccess(0)
 					}
 				}
