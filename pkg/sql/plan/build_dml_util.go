@@ -450,9 +450,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				}
 			}
 			childObjRef := &plan.ObjectRef{
-				Obj:        int64(childTableDef.TblId),
-				SchemaName: builder.compCtx.DefaultDatabase(),
-				ObjName:    childTableDef.Name,
+				Obj:          int64(childTableDef.TblId),
+				SchemaName:   builder.compCtx.DefaultDatabase(),
+				ObjName:      childTableDef.Name,
+				PubAccountId: -1,
 			}
 
 			for _, fk := range childTableDef.Fkeys {

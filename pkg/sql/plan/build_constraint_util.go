@@ -285,9 +285,10 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	nowIdx := len(tblInfo.tableDefs)
 	tblInfo.isClusterTable = append(tblInfo.isClusterTable, isClusterTable)
 	tblInfo.objRef = append(tblInfo.objRef, &ObjectRef{
-		Obj:        int64(tableDef.TblId),
-		SchemaName: dbName,
-		ObjName:    tblName,
+		Obj:          int64(tableDef.TblId),
+		SchemaName:   dbName,
+		ObjName:      tblName,
+		PubAccountId: -1,
 	})
 	tblInfo.tableDefs = append(tblInfo.tableDefs, tableDef)
 	key := dbName + "." + tblName
