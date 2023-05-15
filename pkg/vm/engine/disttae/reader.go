@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -93,20 +92,27 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
-		blockio.BlockPrefetch(r.prefetchColIdxs, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		blks := make([]*catalog.BlockInfo, 0, len(r.infos[0]))
+		for _, info := range r.infos[0] {
+			blks = append(blks, &info.meta)
+		}
+		blockio.BlockPrefetch(r.prefetchColIdxs, r.fs, [][]*catalog.BlockInfo{blks})
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
 	}
 
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	// load txn_workspace flush deletes
+	info.LoadFlushDeleteForBlockRead(ctx, r.fs, mp)
+
+	bat, err := blockio.BlockRead(r.ctx, &info.meta, info.cnRawBatchdeletes, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
 	bat.SetAttributes(cols)
 
 	// if it's not sorted, just return
-	if !r.blks[0].Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
+	if !r.blks[0].meta.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
 		return bat, nil
 	}
 
@@ -131,68 +137,56 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	return bat, nil
 }
 
-func (r *blockMergeReader) Close() error {
-	return nil
-}
+// func (r *blockMergeReader) Close() error {
+// 	return nil
+// }
 
-func (r *blockMergeReader) Read(ctx context.Context, cols []string,
-	expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
-	if len(r.blks) == 0 {
-		r.sels = nil
-		return nil, nil
-	}
-	defer func() { r.blks = r.blks[1:] }()
-	info := &r.blks[0].meta
+// func (r *blockMergeReader) Read(ctx context.Context, cols []string,
+// 	expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
+// 	if len(r.blks) == 0 {
+// 		r.sels = nil
+// 		return nil, nil
+// 	}
+// 	defer func() { r.blks = r.blks[1:] }()
+// 	info := &r.blks[0]
 
-	if len(cols) != len(r.seqnums) {
-		if len(r.seqnums) == 0 {
-			r.seqnums = make([]uint16, len(cols))
-			r.colTypes = make([]types.Type, len(cols))
-			r.colNulls = make([]bool, len(cols))
-			for i, column := range cols {
-				// sometimes Name2ColIndex have no row_id， sometimes have one
-				// sometimes Name2ColIndex have no row_id， sometimes have one
-				if column == catalog.Row_ID {
-					// actually rowid's seqnum does not matter because it is generated in memory
-					r.seqnums[i] = objectio.SEQNUM_ROWID
-					r.colTypes[i] = types.T_Rowid.ToType()
-				} else {
-					logicalIdx := r.tableDef.Name2ColIndex[column]
-					colDef := r.tableDef.Cols[logicalIdx]
-					r.seqnums[i] = uint16(colDef.Seqnum)
-					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
-					if colDef.Default != nil {
-						r.colNulls[i] = colDef.Default.NullAbility
-					}
-				}
-			}
-		} else {
-			panic(moerr.NewInternalError(ctx, "blockReader reads different number of columns"))
-		}
-	}
+// 	if len(cols) != len(r.seqnums) {
+// 		if len(r.seqnums) == 0 {
+// 			r.seqnums = make([]uint16, len(cols))
+// 			r.colTypes = make([]types.Type, len(cols))
+// 			r.colNulls = make([]bool, len(cols))
+// 			for i, column := range cols {
+// 				// sometimes Name2ColIndex have no row_id， sometimes have one
+// 				// sometimes Name2ColIndex have no row_id， sometimes have one
+// 				if column == catalog.Row_ID {
+// 					// actually rowid's seqnum does not matter because it is generated in memory
+// 					r.seqnums[i] = objectio.SEQNUM_ROWID
+// 					r.colTypes[i] = types.T_Rowid.ToType()
+// 				} else {
+// 					logicalIdx := r.tableDef.Name2ColIndex[column]
+// 					colDef := r.tableDef.Cols[logicalIdx]
+// 					r.seqnums[i] = uint16(colDef.Seqnum)
+// 					r.colTypes[i] = types.T(colDef.Typ.Id).ToType()
+// 					if colDef.Default != nil {
+// 						r.colNulls[i] = colDef.Default.NullAbility
+// 					}
+// 				}
+// 			}
+// 		} else {
+// 			panic(moerr.NewInternalError(ctx, "blockReader reads different number of columns"))
+// 		}
+// 	}
 
-	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
-	if err != nil {
-		return nil, err
-	}
-	bat.SetAttributes(cols)
-	r.sels = r.sels[:0]
-	deletes := make([]int, len(r.blks[0].cnRawBatchdeletes))
-	copy(deletes, r.blks[0].cnRawBatchdeletes)
-	sort.Ints(deletes)
-	for i := 0; i < bat.Length(); i++ {
-		if len(deletes) > 0 && i == deletes[0] {
-			deletes = deletes[1:]
-			continue
-		}
-		r.sels = append(r.sels, int64(i))
-	}
-	bat.Shrink(r.sels)
-
-	logutil.Debug(testutil.OperatorCatchBatch("block merge reader", bat))
-	return bat, nil
-}
+// 	logutil.Debugf("read %v with %v", cols, r.seqnums)
+// 	info.LoadFlushDeleteForBlockRead(ctx, r.fs, mp)
+// 	bat, err := blockio.BlockRead(r.ctx, &info.meta, info.cnRawBatchdeletes, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	bat.SetAttributes(cols)
+// 	logutil.Debug(testutil.OperatorCatchBatch("block merge reader", bat))
+// 	return bat, nil
+// }
 
 func NewMergeReader(readers []engine.Reader) *mergeReader {
 	return &mergeReader{

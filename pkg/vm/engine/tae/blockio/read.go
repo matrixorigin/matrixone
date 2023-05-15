@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -38,7 +39,7 @@ import (
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
 func BlockRead(
 	ctx context.Context,
-	info *pkgcatalog.BlockInfo,
+	info *pkgcatalog.BlockInfo, deletes []int,
 	seqnums []uint16,
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
@@ -48,7 +49,7 @@ func BlockRead(
 		logutil.Infof("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
 	}
 	columnBatch, err := BlockReadInner(
-		ctx, info, seqnums, colTypes,
+		ctx, info, deletes, seqnums, colTypes,
 		types.TimestampToTS(ts), fs, mp, vp,
 	)
 	if err != nil {
@@ -93,7 +94,7 @@ func mergeDeleteRows(d1, d2 []int64) []int64 {
 
 func BlockReadInner(
 	ctx context.Context,
-	info *pkgcatalog.BlockInfo,
+	info *pkgcatalog.BlockInfo, deleteOffset []int,
 	seqnums []uint16,
 	colTypes []types.Type,
 	ts types.TS,
@@ -128,7 +129,12 @@ func BlockReadInner(
 				info.BlockID.String(), deletes.Length(), ts.ToString(), len(deletedRows))
 		}
 	}
-
+	for _, offset := range deleteOffset {
+		deletedRows = append(deletedRows, int64(offset))
+	}
+	sort.Slice(deletedRows, func(i, j int) bool {
+		return deletedRows[i] < deletedRows[j]
+	})
 	result = batch.NewWithSize(len(loaded.Vecs))
 	for i, col := range loaded.Vecs {
 		typ := *col.GetType()

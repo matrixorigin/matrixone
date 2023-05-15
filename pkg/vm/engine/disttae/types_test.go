@@ -53,10 +53,8 @@ func TestModifyBlockMarShalAnUnmarshal(t *testing.T) {
 		cnRawBatchdeletes: []int{1, 2},
 		cnDeleteLocations: []objectio.Location{loca1, loca2},
 	}
-	data := modifyBlockMeta.Encode()
-	var modifyBlockMeta2 ModifyBlockMeta
-	p := &modifyBlockMeta2
-	err := p.Decode(data)
+	data := modifyBlockMeta.ModifyEncode()
+	modifyBlockMeta2, err := ModifyDecode(data)
 	require.Nil(t, err)
 	require.Equal(t, modifyBlockMeta.meta, catalog.BlockInfo{})
 	require.Equal(t, modifyBlockMeta.cnRawBatchdeletes, modifyBlockMeta2.cnRawBatchdeletes)

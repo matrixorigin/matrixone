@@ -1330,19 +1330,19 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	}
 }
 
-func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
-	var infos [][]*catalog.BlockInfo
+func groupBlocksToObjects(blocks []*ModifyBlockMeta, dop int) ([][]*ModifyBlockMeta, []int) {
+	var infos [][]*ModifyBlockMeta
 	objMap := make(map[string]int, 0)
 	lenObjs := 0
 	for i := range blocks {
 		block := blocks[i]
-		objName := block.MetaLocation().Name().String()
+		objName := block.meta.MetaLocation().Name().String()
 		if idx, ok := objMap[objName]; ok {
 			infos[idx] = append(infos[idx], block)
 		} else {
 			objMap[objName] = lenObjs
 			lenObjs++
-			infos = append(infos, []*catalog.BlockInfo{block})
+			infos = append(infos, []*ModifyBlockMeta{block})
 		}
 	}
 	steps := make([]int, len(infos))
@@ -1372,7 +1372,7 @@ func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *pl
 	return rds
 }
 
-func distributeBlocksToBlockReaders(rds []*blockReader, num int, infos [][]*catalog.BlockInfo, steps []int) []*blockReader {
+func distributeBlocksToBlockReaders(rds []*blockReader, num int, infos [][]*ModifyBlockMeta, steps []int) []*blockReader {
 	readerIndex := 0
 	for i := range infos {
 		//distribute objects and steps for prefetch

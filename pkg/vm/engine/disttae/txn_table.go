@@ -230,7 +230,6 @@ func (tbl *txnTable) reset(newId uint64) {
 	tbl.tableId = newId
 	tbl._parts = nil
 	tbl.blockInfos = nil
-	tbl.modifiedBlocks = nil
 	tbl.blockInfosUpdated = false
 	tbl.localState = logtailreplay.NewPartitionState(true)
 }
@@ -268,8 +267,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 		return
 	}
 
-	tbl.modifiedBlocks = make([][]ModifyBlockMeta, len(tbl.blockInfos))
-
 	for _, i := range tbl.dnList {
 		blocks := tbl.blockInfos[i]
 		if len(blocks) == 0 {
@@ -283,7 +280,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 			expr,
 			blocks,
 			&ranges,
-			&tbl.modifiedBlocks[i],
 			tbl.db.txn.proc,
 		); err != nil {
 			return
@@ -302,22 +298,23 @@ func (tbl *txnTable) rangesOnePart(
 	expr *plan.Expr, // filter expression
 	blocks []catalog.BlockInfo, // whole block list
 	ranges *[][]byte, // output marshaled block list after filtering
-	modifies *[]ModifyBlockMeta, // output modified blocks after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	deletes := make(map[types.Blockid][]int)
-	ids := make([]types.Blockid, len(blocks))
-	appendIds := make([]types.Blockid, 0, 1)
+
+	// append-block-id and no-append-block-id are all in visibleBlks
+	// no-need to distinct them
+	visibleBlks := make([]catalog.BlockInfo, 0, len(blocks))
 
 	for i := range blocks {
 		// if cn can see a appendable block, this block must contain all updates
 		// in cache, no need to do merge read, BlockRead will filter out
 		// invisible and deleted rows with respect to the timestamp
 		if blocks[i].EntryState {
-			appendIds = append(appendIds, blocks[i].BlockID)
+			visibleBlks = append(visibleBlks, blocks[i])
 		} else {
 			if blocks[i].CommitTs.ToTimestamp().Less(ts) { // hack
-				ids[i] = blocks[i].BlockID
+				visibleBlks = append(visibleBlks, blocks[i])
 			}
 		}
 	}
@@ -326,19 +323,17 @@ func (tbl *txnTable) rangesOnePart(
 	// non-append -> raw-deletes  -- yes
 	// append     -> raw-deletes -- yes
 	// append     -> flush-deletes -- yes
-	for _, blockID := range ids {
+
+	// add dn-memroy-deletes
+	for _, blk := range visibleBlks {
 		ts := types.TimestampToTS(ts)
-		iter := state.NewRowsIter(ts, &blockID, true)
+		iter := state.NewRowsIter(ts, &blk.BlockID, true)
 		for iter.Next() {
 			entry := iter.Entry()
 			id, offset := entry.RowID.Decode()
 			deletes[id] = append(deletes[id], int(offset))
 		}
 		iter.Close()
-		// DN flush deletes rowids block
-		if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
-			return
-		}
 	}
 
 	for _, entry := range tbl.writes {
@@ -355,14 +350,6 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}
 
-	// add append-block flush-deletes
-	for _, blockID := range appendIds {
-		// DN flush deletes rowids block
-		if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
-			return
-		}
-	}
-
 	var (
 		isMonoExpr     bool
 		meta           objectio.ObjectMeta
@@ -370,15 +357,15 @@ func (tbl *txnTable) rangesOnePart(
 		skipThisObject bool
 	)
 
-	hasDeletes := len(deletes) > 0
-
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	if isMonoExpr = plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
 		columnMap, _, _, _ = plan2.GetColumnsByExpr(expr, tableDef)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
-	for _, blk := range blocks {
+	// for now, we have load all memory deletes (both partitionState deletes and txn_workspace memory deletes).
+	// and we need to add DN block flush deletes batch.
+	for _, blk := range visibleBlks {
 		need := true
 
 		// if expr is monotonic, we need evaluating expr for each block
@@ -411,19 +398,30 @@ func (tbl *txnTable) rangesOnePart(
 		if !need {
 			continue
 		}
-
-		if hasDeletes {
-			// check if the block has deletes
-			// if any, store the block and its deletes in modifies
-			if rows, ok := deletes[blk.BlockID]; ok {
-				*modifies = append(*modifies, ModifyBlockMeta{blk, rows, nil})
-			} else {
-				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-			}
-		} else {
-			// store the block in ranges
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+		modifiyBlock := &ModifyBlockMeta{
+			meta: blk,
 		}
+
+		if len(deletes[blk.BlockID]) > 0 {
+			modifiyBlock.cnRawBatchdeletes = make([]int, 0, len(deletes[blk.BlockID]))
+			modifiyBlock.cnRawBatchdeletes = append(modifiyBlock.cnRawBatchdeletes, deletes[blk.BlockID]...)
+		}
+		length := len(tbl.db.txn.blockId_dn_delete_metaLoc_batch[blk.BlockID])
+		if length > 0 {
+			modifiyBlock.cnDeleteLocations = make([]objectio.Location, 0, length)
+			// THIS Will be not over 8192 (an extreme number), in normal it's 1 or 2.
+			for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[blk.BlockID] {
+				vs := vector.MustStrCol(bat.GetVector(0))
+				for _, metalLoc := range vs {
+					if location, err := blockio.EncodeLocationFromString(metalLoc); err != nil {
+						return err
+					} else {
+						modifiyBlock.cnDeleteLocations = append(modifiyBlock.cnDeleteLocations, location)
+					}
+				}
+			}
+		}
+		*ranges = append(*ranges, modifiyBlock.ModifyEncode())
 	}
 	return
 }
@@ -831,14 +829,17 @@ func (tbl *txnTable) GetTableID(ctx context.Context) uint64 {
 
 func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	if len(ranges) == 0 {
+		// get partitionReader,no block read here
 		return tbl.newMergeReader(ctx, num, expr)
 	}
 	if len(ranges) == 1 && engine.IsMemtable(ranges[0]) {
+		// get partitionReader,no block read here
 		return tbl.newMergeReader(ctx, num, expr)
 	}
 	if len(ranges) > 1 && engine.IsMemtable(ranges[0]) {
 		rds := make([]engine.Reader, num)
 		mrds := make([]mergeReader, num)
+		// get partitionReader,no block read here
 		rds0, err := tbl.newMergeReader(ctx, num, expr)
 		if err != nil {
 			return nil, err
@@ -861,6 +862,7 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 	return tbl.newBlockReader(ctx, num, expr, ranges)
 }
 
+// new MergeReader is used to Get PartitionReader, there not exists block read
 func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
 
@@ -879,17 +881,12 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
-		var blks []ModifyBlockMeta
-
-		if len(tbl.blockInfos) > 0 {
-			blks = tbl.modifiedBlocks[i]
-		}
+		// just for partitionReader now
 		rds0, err := tbl.newReader(
 			ctx,
 			i,
 			num,
 			encodedPrimaryKey,
-			blks,
 			tbl.writes,
 		)
 		if err != nil {
@@ -907,9 +904,13 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 
 func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]*catalog.BlockInfo, len(ranges))
+	blks := make([]*ModifyBlockMeta, len(ranges))
 	for i := range ranges {
-		blks[i] = catalog.DecodeBlockInfo(ranges[i])
+		if blkInfo, err := ModifyDecode(ranges[i]); err != nil {
+			return nil, err
+		} else {
+			blks[i] = blkInfo
+		}
 	}
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
@@ -923,7 +924,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 				expr:          expr,
 				ts:            ts,
 				ctx:           ctx,
-				blks:          []*catalog.BlockInfo{blks[i]},
+				blks:          []*ModifyBlockMeta{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
@@ -946,7 +947,6 @@ func (tbl *txnTable) newReader(
 	partitionIndex int,
 	readerNumber int,
 	encodedPrimaryKey []byte,
-	blks []ModifyBlockMeta,
 	entries []Entry,
 ) ([]engine.Reader, error) {
 	var inserts []*batch.Batch
@@ -1063,63 +1063,6 @@ func (tbl *txnTable) newReader(
 		deletedBlocks:   txn.deletedBlocks,
 	}
 	readers[0] = partReader
-
-	if readerNumber == 1 {
-		for i := range blks {
-			readers = append(readers, &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{blks[i]},
-			})
-		}
-		return []engine.Reader{&mergeReader{readers}}, nil
-	}
-
-	if len(blks) < readerNumber-1 {
-		for i := range blks {
-			readers[i+1] = &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{blks[i]},
-			}
-		}
-		for j := len(blks) + 1; j < readerNumber; j++ {
-			readers[j] = &emptyReader{}
-		}
-		return readers, nil
-	}
-
-	step := len(blks) / (readerNumber - 1)
-	if step < 1 {
-		step = 1
-	}
-	for i := 1; i < readerNumber; i++ {
-		if i == readerNumber-1 {
-			readers[i] = &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				blks:     blks[(i-1)*step:],
-				sels:     make([]int64, 0, 1024),
-			}
-		} else {
-			readers[i] = &blockMergeReader{
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				blks:     blks[(i-1)*step : i*step],
-				sels:     make([]int64, 0, 1024),
-			}
-		}
-	}
 
 	return readers, nil
 }
