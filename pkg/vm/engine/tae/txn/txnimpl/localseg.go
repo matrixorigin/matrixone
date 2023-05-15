@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -238,8 +237,8 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID,
 				id.TableID, &id.BlockID)
 			seg.appends = append(seg.appends, ctx)
-			logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
-				id.String(), toAppend, appended, len(seg.appends))
+			// logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
+			// 	id.String(), toAppend, appended, len(seg.appends))
 			appended += toAppend
 			if appended == node.Rows() {
 				break

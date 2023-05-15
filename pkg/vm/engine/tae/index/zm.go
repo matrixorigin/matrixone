@@ -34,6 +34,7 @@ const (
 )
 
 var MaxBytesValue []byte
+var zeroZM = make([]byte, ZMSize)
 
 func init() {
 	MaxBytesValue = bytes.Repeat([]byte{0xff}, 31)
@@ -60,6 +61,14 @@ func BuildZM(t types.T, v []byte) ZM {
 	zm.SetType(t)
 	zm.doInit(v)
 	return zm
+}
+
+func (zm ZM) ResetMinMax() {
+	t := zm.GetType()
+	scale := zm.GetScale()
+	copy(zm[:], zeroZM)
+	zm.SetType(t)
+	zm.SetScale(scale)
 }
 
 func (zm ZM) doInit(v []byte) {
@@ -103,6 +112,10 @@ func (zm ZM) GetType() types.T {
 
 func (zm ZM) IsString() bool {
 	return zm.GetType().FixedLength() < 0
+}
+
+func (zm ZM) Valid() bool {
+	return len(zm) == ZMSize && zm.IsInited()
 }
 
 func (zm ZM) SetType(t types.T) {
@@ -422,16 +435,21 @@ func (zm ZM) AnyLE(o ZM) (res bool, ok bool) {
 	return
 }
 
+func (zm ZM) FastIntersect(o ZM) (res bool) {
+	t := zm.GetType()
+	// zm.max >= o.min && zm.min <= v2.max
+	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), t, zm.GetScale(), o.GetScale()) >= 0 &&
+		compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), t, zm.GetScale(), o.GetScale()) <= 0
+	return
+}
+
 func (zm ZM) Intersect(o ZM) (res bool, ok bool) {
 	if !zm.compareCheck(o) {
 		ok = false
 		return
 	}
-	t := zm.GetType()
-	// zm.max >= o.min && zm.min <= v2.max
 	ok = true
-	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), t, zm.GetScale(), o.GetScale()) >= 0 &&
-		compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), t, zm.GetScale(), o.GetScale()) <= 0
+	res = zm.FastIntersect(o)
 	return
 }
 

@@ -40,7 +40,8 @@ type ServerConn interface {
 	// ExecStmt executes a simple statement, it sends a query to backend server.
 	// After it finished, server connection should be closed immediately because
 	// it is a temp connection.
-	ExecStmt(stmt string, resp chan<- []byte) error
+	// The first return value indicates that if the execution result is OK.
+	ExecStmt(stmt string, resp chan<- []byte) (bool, error)
 	// Close closes the connection to CN server.
 	Close() error
 }
@@ -138,29 +139,34 @@ func (s *serverConn) HandleHandshake(handshakeResp *frontend.Packet) (*frontend.
 }
 
 // ExecStmt implements the ServerConn interface.
-func (s *serverConn) ExecStmt(stmt string, resp chan<- []byte) error {
+func (s *serverConn) ExecStmt(stmt string, resp chan<- []byte) (bool, error) {
 	req := make([]byte, 1, len(stmt)+1)
 	req[0] = byte(cmdQuery)
 	req = append(req, []byte(stmt)...)
 	s.mysqlProto.SetSequenceID(0)
 	if err := s.mysqlProto.WritePacket(req); err != nil {
-		return err
+		return false, err
 	}
+	execOK := true
 	for {
 		// readPacket makes sure return value is a whole MySQL packet.
 		res, err := s.readPacket()
 		if err != nil {
-			return err
+			return false, err
 		}
 		bs := packetToBytes(res)
 		if resp != nil {
 			sendResp(bs, resp)
 		}
-		if isEOFPacket(bs) || isOKPacket(bs) || isErrPacket(bs) {
+		if isEOFPacket(bs) || isOKPacket(bs) {
+			break
+		}
+		if isErrPacket(bs) {
+			execOK = false
 			break
 		}
 	}
-	return nil
+	return execOK, nil
 }
 
 // Close implements the ServerConn interface.

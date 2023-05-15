@@ -332,10 +332,13 @@ func (blk *baseBlock) PersistedBatchDedup(
 	isCommitting bool,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
-	isAblk bool) (err error) {
+	isAblk bool,
+	zm []byte,
+) (err error) {
 	sels, err := pnode.BatchDedup(
 		keys,
 		nil,
+		zm,
 	)
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return

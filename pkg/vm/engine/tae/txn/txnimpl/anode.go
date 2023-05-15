@@ -62,6 +62,10 @@ func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *comm
 	return info
 }
 
+func (n *anode) IsPersisted() bool {
+	return false
+}
+
 func (n *anode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	if n.IsPersisted() {
 		return nil, nil

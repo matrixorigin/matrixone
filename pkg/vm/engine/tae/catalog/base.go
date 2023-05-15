@@ -112,6 +112,25 @@ func (be *BaseEntryImpl[T]) TryGetTerminatedTS(waitIfcommitting bool) (terminate
 	return
 }
 func (be *BaseEntryImpl[T]) PrepareAdd(txn txnif.TxnReader) (err error) {
+	if err = be.ConflictCheck(txn); err != nil {
+		return
+	}
+	// check duplication then
+	be.RLock()
+	defer be.RUnlock()
+	if txn == nil || be.GetTxn() != txn {
+		if !be.HasDropCommittedLocked() {
+			return moerr.GetOkExpectedDup()
+		}
+	} else {
+		if be.ensureVisibleAndNotDropped(txn) {
+			return moerr.GetOkExpectedDup()
+		}
+	}
+	return
+}
+
+func (be *BaseEntryImpl[T]) ConflictCheck(txn txnif.TxnReader) (err error) {
 	be.RLock()
 	defer be.RUnlock()
 	if txn != nil {
@@ -124,15 +143,6 @@ func (be *BaseEntryImpl[T]) PrepareAdd(txn txnif.TxnReader) (err error) {
 		err = be.CheckConflict(txn)
 		if err != nil {
 			return
-		}
-	}
-	if txn == nil || be.GetTxn() != txn {
-		if !be.HasDropCommittedLocked() {
-			return moerr.GetOkExpectedDup()
-		}
-	} else {
-		if be.ensureVisibleAndNotDropped(txn) {
-			return moerr.GetOkExpectedDup()
 		}
 	}
 	return

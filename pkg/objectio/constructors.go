@@ -36,7 +36,7 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 			}
 
 			// no compress
-			if algo == 0 {
+			if algo == compress.None {
 				return data, int64(len(data)), nil
 			}
 
