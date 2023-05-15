@@ -15,12 +15,9 @@
 package function2
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/constraints"
 	"math"
 )
 
@@ -263,8 +260,7 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return v1 * v2
 		})
 	case types.T_decimal64:
-		return decimalArith2(parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal128, error) {
-			x, y := function2Util.ConvertD64ToD128(v1), function2Util.ConvertD64ToD128(v2)
+		return decimalArith2(parameters, result, proc, length, func(x, y types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			rt, _, err := x.Mul(y, scale1, scale2)
 			return rt, err
 		})
@@ -281,12 +277,15 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_float32:
-		return floatDiv[float32](parameters, result, uint64(length))
+		return optimizedTypeArithDiv[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+			return v1 / v2
+		})
 	case types.T_float64:
-		return floatDiv[float64](parameters, result, uint64(length))
+		return optimizedTypeArithDiv[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+			return v1 / v2
+		})
 	case types.T_decimal64:
-		return decimalArith2(parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal128, error) {
-			x, y := function2Util.ConvertD64ToD128(v1), function2Util.ConvertD64ToD128(v2)
+		return decimalArith2(parameters, result, proc, length, func(x, y types.Decimal128, scale1, scale2 int32) (types.Decimal128, error) {
 			rt, _, err := x.Div(y, scale1, scale2)
 			return rt, err
 		})
@@ -299,88 +298,64 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	panic("unreached code")
 }
 
-func floatDiv[T float32 | float64](parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	rs := vector.MustFunctionResult[T](result)
-
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if v2 == 0 {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			if err := rs.Append(v1/v2, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	if paramType.Oid == types.T_float32 {
-		return floatIntegerDiv[float32](parameters, result, uint64(length))
+		return optimizedTypeArithDiv[float32, int64](parameters, result, proc, length, func(v1, v2 float32) int64 {
+			return int64(v1 / v2)
+		})
 	}
 	if paramType.Oid == types.T_float64 {
-		return floatIntegerDiv[float64](parameters, result, uint64(length))
+		return optimizedTypeArithDiv[float64, int64](parameters, result, proc, length, func(v1, v2 float64) int64 {
+			return int64(v1 / v2)
+		})
 	}
 	panic("unreached code")
-}
-
-func floatIntegerDiv[T float32 | float64](parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	rs := vector.MustFunctionResult[int64](result)
-
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if v2 == 0 {
-				return moerr.NewDivByZeroNoCtx()
-			}
-			if err := rs.Append(int64(v1/v2), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return intMod[uint8](parameters, result, uint64(length))
+		return optimizedTypeArithMod[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+			return v1 % v2
+		})
 	case types.T_uint16:
-		return intMod[uint16](parameters, result, uint64(length))
+		return optimizedTypeArithMod[uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+			return v1 % v2
+		})
 	case types.T_uint32:
-		return intMod[uint32](parameters, result, uint64(length))
+		return optimizedTypeArithMod[uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+			return v1 % v2
+		})
 	case types.T_uint64:
-		return intMod[uint64](parameters, result, uint64(length))
+		return optimizedTypeArithMod[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 % v2
+		})
 	case types.T_int8:
-		return intMod[int8](parameters, result, uint64(length))
+		return optimizedTypeArithMod[int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+			return v1 % v2
+		})
 	case types.T_int16:
-		return intMod[int16](parameters, result, uint64(length))
+		return optimizedTypeArithMod[int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+			return v1 % v2
+		})
 	case types.T_int32:
-		return intMod[int32](parameters, result, uint64(length))
+		return optimizedTypeArithMod[int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+			return v1 % v2
+		})
 	case types.T_int64:
-		return intMod[int64](parameters, result, uint64(length))
+		return optimizedTypeArithMod[int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+			return v1 % v2
+		})
 	case types.T_float32:
-		return floatMod[float32](parameters, result, uint64(length))
+		return optimizedTypeArithMod[float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+			return float32(math.Mod(float64(v1), float64(v2)))
+		})
 	case types.T_float64:
-		return floatMod[float64](parameters, result, uint64(length))
+		return optimizedTypeArithMod[float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+			return math.Mod(v1, v2)
+		})
 	case types.T_decimal64:
 		return decimalArith[types.Decimal64](parameters, result, proc, length, func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal64, error) {
 			r, _, err := v1.Mod(v2, scale1, scale2)
@@ -393,56 +368,4 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		})
 	}
 	panic("unreached code")
-}
-
-func intMod[T constraints.Integer](parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	rs := vector.MustFunctionResult[T](result)
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if v2 == 0 {
-				if err := rs.Append(v1, false); err != nil {
-					return err
-				}
-			} else {
-				if err := rs.Append(v1%v2, false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func floatMod[T constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, length uint64) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	rs := vector.MustFunctionResult[T](result)
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetValue(i)
-		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if v2 == 0 {
-				if err := rs.Append(v1, false); err != nil {
-					return err
-				}
-			} else {
-				if err := rs.Append(T(math.Mod(float64(v1), float64(v2))), false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
 }

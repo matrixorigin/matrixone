@@ -47,56 +47,56 @@ func compareOperatorSupports(typ1, typ2 types.Type) bool {
 }
 
 // should convert to c.Numeric next.
-func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return valueCompare[bool](parameters, rs, uint64(length), func(a, b bool) bool {
+		return optimizedTypeArith1[bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
 			return a == b
 		})
 	case types.T_int8:
-		return valueCompare[int8](parameters, rs, uint64(length), func(a, b int8) bool {
+		return optimizedTypeArith1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a == b
 		})
 	case types.T_int16:
-		return valueCompare[int16](parameters, rs, uint64(length), func(a, b int16) bool {
+		return optimizedTypeArith1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a == b
 		})
 	case types.T_int32:
-		return valueCompare[int32](parameters, rs, uint64(length), func(a, b int32) bool {
+		return optimizedTypeArith1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a == b
 		})
 	case types.T_int64:
-		return valueCompare[int64](parameters, rs, uint64(length), func(a, b int64) bool {
+		return optimizedTypeArith1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a == b
 		})
 	case types.T_uint8:
-		return valueCompare[uint8](parameters, rs, uint64(length), func(a, b uint8) bool {
+		return optimizedTypeArith1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a == b
 		})
 	case types.T_uint16:
-		return valueCompare[uint16](parameters, rs, uint64(length), func(a, b uint16) bool {
+		return optimizedTypeArith1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a == b
 		})
 	case types.T_uint32:
-		return valueCompare[uint32](parameters, rs, uint64(length), func(a, b uint32) bool {
+		return optimizedTypeArith1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a == b
 		})
 	case types.T_uint64:
-		return valueCompare[uint64](parameters, rs, uint64(length), func(a, b uint64) bool {
+		return optimizedTypeArith1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a == b
 		})
 	case types.T_uuid:
-		return valueCompare[types.Uuid](parameters, rs, uint64(length), func(a, b types.Uuid) bool {
+		return optimizedTypeArith1[types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
 			return a == b
 		})
 	case types.T_float32:
-		return valueCompare[float32](parameters, rs, uint64(length), func(a, b float32) bool {
+		return optimizedTypeArith1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a == b
 		})
 	case types.T_float64:
-		return valueCompare[float64](parameters, rs, uint64(length), func(a, b float64) bool {
+		return optimizedTypeArith1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a == b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
@@ -104,19 +104,19 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _
 	case types.T_binary, types.T_varbinary:
 		return valueStrCompare(parameters, rs, uint64(length), bytes.Equal)
 	case types.T_date:
-		return valueCompare[types.Date](parameters, rs, uint64(length), func(a, b types.Date) bool {
+		return optimizedTypeArith1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a == b
 		})
 	case types.T_datetime:
-		return valueCompare[types.Datetime](parameters, rs, uint64(length), func(a, b types.Datetime) bool {
+		return optimizedTypeArith1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a == b
 		})
 	case types.T_time:
-		return valueCompare[types.Time](parameters, rs, uint64(length), func(a, b types.Time) bool {
+		return optimizedTypeArith1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a == b
 		})
 	case types.T_timestamp:
-		return valueCompare[types.Timestamp](parameters, rs, uint64(length), func(a, b types.Timestamp) bool {
+		return optimizedTypeArith1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a == b
 		})
 	case types.T_decimal64:

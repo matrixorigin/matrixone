@@ -15,14 +15,14 @@
 package function2
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
-
-var _ = optimizedTpsToTrFn[bool, bool]
 
 type templateTp1 interface {
 	bool
@@ -219,6 +219,9 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 							}
 						}
 					} else {
+						if rsVec.GetNulls().Np == nil {
+							rsVec.SetNulls(nulls.NewWithSize(0))
+						}
 						for i := uint64(0); i < uint64(length); i++ {
 							v2, _ := p2.GetValue(i)
 							r, ifnull := fNullValue(v2)
@@ -275,6 +278,9 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 							}
 						}
 					} else {
+						if rsVec.GetNulls().Np == nil {
+							rsVec.SetNulls(nulls.NewWithSize(0))
+						}
 						for i := uint64(0); i < uint64(length); i++ {
 							v1, _ := p1.GetValue(i)
 							r, ifnull := fValueNull(v1)
@@ -427,6 +433,20 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 {
+				continue
+			}
+			r, err := arithFn(v1, v2, scale1, scale2)
+			if err != nil {
+				return err
+			}
+			rss[i] = r
+		}
+		return nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -443,7 +463,7 @@ func decimalArith[T templateDec](parameters []*vector.Vector, result vector.Func
 
 // XXX For decimal64 / decimal64, decimal64 * decimal64
 func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2 types.Decimal64, scale1, scale2 int32) (types.Decimal128, error)) error {
+	arithFn func(v1, v2 types.Decimal128, scale1, scale2 int32) (types.Decimal128, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[1])
 	rs := vector.MustFunctionResult[types.Decimal128](result)
@@ -460,7 +480,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if ifNull {
 			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
 		} else {
-			r, err := arithFn(v1, v2, scale1, scale2)
+			x, y := function2Util.ConvertD64ToD128(v1), function2Util.ConvertD64ToD128(v2)
+			r, err := arithFn(x, y, scale1, scale2)
 			if err != nil {
 				return err
 			}
@@ -478,21 +499,26 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 		} else {
 			if p2.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+
+				x := function2Util.ConvertD64ToD128(v1)
 				for i := uint64(0); i < uint64(length); i++ {
 					v2, null2 := p2.GetValue(i)
 					if null2 {
 						continue
 					}
-					r, err := arithFn(v1, v2, scale1, scale2)
+					y := function2Util.ConvertD64ToD128(v2)
+					r, err := arithFn(x, y, scale1, scale2)
 					if err != nil {
 						return err
 					}
 					rss[i] = r
 				}
 			} else {
+				x := function2Util.ConvertD64ToD128(v1)
 				for i := uint64(0); i < uint64(length); i++ {
 					v2, _ := p2.GetValue(i)
-					r, err := arithFn(v1, v2, scale1, scale2)
+					y := function2Util.ConvertD64ToD128(v2)
+					r, err := arithFn(x, y, scale1, scale2)
 					if err != nil {
 						return err
 					}
@@ -510,21 +536,26 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 		} else {
 			if p1.WithAnyNullValue() {
 				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+
+				y := function2Util.ConvertD64ToD128(v2)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, null1 := p1.GetValue(i)
 					if null1 {
 						continue
 					}
-					r, err := arithFn(v1, v2, scale1, scale2)
+					x := function2Util.ConvertD64ToD128(v1)
+					r, err := arithFn(x, y, scale1, scale2)
 					if err != nil {
 						return err
 					}
 					rss[i] = r
 				}
 			} else {
+				y := function2Util.ConvertD64ToD128(v2)
 				for i := uint64(0); i < uint64(length); i++ {
 					v1, _ := p1.GetValue(i)
-					r, err := arithFn(v1, v2, scale1, scale2)
+					x := function2Util.ConvertD64ToD128(v1)
+					r, err := arithFn(x, y, scale1, scale2)
 					if err != nil {
 						return err
 					}
@@ -538,12 +569,28 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 {
+				continue
+			}
+			x, y := function2Util.ConvertD64ToD128(v1), function2Util.ConvertD64ToD128(v2)
+			r, err := arithFn(x, y, scale1, scale2)
+			if err != nil {
+				return err
+			}
+			rss[i] = r
+		}
+		return nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
-		r, err := arithFn(v1, v2, scale1, scale2)
+		x, y := function2Util.ConvertD64ToD128(v1), function2Util.ConvertD64ToD128(v2)
+		r, err := arithFn(x, y, scale1, scale2)
 		if err != nil {
 			return err
 		}
@@ -553,8 +600,8 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func optimizedTypeArith1[
-	T constraints.Integer | constraints.Float | types.Date | types.Datetime,
-	T2 constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
+	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 T) T2) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
@@ -629,12 +676,255 @@ func optimizedTypeArith1[
 	// basic case.
 	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
 		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 {
+				continue
+			}
+			rss[i] = arithFn(v1, v2)
+		}
+		return nil
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		rss[i] = arithFn(v1, v2)
+	}
+	return nil
+}
+
+func optimizedTypeArithMod[
+	T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	modFn func(v1, v2 T) T) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
+	rs := vector.MustFunctionResult[T](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[T](rsVec)
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 && c2 {
+		v1, null1 := p1.GetValue(0)
+		v2, null2 := p2.GetValue(0)
+		ifNull := null1 || null2
+		if ifNull || v2 == 0 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r := modFn(v1, v2)
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p2.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, null2 := p2.GetValue(i)
+					if null2 {
+						continue
+					}
+					if v2 == 0 {
+						rsVec.GetNulls().Np.Add(i)
+					} else {
+						rss[i] = modFn(v1, v2)
+					}
+				}
+			} else {
+				if rsVec.GetNulls().Np == nil {
+					rsVec.SetNulls(nulls.NewWithSize(0))
+				}
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, _ := p2.GetValue(i)
+					if v2 == 0 {
+						rsVec.GetNulls().Np.Add(i)
+					} else {
+						rss[i] = modFn(v1, v2)
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetValue(0)
+		if null2 || v2 == 0 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetValue(i)
+					if null1 {
+						continue
+					}
+					rss[i] = modFn(v1, v2)
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, _ := p1.GetValue(i)
+					rss[i] = modFn(v1, v2)
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 {
+				continue
+			}
+			if v2 == 0 {
+				rsVec.GetNulls().Np.Add(i)
+			} else {
+				rss[i] = modFn(v1, v2)
+			}
+		}
+		return nil
+	}
+
+	if rsVec.GetNulls().Np == nil {
+		rsVec.SetNulls(nulls.NewWithSize(0))
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetValue(i)
+		v2, _ := p2.GetValue(i)
+		if v2 == 0 {
+			rsVec.GetNulls().Np.Add(i)
+		} else {
+			rss[i] = modFn(v1, v2)
+		}
+	}
+	return nil
+}
+
+func optimizedTypeArithDiv[
+	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	divFn func(v1, v2 T) T2) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
+	rs := vector.MustFunctionResult[T2](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[T2](rsVec)
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 && c2 {
+		v1, null1 := p1.GetValue(0)
+		v2, null2 := p2.GetValue(0)
+		ifNull := null1 || null2
+		if ifNull {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if v2 == 0 {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			r := divFn(v1, v2)
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p2.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, null2 := p2.GetValue(i)
+					if null2 {
+						continue
+					}
+					if v2 == 0 {
+						return moerr.NewDivByZeroNoCtx()
+					} else {
+						rss[i] = divFn(v1, v2)
+					}
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, _ := p2.GetValue(i)
+					if v2 == 0 {
+						return moerr.NewDivByZeroNoCtx()
+					} else {
+						rss[i] = divFn(v1, v2)
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetValue(0)
+		if null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if v2 == 0 {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetValue(i)
+					if null1 {
+						continue
+					}
+					rss[i] = divFn(v1, v2)
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, _ := p1.GetValue(i)
+					rss[i] = divFn(v1, v2)
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 {
+				continue
+			}
+			if v2 == 0 {
+				return moerr.NewDivByZeroNoCtx()
+			} else {
+				rss[i] = divFn(v1, v2)
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetValue(i)
+		v2, _ := p2.GetValue(i)
+		if v2 == 0 {
+			return moerr.NewDivByZeroNoCtx()
+		} else {
+			rss[i] = divFn(v1, v2)
+		}
 	}
 	return nil
 }

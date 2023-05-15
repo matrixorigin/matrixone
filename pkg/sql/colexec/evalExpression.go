@@ -767,7 +767,9 @@ func evaluateFilterByZoneMap(
 			}
 			defer result.GetResultVector().Free(proc.Mp())
 			v = index.VectorToZM(result.GetResultVector())
+
+			return
 		}
 	}
-	return nil
+	return objectio.NewZM(types.T_bool, 0)
 }
