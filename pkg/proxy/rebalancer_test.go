@@ -16,6 +16,9 @@ package proxy
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -52,45 +55,43 @@ func TestCollectTunnels(t *testing.T) {
 	defer st.Stop()
 	ha := LabelHash("hash1")
 
-	cn11 := &CNServer{
-		hash: ha,
-		reqLabel: newLabelInfo("t1", map[string]string{
+	temp := os.TempDir()
+	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr1))
+	cn11 := testMakeCNServer("cn11", addr1, 0, ha,
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 			"k2": "v2",
 		}),
-		uuid: "cn11",
-		addr: "127.0.0.1:38001",
-	}
+	)
 	hc.updateCN("cn11", cn11.addr, map[string]metadata.LabelList{
 		tenantLabelKey: {Labels: []string{"t1"}},
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
 
-	cn12 := &CNServer{
-		hash: ha,
-		reqLabel: newLabelInfo("t1", map[string]string{
+	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr2))
+	cn12 := testMakeCNServer("cn12", addr2, 0, ha,
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 			"k2": "v2",
 		}),
-		uuid: "cn12",
-		addr: "127.0.0.1:38002",
-	}
+	)
 	hc.updateCN("cn12", cn12.addr, map[string]metadata.LabelList{
 		tenantLabelKey: {Labels: []string{"t1"}},
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
 
-	cn13 := &CNServer{
-		hash: ha,
-		reqLabel: newLabelInfo("t1", map[string]string{
+	addr3 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr3))
+	cn13 := testMakeCNServer("cn13", addr3, 0, ha,
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 			"k2": "v2",
 		}),
-		uuid: "cn13",
-		addr: "127.0.0.1:38003",
-	}
+	)
 	hc.updateCN("cn13", cn13.addr, map[string]metadata.LabelList{
 		tenantLabelKey: {Labels: []string{"t1"}},
 		"k1":           {Labels: []string{"v1"}},
@@ -160,15 +161,16 @@ func TestDoRebalance(t *testing.T) {
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
 
+	temp := os.TempDir()
 	// Construct backend CN servers.
-	cn11 := &CNServer{
-		reqLabel: newLabelInfo("t1", map[string]string{
+	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr1))
+	cn11 := testMakeCNServer("cn11", addr1, 0, "",
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 			"k2": "v2",
 		}),
-		uuid: "cn11",
-		addr: "127.0.0.1:38001",
-	}
+	)
 	li := labelInfo{
 		Tenant: "t1",
 	}
@@ -179,19 +181,19 @@ func TestDoRebalance(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn11 := startTestCNServer(t, tp.ctx, cn11.addr)
+	stopFn11 := startTestCNServer(t, tp.ctx, addr1)
 	defer func() {
 		require.NoError(t, stopFn11())
 	}()
 
-	cn12 := &CNServer{
-		reqLabel: newLabelInfo("t1", map[string]string{
+	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr2))
+	cn12 := testMakeCNServer("cn12", addr2, 0, "",
+		newLabelInfo("t1", map[string]string{
 			"k1": "v1",
 			"k2": "v2",
 		}),
-		uuid: "cn12",
-		addr: "127.0.0.1:38002",
-	}
+	)
 	cn12.hash, err = li.getHash()
 	require.NoError(t, err)
 	tp.hc.updateCN("cn12", cn12.addr, map[string]metadata.LabelList{
@@ -199,7 +201,7 @@ func TestDoRebalance(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn12 := startTestCNServer(t, tp.ctx, cn12.addr)
+	stopFn12 := startTestCNServer(t, tp.ctx, addr2)
 	defer func() {
 		require.NoError(t, stopFn12())
 	}()
@@ -209,10 +211,15 @@ func TestDoRebalance(t *testing.T) {
 	ctx, cancel := context.WithTimeout(tp.ctx, 10*time.Second)
 	defer cancel()
 
+	ci := clientInfo{
+		labelInfo: li,
+		username:  "test",
+		originIP:  net.ParseIP("127.0.0.1"),
+	}
 	// There 2 servers cn11 and cn12. 4 connections are all on cn11, and the
 	// toleration is 0.3, so there will be 3 connections on cn11 and 1 connection
 	// on cn12 at last.
-	cleanup := testStartNClients(t, tp, li, cn11, 4)
+	cleanup := testStartNClients(t, tp, ci, cn11, 4)
 	defer cleanup()
 
 	tick := time.NewTicker(time.Millisecond * 200)

@@ -38,6 +38,8 @@ type evalVector struct {
 }
 
 type container struct {
+	colexec.ReceiverOperator
+
 	state int
 
 	inBuckets []uint8
@@ -73,6 +75,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
+		ctr.FreeAllReg()
 	}
 }
 

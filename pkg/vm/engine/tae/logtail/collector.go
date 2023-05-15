@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -380,9 +381,10 @@ func (d *dirtyCollector) tryCompactTree(
 				return
 			}
 			for id := range dirtySeg.Blks {
-				if blk, err = seg.GetBlockEntryByID(id); err != nil {
+				bid := objectio.NewBlockid(dirtySeg.ID, id.Num, id.Seq)
+				if blk, err = seg.GetBlockEntryByID(bid); err != nil {
 					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-						dirtySeg.Shrink(id)
+						dirtySeg.Shrink(bid)
 						err = nil
 						continue
 					}
@@ -394,7 +396,7 @@ func (d *dirtyCollector) tryCompactTree(
 					if blk.HasPersistedData() {
 						blk.GetBlockData().TryUpgrade()
 					}
-					dirtySeg.Shrink(id)
+					dirtySeg.Shrink(bid)
 					continue
 				}
 				if err = interceptor.OnBlock(blk); err != nil {

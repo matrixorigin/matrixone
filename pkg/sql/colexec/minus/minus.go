@@ -16,7 +16,6 @@ package minus
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,6 +31,8 @@ func Prepare(proc *process.Process, argument any) error {
 	var err error
 	arg := argument.(*Argument)
 	{
+		arg.ctr = new(container)
+		arg.ctr.InitReceiver(proc, false)
 		arg.ctr.bat = nil
 		arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
 		if err != nil {
@@ -59,7 +60,6 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 		case buildingHashMap:
 			// step 1: build the hash table by all right batches.
 			if err = arg.ctr.buildHashTable(proc, analyze, 1, isFirst); err != nil {
-				arg.Free(proc, true)
 				return false, err
 			}
 			if arg.ctr.hashTable != nil {
@@ -75,7 +75,6 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 			last := false
 			last, err = arg.ctr.probeHashTable(proc, analyze, 0, isFirst, isLast)
 			if err != nil {
-				arg.Free(proc, true)
 				return false, err
 			}
 			if last {
@@ -86,7 +85,6 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 
 		case operatorEnd:
 			// operator over.
-			arg.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -96,9 +94,11 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 // buildHashTable use all batches from proc.Reg.MergeReceiver[index] to build the hash map.
 func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze, index int, isFirst bool) error {
 	for {
-		start := time.Now()
-		bat := <-proc.Reg.MergeReceivers[index].Ch
-		ana.WaitStop(start)
+		bat, _, err := ctr.ReceiveFromSingleReg(index, ana)
+		if err != nil {
+			return err
+		}
+
 		// the last batch of pipeline.
 		if bat == nil {
 			break
@@ -106,6 +106,7 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 
 		// just an empty batch.
 		if len(bat.Zs) == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 		ana.Input(bat, isFirst)
@@ -136,9 +137,10 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 	restoreInserted := make([]uint8, hashmap.UnitLimit)
 
 	for {
-		start := time.Now()
-		bat := <-proc.Reg.MergeReceivers[index].Ch
-		ana.WaitStop(start)
+		bat, _, err := ctr.ReceiveFromSingleReg(index, ana)
+		if err != nil {
+			return false, err
+		}
 
 		// the last batch of block.
 		if bat == nil {
@@ -146,6 +148,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		// just an empty batch.
 		if len(bat.Zs) == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 		ana.Input(bat, isFirst)

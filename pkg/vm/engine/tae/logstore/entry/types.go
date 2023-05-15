@@ -23,18 +23,6 @@ import (
 type Type = uint16
 
 const (
-	ETInvalid Type = iota
-	ETNoop
-	ETFlush
-	ETCheckpoint
-	ETUncommitted
-	ETTxn
-	ETPostCommit
-	ETMeta
-	ETCustomizedStart
-)
-
-const (
 	GTInvalid uint32 = iota
 	GTNoop
 	GTCKp
@@ -52,8 +40,10 @@ type Desc interface {
 	GetMetaSize() int
 	TotalSize() int
 	GetMetaBuf() []byte
-	IsFlush() bool
-	IsCheckpoint() bool
+}
+
+type Allocator interface {
+	Alloc(int) ([]byte, error)
 }
 
 type Entry interface {
@@ -67,10 +57,10 @@ type Entry interface {
 	SetPayload([]byte) error
 	UnmarshalFromNode([]byte, bool) error
 
-	Unmarshal(buf []byte) error
+	Unmarshal(buf []byte, allocator Allocator) error
 	Marshal() (buf []byte, err error)
-	ReadFrom(io.Reader) (int64, error)
-	ReadAt(r *os.File, offset int) (int, error)
+	ReadFromWithAllocator(r io.Reader, allocator Allocator) (int64, error)
+	ReadAt(r *os.File, offset int, allocator Allocator) (int, error)
 	WriteTo(io.Writer) (int64, error)
 	PrepareWrite()
 

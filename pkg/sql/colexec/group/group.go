@@ -77,7 +77,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal := proc.GetAnalyze(idx)
 	anal.Start()
 	defer anal.Stop()
-
 	if len(ap.Exprs) == 0 {
 		end, err = ap.ctr.process(ap, proc, anal, isFirst, isLast)
 	} else {
@@ -195,7 +194,6 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	var err error
-
 	bat := proc.InputBatch()
 	if bat == nil {
 		if ctr.bat != nil {
@@ -253,7 +251,9 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.groupVecs = make([]evalVector, len(ap.Exprs))
 	}
 
+	groupVecsNullable := false
 	for i, expr := range ap.Exprs {
+		groupVecsNullable = groupVecsNullable || (!expr.Typ.NotNullable)
 		vec, err := colexec.EvalExpr(bat, proc, expr)
 		if err != nil {
 			ctr.cleanGroupVectors(proc.Mp())
@@ -261,6 +261,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		}
 		ctr.groupVecs[i].vec = vec
 		ctr.groupVecs[i].needFree = true
+
 		for j := range bat.Vecs {
 			if bat.Vecs[j] == vec {
 				ctr.groupVecs[i].needFree = false
@@ -280,17 +281,14 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
-			switch vec.GetType().TypeSize() {
-			case 1:
-				size += 1 + 1
-			case 2:
-				size += 2 + 1
-			case 4:
-				size += 4 + 1
-			case 8:
-				size += 8 + 1
-			case 16:
-				size += 16 + 1
+			ctr.bat.Vecs[i].GetType().SetNotNull(!groupVecsNullable)
+			currentSize := vec.GetType().TypeSize()
+			switch currentSize {
+			case 1, 2, 4, 8, 16:
+				size += currentSize
+				if groupVecsNullable {
+					size += 1
+				}
 			default:
 				size = 128
 			}
@@ -304,12 +302,12 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		//	ctr.typ = HIndex
 		case size <= 8:
 			ctr.typ = H8
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 				return false, err
 			}
 		default:
 			ctr.typ = HStr
-			if ctr.strHashMap, err = hashmap.NewStrMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 				return false, err
 			}
 		}

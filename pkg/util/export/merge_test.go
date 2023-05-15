@@ -68,9 +68,9 @@ var dummyTable = &table.Table{
 
 func dummyFillTable(str string, i int64, f float64) *table.Row {
 	row := dummyTable.GetRow(context.TODO())
-	row.SetColumnVal(dummyStrColumn, str)
-	row.SetColumnVal(dummyInt64Column, i)
-	row.SetColumnVal(dummyFloat64Column, f)
+	row.SetColumnVal(dummyStrColumn, table.StringField(str))
+	row.SetColumnVal(dummyInt64Column, table.Int64Field(i))
+	row.SetColumnVal(dummyFloat64Column, table.Float64Field(f))
 	return row
 }
 

@@ -15,7 +15,6 @@
 package txnentries
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -30,18 +29,14 @@ func TestCompactBlockCmd(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	sid1 := objectio.NewSegmentid()
 	sid2 := objectio.NewSegmentid()
-	from := &common.ID{TableID: 1, SegmentID: sid1, BlockID: objectio.NewBlockid(&sid1, 1, 0)}
-	to := &common.ID{TableID: 1, SegmentID: sid2, BlockID: objectio.NewBlockid(&sid2, 3, 0)}
+	from := &common.ID{TableID: 1, BlockID: *objectio.NewBlockid(sid1, 1, 0)}
+	to := &common.ID{TableID: 1, BlockID: *objectio.NewBlockid(sid2, 3, 0)}
 	cmd := newCompactBlockCmd(from, to, nil, 0)
 
-	var w bytes.Buffer
-	_, err := cmd.WriteTo(&w)
+	buf, err := cmd.MarshalBinary()
 	assert.Nil(t, err)
 
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-
-	_, _, err = txnbase.BuildCommandFrom(r)
+	_, err = txnbase.BuildCommandFrom(buf)
 	assert.Nil(t, err)
 }
 
@@ -50,12 +45,16 @@ func TestMergeBlocksCmd(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	droppedSid := objectio.NewSegmentid()
 	createdSid := objectio.NewSegmentid()
-	droppedSegs := []*common.ID{{TableID: 1, SegmentID: droppedSid}, {TableID: 1, SegmentID: droppedSid}}
-	createdSegs := []*common.ID{{TableID: 1, SegmentID: createdSid}}
+	id1 := common.ID{TableID: 1}
+	id1.SetSegmentID(droppedSid)
+	id2 := common.ID{TableID: 1}
+	id2.SetSegmentID(createdSid)
+	droppedSegs := []*common.ID{&id1, &id1}
+	createdSegs := []*common.ID{&id2}
 	droppedBlks := []*common.ID{
-		{TableID: 1, SegmentID: droppedSid, BlockID: objectio.NewBlockid(&droppedSid, 3, 0)},
-		{TableID: 1, SegmentID: droppedSid, BlockID: objectio.NewBlockid(&droppedSid, 4, 0)}}
-	createdBlks := []*common.ID{{TableID: 1, SegmentID: createdSid, BlockID: objectio.NewBlockid(&createdSid, 1, 0)}}
+		{TableID: 1, BlockID: *objectio.NewBlockid(droppedSid, 3, 0)},
+		{TableID: 1, BlockID: *objectio.NewBlockid(droppedSid, 4, 0)}}
+	createdBlks := []*common.ID{{TableID: 1, BlockID: *objectio.NewBlockid(createdSid, 1, 0)}}
 	mapping := []uint32{3445, 4253, 425, 45, 123, 34, 42, 42, 2, 5, 0}
 	fromAddr := []uint32{40000, 40000, 40000, 42}
 	toAddr := []uint32{40000, 40000, 242}
@@ -71,13 +70,9 @@ func TestMergeBlocksCmd(t *testing.T) {
 		nil,
 		0)
 
-	var w bytes.Buffer
-	_, err := cmd.WriteTo(&w)
+	buf, err := cmd.MarshalBinary()
 	assert.Nil(t, err)
 
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-
-	_, _, err = txnbase.BuildCommandFrom(r)
+	_, err = txnbase.BuildCommandFrom(buf)
 	assert.Nil(t, err)
 }

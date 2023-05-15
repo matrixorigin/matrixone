@@ -53,6 +53,10 @@ func (n *node) Close() error {
 	return nil
 }
 
+func (n *node) IsPersisted() bool {
+	return true
+}
+
 func (n *node) Append(data *containers.Batch, offset uint32) (appended uint32, err error) {
 	panic("not supported")
 }
@@ -109,7 +113,6 @@ func (n *node) AddApplyInfo(
 	srcLen,
 	destOff,
 	destLen uint32,
-	dbid uint64,
 	dest *common.ID) *appendInfo {
 	panic("not supported ")
 }

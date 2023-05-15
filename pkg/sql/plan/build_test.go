@@ -827,6 +827,8 @@ func TestShow(t *testing.T) {
 		"show grants for ROLE role1",
 		"show function status",
 		"show function status like '%ff'",
+		// "show procedure status",
+		// "show procedure status like '%ff'",
 		"show roles",
 		"show roles like '%ff'",
 		// "show grants",

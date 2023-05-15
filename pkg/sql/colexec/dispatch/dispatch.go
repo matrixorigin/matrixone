@@ -16,8 +16,10 @@ package dispatch
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -28,57 +30,68 @@ func String(arg any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
-	ap.ctr = new(container)
-	ap.localRegsCnt = len(ap.LocalRegs)
-	ap.remoteRegsCnt = len(ap.RemoteRegs)
-	ap.aliveRegCnt = ap.localRegsCnt + ap.remoteRegsCnt
+	ctr := new(container)
+	ap.ctr = ctr
+	ctr.localRegsCnt = len(ap.LocalRegs)
+	ctr.remoteRegsCnt = len(ap.RemoteRegs)
+	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
 
 	switch ap.FuncId {
 	case SendToAllFunc:
-		if ap.remoteRegsCnt == 0 {
+		if ctr.remoteRegsCnt == 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAllFunc should include RemoteRegs")
 		}
-		ap.prepared = false
-		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, ap.remoteRegsCnt)
 		if len(ap.LocalRegs) == 0 {
-			ap.ctr.sendFunc = sendToAllRemoteFunc
+			ctr.sendFunc = sendToAllRemoteFunc
 		} else {
-			ap.ctr.sendFunc = sendToAllFunc
+			ctr.sendFunc = sendToAllFunc
 		}
-		for _, rr := range ap.RemoteRegs {
-			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
+		ap.prepareRemote(proc)
+
+	case ShuffleToAllFunc:
+		if ctr.remoteRegsCnt == 0 {
+			return moerr.NewInternalError(proc.Ctx, "ShuffleToAllFunc should include RemoteRegs")
 		}
+		if len(ap.LocalRegs) == 0 {
+			ap.ctr.sendFunc = shuffleToAllRemoteFunc
+		} else {
+			ap.ctr.sendFunc = shuffleToAllFunc
+		}
+		ap.prepareRemote(proc)
+		ap.initSelsForShuffleReuse()
 
 	case SendToAnyFunc:
-		if ap.remoteRegsCnt == 0 {
+		if ctr.remoteRegsCnt == 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAnyFunc should include RemoteRegs")
 		}
-		ap.prepared = false
-		ap.ctr.remoteReceivers = make([]*WrapperClientSession, 0, ap.remoteRegsCnt)
 		if len(ap.LocalRegs) == 0 {
-			ap.ctr.sendFunc = sendToAnyRemoteFunc
+			ctr.sendFunc = sendToAnyRemoteFunc
 		} else {
-			ap.ctr.sendFunc = sendToAnyFunc
+			ctr.sendFunc = sendToAnyFunc
 		}
-		for _, rr := range ap.RemoteRegs {
-			colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc.DispatchNotifyCh)
-		}
+		ap.prepareRemote(proc)
 
 	case SendToAllLocalFunc:
-		if ap.remoteRegsCnt != 0 {
+		if ctr.remoteRegsCnt != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAllLocalFunc should not send to remote")
 		}
-		ap.prepared = true
-		ap.ctr.remoteReceivers = nil
-		ap.ctr.sendFunc = sendToAllLocalFunc
+		ctr.sendFunc = sendToAllLocalFunc
+		ap.prepareLocal()
+
+	case ShuffleToAllLocalFunc:
+		if ctr.remoteRegsCnt != 0 {
+			return moerr.NewInternalError(proc.Ctx, "ShuffleToAllLocalFunc should not send to remote")
+		}
+		ctr.sendFunc = shuffleToAllLocalFunc
+		ap.prepareLocal()
+		ap.initSelsForShuffleReuse()
 
 	case SendToAnyLocalFunc:
-		if ap.remoteRegsCnt != 0 {
+		if ctr.remoteRegsCnt != 0 {
 			return moerr.NewInternalError(proc.Ctx, "SendToAnyLocalFunc should not send to remote")
 		}
-		ap.prepared = true
-		ap.ctr.remoteReceivers = nil
 		ap.ctr.sendFunc = sendToAnyLocalFunc
+		ap.prepareLocal()
 
 	default:
 		return moerr.NewInternalError(proc.Ctx, "wrong sendFunc id for dispatch")
@@ -90,31 +103,74 @@ func Prepare(proc *process.Process, arg any) error {
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	ap := arg.(*Argument)
 
-	// waiting all remote receive prepared
-	// put it in Call() for better parallel
-
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
 
 	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 	return ap.ctr.sendFunc(bat, ap, proc)
 }
 
-func (arg *Argument) waitRemoteRegsReady(proc *process.Process) {
+func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	cnt := len(arg.RemoteRegs)
 	for cnt > 0 {
-		csinfo := <-proc.DispatchNotifyCh
-		arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{
-			msgId:  csinfo.MsgId,
-			cs:     csinfo.Cs,
-			uuid:   csinfo.Uid,
-			doneCh: csinfo.DoneCh,
-		})
-		cnt--
+		timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), waitNotifyTimeout)
+		defer timeoutCancel()
+		select {
+		case <-timeoutCtx.Done():
+			logutil.Errorf("waiting notify msg timeout")
+			return false, moerr.NewInternalErrorNoCtx("wait notify message timeout")
+		case <-proc.Ctx.Done():
+			arg.ctr.prepared = true
+			logutil.Infof("conctx done during dispatch")
+			return true, nil
+		case csinfo := <-proc.DispatchNotifyCh:
+			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{
+				msgId:  csinfo.MsgId,
+				cs:     csinfo.Cs,
+				uuid:   csinfo.Uid,
+				doneCh: csinfo.DoneCh,
+			})
+			cnt--
+		}
 	}
-	arg.prepared = true
+	arg.ctr.prepared = true
+	return false, nil
+}
+
+func (arg *Argument) prepareRemote(proc *process.Process) {
+	arg.ctr.prepared = false
+	arg.ctr.isRemote = true
+	arg.ctr.remoteReceivers = make([]*WrapperClientSession, 0, arg.ctr.remoteRegsCnt)
+	for _, rr := range arg.RemoteRegs {
+		colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc)
+	}
+}
+
+func (arg *Argument) prepareLocal() {
+	arg.ctr.prepared = true
+	arg.ctr.isRemote = false
+	arg.ctr.remoteReceivers = nil
+}
+
+func (arg *Argument) initSelsForShuffleReuse() {
+	if arg.ctr.sels == nil {
+		arg.ctr.sels = make([][]int32, arg.ctr.aliveRegCnt)
+		for i := 0; i < arg.ctr.aliveRegCnt; i++ {
+			arg.ctr.sels[i] = make([]int32, 8192)
+		}
+		arg.ctr.lenshuffledSels = make([]int, arg.ctr.aliveRegCnt)
+	}
+}
+
+func (arg *Argument) getSels() ([][]int32, []int) {
+	for i := range arg.ctr.sels {
+		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
+		arg.ctr.lenshuffledSels[i] = 0
+	}
+	return arg.ctr.sels, arg.ctr.lenshuffledSels
 }

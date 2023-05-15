@@ -130,6 +130,7 @@ func (mgr *TxnManager) Now() types.TS {
 }
 
 func (mgr *TxnManager) Init(prevTs types.TS) error {
+	logutil.Infof("init ts to %v", prevTs.ToString())
 	mgr.TsAlloc.SetStart(prevTs)
 	logutil.Info("[INIT]", TxnMgrField(mgr))
 	return nil
@@ -171,7 +172,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 }
 
 // StartTxn starts a local transaction initiated by DN
-func (mgr *TxnManager) StartTxnWithNow(info []byte) (txn txnif.AsyncTxn, err error) {
+func (mgr *TxnManager) StartTxnWithLatestTS(info []byte) (txn txnif.AsyncTxn, err error) {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)
 		logutil.Warnf("StartTxn: %v", err)
@@ -293,7 +294,9 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	// If txn is trying committing, call txn.PrePrepare()
 	now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare())
-	logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
+	})
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
@@ -466,10 +469,12 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 			panic(err)
 		}
 	}
-	logutil.Debug("[dequeuePreparing]",
-		common.NameSpaceField("txns"),
-		common.DurationField(time.Since(now)),
-		common.CountField(len(items)))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("[dequeuePreparing]",
+			common.NameSpaceField("txns"),
+			common.DurationField(time.Since(now)),
+			common.CountField(len(items)))
+	})
 }
 
 // 1PC and 2PC
@@ -490,10 +495,12 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 			mgr.on1PCPrepared(op)
 		}
 	}
-	logutil.Debug("[dequeuePrepared]",
-		common.NameSpaceField("txns"),
-		common.CountField(len(items)),
-		common.DurationField(time.Since(now)))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("[dequeuePrepared]",
+			common.NameSpaceField("txns"),
+			common.CountField(len(items)),
+			common.DurationField(time.Since(now)))
+	})
 }
 
 func (mgr *TxnManager) OnException(new error) {

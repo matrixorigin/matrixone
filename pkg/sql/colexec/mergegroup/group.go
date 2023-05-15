@@ -16,12 +16,9 @@ package mergegroup
 
 import (
 	"bytes"
-	"reflect"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -32,17 +29,9 @@ func String(_ interface{}, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg interface{}) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, true)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
-
-	ap.ctr.receiverListener = make([]reflect.SelectCase, len(proc.Reg.MergeReceivers))
-	for i, mr := range proc.Reg.MergeReceivers {
-		ap.ctr.receiverListener[i] = reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(mr.Ch),
-		}
-	}
-	ap.ctr.aliveMergeReceiver = len(proc.Reg.MergeReceivers)
 	return nil
 }
 
@@ -95,32 +84,14 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 }
 
 func (ctr *container) build(proc *process.Process, anal process.Analyze, isFirst bool) (bool, error) {
-	var err error
 	for {
-		if ctr.aliveMergeReceiver == 0 {
-			return false, nil
-		}
-
-		start := time.Now()
-		chosen, value, ok := reflect.Select(ctr.receiverListener)
-		if !ok {
-			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			logutil.Errorf("pipeline closed unexpectedly")
+		bat, end, err := ctr.ReceiveFromAllRegs(anal)
+		if err != nil {
 			return true, nil
 		}
-		anal.WaitStop(start)
 
-		pointer := value.UnsafePointer()
-		bat := (*batch.Batch)(pointer)
-		if bat == nil {
-			ctr.receiverListener = append(ctr.receiverListener[:chosen], ctr.receiverListener[chosen+1:]...)
-			ctr.aliveMergeReceiver--
-			continue
-		}
-
-		if bat.Length() == 0 {
-			bat.Clean(proc.Mp())
-			continue
+		if end {
+			return false, nil
 		}
 
 		anal.Input(bat, isFirst)
@@ -136,18 +107,19 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 
 	if ctr.bat == nil {
 		size := 0
+		groupVecsNullable := false
 		for _, vec := range bat.Vecs {
-			switch vec.GetType().TypeSize() {
-			case 1:
-				size += 1 + 1
-			case 2:
-				size += 2 + 1
-			case 4:
-				size += 4 + 1
-			case 8:
-				size += 8 + 1
-			case 16:
-				size += 16 + 1
+			groupVecsNullable = groupVecsNullable || (!vec.GetType().GetNotNull())
+		}
+
+		for _, vec := range bat.Vecs {
+			currentSize := vec.GetType().TypeSize()
+			switch currentSize {
+			case 1, 2, 4, 8, 16:
+				size += currentSize
+				if groupVecsNullable {
+					size += 1
+				}
 			default:
 				size = 128
 			}
@@ -157,12 +129,12 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 			ctr.typ = H0
 		case size <= 8:
 			ctr.typ = H8
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, 0, 0, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
 				return err
 			}
 		default:
 			ctr.typ = HStr
-			if ctr.strHashMap, err = hashmap.NewStrMap(true, 0, 0, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
 				return err
 			}
 		}

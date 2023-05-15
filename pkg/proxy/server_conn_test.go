@@ -16,7 +16,10 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,11 +28,34 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
 
 var testSlat = []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0}
+var testPacket = &frontend.Packet{
+	Length:     1,
+	SequenceID: 0,
+	Payload:    []byte{1},
+}
+
+func testMakeCNServer(
+	uuid string, addr string, connID uint32, hash LabelHash, reqLabel labelInfo,
+) *CNServer {
+	if strings.Contains(addr, "sock") {
+		addr = "unix://" + addr
+	}
+	return &CNServer{
+		connID:   connID,
+		addr:     addr,
+		uuid:     uuid,
+		salt:     testSlat,
+		hash:     hash,
+		reqLabel: reqLabel,
+	}
+}
 
 type mockServerConn struct {
 	conn net.Conn
@@ -49,9 +75,9 @@ func (s *mockServerConn) RawConn() net.Conn { return s.conn }
 func (s *mockServerConn) HandleHandshake(_ *frontend.Packet) (*frontend.Packet, error) {
 	return nil, nil
 }
-func (s *mockServerConn) ExecStmt(stmt string, resp chan<- []byte) error {
+func (s *mockServerConn) ExecStmt(stmt string, resp chan<- []byte) (bool, error) {
 	sendResp(makeOKPacket(), resp)
-	return nil
+	return true, nil
 }
 func (s *mockServerConn) Close() error {
 	if s.conn != nil {
@@ -65,23 +91,33 @@ var baseConnID atomic.Uint32
 type testCNServer struct {
 	sync.Mutex
 	ctx      context.Context
+	scheme   string
 	addr     string
 	listener net.Listener
 	started  bool
 	quit     chan interface{}
+
+	globalVars map[string]string
 }
 
 type testHandler struct {
-	mysqlProto *frontend.MysqlProtocolImpl
-	connID     uint32
-	conn       goetty.IOSession
+	mysqlProto  *frontend.MysqlProtocolImpl
+	connID      uint32
+	conn        goetty.IOSession
+	sessionVars map[string]string
+	server      *testCNServer
 }
 
 func startTestCNServer(t *testing.T, ctx context.Context, addr string) func() error {
 	b := &testCNServer{
-		ctx:  ctx,
-		addr: addr,
-		quit: make(chan interface{}),
+		ctx:        ctx,
+		scheme:     "tcp",
+		addr:       addr,
+		quit:       make(chan interface{}),
+		globalVars: make(map[string]string),
+	}
+	if strings.Contains(addr, "sock") {
+		b.scheme = "unix"
 	}
 	go func() {
 		err := b.Start()
@@ -105,7 +141,7 @@ func (s *testCNServer) waitCNServerReady() bool {
 			s.Lock()
 			started := s.started
 			s.Unlock()
-			conn, err := net.Dial("tcp", s.addr)
+			conn, err := net.Dial(s.scheme, s.addr)
 			if err == nil && started {
 				_ = conn.Close()
 				return true
@@ -119,7 +155,7 @@ func (s *testCNServer) waitCNServerReady() bool {
 
 func (s *testCNServer) Start() error {
 	var err error
-	s.listener, err = net.Listen("tcp", s.addr)
+	s.listener, err = net.Listen(s.scheme, s.addr)
 	if err != nil {
 		return err
 	}
@@ -154,6 +190,8 @@ func (s *testCNServer) Start() error {
 					conn:   c,
 					mysqlProto: frontend.NewMysqlClientProtocol(
 						cid, c, 0, &fp),
+					sessionVars: make(map[string]string),
+					server:      s,
 				}
 				go func(h *testHandler) {
 					testHandle(h)
@@ -172,14 +210,148 @@ func testHandle(h *testHandler) {
 	// server reads auth information from client.
 	_, _ = h.conn.Read(goetty.ReadOptions{})
 	// server writes ok packet.
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, 0, 0, 0, ""))
-	var err error
-	for err == nil {
-		_, err = h.conn.Read(goetty.ReadOptions{})
-		h.mysqlProto.SetSequenceID(1)
-		// set last insert id as connection id to do test more easily.
-		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
+	for {
+		msg, err := h.conn.Read(goetty.ReadOptions{})
+		if err != nil {
+			break
+		}
+		packet, ok := msg.(*frontend.Packet)
+		if !ok {
+			return
+		}
+		if packet.Length > 1 && packet.Payload[0] == 3 {
+			if strings.HasPrefix(string(packet.Payload[1:]), "set session") {
+				h.handleSetVar(packet)
+			} else if string(packet.Payload[1:]) == "show session variables" {
+				h.handleShowVar()
+			} else if string(packet.Payload[1:]) == "show global variables" {
+				h.handleShowGlobalVar()
+			} else if strings.HasPrefix(string(packet.Payload[1:]), "kill connection") {
+				h.handleKillConn()
+			} else {
+				h.handleCommon()
+			}
+		} else {
+			h.handleCommon()
+		}
 	}
+}
+
+func (h *testHandler) handleCommon() {
+	h.mysqlProto.SetSequenceID(1)
+	// set last insert id as connection id to do test more easily.
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
+}
+
+func (h *testHandler) handleSetVar(packet *frontend.Packet) {
+	words := strings.Split(string(packet.Payload[1:]), " ")
+	v := strings.Split(words[2], "=")
+	h.sessionVars[v[0]] = strings.Trim(v[1], "'")
+	h.mysqlProto.SetSequenceID(1)
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
+}
+
+func (h *testHandler) handleKillConn() {
+	h.server.globalVars["killed"] = "yes"
+	h.mysqlProto.SetSequenceID(1)
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
+}
+
+func (h *testHandler) handleShowVar() {
+	h.mysqlProto.SetSequenceID(1)
+	err := h.mysqlProto.SendColumnCountPacket(2)
+	if err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	cols := []*plan.ColDef{
+		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
+		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Value"},
+	}
+	columns := make([]interface{}, len(cols))
+	res := &frontend.MysqlResultSet{}
+	for i, col := range cols {
+		c := new(frontend.MysqlColumn)
+		c.SetName(col.Name)
+		c.SetOrgName(col.Name)
+		c.SetTable(col.Typ.Table)
+		c.SetOrgTable(col.Typ.Table)
+		c.SetAutoIncr(col.Typ.AutoIncr)
+		c.SetSchema("")
+		c.SetDecimal(col.Typ.Scale)
+		columns[i] = c
+		res.AddColumn(c)
+	}
+	for _, c := range columns {
+		if err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
+			_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+			return
+		}
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+	for k, v := range h.sessionVars {
+		row := make([]interface{}, 2)
+		row[0] = k
+		row[1] = v
+		res.AddRow(row)
+	}
+	ses := &frontend.Session{}
+	ses.SetRequestContext(context.Background())
+	h.mysqlProto.SetSession(ses)
+	if err := h.mysqlProto.SendResultSetTextBatchRow(res, res.GetRowCount()); err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+}
+
+func (h *testHandler) handleShowGlobalVar() {
+	h.mysqlProto.SetSequenceID(1)
+	err := h.mysqlProto.SendColumnCountPacket(2)
+	if err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	cols := []*plan.ColDef{
+		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
+		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Value"},
+	}
+	columns := make([]interface{}, len(cols))
+	res := &frontend.MysqlResultSet{}
+	for i, col := range cols {
+		c := new(frontend.MysqlColumn)
+		c.SetName(col.Name)
+		c.SetOrgName(col.Name)
+		c.SetTable(col.Typ.Table)
+		c.SetOrgTable(col.Typ.Table)
+		c.SetAutoIncr(col.Typ.AutoIncr)
+		c.SetSchema("")
+		c.SetDecimal(col.Typ.Scale)
+		columns[i] = c
+		res.AddColumn(c)
+	}
+	for _, c := range columns {
+		if err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
+			_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+			return
+		}
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+	for k, v := range h.server.globalVars {
+		row := make([]interface{}, 2)
+		row[0] = k
+		row[1] = v
+		res.AddRow(row)
+	}
+	ses := &frontend.Session{}
+	ses.SetRequestContext(context.Background())
+	h.mysqlProto.SetSession(ses)
+	if err := h.mysqlProto.SendResultSetTextBatchRow(res, res.GetRowCount()); err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
 }
 
 func (s *testCNServer) Stop() error {
@@ -191,16 +363,14 @@ func (s *testCNServer) Stop() error {
 func TestServerConn_Create(t *testing.T) {
 	defer leaktest.AfterTest(t)
 
-	addr := "127.0.0.1:38009"
-	cn1 := &CNServer{
-		reqLabel: newLabelInfo("t1", map[string]string{
-			"k1": "v1",
-			"k2": "v2",
-		}),
-		uuid: "cn11",
-		addr: addr,
-		salt: testSlat,
-	}
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
+	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
+	cn1.reqLabel = newLabelInfo("t1", map[string]string{
+		"k1": "v1",
+		"k2": "v2",
+	})
 	// server not started.
 	sc, err := newServerConn(cn1, nil, nil)
 	require.Error(t, err)
@@ -221,16 +391,14 @@ func TestServerConn_Create(t *testing.T) {
 
 func TestServerConn_Connect(t *testing.T) {
 	defer leaktest.AfterTest(t)
-	addr := "127.0.0.1:38090"
-	cn1 := &CNServer{
-		reqLabel: newLabelInfo("t1", map[string]string{
-			"k1": "v1",
-			"k2": "v2",
-		}),
-		uuid: "cn11",
-		addr: addr,
-		salt: testSlat,
-	}
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
+	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
+	cn1.reqLabel = newLabelInfo("t1", map[string]string{
+		"k1": "v1",
+		"k2": "v2",
+	})
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
 	stopFn := startTestCNServer(t, tp.ctx, addr)
@@ -254,39 +422,36 @@ func TestFakeCNServer(t *testing.T) {
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
 
-	addr := "127.0.0.1:38009"
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
 	stopFn := startTestCNServer(t, tp.ctx, addr)
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
 
 	li := labelInfo{}
-	cn1 := &CNServer{
-		reqLabel: newLabelInfo("t1", map[string]string{
-			"k1": "v1",
-			"k2": "v2",
-		}),
-		uuid: "cn11",
-		addr: "127.0.0.1:38009",
-	}
+	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
+	cn1.reqLabel = newLabelInfo("t1", map[string]string{
+		"k1": "v1",
+		"k2": "v2",
+	})
 
-	cleanup := testStartClient(t, tp, li, cn1)
+	cleanup := testStartClient(t, tp, clientInfo{labelInfo: li}, cn1)
 	defer cleanup()
 }
 
 func TestServerConn_ExecStmt(t *testing.T) {
 	defer leaktest.AfterTest(t)
 
-	addr := "127.0.0.1:38190"
-	cn1 := &CNServer{
-		reqLabel: newLabelInfo("t1", map[string]string{
-			"k1": "v1",
-			"k2": "v2",
-		}),
-		uuid: "cn11",
-		addr: addr,
-		salt: testSlat,
-	}
+	temp := os.TempDir()
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
+	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
+	cn1.reqLabel = newLabelInfo("t1", map[string]string{
+		"k1": "v1",
+		"k2": "v2",
+	})
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
 	stopFn := startTestCNServer(t, tp.ctx, addr)
@@ -301,7 +466,7 @@ func TestServerConn_ExecStmt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, 0, int(sc.ConnID()))
 	resp := make(chan []byte, 10)
-	err = sc.ExecStmt("kill query", resp)
+	_, err = sc.ExecStmt("kill query", resp)
 	require.NoError(t, err)
 	res := <-resp
 	ok := isOKPacket(res)

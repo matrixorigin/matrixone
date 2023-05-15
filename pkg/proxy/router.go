@@ -15,6 +15,8 @@
 package proxy
 
 import (
+	"context"
+	"net"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -31,11 +33,17 @@ const (
 
 // Router is an interface to select CN server and connects to it.
 type Router interface {
+	// Route selects the best CN server according to the clientInfo.
+	// This is the only method that allocate *CNServer, and other
+	// SelectXXX method in this interface select CNServer from the
+	// ones it allocated.
+	Route(ctx context.Context, client clientInfo) (*CNServer, error)
+
 	// SelectByConnID selects the CN server which has the connection ID.
 	SelectByConnID(connID uint32) (*CNServer, error)
 
-	// SelectByLabel selects the best CN server with the label.
-	SelectByLabel(label labelInfo) (*CNServer, error)
+	// SelectByTenant selects the CN servers belongs to the tenant.
+	SelectByTenant(tenant Tenant) ([]*CNServer, error)
 
 	// Connect connects to the CN server and returns the connection.
 	// It should take a handshakeResp as a parameter, which is the auth
@@ -44,6 +52,7 @@ type Router interface {
 }
 
 // CNServer represents the backend CN server, including salt, tenant, uuid and address.
+// When there is a new client connection, a new CNServer will be created.
 type CNServer struct {
 	// connID is the backend CN server's connection ID, which is global unique
 	// and is tracked in connManager.
@@ -61,10 +70,18 @@ type CNServer struct {
 	uuid string
 	// addr is the net address of CN server.
 	addr string
+	// conn for test.
+	conn net.Conn
 }
 
 // Connect connects to backend server and returns IOSession.
 func (s *CNServer) Connect() (goetty.IOSession, error) {
+	if s.conn != nil { // for test.
+		return goetty.NewIOSession(
+			goetty.WithSessionCodec(frontend.NewSqlCodec()),
+			goetty.WithSessionConn(0, s.conn),
+		), nil
+	}
 	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
 	err := c.Connect(s.addr, defaultConnectTimeout)
 	if err != nil {
@@ -102,9 +119,9 @@ func newRouter(
 	}
 }
 
-// SelectByConnID implements the CNConnector interface.
+// SelectByConnID implements the Router interface.
 func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
-	cn := r.rebalancer.connManager.getCNServer(connID)
+	cn := r.rebalancer.connManager.getCNServerByConnID(connID)
 	if cn == nil {
 		return nil, moerr.NewInternalErrorNoCtx("no available CN server.")
 	}
@@ -116,13 +133,22 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 	}, nil
 }
 
-// SelectByLabel implements the CNConnector interface.
-func (r *router) SelectByLabel(label labelInfo) (*CNServer, error) {
+// SelectByTenant implements the Router interface.
+func (r *router) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
+	return r.rebalancer.connManager.getCNServersByTenant(tenant), nil
+}
+
+// Route implements the Router interface.
+func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
 	var cns []*CNServer
 	var cnEmpty, cnNotEmpty bool
-	r.moCluster.GetCNService(label.genSelector(), func(s metadata.CNService) bool {
+	selector := c.labelInfo.genSelector()
+	if c.labelInfo.isSuperTenant() {
+		selector = clusterservice.NewSelector()
+	}
+	r.moCluster.GetCNService(selector, func(s metadata.CNService) bool {
 		cns = append(cns, &CNServer{
-			reqLabel: label,
+			reqLabel: c.labelInfo,
 			cnLabel:  s.Labels,
 			uuid:     s.ServiceID,
 			addr:     s.SQLAddress,
@@ -141,7 +167,7 @@ func (r *router) SelectByLabel(label labelInfo) (*CNServer, error) {
 	}
 
 	// getHash returns same hash for same labels.
-	hash, err := label.getHash()
+	hash, err := c.labelInfo.getHash()
 	if err != nil {
 		return nil, err
 	}

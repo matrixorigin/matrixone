@@ -69,12 +69,24 @@ func (*StorageTxnClient) Close() error {
 	return nil
 }
 
+func (*StorageTxnClient) MinTimestamp() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta
 }
 
 var _ client.TxnOperator = new(StorageTxnOperator)
+
+func (s *StorageTxnOperator) AddWorkspace(_ client.Workspace) {
+	panic("unimplemented")
+}
+
+func (s *StorageTxnOperator) GetWorkspace() client.Workspace {
+	panic("unimplemented")
+}
 
 func (s *StorageTxnOperator) ApplySnapshot(data []byte) error {
 	panic("unimplemented")

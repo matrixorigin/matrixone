@@ -307,7 +307,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		cnt := 0
 		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
 		mockDbMeta.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
-		eng.EXPECT().Database(ctx, gomock.Any(), gomock.Any()).DoAndReturn(
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 			func(ctx2 context.Context, db string, dump interface{}) (engine.Database, error) {
 				cnt++
 				if cnt == 1 {
@@ -974,7 +974,7 @@ func Test_statement_type(t *testing.T) {
 		}
 
 		for _, k := range kases {
-			ret, _ := StatementCanBeExecutedInUncommittedTransaction(nil, k.stmt)
+			ret, _ := statementCanBeExecutedInUncommittedTransaction(nil, k.stmt)
 			convey.So(ret, convey.ShouldBeTrue)
 		}
 
@@ -983,7 +983,7 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
-		convey.So(NeedToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.DropTable{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(nil), convey.ShouldBeFalse)
 	})
@@ -1150,7 +1150,7 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.ShowVariables{}, true},
 		{&tree.ShowStatus{}, true},
 		{&tree.ShowIndex{}, true},
-		{&tree.ShowFunctionStatus{}, true},
+		{&tree.ShowFunctionOrProcedureStatus{}, true},
 		{&tree.ShowNodeList{}, true},
 		{&tree.ShowLocks{}, true},
 		{&tree.ShowTableNumber{}, true},
@@ -1163,7 +1163,7 @@ func Test_StatementClassify(t *testing.T) {
 	}
 
 	for _, a := range args {
-		ret, err := StatementCanBeExecutedInUncommittedTransaction(nil, a.stmt)
+		ret, err := statementCanBeExecutedInUncommittedTransaction(nil, a.stmt)
 		assert.Nil(t, err)
 		assert.Equal(t, ret, a.want)
 	}
@@ -1279,4 +1279,25 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 		require.Equal(t, "s1", row[0])
 		require.Equal(t, "addr1", row[1])
 	})
+}
+
+func Test_RecordParseErrorStatement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetRequestContext(context.TODO())
+
+	proc := &process.Process{
+		Ctx: context.TODO(),
+	}
+
+	motrace.GetTracerProvider().SetEnable(true)
+	ctx := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
+	si := motrace.StatementFromContext(ctx)
+	require.NotNil(t, si)
+
+	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{externSql, externSql}, moerr.NewInternalErrorNoCtx("test"))
+	si = motrace.StatementFromContext(ctx)
+	require.NotNil(t, si)
+
 }

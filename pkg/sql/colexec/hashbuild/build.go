@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,13 +34,13 @@ func Prepare(proc *process.Process, arg any) error {
 
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, false)
 	if ap.NeedHashMap {
 		if ap.ctr.mp, err = hashmap.NewStrMap(false, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 			return err
 		}
 		ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions))
 		ap.ctr.evecs = make([]evalVector, len(ap.Conditions))
-		ap.ctr.nullSels = make([]int32, 0)
 	}
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
@@ -62,7 +61,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 			if ap.ctr.mp != nil {
@@ -72,17 +70,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		default:
 			if ctr.bat != nil {
 				if ap.NeedHashMap {
-					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, ctr.nullSels, nil, ctr.mp, ctr.hasNull)
+					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
 				}
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil
 				ctr.bat = nil
 				ctr.sels = nil
-				ctr.nullSels = nil
 			} else {
 				proc.SetInputBatch(nil)
 			}
-			ap.Free(proc, false)
 			return true, nil
 		}
 	}
@@ -92,14 +88,16 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	var err error
 
 	for {
-		start := time.Now()
-		bat := <-proc.Reg.MergeReceivers[0].Ch
-		anal.WaitStop(start)
+		bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
+		if err != nil {
+			return err
+		}
 
 		if bat == nil {
 			break
 		}
 		if bat.Length() == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 		anal.Input(bat, isFirst)
@@ -116,12 +114,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	if err = ctr.evalJoinCondition(ctr.bat, ap.Conditions, proc, anal); err != nil {
 		return err
 	}
-
-	//if ctr.idx != nil {
-	//	return ctr.indexBuild()
-	//}
-
-	inBuckets := make([]uint8, hashmap.UnitLimit)
 
 	itr := ctr.mp.NewIterator()
 	count := ctr.bat.Length()
@@ -149,19 +141,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			ai := int64(v) - 1
 			ctr.sels[ai] = append(ctr.sels[ai], int32(i+k))
 		}
-		if ap.IsRight {
-			copy(inBuckets, hashmap.OneUInt8s)
-			_, zvals = itr.Find(i, n, ctr.vecs, inBuckets)
-			for k := 0; k < n; k++ {
-				if inBuckets[k] == 0 {
-					continue
-				}
-				if zvals[k] == 0 {
-					ctr.nullSels = append(ctr.nullSels, int32(i+k))
-				}
-			}
-		}
-
 	}
 
 	return nil

@@ -30,6 +30,8 @@ const (
 )
 
 type container struct {
+	colexec.ReceiverOperator
+
 	state int
 	bat   *batch.Batch
 }
@@ -45,6 +47,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.cleanBatch(proc.Mp())
+		ctr.FreeAllReg()
 	}
 }
 

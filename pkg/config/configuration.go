@@ -124,6 +124,9 @@ var (
 	// defaultMetricUpdateStorageUsageInterval default: 15 min.
 	defaultMetricUpdateStorageUsageInterval = 15 * time.Minute
 
+	// defaultMetricStorageUsageCheckNewInterval default: 1 min
+	defaultMetricStorageUsageCheckNewInterval = time.Minute
+
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
 
@@ -137,10 +140,10 @@ var (
 	defaultSessionTimeout = 24 * time.Hour
 
 	// defaultLogsExtension default: tae. Support val in [csv, tae]
-	defaultLogsExtension = "tae"
+	defaultLogsExtension = "csv"
 
 	// defaultMergedExtension default: tae. Support val in [csv, tae]
-	defaultMergedExtension = "tae"
+	defaultMergedExtension = "csv"
 
 	// defaultOBShowStatsInterval default: 1min
 	defaultOBShowStatsInterval = time.Minute
@@ -153,6 +156,12 @@ var (
 
 	// defaultPrintDebugInterval default: 30 minutes
 	defaultPrintDebugInterval = 30
+
+	// defaultKillRountinesInterval default: 1 minutes
+	defaultKillRountinesInterval = 1
+
+	//defaultCleanKillQueueInterval default: 60 minutes
+	defaultCleanKillQueueInterval = 60
 )
 
 // FrontendParameters of the frontend
@@ -296,9 +305,16 @@ type FrontendParameters struct {
 
 	PrintDebugInterval int `toml:"printDebugInterval"`
 
+	KillRountinesInterval int `toml:"killRountinesInterval"`
+
+	CleanKillQueueInterval int `toml:"cleanKillQueueInterval"`
+
 	// ProxyEnabled indicates that proxy module is enabled and something extra
 	// is needed, such as update the salt.
 	ProxyEnabled bool `toml:"proxy-enabled"`
+
+	// SkipCheckPrivilege denotes the privilege check should be passed.
+	SkipCheckPrivilege bool `toml:"skipCheckPrivilege"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -415,7 +431,7 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	}
 
 	if fp.AutoIncrCacheSize == 0 {
-		fp.AutoIncrCacheSize = 3000
+		fp.AutoIncrCacheSize = 3000000
 	}
 
 	if fp.LowerCaseTableNames == "" {
@@ -424,6 +440,14 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.PrintDebugInterval == 0 {
 		fp.PrintDebugInterval = defaultPrintDebugInterval
+	}
+
+	if fp.KillRountinesInterval == 0 {
+		fp.KillRountinesInterval = defaultKillRountinesInterval
+	}
+
+	if fp.CleanKillQueueInterval == 0 {
+		fp.CleanKillQueueInterval = defaultCleanKillQueueInterval
 	}
 }
 
@@ -534,8 +558,11 @@ type ObservabilityParameters struct {
 	// MetricGatherInterval default is 15 sec.
 	MetricGatherInterval int `toml:"metricGatherInterval"`
 
-	// MetricUpdateStorageUsageInterval, default: 30 min
-	MetricUpdateStorageUsageInterval toml.Duration `toml:"metricUpdateStorageUsageInterval"`
+	// MetricStorageUsageUpdateInterval, default: 30 min
+	MetricStorageUsageUpdateInterval toml.Duration `toml:"metricStorageUsageUpdateInterval"`
+
+	// MetricStorageUsageCheckNewInterval, default: 1 min
+	MetricStorageUsageCheckNewInterval toml.Duration `toml:"metricStorageUsageCheckNewInterval"`
 
 	// MergeCycle default: 14400 sec (4 hours).
 	// PS: only used while MO init.
@@ -585,8 +612,12 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.MetricGatherInterval = defaultMetricGatherInterval
 	}
 
-	if op.MetricUpdateStorageUsageInterval.Duration <= 0 {
-		op.MetricUpdateStorageUsageInterval.Duration = defaultMetricUpdateStorageUsageInterval
+	if op.MetricStorageUsageUpdateInterval.Duration <= 0 {
+		op.MetricStorageUsageUpdateInterval.Duration = defaultMetricUpdateStorageUsageInterval
+	}
+
+	if op.MetricStorageUsageCheckNewInterval.Duration <= 0 {
+		op.MetricStorageUsageCheckNewInterval.Duration = defaultMetricStorageUsageCheckNewInterval
 	}
 
 	if op.MergeCycle.Duration <= 0 {

@@ -15,13 +15,16 @@
 package index
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"strings"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -29,6 +32,13 @@ import (
 const (
 	ZMSize = 64
 )
+
+var MaxBytesValue []byte
+var zeroZM = make([]byte, ZMSize)
+
+func init() {
+	MaxBytesValue = bytes.Repeat([]byte{0xff}, 31)
+}
 
 // [0,...29, 30, 31,...60, 61, 62, 63]
 //
@@ -39,15 +49,11 @@ const (
 //	                              type
 type ZM []byte
 
-// TODO: remove me later
-func NewZoneMap(typ types.Type) *ZM {
-	return NewZM(typ.Oid)
-}
-
-func NewZM(t types.T) *ZM {
+func NewZM(t types.T, scale int32) ZM {
 	zm := ZM(make([]byte, ZMSize))
 	zm.SetType(t)
-	return &zm
+	zm.SetScale(scale)
+	return zm
 }
 
 func BuildZM(t types.T, v []byte) ZM {
@@ -55,6 +61,14 @@ func BuildZM(t types.T, v []byte) ZM {
 	zm.SetType(t)
 	zm.doInit(v)
 	return zm
+}
+
+func (zm ZM) ResetMinMax() {
+	t := zm.GetType()
+	scale := zm.GetScale()
+	copy(zm[:], zeroZM)
+	zm.SetType(t)
+	zm.SetScale(scale)
 }
 
 func (zm ZM) doInit(v []byte) {
@@ -70,10 +84,18 @@ func (zm ZM) doInit(v []byte) {
 
 func (zm ZM) String() string {
 	var b strings.Builder
-	_, _ = b.WriteString(fmt.Sprintf("ZM(%s)[%v,%v]",
-		zm.GetType().String(), zm.GetMin(), zm.GetMax()))
+	if zm.IsString() {
+		_, _ = b.WriteString(fmt.Sprintf("ZM(%s)%d[%v,%v]",
+			zm.GetType().String(), zm.GetScale(), string(zm.GetMinBuf()), string(zm.GetMaxBuf())))
+	} else {
+		_, _ = b.WriteString(fmt.Sprintf("ZM(%s)%d[%v,%v]",
+			zm.GetType().String(), zm.GetScale(), zm.GetMin(), zm.GetMax()))
+	}
 	if zm.MaxTruncated() {
 		_ = b.WriteByte('+')
+	}
+	if !zm.IsInited() {
+		_, _ = b.WriteString("--")
 	}
 	return b.String()
 }
@@ -92,9 +114,30 @@ func (zm ZM) IsString() bool {
 	return zm.GetType().FixedLength() < 0
 }
 
+func (zm ZM) Valid() bool {
+	return len(zm) == ZMSize && zm.IsInited()
+}
+
 func (zm ZM) SetType(t types.T) {
 	zm[63] &= 0x00
 	zm[63] |= byte(t)
+	sz := t.FixedLength()
+	if sz <= 0 {
+		return
+	}
+	zm[61] = byte(sz)
+	zm[30] = byte(sz)
+}
+
+func (zm ZM) SetScale(scale int32) {
+	sz := 0x3f & byte(scale)
+	zm[62] &= 0xc0
+	zm[62] |= sz
+}
+
+func (zm ZM) GetScale() int32 {
+	sz := 0x3f & zm[62]
+	return int32(sz)
 }
 
 func (zm ZM) GetMin() any {
@@ -146,7 +189,7 @@ func (zm ZM) Unmarshal(buf []byte) (err error) {
 
 // TODO: remove me later
 func (zm ZM) Update(v any) (err error) {
-	UpdateZMAny(&zm, v)
+	UpdateZMAny(zm, v)
 	return
 }
 
@@ -207,8 +250,8 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 // Optimize me later
 func (zm ZM) containsBytes(k []byte) bool {
 	t := types.T(zm[63])
-	return compute.Compare(k, zm.GetMinBuf(), t) >= 0 &&
-		compute.Compare(k, zm.GetMaxBuf(), t) <= 0
+	return compute.Compare(k, zm.GetMinBuf(), t, 0, 0) >= 0 &&
+		compute.Compare(k, zm.GetMaxBuf(), t, 0, 0) <= 0
 }
 
 func (zm ZM) containsString(k []byte) bool {
@@ -241,12 +284,18 @@ func (zm ZM) ContainsKey(k []byte) bool {
 		return zm.containsString(k)
 	}
 	t := types.T(zm[63])
-	return compute.Compare(k, zm.GetMinBuf(), t) >= 0 &&
-		compute.Compare(k, zm.GetMaxBuf(), t) <= 0
+	return compute.Compare(k, zm.GetMinBuf(), t, 0, 0) >= 0 &&
+		compute.Compare(k, zm.GetMaxBuf(), t, 0, 0) <= 0
 }
 
 func (zm ZM) IsInited() bool {
-	return zm[62]&0x80 != 0
+	return len(zm) == ZMSize && zm[62]&0x80 != 0
+}
+
+func (zm ZM) Reset() {
+	if len(zm) == ZMSize {
+		zm[62] &= 0x7f
+	}
 }
 
 func (zm ZM) setInited() {
@@ -341,6 +390,512 @@ func (zm ZM) updateMaxFixed(v []byte) {
 	zm[61] = byte(len(v))
 }
 
+func (zm ZM) compareCheck(o ZM) (ok bool) {
+	if !zm.IsInited() || !o.IsInited() {
+		return false
+	}
+	return zm.GetType() == o.GetType() || (zm.IsString() && o.IsString())
+}
+
+func (zm ZM) AnyGT(o ZM) (res bool, ok bool) {
+	if !zm.compareCheck(o) {
+		ok = false
+		return
+	}
+	// zm.max > o.min
+	ok = true
+	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) > 0
+	return
+}
+
+func (zm ZM) AnyGE(o ZM) (res bool, ok bool) {
+	if !zm.compareCheck(o) {
+		ok = false
+		return
+	}
+	// zm.max >= o.min
+	ok = true
+	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) >= 0
+	return
+}
+
+func (zm ZM) AnyLT(o ZM) (res bool, ok bool) {
+	if !zm.compareCheck(o) {
+		ok = false
+		return
+	}
+	// zm.min < o.max
+	ok = true
+	res = compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) < 0
+	return
+}
+
+func (zm ZM) AnyLE(o ZM) (res bool, ok bool) {
+	if !zm.compareCheck(o) {
+		ok = false
+		return
+	}
+	// zm.min <= o.max
+	ok = true
+	res = compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) <= 0
+	return
+}
+
+func (zm ZM) FastIntersect(o ZM) (res bool) {
+	t := zm.GetType()
+	// zm.max >= o.min && zm.min <= v2.max
+	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), t, zm.GetScale(), o.GetScale()) >= 0 &&
+		compute.Compare(zm.GetMinBuf(), o.GetMaxBuf(), t, zm.GetScale(), o.GetScale()) <= 0
+	return
+}
+
+func (zm ZM) Intersect(o ZM) (res bool, ok bool) {
+	if !zm.compareCheck(o) {
+		ok = false
+		return
+	}
+	ok = true
+	res = zm.FastIntersect(o)
+	return
+}
+
+// both zm should be of type bool, otherwise, ok is false
+// res is true only when zm.min == true and o.min == true
+func (zm ZM) And(o ZM) (res bool, ok bool) {
+	if !zm.compareCheck(o) {
+		ok = false
+		return
+	}
+	t := zm.GetType()
+	if t != types.T_bool {
+		ok = false
+		return
+	}
+	ok = true
+	if !types.DecodeBool(zm.GetMinBuf()) {
+		return
+	}
+	res = types.DecodeBool(o.GetMinBuf())
+	return
+}
+
+// both zm should be of type bool, otherwise, ok is false
+// res is false only when zm.max == false and o.max == false
+func (zm ZM) Or(o ZM) (res bool, ok bool) {
+	if !zm.compareCheck(o) {
+		ok = false
+		return
+	}
+	t := zm.GetType()
+	if t != types.T_bool {
+		ok = false
+		return
+	}
+	res, ok = true, true
+	if !types.DecodeBool(zm.GetMaxBuf()) && !types.DecodeBool(o.GetMaxBuf()) {
+		res = false
+	}
+	return
+}
+
+// max = v1.max+v2.max
+// min = v1.min+v2.min
+func ZMPlus(v1, v2, res ZM) ZM {
+	res.Reset()
+	if !v1.compareCheck(v2) {
+		return res
+	}
+	// check supported type
+	if len(res) != ZMSize {
+		res = NewZM(v1.GetType(), v1.GetScale())
+	}
+	if !applyArithmetic(v1, v2, res, '+', v1.GetScale(), v2.GetScale()) {
+		res.Reset()
+	}
+	return res
+}
+
+// max = v1.max-v2.min
+// min = v1.max-v2.min
+func ZMMinus(v1, v2, res ZM) ZM {
+	res.Reset()
+	if !v1.compareCheck(v2) {
+		return res
+	}
+	// check supported type
+	if len(res) != ZMSize {
+		res = NewZM(v1.GetType(), v1.GetScale())
+	}
+	if !applyArithmetic(v1, v2, res, '-', v1.GetScale(), v2.GetScale()) {
+		res.Reset()
+	}
+	return res
+}
+
+// v1 product v2 => p[r0,r1,r2,r3]
+// min,max = Min(p),Max(p)
+func ZMMulti(v1, v2, res ZM) ZM {
+	res.Reset()
+	if !v1.compareCheck(v2) {
+		return res
+	}
+	// check supported type
+	if len(res) != ZMSize {
+		res = NewZM(v1.GetType(), v1.GetScale())
+	}
+	if !applyArithmetic(v1, v2, res, '*', v1.GetScale(), v2.GetScale()) {
+		res.Reset()
+	}
+	return res
+}
+
+func applyArithmetic(v1, v2, res ZM, op byte, scale1, scale2 int32) (ok bool) {
+	ok = true
+	switch v1.GetType() {
+	case types.T_int8:
+		var minv, maxv int8
+		switch op {
+		case '+':
+			maxv = types.DecodeInt8(v1.GetMaxBuf()) + types.DecodeInt8(v2.GetMaxBuf())
+			minv = types.DecodeInt8(v1.GetMinBuf()) + types.DecodeInt8(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeInt8(v1.GetMaxBuf()) - types.DecodeInt8(v2.GetMinBuf())
+			minv = types.DecodeInt8(v1.GetMinBuf()) - types.DecodeInt8(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeInt8(v1.GetMinBuf()), types.DecodeInt8(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeInt8(v2.GetMinBuf()), types.DecodeInt8(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeInt8(&minv))
+		UpdateZM(res, types.EncodeInt8(&maxv))
+	case types.T_int16:
+		var minv, maxv int16
+		switch op {
+		case '+':
+			maxv = types.DecodeInt16(v1.GetMaxBuf()) + types.DecodeInt16(v2.GetMaxBuf())
+			minv = types.DecodeInt16(v1.GetMinBuf()) + types.DecodeInt16(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeInt16(v1.GetMaxBuf()) - types.DecodeInt16(v2.GetMinBuf())
+			minv = types.DecodeInt16(v1.GetMinBuf()) - types.DecodeInt16(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeInt16(v1.GetMinBuf()), types.DecodeInt16(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeInt16(v2.GetMinBuf()), types.DecodeInt16(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeInt16(&minv))
+		UpdateZM(res, types.EncodeInt16(&maxv))
+	case types.T_int32:
+		var minv, maxv int32
+		switch op {
+		case '+':
+			maxv = types.DecodeInt32(v1.GetMaxBuf()) + types.DecodeInt32(v2.GetMaxBuf())
+			minv = types.DecodeInt32(v1.GetMinBuf()) + types.DecodeInt32(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeInt32(v1.GetMaxBuf()) - types.DecodeInt32(v2.GetMinBuf())
+			minv = types.DecodeInt32(v1.GetMinBuf()) - types.DecodeInt32(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeInt32(v1.GetMinBuf()), types.DecodeInt32(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeInt32(v2.GetMinBuf()), types.DecodeInt32(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeInt32(&minv))
+		UpdateZM(res, types.EncodeInt32(&maxv))
+	case types.T_int64:
+		var minv, maxv int64
+		switch op {
+		case '+':
+			maxv = types.DecodeInt64(v1.GetMaxBuf()) + types.DecodeInt64(v2.GetMaxBuf())
+			minv = types.DecodeInt64(v1.GetMinBuf()) + types.DecodeInt64(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeInt64(v1.GetMaxBuf()) - types.DecodeInt64(v2.GetMinBuf())
+			minv = types.DecodeInt64(v1.GetMinBuf()) - types.DecodeInt64(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeInt64(v1.GetMinBuf()), types.DecodeInt64(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeInt64(v2.GetMinBuf()), types.DecodeInt64(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeInt64(&minv))
+		UpdateZM(res, types.EncodeInt64(&maxv))
+	case types.T_uint8:
+		var minv, maxv uint8
+		switch op {
+		case '+':
+			maxv = types.DecodeUint8(v1.GetMaxBuf()) + types.DecodeUint8(v2.GetMaxBuf())
+			minv = types.DecodeUint8(v1.GetMinBuf()) + types.DecodeUint8(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeUint8(v1.GetMaxBuf()) - types.DecodeUint8(v2.GetMinBuf())
+			minv = types.DecodeUint8(v1.GetMinBuf()) - types.DecodeUint8(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeUint8(v1.GetMinBuf()), types.DecodeUint8(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeUint8(v2.GetMinBuf()), types.DecodeUint8(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeUint8(&minv))
+		UpdateZM(res, types.EncodeUint8(&maxv))
+	case types.T_uint16:
+		var minv, maxv uint16
+		switch op {
+		case '+':
+			maxv = types.DecodeUint16(v1.GetMaxBuf()) + types.DecodeUint16(v2.GetMaxBuf())
+			minv = types.DecodeUint16(v1.GetMinBuf()) + types.DecodeUint16(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeUint16(v1.GetMaxBuf()) - types.DecodeUint16(v2.GetMinBuf())
+			minv = types.DecodeUint16(v1.GetMinBuf()) - types.DecodeUint16(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeUint16(v1.GetMinBuf()), types.DecodeUint16(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeUint16(v2.GetMinBuf()), types.DecodeUint16(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeUint16(&minv))
+		UpdateZM(res, types.EncodeUint16(&maxv))
+	case types.T_uint32:
+		var minv, maxv uint32
+		switch op {
+		case '+':
+			maxv = types.DecodeUint32(v1.GetMaxBuf()) + types.DecodeUint32(v2.GetMaxBuf())
+			minv = types.DecodeUint32(v1.GetMinBuf()) + types.DecodeUint32(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeUint32(v1.GetMaxBuf()) - types.DecodeUint32(v2.GetMinBuf())
+			minv = types.DecodeUint32(v1.GetMinBuf()) - types.DecodeUint32(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeUint32(v1.GetMinBuf()), types.DecodeUint32(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeUint32(v2.GetMinBuf()), types.DecodeUint32(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeUint32(&minv))
+		UpdateZM(res, types.EncodeUint32(&maxv))
+	case types.T_uint64:
+		var minv, maxv uint64
+		switch op {
+		case '+':
+			maxv = types.DecodeUint64(v1.GetMaxBuf()) + types.DecodeUint64(v2.GetMaxBuf())
+			minv = types.DecodeUint64(v1.GetMinBuf()) + types.DecodeUint64(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeUint64(v1.GetMaxBuf()) - types.DecodeUint64(v2.GetMinBuf())
+			minv = types.DecodeUint64(v1.GetMinBuf()) - types.DecodeUint64(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeUint64(v1.GetMinBuf()), types.DecodeUint64(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeUint64(v2.GetMinBuf()), types.DecodeUint64(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeUint64(&minv))
+		UpdateZM(res, types.EncodeUint64(&maxv))
+	case types.T_float32:
+		var minv, maxv float32
+		switch op {
+		case '+':
+			maxv = types.DecodeFloat32(v1.GetMaxBuf()) + types.DecodeFloat32(v2.GetMaxBuf())
+			minv = types.DecodeFloat32(v1.GetMinBuf()) + types.DecodeFloat32(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeFloat32(v1.GetMaxBuf()) - types.DecodeFloat32(v2.GetMinBuf())
+			minv = types.DecodeFloat32(v1.GetMinBuf()) - types.DecodeFloat32(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeFloat32(v1.GetMinBuf()), types.DecodeFloat32(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeFloat32(v2.GetMinBuf()), types.DecodeFloat32(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeFloat32(&minv))
+		UpdateZM(res, types.EncodeFloat32(&maxv))
+	case types.T_float64:
+		var minv, maxv float64
+		switch op {
+		case '+':
+			maxv = types.DecodeFloat64(v1.GetMaxBuf()) + types.DecodeFloat64(v2.GetMaxBuf())
+			minv = types.DecodeFloat64(v1.GetMinBuf()) + types.DecodeFloat64(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeFloat64(v1.GetMaxBuf()) - types.DecodeFloat64(v2.GetMinBuf())
+			minv = types.DecodeFloat64(v1.GetMinBuf()) - types.DecodeFloat64(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeFloat64(v1.GetMinBuf()), types.DecodeFloat64(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeFloat64(v2.GetMinBuf()), types.DecodeFloat64(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeFloat64(&minv))
+		UpdateZM(res, types.EncodeFloat64(&maxv))
+	case types.T_date:
+		var minv, maxv types.Date
+		switch op {
+		case '+':
+			maxv = types.DecodeDate(v1.GetMaxBuf()) + types.DecodeDate(v2.GetMaxBuf())
+			minv = types.DecodeDate(v1.GetMinBuf()) + types.DecodeDate(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeDate(v1.GetMaxBuf()) - types.DecodeDate(v2.GetMinBuf())
+			minv = types.DecodeDate(v1.GetMinBuf()) - types.DecodeDate(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeDate(v1.GetMinBuf()), types.DecodeDate(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeDate(v2.GetMinBuf()), types.DecodeDate(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeDate(&minv))
+		UpdateZM(res, types.EncodeDate(&maxv))
+	case types.T_datetime:
+		var minv, maxv types.Datetime
+		switch op {
+		case '+':
+			maxv = types.DecodeDatetime(v1.GetMaxBuf()) + types.DecodeDatetime(v2.GetMaxBuf())
+			minv = types.DecodeDatetime(v1.GetMinBuf()) + types.DecodeDatetime(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeDatetime(v1.GetMaxBuf()) - types.DecodeDatetime(v2.GetMinBuf())
+			minv = types.DecodeDatetime(v1.GetMinBuf()) - types.DecodeDatetime(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeDatetime(v1.GetMinBuf()), types.DecodeDatetime(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeDatetime(v2.GetMinBuf()), types.DecodeDatetime(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeDatetime(&minv))
+		UpdateZM(res, types.EncodeDatetime(&maxv))
+	case types.T_decimal64:
+		var minv, maxv types.Decimal64
+		var newScale int32
+		var err error
+		switch op {
+		case '+':
+			maxv = types.DecodeDecimal64(v1.GetMaxBuf())
+			if maxv, newScale, err = maxv.Add(types.DecodeDecimal64(v2.GetMaxBuf()), scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			minv = types.DecodeDecimal64(v1.GetMinBuf())
+			if minv, _, err = minv.Add(types.DecodeDecimal64(v2.GetMinBuf()), scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+		case '-':
+			maxv = types.DecodeDecimal64(v1.GetMaxBuf())
+			if maxv, newScale, err = maxv.Sub(types.DecodeDecimal64(v2.GetMinBuf()), scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			minv = types.DecodeDecimal64(v1.GetMinBuf())
+			if minv, _, err = minv.Sub(types.DecodeDecimal64(v2.GetMaxBuf()), scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+		case '*':
+			rs := make([]types.Decimal64, 4)
+			v1_0, v1_1 := types.DecodeDecimal64(v1.GetMinBuf()), types.DecodeDecimal64(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeDecimal64(v2.GetMinBuf()), types.DecodeDecimal64(v2.GetMaxBuf())
+			if rs[0], newScale, err = v1_0.Mul(v2_0, scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			if rs[1], _, err = v1_1.Mul(v2_0, scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			if rs[2], _, err = v1_0.Mul(v2_1, scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			if rs[3], _, err = v1_1.Mul(v2_1, scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			minv, maxv = compute.GetDecimal64MinAndMax(rs)
+		default:
+			ok = false
+			return
+		}
+		res.SetScale(newScale)
+		UpdateZM(res, types.EncodeDecimal64(&minv))
+		UpdateZM(res, types.EncodeDecimal64(&maxv))
+	case types.T_decimal128:
+		var newScale int32
+		var (
+			err        error
+			minv, maxv types.Decimal128
+		)
+		switch op {
+		case '+':
+			maxv = types.DecodeDecimal128(v1.GetMaxBuf())
+			if maxv, newScale, err = maxv.Add(types.DecodeDecimal128(v2.GetMaxBuf()), scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			minv = types.DecodeDecimal128(v1.GetMinBuf())
+			if minv, _, err = minv.Add(types.DecodeDecimal128(v2.GetMinBuf()), scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+		case '-':
+			maxv = types.DecodeDecimal128(v1.GetMaxBuf())
+			if maxv, newScale, err = maxv.Sub(types.DecodeDecimal128(v2.GetMinBuf()), scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			minv = types.DecodeDecimal128(v1.GetMinBuf())
+			if minv, _, err = minv.Sub(types.DecodeDecimal128(v2.GetMaxBuf()), scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+		case '*':
+			rs := make([]types.Decimal128, 4)
+			v1_0, v1_1 := types.DecodeDecimal128(v1.GetMinBuf()), types.DecodeDecimal128(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeDecimal128(v2.GetMinBuf()), types.DecodeDecimal128(v2.GetMaxBuf())
+			if rs[0], newScale, err = v1_0.Mul(v2_0, scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			if rs[1], _, err = v1_1.Mul(v2_0, scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			if rs[2], _, err = v1_0.Mul(v2_1, scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			if rs[3], _, err = v1_1.Mul(v2_1, scale1, scale2); err != nil {
+				ok = false
+				return
+			}
+			minv, maxv = compute.GetDecimal128MinAndMax(rs)
+		default:
+			ok = false
+			return
+		}
+		res.SetScale(newScale)
+		UpdateZM(res, types.EncodeDecimal128(&minv))
+		UpdateZM(res, types.EncodeDecimal128(&maxv))
+	}
+	return
+}
+
 func hasMaxPrefix(bs []byte) bool {
 	for i := 0; i < 3; i++ {
 		if types.DecodeFixed[uint64](bs[i*8:(i+1)*8]) != math.MaxUint64 {
@@ -362,7 +917,7 @@ func adjustBytes(bs []byte) {
 	}
 }
 
-func BatchUpdateZM(zm *ZM, vs containers.Vector) (err error) {
+func BatchUpdateZM(zm ZM, vs containers.Vector) (err error) {
 	op := func(v []byte, isNull bool, _ int) (err error) {
 		if isNull {
 			return
@@ -374,9 +929,10 @@ func BatchUpdateZM(zm *ZM, vs containers.Vector) (err error) {
 	return
 }
 
-func UpdateZM(zm *ZM, v []byte) {
+func UpdateZM(zm ZM, v []byte) {
 	if !zm.IsInited() {
 		zm.doInit(v)
+		return
 	}
 	if zm.IsString() {
 		if compute.CompareBytes(v, zm.GetMinBuf()) < 0 {
@@ -387,14 +943,15 @@ func UpdateZM(zm *ZM, v []byte) {
 		return
 	}
 	t := zm.GetType()
-	if compute.Compare(v, zm.GetMinBuf(), t) < 0 {
+	scale := zm.GetScale()
+	if compute.Compare(v, zm.GetMinBuf(), t, scale, scale) < 0 {
 		zm.updateMinFixed(v)
-	} else if compute.Compare(v, zm.GetMaxBuf(), t) > 0 {
+	} else if compute.Compare(v, zm.GetMaxBuf(), t, scale, scale) > 0 {
 		zm.updateMaxFixed(v)
 	}
 }
 
-func UpdateZMAny(zm *ZM, v any) {
+func UpdateZMAny(zm ZM, v any) {
 	vv := types.EncodeValue(v, zm.GetType())
 	UpdateZM(zm, vv)
 }
@@ -405,4 +962,85 @@ func EncodeZM(zm *ZM) []byte {
 
 func DecodeZM(buf []byte) ZM {
 	return buf[:ZMSize]
+}
+
+func SetBool(zm ZM, v bool) ZM {
+	if len(zm) != ZMSize {
+		zm = NewZM(types.T_bool, 0)
+	}
+	buf := types.EncodeBool(&v)
+	zm.doInit(buf)
+	return zm
+}
+
+func MustZMToVector(zm ZM, vec *vector.Vector, m *mpool.MPool) *vector.Vector {
+	var err error
+	if vec, err = ZMToVector(zm, vec, m); err != nil {
+		t := zm.GetType().ToType()
+		t.Scale = zm.GetScale()
+		vector.SetConstNull(vec, 2, m)
+	}
+	return vec
+}
+
+// if zm is not initialized, return a const null vector
+// if zm is of type varlen and truncated, the max value is null
+func ZMToVector(zm ZM, vec *vector.Vector, m *mpool.MPool) (*vector.Vector, error) {
+	var err error
+
+	t := zm.GetType().ToType()
+	t.Scale = zm.GetScale()
+	if vec == nil {
+		vec = vector.NewVec(t)
+	}
+
+	if !zm.IsInited() {
+		vector.SetConstNull(vec, 2, m)
+		return vec, err
+	}
+
+	vec.SetClass(vector.FLAT)
+	vec.SetLength(0)
+	appendFn := vector.MakeAppendBytesFunc(vec)
+	if err = appendFn(zm.GetMinBuf(), false, m); err != nil {
+		return vec, err
+	}
+
+	null := false
+	if t.IsVarlen() && zm.MaxTruncated() {
+		null = true
+	}
+	err = appendFn(zm.GetMaxBuf(), null, m)
+
+	return vec, err
+}
+
+// if zm is not of length 2, return not initilized zm
+func VectorToZM(vec *vector.Vector, zm ZM) ZM {
+	t := vec.GetType()
+	zm.Reset()
+	if vec.Length() != 2 || vec.IsConstNull() || vec.GetNulls().Count() == 2 {
+		return zm
+	}
+	if len(zm) != ZMSize {
+		zm = NewZM(t.Oid, t.Scale)
+	}
+	if t.IsVarlen() {
+		UpdateZM(zm, vec.GetBytesAt(0))
+		nsp := vec.GetNulls()
+		if nsp.Contains(1) {
+			zm.updateMaxString(MaxBytesValue)
+		} else {
+			UpdateZM(zm, vec.GetBytesAt(1))
+		}
+	} else {
+		data := vec.UnsafeGetRawData()
+		if vec.IsConst() {
+			UpdateZM(zm, data)
+		} else {
+			UpdateZM(zm, data[:len(data)/2])
+			UpdateZM(zm, data[len(data)/2:])
+		}
+	}
+	return zm
 }

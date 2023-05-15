@@ -75,6 +75,8 @@ func (m CNService) DebugString() string {
 	buf.WriteString(m.PipelineServiceAddress)
 	buf.WriteString(")/lock(")
 	buf.WriteString(m.LockServiceAddress)
+	buf.WriteString(")/ctl(")
+	buf.WriteString(m.CtlAddress)
 	buf.WriteString(")/[")
 	for k, v := range m.Labels {
 		buf.WriteString(k)

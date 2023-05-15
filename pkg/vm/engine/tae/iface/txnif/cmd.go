@@ -16,15 +16,12 @@ package txnif
 
 import (
 	"fmt"
-	"io"
 )
 
 type TxnCmd interface {
-	WriteTo(io.Writer) (int64, error)
-	ReadFrom(io.Reader) (int64, error)
-	Marshal() ([]byte, error)
-	Unmarshal([]byte) error
-	GetType() int16
+	MarshalBinary() ([]byte, error)
+	UnmarshalBinary([]byte) error
+	GetType() uint16
 	Desc() string
 	String() string
 	ApplyRollback()

@@ -217,7 +217,14 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		if m, ok := request.Message.(*flagOnlyMessage); ok {
 			switch m.flag {
 			case flagPing:
-				return cs.Write(request.Ctx, &flagOnlyMessage{flag: flagPong, id: m.id})
+				return cs.WriteRPCMessage(RPCMessage{
+					Ctx:      request.Ctx,
+					internal: true,
+					Message: &flagOnlyMessage{
+						flag: flagPong,
+						id:   m.id,
+					},
+				})
 			default:
 				panic(fmt.Sprintf("invalid internal message, flag %d", m.flag))
 			}
@@ -445,6 +452,10 @@ func newClientSession(
 	return cs
 }
 
+func (cs *clientSession) RemoteAddress() string {
+	return cs.conn.RemoteAddress()
+}
+
 func (cs *clientSession) Close() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -476,9 +487,8 @@ func (cs *clientSession) cleanSend() {
 	}
 }
 
-func (cs *clientSession) Write(
-	ctx context.Context,
-	response Message) error {
+func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
+	response := msg.Message
 	if err := cs.codec.Valid(response); err != nil {
 		return err
 	}
@@ -490,7 +500,6 @@ func (cs *clientSession) Write(
 		return moerr.NewClientClosedNoCtx()
 	}
 
-	msg := RPCMessage{Ctx: ctx, Message: response}
 	id := response.GetID()
 	if v, ok := cs.sentStreamSequences.Load(id); ok {
 		seq := v.(uint32) + 1
@@ -507,6 +516,15 @@ func (cs *clientSession) Write(
 	cs.c <- f
 	// stream only wait send completed
 	return f.waitSendCompleted()
+}
+
+func (cs *clientSession) Write(
+	ctx context.Context,
+	response Message) error {
+	return cs.WriteRPCMessage(RPCMessage{
+		Ctx:     ctx,
+		Message: response,
+	})
 }
 
 func (cs *clientSession) startCheckCacheTimeout() {

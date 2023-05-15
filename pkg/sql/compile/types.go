@@ -40,9 +40,11 @@ const (
 	MinBlockNum = 200
 )
 
+type magicType int
+
 // type of scope
 const (
-	Merge = iota
+	Merge magicType = iota
 	Normal
 	Remote
 	Parallel
@@ -61,9 +63,11 @@ const (
 	AlterView
 	AlterTable
 	MergeInsert
+	MergeDelete
 	CreateSequence
 	DropSequence
 	AlterSequence
+	MagicDelete
 )
 
 // Source contains information of a relation which will be used in execution,
@@ -95,7 +99,7 @@ type Scope struct {
 	// 0 -  execution unit for reading data.
 	// 1 -  execution unit for processing intermediate results.
 	// 2 -  execution unit that requires remote call.
-	Magic int
+	Magic magicType
 
 	// IsEnd means the pipeline is join
 	IsJoin bool
@@ -163,6 +167,8 @@ type Compile struct {
 	addr string
 	// db current database name.
 	db string
+	// tenant is the account name.
+	tenant string
 	// uid the user who initiated the sql.
 	uid string
 	// sql sql text.
@@ -182,6 +188,10 @@ type Compile struct {
 	s3CounterSet perfcounter.CounterSet
 
 	stepRegs map[int32][]*process.WaitRegister
+
+	isInternal bool
+	// cnLabel is the CN labels which is parsed from session variable "cn_label".
+	cnLabel map[string]string
 }
 
 type RemoteReceivRegInfo struct {

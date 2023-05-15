@@ -38,6 +38,7 @@ func Prepare(proc *process.Process, arg any) error {
 	var err error
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, false)
 	if ap.ctr.hashTable, err = hashmap.NewStrMap(true, ap.IBucket, ap.NBucket, proc.Mp()); err != nil {
 		return err
 	}
@@ -103,6 +104,7 @@ func (ctr *container) build(proc *process.Process, analyzer process.Analyze, isF
 			break
 		}
 		if len(bat.Zs) == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 
@@ -155,6 +157,7 @@ func (ctr *container) probe(proc *process.Process, analyzer process.Analyze, isF
 			return true, nil
 		}
 		if len(bat.Zs) == 0 {
+			bat.Clean(proc.Mp())
 			continue
 		}
 

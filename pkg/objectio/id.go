@@ -26,32 +26,33 @@ const (
 	SegmentIdSize = types.UuidSize
 )
 
-var emptySegmentId types.Uuid
+var emptySegmentId types.Segmentid
 var emptyBlockId types.Blockid
 
-type Segmentid = types.Uuid
+type Segmentid = types.Segmentid
 type Blockid = types.Blockid
 type Rowid = types.Rowid
 
-func NewSegmentid() Segmentid {
-	return types.Uuid(uuid.Must(uuid.NewUUID()))
+func NewSegmentid() *Segmentid {
+	id := types.Uuid(uuid.Must(uuid.NewUUID()))
+	return &id
 }
 
-func NewBlockid(segid *Segmentid, fnum, blknum uint16) Blockid {
+func NewBlockid(segid *Segmentid, fnum, blknum uint16) *Blockid {
 	var id Blockid
 	size := SegmentIdSize
 	copy(id[:size], segid[:])
 	copy(id[size:size+2], types.EncodeUint16(&fnum))
 	copy(id[size+2:size+4], types.EncodeUint16(&blknum))
-	return id
+	return &id
 }
 
-func NewRowid(blkid *Blockid, offset uint32) types.Rowid {
+func NewRowid(blkid *Blockid, offset uint32) *types.Rowid {
 	var rowid types.Rowid
 	size := types.BlockidSize
 	copy(rowid[:size], blkid[:])
 	copy(rowid[size:size+4], types.EncodeUint32(&offset))
-	return rowid
+	return &rowid
 }
 
 func BuildObjectBlockid(name ObjectName, sequence uint16) *Blockid {
@@ -61,13 +62,23 @@ func BuildObjectBlockid(name ObjectName, sequence uint16) *Blockid {
 	return &id
 }
 
-func ToObjectName(blkID *Blockid) ObjectName {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), ObjectNameLen)
+func Str2Blockid(id string) *Blockid {
+	var blkid Blockid
+	copy(blkid[:], id)
+	return &blkid
+}
+
+func ToObjectNameShort(blkID *Blockid) *ObjectNameShort {
+	return (*ObjectNameShort)(unsafe.Pointer(&blkID[0]))
 }
 
 func IsBlockInObject(blkID *types.Blockid, objID *ObjectName) bool {
 	buf := unsafe.Slice((*byte)(unsafe.Pointer(&blkID[0])), ObjectNameLen)
 	return bytes.Equal(buf, *objID)
+}
+
+func ToSegmentId(blkID *Blockid) *Segmentid {
+	return (*Segmentid)(unsafe.Pointer(blkID))
 }
 
 func IsEmptySegid(id *Segmentid) bool {

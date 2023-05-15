@@ -16,6 +16,7 @@ package catalog
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -24,17 +25,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type TableDataFactory = func(meta *TableEntry) data.Table
 
-func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn txnif.TxnReader) (visible, dropped bool) {
+func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn txnif.TxnReader) (visible, dropped bool, name string) {
 	table := n.GetPayload()
-	visible, dropped = table.GetVisibility(txn)
+	visible, dropped, name = table.GetVisibilityAndName(txn)
 	return
 }
 
@@ -75,13 +78,12 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		ID: tableId,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		db: db,
-		TableNode: &TableNode{
-			schema: schema,
-		},
-		link:    common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		db:        db,
+		TableNode: &TableNode{},
+		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
+		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
+	e.TableNode.schema.Store(schema)
 	if dataFactory != nil {
 		e.tableData = dataFactory(e)
 	}
@@ -94,14 +96,13 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		db: db,
-		TableNode: &TableNode{
-			schema: schema,
-		},
-		link:    common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		db:        db,
+		TableNode: &TableNode{},
+		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
+		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
-	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{})
+	e.TableNode.schema.Store(schema)
+	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
 	var sid types.Uuid
 	if schema.Name == SystemTableSchema.Name {
 		sid = SystemSegment_Table_ID
@@ -128,15 +129,15 @@ func NewReplayTableEntry() *TableEntry {
 }
 
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
+	node := &TableNode{}
+	node.schema.Store(schema)
 	return &TableEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		TableNode: &TableNode{
-			schema: schema,
-		},
-		link:    common.NewGenericSortedDList((*SegmentEntry).Less),
-		entries: make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
+		TableNode: node,
+		link:      common.NewGenericSortedDList((*SegmentEntry).Less),
+		entries:   make(map[types.Uuid]*common.GenericDLNode[*SegmentEntry]),
 	}
 }
 func (entry *TableEntry) GetID() uint64 { return entry.ID }
@@ -144,9 +145,10 @@ func (entry *TableEntry) IsVirtual() bool {
 	if !entry.db.IsSystemDB() {
 		return false
 	}
-	return entry.schema.Name == pkgcatalog.MO_DATABASE ||
-		entry.schema.Name == pkgcatalog.MO_TABLES ||
-		entry.schema.Name == pkgcatalog.MO_COLUMNS
+	name := entry.GetLastestSchema().Name
+	return name == pkgcatalog.MO_DATABASE ||
+		name == pkgcatalog.MO_TABLES ||
+		name == pkgcatalog.MO_COLUMNS
 }
 
 func (entry *TableEntry) GetRows() uint64 {
@@ -161,10 +163,10 @@ func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
 	return entry.rows.Add(^(delta - 1))
 }
 
-func (entry *TableEntry) GetSegmentByID(id types.Uuid) (seg *SegmentEntry, err error) {
+func (entry *TableEntry) GetSegmentByID(id *types.Segmentid) (seg *SegmentEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
-	node := entry.entries[id]
+	node := entry.entries[*id]
 	if node == nil {
 		return nil, moerr.GetOkExpectedEOB()
 	}
@@ -184,9 +186,9 @@ func (entry *TableEntry) CreateSegment(
 	opts *objectio.CreateSegOpt) (created *SegmentEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
-	var id types.Uuid
+	var id *objectio.Segmentid
 	if opts != nil && opts.Id != nil {
-		id = *opts.Id
+		id = opts.Id
 	} else {
 		id = objectio.NewSegmentid()
 	}
@@ -196,7 +198,7 @@ func (entry *TableEntry) CreateSegment(
 }
 
 func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := CmdUpdateTable
+	cmdType := IOET_WALTxnCommand_Table
 	entry.RLock()
 	defer entry.RUnlock()
 	return newTableCmd(id, cmdType, entry), nil
@@ -223,19 +225,45 @@ func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 	return nil
 }
 
-func (entry *TableEntry) GetSchema() *Schema {
-	return entry.schema
+// GetLastestSchema returns the latest committed schema
+func (entry *TableEntry) GetLastestSchema() *Schema {
+	return entry.schema.Load()
+}
+
+// GetVisibleSchema returns committed schema visible at the given txn
+func (entry *TableEntry) GetVisibleSchema(txn txnif.TxnReader) *Schema {
+	entry.RLock()
+	defer entry.RUnlock()
+	node := entry.GetVisibleNode(txn)
+	if node != nil {
+		return node.BaseNode.Schema
+	}
+	return nil
+}
+
+func (entry *TableEntry) GetVersionSchema(ver uint32) *Schema {
+	entry.RLock()
+	defer entry.RUnlock()
+	var ret *Schema
+	entry.LoopChain(func(m *MVCCNode[*TableMVCCNode]) bool {
+		if cur := m.BaseNode.Schema.Version; cur > ver {
+			return true
+		} else if cur == ver {
+			ret = m.BaseNode.Schema
+		}
+		return false
+	})
+	return ret
 }
 
 func (entry *TableEntry) GetColDefs() []*ColDef {
-	colDefs := entry.schema.ColDefs
-	colDefs = append(colDefs, entry.schema.PhyAddrKey)
-	return colDefs
+	return entry.GetLastestSchema().ColDefs
 }
 
 func (entry *TableEntry) GetFullName() string {
 	if len(entry.fullName) == 0 {
-		entry.fullName = genTblFullName(entry.schema.AcInfo.TenantID, entry.schema.Name)
+		schema := entry.GetLastestSchema()
+		entry.fullName = genTblFullName(schema.AcInfo.TenantID, schema.Name)
 	}
 	return entry.fullName
 }
@@ -272,11 +300,12 @@ func (entry *TableEntry) StringWithLevel(level common.PPLevel) string {
 	return entry.StringLockedWithLevel(level)
 }
 func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
+	name := entry.GetLastestSchema().Name
 	if level <= common.PPL1 {
 		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
-			entry.ID, entry.schema.Name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+			entry.ID, name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("TBL%s[name=%s]", entry.BaseEntryImpl.StringLocked(), entry.schema.Name)
+	return fmt.Sprintf("TBL%s[name=%s]", entry.BaseEntryImpl.StringLocked(), name)
 }
 
 func (entry *TableEntry) StringLocked() string {
@@ -317,6 +346,7 @@ func (entry *TableEntry) LastNonAppendableSegmemt() (seg *SegmentEntry) {
 
 func (entry *TableEntry) AsCommonID() *common.ID {
 	return &common.ID{
+		DbID:    entry.GetDB().ID,
 		TableID: entry.ID,
 	}
 }
@@ -357,7 +387,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	return err
 }
 
-func (entry *TableEntry) DropSegmentEntry(id types.Uuid, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
+func (entry *TableEntry) DropSegmentEntry(id *types.Segmentid, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
 	seg, err := entry.GetSegmentByID(id)
 	if err != nil {
 		return
@@ -388,6 +418,12 @@ func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {
+	// Safety: in commit queue, that's ok without lock
+	t := entry.GetLatestNodeLocked()
+	if schema := t.BaseNode.Schema; schema.Extra.OldName != "" {
+		fullname := genTblFullName(schema.AcInfo.TenantID, schema.Name)
+		entry.GetDB().RollbackRenameTable(fullname, entry.ID)
+	}
 	var isEmpty bool
 	isEmpty, err = entry.BaseEntryImpl.PrepareRollback()
 	if err != nil {
@@ -400,6 +436,63 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 		}
 	}
 	return
+}
+
+/*
+s: start
+p: prepare
+c: commit
+
+	         	    old schema  <- | -> new schema
+	        					   |
+		  s------------------p-----c         AlterColumn Txn
+
+Append Txn:
+
+	          s------------p----c               Yes
+	              s-------------p--------c      Yes
+	s-----------------------p---------c         Yes
+	           s----------------------p         No, schema at s is not same with schema at p
+*/
+func (entry *TableEntry) ApplyCommit(index *wal.Index) (err error) {
+	err = entry.BaseEntryImpl.ApplyCommit(index)
+	if err != nil {
+		return
+	}
+	// It is not wanted that a block spans across different schemas
+	if entry.isColumnChangedInSchema() {
+		entry.FreezeAppend()
+	}
+	// update the shortcut to the lastest schema
+	entry.TableNode.schema.Store(entry.GetLatestNodeLocked().BaseNode.Schema)
+	return
+}
+
+// hasColumnChangedSchema checks if add or drop columns on previous schema
+func (entry *TableEntry) isColumnChangedInSchema() bool {
+	// in commit queue, it is safe
+	node := entry.GetLatestNodeLocked()
+	toCommitted := node.BaseNode.Schema
+	ver := toCommitted.Version
+	// skip create table
+	if ver == 0 {
+		return false
+	}
+	return toCommitted.Extra.ColumnChanged
+}
+
+func (entry *TableEntry) FreezeAppend() {
+	seg := entry.LastAppendableSegmemt()
+	if seg == nil {
+		// nothing to freeze
+		return
+	}
+	blk := seg.LastAppendableBlock()
+	if blk == nil {
+		// nothing to freeze
+		return
+	}
+	blk.GetBlockData().FreezeAppend()
 }
 
 // IsActive is coarse API: no consistency check
@@ -422,7 +515,7 @@ func (entry *TableEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 	return
 }
 
-func (entry *TableEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isNewNode bool, err error) {
+func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, req *apipb.AlterTableReq) (isNewNode bool, newSchema *Schema, err error) {
 	entry.Lock()
 	defer entry.Unlock()
 	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
@@ -437,10 +530,21 @@ func (entry *TableEntry) UpdateConstraint(txn txnif.TxnReader, cstr []byte) (isN
 	}
 	var node *MVCCNode[*TableMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
-	node.BaseNode.Update(
-		&TableMVCCNode{
-			SchemaConstraints: string(cstr),
-		})
+
+	newSchema = node.BaseNode.Schema
+	if isNewNode {
+		// Extra info(except seqnnum) is meaningful to the previous version schema
+		// reset in new Schema
+		newSchema.Extra = &apipb.SchemaExtra{
+			NextColSeqnum: newSchema.Extra.NextColSeqnum,
+		}
+	}
+	if err = newSchema.ApplyAlterTable(req); err != nil {
+		return
+	}
+	if isNewNode {
+		node.BaseNode.Schema.Version += 1
+	}
 	return
 }
 
@@ -451,8 +555,31 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 		},
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		BaseNode: &TableMVCCNode{
-			SchemaConstraints: string(schema.Constraint),
+			Schema: schema,
 		},
 	}
 	entry.Insert(node)
+}
+
+func (entry *TableEntry) GetVisibilityAndName(txn txnif.TxnReader) (visible, dropped bool, name string) {
+	entry.RLock()
+	defer entry.RUnlock()
+	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		entry.RUnlock()
+		txnToWait.GetTxnState(true)
+		entry.RLock()
+	}
+	un := entry.GetVisibleNode(txn)
+	if un == nil {
+		return
+	}
+	visible = true
+	if un.IsSameTxn(txn) {
+		dropped = un.HasDropIntent()
+	} else {
+		dropped = un.HasDropCommitted()
+	}
+	name = un.BaseNode.Schema.Name
+	return
 }

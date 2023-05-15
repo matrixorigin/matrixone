@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -143,8 +142,7 @@ func (seg *localSegment) ApplyAppend() (err error) {
 			ctx.start,
 			ctx.count,
 			uint32(destOff),
-			ctx.count,
-			seg.table.entry.GetDB().ID, id)
+			ctx.count, id)
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
@@ -185,17 +183,23 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 					return err
 				}
 				blk, err := segH.CreateBlock(true)
+				segH.Close()
 				if err != nil {
 					return err
 				}
 				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+				blk.Close()
 			} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
 				id := appender.GetID()
-				blk, err := seg.table.CreateBlock(id.SegmentID, true)
+				blk, err := seg.table.CreateBlock(id.SegmentID(), true)
 				if err != nil {
 					return err
 				}
 				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+				blk.Close()
+			}
+			if !appender.IsSameColumns(seg.table.GetLocalSchema()) {
+				return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 			}
 			//PrepareAppend: It is very important that appending a AppendNode into
 			// block's MVCCHandle before applying data into block.
@@ -231,17 +235,17 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			id := appender.GetID()
 			seg.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
 			seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID,
-				id.TableID, id.SegmentID, id.BlockID)
+				id.TableID, &id.BlockID)
 			seg.appends = append(seg.appends, ctx)
-			logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
-				id.String(), toAppend, appended, len(seg.appends))
+			// logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
+			// 	id.String(), toAppend, appended, len(seg.appends))
 			appended += toAppend
 			if appended == node.Rows() {
 				break
 			}
 		}
-		an.storage.mnode.data.Vecs[seg.table.GetSchema().PhyAddrKey.Idx].Close()
-		an.storage.mnode.data.Vecs[seg.table.GetSchema().PhyAddrKey.Idx] = vec
+		an.storage.mnode.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx].Close()
+		an.storage.mnode.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx] = vec
 		return
 	}
 	//handle persisted insertNode.
@@ -295,6 +299,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	appended := uint32(0)
 	offset := uint32(0)
 	length := uint32(data.Length())
+	schema := seg.table.GetLocalSchema()
 	for {
 		h := seg.appendable
 		space := h.GetSpace()
@@ -307,10 +312,10 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 			return
 		}
 		skip := seg.table.store.txn.GetPKDedupSkip()
-		if seg.table.schema.HasPK() && skip == txnif.PKDedupSkipNone {
+		if schema.HasPK() && skip == txnif.PKDedupSkipNone {
 			if err = seg.index.BatchInsert(
-				data.Attrs[seg.table.schema.GetSingleSortKeyIdx()],
-				data.Vecs[seg.table.schema.GetSingleSortKeyIdx()],
+				data.Attrs[schema.GetSingleSortKeyIdx()],
+				data.Vecs[schema.GetSingleSortKeyIdx()],
 				int(offset),
 				int(appended),
 				seg.rows,
@@ -339,7 +344,7 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 		//insert primary keys into seg.index
 		if pkVecs != nil && skip == txnif.PKDedupSkipNone {
 			if err = seg.index.BatchInsert(
-				seg.table.schema.GetSingleSortKey().Name,
+				seg.table.GetLocalSchema().GetSingleSortKey().Name,
 				pkVecs[i],
 				0,
 				pkVecs[i].Length(),
@@ -355,8 +360,9 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 }
 
 func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
+	schema := seg.table.GetLocalSchema()
 	for i := from; i <= to; i++ {
-		v, _, err := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+		v, _, err := node.GetValue(schema.GetSingleSortKeyIdx(), i)
 		if err != nil {
 			return err
 		}
@@ -378,7 +384,7 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 		if err != nil {
 			return err
 		}
-		if !seg.table.schema.HasPK() {
+		if !seg.table.GetLocalSchema().HasPK() {
 			// If no pk defined
 			return err
 		}
@@ -452,9 +458,9 @@ func (seg *localSegment) Rows() (n uint32) {
 }
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	if !seg.table.schema.HasPK() {
+	if !seg.table.GetLocalSchema().HasPK() {
 		id = seg.table.entry.AsCommonID()
-		id.SegmentID, id.BlockID, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		id.BlockID, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
 	id = seg.entry.AsCommonID()
@@ -470,17 +476,17 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 }
 
 func (seg *localSegment) GetPKColumn() containers.Vector {
-	schema := seg.table.entry.GetSchema()
+	schema := seg.table.entry.GetLastestSchema()
 	return seg.index.KeyToVector(schema.GetSingleSortKeyType())
 }
 
 func (seg *localSegment) GetPKVecs() []containers.Vector {
-	schema := seg.table.entry.GetSchema()
+	schema := seg.table.entry.GetLastestSchema()
 	return seg.index.KeyToVectors(schema.GetSingleSortKeyType())
 }
 
 func (seg *localSegment) BatchDedup(key containers.Vector) error {
-	return seg.index.BatchDedup(seg.table.GetSchema().GetSingleSortKey().Name, key)
+	return seg.index.BatchDedup(seg.table.GetLocalSchema().GetSingleSortKey().Name, key)
 }
 
 func (seg *localSegment) GetColumnDataByIds(

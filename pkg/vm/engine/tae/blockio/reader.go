@@ -16,15 +16,22 @@ package blockio
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
+
+const (
+	AsyncIo = 1
+	SyncIo  = 2
+)
+
+var IoModel = SyncIo
 
 type BlockReader struct {
 	reader *objectio.ObjectReader
@@ -33,6 +40,7 @@ type BlockReader struct {
 
 type fetchParams struct {
 	idxes  []uint16
+	typs   []types.Type
 	blk    uint16
 	pool   *mpool.MPool
 	reader *objectio.ObjectReader
@@ -76,9 +84,11 @@ func NewFileReaderNoCache(service fileservice.FileService, name string) (*BlockR
 	}, nil
 }
 
+// LoadColumns needs typs to generate columns, if the target table has no schema change, nil can be passed.
 func (r *BlockReader) LoadColumns(
 	ctx context.Context,
 	cols []uint16,
+	typs []types.Type,
 	blk uint16,
 	m *mpool.MPool,
 ) (bat *batch.Batch, err error) {
@@ -86,20 +96,34 @@ func (r *BlockReader) LoadColumns(
 	if metaExt == nil || metaExt.End() == 0 {
 		return
 	}
-	proc := fetchParams{
-		idxes:  cols,
-		blk:    blk,
-		pool:   m,
-		reader: r.reader,
+	var ioVectors *fileservice.IOVector
+	if IoModel == AsyncIo {
+		proc := fetchParams{
+			idxes:  cols,
+			blk:    blk,
+			typs:   typs,
+			pool:   m,
+			reader: r.reader,
+		}
+		var v any
+		if v, err = r.aio.Fetch(ctx, proc); err != nil {
+			return
+		}
+		ioVectors = v.(*fileservice.IOVector)
+	} else {
+		ioVectors, err = r.reader.ReadOneBlock(ctx, cols, typs, blk, m)
+		if err != nil {
+			return
+		}
 	}
-	var v any
-	if v, err = r.aio.Fetch(ctx, proc); err != nil {
-		return
-	}
-	ioVectors := v.(*fileservice.IOVector)
 	bat = batch.NewWithSize(len(cols))
+	var obj any
 	for i := range cols {
-		bat.Vecs[i] = ioVectors.Entries[i].Object.(*vector.Vector)
+		obj, err = objectio.Decode(ioVectors.Entries[i].ObjectBytes)
+		if err != nil {
+			return
+		}
+		bat.Vecs[i] = obj.(*vector.Vector)
 	}
 	return
 }
@@ -132,8 +156,13 @@ func (r *BlockReader) LoadAllColumns(
 	}
 	for y := 0; y < int(meta.BlockCount()); y++ {
 		bat := batch.NewWithSize(len(idxs))
+		var obj any
 		for i := range idxs {
-			bat.Vecs[i] = ioVectors.Entries[y*len(idxs)+i].Object.(*vector.Vector)
+			obj, err = objectio.Decode(ioVectors.Entries[y*len(idxs)+i].ObjectBytes)
+			if err != nil {
+				return nil, err
+			}
+			bat.Vecs[i] = obj.(*vector.Vector)
 		}
 		bats = append(bats, bat)
 	}
@@ -142,11 +171,11 @@ func (r *BlockReader) LoadAllColumns(
 
 func (r *BlockReader) LoadZoneMaps(
 	ctx context.Context,
-	idxs []uint16,
+	seqnums []uint16,
 	id uint16,
 	m *mpool.MPool,
 ) ([]objectio.ZoneMap, error) {
-	return r.reader.ReadZM(ctx, id, idxs, m)
+	return r.reader.ReadZM(ctx, id, seqnums, m)
 }
 
 func (r *BlockReader) LoadObjectMeta(ctx context.Context, m *mpool.MPool) (objectio.ObjectMeta, error) {
@@ -167,22 +196,22 @@ func (r *BlockReader) LoadAllBlocks(ctx context.Context, m *mpool.MPool) ([]obje
 
 func (r *BlockReader) LoadZoneMap(
 	ctx context.Context,
-	idxs []uint16,
+	seqnums []uint16,
 	block objectio.BlockObject,
 	m *mpool.MPool) ([]objectio.ZoneMap, error) {
-	return block.ToColumnZoneMaps(idxs), nil
+	return block.ToColumnZoneMaps(seqnums), nil
 }
 
 func (r *BlockReader) LoadOneBF(
 	ctx context.Context,
 	blk uint16,
-) (objectio.StaticFilter, error) {
+) (objectio.StaticFilter, uint32, error) {
 	return r.reader.ReadOneBF(ctx, blk)
 }
 
 func (r *BlockReader) LoadAllBF(
 	ctx context.Context,
-) ([]objectio.StaticFilter, uint32, error) {
+) (objectio.BloomFilter, uint32, error) {
 	return r.reader.ReadAllBF(ctx)
 }
 
@@ -230,7 +259,7 @@ func PrefetchFile(service fileservice.FileService, name string) error {
 	if err != nil {
 		return err
 	}
-	params := buildPrefetchParams2(reader)
+	params := buildPrefetchParamsByReader(reader)
 	for i := range bs {
 		idxes := make([]uint16, bs[i].GetColumnCount())
 		for a := uint16(0); a < bs[i].GetColumnCount(); a++ {

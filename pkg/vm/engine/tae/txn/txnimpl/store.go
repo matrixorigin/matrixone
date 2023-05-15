@@ -15,16 +15,14 @@
 package txnimpl
 
 import (
+	"context"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -109,17 +107,16 @@ func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) 
 		store.txn.GetCommitTS(),
 	)
 	var buf []byte
-	if buf, err = cmd.Marshal(); err != nil {
+	if buf, err = cmd.MarshalBinary(); err != nil {
 		return
 	}
 	logEntry = entry.GetBase()
-	logEntry.SetType(ETTxnState)
+	logEntry.SetType(IOET_WALEntry_TxnRecord)
 	if err = logEntry.SetPayload(buf); err != nil {
 		return
 	}
 	info := &entry.Info{
 		Group: wal.GroupC,
-		TxnId: store.txn.GetID(),
 	}
 	logEntry.SetInfo(info)
 	var lsn uint64
@@ -189,16 +186,16 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	return db.AddBlksWithMetaLoc(tid, zm, metaLoc)
 }
 
-func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
-	db, err := store.getOrSetDB(dbId)
+func (store *txnStore) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
 	}
 	return db.RangeDelete(id, start, end, dt)
 }
 
-func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objectio.Location) (err error) {
-	db, err := store.getOrSetDB(dbId)
+func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
+	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
 	}
@@ -208,8 +205,8 @@ func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc objecti
 	return db.UpdateMetaLoc(id, metaLoc)
 }
 
-func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc objectio.Location) (err error) {
-	db, err := store.getOrSetDB(dbId)
+func (store *txnStore) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
+	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
 	}
@@ -231,8 +228,8 @@ func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id 
 	return db.GetByFilter(tid, filter)
 }
 
-func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
-	db, err := store.getOrSetDB(dbId)
+func (store *txnStore) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
+	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return
 	}
@@ -355,6 +352,7 @@ func (store *txnStore) ObserveTxn(
 	visitTable func(tbl any),
 	rotateTable func(dbName, tblName string, dbid, tid uint64),
 	visitMetadata func(block any),
+	visitSegment func(seg any),
 	visitAppend func(bat any),
 	visitDelete func(deletes []uint32, prefix []byte)) {
 	for _, db := range store.dbs {
@@ -364,7 +362,7 @@ func (store *txnStore) ObserveTxn(
 		dbName := db.entry.GetName()
 		dbid := db.entry.ID
 		for _, tbl := range db.tables {
-			tblName := tbl.entry.GetSchema().Name
+			tblName := tbl.GetLocalSchema().Name
 			tid := tbl.entry.ID
 			rotateTable(dbName, tblName, dbid, tid)
 			if tbl.createEntry != nil || tbl.dropEntry != nil {
@@ -372,6 +370,8 @@ func (store *txnStore) ObserveTxn(
 			}
 			for _, iTxnEntry := range tbl.txnEntries.entries {
 				switch txnEntry := iTxnEntry.(type) {
+				case *catalog.SegmentEntry:
+					visitSegment(txnEntry)
 				case *catalog.BlockEntry:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
@@ -389,7 +389,14 @@ func (store *txnStore) ObserveTxn(
 				for _, node := range tbl.localSegment.nodes {
 					anode, ok := node.(*anode)
 					if ok {
-						visitAppend(anode.storage.mnode.data)
+						schema := anode.table.GetLocalSchema()
+						bat := &containers.BatchWithVersion{
+							Version:    schema.Version,
+							NextSeqnum: uint16(schema.Extra.NextColSeqnum),
+							Seqnums:    schema.AllSeqnums(),
+							Batch:      anode.storage.mnode.data,
+						}
+						visitAppend(bat)
 					}
 				}
 			}
@@ -476,9 +483,9 @@ func (store *txnStore) GetRelationByID(dbId uint64, id uint64) (relation handle.
 	return db.GetRelationByID(id)
 }
 
-func (store *txnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Segment, err error) {
+func (store *txnStore) GetSegment(id *common.ID) (seg handle.Segment, err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	return db.GetSegment(id)
@@ -523,41 +530,41 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	return
 }
 
-func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
+func (store *txnStore) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	return db.CreateNonAppendableBlock(id, opts)
 }
 
-func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
+func (store *txnStore) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	return db.GetBlock(id)
 }
 
-func (store *txnStore) CreateBlock(dbId, tid uint64, sid types.Uuid, is1PC bool) (blk handle.Block, err error) {
+func (store *txnStore) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
-	return db.CreateBlock(tid, sid, is1PC)
+	return db.CreateBlock(id, is1PC)
 }
 
-func (store *txnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error) {
+func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	return db.SoftDeleteBlock(id)
 }
 
-func (store *txnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error) {
+func (store *txnStore) SoftDeleteSegment(id *common.ID) (err error) {
 	var db *txnDB
-	if db, err = store.getOrSetDB(dbId); err != nil {
+	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	return db.SoftDeleteSegment(id)
@@ -581,12 +588,14 @@ func (store *txnStore) WaitPrepared() (err error) {
 			return
 		}
 	}
-	for _, e := range store.logs {
-		if err = e.WaitDone(); err != nil {
-			break
+	trace.WithRegion(context.Background(), "Wait for WAL to be flushed", func() {
+		for _, e := range store.logs {
+			if err = e.WaitDone(); err != nil {
+				break
+			}
+			e.Free()
 		}
-		e.Free()
-	}
+	})
 	store.wg.Wait()
 	return
 }
@@ -633,7 +642,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 }
 
 func (store *txnStore) PreApplyCommit() (err error) {
-	now := time.Now()
+	// now := time.Now()
 	for _, db := range store.dbs {
 		if err = db.PreApplyCommit(); err != nil {
 			return
@@ -659,7 +668,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 			return
 		}
 	}
-	logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	// logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
 	return
 }
 

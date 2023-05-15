@@ -86,6 +86,7 @@ select num_col1  from  atomic_ex_table;
 show create table atomic_ex_table;
 desc atomic_ex_table;
 
+-- @bvt:issue#9124
 create TEMPORARY TABLE atomic_temp(a int);
 begin;
 insert into atomic_temp values (5);
@@ -106,6 +107,7 @@ create TEMPORARY TABLE atomic_temp(a int);
 insert into atomic_temp values (5);
 commit ;
 select * from atomic_temp;
+-- @bvt:issue
 
 CREATE TABLE `t_code_rule` (
   `code_id` bigint(20) NOT NULL AUTO_INCREMENT,

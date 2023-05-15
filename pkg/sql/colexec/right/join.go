@@ -32,6 +32,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
+	ap.ctr.InitReceiver(proc, false)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
@@ -56,15 +57,25 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				ap.Free(proc, true)
 				return false, err
 			}
-			ctr.state = Probe
+			if ctr.mp == nil {
+				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
+				ctr.state = End
+			} else {
+				ctr.state = Probe
+			}
 
 		case Probe:
-			bat := <-proc.Reg.MergeReceivers[0].Ch
+			bat, _, err := ctr.ReceiveFromSingleReg(0, analyze)
+			if err != nil {
+				return false, err
+			}
+
 			if bat == nil {
 				ctr.state = SendLast
 				continue
 			}
 			if bat.Length() == 0 {
+				bat.Clean(proc.Mp())
 				continue
 			}
 
@@ -74,7 +85,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 
 			if err := ctr.probe(bat, ap, proc, analyze, isFirst, isLast); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 
@@ -86,7 +96,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				setNil, err := ctr.sendLast(ap, proc, analyze, isFirst, isLast)
 
 				if err != nil {
-					ap.Free(proc, true)
 					return false, err
 				}
 				ctr.state = End
@@ -99,14 +108,17 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 		default:
 			proc.SetInputBatch(nil)
-			ap.Free(proc, false)
 			return true, nil
 		}
 	}
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, analyze process.Analyze) error {
-	bat := <-proc.Reg.MergeReceivers[1].Ch
+	bat, _, err := ctr.ReceiveFromSingleReg(1, analyze)
+	if err != nil {
+		return err
+	}
+
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()

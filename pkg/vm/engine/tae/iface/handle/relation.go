@@ -15,11 +15,12 @@
 package handle
 
 import (
+	"context"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -33,7 +34,7 @@ type Relation interface {
 	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64
 	Schema() any
-	UpdateConstraint([]byte) error
+	AlterTable(ctx context.Context, req *apipb.AlterTableReq) error
 	MakeSegmentIt() SegmentIt
 	MakeSegmentItOnSnap() SegmentIt
 	MakeBlockIt() BlockIt
@@ -57,8 +58,8 @@ type Relation interface {
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)
 	CreateNonAppendableSegment(is1PC bool) (Segment, error)
-	GetSegment(id types.Uuid) (Segment, error)
-	SoftDeleteSegment(id types.Uuid) (err error)
+	GetSegment(id *types.Segmentid) (Segment, error)
+	SoftDeleteSegment(id *types.Segmentid) (err error)
 
 	GetDB() (Database, error)
 }

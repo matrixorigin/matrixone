@@ -18,9 +18,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -40,15 +39,16 @@ import (
 func BlockRead(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
-	colIdxes []uint16,
+	seqnums []uint16,
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
 	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
-
-	// read
+	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+		logutil.Infof("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
+	}
 	columnBatch, err := BlockReadInner(
-		ctx, info, colIdxes, colTypes,
+		ctx, info, seqnums, colTypes,
 		types.TimestampToTS(ts), fs, mp, vp,
 	)
 	if err != nil {
@@ -94,50 +94,73 @@ func mergeDeleteRows(d1, d2 []int64) []int64 {
 func BlockReadInner(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
-	colIdxes []uint16,
+	seqnums []uint16,
 	colTypes []types.Type,
 	ts types.TS,
 	fs fileservice.FileService,
-	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
-	var deleteRows []int64
-	columnBatch, deleteRows, err := readBlockData(ctx, colIdxes, colTypes, info, ts,
-		fs, mp)
-	if err != nil {
-		return nil, err
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+) (result *batch.Batch, err error) {
+	var (
+		rowid       *vector.Vector
+		deletedRows []int64
+		loaded      *batch.Batch
+	)
+
+	// read block data from storage
+	if loaded, rowid, deletedRows, err = readBlockData(
+		ctx, seqnums, colTypes, info, ts, fs, mp,
+	); err != nil {
+		return
 	}
-	if !info.DeltaLoc.IsEmpty() {
-		deleteBatch, err := readBlockDelete(ctx, info.DeltaLoc, fs)
-		if err != nil {
-			return nil, err
+
+	// read deletes from storage if needed
+	if !info.DeltaLocation().IsEmpty() {
+		var deletes *batch.Batch
+		if deletes, err = readBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+			return
 		}
-		deleteRows = mergeDeleteRows(deleteRows, recordDeletes(deleteBatch, ts))
-		logutil.Infof(
-			"blockread %s read delete %d: base %s filter out %v\n",
-			info.BlockID.String(), deleteBatch.Length(), ts.ToString(), len(deleteRows))
+
+		deletedRows = mergeDeleteRows(deletedRows, evalDeleteRowsByTimestamp(deletes, ts))
+		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+			logutil.Debugf(
+				"blockread %s read delete %d: base %s filter out %v\n",
+				info.BlockID.String(), deletes.Length(), ts.ToString(), len(deletedRows))
+		}
 	}
-	rbat := batch.NewWithSize(len(columnBatch.Vecs))
-	for i, col := range columnBatch.Vecs {
+
+	result = batch.NewWithSize(len(loaded.Vecs))
+	for i, col := range loaded.Vecs {
 		typ := *col.GetType()
 		if vp == nil {
-			rbat.Vecs[i] = vector.NewVec(typ)
+			result.Vecs[i] = vector.NewVec(typ)
 		} else {
-			rbat.Vecs[i] = vp.GetVector(typ)
+			result.Vecs[i] = vp.GetVector(typ)
 		}
-		if err := vector.GetUnionFunction(typ, mp)(rbat.Vecs[i], col); err != nil {
-			return nil, err
+		if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
+			break
 		}
-		if col.GetType().Oid == types.T_Rowid {
-			// rowid need free
-			col.Free(mp)
-		}
-		if len(deleteRows) > 0 {
-			rbat.Vecs[i].Shrink(deleteRows, true)
+		// shrink the vector by deleted rows
+		if len(deletedRows) > 0 {
+			result.Vecs[i].Shrink(deletedRows, true)
 		}
 	}
-	return rbat, nil
+
+	if rowid != nil {
+		rowid.Free(mp)
+	}
+
+	if err != nil {
+		for _, col := range result.Vecs {
+			if col != nil {
+				col.Free(mp)
+			}
+		}
+	}
+	return
 }
 
-func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, uint16, []uint16) {
+func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, []uint16, []types.Type) {
 	found := false
 	idx := 0
 	for i, typ := range colTypes {
@@ -148,20 +171,20 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, uint16, [
 		}
 	}
 	if !found {
-		return found, uint16(idx), colIndexes
+		return found, colIndexes, colTypes
 	}
-	idxes := make([]uint16, 0)
-	for i := range colIndexes {
-		if i == idx {
-			continue
-		}
-		idxes = append(idxes, colIndexes[i])
-	}
-	return found, uint16(idx), idxes
+	idxes := make([]uint16, 0, len(colTypes)-1)
+	typs := make([]types.Type, 0, len(colTypes)-1)
+	idxes = append(idxes, colIndexes[:idx]...)
+	idxes = append(idxes, colIndexes[idx+1:]...)
+	typs = append(typs, colTypes[:idx]...)
+	typs = append(typs, colTypes[idx+1:]...)
+	return found, idxes, typs
 }
 
 func preparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32, pool *mpool.MPool) (col *vector.Vector, err error) {
 	col = vector.NewVec(typ)
+	col.PreExtend(int(length), pool)
 	for i := uint32(0); i < length; i++ {
 		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
 		vector.AppendFixed(col, rowid, false, pool)
@@ -169,180 +192,150 @@ func preparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32, 
 	return
 }
 
-func readBlockData(ctx context.Context, colIndexes []uint16,
-	colTypes []types.Type, info *pkgcatalog.BlockInfo, ts types.TS,
-	fs fileservice.FileService, m *mpool.MPool) (*batch.Batch, []int64, error) {
-	deleteRows := make([]int64, 0)
-	ok, _, idxes := getRowsIdIndex(colIndexes, colTypes)
-	id := info.MetaLoc.ID()
-	reader, err := NewObjectReader(fs, info.MetaLoc)
-	if err != nil {
-		return nil, deleteRows, err
-	}
-	var rowIdVec *vector.Vector
-	var bat *batch.Batch
-	if ok {
-		// generate rowIdVec
-		prefix := info.BlockID[:]
-		rowIdVec, err = preparePhyAddrData(
+func readBlockData(
+	ctx context.Context,
+	colIndexes []uint16,
+	colTypes []types.Type,
+	info *pkgcatalog.BlockInfo,
+	ts types.TS,
+	fs fileservice.FileService,
+	m *mpool.MPool,
+) (bat *batch.Batch, rowid *vector.Vector, deletedRows []int64, err error) {
+
+	hasRowId, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
+	if hasRowId {
+		// generate rowid
+		if rowid, err = preparePhyAddrData(
 			types.T_Rowid.ToType(),
-			prefix,
+			info.BlockID[:],
 			0,
-			info.MetaLoc.Rows(),
+			info.MetaLocation().Rows(),
 			m,
-		)
-		if err != nil {
-			return nil, deleteRows, err
+		); err != nil {
+			return
 		}
 		defer func() {
 			if err != nil {
-				rowIdVec.Free(m)
+				rowid.Free(m)
+				rowid = nil
 			}
 		}()
 	}
 
-	loadBlock := func(idxes []uint16) (*batch.Batch, error) {
-		if len(idxes) == 0 && ok {
+	readColumns := func(cols []uint16) (result *batch.Batch, loaded *batch.Batch, err error) {
+		if len(cols) == 0 && hasRowId {
 			// only read rowid column on non appendable block, return early
-			bat = batch.NewWithSize(0)
-			bat.Vecs = append(bat.Vecs, rowIdVec)
-			return nil, nil
+			result = batch.NewWithSize(1)
+			result.Vecs[0] = rowid
+			return
 		}
-		bats, err := reader.LoadColumns(ctx, idxes, id, nil)
-		if err != nil {
-			return nil, err
+
+		if loaded, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m); err != nil {
+			return
 		}
-		entry := bats.Vecs
-		bat = batch.NewWithSize(0)
-		for _, typ := range colTypes {
+
+		colPos := 0
+		result = batch.NewWithSize(len(colTypes))
+		for i, typ := range colTypes {
 			if typ.Oid == types.T_Rowid {
-				bat.Vecs = append(bat.Vecs, rowIdVec)
-				continue
+				result.Vecs[i] = rowid
+			} else {
+				result.Vecs[i] = loaded.Vecs[colPos]
+				colPos++
 			}
-			bat.Vecs = append(bat.Vecs, entry[0])
-			entry = entry[1:]
 		}
-		return bats, nil
+		return
 	}
 
-	loadAppendBlock := func() error {
+	readABlkColumns := func(cols []uint16) (result *batch.Batch, deletedRows []int64, err error) {
+		var loaded *batch.Batch
 		// appendable block should be filtered by committs
-		meta, err := reader.reader.ReadMeta(ctx, m)
-		if err != nil {
-			return err
+		cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
+
+		// no need to add typs, the two columns won't be generated
+		if result, loaded, err = readColumns(cols); err != nil {
+			return
 		}
-		block := meta.GetBlockMeta(0)
-		colCount := block.GetColumnCount()
-		idxes = append(idxes, colCount-2) // committs
-		idxes = append(idxes, colCount-1) // aborted
-		bats, err := loadBlock(idxes)
-		if err != nil {
-			return err
-		}
-		lenVecs := len(bats.Vecs)
+
 		t0 := time.Now()
-		commits := bats.Vecs[lenVecs-2]
-		abort := bats.Vecs[lenVecs-1]
-		for i := 0; i < commits.Length(); i++ {
-			if vector.GetFixedAt[bool](abort, i) || vector.GetFixedAt[types.TS](commits, i).Greater(ts) {
-				deleteRows = append(deleteRows, int64(i))
+		aborts := vector.MustFixedCol[bool](loaded.Vecs[len(loaded.Vecs)-1])
+		commits := vector.MustFixedCol[types.TS](loaded.Vecs[len(loaded.Vecs)-2])
+		for i := 0; i < len(commits); i++ {
+			if aborts[i] || commits[i].Greater(ts) {
+				deletedRows = append(deletedRows, int64(i))
 			}
 		}
-		logutil.Infof(
+		logutil.Debugf(
 			"blockread %s scan filter cost %v: base %s filter out %v\n ",
-			info.BlockID.String(), time.Since(t0), ts.ToString(), len(deleteRows))
-		return nil
+			info.BlockID.String(), time.Since(t0), ts.ToString(), len(deletedRows))
+		return
 	}
 
 	if info.EntryState {
-		err = loadAppendBlock()
+		bat, deletedRows, err = readABlkColumns(idxes)
 	} else {
-		_, err = loadBlock(idxes)
+		bat, _, err = readColumns(idxes)
 	}
 
-	if err != nil {
-		return nil, deleteRows, err
-	}
-
-	return bat, deleteRows, nil
+	return
 }
 
 func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (*batch.Batch, error) {
-	reader, err := NewObjectReader(fs, deltaloc)
-	if err != nil {
-		return nil, err
-	}
-
-	bat, err := reader.LoadColumns(ctx, []uint16{0, 1, 2}, deltaloc.ID(), nil)
+	bat, err := LoadColumns(ctx, []uint16{0, 1, 2}, nil, fs, deltaloc, nil)
 	if err != nil {
 		return nil, err
 	}
 	return bat, nil
 }
 
-func recordDeletes(deleteBatch *batch.Batch, ts types.TS) []int64 {
-	if deleteBatch == nil {
+func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows []int64) {
+	if deletes == nil {
 		return nil
 	}
 	// record visible delete rows
-	deleteRows := nulls.NewWithSize(0)
-	for i := 0; i < deleteBatch.Vecs[0].Length(); i++ {
-		if vector.GetFixedAt[bool](deleteBatch.Vecs[2], i) {
+	deletedRows := nulls.NewWithSize(0)
+	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
+	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
+	aborts := vector.MustFixedCol[bool](deletes.Vecs[2])
+
+	for i, rowid := range rowids {
+		if aborts[i] || tss[i].Greater(ts) {
 			continue
 		}
-		if vector.GetFixedAt[types.TS](deleteBatch.Vecs[1], i).Greater(ts) {
-			continue
-		}
-		rowid := vector.GetFixedAt[types.Rowid](deleteBatch.Vecs[0], i)
-		_, _, row := model.DecodePhyAddrKey(rowid)
-		nulls.Add(deleteRows, uint64(row))
+		_, row := model.DecodePhyAddrKey(&rowid)
+		nulls.Add(deletedRows, uint64(row))
 	}
-	var rows []int64
-	itr := deleteRows.Np.Iterator()
+
+	if !deletedRows.Any() {
+		return
+	}
+
+	itr := deletedRows.GetBitmap().Iterator()
 	for itr.HasNext() {
 		r := itr.Next()
 		rows = append(rows, int64(r))
 	}
-	return rows
+
+	return
 }
 
 // BlockPrefetch is the interface for cn to call read ahead
 // columns  Which columns should be taken for columns
 // service  fileservice
 // infos [s3object name][block]
-func BlockPrefetch(
-	columns []string,
-	tableDef *plan.TableDef,
-	service fileservice.FileService,
-	infos [][]*pkgcatalog.BlockInfo) error {
-	idxes := make([]uint16, len(columns))
-
-	// Generate index for columns
-	for i, column := range columns {
-		if column != pkgcatalog.Row_ID {
-			if colIdx, ok := tableDef.Name2ColIndex[column]; ok {
-				idxes[i] = uint16(colIdx)
-			} else {
-				idxes[i] = uint16(len(tableDef.Name2ColIndex))
-			}
-		}
-	}
-	return PrefetchInner(idxes, service, infos)
-}
-
-func PrefetchInner(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo) error {
+func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*pkgcatalog.BlockInfo) error {
 	// Generate prefetch task
 	for i := range infos {
 		// build reader
-		pref, err := BuildPrefetchParams(service, infos[i][0].MetaLoc)
+		pref, err := BuildPrefetchParams(service, infos[i][0].MetaLocation())
 		if err != nil {
 			return err
 		}
 		for _, info := range infos[i] {
-			pref.AddBlock(idxes, []uint16{info.MetaLoc.ID()})
-			if !info.DeltaLoc.IsEmpty() {
+			pref.AddBlock(idxes, []uint16{info.MetaLocation().ID()})
+			if !info.DeltaLocation().IsEmpty() {
 				// Need to read all delete
-				err = Prefetch([]uint16{0, 1, 2}, []uint16{info.DeltaLoc.ID()}, service, info.DeltaLoc)
+				err = Prefetch([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
 				if err != nil {
 					return err
 				}

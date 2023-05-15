@@ -17,10 +17,9 @@ package db
 import (
 	"bytes"
 
-	//"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"sync"
 
@@ -40,6 +39,21 @@ type Replayer struct {
 	staleIndexes []*wal.Index
 	once         sync.Once
 	ckpedTS      types.TS
+}
+
+type replayAllocator struct {
+	replayBuf bytes.Buffer
+}
+
+func newReplayAllocator() *replayAllocator {
+	return &replayAllocator{
+		replayBuf: bytes.Buffer{},
+	}
+}
+
+func (a *replayAllocator) Alloc(n int) ([]byte, error) {
+	a.replayBuf.Grow(n)
+	return a.replayBuf.Bytes(), nil
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS) *Replayer {
@@ -76,7 +90,8 @@ func (replayer *Replayer) PreReplayWal() {
 }
 
 func (replayer *Replayer) Replay() {
-	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry); err != nil {
+	allocator := newReplayAllocator()
+	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry, allocator); err != nil {
 		panic(err)
 	}
 	if _, err := replayer.db.Wal.Checkpoint(replayer.staleIndexes); err != nil {
@@ -94,8 +109,10 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 		return
 	}
 	idxCtx := store.NewIndex(lsn, 0, 0)
-	r := bytes.NewBuffer(payload)
-	txnCmd, _, err := txnbase.BuildCommandFrom(r)
+	head := objectio.DecodeIOEntryHeader(payload)
+	codec := objectio.GetIOEntryCodec(*head)
+	entry, err := codec.Decode(payload[4:])
+	txnCmd := entry.(*txnbase.TxnCmd)
 	if err != nil {
 		panic(err)
 	}

@@ -575,8 +575,7 @@ func TestUpdateCNLabel(t *testing.T) {
 
 		uuid := "uuid1"
 		label := pb.CNStoreLabel{
-			UUID:      uuid,
-			Operation: pb.SetLabel,
+			UUID: uuid,
 			Labels: map[string]metadata.LabelList{
 				"account": {Labels: []string{"a", "b"}},
 				"role":    {Labels: []string{"1", "2"}},
@@ -593,8 +592,7 @@ func TestUpdateCNLabel(t *testing.T) {
 		assert.NoError(t, err)
 
 		label = pb.CNStoreLabel{
-			UUID:      uuid,
-			Operation: pb.SetLabel,
+			UUID: uuid,
 			Labels: map[string]metadata.LabelList{
 				"account": {Labels: []string{"a", "b"}},
 				"role":    {Labels: []string{"1", "2"}},
@@ -616,10 +614,9 @@ func TestUpdateCNLabel(t *testing.T) {
 		assert.Equal(t, labels2.Labels, []string{"1", "2"})
 
 		label = pb.CNStoreLabel{
-			UUID:      uuid,
-			Operation: pb.DeleteLabel,
+			UUID: uuid,
 			Labels: map[string]metadata.LabelList{
-				"role": {Labels: []string{"1", "2"}},
+				"account": {Labels: []string{"a", "b"}},
 			},
 		}
 		err = store.updateCNLabel(ctx, label)

@@ -16,7 +16,10 @@ package proxy
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -36,10 +39,12 @@ func TestNewServer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	temp := os.TempDir()
+	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(listenAddr))
 	cfg := Config{
-		ListenAddress: "127.0.0.1:40009",
+		ListenAddress: "unix://" + listenAddr,
 	}
-	cfg.HAKeeper.ClientConfig.ServiceAddresses = []string{"127.0.0.1:8000"}
 	hc := &mockHAKeeperClient{}
 	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
 		WithHAKeeperClient(hc))

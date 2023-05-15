@@ -16,7 +16,6 @@ package intersect
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,6 +30,8 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, argument any) error {
 	var err error
 	arg := argument.(*Argument)
+	arg.ctr = new(container)
+	arg.ctr.InitReceiver(proc, false)
 	arg.ctr.btc = nil
 	arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
 	if err != nil {
@@ -51,7 +52,6 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 		switch arg.ctr.state {
 		case build:
 			if err := arg.ctr.buildHashTable(proc, analyze, 1, isFirst); err != nil {
-				arg.Free(proc, true)
 				return false, err
 			}
 			if arg.ctr.hashTable != nil {
@@ -73,7 +73,6 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 			return false, nil
 
 		case end:
-			arg.Free(proc, false)
 			proc.SetInputBatch(nil)
 			return true, nil
 		}
@@ -83,9 +82,10 @@ func Call(idx int, proc *process.Process, argument any, isFirst bool, isLast boo
 // build hash table
 func (c *container) buildHashTable(proc *process.Process, analyse process.Analyze, idx int, isFirst bool) error {
 	for {
-		start := time.Now()
-		btc := <-proc.Reg.MergeReceivers[idx].Ch
-		analyse.WaitStop(start)
+		btc, _, err := c.ReceiveFromSingleReg(idx, analyse)
+		if err != nil {
+			return err
+		}
 
 		// last batch of block
 		if btc == nil {
@@ -94,6 +94,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 
 		// empty batch
 		if btc.Length() == 0 {
+			btc.Clean(proc.Mp())
 			continue
 		}
 
@@ -134,9 +135,10 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 
 func (c *container) probeHashTable(proc *process.Process, analyze process.Analyze, idx int, isFirst bool, isLast bool) (bool, error) {
 	for {
-		start := time.Now()
-		btc := <-proc.Reg.MergeReceivers[idx].Ch
-		analyze.WaitStop(start)
+		btc, _, err := c.ReceiveFromSingleReg(idx, analyze)
+		if err != nil {
+			return false, err
+		}
 
 		// last batch of block
 		if btc == nil {
@@ -145,6 +147,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 		// empty batch
 		if btc.Length() == 0 {
+			btc.Clean(proc.Mp())
 			continue
 		}
 

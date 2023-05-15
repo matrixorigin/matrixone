@@ -254,6 +254,7 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 	timestamps := vector.MustFixedCol[types.TS](ibat.GetVector(MO_TIMESTAMP_IDX))
 	accounts := vector.MustFixedCol[uint32](ibat.GetVector(catalog.MO_TABLES_ACCOUNT_ID_IDX + MO_OFF))
 	names := vector.MustBytesCol(ibat.GetVector(catalog.MO_TABLES_REL_NAME_IDX + MO_OFF))
+	ids := vector.MustFixedCol[uint64](ibat.GetVector(catalog.MO_TABLES_REL_ID_IDX + MO_OFF))
 	databaseIds := vector.MustFixedCol[uint64](ibat.GetVector(catalog.MO_TABLES_RELDATABASE_ID_IDX + MO_OFF))
 	bat := batch.NewWithSize(len(typs))
 	bat.SetZs(Rows, mp)
@@ -281,6 +282,12 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 					err := vector.AppendFixed(vec, databaseIds[i], false, mp)
 					require.NoError(t, err)
 				}
+			case catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX + MO_OFF:
+				vec = vector.NewVec(typ)
+				for k := 0; k < Rows; k++ {
+					err := vector.AppendFixed(vec, ids[i], false, mp)
+					require.NoError(t, err)
+				}
 			case catalog.MO_COLUMNS_ATT_RELNAME_IDX + MO_OFF:
 				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {
@@ -288,7 +295,7 @@ func newTestColumnBatch(t *testing.T, ibat *batch.Batch, mp *mpool.MPool) *batch
 					require.NoError(t, err)
 				}
 			case catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF:
-				data, err := types.Encode(typ) // reuse the type for test
+				data, err := types.Encode(&typ) // reuse the type for test
 				require.NoError(t, err)
 				vec = vector.NewVec(typ)
 				for k := 0; k < Rows; k++ {

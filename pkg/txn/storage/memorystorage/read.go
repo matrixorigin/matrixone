@@ -15,9 +15,8 @@
 package memorystorage
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
+	"encoding"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -106,15 +105,26 @@ func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payl
 	return
 }
 
-func handleRead[Req any, Resp any](
+func handleRead[
+	Req any, PReq interface {
+		// anonymous constraint
+		encoding.BinaryUnmarshaler
+		// make Req convertible to its pointer type
+		*Req
+	},
+	Resp any, PResp interface {
+		encoding.BinaryMarshaler
+		*Resp
+	},
+](
 	ctx context.Context,
 	txnMeta txn.TxnMeta,
 	payload []byte,
 	fn func(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req Req,
-		resp *Resp,
+		preq PReq,
+		presp PResp,
 	) (
 		err error,
 	),
@@ -123,30 +133,30 @@ func handleRead[Req any, Resp any](
 	err error,
 ) {
 
-	var req Req
-	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
+	var preq PReq = new(Req)
+	if err := preq.UnmarshalBinary(payload); err != nil {
 		return nil, err
 	}
 
-	var resp Resp
-	defer logReq("read", req, txnMeta, &resp, &err)()
+	var presp PResp = new(Resp)
+	defer logReq("read", preq, txnMeta, presp, &err)()
 	defer func() {
-		if closer, ok := (any)(resp).(io.Closer); ok {
+		if closer, ok := (any)(presp).(io.Closer); ok {
 			_ = closer.Close()
 		}
 	}()
 
-	err = fn(ctx, txnMeta, req, &resp)
+	err = fn(ctx, txnMeta, preq, presp)
 	if err != nil {
 		return nil, err
 	}
 
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(resp); err != nil {
+	data, err := presp.MarshalBinary()
+	if err != nil {
 		return nil, err
 	}
 	res = &readResult{
-		payload: buf.Bytes(),
+		payload: data,
 	}
 
 	return res, nil

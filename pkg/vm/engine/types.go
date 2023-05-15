@@ -66,6 +66,8 @@ type Attribute struct {
 	Comment string
 	// AutoIncrement is auto incr or not
 	AutoIncrement bool
+	// Seqnum, do not change during the whole lifetime of the table
+	Seqnum uint16
 }
 
 type PropertiesDef struct {
@@ -120,6 +122,10 @@ type CommentDef struct {
 	Comment string
 }
 
+type VersionDef struct {
+	Version uint32
+}
+
 type PartitionDef struct {
 	Partitioned int8
 	Partition   string
@@ -147,9 +153,13 @@ type RefChildTableDef struct {
 
 type TableDef interface {
 	tableDef()
+
+	// ToPBVersion returns corresponding PB struct.
+	ToPBVersion() TableDefPB
 }
 
 func (*CommentDef) tableDef()    {}
+func (*VersionDef) tableDef()    {}
 func (*PartitionDef) tableDef()  {}
 func (*ViewDef) tableDef()       {}
 func (*AttributeDef) tableDef()  {}
@@ -157,6 +167,113 @@ func (*IndexTableDef) tableDef() {}
 func (*PropertiesDef) tableDef() {}
 func (*ClusterByDef) tableDef()  {}
 func (*ConstraintDef) tableDef() {}
+
+func (def *CommentDef) ToPBVersion() TableDefPB {
+	return TableDefPB{
+		Def: &TableDefPB_CommentDef{
+			CommentDef: def,
+		},
+	}
+}
+
+func (def *VersionDef) ToPBVersion() TableDefPB {
+	return TableDefPB{
+		Def: &TableDefPB_VersionDef{
+			VersionDef: def,
+		},
+	}
+}
+
+func (def *PartitionDef) ToPBVersion() TableDefPB {
+	return TableDefPB{
+		Def: &TableDefPB_PartitionDef{
+			PartitionDef: def,
+		},
+	}
+}
+
+func (def *ViewDef) ToPBVersion() TableDefPB {
+	return TableDefPB{
+		Def: &TableDefPB_ViewDef{
+			ViewDef: def,
+		},
+	}
+}
+
+func (def *AttributeDef) ToPBVersion() TableDefPB {
+	return TableDefPB{
+		Def: &TableDefPB_AttributeDef{
+			AttributeDef: def,
+		},
+	}
+}
+
+func (def *IndexTableDef) ToPBVersion() TableDefPB {
+	return TableDefPB{
+		Def: &TableDefPB_IndexTableDef{
+			IndexTableDef: def,
+		},
+	}
+}
+
+func (def *PropertiesDef) ToPBVersion() TableDefPB {
+	return TableDefPB{
+		Def: &TableDefPB_PropertiesDef{
+			PropertiesDef: def,
+		},
+	}
+}
+
+func (def *ClusterByDef) ToPBVersion() TableDefPB {
+	return TableDefPB{
+		Def: &TableDefPB_ClusterByDef{
+			ClusterByDef: def,
+		},
+	}
+}
+
+func (def *ConstraintDef) ToPBVersion() TableDefPB {
+	cts := make([]ConstraintPB, 0, len(def.Cts))
+	for i := 0; i < len(def.Cts); i++ {
+		cts = append(cts, def.Cts[i].ToPBVersion())
+	}
+
+	return TableDefPB{
+		Def: &TableDefPB_ConstraintDefPB{
+			ConstraintDefPB: &ConstraintDefPB{
+				Cts: cts,
+			},
+		},
+	}
+}
+
+func (def *TableDefPB) FromPBVersion() TableDef {
+	if r := def.GetCommentDef(); r != nil {
+		return r
+	}
+	if r := def.GetPartitionDef(); r != nil {
+		return r
+	}
+	if r := def.GetViewDef(); r != nil {
+		return r
+	}
+	if r := def.GetAttributeDef(); r != nil {
+		return r
+	}
+	if r := def.GetIndexTableDef(); r != nil {
+		return r
+	}
+	if r := def.GetPropertiesDef(); r != nil {
+		return r
+	}
+	if r := def.GetClusterByDef(); r != nil {
+		return r
+	}
+	if r := def.GetConstraintDefPB(); r != nil {
+		return r.FromPBVersion()
+	}
+	panic("no corresponding type")
+}
 
 type ConstraintDef struct {
 	Cts []Constraint
@@ -171,9 +288,17 @@ const (
 	PrimaryKey
 )
 
-func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
+type EngineType int8
+
+const (
+	Disttae EngineType = iota
+	Memory
+	UNKNOWN
+)
+
+func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
-	for _, ct := range c.Cts {
+	for _, ct := range def.Cts {
 		switch def := ct.(type) {
 		case *IndexDef:
 			if err := binary.Write(buf, binary.BigEndian, Index); err != nil {
@@ -241,7 +366,7 @@ func (c *ConstraintDef) MarshalBinary() (data []byte, err error) {
 	return buf.Bytes(), nil
 }
 
-func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
+func (def *ConstraintDef) UnmarshalBinary(data []byte) error {
 	l := 0
 	var length uint64
 	for l < len(data) {
@@ -264,7 +389,7 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 				l += int(dataLength)
 				indexes[i] = indexdef
 			}
-			c.Cts = append(c.Cts, &IndexDef{indexes})
+			def.Cts = append(def.Cts, &IndexDef{indexes})
 		case RefChildTable:
 			length = binary.BigEndian.Uint64(data[l : l+8])
 			l += 8
@@ -274,7 +399,7 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 				l += 8
 				tables[i] = tblId
 			}
-			c.Cts = append(c.Cts, &RefChildTableDef{tables})
+			def.Cts = append(def.Cts, &RefChildTableDef{tables})
 
 		case ForeignKey:
 			length = binary.BigEndian.Uint64(data[l : l+8])
@@ -292,7 +417,7 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 				l += int(dataLength)
 				fKeys[i] = fKey
 			}
-			c.Cts = append(c.Cts, &ForeignKeyDef{fKeys})
+			def.Cts = append(def.Cts, &ForeignKeyDef{fKeys})
 
 		case PrimaryKey:
 			length = binary.BigEndian.Uint64(data[l : l+8])
@@ -303,15 +428,41 @@ func (c *ConstraintDef) UnmarshalBinary(data []byte) error {
 				return err
 			}
 			l += int(length)
-			c.Cts = append(c.Cts, &PrimaryKeyDef{pkey})
+			def.Cts = append(def.Cts, &PrimaryKeyDef{pkey})
 		}
 	}
 	return nil
 }
 
+func (def *ConstraintDefPB) FromPBVersion() *ConstraintDef {
+	cts := make([]Constraint, 0, len(def.Cts))
+	for i := 0; i < len(def.Cts); i++ {
+		cts = append(cts, def.Cts[i].FromPBVersion())
+	}
+	return &ConstraintDef{
+		Cts: cts,
+	}
+}
+
+func (def *ConstraintPB) FromPBVersion() Constraint {
+	if r := def.GetForeignKeyDef(); r != nil {
+		return r
+	}
+	if r := def.GetPrimaryKeyDef(); r != nil {
+		return r
+	}
+	if r := def.GetRefChildTableDef(); r != nil {
+		return r
+	}
+	if r := def.GetIndexDef(); r != nil {
+		return r
+	}
+	panic("no corresponding type")
+}
+
 // get the primary key definition in the constraint, and return null if there is no primary key
-func (c *ConstraintDef) GetPrimaryKeyDef() *PrimaryKeyDef {
-	for _, ct := range c.Cts {
+func (def *ConstraintDef) GetPrimaryKeyDef() *PrimaryKeyDef {
+	for _, ct := range def.Cts {
 		if ctVal, ok := ct.(*PrimaryKeyDef); ok {
 			return ctVal
 		}
@@ -321,6 +472,9 @@ func (c *ConstraintDef) GetPrimaryKeyDef() *PrimaryKeyDef {
 
 type Constraint interface {
 	constraint()
+
+	// ToPBVersion returns corresponding PB struct.
+	ToPBVersion() ConstraintPB
 }
 
 // TODO: UniqueIndexDef, SecondaryIndexDef will not be tabledef and need to be moved in Constraint to be able modified
@@ -328,6 +482,35 @@ func (*ForeignKeyDef) constraint()    {}
 func (*PrimaryKeyDef) constraint()    {}
 func (*RefChildTableDef) constraint() {}
 func (*IndexDef) constraint()         {}
+
+func (def *ForeignKeyDef) ToPBVersion() ConstraintPB {
+	return ConstraintPB{
+		Ct: &ConstraintPB_ForeignKeyDef{
+			ForeignKeyDef: def,
+		},
+	}
+}
+func (def *PrimaryKeyDef) ToPBVersion() ConstraintPB {
+	return ConstraintPB{
+		Ct: &ConstraintPB_PrimaryKeyDef{
+			PrimaryKeyDef: def,
+		},
+	}
+}
+func (def *RefChildTableDef) ToPBVersion() ConstraintPB {
+	return ConstraintPB{
+		Ct: &ConstraintPB_RefChildTableDef{
+			RefChildTableDef: def,
+		},
+	}
+}
+func (def *IndexDef) ToPBVersion() ConstraintPB {
+	return ConstraintPB{
+		Ct: &ConstraintPB_IndexDef{
+			IndexDef: def,
+		},
+	}
+}
 
 type Relation interface {
 	Statistics
@@ -362,6 +545,8 @@ type Relation interface {
 
 	//max and min values
 	MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error)
+
+	GetEngineType() EngineType
 }
 
 type Reader interface {
@@ -399,8 +584,9 @@ type Engine interface {
 	// Database creates a handle for a database
 	Database(ctx context.Context, databaseName string, op client.TxnOperator) (Database, error)
 
-	// Nodes returns all nodes for worker jobs
-	Nodes() (cnNodes Nodes, err error)
+	// Nodes returns all nodes for worker jobs. isInternal, tenant, cnLabel are
+	// used to filter CN servers.
+	Nodes(isInternal bool, tenant string, cnLabel map[string]string) (cnNodes Nodes, err error)
 
 	// Hints returns hints of engine features
 	// return value should not be cached

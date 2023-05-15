@@ -215,28 +215,28 @@ func Test_getCompressType(t *testing.T) {
 				Ctx: context.Background(),
 			},
 		}
-		compress := getCompressType(param, param.Filepath)
+		compress := GetCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, param.CompressType)
 
 		param.CompressType = tree.AUTO
 		param.Filepath = "a.gz"
-		compress = getCompressType(param, param.Filepath)
+		compress = GetCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, tree.GZIP)
 
 		param.Filepath = "a.bz2"
-		compress = getCompressType(param, param.Filepath)
+		compress = GetCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, tree.BZIP2)
 
 		param.Filepath = "a.lz4"
-		compress = getCompressType(param, param.Filepath)
+		compress = GetCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, tree.LZ4)
 
 		param.Filepath = "a.csv"
-		compress = getCompressType(param, param.Filepath)
+		compress = GetCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, tree.NOCOMPRESS)
 
 		param.Filepath = "a"
-		compress = getCompressType(param, param.Filepath)
+		compress = GetCompressType(param, param.Filepath)
 		convey.So(compress, convey.ShouldEqual, tree.NOCOMPRESS)
 	})
 }

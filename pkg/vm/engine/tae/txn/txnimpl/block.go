@@ -15,8 +15,9 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -27,8 +28,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
+// var newBlockCnt atomic.Int64
+// var getBlockCnt atomic.Int64
+// var putBlockCnt atomic.Int64
+
+var (
+	_blockPool = sync.Pool{
+		New: func() any {
+			// newBlockCnt.Add(1)
+			return &txnBlock{}
+		},
+	}
+)
+
 type txnBlock struct {
-	*txnbase.TxnBlock
+	txnbase.TxnBlock
 	isUncommitted bool
 	entry         *catalog.BlockEntry
 	table         *txnTable
@@ -127,15 +141,27 @@ func buildBlock(table *txnTable, meta *catalog.BlockEntry) handle.Block {
 }
 
 func newBlock(table *txnTable, meta *catalog.BlockEntry) *txnBlock {
-	blk := &txnBlock{
-		TxnBlock: &txnbase.TxnBlock{
-			Txn: table.store.txn,
-		},
-		entry:         meta,
-		table:         table,
-		isUncommitted: meta.GetSegment().IsLocal,
-	}
+	blk := _blockPool.Get().(*txnBlock)
+	// getBlockCnt.Add(1)
+	blk.Txn = table.store.txn
+	blk.entry = meta
+	blk.table = table
+	blk.isUncommitted = meta.GetSegment().IsLocal
 	return blk
+}
+
+func (blk *txnBlock) Reset() {
+	blk.entry = nil
+	blk.table = nil
+	blk.isUncommitted = false
+	blk.TxnBlock.Reset()
+}
+
+func (blk *txnBlock) Close() (err error) {
+	blk.Reset()
+	_blockPool.Put(blk)
+	// putBlockCnt.Add(1)
+	return
 }
 
 func (blk *txnBlock) GetMeta() any { return blk.entry }
@@ -163,7 +189,7 @@ func (blk *txnBlock) getDBID() uint64 {
 }
 
 func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
-	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end, dt)
+	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end, dt)
 }
 
 func (blk *txnBlock) GetMetaLoc() (metaLoc objectio.Location) {
@@ -174,15 +200,13 @@ func (blk *txnBlock) GetDeltaLoc() (deltaloc objectio.Location) {
 }
 func (blk *txnBlock) UpdateMetaLoc(metaLoc objectio.Location) (err error) {
 	blkID := blk.Fingerprint()
-	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
-	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaLoc)
+	err = blk.Txn.GetStore().UpdateMetaLoc(blkID, metaLoc)
 	return
 }
 
 func (blk *txnBlock) UpdateDeltaLoc(deltaloc objectio.Location) (err error) {
 	blkID := blk.Fingerprint()
-	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().ID
-	err = blk.Txn.GetStore().UpdateDeltaLoc(dbid, blkID, deltaloc)
+	err = blk.Txn.GetStore().UpdateDeltaLoc(blkID, deltaloc)
 	return
 }
 
@@ -194,44 +218,51 @@ func (blk *txnBlock) Rows() int {
 	return blk.entry.GetBlockData().Rows()
 }
 
-func (blk *txnBlock) GetColumnDataByIds(colIdxes []int) (*model.BlockView, error) {
+func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error) {
+	schema := blk.table.GetLocalSchema()
+	colIdx := schema.GetColIdx(attr)
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes)
+		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, colIdxes)
+	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, schema, colIdx)
 }
 
 func (blk *txnBlock) GetColumnDataByNames(attrs []string) (*model.BlockView, error) {
+	schema := blk.table.GetLocalSchema()
+	attrIds := make([]int, len(attrs))
+	for i, attr := range attrs {
+		attrIds[i] = schema.GetColIdx(attr)
+	}
 	if blk.isUncommitted {
-		attrIds := make([]int, len(attrs))
-		for i, attr := range attrs {
-			attrIds[i] = blk.table.entry.GetSchema().GetColIdx(attr)
-		}
 		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByNames(blk.Txn, attrs)
+	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, schema, attrIds)
 }
 
 func (blk *txnBlock) GetColumnDataById(colIdx int) (*model.ColumnView, error) {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx)
 	}
-	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, colIdx)
+	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, blk.table.GetLocalSchema(), colIdx)
+}
+
+func (blk *txnBlock) GetColumnDataByIds(colIdxes []int) (*model.BlockView, error) {
+	if blk.isUncommitted {
+		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes)
+	}
+	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, blk.table.GetLocalSchema(), colIdxes)
 }
 
 func (blk *txnBlock) Prefetch(idxes []uint16) error {
-	if blk.isUncommitted {
-		return blk.table.localSegment.Prefetch(blk.entry, idxes)
+	schema := blk.table.GetLocalSchema()
+	seqnums := make([]uint16, 0, len(idxes))
+	for _, idx := range idxes {
+		seqnums = append(seqnums, schema.ColDefs[idx].SeqNum)
 	}
-	return blk.entry.GetBlockData().Prefetch(idxes)
-}
-
-func (blk *txnBlock) GetColumnDataByName(attr string) (*model.ColumnView, error) {
 	if blk.isUncommitted {
-		attrId := blk.table.entry.GetSchema().GetColIdx(attr)
-		return blk.table.localSegment.GetColumnDataById(blk.entry, attrId)
+		return blk.table.localSegment.Prefetch(blk.entry, seqnums)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByName(blk.Txn, attr)
+	return blk.entry.GetBlockData().Prefetch(seqnums)
 }
 
 func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
@@ -264,9 +295,11 @@ func newRelationBlockItOnSnap(rel handle.Relation) *relBlockIt {
 			it.err = segmentIt.GetError()
 			return it
 		}
+		seg.Close()
 		seg = segmentIt.GetSegment()
 		blockIt = seg.MakeBlockIt()
 	}
+	seg.Close()
 	it.blockIt = blockIt
 	it.segmentIt = segmentIt
 	it.rel = rel
@@ -290,9 +323,11 @@ func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 			it.err = segmentIt.GetError()
 			return it
 		}
+		seg.Close()
 		seg = segmentIt.GetSegment()
 		blockIt = seg.MakeBlockIt()
 	}
+	seg.Close()
 	it.blockIt = blockIt
 	it.segmentIt = segmentIt
 	it.rel = rel
@@ -335,6 +370,9 @@ func (it *relBlockIt) Valid() bool {
 			}
 			return false
 		}
+		if seg != nil {
+			seg.Close()
+		}
 		seg = it.segmentIt.GetSegment()
 		meta := seg.GetMeta().(*catalog.SegmentEntry)
 		meta.RLock()
@@ -343,6 +381,9 @@ func (it *relBlockIt) Valid() bool {
 		if cnt != 0 {
 			break
 		}
+	}
+	if seg != nil {
+		seg.Close()
 	}
 	it.blockIt = seg.MakeBlockIt()
 	if err = it.blockIt.GetError(); err != nil {
@@ -371,7 +412,9 @@ func (it *relBlockIt) Next() {
 		if !it.segmentIt.Valid() {
 			return
 		}
-		seg := it.segmentIt.GetSegment()
+		seg.Close()
+		seg = it.segmentIt.GetSegment()
 		it.blockIt = seg.MakeBlockIt()
 	}
+	seg.Close()
 }

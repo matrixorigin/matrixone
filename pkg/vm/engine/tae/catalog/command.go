@@ -20,6 +20,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -27,44 +28,86 @@ import (
 )
 
 const (
-	CmdUpdateDatabase = int16(256) + iota
-	CmdUpdateTable
-	CmdUpdateSegment
-	CmdUpdateBlock
+	IOET_WALTxnCommand_Database uint16 = 3009
+	IOET_WALTxnCommand_Table    uint16 = 3010
+	IOET_WALTxnCommand_Segment  uint16 = 3011
+	IOET_WALTxnCommand_Block    uint16 = 3012
+
+	IOET_WALTxnCommand_Database_V1 uint16 = 1
+	IOET_WALTxnCommand_Table_V1    uint16 = 1
+	IOET_WALTxnCommand_Segment_V1  uint16 = 1
+	IOET_WALTxnCommand_Block_V1    uint16 = 1
+
+	IOET_WALTxnCommand_Database_CurrVer = IOET_WALTxnCommand_Database_V1
+	IOET_WALTxnCommand_Table_CurrVer    = IOET_WALTxnCommand_Table_V1
+	IOET_WALTxnCommand_Segment_CurrVer  = IOET_WALTxnCommand_Segment_V1
+	IOET_WALTxnCommand_Block_CurrVer    = IOET_WALTxnCommand_Block_V1
 )
 
-var cmdNames = map[int16]string{
-	CmdUpdateDatabase: "UDB",
-	CmdUpdateTable:    "UTBL",
-	CmdUpdateSegment:  "USEG",
-	CmdUpdateBlock:    "UBLK",
+var cmdNames = map[uint16]string{
+	IOET_WALTxnCommand_Database: "UDB",
+	IOET_WALTxnCommand_Table:    "UTBL",
+	IOET_WALTxnCommand_Segment:  "USEG",
+	IOET_WALTxnCommand_Block:    "UBLK",
 }
 
-func CmdName(t int16) string {
+func CmdName(t uint16) string {
 	return cmdNames[t]
 }
 
 func init() {
-	txnif.RegisterCmdFactory(CmdUpdateDatabase, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd(cmdType,
-			NewEmptyMVCCNodeFactory(NewEmptyEmptyMVCCNode),
-			func() *DBNode { return &DBNode{} })
-	})
-	txnif.RegisterCmdFactory(CmdUpdateTable, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd(cmdType,
-			NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
-			func() *TableNode { return &TableNode{} })
-	})
-	txnif.RegisterCmdFactory(CmdUpdateSegment, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd(cmdType,
-			NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
-			func() *SegmentNode { return &SegmentNode{} })
-	})
-	txnif.RegisterCmdFactory(CmdUpdateBlock, func(cmdType int16) txnif.TxnCmd {
-		return newEmptyEntryCmd(cmdType,
-			NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
-			func() *BlockNode { return &BlockNode{} })
-	})
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Database,
+			Version: IOET_WALTxnCommand_Database_V1,
+		}, nil,
+		func(b []byte) (any, error) {
+			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Database,
+				NewEmptyMVCCNodeFactory(NewEmptyEmptyMVCCNode),
+				func() *DBNode { return &DBNode{} })
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Table,
+			Version: IOET_WALTxnCommand_Table_V1,
+		}, nil,
+		func(b []byte) (any, error) {
+			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Table,
+				NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
+				func() *TableNode { return &TableNode{} })
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Segment,
+			Version: IOET_WALTxnCommand_Segment_V1,
+		}, nil,
+		func(b []byte) (any, error) {
+			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Segment,
+				NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
+				func() *SegmentNode { return &SegmentNode{} })
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Block,
+			Version: IOET_WALTxnCommand_Block_V1,
+		}, nil,
+		func(b []byte) (any, error) {
+			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Block,
+				NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
+				func() *BlockNode { return &BlockNode{} })
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
 }
 
 type Node interface {
@@ -74,14 +117,13 @@ type Node interface {
 
 type EntryCommand[T BaseNode[T], N Node] struct {
 	*txnbase.BaseCustomizedCmd
-	cmdType  int16
-	DBID     uint64
+	cmdType  uint16
 	ID       *common.ID
 	mvccNode *MVCCNode[T]
 	node     N
 }
 
-func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType int16, mvccNodeFactory func() *MVCCNode[T], nodeFactory func() N) *EntryCommand[T, N] {
+func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType uint16, mvccNodeFactory func() *MVCCNode[T], nodeFactory func() N) *EntryCommand[T, N] {
 	impl := &EntryCommand[T, N]{
 		cmdType:  cmdType,
 		ID:       &common.ID{},
@@ -92,9 +134,8 @@ func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType int16, mvccNodeFactory func
 	return impl
 }
 
-func newBlockCmd(id uint32, cmdType int16, entry *BlockEntry) *EntryCommand[*MetadataMVCCNode, *BlockNode] {
+func newBlockCmd(id uint32, cmdType uint16, entry *BlockEntry) *EntryCommand[*MetadataMVCCNode, *BlockNode] {
 	impl := &EntryCommand[*MetadataMVCCNode, *BlockNode]{
-		DBID:     entry.GetSegment().GetTable().GetDB().ID,
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
@@ -104,9 +145,8 @@ func newBlockCmd(id uint32, cmdType int16, entry *BlockEntry) *EntryCommand[*Met
 	return impl
 }
 
-func newSegmentCmd(id uint32, cmdType int16, entry *SegmentEntry) *EntryCommand[*MetadataMVCCNode, *SegmentNode] {
+func newSegmentCmd(id uint32, cmdType uint16, entry *SegmentEntry) *EntryCommand[*MetadataMVCCNode, *SegmentNode] {
 	impl := &EntryCommand[*MetadataMVCCNode, *SegmentNode]{
-		DBID:     entry.GetTable().GetDB().ID,
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
@@ -116,9 +156,8 @@ func newSegmentCmd(id uint32, cmdType int16, entry *SegmentEntry) *EntryCommand[
 	return impl
 }
 
-func newTableCmd(id uint32, cmdType int16, entry *TableEntry) *EntryCommand[*TableMVCCNode, *TableNode] {
+func newTableCmd(id uint32, cmdType uint16, entry *TableEntry) *EntryCommand[*TableMVCCNode, *TableNode] {
 	impl := &EntryCommand[*TableMVCCNode, *TableNode]{
-		DBID:     entry.GetDB().ID,
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
@@ -128,10 +167,9 @@ func newTableCmd(id uint32, cmdType int16, entry *TableEntry) *EntryCommand[*Tab
 	return impl
 }
 
-func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand[*EmptyMVCCNode, *DBNode] {
+func newDBCmd(id uint32, cmdType uint16, entry *DBEntry) *EntryCommand[*EmptyMVCCNode, *DBNode] {
 	impl := &EntryCommand[*EmptyMVCCNode, *DBNode]{
-		DBID:     entry.ID,
-		ID:       &common.ID{},
+		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		node:     entry.DBNode,
 		mvccNode: entry.GetLatestNodeLocked(),
@@ -182,21 +220,21 @@ func (cmd *EntryCommand[T, N]) GetTs() types.TS {
 
 func (cmd *EntryCommand[T, N]) IDString() string {
 	s := ""
-	dbid, id := cmd.GetID()
+	id := cmd.GetID()
 	switch cmd.cmdType {
-	case CmdUpdateDatabase:
-		s = fmt.Sprintf("%sDB=%d", s, dbid)
-	case CmdUpdateTable:
-		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.TableString())
-	case CmdUpdateSegment:
-		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.SegmentString())
-	case CmdUpdateBlock:
-		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.BlockString())
+	case IOET_WALTxnCommand_Database:
+		s = fmt.Sprintf("%sCommonID=%s", s, id.DBString())
+	case IOET_WALTxnCommand_Table:
+		s = fmt.Sprintf("%sCommonID=%s", s, id.TableString())
+	case IOET_WALTxnCommand_Segment:
+		s = fmt.Sprintf("%sCommonID=%s", s, id.SegmentString())
+	case IOET_WALTxnCommand_Block:
+		s = fmt.Sprintf("%sCommonID=%s", s, id.BlockString())
 	}
 	return s
 }
-func (cmd *EntryCommand[T, N]) GetID() (uint64, *common.ID) {
-	return cmd.DBID, cmd.ID
+func (cmd *EntryCommand[T, N]) GetID() *common.ID {
+	return cmd.ID
 }
 
 func (cmd *EntryCommand[T, N]) String() string {
@@ -208,19 +246,34 @@ func (cmd *EntryCommand[T, N]) VerboseString() string {
 	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID, cmd.mvccNode.String())
 	return s
 }
-func (cmd *EntryCommand[T, N]) GetType() int16 { return cmd.cmdType }
+func (cmd *EntryCommand[T, N]) GetType() uint16 { return cmd.cmdType }
+func (cmd *EntryCommand[T, N]) GetCurrVersion() uint16 {
+	switch cmd.cmdType {
+	case IOET_WALTxnCommand_Database:
+		return IOET_WALTxnCommand_Database_CurrVer
+	case IOET_WALTxnCommand_Table:
+		return IOET_WALTxnCommand_Table_CurrVer
+	case IOET_WALTxnCommand_Segment:
+		return IOET_WALTxnCommand_Segment_CurrVer
+	case IOET_WALTxnCommand_Block:
+		return IOET_WALTxnCommand_Block_CurrVer
+	default:
+		panic(fmt.Sprintf("not support type %d", cmd.cmdType))
+	}
+}
 
 func (cmd *EntryCommand[T, N]) WriteTo(w io.Writer) (n int64, err error) {
 	t := cmd.GetType()
-	if _, err = w.Write(types.EncodeInt16(&t)); err != nil {
+	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
+		return
+	}
+	n += 2
+	ver := cmd.GetCurrVersion()
+	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
 		return
 	}
 	n += 2
 	var sn2 int
-	if sn2, err = w.Write(types.EncodeUint64(&cmd.DBID)); err != nil {
-		return
-	}
-	n += int64(sn2)
 	if sn2, err = w.Write(common.EncodeID(cmd.ID)); err != nil {
 		return
 	}
@@ -236,7 +289,7 @@ func (cmd *EntryCommand[T, N]) WriteTo(w io.Writer) (n int64, err error) {
 	n += sn
 	return
 }
-func (cmd *EntryCommand[T, N]) Marshal() (buf []byte, err error) {
+func (cmd *EntryCommand[T, N]) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = cmd.WriteTo(&bbuf); err != nil {
 		return
@@ -246,10 +299,6 @@ func (cmd *EntryCommand[T, N]) Marshal() (buf []byte, err error) {
 }
 func (cmd *EntryCommand[T, N]) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn2 int
-	if sn2, err = r.Read(types.EncodeUint64(&cmd.DBID)); err != nil {
-		return
-	}
-	n += int64(sn2)
 	if sn2, err = r.Read(common.EncodeID(cmd.ID)); err != nil {
 		return
 	}
@@ -266,7 +315,7 @@ func (cmd *EntryCommand[T, N]) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (cmd *EntryCommand[T, N]) Unmarshal(buf []byte) (err error) {
+func (cmd *EntryCommand[T, N]) UnmarshalBinary(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
 	_, err = cmd.ReadFrom(bbuf)
 	return

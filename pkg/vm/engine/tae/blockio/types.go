@@ -16,9 +16,10 @@ package blockio
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -68,12 +69,9 @@ func GetObjectSizeWithBlocks(blocks []objectio.BlockObject) (uint32, error) {
 	objectSize := uint32(0)
 	for _, block := range blocks {
 		meta := block.GetMeta()
-		count := meta.BlockHeader().ColumnCount()
+		count := meta.BlockHeader().MetaColumnCount()
 		for i := 0; i < int(count); i++ {
-			col, err := block.GetColumn(uint16(i))
-			if err != nil {
-				return 0, err
-			}
+			col := block.MustGetColumn(uint16(i))
 			objectSize += col.Location().Length()
 		}
 	}
@@ -119,7 +117,7 @@ func EncodeLocationFromString(info string) (objectio.Location, error) {
 	if err != nil {
 		return nil, err
 	}
-	name := objectio.BuildObjectName(uid, uint16(num))
+	name := objectio.BuildObjectName(&uid, uint16(num))
 	return objectio.BuildLocation(name, extent, uint32(rows), uint16(id)), nil
 }
 

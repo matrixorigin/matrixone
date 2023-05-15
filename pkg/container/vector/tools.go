@@ -16,6 +16,7 @@ package vector
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -147,8 +148,8 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
-	sz := v.typ.TypeSize()
 	if tgtCap := v.length + rows; tgtCap > v.capacity {
+		sz := v.typ.TypeSize()
 		ndata, err := m.Grow(v.data, tgtCap*sz)
 		if err != nil {
 			return err
@@ -156,7 +157,6 @@ func extend(v *Vector, rows int, m *mpool.MPool) error {
 		v.data = ndata[:cap(ndata)]
 		v.setupColFromData()
 	}
-	v.data = v.data[:(v.length+rows)*sz]
 	return nil
 }
 
@@ -210,7 +210,7 @@ func (v *Vector) setupColFromData() {
 		case types.T_Blockid:
 			v.col = DecodeFixedCol[types.Blockid](v)
 		default:
-			panic("unknown type")
+			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
 		}
 	}
 	tlen := v.GetType().TypeSize()
@@ -247,12 +247,10 @@ func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	} else {
 		rvec.class = FLAT
 	}
-	rvec.nsp = &nulls.Nulls{}
 	if err := rvec.nsp.Read(vec.Nsp); err != nil {
 		return nil, err
 	}
 	if rvec.IsConst() && rvec.nsp.Contains(0) {
-		rvec.nsp = &nulls.Nulls{}
 		return rvec, nil
 	}
 	rvec.data = vec.Data
@@ -548,7 +546,7 @@ func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) b
 	if vec1.IsConstNull() || vec2.IsConstNull() {
 		return true
 	}
-	if nulls.Any(vec1.nsp) || nulls.Any(vec2.nsp) {
+	if nulls.Any(vec1.GetNulls()) || nulls.Any(vec2.GetNulls()) {
 		return true
 	}
 	cols1 := MustFixedCol[T](vec1)
@@ -562,7 +560,7 @@ func runStrCompareCheckAnyResultIsTrue(vec1, vec2 *Vector, fn compFn[string]) bo
 	if vec1.IsConstNull() || vec2.IsConstNull() {
 		return true
 	}
-	if nulls.Any(vec1.nsp) || nulls.Any(vec2.nsp) {
+	if nulls.Any(vec1.GetNulls()) || nulls.Any(vec2.GetNulls()) {
 		return true
 	}
 
@@ -580,4 +578,65 @@ func compareCheckAnyResultIsTrue[T compT](cols1, cols2 []T, fn compFn[T]) bool {
 		}
 	}
 	return false
+}
+
+func appendBytesToFixSized[T types.FixedSizeT](vec *Vector) func([]byte, bool, *mpool.MPool) error {
+	return func(buf []byte, isNull bool, mp *mpool.MPool) (err error) {
+		v := types.DecodeFixed[T](buf)
+		return AppendFixed(vec, v, isNull, mp)
+	}
+}
+
+func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
+	t := vec.GetType()
+	if t.IsVarlen() {
+		return func(v []byte, isNull bool, mp *mpool.MPool) (err error) {
+			return AppendBytes(vec, v, isNull, mp)
+		}
+	}
+	switch t.Oid {
+	case types.T_bool:
+		return appendBytesToFixSized[bool](vec)
+	case types.T_int8:
+		return appendBytesToFixSized[int8](vec)
+	case types.T_int16:
+		return appendBytesToFixSized[int16](vec)
+	case types.T_int32:
+		return appendBytesToFixSized[int32](vec)
+	case types.T_int64:
+		return appendBytesToFixSized[int64](vec)
+	case types.T_uint8:
+		return appendBytesToFixSized[uint8](vec)
+	case types.T_uint16:
+		return appendBytesToFixSized[uint16](vec)
+	case types.T_uint32:
+		return appendBytesToFixSized[uint32](vec)
+	case types.T_uint64:
+		return appendBytesToFixSized[uint64](vec)
+	case types.T_float32:
+		return appendBytesToFixSized[float32](vec)
+	case types.T_float64:
+		return appendBytesToFixSized[float64](vec)
+	case types.T_date:
+		return appendBytesToFixSized[types.Date](vec)
+	case types.T_datetime:
+		return appendBytesToFixSized[types.Datetime](vec)
+	case types.T_time:
+		return appendBytesToFixSized[types.Time](vec)
+	case types.T_timestamp:
+		return appendBytesToFixSized[types.Timestamp](vec)
+	case types.T_decimal64:
+		return appendBytesToFixSized[types.Decimal64](vec)
+	case types.T_decimal128:
+		return appendBytesToFixSized[types.Decimal128](vec)
+	case types.T_uuid:
+		return appendBytesToFixSized[types.Uuid](vec)
+	case types.T_TS:
+		return appendBytesToFixSized[types.TS](vec)
+	case types.T_Rowid:
+		return appendBytesToFixSized[types.Rowid](vec)
+	case types.T_Blockid:
+		return appendBytesToFixSized[types.Blockid](vec)
+	}
+	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
 }

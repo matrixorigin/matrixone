@@ -396,7 +396,7 @@ func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 	defer r.storage.Unlock()
 	r.storage.globals.Delete(entry)
 }
-func (r *runner) FlushTable(dbID, tableID uint64, ts types.TS) (err error) {
+func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
 	makeCtx := func() *DirtyCtx {
 		tree := r.source.ScanInRangePruned(types.TS{}, ts)
 		tree.GetTree().Compact()
@@ -459,9 +459,9 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	}
 	defer data.Close()
 
-	segmentid, _ := types.BuildUuid()
+	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
-	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name)
+	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name, 0, nil)
 	if err != nil {
 		return err
 	}
@@ -483,9 +483,9 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	}
 	defer data.Close()
 
-	segmentid, _ := types.BuildUuid()
+	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
-	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name)
+	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name, 0, nil)
 	if err != nil {
 		return
 	}
@@ -644,7 +644,7 @@ func (r *runner) fillDefaults() {
 	}
 }
 
-func (r *runner) tryCompactBlock(dbID, tableID uint64, segmentID types.Uuid, id types.Blockid, force bool) (err error) {
+func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, force bool) (err error) {
 	db, err := r.catalog.GetDatabaseByID(dbID)
 	if err != nil {
 		panic(err)
@@ -653,7 +653,8 @@ func (r *runner) tryCompactBlock(dbID, tableID uint64, segmentID types.Uuid, id 
 	if err != nil {
 		panic(err)
 	}
-	segment, err := table.GetSegmentByID(segmentID)
+	sid := objectio.ToSegmentId(id)
+	segment, err := table.GetSegmentByID(sid)
 	if err != nil {
 		panic(err)
 	}
@@ -702,9 +703,10 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 	}
 	logutil.Debugf(entry.String())
 	visitor := new(model.BaseTreeVisitor)
-	visitor.BlockFn = func(force bool) func(uint64, uint64, types.Uuid, types.Blockid) error {
-		return func(dbID, tableID uint64, segmentID types.Uuid, id types.Blockid) (err error) {
-			return r.tryCompactBlock(dbID, tableID, segmentID, id, force)
+	visitor.BlockFn = func(force bool) func(uint64, uint64, *objectio.Segmentid, uint16, uint16) error {
+		return func(dbID, tableID uint64, segmentID *objectio.Segmentid, num, seq uint16) (err error) {
+			id := objectio.NewBlockid(segmentID, num, seq)
+			return r.tryCompactBlock(dbID, tableID, id, force)
 		}
 	}(force)
 

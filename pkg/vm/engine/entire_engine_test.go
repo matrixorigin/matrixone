@@ -139,10 +139,10 @@ func TestEntireEngineDatabase(t *testing.T) {
 
 func TestEntireEngineNodes(t *testing.T) {
 	ee := buildEntireEngineWithoutTempEngine()
-	ee.Nodes()
+	ee.Nodes(false, "", nil)
 	assert.Equal(t, only_engine, ee.state)
 	ee = buildEntireEngineWithTempEngine()
-	ee.Nodes()
+	ee.Nodes(false, "", nil)
 	assert.Equal(t, only_engine, ee.state)
 }
 
@@ -270,7 +270,7 @@ func (e *testEngine) Database(ctx context.Context, name string, txnOp client.Txn
 	return nil, nil
 }
 
-func (e *testEngine) Nodes() (Nodes, error) {
+func (e *testEngine) Nodes(_ bool, _ string, _ map[string]string) (Nodes, error) {
 	e.parent.step = e.parent.step + 1
 	if e.name == origin {
 		e.parent.state = e.parent.state + e.parent.step*e.parent.state
@@ -315,6 +315,13 @@ func (e *testEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, e
 
 func newtestOperator() *testOperator {
 	return &testOperator{}
+}
+
+func (o *testOperator) AddWorkspace(_ client.Workspace) {
+}
+
+func (o *testOperator) GetWorkspace() client.Workspace {
+	return nil
 }
 
 func (o *testOperator) ApplySnapshot(data []byte) error {

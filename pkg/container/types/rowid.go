@@ -66,14 +66,12 @@ func (r Rowid) Equal(to Rowid) bool {
 	return bytes.Equal(r[:], to[:])
 }
 
-func (r Rowid) GetBlockid() Blockid {
-	return *(*Blockid)(r[:BlockidSize])
-	// return (Blockid)(r[:BlockidSize])
+func (r Rowid) GetBlockid() *Blockid {
+	return (*Blockid)(r[:BlockidSize])
 }
 
-func (r Rowid) GetSegid() Uuid {
-	return *(*Uuid)(r[:UuidSize])
-	// return (Blockid)(r[:BlockidSize])
+func (r Rowid) GetSegid() *Segmentid {
+	return (*Uuid)(r[:UuidSize])
 }
 
 func (r Rowid) Decode() (Blockid, uint32) {
@@ -90,8 +88,16 @@ func (r Rowid) GetObject() ObjectBytes {
 	return *(*ObjectBytes)(r[:ObjectBytesSize])
 }
 
+func (r *Rowid) SetRowOffset(offset uint32) {
+	copy(r[BlockidSize:], EncodeUint32(&offset))
+}
+
 func (r Rowid) GetRowOffset() uint32 {
 	return DecodeUint32(r[BlockidSize:])
+}
+
+func (r Rowid) GetBlockOffset() uint16 {
+	return DecodeUint16(r[ObjectBytesSize:BlockidSize])
 }
 
 func (r Rowid) GetObjectString() string {
@@ -143,8 +149,8 @@ func (b *Blockid) Offsets() (uint16, uint16) {
 	return filen, blkn
 }
 
-func (b *Blockid) Segment() Uuid {
-	return DecodeUuid(b[:UuidSize])
+func (b *Blockid) Segment() *Segmentid {
+	return (*Uuid)(unsafe.Pointer(&b[0]))
 }
 
 func (b *Blockid) Sequence() uint16 {

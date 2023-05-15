@@ -79,6 +79,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.SQLAddress = hb.SQLAddress
 	storeInfo.LockServiceAddress = hb.LockServiceAddress
+	storeInfo.CtlAddress = hb.CtlAddress
 	storeInfo.Role = hb.Role
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	s.Stores[hb.UUID] = storeInfo
@@ -92,12 +93,7 @@ func (s *CNState) UpdateLabel(label CNStoreLabel) {
 	if !ok {
 		return
 	}
-	for k, v := range label.Labels {
-		storeInfo.Labels[k] = v
-		if label.Operation == DeleteLabel {
-			delete(storeInfo.Labels, k)
-		}
-	}
+	storeInfo.Labels = label.Labels
 	s.Stores[label.UUID] = storeInfo
 }
 
@@ -120,6 +116,7 @@ func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.LogtailServerAddress = hb.LogtailServerAddress
 	storeInfo.LockServiceAddress = hb.LockServiceAddress
+	storeInfo.CtlAddress = hb.CtlAddress
 	storeInfo.TaskServiceCreated = hb.TaskServiceCreated
 	s.Stores[hb.UUID] = storeInfo
 }

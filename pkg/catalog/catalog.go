@@ -141,8 +141,8 @@ func GenBlockInfo(rows [][]any) []BlockInfo {
 		infos[i].BlockID = row[BLOCKMETA_ID_IDX].(types.Blockid)
 		infos[i].EntryState = row[BLOCKMETA_ENTRYSTATE_IDX].(bool)
 		infos[i].Sorted = row[BLOCKMETA_SORTED_IDX].(bool)
-		infos[i].MetaLoc = row[BLOCKMETA_METALOC_IDX].([]byte)
-		infos[i].DeltaLoc = row[BLOCKMETA_DELTALOC_IDX].([]byte)
+		infos[i].SetMetaLocation(row[BLOCKMETA_METALOC_IDX].([]byte))
+		infos[i].SetDeltaLocation(row[BLOCKMETA_DELTALOC_IDX].([]byte))
 		infos[i].CommitTs = row[BLOCKMETA_COMMITTS_IDX].(types.TS)
 		infos[i].SegmentID = row[BLOCKMETA_SEGID_IDX].(types.Uuid)
 	}
@@ -209,19 +209,19 @@ func genUpdateConstraint(rows [][]any) []UpdateConstraint {
 func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
 	cmds := make([]DropOrTruncateTable, len(rows))
 	for i, row := range rows {
-		name := string(row[MO_TABLES_REL_NAME_IDX].([]byte))
+		name := string(row[SKIP_ROWID_OFFSET+MO_TABLES_REL_NAME_IDX].([]byte))
 		if id, tblName, ok := isTruncate(name); ok {
 			cmds[i].Id = id
 			cmds[i].Name = tblName
-			cmds[i].NewId = row[MO_TABLES_REL_ID_IDX].(uint64)
-			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
-			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+			cmds[i].NewId = row[SKIP_ROWID_OFFSET+MO_TABLES_REL_ID_IDX].(uint64)
+			cmds[i].DatabaseId = row[SKIP_ROWID_OFFSET+MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			cmds[i].DatabaseName = string(row[SKIP_ROWID_OFFSET+MO_TABLES_RELDATABASE_IDX].([]byte))
 		} else {
 			cmds[i].IsDrop = true
-			cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
+			cmds[i].Id = row[SKIP_ROWID_OFFSET+MO_TABLES_REL_ID_IDX].(uint64)
 			cmds[i].Name = name
-			cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
-			cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+			cmds[i].DatabaseId = row[SKIP_ROWID_OFFSET+MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+			cmds[i].DatabaseName = string(row[SKIP_ROWID_OFFSET+MO_TABLES_RELDATABASE_IDX].([]byte))
 		}
 	}
 	return cmds
@@ -396,9 +396,8 @@ func GenRows(bat *batch.Batch) [][]any {
 				rows[j][i] = col[j]
 			}
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_json, types.T_text:
-			col := vector.MustBytesCol(vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
+				rows[j][i] = vec.GetBytesAt(j)
 			}
 		default:
 			panic(fmt.Sprintf("unspported type: %v", vec.GetType()))

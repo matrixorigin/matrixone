@@ -17,14 +17,24 @@ package model
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 func PreparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32) (col containers.Vector, err error) {
 	col = containers.MakeVector(typ)
+	col.PreExtend(int(length))
+	vec := col.GetDownstreamVector()
+	m := col.GetAllocator()
 	for i := uint32(0); i < length; i++ {
 		rowid := EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
-		col.Append(rowid, false)
+		if err = vector.AppendFixed[types.Rowid](vec, rowid, false, m); err != nil {
+			break
+		}
+	}
+	if err != nil {
+		col.Close()
+		col = nil
 	}
 	return
 }
@@ -39,8 +49,10 @@ func PreparePhyAddrDataWithPool(typ types.Type, prefix []byte, startRow, length 
 }
 
 type PreparedCompactedBlockData struct {
-	Columns *containers.Batch
-	SortKey containers.Vector
+	Columns       *containers.Batch
+	SortKey       containers.Vector
+	SchemaVersion uint32
+	Seqnums       []uint16
 }
 
 func NewPreparedCompactedBlockData() *PreparedCompactedBlockData {
@@ -50,9 +62,10 @@ func NewPreparedCompactedBlockData() *PreparedCompactedBlockData {
 func (preparer *PreparedCompactedBlockData) Close() {
 	if preparer.Columns != nil {
 		preparer.Columns.Close()
+		preparer.Columns = nil
 	}
-	preparer.Columns.Close()
 	if preparer.SortKey != nil {
 		preparer.SortKey.Close()
+		preparer.SortKey = nil
 	}
 }

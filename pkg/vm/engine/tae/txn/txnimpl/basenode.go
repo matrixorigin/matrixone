@@ -51,7 +51,7 @@ type InsertNode interface {
 	Rows() uint32
 	GetValue(col int, row uint32) (any, bool, error)
 	MakeCommand(uint32) (txnif.TxnCmd, error)
-	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
+	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
 	LengthWithDeletes(appended, toAppend uint32) uint32
 	OffsetWithDeletes(count uint32) uint32
@@ -63,7 +63,6 @@ type InsertNode interface {
 type appendInfo struct {
 	seq              uint32
 	srcOff, srcLen   uint32
-	dbid             uint64
 	dest             common.ID
 	destOff, destLen uint32
 }
@@ -78,9 +77,6 @@ func EncodeAppendInfo(info *appendInfo) []byte {
 
 func (info *appendInfo) GetDest() *common.ID {
 	return &info.dest
-}
-func (info *appendInfo) GetDBID() uint64 {
-	return info.dbid
 }
 func (info *appendInfo) GetSrcOff() uint32 {
 	return info.srcOff
@@ -143,7 +139,7 @@ func (n *memoryNode) PrepareAppend(data *containers.Batch, offset uint32) uint32
 }
 
 func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
-	schema := n.bnode.table.entry.GetSchema()
+	schema := n.bnode.table.GetLocalSchema()
 	if n.data == nil {
 		opts := containers.Options{}
 		opts.Capacity = data.Length() - int(offset)
@@ -175,7 +171,7 @@ func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 		return
 	}
 	defer col.Close()
-	vec := n.data.Vecs[n.bnode.table.entry.GetSchema().PhyAddrKey.Idx]
+	vec := n.data.Vecs[n.bnode.table.GetLocalSchema().PhyAddrKey.Idx]
 	vec.Extend(col)
 	return
 }
@@ -305,11 +301,11 @@ func (n *baseNode) TryUpgrade() (err error) {
 }
 
 func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, err error) {
-	def := n.meta.GetSchema().ColDefs[colIdx]
+	def := n.table.GetLocalSchema().ColDefs[colIdx]
 	location := n.meta.GetMetaLoc()
 	return tables.LoadPersistedColumnData(
 		n.fs,
-		n.meta.AsCommonID(),
+		nil,
 		def,
 		location)
 }

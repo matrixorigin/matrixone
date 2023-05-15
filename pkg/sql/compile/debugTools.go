@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var debugInstructionNames = map[int]string{
+var debugInstructionNames = map[vm.OpType]string{
 	vm.Top:          "top",
 	vm.Join:         "join",
 	vm.Semi:         "semi",
@@ -68,7 +68,7 @@ var debugInstructionNames = map[int]string{
 	vm.HashBuild:    "hash build",
 }
 
-var debugMagicNames = map[int]string{
+var debugMagicNames = map[magicType]string{
 	Merge:          "Merge",
 	Normal:         "Normal",
 	Remote:         "Remote",
@@ -84,6 +84,7 @@ var debugMagicNames = map[int]string{
 	Insert:         "Insert",
 	Update:         "Update",
 	InsertValues:   "InsertValues",
+	MergeDelete:    "MergeDelete",
 }
 
 var _ = DebugShowScopes
@@ -155,7 +156,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 	}
 
 	// convert magic to its string name
-	magicShow := func(magic int) string {
+	magicShow := func(magic magicType) string {
 		name, ok := debugMagicNames[magic]
 		if ok {
 			return name
@@ -200,6 +201,8 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 					}
 				}
 				switch arg.FuncId {
+				case dispatch.ShuffleToAllFunc, dispatch.ShuffleToAllLocalFunc:
+					str += fmt.Sprintf(" shuffle to all of MergeReceiver [%s].", chs)
 				case dispatch.SendToAllFunc, dispatch.SendToAllLocalFunc:
 					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)
 				case dispatch.SendToAnyLocalFunc:
@@ -208,7 +211,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 					str += fmt.Sprintf(" unknow type dispatch [%s].", chs)
 				}
 
-				if arg.FuncId == dispatch.SendToAllFunc && len(arg.RemoteRegs) != 0 {
+				if len(arg.RemoteRegs) != 0 {
 					remoteChs := ""
 					for i, reg := range arg.RemoteRegs {
 						if i != 0 {

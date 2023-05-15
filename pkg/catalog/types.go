@@ -15,12 +15,14 @@
 package catalog
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"strings"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -31,6 +33,10 @@ const (
 	PrefixIndexTableName = "__mo_index_"
 	// Compound primary key column name, which is a hidden column
 	CPrimaryKeyColName = "__mo_cpkey_col"
+	// FakePrimaryKeyColName for tables without a primary key, a new hidden primary key column
+	// is added, which will not be sorted or used for any other purpose, but will only be used to add
+	// locks to the Lock operator in pessimistic transaction mode.
+	FakePrimaryKeyColName = "__mo_fake_pk_col"
 	// IndexTable has two column at most, the first is idx col, the second is origin table primary col
 	IndexTableIndexColName   = "__mo_index_idx_col"
 	IndexTablePrimaryColName = "__mo_index_pri_col"
@@ -102,6 +108,7 @@ const (
 	SystemRelAttr_Partition   = "partition_info"
 	SystemRelAttr_ViewDef     = "viewdef"
 	SystemRelAttr_Constraint  = "constraint"
+	SystemRelAttr_Version     = "rel_version"
 
 	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"
@@ -126,8 +133,10 @@ const (
 	SystemColAttr_HasUpdate       = "attr_has_update"
 	SystemColAttr_Update          = "attr_update"
 	SystemColAttr_IsClusterBy     = "attr_is_clusterby"
+	SystemColAttr_Seqnum          = "attr_seqnum"
 
 	BlockMeta_ID              = "block_id"
+	BlockMeta_Delete_ID       = "block_delete_id"
 	BlockMeta_EntryState      = "entry_state"
 	BlockMeta_Sorted          = "sorted"
 	BlockMeta_MetaLoc         = "%!%mo__meta_loc"
@@ -135,7 +144,11 @@ const (
 	BlockMeta_CommitTs        = "committs"
 	BlockMeta_SegmentID       = "segment_id"
 	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
-
+	BlockMeta_Type            = "%!%mo__meta_type"
+	BlockMeta_Deletes_Length  = "%!%mo__meta_deletes_length"
+	// BlockMetaOffset_Min       = "%!%mo__meta_offset_min"
+	// BlockMetaOffset_Max       = "%!%mo__meta_offset_max"
+	BlockMetaOffset    = "%!%mo__meta_offset"
 	SystemCatalogName  = "def"
 	SystemPersistRel   = "p"
 	SystemTransientRel = "t"
@@ -145,7 +158,7 @@ const (
 	SystemSequenceRel     = "S"
 	SystemViewRel         = "v"
 	SystemMaterializedRel = "m"
-	SystemExternalRel     = "e"
+	SystemExternalRel     = plan.SystemExternalRel
 	//the cluster table created by the sys account
 	//and read only by the general account
 	SystemClusterRel = "cluster"
@@ -202,6 +215,7 @@ const (
 	MO_TABLES_PARTITION_INFO_IDX = 13
 	MO_TABLES_VIEWDEF_IDX        = 14
 	MO_TABLES_CONSTRAINT_IDX     = 15
+	MO_TABLES_VERSION_IDX        = 16
 
 	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
 	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
@@ -225,6 +239,7 @@ const (
 	MO_COLUMNS_ATT_HAS_UPDATE_IDX        = 19
 	MO_COLUMNS_ATT_UPDATE_IDX            = 20
 	MO_COLUMNS_ATT_IS_CLUSTERBY          = 21
+	MO_COLUMNS_ATT_SEQNUM_IDX            = 22
 
 	BLOCKMETA_ID_IDX         = 0
 	BLOCKMETA_ENTRYSTATE_IDX = 1
@@ -233,16 +248,87 @@ const (
 	BLOCKMETA_DELTALOC_IDX   = 4
 	BLOCKMETA_COMMITTS_IDX   = 5
 	BLOCKMETA_SEGID_IDX      = 6
+
+	SKIP_ROWID_OFFSET = 1 //rowid is the 0th vector in the batch
+)
+
+type ObjectLocation [objectio.LocationLen]byte
+
+// ProtoSize is used by gogoproto.
+func (m *ObjectLocation) ProtoSize() int {
+	return objectio.LocationLen
+}
+
+// MarshalTo is used by gogoproto.
+func (m *ObjectLocation) MarshalTo(data []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(data[:size])
+}
+
+// MarshalToSizedBuffer is used by gogoproto.
+func (m *ObjectLocation) MarshalToSizedBuffer(data []byte) (int, error) {
+	if len(data) < m.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	n := copy(data, m[:])
+	return n, nil
+}
+
+// Marshal is used by gogoproto.
+func (m *ObjectLocation) Marshal() ([]byte, error) {
+	data := make([]byte, m.ProtoSize())
+	n, err := m.MarshalToSizedBuffer(data)
+	if err != nil {
+		return nil, err
+	}
+	return data[:n], err
+}
+
+// Unmarshal is used by gogoproto.
+func (m *ObjectLocation) Unmarshal(data []byte) error {
+	if len(data) < m.ProtoSize() {
+		panic("invalid byte slice")
+	}
+	copy(m[:], data)
+	return nil
+}
+
+const (
+	BlockInfoSize = unsafe.Sizeof(BlockInfo{})
 )
 
 type BlockInfo struct {
 	BlockID    types.Blockid
 	EntryState bool
 	Sorted     bool
-	MetaLoc    objectio.Location
-	DeltaLoc   objectio.Location
+	MetaLoc    ObjectLocation
+	DeltaLoc   ObjectLocation
 	CommitTs   types.TS
 	SegmentID  types.Uuid
+}
+
+func (b *BlockInfo) MetaLocation() objectio.Location {
+	return b.MetaLoc[:]
+}
+
+func (b *BlockInfo) SetMetaLocation(metaLoc objectio.Location) {
+	b.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0]))
+}
+
+func (b *BlockInfo) DeltaLocation() objectio.Location {
+	return b.DeltaLoc[:]
+}
+
+func (b *BlockInfo) SetDeltaLocation(deltaLoc objectio.Location) {
+	b.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
+}
+
+func EncodeBlockInfo(info BlockInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
+}
+
+func DecodeBlockInfo(buf []byte) *BlockInfo {
+	return (*BlockInfo)(unsafe.Pointer(&buf[0]))
 }
 
 // used for memengine and tae
@@ -328,6 +414,7 @@ var (
 		SystemRelAttr_Partition,
 		SystemRelAttr_ViewDef,
 		SystemRelAttr_Constraint,
+		SystemRelAttr_Version,
 	}
 	MoColumnsSchema = []string{
 		SystemColAttr_UniqName,
@@ -352,6 +439,7 @@ var (
 		SystemColAttr_HasUpdate,
 		SystemColAttr_Update,
 		SystemColAttr_IsClusterBy,
+		SystemColAttr_Seqnum,
 	}
 	MoTableMetaSchema = []string{
 		BlockMeta_ID,
@@ -388,8 +476,9 @@ var (
 		types.New(types.T_uint32, 0, 0),     // account_id
 		types.New(types.T_int8, 0, 0),       // partitioned
 		types.New(types.T_blob, 0, 0),       // partition_info
-		types.New(types.T_blob, 0, 0),       // viewdef
+		types.New(types.T_varchar, 5000, 0), // viewdef
 		types.New(types.T_varchar, 5000, 0), // constraint
+		types.New(types.T_uint32, 0, 0),     // schema_version
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0),  // att_uniq_name
@@ -414,6 +503,7 @@ var (
 		types.New(types.T_int8, 0, 0),       // att_has_update
 		types.New(types.T_varchar, 2048, 0), // att_update
 		types.New(types.T_int8, 0, 0),       // att_is_clusterby
+		types.New(types.T_uint16, 0, 0),     // att_seqnum
 	}
 	MoTableMetaTypes = []types.Type{
 		types.New(types.T_Blockid, 0, 0),                   // block_id

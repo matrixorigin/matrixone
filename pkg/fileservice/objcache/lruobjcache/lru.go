@@ -17,8 +17,6 @@ package lruobjcache
 import (
 	"container/list"
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache"
 )
 
 type LRU struct {
@@ -31,7 +29,7 @@ type LRU struct {
 
 type lruItem struct {
 	Key   any
-	Value any
+	Value []byte
 	Size  int64
 }
 
@@ -43,7 +41,7 @@ func New(capacity int64) *LRU {
 	}
 }
 
-func (l *LRU) Set(key any, value any, size int64, preloading bool) {
+func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
 	l.Lock()
 	defer l.Unlock()
 
@@ -94,23 +92,6 @@ func (l *LRU) evict() {
 				return
 			}
 			item := elem.Value.(*lruItem)
-
-			// RC value
-			if rc, ok := item.Value.(interface {
-				RefCount() int64
-			}); ok {
-				if rc.RefCount() > 0 {
-					// skip
-					elem = elem.Prev()
-					continue
-				}
-			}
-
-			// Releasable
-			if v, ok := item.Value.(objcache.Releasable); ok {
-				v.Release()
-			}
-
 			l.size -= item.Size
 			l.evicts.Remove(elem)
 			delete(l.kv, item.Key)
@@ -120,7 +101,7 @@ func (l *LRU) evict() {
 	}
 }
 
-func (l *LRU) Get(key any, preloading bool) (value any, size int64, ok bool) {
+func (l *LRU) Get(key any, preloading bool) (value []byte, size int64, ok bool) {
 	l.Lock()
 	defer l.Unlock()
 	if elem, ok := l.kv[key]; ok {
@@ -141,6 +122,18 @@ func (l *LRU) Flush() {
 	l.kv = make(map[any]*list.Element)
 }
 
-func (l *LRU) Size() int64 {
+func (l *LRU) Capacity() int64 {
+	return l.capacity
+}
+
+func (l *LRU) Used() int64 {
+	l.Lock()
+	defer l.Unlock()
 	return l.size
+}
+
+func (l *LRU) Available() int64 {
+	l.Lock()
+	defer l.Unlock()
+	return l.capacity - l.size
 }

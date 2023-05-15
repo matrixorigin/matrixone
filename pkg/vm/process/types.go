@@ -151,8 +151,9 @@ type Process struct {
 	Reg Register
 	Lim Limitation
 
-	vp *vectorPool
-	mp *mpool.MPool
+	vp           *vectorPool
+	mp           *mpool.MPool
+	prepareBatch *batch.Batch
 
 	// unix timestamp
 	UnixTime int64
@@ -218,6 +219,13 @@ func (proc *Process) GetLastInsertID() uint64 {
 		return *proc.LastInsertID
 	}
 	return 0
+}
+
+func (proc *Process) SetCacheForAutoCol(name string) {
+	aicm := proc.Aicm
+	aicm.Mu.Lock()
+	defer aicm.Mu.Unlock()
+	aicm.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: 0, MaxNum: aicm.MaxSize, Step: 1}
 }
 
 type analyze struct {

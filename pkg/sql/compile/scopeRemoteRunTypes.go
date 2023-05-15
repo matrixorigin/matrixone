@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"hash/crc32"
+	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,6 +42,8 @@ import (
 
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
+
+	HandleNotifyTimeout = 60 * time.Second
 )
 
 // cnInformation records service information to help handle messages.
@@ -74,8 +78,8 @@ type messageSenderOnClient struct {
 }
 
 func newMessageSenderOnClient(
-	ctx context.Context, toAddr string) (messageSenderOnClient, error) {
-	var sender = messageSenderOnClient{}
+	ctx context.Context, toAddr string) (*messageSenderOnClient, error) {
+	var sender = new(messageSenderOnClient)
 
 	streamSender, err := cnclient.GetStreamSender(toAddr)
 	if err != nil {
@@ -139,17 +143,10 @@ func (sender *messageSenderOnClient) send(
 }
 
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
-	var err error
-	if sender.receiveCh == nil {
-		sender.receiveCh, err = sender.streamSender.Receive()
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	select {
 	case <-sender.ctx.Done():
-		return nil, moerr.NewRPCTimeout(sender.ctx)
+		logutil.Errorf("sender ctx done during receive")
+		return nil, nil
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
 			// ch close
@@ -164,7 +161,7 @@ func (sender *messageSenderOnClient) close() {
 		sender.ctxCancel()
 	}
 	// XXX not a good way to deal it if close failed.
-	_ = sender.streamSender.Close()
+	_ = sender.streamSender.Close(false)
 }
 
 // messageReceiverOnServer is a structure
@@ -275,6 +272,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
 	proc.SessionInfo = pHelper.sessionInfo
+	proc.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
 	for i := range proc.AnalInfos {
 		proc.AnalInfos[i] = &process.AnalyzeInfo{
@@ -415,4 +413,29 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	}
 
 	return result, nil
+}
+
+func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, error) {
+	getCtx, getCancel := context.WithTimeout(context.Background(), HandleNotifyTimeout)
+	defer getCancel()
+	var opProc *process.Process
+	var ok bool
+	opUuid := receiver.messageUuid
+outter:
+	for {
+		select {
+		case <-getCtx.Done():
+			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
+		case <-receiver.ctx.Done():
+			logutil.Errorf("receiver conctx done during get dispatch process")
+			return nil, nil
+		default:
+			if opProc, ok = colexec.Srv.GetNotifyChByUuid(opUuid); !ok {
+				runtime.Gosched()
+			} else {
+				break outter
+			}
+		}
+	}
+	return opProc, nil
 }

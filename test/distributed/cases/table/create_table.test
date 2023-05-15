@@ -17,6 +17,7 @@ create table table17 (`index` int);
 create table account(a int);
 show tables;
 create table test01(a int primary key, b int) cluster by a;
+-- @bvt:issue#9109
 create table test01(a int, b int) cluster by a;
 create table test02(a int, b int) cluster by b;
 insert into test01 values(1,1),(2,2),(3,null),(null,4);
@@ -25,7 +26,9 @@ insert into test02 select * from test01;
 select * from test02;
 update test02 set b=null where a=1;
 select * from test02;
+-- @bvt:issue
 create table test03(a int, b int) cluster by c;
+-- @bvt:issue#9109
 create table test04(a int, b int, c varchar(10), unique key(a)) cluster by (b,c,a);
 insert into test04 values(11,3,'bb');
 insert into test04 values(1,2,'a');
@@ -41,8 +44,10 @@ insert into test06 select * from test04;
 select * from test06;
 update test06 set c=a where b=2;
 select * from test06;
+-- @bvt:issue
 create table test05(a int, b int, c varchar(10)) cluster by (b,c,d);
 create temporary table test05(a int, b int, c varchar(10)) cluster by (b,c);
+-- @bvt:issue#9109
 show create table test01;
 show create table test02;
 show create table test04;
@@ -55,6 +60,7 @@ drop table test01;
 drop table test02;
 drop table test04;
 drop table test06;
+-- @bvt:issue
 drop table if exists t1;
 create table t1(a int, b int, unique key(a), unique key(a, b));
 show create table t1;

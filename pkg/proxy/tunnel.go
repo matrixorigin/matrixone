@@ -47,7 +47,7 @@ type tunnel struct {
 	cc ClientConn
 	// reqC is the event request channel. Events may be happened in tunnel data flow,
 	// and need to be handled in client connection.
-	reqC chan IEventReq
+	reqC chan IEvent
 	// respC is the event response channel.
 	respC chan []byte
 	// closeOnce controls the close function to close tunnel only once.
@@ -83,7 +83,7 @@ func newTunnel(ctx context.Context, logger *log.MOLogger, cs *counterSet) *tunne
 		logger:    logger,
 		errC:      make(chan error, 1),
 		// We need to handle events synchronously, so this channel has no buffer.
-		reqC: make(chan IEventReq),
+		reqC: make(chan IEvent),
 		// response channel should have buffer, because it is handled in the same
 		// for-select with reqC.
 		respC: make(chan []byte, 10),
@@ -479,4 +479,11 @@ func (p *pipe) pause(ctx context.Context) error {
 		p.mu.cond.Wait()
 	}
 	return nil
+}
+
+// inTxn returns if the session is in a txn.
+func (p *pipe) inTxn() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mu.inTxn
 }

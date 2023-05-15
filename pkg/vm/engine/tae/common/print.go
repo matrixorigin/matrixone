@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type PPLevel int8
@@ -44,6 +45,32 @@ func RepeatStr(str string, times int) string {
 		str = fmt.Sprintf("%s\t", str)
 	}
 	return str
+}
+
+func DoIfFatalEnabled(fn func()) {
+	if logutil.GetSkip1Logger().Core().Enabled(zapcore.FatalLevel) {
+		fn()
+	}
+}
+func DoIfErrorEnabled(fn func()) {
+	if logutil.GetSkip1Logger().Core().Enabled(zapcore.ErrorLevel) {
+		fn()
+	}
+}
+func DoIfWarnEnabled(fn func()) {
+	if logutil.GetSkip1Logger().Core().Enabled(zapcore.WarnLevel) {
+		fn()
+	}
+}
+func DoIfInfoEnabled(fn func()) {
+	if logutil.GetSkip1Logger().Core().Enabled(zapcore.InfoLevel) {
+		fn()
+	}
+}
+func DoIfDebugEnabled(fn func()) {
+	if logutil.GetSkip1Logger().Core().Enabled(zapcore.InfoLevel) {
+		fn()
+	}
 }
 
 type opt struct {
@@ -223,6 +250,9 @@ func PrintMoBatch(moBat *batch.Batch, printN int) string {
 }
 
 func PrintApiBatch(apiBat *api.Batch, printN int) string {
+	if apiBat == nil {
+		return ""
+	}
 	bat, _ := batch.ProtoBatchToBatch(apiBat)
 	return PrintMoBatch(bat, printN)
 }

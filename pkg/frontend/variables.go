@@ -1259,6 +1259,30 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("mo_pk_check_by_dn"),
 		Default:           int8(0),
 	},
+	"cn_label": {
+		Name:              "cn_label",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("cn_label"),
+		Default:           "",
+	},
+	"syspublications": {
+		Name:              "syspublications",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("syspublications"),
+		Default:           "",
+	},
+	"net_buffer_length": {
+		Name:              "net_buffer_length",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("net_buffer_length", 1024, 1048576, false),
+		Default:           16384,
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {

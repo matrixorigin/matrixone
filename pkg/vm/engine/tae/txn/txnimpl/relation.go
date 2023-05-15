@@ -15,10 +15,13 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -81,8 +84,8 @@ func (it *txnRelationIt) Next() {
 		entry.RLock()
 		// SystemDB can hold table created by different tenant, filter needed.
 		// while the 3 shared tables are not affected
-		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetSchema().Name) &&
-			entry.GetSchema().AcInfo.TenantID != txn.GetTenantID() {
+		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetLastestSchema().Name) &&
+			entry.GetLastestSchema().AcInfo.TenantID != txn.GetTenantID() {
 			entry.RUnlock()
 			continue
 		}
@@ -133,6 +136,7 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	it := h.MakeBlockIt()
 	for it.Valid() {
 		block := it.GetBlock()
+		defer block.Close()
 		s = fmt.Sprintf("%s\n%s", s, block.String())
 		it.Next()
 	}
@@ -141,15 +145,17 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 
 func (h *txnRelation) Close() error { return nil }
 func (h *txnRelation) GetMeta() any { return h.table.entry }
-func (h *txnRelation) Schema() any  { return h.table.entry.GetSchema() }
+
+// Schema return schema in txnTable, not the lastest schema in TableEntry
+func (h *txnRelation) Schema() any { return h.table.GetLocalSchema() }
 
 func (h *txnRelation) Rows() int64 {
 	if h.table.entry.GetDB().IsSystemDB() && h.table.entry.IsVirtual() {
-		if h.table.entry.GetSchema().Name == pkgcatalog.MO_DATABASE {
+		if h.table.GetLocalSchema().Name == pkgcatalog.MO_DATABASE {
 			return int64(h.table.entry.GetCatalog().CoarseDBCnt())
-		} else if h.table.entry.GetSchema().Name == pkgcatalog.MO_TABLES {
+		} else if h.table.GetLocalSchema().Name == pkgcatalog.MO_TABLES {
 			return int64(h.table.entry.GetCatalog().CoarseTableCnt())
-		} else if h.table.entry.GetSchema().Name == pkgcatalog.MO_COLUMNS {
+		} else if h.table.GetLocalSchema().Name == pkgcatalog.MO_COLUMNS {
 			return int64(h.table.entry.GetCatalog().CoarseColumnCnt())
 		}
 		panic("logic error")
@@ -163,6 +169,9 @@ func (h *txnRelation) BatchDedup(col containers.Vector) error {
 }
 
 func (h *txnRelation) Append(data *containers.Batch) error {
+	if !h.table.GetLocalSchema().IsSameColumns(h.table.GetMeta().GetLastestSchema()) {
+		return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
+	}
 	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
@@ -177,10 +186,10 @@ func (h *txnRelation) AddBlksWithMetaLoc(
 	)
 }
 
-func (h *txnRelation) GetSegment(id types.Uuid) (seg handle.Segment, err error) {
+func (h *txnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error) {
 	fp := h.table.entry.AsCommonID()
-	fp.SegmentID = id
-	return h.Txn.GetStore().GetSegment(h.table.entry.GetDB().ID, fp)
+	fp.SetSegmentID(id)
+	return h.Txn.GetStore().GetSegment(fp)
 }
 
 func (h *txnRelation) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
@@ -191,10 +200,10 @@ func (h *txnRelation) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment
 	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
-func (h *txnRelation) SoftDeleteSegment(id types.Uuid) (err error) {
+func (h *txnRelation) SoftDeleteSegment(id *types.Segmentid) (err error) {
 	fp := h.table.entry.AsCommonID()
-	fp.SegmentID = id
-	return h.Txn.GetStore().SoftDeleteSegment(h.table.entry.GetDB().ID, fp)
+	fp.SetSegmentID(id)
+	return h.Txn.GetStore().SoftDeleteSegment(fp)
 }
 
 func (h *txnRelation) MakeSegmentItOnSnap() handle.SegmentIt {
@@ -227,7 +236,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 	if err != nil {
 		return
 	}
-	schema := h.table.entry.GetSchema()
+	schema := h.table.GetLocalSchema()
 	bat := containers.NewBatch()
 	defer bat.Close()
 	for _, def := range schema.ColDefs {
@@ -266,47 +275,38 @@ func (h *txnRelation) DeleteByFilter(filter *handle.Filter) (err error) {
 }
 
 func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
-	id := &common.ID{
-		TableID: h.table.entry.ID,
-	}
+	id := h.table.entry.AsCommonID()
 	var row uint32
-	dbId := h.table.entry.GetDB().ID
 	err = containers.ForeachVectorWindow(
 		keys, 0, keys.Length(),
 		func(rid types.Rowid, _ bool, _ int) (err error) {
-			id.SegmentID, id.BlockID, row = model.DecodePhyAddrKey(rid)
-			err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
+			id.BlockID, row = model.DecodePhyAddrKey(&rid)
+			err = h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
 			return
-		}, nil)
+		}, nil, nil)
 	return
 }
 
 func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
-	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
-	id := &common.ID{
-		TableID:   h.table.entry.ID,
-		SegmentID: sid,
-		BlockID:   bid,
-	}
-	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, row, row, handle.DT_Normal)
+	bid, row := model.DecodePhyAddrKeyFromValue(key)
+	id := h.table.entry.AsCommonID()
+	id.BlockID = bid
+	return h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
 }
 
 func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error {
-	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, start, end, dt)
+	return h.Txn.GetStore().RangeDelete(id, start, end, dt)
 }
 
 func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, bool, error) {
-	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
-	id := &common.ID{
-		TableID:   h.table.entry.ID,
-		SegmentID: sid,
-		BlockID:   bid,
-	}
-	return h.Txn.GetStore().GetValue(h.table.entry.GetDB().ID, id, row, uint16(col))
+	bid, row := model.DecodePhyAddrKeyFromValue(key)
+	id := h.table.entry.AsCommonID()
+	id.BlockID = bid
+	return h.Txn.GetStore().GetValue(id, row, uint16(col))
 }
 
 func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (any, bool, error) {
-	return h.Txn.GetStore().GetValue(h.table.entry.GetDB().ID, id, row, col)
+	return h.Txn.GetStore().GetValue(id, row, col)
 }
 
 func (h *txnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
@@ -317,6 +317,6 @@ func (h *txnRelation) GetDB() (handle.Database, error) {
 	return h.Txn.GetStore().GetDatabase(h.GetMeta().(*catalog.TableEntry).GetDB().GetName())
 }
 
-func (h *txnRelation) UpdateConstraint(cstr []byte) (err error) {
-	return h.table.UpdateConstraint(cstr)
+func (h *txnRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) (err error) {
+	return h.table.AlterTable(ctx, req)
 }

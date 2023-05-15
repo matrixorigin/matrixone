@@ -71,6 +71,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.Id = p.Id
 	proc.vp = p.vp
 	proc.mp = p.Mp()
+	proc.prepareBatch = p.prepareBatch
 	proc.Lim = p.Lim
 	proc.TxnClient = p.TxnClient
 	proc.TxnOperator = p.TxnOperator
@@ -142,6 +143,14 @@ func (proc *Process) Mp() *mpool.MPool {
 	return proc.GetMPool()
 }
 
+func (proc *Process) SetPrepareBatch(bat *batch.Batch) {
+	proc.prepareBatch = bat
+}
+
+func (proc *Process) GetPrepareBatch() *batch.Batch {
+	return proc.prepareBatch
+}
+
 func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Mp().Cap() < size
 }
@@ -152,6 +161,17 @@ func (proc *Process) SetInputBatch(bat *batch.Batch) {
 
 func (proc *Process) InputBatch() *batch.Batch {
 	return proc.Reg.InputBatch
+}
+
+func (proc *Process) ResetContextFromParent(parent context.Context) {
+	newctx, cancel := context.WithCancel(parent)
+
+	proc.Ctx = newctx
+	proc.Cancel = cancel
+
+	for i := range proc.Reg.MergeReceivers {
+		proc.Reg.MergeReceivers[i].Ctx = newctx
+	}
 }
 
 func (proc *Process) GetAnalyze(idx int) Analyze {

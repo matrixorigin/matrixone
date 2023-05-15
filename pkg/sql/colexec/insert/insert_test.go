@@ -81,7 +81,6 @@ func TestInsertOperator(t *testing.T) {
 		Zs:    []int64{1, 1, 1},
 	}
 	argument1 := Argument{
-		Engine: eng,
 		InsertCtx: &InsertCtx{
 			Rels: []engine.Relation{&mockRelation{}},
 			Ref: &plan.ObjectRef{
