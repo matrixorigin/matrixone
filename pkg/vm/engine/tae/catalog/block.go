@@ -292,6 +292,10 @@ func (entry *BlockEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 func (entry *BlockEntry) HasPersistedData() bool {
 	return !entry.GetMetaLoc().IsEmpty()
 }
+func (entry *BlockEntry) FastGetMetaLoc() objectio.Location {
+	return entry.Location
+}
+
 func (entry *BlockEntry) GetMetaLoc() objectio.Location {
 	if len(entry.Location) > 0 {
 		return entry.Location
