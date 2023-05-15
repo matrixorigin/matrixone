@@ -261,7 +261,7 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		stopCh:         make(chan struct{}),
 		collectorCnt:   runtime.NumCPU(),
 		generatorCnt:   runtime.NumCPU(),
-		exporterCnt:    1,
+		exporterCnt:    runtime.NumCPU(),
 		pipeImplHolder: newPipeImplHolder(),
 		statsInterval:  time.Minute,
 		maxBufferCnt:   int32(runtime.NumCPU()),
