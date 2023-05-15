@@ -594,6 +594,8 @@ func getVariableValue(varDefault interface{}) string {
 		return fmt.Sprintf("%d", val)
 	case uint64:
 		return fmt.Sprintf("%d", val)
+	case int8:
+		return fmt.Sprintf("%d", val)
 	case string:
 		return val
 	default:

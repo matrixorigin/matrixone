@@ -547,12 +547,13 @@ func (tcc *TxnCompilerContext) resolveGlobalVar(varName string) (interface{}, er
 	var sql string
 	var accountId uint32
 	var erArray []ExecResult
+	var value interface{}
 
 	ses := tcc.GetSession()
 	ctx := ses.GetRequestContext()
 
 	gSysVars := ses.GetGlobalSysVars()
-	if def, val, ok := gSysVars.GetGlobalSysVar(varName); ok {
+	if def, _, ok := gSysVars.GetGlobalSysVar(varName); ok {
 		if def.GetScope() == ScopeSession {
 			//empty
 			return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableSessionEmpty())
@@ -585,19 +586,18 @@ func (tcc *TxnCompilerContext) resolveGlobalVar(varName string) (interface{}, er
 			if err != nil {
 				return nil, err
 			}
-			value, err := def.GetType().ConvertFromString(variable_value)
+			value, err = def.GetType().ConvertFromString(variable_value)
 			if err != nil {
 				return nil, err
 			}
-			val = value
 
 			if _, ok := def.GetType().(SystemVariableBoolType); ok {
 				v, ok := value.(int8)
 				if ok {
 					if v == 1 {
-						val = "on"
+						value = "on"
 					} else {
-						val = "off"
+						value = "off"
 					}
 				}
 			}
@@ -609,7 +609,7 @@ func (tcc *TxnCompilerContext) resolveGlobalVar(varName string) (interface{}, er
 		if err != nil {
 			goto handleFailed
 		}
-		return val, nil
+		return value, nil
 	handleFailed:
 		//ROLLBACK the transaction
 		rbErr := bh.Exec(ctx, "rollback;")

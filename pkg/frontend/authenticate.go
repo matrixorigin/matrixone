@@ -1294,6 +1294,8 @@ const (
 
 	getSystemVariableValueFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and variable_name = '%s';`
 
+	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s';`
+
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
@@ -1701,6 +1703,10 @@ func getSystemVariablesWithAccount(accountId uint64) string {
 
 func getSqlForgetSystemVariableValue(accountId uint64, varName string) string {
 	return fmt.Sprintf(getSystemVariableValueFormat, accountId, varName)
+}
+
+func getSqlForUpdateSystemVariableValue(varValue string, accountId uint64, varName string) string {
+	return fmt.Sprintf(updateSystemVariableValueFormat, varValue, accountId, varName)
 }
 
 // isClusterTable decides a table is the index table or not
@@ -7943,4 +7949,51 @@ handleFailed:
 	}
 	return nil, err
 
+}
+
+func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) error {
+	var err error
+	var sql string
+	var accountId uint32
+	tenantInfo := ses.GetTenantInfo()
+
+	varName = strings.ToLower(varName)
+	if sv, ok := gSysVarsDefs[varName]; ok {
+		if sv.GetScope() == ScopeSession {
+			return moerr.NewInternalError(ctx, errorSystemVariableIsSession())
+		}
+		if !sv.GetDynamic() {
+			return moerr.NewInternalError(ctx, errorSystemVariableIsReadOnly())
+		}
+
+		bh := ses.GetBackgroundExec(ctx)
+		defer bh.Close()
+
+		err = bh.Exec(ctx, "begin;")
+		if err != nil {
+			goto handleFailed
+		}
+
+		accountId = tenantInfo.GetTenantID()
+		sql = getSqlForUpdateSystemVariableValue(getVariableValue(varValue), uint64(accountId), varName)
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+
+		err = bh.Exec(ctx, "commit;")
+		if err != nil {
+			goto handleFailed
+		}
+
+	handleFailed:
+		//ROLLBACK the transaction
+		rbErr := bh.Exec(ctx, "rollback;")
+		if rbErr != nil {
+			return rbErr
+		}
+		return err
+	} else {
+		return moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
+	}
 }

@@ -619,7 +619,7 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 	setVarFunc := func(system, global bool, name string, value interface{}) error {
 		if system {
 			if global {
-				err = ses.SetGlobalVar(name, value)
+				err = doSetGlobalSystemVariable(ctx, ses, name, value)
 				if err != nil {
 					return err
 				}
