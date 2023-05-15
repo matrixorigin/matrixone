@@ -266,6 +266,10 @@ func (bf BloomFilter) GetBloomFilter(BlockID uint32) []byte {
 	return bf[offset : offset+length]
 }
 
+func (bf BloomFilter) GetObjectBloomFilter() []byte {
+	return bf.GetBloomFilter(bf.BlockCount())
+}
+
 type ZoneMapArea []byte
 
 func (zma ZoneMapArea) BlockCount() uint32 {

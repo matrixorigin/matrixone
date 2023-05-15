@@ -71,7 +71,7 @@ INSERT INTO substring_index_01 VALUES(10, '442+562++++——----吃饭了',',',N
 INSERT INTO substring_index_01 VALUES(1, 'ewjj32..3,l43/.43', 0);
 Column count doesn't match value count at row 1
 INSERT INTO substring_index_01 VALUES(11, 'vhjdwewj3902i302o302($#$%^&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw54545484154444489897897o8u8&92)(','few',4);
-internal error: Can't cast 'vhjdwewj3902i302o302($#$%!^(MISSING)&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw545454841544444898978...' from VARCHAR type to VARCHAR type. Src length 111 is larger than Dest length 100 
+internal error: Can't cast 'vhjdwewj3902i302o302($#$%!^(MISSING)&*()_POJHFTY&(*UIOPL:<DQ87*q8JIFWJLWKMDXKLSMDXKSLMKCw545454841544444898978...' from VARCHAR type to VARCHAR type. Src length 111 is larger than Dest length 100
 INSERT INTO substring_index_01 VALUES(12, '', 'vjdkelwvrew', 32769);
 Data truncation: data out of range: data type int16, value '32769'
 SELECT substring_index(s1,delim,count1) FROM substring_index_01;
@@ -83,16 +83,16 @@ ehjwkvnrkew哈哈哈&9832哈哈哈,84321093,
 .327hjfew.;,32oi  cekw
 9099032c45dc3s// *  
 
-
-
+null
+null
 null
 SELECT substring_index(s1,delim,count1) FROM substring_index_01 WHERE count1 >= 2;
 substring_index(s1, delim, count1)
 abc.com
 新年快乐，身体健康，万事如意
 123abc&*.jjkmm&*.73290302
-
-
+null
+null
 SELECT substring_index(s1,delim,count1 + 3) FROM substring_index_01 WHERE count1 < 0;
 substring_index(s1, delim, count1 + 3)
 ehjwkvnrkew哈哈哈&9832哈哈哈,84321093,
@@ -147,7 +147,7 @@ startswith(substring_index(s1, *., 3), 123)
 0
 0
 0
-0
+null
 0
 SELECT endswith(substring_index(s1,'+',2),'62') FROM substring_index_01;
 endswith(substring_index(s1, +, 2), 62)
@@ -159,7 +159,7 @@ endswith(substring_index(s1, +, 2), 62)
 0
 0
 0
-0
+null
 1
 SELECT * FROM substring_index_01 WHERE find_in_set(substring_index(s1,delim,count1),NULL) = NULL;
 id    s1    delim    count1
@@ -175,8 +175,8 @@ false
 false
 false
 true
-true
-true
+null
+null
 null
 SELECT substring(substring_index(s1,delim,count1),1,5) FROM substring_index_01;
 substring(substring_index(s1, delim, count1), 1, 5)
@@ -199,8 +199,8 @@ nc.moc.cba
 wkec  io23,;.wefjh723.,92887  
 //s3cd54c2309909  ;;3w3rjkn3uwfe
 
-
-
+null
+null
 了饭吃----——++++265+244
 SELECT * FROM substring_index_01 WHERE s1 = (SELECT s1 FROM substring_index_01 WHERE substring_index(LTRIM(s1),'.',2) = '78829,.327hjfew');
 id    s1    delim    count1
@@ -226,18 +226,18 @@ SELECT substring_index(s1,delim,count1) FROM substring_index_02;
 substring_index(s1, delim, count1)
 SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length)
 
-
-
+null
+null
   dhewjvrew  er&&***&&n e89__+&&**+=--=
 SELECT substring_index(s1,delim,count1 + 3),substring_index(s1,delim,count2) FROM substring_index_02 WHERE count1 < 0;
 substring_index(s1, delim, count1 + 3)    substring_index(s1, delim, count2)
 SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length)    SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length)
-    
+null    null
 SELECT substring_index(s1,delim,count2 % 2) FROM substring_index_02 WHERE count2 IS NOT NULL;
 substring_index(s1, delim, count2 % 2)
 SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, st
 dvuewinviecf
-
+null
 
 SELECT * FROM substring_index_02 WHERE substring_index(s1,'的',2) = 'SUBSTRING函数的功能:用于从字符串';
 id    s1    delim    count1    count2
@@ -258,22 +258,22 @@ SELECT startswith(substring_index(s1,delim,3),'SUB') FROM substring_index_02;
 startswith(substring_index(s1, delim, 3), SUB)
 1
 0
-0
-0
+null
+null
 0
 SELECT endswith(substring_index(s1,delim,-2),'h)') FROM substring_index_02;
 endswith(substring_index(s1, delim, -2), h))
 1
 0
-0
-0
+null
+null
 0
 SELECT find_in_set(substring_index(s1,delim,count1),'SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length),dvuewinviecfjds439432094ie3jiHHDIUWH*&*(UIJCSijfje3iu2j9032^&(*&()(*)I)A&^%^*&') FROM substring_index_02;
 find_in_set(substring_index(s1, delim, count1), SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length),dvuewinviecfjds439432094ie3jiHHDIUWH*&*(UIJCSijfje3iu2j9032^&(*&()(*)I)A&^%^*&)
 0
 0
-0
-0
+null
+null
 0
 SELECT CONCAT_WS(substring_index(s1,delim,count1),'hehaha32789','ABCNSLK') FROM substring_index_02 WHERE id = 2;
 concat_ws(substring_index(s1, delim, count1), hehaha32789, ABCNSLK)
@@ -289,8 +289,8 @@ SELECT REVERSE(substring_index(s1,delim,3)) FROM substring_index_02;
 reverse(substring_index(s1, delim, 3))
 )htgnel ,trats ,gnirts(GNIRTSBUS:法语gnirtsbus串符字的度长定指取截始开置位定指的串符字从于用:能功的数函GNIRTSBUS
 iSCJIU(*&*HWUIDHHij3ei490234934sdjfceivniweuvd
-
-
+null
+null
 **&&re  wervjwehd  
 DROP TABLE IF EXISTS substring_index_03;
 DROP TABLE IF EXISTS substring_index_04;

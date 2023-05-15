@@ -377,7 +377,16 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		if tbl.isColumnChangedInSchema() {
 			tbl.FreezeAppend()
 		}
-		tbl.TableNode.schema.Store(un.BaseNode.Schema)
+		schema := un.BaseNode.Schema
+		tbl.TableNode.schema.Store(schema)
+		// alter table rename
+		if schema.Extra.OldName != "" {
+			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
+			if err != nil {
+				logutil.Warn(schema.String())
+				panic(err)
+			}
+		}
 	}
 
 }
@@ -446,6 +455,13 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 			tbl.FreezeAppend()
 		}
 		tbl.TableNode.schema.Store(schema)
+		if schema.Extra.OldName != "" {
+			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
+			if err != nil {
+				logutil.Warn(schema.String())
+				panic(err)
+			}
+		}
 
 		return
 	}
@@ -1003,7 +1019,7 @@ func (catalog *Catalog) txnGetNodeByName(
 	if node == nil {
 		return nil, moerr.NewBadDBNoCtx(name)
 	}
-	return node.TxnGetNodeLocked(txn)
+	return node.TxnGetNodeLocked(txn, "")
 }
 
 func (catalog *Catalog) GetDBEntryByName(

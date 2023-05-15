@@ -47,7 +47,7 @@ type Index interface {
 	// If key is not found, return nil
 	Dedup(key any, skipfn func(row uint32) error) error
 
-	BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error)
+	BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error), zm []byte) (keyselects *roaring.Bitmap, err error)
 	//DedupByIndex(index Index, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error)
 
 	// BatchUpsert batch insert the specific keys

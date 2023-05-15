@@ -1265,6 +1265,21 @@ const (
 
 	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
 
+	// grant ownership on database
+	grantOwnershipOnDatabaseFormat = `grant ownership on database %s to %s;`
+
+	// grant ownership on table
+	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
+
+	// get the owner of the database
+	getOwnerOfDatabaseFormat = `select owner from mo_catalog.mo_database where datname = '%s';`
+
+	// get the owner of the table
+	getOwnerOfTableFormat = `select owner from mo_catalog.mo_tables where reldatabase = '%s' and relname = '%s';`
+
+	// get the roles of the current user
+	getRolesOfCurrentUserFormat = `select role_id from mo_catalog.mo_user_grant where user_id = %d;`
+
 	//delete user from mo_user,mo_user_grant
 	deleteUserFromMoUserFormat = `delete from mo_catalog.mo_user where user_id = %d;`
 
@@ -1751,6 +1766,31 @@ func isClusterTable(dbName, name string) bool {
 		}
 	}
 	return false
+}
+
+// getSqlForGrantOwnershipOnDatabase get the sql for grant ownership on database
+func getSqlForGrantOwnershipOnDatabase(dbName, roleName string) string {
+	return fmt.Sprintf(grantOwnershipOnDatabaseFormat, dbName, roleName)
+}
+
+// getSqlForGrantOwnershipOnTable get the sql for grant ownership on database
+func getSqlForGrantOwnershipOnTable(dbName, tbName, roleName string) string {
+	return fmt.Sprintf(grantOwnershipOnTableFormat, dbName, tbName, roleName)
+}
+
+// getSqlForGetOwnerOfDatabase get the sql for get the owner of the database
+func getSqlForGetOwnerOfDatabase(dbName string) string {
+	return fmt.Sprintf(getOwnerOfDatabaseFormat, dbName)
+}
+
+// getSqlForGetOwnerOfTable get the sql for get the owner of the table
+func getSqlForGetOwnerOfTable(dbName, tbName string) string {
+	return fmt.Sprintf(getOwnerOfTableFormat, dbName, tbName)
+}
+
+// getSqlForGetRolesOfCurrentUser get the sql for get the roles of the user
+func getSqlForGetRolesOfCurrentUser(userId int64) string {
+	return fmt.Sprintf(getRolesOfCurrentUserFormat, userId)
 }
 
 func isBannedDatabase(dbName string) bool {
@@ -6050,6 +6090,182 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	//for Create User statement with default role.
 	//TODO:
 
+	// support dropdatabase and droptable for owner
+	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil && priv.kind == privilegeKindGeneral {
+		switch st := stmt.(type) {
+		case *tree.DropDatabase:
+			// get the databasename
+			dbName := string(st.Name)
+			if _, inSet := sysDatabases[dbName]; inSet {
+				return ok, nil
+			}
+			return checkRoleWhetherDatabaseOwner(ctx, ses, dbName, ok)
+		case *tree.DropTable:
+			// get the databasename and tablename
+			if len(st.Names) != 1 {
+				return ok, nil
+			}
+			dbName := string(st.Names[0].SchemaName)
+			if len(dbName) == 0 {
+				dbName = ses.GetDatabaseName()
+			}
+			if _, inSet := sysDatabases[dbName]; inSet {
+				return ok, nil
+			}
+			tbName := string(st.Names[0].ObjectName)
+			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
+		}
+	}
+	return ok, nil
+}
+
+func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbName string, ok bool) (bool, error) {
+	var owner int64
+	var err error
+	var erArray []ExecResult
+	var sql string
+	roles := make([]int64, 0)
+	tenantInfo := ses.GetTenantInfo()
+	// current user
+	currentUser := tenantInfo.GetUserID()
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// getOwner of the table
+	sql = getSqlForGetOwnerOfTable(dbName, tbName)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return ok, nil
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return ok, nil
+	}
+
+	if execResultArrayHasData(erArray) {
+		owner, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return ok, nil
+		}
+	} else {
+		return ok, nil
+	}
+
+	// check role
+	if tenantInfo.useAllSecondaryRole {
+		sql = getSqlForGetRolesOfCurrentUser(int64(currentUser))
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return ok, nil
+		}
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return ok, nil
+		}
+
+		if execResultArrayHasData(erArray) {
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				role, err := erArray[0].GetInt64(ctx, i, 0)
+				if err != nil {
+					return ok, nil
+				}
+				roles = append(roles, role)
+			}
+		} else {
+			return ok, nil
+		}
+
+		// check the role whether the table's owner
+		for _, role := range roles {
+			if role == owner {
+				return true, nil
+			}
+		}
+	} else {
+		currentRole := tenantInfo.GetDefaultRoleID()
+		if owner == int64(currentRole) {
+			return true, nil
+		}
+	}
+	return ok, nil
+
+}
+
+func checkRoleWhetherDatabaseOwner(ctx context.Context, ses *Session, dbName string, ok bool) (bool, error) {
+	var owner int64
+	var err error
+	var erArray []ExecResult
+	var sql string
+	roles := make([]int64, 0)
+
+	tenantInfo := ses.GetTenantInfo()
+	// current user
+	currentUser := tenantInfo.GetUserID()
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// getOwner of the database
+	sql = getSqlForGetOwnerOfDatabase(dbName)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return ok, nil
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return ok, nil
+	}
+
+	if execResultArrayHasData(erArray) {
+		owner, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return ok, nil
+		}
+	} else {
+		return ok, nil
+	}
+
+	// check role
+	if tenantInfo.useAllSecondaryRole {
+		sql = getSqlForGetRolesOfCurrentUser(int64(currentUser))
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return ok, nil
+		}
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return ok, nil
+		}
+
+		if execResultArrayHasData(erArray) {
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				role, err := erArray[0].GetInt64(ctx, i, 0)
+				if err != nil {
+					return ok, nil
+				}
+				roles = append(roles, role)
+			}
+		} else {
+			return ok, nil
+		}
+
+		// check the role whether the database's owner
+		for _, role := range roles {
+			if role == owner {
+				return true, nil
+			}
+		}
+	} else {
+		currentRole := tenantInfo.GetDefaultRoleID()
+		if owner == int64(currentRole) {
+			return true, nil
+		}
+	}
 	return ok, nil
 }
 
@@ -8064,7 +8280,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	// 2.grant database privilege
 	switch st := stmt.(type) {
 	case *tree.CreateDatabase:
-		sql = fmt.Sprintf(`grant ownership on database %s to %s with grant option;`, st.Name, currentRole)
+		sql = getSqlForGrantOwnershipOnDatabase(string(st.Name), currentRole)
 	case *tree.CreateTable:
 		// get database name
 		var dbName string
@@ -8075,7 +8291,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		}
 		// get table name
 		tableName := string(st.Table.ObjectName)
-		sql = fmt.Sprintf(`grant ownership on table %s.%s to %s with grant option;`, dbName, tableName, currentRole)
+		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, currentRole)
 	}
 
 	bh := ses.GetBackgroundExec(tenantCtx)

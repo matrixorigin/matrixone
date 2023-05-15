@@ -65,6 +65,14 @@ func (r *ZmReader) Contains(key any) bool {
 	return zm.Contains(key)
 }
 
+func (r *ZmReader) Intersect(zm index.ZM) (ok bool) {
+	base, err := r.getZoneMap()
+	if err != nil {
+		return false
+	}
+	return base.FastIntersect(zm)
+}
+
 func (r *ZmReader) FastContainsAny(keys containers.Vector) (ok bool) {
 	zm, err := r.getZoneMap()
 	if err != nil {
