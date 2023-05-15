@@ -246,27 +246,33 @@ func (tbl *txnTable) recurTransferDelete(
 	if err = tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
 		return
 	}
-	logutil.Infof("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
-		depth,
-		id.BlockID.String(),
-		row,
-		blockID.String(),
-		offset)
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
+			depth,
+			id.BlockID.String(),
+			row,
+			blockID.String(),
+			offset)
+	})
 	return
 }
 
 func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
-	logutil.Info("[Start]",
-		common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
-		common.OperationField("transfer-deletes"),
-		common.OperandField(id.BlockString()))
-	defer func() {
-		logutil.Info("[End]",
+	common.DoIfInfoEnabled(func() {
+		logutil.Info("[Start]",
 			common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
 			common.OperationField("transfer-deletes"),
-			common.OperandField(id.BlockString()),
-			common.ErrorField(err))
+			common.OperandField(id.BlockString()))
+	})
+	defer func() {
+		common.DoIfInfoEnabled(func() {
+			logutil.Info("[End]",
+				common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
+				common.OperationField("transfer-deletes"),
+				common.OperandField(id.BlockString()),
+				common.ErrorField(err))
+		})
 		for _, m := range memo {
 			m.Close()
 		}
@@ -599,15 +605,12 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 		if skip == txnif.PKDedupSkipNone {
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
-				reader, err := blockio.NewObjectReader(tbl.store.dataFactory.Fs.Service, loc)
-				if err != nil {
-					return err
-				}
-				bat, err := reader.LoadColumns(
+				bat, err := blockio.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
-					loc.ID(),
+					tbl.store.dataFactory.Fs.Service,
+					loc,
 					nil,
 				)
 				if err != nil {
@@ -732,13 +735,12 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 	blockIt := h.MakeBlockIt()
 	for blockIt.Valid() {
 		h := blockIt.GetBlock()
+		defer h.Close()
 		if h.IsUncommitted() {
 			blockIt.Next()
 			continue
 		}
 		offset, err = h.GetByFilter(filter)
-		// block := h.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		// offset, err = block.GetByFilter(tbl.store.txn, filter)
 		if err == nil {
 			id = h.Fingerprint()
 			break
@@ -884,7 +886,9 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	it := newRelationBlockItOnSnap(h)
 	maxSegmentHint := uint64(0)
 	for it.Valid() {
-		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		blkH := it.GetBlock()
+		blk := blkH.GetMeta().(*catalog.BlockEntry)
+		blkH.Close()
 		segmentHint := blk.GetSegment().SortHint
 		if segmentHint > maxSegmentHint {
 			maxSegmentHint = segmentHint
@@ -938,15 +942,12 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 			//TODO::laod zm index first, then load pk column if necessary.
 			_, ok := loaded[i]
 			if !ok {
-				reader, err := blockio.NewObjectReader(tbl.store.dataFactory.Fs.Service, loc)
-				if err != nil {
-					return err
-				}
-				bat, err := reader.LoadColumns(
+				bat, err := blockio.LoadColumns(
 					context.Background(),
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
-					loc.ID(),
+					tbl.store.dataFactory.Fs.Service,
+					loc,
 					nil,
 				)
 				if err != nil {

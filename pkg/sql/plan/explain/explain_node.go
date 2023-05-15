@@ -15,11 +15,12 @@
 package explain
 
 import (
+	"bytes"
 	"context"
-	"strconv"
-
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"strconv"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -38,7 +39,7 @@ const TableScan = "Table Scan"
 const ExternalScan = "External Scan"
 
 func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	var result string
+	buf := bytes.NewBuffer(make([]byte, 0, 400))
 	var pname string /* node type name for text output */
 
 	// Get the Node Name
@@ -115,40 +116,40 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 
 	// Get Node's operator object info ,such as table, view
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		result += pname
+		buf.WriteString(pname)
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
-			result += " \"*VALUES*\" "
+			buf.WriteString(" \"*VALUES*\" ")
 		case plan.Node_TABLE_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
-			result += " on "
+			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
-				result += ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName()
+				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
 			} else if ndesc.Node.TableDef != nil {
-				result += ndesc.Node.TableDef.GetName()
+				buf.WriteString(ndesc.Node.TableDef.GetName())
 			}
 		case plan.Node_UPDATE:
-			result += " on "
+			buf.WriteString(" on ")
 			if ndesc.Node.UpdateCtx != nil {
 				first := true
 				for _, ctx := range ndesc.Node.UpdateCtx.Ref {
 					if !first {
-						result += ", "
+						buf.WriteString(", ")
 					}
-					result += ctx.SchemaName + "." + ctx.ObjName
+					buf.WriteString(ctx.SchemaName + "." + ctx.ObjName)
 					if first {
 						first = false
 					}
 				}
 			}
 		case plan.Node_DELETE:
-			result += " on "
+			buf.WriteString(" on ")
 			if ndesc.Node.DeleteCtx != nil {
 				first := true
 				for _, ctx := range ndesc.Node.DeleteCtx.Ref {
 					if !first {
-						result += ", "
+						buf.WriteString(", ")
 					}
-					result += ctx.SchemaName + "." + ctx.ObjName
+					buf.WriteString(ctx.SchemaName + "." + ctx.ObjName)
 					if first {
 						first = false
 					}
@@ -160,38 +161,36 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 	// Get Costs info of Node
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		//result += " (cost=%.2f..%.2f rows=%.0f width=%f)"
-
 		if options.Verbose {
 			costDescImpl := &CostDescribeImpl{
 				Stats: ndesc.Node.GetStats(),
 			}
-			costInfo, err := costDescImpl.GetDescription(ctx, options)
+			err := costDescImpl.GetDescription(ctx, options, buf)
 			if err != nil {
-				return result, err
+				return "", err
 			}
-			result += " " + costInfo
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI(ctx, "explain format json")
+		return "", moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI(ctx, "explain format dot")
+		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
-	return result, nil
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Analyze: "
+	buf := bytes.NewBuffer(make([]byte, 0, 400))
+	buf.WriteString("Analyze: ")
 	if ndesc.Node.AnalyzeInfo != nil {
 		impl := NewAnalyzeInfoDescribeImpl(ndesc.Node.AnalyzeInfo)
-		describe, err := impl.GetDescription(ctx, options)
+		err := impl.GetDescription(ctx, options, buf)
 		if err != nil {
-			return result, err
+			return "", err
 		}
-		result += describe
 	} else {
-		result += "timeConsumed=0ns waitTime=0ns inputRows=0  outputRows=0 inputSize=0 bytes outputSize:0 bytes, memorySize=0 bytes"
+		buf.WriteString("timeConsumed=0ns waitTime=0ns inputRows=0  outputRows=0 inputSize=0 bytes outputSize:0 bytes, memorySize=0 bytes")
 	}
-	return result, nil
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -205,7 +204,6 @@ func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *Explain
 				result += ", "
 			}
 			first = false
-			//result += "'" + col.Name + "':" + col.Typ.Id.String()
 			result += strconv.Itoa(i) + ":'" + col.Name + "'"
 		}
 		result += ")"
@@ -273,20 +271,20 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 
 	// Get Limit And Offset info
 	if ndesc.Node.Limit != nil {
-		var temp string
-		limitInfo, err := describeExpr(ctx, ndesc.Node.Limit, options)
+		buf := bytes.NewBuffer(make([]byte, 0, 160))
+		buf.WriteString("Limit: ")
+		err := describeExpr(ctx, ndesc.Node.Limit, options, buf)
 		if err != nil {
 			return nil, err
 		}
-		temp += "Limit: " + limitInfo
 		if ndesc.Node.Offset != nil {
-			offsetInfo, err := describeExpr(ctx, ndesc.Node.Offset, options)
+			buf.WriteString(", Offset: ")
+			err := describeExpr(ctx, ndesc.Node.Offset, options, buf)
 			if err != nil {
 				return nil, err
 			}
-			temp += ", Offset: " + offsetInfo
 		}
-		lines = append(lines, temp)
+		lines = append(lines, buf.String())
 	}
 
 	//if ndesc.Node.UpdateList != nil {
@@ -303,14 +301,14 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Output: "
+	buf := bytes.NewBuffer(make([]byte, 0, 400))
+	buf.WriteString("Output: ")
 	exprs := NewExprListDescribeImpl(ndesc.Node.ProjectList)
-	describe, err := exprs.GetDescription(ctx, options)
+	err := exprs.GetDescription(ctx, options, buf)
 	if err != nil {
-		return result, err
+		return "", err
 	}
-	result += describe
-	return result, nil
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -319,101 +317,100 @@ func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *Exp
 }
 
 func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Join Cond: "
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Join Cond: ")
 	exprs := NewExprListDescribeImpl(ndesc.Node.OnList)
-	describe, err := exprs.GetDescription(ctx, options)
+	err := exprs.GetDescription(ctx, options, buf)
 	if err != nil {
-		return result, err
+		return "", err
 	}
-	result += describe
-	return result, nil
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Filter Cond: "
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Filter Cond: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.FilterList {
 			if !first {
-				result += ", "
+				buf.WriteString(", ")
 			}
 			first = false
-			descV, err := describeExpr(ctx, v, options)
+			err := describeExpr(ctx, v, options, buf)
 			if err != nil {
-				return result, err
+				return "", err
 			}
-			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI(ctx, "explain format json")
+		return "", moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI(ctx, "explain format dot")
+		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
-	return result, nil
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Group Key: "
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Group Key: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.GetGroupBy() {
 			if !first {
-				result += ", "
+				buf.WriteString(", ")
 			}
 			first = false
-			descV, err := describeExpr(ctx, v, options)
+			err := describeExpr(ctx, v, options, buf)
 			if err != nil {
-				return result, err
+				return "", err
 			}
-			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI(ctx, "explain format json")
+		return "", moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI(ctx, "explain format dot")
+		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
-	return result, nil
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Aggregate Functions: "
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Aggregate Functions: ")
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.GetAggList() {
 			if !first {
-				result += ", "
+				buf.WriteString(", ")
 			}
 			first = false
-			descV, err := describeExpr(ctx, v, options)
+			err := describeExpr(ctx, v, options, buf)
 			if err != nil {
-				return result, err
+				return "", err
 			}
-			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI(ctx, "explain format json")
+		return "", moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI(ctx, "explain format dot")
+		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
-	return result, nil
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	var result string
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		result = "Sort Key: "
+		buf.WriteString("Sort Key: ")
 		orderByDescImpl := NewOrderByDescribeImpl(ndesc.Node.OrderBy)
-		describe, err := orderByDescImpl.GetDescription(ctx, options)
+		err := orderByDescImpl.GetDescription(ctx, options, buf)
 		if err != nil {
-			return result, err
+			return "", err
 		}
-		result += describe
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI(ctx, "explain format json")
+		return "", moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI(ctx, "explain format dot")
+		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
-	return result, nil
+	return buf.String(), nil
 }
 
 var _ NodeElemDescribe = &CostDescribeImpl{}
@@ -434,26 +431,26 @@ func NewAnalyzeInfoDescribeImpl(analyze *plan.AnalyzeInfo) *AnalyzeInfoDescribeI
 	}
 }
 
-func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "timeConsumed=" + strconv.FormatInt(a.AnalyzeInfo.TimeConsumed/1000000, 10) + "ms" +
-		" waitTime=" + strconv.FormatInt(a.AnalyzeInfo.WaitTimeConsumed/1000000, 10) + "ms" +
-		" inputRows=" + strconv.FormatInt(a.AnalyzeInfo.InputRows, 10) +
-		" outputRows=" + strconv.FormatInt(a.AnalyzeInfo.OutputRows, 10) +
-		" inputSize=" + strconv.FormatInt(a.AnalyzeInfo.InputSize, 10) + "bytes" +
-		" outputSize=" + strconv.FormatInt(a.AnalyzeInfo.OutputSize, 10) + "bytes" +
-		" memorySize=" + strconv.FormatInt(a.AnalyzeInfo.MemorySize, 10) + "bytes"
-	return result, nil
+func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
+	fmt.Fprintf(buf, "timeConsumed=%dms", a.AnalyzeInfo.TimeConsumed/1000000)
+	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/1000000)
+	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
+	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
+	fmt.Fprintf(buf, " inputSize=%dbytes", a.AnalyzeInfo.InputSize)
+	fmt.Fprintf(buf, " outputSize=%dbytes", a.AnalyzeInfo.OutputSize)
+	fmt.Fprintf(buf, " memorySize=%dbytes", a.AnalyzeInfo.MemorySize)
+
+	return nil
 }
 
 type CostDescribeImpl struct {
 	Stats *plan.Stats
 }
 
-func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
-	var result string
+func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
+	//var result string
 	if c.Stats == nil {
-		result = " (cost=0)"
-		//result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
+		buf.WriteString(" (cost=0)")
 	} else {
 		var blockNumStr, hashmapSizeStr string
 		if c.Stats.BlockNum > 0 {
@@ -462,13 +459,12 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		if c.Stats.HashmapSize > 0 {
 			hashmapSizeStr = " hashmapSize=" + strconv.FormatFloat(c.Stats.HashmapSize, 'f', 2, 64)
 		}
-
-		result = " (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
+		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
 			" selectivity=" + strconv.FormatFloat(c.Stats.Selectivity, 'f', 4, 64) +
-			blockNumStr + hashmapSizeStr + ")"
+			blockNumStr + hashmapSizeStr + ")")
 	}
-	return result, nil
+	return nil
 }
 
 type ExprListDescribeImpl struct {
@@ -481,27 +477,26 @@ func NewExprListDescribeImpl(ExprList []*plan.Expr) *ExprListDescribeImpl {
 	}
 }
 
-func (e *ExprListDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
+func (e *ExprListDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
 	first := true
-	var result string
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		for _, v := range e.ExprList {
 			if !first {
-				result += ", "
+				buf.WriteString(", ")
 			}
 			first = false
-			descV, err := describeExpr(ctx, v, options)
+			err := describeExpr(ctx, v, options, buf)
 			if err != nil {
-				return result, err
+				return err
+				//return result, err
 			}
-			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, moerr.NewNYI(ctx, "explain format json")
+		return moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, moerr.NewNYI(ctx, "explain format dot")
+		return moerr.NewNYI(ctx, "explain format dot")
 	}
-	return result, nil
+	return nil
 }
 
 type OrderByDescribeImpl struct {
@@ -514,37 +509,36 @@ func NewOrderByDescribeImpl(OrderBy []*plan.OrderBySpec) *OrderByDescribeImpl {
 	}
 }
 
-func (o *OrderByDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
-	var result string
+func (o *OrderByDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
+	//var result string
+	//buf := bytes.NewBuffer(make([]byte, 0, 120))
 	if options.Format == EXPLAIN_FORMAT_TEXT || options.Format == EXPLAIN_FORMAT_JSON {
 		first := true
 		for _, v := range o.OrderBy {
 			if !first {
-				result += ", "
+				buf.WriteString(", ")
 			}
 			first = false
-			descExpr, err := describeExpr(ctx, v.Expr, options)
+			err := describeExpr(ctx, v.Expr, options, buf)
 			if err != nil {
-				return result, err
+				return err
 			}
-			result += descExpr
 
 			flagKey := int32(v.Flag)
 			orderbyFlag := plan.OrderBySpec_OrderByFlag_name[flagKey]
-			result += " " + orderbyFlag
+			buf.WriteString(" " + orderbyFlag)
 		}
-		return result, nil
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return "", moerr.NewNYI(ctx, "explain format dot")
+		return moerr.NewNYI(ctx, "explain format dot")
 	}
-	return result, nil
+	return nil
 }
 
 type WinSpecDescribeImpl struct {
 	WinSpec *plan.WindowSpec
 }
 
-func (w *WinSpecDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
+func (w *WinSpecDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
 	// TODO implement me
 	panic("implement me")
 }
@@ -553,41 +547,41 @@ type RowsetDataDescribeImpl struct {
 	RowsetData *plan.RowsetData
 }
 
-func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Value:"
+func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
+	buf.WriteString("Value:")
 	if r.RowsetData == nil {
-		return result, nil
+		return nil
 	}
 
 	first := true
 	for index := range r.RowsetData.Cols {
 		if !first {
-			result += ", "
+			buf.WriteString(", ")
 		}
 		first = false
-		result += "\"*VALUES*\".column" + strconv.Itoa(index+1)
+		buf.WriteString("\"*VALUES*\".column" + strconv.Itoa(index+1))
 	}
-	return result, nil
+	return nil
 }
 
 type UpdateCtxsDescribeImpl struct {
 	UpdateCtx *plan.UpdateCtx
 }
 
-func (u *UpdateCtxsDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Update Columns: "
+func (u *UpdateCtxsDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
+	buf.WriteString("Update Columns: ")
 	first := true
 	for i, ctx := range u.UpdateCtx.Ref {
 		if u.UpdateCtx.UpdateCol[i] != nil {
 			for colName := range u.UpdateCtx.UpdateCol[i].Map {
 				if !first {
-					result += ", "
+					buf.WriteString(", ")
 				} else {
 					first = false
 				}
-				result += ctx.SchemaName + "." + ctx.ObjName + "." + colName
+				buf.WriteString(ctx.SchemaName + "." + ctx.ObjName + "." + colName)
 			}
 		}
 	}
-	return result, nil
+	return nil
 }

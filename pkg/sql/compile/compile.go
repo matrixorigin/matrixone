@@ -70,19 +70,21 @@ const (
 )
 
 // New is used to new an object of compile
-func New(addr, db string, sql string, uid string, ctx context.Context,
-	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
+func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
+	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
 	return &Compile{
-		e:    e,
-		db:   db,
-		ctx:  ctx,
-		uid:  uid,
-		sql:  sql,
-		proc: proc,
-		stmt: stmt,
-		addr: addr,
-
-		stepRegs: make(map[int32][]*process.WaitRegister),
+		e:          e,
+		db:         db,
+		ctx:        ctx,
+		tenant:     tenant,
+		uid:        uid,
+		sql:        sql,
+		proc:       proc,
+		stmt:       stmt,
+		addr:       addr,
+		stepRegs:   make(map[int32][]*process.WaitRegister),
+		isInternal: isInternal,
+		cnLabel:    cnLabel,
 	}
 }
 
@@ -418,7 +420,7 @@ func (c *Compile) compileAttachedScope(ctx context.Context, attachedPlan *plan.P
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
-	c.cnList, err = c.e.Nodes()
+	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.cnLabel)
 	if err != nil {
 		return nil, err
 	}

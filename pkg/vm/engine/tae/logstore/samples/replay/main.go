@@ -41,11 +41,9 @@ func main() {
 	buf := bs.Bytes()
 
 	for i := 0; i < 5000; i++ {
-		tid := string(common.NewTxnIDAllocator().Alloc())
 		e1 := entry.GetBase()
 		uncommitInfo := &entry.Info{
-			Group:     10,
-			Uncommits: tid,
+			Group: 10,
 		}
 		e1.SetType(entry.IOET_WALEntry_Uncommitted)
 		e1.SetInfo(uncommitInfo)
@@ -65,7 +63,6 @@ func main() {
 
 		txnInfo := &entry.Info{
 			Group: 11,
-			TxnId: tid,
 		}
 		e2 := entry.GetBase()
 		e2.SetType(entry.IOET_WALEntry_Txn)

@@ -214,7 +214,7 @@ func (ses *Session) setRoutine(rt *Routine) {
 	ses.rt = rt
 }
 
-func (ses *Session) getRoutin() *Routine {
+func (ses *Session) getRoutine() *Routine {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.rt
@@ -1378,7 +1378,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		tenant.SetDefaultRole(defaultRole)
 	}
 	// record the id :routine pair in RoutineManager
-	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutin(), accountVersion)
+	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
 	logInfo(ses, sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)
@@ -1688,4 +1688,26 @@ func (ses *Session) getLastCommitTS() timestamp.Timestamp {
 		}
 	}
 	return minTS
+}
+
+// getCNLabels parse the session variable and returns map[string]string.
+func (ses *Session) getCNLabels() map[string]string {
+	label, ok := ses.sysVars["cn_label"]
+	if !ok {
+		return nil
+	}
+	labelStr, ok := label.(string)
+	if !ok {
+		return nil
+	}
+	labels := strings.Split(labelStr, ",")
+	res := make(map[string]string, len(labels))
+	for _, kvStr := range labels {
+		kvs := strings.Split(kvStr, "=")
+		if len(kvs) != 2 {
+			continue
+		}
+		res[kvs[0]] = kvs[1]
+	}
+	return res
 }
