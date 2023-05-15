@@ -178,8 +178,8 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	}
 	bat.SetAttributes(cols)
 	r.sels = r.sels[:0]
-	deletes := make([]int, len(r.blks[0].deletes))
-	copy(deletes, r.blks[0].deletes)
+	deletes := make([]int, len(r.blks[0].cnRawBatchdeletes))
+	copy(deletes, r.blks[0].cnRawBatchdeletes)
 	sort.Ints(deletes)
 	for i := 0; i < bat.Length(); i++ {
 		if len(deletes) > 0 && i == deletes[0] {

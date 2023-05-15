@@ -416,7 +416,7 @@ func (tbl *txnTable) rangesOnePart(
 			// check if the block has deletes
 			// if any, store the block and its deletes in modifies
 			if rows, ok := deletes[blk.BlockID]; ok {
-				*modifies = append(*modifies, ModifyBlockMeta{blk, rows})
+				*modifies = append(*modifies, ModifyBlockMeta{blk, rows, nil})
 			} else {
 				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 			}

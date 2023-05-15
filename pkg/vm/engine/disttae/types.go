@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -425,8 +426,60 @@ func (z *Zonemap) Unmarshal(data []byte) error {
 }
 
 type ModifyBlockMeta struct {
-	meta    catalog.BlockInfo
-	deletes []int
+	meta catalog.BlockInfo
+	// cn's deletes which is held in memory
+	cnRawBatchdeletes []int
+	// cn's deletes which is held in disk
+	cnDeleteLocations []objectio.Location
+}
+
+func (modifyBlockMeta *ModifyBlockMeta) Encode() []byte {
+	bytes := make([]byte, 0, (4+int(catalog.BlockInfoSize))+(4+8*len(modifyBlockMeta.cnRawBatchdeletes)+(4+len(modifyBlockMeta.cnDeleteLocations)*objectio.LocationLen)))
+	// append (meta  catalog.BlockInfo) => size + bytes
+	metaBytes := catalog.EncodeBlockInfo(modifyBlockMeta.meta)
+	size := int32(len(metaBytes))
+	bytes = append(bytes, types.EncodeInt32(&size)...)
+	bytes = append(bytes, metaBytes...)
+	// append (cnRawBatchdeletes []int64) => size + bytes
+	size = int32(len(modifyBlockMeta.cnRawBatchdeletes))
+	bytes = append(bytes, types.EncodeInt32(&size)...)
+	for i := range modifyBlockMeta.cnRawBatchdeletes {
+		offset := int64(modifyBlockMeta.cnRawBatchdeletes[i])
+		bytes = append(bytes, types.EncodeInt64(&offset)...)
+	}
+	// append (cnDeleteLocations []objectio.Location) => size + bytes
+	size = int32(len(modifyBlockMeta.cnDeleteLocations))
+	bytes = append(bytes, types.EncodeInt32(&size)...)
+	for i := range modifyBlockMeta.cnDeleteLocations {
+		bytes = append(bytes, modifyBlockMeta.cnDeleteLocations[i]...)
+	}
+	return bytes
+}
+
+func (modifyBlockMeta *ModifyBlockMeta) Decode(data []byte) error {
+	var size int
+	// load meta
+	pos := 0
+	size = int(types.DecodeInt32(data[pos : pos+4]))
+	pos += 4
+	modifyBlockMeta.meta = *catalog.DecodeBlockInfo(data[pos : pos+size])
+	// load deletes
+	pos += size
+	size = int(types.DecodeInt32(data[pos : pos+4]))
+	modifyBlockMeta.cnRawBatchdeletes = make([]int, 0, size)
+	pos += 4
+	for i := 0; i < size; i++ {
+		modifyBlockMeta.cnRawBatchdeletes = append(modifyBlockMeta.cnRawBatchdeletes, int(types.DecodeInt64(data[pos:pos+8])))
+		pos += 8
+	}
+	// load deleteLoc
+	size = int(types.DecodeInt32(data[pos : pos+4]))
+	modifyBlockMeta.cnDeleteLocations = make([]objectio.Location, 0, size)
+	for i := 0; i < size; i++ {
+		modifyBlockMeta.cnDeleteLocations = append(modifyBlockMeta.cnDeleteLocations, data[pos:pos+objectio.LocationLen])
+		pos += objectio.LocationLen
+	}
+	return nil
 }
 
 type Columns []column

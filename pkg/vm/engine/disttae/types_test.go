@@ -17,6 +17,9 @@ package disttae
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,4 +36,29 @@ func TestZonemapMarshalAndUnmarshal(t *testing.T) {
 	err = ret.Unmarshal(data)
 	require.NoError(t, err)
 	require.Equal(t, z, ret)
+}
+
+func getLocation() objectio.Location {
+	uuid, _ := types.BuildUuid()
+	name := objectio.BuildObjectName(&uuid, 1)
+	extent := objectio.NewExtent(1, 1, 1, 1)
+	return objectio.BuildLocation(name, extent, 1, 1)
+}
+
+func TestModifyBlockMarShalAnUnmarshal(t *testing.T) {
+	var loca1 objectio.Location = getLocation()
+	var loca2 objectio.Location = getLocation()
+	var modifyBlockMeta *ModifyBlockMeta = &ModifyBlockMeta{
+		meta:              catalog.BlockInfo{},
+		cnRawBatchdeletes: []int{1, 2},
+		cnDeleteLocations: []objectio.Location{loca1, loca2},
+	}
+	data := modifyBlockMeta.Encode()
+	var modifyBlockMeta2 ModifyBlockMeta
+	p := &modifyBlockMeta2
+	err := p.Decode(data)
+	require.Nil(t, err)
+	require.Equal(t, modifyBlockMeta.meta, catalog.BlockInfo{})
+	require.Equal(t, modifyBlockMeta.cnRawBatchdeletes, modifyBlockMeta2.cnRawBatchdeletes)
+	require.Equal(t, modifyBlockMeta2.cnDeleteLocations, modifyBlockMeta2.cnDeleteLocations)
 }
