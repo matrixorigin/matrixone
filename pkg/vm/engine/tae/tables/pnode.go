@@ -128,6 +128,19 @@ func (node *persistedNode) GetColumnDataWindow(
 	return
 }
 
+func (node *persistedNode) Foreach(
+	readSchema *catalog.Schema,
+	colIdx int, op func(v any, isNull bool, row int) error, sel *roaring.Bitmap) (err error) {
+	var data containers.Vector
+	if data, err = node.block.LoadPersistedColumnData(
+		readSchema,
+		colIdx,
+	); err != nil {
+		return
+	}
+	return data.Foreach(op, sel)
+}
+
 func (node *persistedNode) GetDataWindow(
 	readSchema *catalog.Schema, from, to uint32) (bat *containers.Batch, err error) {
 	panic("to be implemented")
