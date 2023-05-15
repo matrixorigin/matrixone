@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	idxpkg "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
@@ -34,7 +34,7 @@ type immutableIndex struct {
 func NewImmutableIndex() *immutableIndex {
 	return new(immutableIndex)
 }
-func (index *immutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
+func (index *immutableIndex) BatchUpsert(keysCtx *idxpkg.KeysCtx, offset int) (err error) {
 	panic("not support")
 }
 func (index *immutableIndex) GetActiveRow(key any) ([]uint32, error) { panic("not support") }
@@ -65,15 +65,23 @@ func (index *immutableIndex) Dedup(key any, _ func(row uint32) error) (err error
 func (index *immutableIndex) BatchDedup(
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
+	zm []byte,
 ) (keyselects *roaring.Bitmap, err error) {
-	if keys.Length() == 1 {
-		err = index.Dedup(keys.ShallowGet(0), skipfn)
-		return
-	}
-	exist := index.zmReader.FastContainsAny(keys)
-	// 1. all keys are not in [min, max]. definitely not
-	if !exist {
-		return
+	var exist bool
+	inputZM := idxpkg.ZM(zm)
+	if inputZM.Valid() {
+		if exist = index.zmReader.Intersect(inputZM); !exist {
+			return
+		}
+	} else {
+		if keys.Length() == 1 {
+			err = index.Dedup(keys.ShallowGet(0), skipfn)
+			return
+		}
+		// 1. all keys are not in [min, max]. definitely not
+		if exist = index.zmReader.FastContainsAny(keys); !exist {
+			return
+		}
 	}
 	if index.bfReader != nil {
 		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys)

@@ -72,14 +72,14 @@ mid(str1, d1, 3)
 
 
 
-
+null
 
 SELECT mid(str1, d1, d2) FROM mid_01;
 mid(str1, d1, d2)
 
 
 
-
+null
 null
 SELECT * FROM mid_01 WHERE mid(str1,1,1) = 'h';
 id    str1    d1    d2
@@ -97,13 +97,13 @@ length(mid(str1, abs(d1), d2))
 0
 SELECT empty(mid(str1, d1, d2)) FROM mid_01 WHERE ABS(d2) = 3;
 empty(mid(str1, d1, d2))
-true
+null
 SELECT mid(str1, d1, d2) FROM mid_01;
 mid(str1, d1, d2)
 
 
 
-
+null
 null
 SELECT mid(str1, d1, 2) FROM mid_01 WHERE ABS(d1) % 2 = 0;
 mid(str1, d1, 2)
@@ -168,9 +168,9 @@ mid(s, d1, d2)
 shishei3829
 
 ^&
-
-
-
+null
+null
+null
 
 SELECT mid(s, d1, -3) FROM mid_02 WHERE d2 = 2;
 mid(s, d1, -3)

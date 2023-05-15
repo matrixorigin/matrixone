@@ -19,7 +19,6 @@ import (
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -643,7 +642,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 }
 
 func (store *txnStore) PreApplyCommit() (err error) {
-	now := time.Now()
+	// now := time.Now()
 	for _, db := range store.dbs {
 		if err = db.PreApplyCommit(); err != nil {
 			return
@@ -669,7 +668,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 			return
 		}
 	}
-	logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	// logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
 	return
 }
 
