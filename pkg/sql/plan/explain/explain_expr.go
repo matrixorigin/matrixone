@@ -62,9 +62,9 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		case *plan.Const_U64Val:
 			fmt.Fprintf(buf, "%d", val.U64Val)
 		case *plan.Const_Fval:
-			fmt.Fprintf(buf, "%.32f", val.Fval)
+			fmt.Fprintf(buf, "%v", strconv.FormatFloat(float64(val.Fval), 'f', -1, 32))
 		case *plan.Const_Dval:
-			fmt.Fprintf(buf, "%.64f", val.Dval)
+			fmt.Fprintf(buf, "%v", strconv.FormatFloat(val.Dval, 'f', -1, 64))
 		case *plan.Const_Sval:
 			buf.WriteString("'" + val.Sval + "'")
 		case *plan.Const_Bval:
