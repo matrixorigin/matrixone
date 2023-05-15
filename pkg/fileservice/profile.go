@@ -157,7 +157,8 @@ func (p *profiler) addSample(skip int) {
 
 	var pcs []uintptr
 	put := pcsPool.Get(&pcs)
-	defer put()
+	defer put.Put()
+
 	pcs = pcs[:runtime.Callers(2+skip, pcs)]
 	frames := runtime.CallersFrames(pcs)
 	for {

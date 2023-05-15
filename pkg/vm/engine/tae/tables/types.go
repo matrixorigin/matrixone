@@ -46,6 +46,7 @@ type NodeT interface {
 	BatchDedup(
 		keys containers.Vector,
 		skipFn func(row uint32) error,
+		zm []byte,
 	) (sels *roaring.Bitmap, err error)
 	ContainsKey(key any) (ok bool, err error)
 

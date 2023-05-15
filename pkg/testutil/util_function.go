@@ -143,7 +143,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 		expectedNsp = nulls.NewWithSize(len(fc.expected.nullList))
 		for i, b := range fc.expected.nullList {
 			if b {
-				expectedNsp.Np.Add(uint64(i))
+				expectedNsp.Add(uint64(i))
 			}
 		}
 	}
