@@ -1076,17 +1076,12 @@ var supportedOperators = []FuncNew{
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
 				if has {
-					for i, o := range overloads {
-						if o.args[0] == t1.Oid {
-							return newCheckResultWithCast(i, []types.Type{t1, t2})
-						}
+					if divOperatorSupports(t1, t2) {
+						return newCheckResultWithCast(0, []types.Type{t1, t2})
 					}
-					return fixedTypeMatch(overloads, inputs)
 				} else {
-					for i, o := range overloads {
-						if o.args[0] == inputs[0].Oid {
-							return newCheckResultWithCast(i, inputs)
-						}
+					if divOperatorSupports(inputs[0], inputs[1]) {
+						return newCheckResultWithSuccess(0)
 					}
 				}
 			}
@@ -1096,61 +1091,19 @@ var supportedOperators = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_float32, types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_float32.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return divFn(parameters, result, proc, length)
+					if parameters[0].Oid.IsDecimal() {
+						scale := int32(12)
+						scale1 := parameters[0].Scale
+						if scale1 > scale {
+							scale = scale1
+						}
+						if scale1+6 < scale {
+							scale = scale1 + 6
+						}
+						return types.New(types.T_decimal128, 38, scale)
 					}
-				},
-			},
-			{
-				overloadId: 1,
-				args:       []types.T{types.T_float64, types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_float64.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return divFn(parameters, result, proc, length)
-					}
-				},
-			},
-			{
-				overloadId: 2,
-				args:       []types.T{types.T_decimal64, types.T_decimal64},
-				retType: func(parameters []types.Type) types.Type {
-					scale := int32(12)
-					scale1 := parameters[0].Scale
-					if scale1 > scale {
-						scale = scale1
-					}
-					if scale1+6 < scale {
-						scale = scale1 + 6
-					}
-					return types.New(types.T_decimal128, 38, scale)
-				},
-				newOp: func() executeLogicOfOverload {
-					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return divFn(parameters, result, proc, length)
-					}
-				},
-			},
-			{
-				overloadId: 3,
-				args:       []types.T{types.T_decimal128, types.T_decimal128},
-				retType: func(parameters []types.Type) types.Type {
-					scale := int32(12)
-					scale1 := parameters[0].Scale
-					if scale1 > scale {
-						scale = scale1
-					}
-					if scale1+6 < scale {
-						scale = scale1 + 6
-					}
-					return types.New(types.T_decimal128, 38, scale)
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {

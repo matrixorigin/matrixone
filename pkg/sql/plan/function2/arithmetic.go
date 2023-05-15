@@ -67,6 +67,19 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
+func divOperatorSupports(typ1, typ2 types.Type) bool {
+	if typ1.Oid != typ2.Oid {
+		return false
+	}
+	switch typ1.Oid {
+	case types.T_float32, types.T_float64:
+	case types.T_decimal64, types.T_decimal128:
+	default:
+		return false
+	}
+	return true
+}
+
 func integerDivOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
 		return false
