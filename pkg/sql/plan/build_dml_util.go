@@ -907,11 +907,10 @@ func makeInsertPlan(
 					return err
 				}
 				lastNodeId = builder.appendNode(&Node{
-					NodeType:    plan.Node_FILTER,
-					Children:    []int32{lastNodeId},
-					FilterList:  []*Expr{assertExpr},
-					ProjectList: getProjectionByLastNode(builder, lastNodeId),
-					IsEnd:       true,
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{lastNodeId},
+					FilterList: []*Expr{assertExpr},
+					IsEnd:      true,
 				}, bindCtx)
 				builder.appendStep(lastNodeId)
 			} else {
@@ -950,11 +949,10 @@ func makeInsertPlan(
 					return err
 				}
 				filterNode := &Node{
-					NodeType:    plan.Node_FILTER,
-					Children:    []int32{lastNodeId},
-					FilterList:  []*Expr{assertExpr},
-					ProjectList: getProjectionByLastNode(builder, lastNodeId),
-					IsEnd:       true,
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{lastNodeId},
+					FilterList: []*Expr{assertExpr},
+					IsEnd:      true,
 				}
 				lastNodeId = builder.appendNode(filterNode, bindCtx)
 				builder.appendStep(lastNodeId)
@@ -1136,8 +1134,7 @@ func appendAssertEqNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId 
 		NodeType:   plan.Node_FILTER,
 		Children:   []int32{lastNodeId},
 		FilterList: []*Expr{filterExpr},
-		// ProjectList: getProjectionByLastNode(builder, lastNodeId),
-		IsEnd: true,
+		IsEnd:      true,
 	}
 	lastNodeId = builder.appendNode(filterNode, bindCtx)
 	return lastNodeId, nil
@@ -1242,10 +1239,10 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 		}
 	}
 	baseNodeId = builder.appendNode(&Node{
-		NodeType:    plan.Node_FILTER,
-		Children:    []int32{baseNodeId},
-		FilterList:  filterConds,
-		ProjectList: projectProjection,
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{baseNodeId},
+		FilterList: filterConds,
+		// ProjectList: projectProjection,
 	}, bindCtx)
 
 	lastNodeId := baseNodeId
@@ -1748,12 +1745,12 @@ func makePreUpdateDeletePlan(
 		if err != nil {
 			return -1, err
 		}
-		filterProjection := getProjectionByLastNode(builder, lastNodeId)
+		// filterProjection := getProjectionByLastNode(builder, lastNodeId)
 		filterNode := &Node{
-			NodeType:    plan.Node_FILTER,
-			Children:    []int32{lastNodeId},
-			FilterList:  []*Expr{nullCheckExpr},
-			ProjectList: filterProjection,
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{lastNodeId},
+			FilterList: []*Expr{nullCheckExpr},
+			// ProjectList: filterProjection,
 		}
 		lastNodeId = builder.appendNode(filterNode, bindCtx)
 	}

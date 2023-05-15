@@ -251,6 +251,7 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) error {
 	var wg sync.WaitGroup
 	errC := make(chan error, len(c.scope))
+	// fmt.Printf("%+v", DebugShowScopes(c.scope))
 	// reset early for multi steps
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -1260,6 +1261,9 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
+	if len(n.ProjectList) == 0 {
+		return ss
+	}
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
