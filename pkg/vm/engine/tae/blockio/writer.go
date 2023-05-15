@@ -89,7 +89,6 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		}
 		if w.isSetPK && w.pk == uint16(i) {
 			isPK = true
-			w.objMetaBuilder.SetPKNdv(w.pk, uint32(vec.Length()))
 		}
 		columnData := containers.ToDNVector(vec)
 		// update null count and distinct value
@@ -133,6 +132,9 @@ func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.Block
 func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
 	if w.objMetaBuilder != nil {
 		cnt, meta := w.objMetaBuilder.Build()
+		if w.isSetPK {
+			w.objMetaBuilder.SetPKNdv(w.pk, cnt)
+		}
 		w.writer.WriteObjectMeta(ctx, cnt, meta)
 		columnsData := w.objMetaBuilder.GetPKData()
 		bf, err := index.NewBinaryFuseFilterByVectors(columnsData)
