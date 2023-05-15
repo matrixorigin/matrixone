@@ -6709,3 +6709,68 @@ func TestCommitS3Blocks(t *testing.T) {
 		assert.NoError(t, txn.Commit())
 	}
 }
+
+func TestDiffCheckPoints(t *testing.T) {
+	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
+	opts.CheckpointCfg.GlobalVersionInterval = time.Nanosecond
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(60, -1)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 10
+	schema.Partitioned = 1
+	tae.bindSchema(schema)
+
+	data := catalog.MockBatch(schema, 200)
+	tae.createRelAndAppend(data, true)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
+	})
+	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
+
+	ctx := context.Background()
+	ckps1 := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	data1, err := ckps1[len(ckps1)-1].Read(ctx, tae.Fs)
+	assert.Nil(t, err)
+	assert.NotNil(t, data1)
+
+	txn, rel := tae.getRelation()
+	it := rel.MakeBlockIt()
+	blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+	assert.NotNil(t, blk)
+	delMetalocName := blk.GetMetaLoc().Name()
+
+	blkid := blk.ID
+	segid := blkid.Segment()
+	seg, err := rel.GetSegment(segid)
+	assert.NotNil(t, seg)
+	err = seg.SoftDeleteBlock(blkid)
+	assert.Nil(t, err)
+	err = txn.Commit()
+	assert.Nil(t, err)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
+	})
+
+	ckps2 := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	data2, err := ckps2[len(ckps2)-1].Read(ctx, tae.Fs)
+	assert.Nil(t, err)
+	assert.NotNil(t, data2)
+	diffs := logtail.DiffCheckPoints(data1, data2)
+	assert.NotNil(t, diffs)
+	assert.Equal(t, 1, len(diffs))
+	assert.Equal(t, delMetalocName, diffs[0])
+}
