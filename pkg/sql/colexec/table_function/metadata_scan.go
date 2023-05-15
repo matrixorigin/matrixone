@@ -60,38 +60,39 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	fmt.Printf("[metadatascan] first: %s, second: %s\n", tb, col)
 	fmt.Printf("arg.Attrs = %s\n", arg.Attrs)
 
-	dd, ttt, cc, err := handleDbAndTable(vector.MustStrCol(tb), vector.MustStrCol(col))
+	dbname, tablename, colname, err := handleDbAndTable(vector.MustStrCol(tb), vector.MustStrCol(col))
 	if err != nil {
 		return false, err
 	}
-	fmt.Printf("[metadatascan] db: %s, table: %s, column: %s\n", dd, ttt, cc)
+	fmt.Printf("[metadatascan] db: %s, table: %s, column: %s\n", dbname, tablename, colname)
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	db, err := e.Database(proc.Ctx, dd, proc.TxnOperator)
+	db, err := e.Database(proc.Ctx, dbname, proc.TxnOperator)
 	if err != nil {
 		return false, err
 	}
-	fmt.Printf("[metadatascan] get db %s success\n", dd)
+	fmt.Printf("[metadatascan] get db %s success\n", dbname)
 
-	rel, err := db.Relation(proc.Ctx, ttt)
+	rel, err := db.Relation(proc.Ctx, tablename)
 	if err != nil {
 		return false, err
 	}
-	fmt.Printf("[metadatascan] get db table %s success\n", ttt)
-	rs, err := rel.Ranges(proc.Ctx, nil)
-	if err != nil {
+	fmt.Printf("[metadatascan] get db table %s success\n", tablename)
+	if _, err := rel.Ranges(proc.Ctx, nil); err != nil {
 		return false, err
 	}
 
-	blockinfos := make([]*catalog.BlockInfo, 0, 1)
-	fmt.Printf("[metadatascan] ranges = %s\n", rs)
-	for i := range rs {
-		if i == 0 {
-			continue
-		}
-		blockinfos = append(blockinfos, catalog.DecodeBlockInfo(rs[i]))
+	infobytes, err := rel.GetColumMetadataScanInfo(proc.Ctx, colname)
+	if err != nil {
+		return false, nil
+	}
+	fmt.Printf("[metadatascan] get infobytes success\n")
+
+	metaInfos := make([]*catalog.MetadataScanInfo, 0, len(infobytes))
+	for i := range infobytes {
+		metaInfos = append(metaInfos, catalog.DecodeMetadataScanInfo(infobytes[i]))
 	}
 
-	retb, err := genRetBatch(*proc, arg, blockinfos, cc, rel)
+	retb, err := genRetBatch(*proc, arg, metaInfos, colname, rel)
 	if err != nil {
 		return false, err
 	}
@@ -115,94 +116,15 @@ func handleDbAndTable(first []string, second []string) (string, string, string, 
 	return strs[0], strs[1], second[0], nil
 }
 
-func genRetBatch(proc process.Process, arg *Argument, blockInfos []*catalog.BlockInfo, colName string, rel engine.Relation) (*batch.Batch, error) {
+func genRetBatch(proc process.Process, arg *Argument, metaInfos []*catalog.MetadataScanInfo, colName string, rel engine.Relation) (*batch.Batch, error) {
 	retBat, err := genMetadataInfoBat(proc, arg)
 	if err != nil {
 		return nil, err
 	}
-	mp := proc.GetMPool()
 
-	cols, err := rel.TableColumns(proc.Ctx)
-	if err != nil {
-		retBat.Clean(mp)
-		return nil, err
+	for i := range metaInfos {
+		fillMetadataInfoBat(retBat, proc, arg, metaInfos[i])
 	}
-
-	if colName != "*" {
-		found := false
-		for i := range cols {
-			if cols[i].Name == colName {
-				found = true
-				break
-			}
-		}
-		if !found {
-			retBat.Clean(mp)
-			return nil, moerr.NewInvalidInput(proc.Ctx, "wrong columns input %v", colName)
-		}
-	}
-
-	for i := range blockInfos {
-		if colName != "*" {
-			for j, a := range arg.Attrs {
-				switch a {
-				case catalog.MoTableMetaColName:
-					vector.AppendBytes(retBat.Vecs[j], []byte(colName), false, mp)
-				case catalog.MoTableMetaBlockID:
-					vector.AppendAny(retBat.Vecs[j], blockInfos[i].BlockID, false, mp)
-				case catalog.MoTableMetaEntryState:
-					vector.AppendFixed(retBat.Vecs[j], blockInfos[i].EntryState, false, mp)
-				case catalog.MoTableMetaSorted:
-					vector.AppendFixed(retBat.Vecs[j], blockInfos[i].Sorted, false, mp)
-				case catalog.MoTableMetaLoc:
-					vector.AppendAny(retBat.Vecs[j], blockInfos[i].MetaLoc[:], false, mp)
-				case catalog.MoTableMetaDelLoc:
-					vector.AppendAny(retBat.Vecs[j], blockInfos[i].DeltaLoc[:], false, mp)
-				case catalog.MoTableMetaCommitTS:
-					vector.AppendAny(retBat.Vecs[j], blockInfos[i].CommitTs, false, mp)
-				case catalog.MoTableMetaSegID:
-					vector.AppendAny(retBat.Vecs[j], blockInfos[i].SegmentID, false, mp)
-				default:
-					retBat.Clean(mp)
-					return nil, moerr.NewInvalidInput(proc.Ctx, "wrong columns %v", a)
-				}
-			}
-		} else {
-			cols, err := rel.TableColumns(proc.Ctx)
-			if err != nil {
-				return nil, err
-			}
-			for k := range cols {
-				if cols[k].Name == "__mo_rowid" {
-					continue
-				}
-				for j, a := range arg.Attrs {
-					switch a {
-					case catalog.MoTableMetaColName:
-						vector.AppendBytes(retBat.Vecs[j], []byte(cols[k].Name), false, mp)
-					case catalog.MoTableMetaBlockID:
-						vector.AppendAny(retBat.Vecs[j], blockInfos[i].BlockID, false, mp)
-					case catalog.MoTableMetaEntryState:
-						vector.AppendFixed(retBat.Vecs[j], blockInfos[i].EntryState, false, mp)
-					case catalog.MoTableMetaSorted:
-						vector.AppendFixed(retBat.Vecs[j], blockInfos[i].Sorted, false, mp)
-					case catalog.MoTableMetaLoc:
-						vector.AppendAny(retBat.Vecs[j], blockInfos[i].MetaLoc[:], false, mp)
-					case catalog.MoTableMetaDelLoc:
-						vector.AppendAny(retBat.Vecs[j], blockInfos[i].DeltaLoc[:], false, mp)
-					case catalog.MoTableMetaCommitTS:
-						vector.AppendAny(retBat.Vecs[j], blockInfos[i].CommitTs, false, mp)
-					case catalog.MoTableMetaSegID:
-						vector.AppendAny(retBat.Vecs[j], blockInfos[i].SegmentID, false, mp)
-					default:
-						retBat.Clean(mp)
-						return nil, moerr.NewInvalidInput(proc.Ctx, "wrong columns %v", a)
-					}
-				}
-			}
-		}
-	}
-	retBat.SetZs(len(blockInfos), mp)
 
 	return retBat, nil
 }
@@ -213,32 +135,46 @@ func genMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, erro
 		switch a {
 		case catalog.MetadataScanInfoNames[catalog.COL_NAME]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.COL_NAME])
+
 		case catalog.MetadataScanInfoNames[catalog.BLOCK_ID]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.BLOCK_ID])
+
 		case catalog.MetadataScanInfoNames[catalog.ENTRY_STATE]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.ENTRY_STATE])
+
 		case catalog.MetadataScanInfoNames[catalog.SORTED]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.SORTED])
+
 		case catalog.MetadataScanInfoNames[catalog.META_LOC]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.META_LOC])
+
 		case catalog.MetadataScanInfoNames[catalog.DELTA_LOC]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.DELTA_LOC])
+
 		case catalog.MetadataScanInfoNames[catalog.COMMIT_TS]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.COMMIT_TS])
-		case catalog.MetadataScanInfoNames[catalog.META_SEG]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.META_SEG])
+
+		case catalog.MetadataScanInfoNames[catalog.SEG_ID]:
+			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.SEG_ID])
+
 		case catalog.MetadataScanInfoNames[catalog.ROW_CNT]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.ROW_CNT])
+
 		case catalog.MetadataScanInfoNames[catalog.NULL_CNT]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.NULL_CNT])
+
 		case catalog.MetadataScanInfoNames[catalog.COMPRESS_SIZE]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.COMPRESS_SIZE])
+
 		case catalog.MetadataScanInfoNames[catalog.ORIGIN_SIZE]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.ORIGIN_SIZE])
+
 		case catalog.MetadataScanInfoNames[catalog.MIN]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.MIN])
+
 		case catalog.MetadataScanInfoNames[catalog.MAX]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.MAX])
+
 		default:
 			retBat.Clean(proc.GetMPool())
 			return nil, moerr.NewInvalidInput(proc.Ctx, "bad input select columns name %v", a)
@@ -246,4 +182,59 @@ func genMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, erro
 	}
 
 	return retBat, nil
+}
+
+func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument, info *catalog.MetadataScanInfo) error {
+	mp := proc.GetMPool()
+	for i, a := range arg.Attrs {
+		switch a {
+		case catalog.MetadataScanInfoNames[catalog.COL_NAME]:
+			vector.AppendBytes(opBat.Vecs[i], []byte(info.ColName), false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.BLOCK_ID]:
+			vector.AppendAny(opBat.Vecs[i], info.BlockId, false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.ENTRY_STATE]:
+			vector.AppendFixed(opBat.Vecs[i], info.EntryState, false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.SORTED]:
+			vector.AppendFixed(opBat.Vecs[i], info.Sorted, false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.META_LOC]:
+			vector.AppendBytes(opBat.Vecs[i], info.MetaLoc[:], false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.DELTA_LOC]:
+			vector.AppendBytes(opBat.Vecs[i], info.DelLoc[:], false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.COMMIT_TS]:
+			vector.AppendAny(opBat.Vecs[i], info.CommitTs, false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.SEG_ID]:
+			vector.AppendAny(opBat.Vecs[i], info.SegId, false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.ROW_CNT]:
+			vector.AppendFixed(opBat.Vecs[i], info.RowCnt, false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.NULL_CNT]:
+			vector.AppendFixed(opBat.Vecs[i], info.NullCnt, false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.COMPRESS_SIZE]:
+			vector.AppendFixed(opBat.Vecs[i], info.CompressSize, false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.ORIGIN_SIZE]:
+			vector.AppendFixed(opBat.Vecs[i], info.OriginSize, false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.MIN]:
+			vector.AppendBytes(opBat.Vecs[i], []byte("min"), false, mp)
+
+		case catalog.MetadataScanInfoNames[catalog.MAX]:
+			vector.AppendBytes(opBat.Vecs[i], []byte("max"), false, mp)
+
+		default:
+			opBat.Clean(proc.GetMPool())
+			return moerr.NewInvalidInput(proc.Ctx, "bad input select columns name %v", a)
+		}
+	}
+	opBat.Zs = append(opBat.Zs, 1)
+	return nil
 }

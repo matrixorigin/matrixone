@@ -610,6 +610,23 @@ const (
 	COLUMN_MAP_IDX   = 13
 )
 
+type MetadataScanInfo struct {
+	ColName      string
+	BlockId      objectio.Blockid
+	EntryState   bool
+	Sorted       bool
+	MetaLoc      ObjectLocation
+	DelLoc       ObjectLocation
+	CommitTs     types.TS
+	SegId        types.Uuid
+	RowCnt       int64
+	NullCnt      int64
+	CompressSize int64
+	OriginSize   int64
+	Min          []byte
+	Max          []byte
+}
+
 var (
 	MetadataScanInfoTypes = []types.Type{
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // column_name
@@ -647,6 +664,8 @@ var (
 )
 
 const (
+	MetadataScanInfoSize = unsafe.Sizeof(MetadataScanInfo{})
+
 	COL_NAME      = 0
 	BLOCK_ID      = 1
 	ENTRY_STATE   = 2
@@ -654,7 +673,7 @@ const (
 	META_LOC      = 4
 	DELTA_LOC     = 5
 	COMMIT_TS     = 6
-	META_SEG      = 7
+	SEG_ID        = 7
 	ROW_CNT       = 8
 	NULL_CNT      = 9
 	COMPRESS_SIZE = 10
@@ -662,3 +681,21 @@ const (
 	MIN           = 12
 	MAX           = 13
 )
+
+func (m *MetadataScanInfo) FillBlockInfo(info *BlockInfo) {
+	m.BlockId = info.BlockID
+	m.EntryState = info.EntryState
+	m.Sorted = info.Sorted
+	m.MetaLoc = info.MetaLoc
+	m.DelLoc = info.DeltaLoc
+	m.CommitTs = info.CommitTs
+	m.SegId = info.SegmentID
+}
+
+func EncodeMetadataScanInfo(info MetadataScanInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), MetadataScanInfoSize)
+}
+
+func DecodeMetadataScanInfo(buf []byte) *MetadataScanInfo {
+	return (*MetadataScanInfo)(unsafe.Pointer(&buf[0]))
+}

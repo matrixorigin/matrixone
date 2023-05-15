@@ -232,6 +232,111 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 	return compressedSize, originSize, nil
 }
 
+func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([][]byte, error) {
+	if len(tbl.blockInfos) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("table meta is nil")
+	}
+
+	if name == "__mo_rowid" {
+		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v")
+	}
+
+	infoList := make([]*catalog.MetadataScanInfo, 0, len(tbl.blockInfos))
+	if name == "*" {
+		cols := tbl.getTableDef().GetCols()
+		for i := range cols { // remote the system columns
+			if cols[i].Name == "__mo_rowid" {
+				cols = append(cols[:i], cols[i+1:]...)
+				break
+			}
+		}
+
+		for i := range tbl.blockInfos {
+			for j := range tbl.blockInfos[i] {
+				blk := tbl.blockInfos[i][j]
+				for k := range cols {
+					get, err := tbl.genMetadataScanInfo(ctx, &blk, cols[k])
+					if err != nil {
+						return nil, err
+					}
+					infoList = append(infoList, get)
+				}
+			}
+		}
+	} else {
+		col, err := tbl.getColByName(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+
+		for i := range tbl.blockInfos {
+			for j := range tbl.blockInfos[i] {
+				blk := tbl.blockInfos[i][j]
+				get, err := tbl.genMetadataScanInfo(ctx, &blk, col)
+				if err != nil {
+					return nil, err
+				}
+				infoList = append(infoList, get)
+			}
+		}
+	}
+
+	ret := make([][]byte, 0, len(infoList))
+	for i := range infoList {
+		ret = append(ret, catalog.EncodeMetadataScanInfo(*infoList[i]))
+	}
+	return ret, nil
+}
+
+func (tbl *txnTable) genMetadataScanInfo(ctx context.Context, blk *catalog.BlockInfo, col *plan.ColDef) (*catalog.MetadataScanInfo, error) {
+	ret := &catalog.MetadataScanInfo{
+		ColName: col.Name,
+	}
+
+	ret.FillBlockInfo(blk)
+	location := blk.MetaLocation()
+	if err := tbl.fillMetadataScanWithCol(ctx, col, &location, ret); err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
+
+func (tbl *txnTable) getColByName(ctx context.Context, name string) (*plan.ColDef, error) {
+	cols := tbl.getTableDef().GetCols()
+	for i := range cols {
+		if cols[i].Name == name {
+			return cols[i], nil
+		}
+	}
+	return nil, moerr.NewInvalidInputNoCtx("bad input column name %v", name)
+}
+
+func (tbl *txnTable) fillMetadataScanWithCol(ctx context.Context, col *plan.ColDef, location *objectio.Location, info *catalog.MetadataScanInfo) error {
+	meta, err := objectio.FastLoadObjectMeta(ctx, location, tbl.db.txn.proc.FileService)
+	if err != nil {
+		return err
+	}
+	colmeta := meta.MustGetColumn(uint16(col.Seqnum))
+
+	// row cnt
+	info.RowCnt = int64(location.Rows())
+
+	// null cnt
+	info.NullCnt = int64(colmeta.NullCnt())
+
+	// compress size and origin size
+	e := colmeta.Location()
+	info.CompressSize = int64(e.Length())
+	info.OriginSize = int64(e.OriginSize())
+
+	// min & max
+	zm := colmeta.ZoneMap()
+	info.Min = zm.GetMinBuf()
+	info.Max = zm.GetMaxBuf()
+
+	return nil
+}
+
 func (tbl *txnTable) LoadDeletesForBlock(blockID *types.Blockid, deleteBlockId map[types.Blockid][]int, deletesRowId map[types.Rowid]uint8) error {
 	for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blockID] {
 		vs := vector.MustStrCol(bat.GetVector(0))

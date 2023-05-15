@@ -52,6 +52,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return f, e
 	}
 	if proc.InputBatch().VectorCount() != len(tblArg.retSchema) {
+		fmt.Printf("[tablefunction] v count = %d, retSchema = %d\n", proc.InputBatch().VectorCount(), len(tblArg.retSchema))
 		return true, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
 	}
 	for i := range tblArg.retSchema {

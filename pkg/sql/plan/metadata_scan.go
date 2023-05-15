@@ -25,98 +25,98 @@ var (
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.COL_NAME],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.COL_NAME].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.COL_NAME].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.BLOCK_ID],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.BLOCK_ID].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.BLOCK_ID].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.ENTRY_STATE],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.ENTRY_STATE].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ENTRY_STATE].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.SORTED],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.SORTED].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.SORTED].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.META_LOC],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.META_LOC].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.META_LOC].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.DELTA_LOC],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.DELTA_LOC].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.DELTA_LOC].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.COMMIT_TS],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.COMMIT_TS].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.COMMIT_TS].Oid),
 				NotNullable: false,
 			},
 		},
 		{
-			Name: catalog.MetadataScanInfoNames[catalog.META_SEG],
+			Name: catalog.MetadataScanInfoNames[catalog.SEG_ID],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.META_SEG].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.SEG_ID].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.ROW_CNT],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.ROW_CNT].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ROW_CNT].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.NULL_CNT],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.NULL_CNT].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.NULL_CNT].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.COMPRESS_SIZE],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.COMPRESS_SIZE].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.COMPRESS_SIZE].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.ORIGIN_SIZE],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.ORIGIN_SIZE].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ORIGIN_SIZE].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.MIN],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.MIN].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.MIN].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.MAX],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetaColTypes[catalog.MAX].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.MAX].Oid),
 				NotNullable: false,
 			},
 		},
