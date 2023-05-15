@@ -1292,8 +1292,6 @@ const (
 
 	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
-	getSystemVariableValueFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and variable_name = '%s';`
-
 	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s';`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
@@ -1699,10 +1697,6 @@ func getSqlForGetSystemVariableValueWithDatabase(dtname, variable_name string) s
 
 func getSystemVariablesWithAccount(accountId uint64) string {
 	return fmt.Sprintf(getSystemVariablesWithAccountFromat, accountId)
-}
-
-func getSqlForgetSystemVariableValue(accountId uint64, varName string) string {
-	return fmt.Sprintf(getSystemVariableValueFormat, accountId, varName)
 }
 
 func getSqlForUpdateSystemVariableValue(varValue string, accountId uint64, varName string) string {
