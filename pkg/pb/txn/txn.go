@@ -185,21 +185,6 @@ func (m *TxnRequest) GetID() uint64 {
 	return m.RequestID
 }
 
-// GetPayloadField implement morpc PayloadMessgae
-func (m TxnRequest) GetPayloadField() []byte {
-	if m.CNRequest != nil {
-		return m.CNRequest.Payload
-	}
-	return nil
-}
-
-// SetPayloadField implement morpc PayloadMessgae
-func (m *TxnRequest) SetPayloadField(data []byte) {
-	if m.CNRequest != nil {
-		m.CNRequest.Payload = data
-	}
-}
-
 // SetID implement morpc Messgae
 func (m *TxnResponse) SetID(id uint64) {
 	m.RequestID = id

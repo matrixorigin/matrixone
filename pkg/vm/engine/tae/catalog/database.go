@@ -52,7 +52,7 @@ func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	return AccessInfoSize, nil
 }
 
-func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], txn txnif.TxnReader) (visible, dropped bool) {
+func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], txn txnif.TxnReader) (visible, dropped bool, name string) {
 	db := n.GetPayload()
 	visible, dropped = db.GetVisibility(txn)
 	return
@@ -66,7 +66,8 @@ type DBEntry struct {
 	fullName string
 	isSys    bool
 
-	entries   map[uint64]*common.GenericDLNode[*TableEntry]
+	entries map[uint64]*common.GenericDLNode[*TableEntry]
+	// nameNodes[ABC] is a linked list of all table entries had been once named as ABC
 	nameNodes map[string]*nodeList[*TableEntry]
 	link      *common.GenericSortedDList[*TableEntry]
 
@@ -301,7 +302,7 @@ func (e *DBEntry) txnGetNodeByName(
 	if node == nil {
 		return nil, moerr.GetOkExpectedEOB()
 	}
-	return node.TxnGetNodeLocked(txn)
+	return node.TxnGetNodeLocked(txn, name)
 }
 
 func (e *DBEntry) TxnGetTableEntryByName(name string, txn txnif.AsyncTxn) (entry *TableEntry, err error) {
@@ -399,6 +400,73 @@ func (e *DBEntry) CreateTableEntryWithTableId(schema *Schema, txn txnif.AsyncTxn
 	return created, err
 }
 
+// For test only
+func (e *DBEntry) PrettyNameIndex() string {
+	buf := &bytes.Buffer{}
+	buf.WriteString(fmt.Sprintf("[%d]NameIndex:\n", len(e.nameNodes)))
+	// iterate all nodes in nameNodes, collect node ids to a string
+	ids := make([]uint64, 0)
+	for name, node := range e.nameNodes {
+		ids = ids[:0]
+		node.ForEachNodes(func(nn *nameNode[*TableEntry]) bool {
+			ids = append(ids, nn.id)
+			return true
+		})
+		buf.WriteString(fmt.Sprintf("  %s: %v\n", name, ids))
+	}
+	return buf.String()
+}
+
+func (e *DBEntry) RenameTableInTxn(old, new string, tid uint64, tenantID uint32, txn txnif.TxnReader, first bool) error {
+	e.Lock()
+	defer e.Unlock()
+	// if alter again and again in the same txn, previous temp name should be deleted.
+	if !first {
+		e.removeNameIndexLocked(genTblFullName(tenantID, old), tid)
+	}
+
+	newFullName := genTblFullName(tenantID, new)
+	if err := e.checkAddNameConflictLocked(new, tid, e.nameNodes[newFullName], txn); err != nil {
+		return err
+	}
+	// make sure every name node has up to one table id. check case alter A -> B -> A
+	e.removeNameIndexLocked(newFullName, tid)
+	// add to the head of linked list
+	e.addNameIndexLocked(newFullName, tid)
+
+	return nil
+}
+
+func (e *DBEntry) addNameIndexLocked(fullname string, tid uint64) {
+	node := e.nameNodes[fullname]
+	if node == nil {
+		nn := newNodeList(e.GetItemNodeByIDLocked,
+			tableVisibilityFn[*TableEntry],
+			&e.nodesMu,
+			fullname)
+		e.nameNodes[fullname] = nn
+		nn.CreateNode(tid)
+	} else {
+		node.CreateNode(tid)
+	}
+}
+
+func (e *DBEntry) removeNameIndexLocked(fullname string, tid uint64) {
+	nn := e.nameNodes[fullname]
+	if nn == nil {
+		return
+	}
+	if _, empty := nn.DeleteNode(tid); empty {
+		delete(e.nameNodes, fullname)
+	}
+}
+
+func (e *DBEntry) RollbackRenameTable(fullname string, tid uint64) {
+	e.Lock()
+	defer e.Unlock()
+	e.removeNameIndexLocked(fullname, tid)
+}
+
 func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	defer func() {
 		if err == nil {
@@ -413,12 +481,28 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	if n, ok := e.entries[table.ID]; !ok {
 		return moerr.GetOkExpectedEOB()
 	} else {
-		nn := e.nameNodes[table.GetFullName()]
-		nn.DeleteNode(table.ID)
+		table.RLock()
+		defer table.RUnlock()
+		prevname := ""
+		// clean all name because RemoveEntry can be called by GC、
+		table.LoopChain(func(m *MVCCNode[*TableMVCCNode]) bool {
+			if prevname == m.BaseNode.Schema.Name {
+				return true
+			}
+			prevname = m.BaseNode.Schema.Name
+			tenantID := m.BaseNode.Schema.AcInfo.TenantID
+			fullname := genTblFullName(tenantID, prevname)
+			nn := e.nameNodes[fullname]
+			if nn == nil {
+				return true
+			}
+			nn.DeleteNode(table.ID)
+			if nn.Length() == 0 {
+				delete(e.nameNodes, fullname)
+			}
+			return true
+		})
 		e.link.Delete(n)
-		if nn.Length() == 0 {
-			delete(e.nameNodes, table.GetFullName())
-		}
 		delete(e.entries, table.ID)
 	}
 	return
@@ -456,10 +540,9 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 
 		nn.CreateNode(table.ID)
 	} else {
-		node := nn.GetNode()
 		if !skipDedup {
-			record := node.GetPayload()
-			err = record.PrepareAdd(txn)
+			name := table.GetLastestSchema().Name
+			err = e.checkAddNameConflictLocked(name, table.ID, nn, txn)
 			if err != nil {
 				return
 			}
@@ -469,6 +552,26 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 		nn.CreateNode(table.ID)
 	}
 	return
+}
+
+func (e *DBEntry) checkAddNameConflictLocked(name string, tid uint64, nn *nodeList[*TableEntry], txn txnif.TxnReader) (err error) {
+	if nn == nil {
+		return nil
+	}
+	// check ww conflict
+	tbl := nn.GetNode().GetPayload()
+	// skip the same table entry
+	if tbl.ID == tid {
+		return nil
+	}
+	if err = tbl.ConflictCheck(txn); err != nil {
+		return
+	}
+	// check name dup
+	if existEntry, _ := nn.TxnGetNodeLocked(txn, name); existEntry != nil {
+		return moerr.GetOkExpectedDup()
+	}
+	return nil
 }
 
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {

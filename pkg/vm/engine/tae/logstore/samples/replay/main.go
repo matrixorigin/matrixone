@@ -47,12 +47,9 @@ func main() {
 		}
 		e1.SetType(entry.IOET_WALEntry_Uncommitted)
 		e1.SetInfo(uncommitInfo)
-		n, err := common.LogAllocator.Alloc(common.K * 100)
-		if err != nil {
-			panic(err)
-		}
+		n := make([]byte, common.K*100)
 		copy(n, buf)
-		err = e1.UnmarshalFromNode(n, true)
+		err := e1.UnmarshalFromNode(n, true)
 		if err != nil {
 			panic(err)
 		}
@@ -67,10 +64,7 @@ func main() {
 		e2 := entry.GetBase()
 		e2.SetType(entry.IOET_WALEntry_Txn)
 		e2.SetInfo(txnInfo)
-		n, err = common.LogAllocator.Alloc(common.K * 100)
-		if err != nil {
-			panic(err)
-		}
+		n = make([]byte, common.K*100)
 		copy(n, buf)
 		err = e2.UnmarshalFromNode(n, true)
 		if err != nil {
@@ -125,7 +119,7 @@ func main() {
 	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 		// fmt.Printf("%s", payload)
 	}
-	err = s.Replay(a)
+	err = s.Replay(a, nil)
 	if err != nil {
 		panic(err)
 	}
