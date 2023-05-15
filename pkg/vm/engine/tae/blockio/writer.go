@@ -89,6 +89,7 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		}
 		if w.isSetPK && w.pk == uint16(i) {
 			isPK = true
+			w.objMetaBuilder.SetPKNdv(w.pk, uint32(vec.Length()))
 		}
 		columnData := containers.ToDNVector(vec)
 		// update null count and distinct value
