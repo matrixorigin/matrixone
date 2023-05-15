@@ -684,10 +684,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 		if len(t.RemoteRegs) > 0 {
 			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNode, len(t.RemoteRegs))
-			for i, r := range t.RemoteRegs {
+			for i := range t.RemoteRegs {
 				wn := &pipeline.WrapNode{
-					NodeAddr: r.NodeAddr,
-					Uuid:     r.Uuid[:],
+					NodeAddr: t.RemoteRegs[i].NodeAddr,
+					Uuid:     t.RemoteRegs[i].Uuid[:],
 				}
 				in.Dispatch.RemoteConnector[i] = wn
 			}
@@ -1017,13 +1017,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 		rrs := make([]colexec.ReceiveInfo, 0)
 		if len(t.RemoteConnector) > 0 {
-			for _, rc := range t.RemoteConnector {
-				uid, err := uuid.FromBytes(rc.Uuid)
+			for i := range t.RemoteConnector {
+				uid, err := uuid.FromBytes(t.RemoteConnector[i].Uuid)
 				if err != nil {
 					return v, err
 				}
 				n := colexec.ReceiveInfo{
-					NodeAddr: rc.NodeAddr,
+					NodeAddr: t.RemoteConnector[i].NodeAddr,
 					Uuid:     uid,
 				}
 				rrs = append(rrs, n)

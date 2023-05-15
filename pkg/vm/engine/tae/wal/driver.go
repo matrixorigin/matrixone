@@ -21,15 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
-
-type entryWithInfo struct {
-	e    LogEntry
-	info any
-}
 
 type DriverConfig struct {
 	BatchStoreConfig   *batchstoredriver.StoreCfg
@@ -37,12 +31,9 @@ type DriverConfig struct {
 }
 
 type walDriver struct {
-	*walInfo
 	sync.RWMutex
 	impl store.Store
 	own  bool
-
-	logInfoQueue sm.Queue
 
 	ckpDuration   time.Duration
 	cancelfn      context.CancelFunc
@@ -74,32 +65,26 @@ func NewDriverWithStore(impl store.Store, own bool, ckpDuration time.Duration) D
 		ckpDuration = time.Second
 	}
 	driver := &walDriver{
-		walInfo:     newWalInfo(),
 		impl:        impl,
 		own:         own,
 		wg:          sync.WaitGroup{},
 		ckpDuration: ckpDuration,
 	}
-	driver.logInfoQueue = sm.NewSafeQueue(1000, 1000, driver.onLogInfo)
 	driver.cancelContext, driver.cancelfn = context.WithCancel(context.Background())
-	driver.logInfoQueue.Start()
 	driver.wg.Add(1)
 	return driver
 }
-func (driver *walDriver) Start() {
-	go driver.checkpointTicker()
-}
+func (driver *walDriver) Start() {}
 func (driver *walDriver) GetCheckpointed() uint64 {
 	return driver.impl.GetCheckpointed(GroupPrepare)
 }
 func (driver *walDriver) replayhandle(handle store.ApplyHandle) store.ApplyHandle {
 	return func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
-		driver.logEntry(info.(*entry.Info))
 		handle(group, commitId, payload, typ, nil)
 	}
 }
-func (driver *walDriver) Replay(handle store.ApplyHandle) error {
-	return driver.impl.Replay(driver.replayhandle(handle))
+func (driver *walDriver) Replay(handle store.ApplyHandle, allocator logstoreEntry.Allocator) error {
+	return driver.impl.Replay(driver.replayhandle(handle), allocator)
 }
 
 func (driver *walDriver) GetPenddingCnt() uint64 {
@@ -116,20 +101,11 @@ func (driver *walDriver) LoadEntry(groupID uint32, lsn uint64) (LogEntry, error)
 
 func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {
 	id, err := driver.impl.Append(group, e)
-	ent := &entryWithInfo{
-		e:    e,
-		info: e.GetInfo(),
-	}
-	_, err2 := driver.logInfoQueue.Enqueue(ent)
-	if err2 != nil {
-		panic(err)
-	}
 	return id, err
 }
 
 func (driver *walDriver) Close() error {
 	driver.cancelfn()
-	driver.logInfoQueue.Stop()
 	if driver.own {
 		return driver.impl.Close()
 	}

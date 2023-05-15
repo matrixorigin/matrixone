@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -92,7 +93,7 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 		AccountId:  accountId,
 		DatabaseId: databaseId,
 	}
-	mp := make(map[uint64]uint8)
+	mp := make(map[string]uint8)
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
 		if item.AccountId != accountId {
 			return false
@@ -100,11 +101,13 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 		if item.DatabaseId != databaseId {
 			return false
 		}
+		// In previous impl table id is used to deduplicate, but this a corner case: rename table t to newt, and rename newt back to t.
+		// In this case newt is first found deleted and taking the place of active t's tableid.
 		if item.Ts.Greater(ts) {
 			return true
 		}
-		if _, ok := mp[item.Id]; !ok {
-			mp[item.Id] = 0
+		if _, ok := mp[item.Name]; !ok {
+			mp[item.Name] = 0
 			if !item.deleted {
 				rs = append(rs, item.Name)
 				rids = append(rids, item.Id)
@@ -349,6 +352,21 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.PrimarySeqnum = -1
 		item.ClusterByIdx = -1
 		copy(item.Rowid[:], rowids[i][:])
+		// invalid old name table
+		if exist, ok := cc.tables.rowidIndex.Get(&TableItem{Rowid: rowids[i]}); ok && exist.Name != item.Name {
+			logutil.Infof("rename invalidate %d-%s,v%d@%s", exist.Id, exist.Name, exist.Version, item.Ts.String())
+			newItem := &TableItem{
+				deleted:    true,
+				Id:         exist.Id,
+				Name:       exist.Name,
+				Rowid:      exist.Rowid,
+				AccountId:  exist.AccountId,
+				DatabaseId: exist.DatabaseId,
+				Version:    exist.Version,
+				Ts:         item.Ts,
+			}
+			cc.tables.data.Set(newItem)
+		}
 		cc.tables.data.Set(item)
 		cc.tables.rowidIndex.Set(item)
 	}

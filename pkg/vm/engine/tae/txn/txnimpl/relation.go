@@ -136,6 +136,7 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	it := h.MakeBlockIt()
 	for it.Valid() {
 		block := it.GetBlock()
+		defer block.Close()
 		s = fmt.Sprintf("%s\n%s", s, block.String())
 		it.Next()
 	}
