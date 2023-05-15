@@ -415,6 +415,8 @@ func evalFilterExprWithZonemap(
 	ctx context.Context,
 	meta objectio.ColumnMetaFetcher,
 	expr *plan.Expr,
+	zms []objectio.ZoneMap,
+	vecs []*vector.Vector,
 	columnMap map[int]int,
 	proc *process.Process,
 ) (selected bool) {
@@ -426,7 +428,7 @@ func evalFilterExprWithZonemap(
 		selected = evalNoColumnFilterExpr(ctx, expr, proc)
 		return
 	}
-	zm := colexec.EvalFilterByZonemap(ctx, meta, expr, columnMap, proc)
+	zm := colexec.EvalFilterByZonemap(ctx, meta, expr, zms, vecs, columnMap, proc)
 	if !zm.IsInited() || zm.GetType() != types.T_bool {
 		selected = true
 	} else {
