@@ -956,7 +956,13 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 				rowmask = deleteNode.GetRowMaskRefLocked()
 			}
 		}
-		if err = blkData.BatchDedup(tbl.store.txn, keys, rowmask, false, inputZM); err != nil {
+		if err = blkData.BatchDedup(
+			tbl.store.txn,
+			keys, rowmask,
+			false,
+			inputZM,
+			objectio.BloomFilter{},
+		); err != nil {
 			// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 			return
 		}
@@ -1007,7 +1013,14 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 				vec := containers.ToDNVector(bat.Vecs[0])
 				loaded[i] = vec
 			}
-			if err = blkData.BatchDedup(tbl.store.txn, loaded[i], rowmask, false, []byte{}); err != nil {
+			if err = blkData.BatchDedup(
+				tbl.store.txn,
+				loaded[i],
+				rowmask,
+				false,
+				[]byte{},
+				objectio.BloomFilter{},
+			); err != nil {
 				// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 				loaded[i].Close()
 				return
@@ -1090,7 +1103,14 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, zm index.ZM) (e
 						rowmask = deleteNode.GetRowMaskRefLocked()
 					}
 				}
-				if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true, zm); err != nil {
+				if err = blkData.BatchDedup(
+					tbl.store.txn,
+					pks,
+					rowmask,
+					true,
+					zm,
+					objectio.BloomFilter{},
+				); err != nil {
 					return
 				}
 				blkIt.Next()
@@ -1169,7 +1189,14 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 					rowmask = deleteNode.GetRowMaskRefLocked()
 				}
 			}
-			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true, []byte{}); err != nil {
+			if err = blkData.BatchDedup(
+				tbl.store.txn,
+				pks,
+				rowmask,
+				true,
+				[]byte{},
+				objectio.BloomFilter{},
+			); err != nil {
 				return err
 			}
 			blkIt.Next()

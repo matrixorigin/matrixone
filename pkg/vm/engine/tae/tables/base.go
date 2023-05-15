@@ -348,11 +348,13 @@ func (blk *baseBlock) PersistedBatchDedup(
 	rowmask *roaring.Bitmap,
 	isAblk bool,
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (err error) {
 	sels, err := pnode.BatchDedup(
 		keys,
 		nil,
 		zm,
+		bf,
 	)
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return

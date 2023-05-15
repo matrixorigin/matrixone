@@ -63,10 +63,14 @@ func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
 	return bloomFilter.MayContainsKey(v)
 }
 
-func (r *BfReader) MayContainsAnyKeys(keys containers.Vector) (b bool, m *roaring.Bitmap, err error) {
-	bf, err := LoadBF(context.Background(), r.key, r.indexCache, r.fs.Service, false)
-	if err != nil {
-		return
+func (r *BfReader) MayContainsAnyKeys(
+	keys containers.Vector,
+	bf objectio.BloomFilter,
+) (b bool, m *roaring.Bitmap, err error) {
+	if bf.Size() == 0 {
+		if bf, err = LoadBF(context.Background(), r.key, r.indexCache, r.fs.Service, false); err != nil {
+			return
+		}
 	}
 	buf := bf.GetBloomFilter(uint32(r.key.ID()))
 	// bloomFilter must be allocated on the stack
