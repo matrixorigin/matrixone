@@ -691,7 +691,7 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 			}
 
 			// Delete the cache.
-			deleteAutoIncrCache(name, proc)
+			// deleteAutoIncrCache(name, proc)
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {
