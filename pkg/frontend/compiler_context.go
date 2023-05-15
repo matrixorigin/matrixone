@@ -532,7 +532,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.resolveGlobalVar(varName)
+			return tcc.GetSession().GetGlobalVar(varName)
 		} else {
 			return tcc.GetSession().GetSessionVar(varName)
 		}
@@ -540,85 +540,6 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
 		return val, err
 	}
-}
-
-func (tcc *TxnCompilerContext) resolveGlobalVar(varName string) (interface{}, error) {
-	var err error
-	var sql string
-	var accountId uint32
-	var erArray []ExecResult
-	var value interface{}
-
-	ses := tcc.GetSession()
-	ctx := ses.GetRequestContext()
-
-	gSysVars := ses.GetGlobalSysVars()
-	if def, _, ok := gSysVars.GetGlobalSysVar(varName); ok {
-		if def.GetScope() == ScopeSession {
-			//empty
-			return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableSessionEmpty())
-		}
-
-		bh := ses.GetBackgroundExec(ctx)
-		defer bh.Close()
-
-		err = bh.Exec(ctx, "begin;")
-		if err != nil {
-			goto handleFailed
-		}
-
-		accountId = ses.GetTenantInfo().GetTenantID()
-		sql = getSqlForgetSystemVariableValue(uint64(accountId), varName)
-
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			goto handleFailed
-		}
-
-		erArray, err = getResultSet(ctx, bh)
-		if err != nil {
-			goto handleFailed
-		}
-
-		if execResultArrayHasData(erArray) {
-			variable_value, err := erArray[0].GetString(ctx, 0, 0)
-			if err != nil {
-				return nil, err
-			}
-			value, err = def.GetType().ConvertFromString(variable_value)
-			if err != nil {
-				return nil, err
-			}
-
-			if _, ok := def.GetType().(SystemVariableBoolType); ok {
-				v, ok := value.(int8)
-				if ok {
-					if v == 1 {
-						value = "on"
-					} else {
-						value = "off"
-					}
-				}
-			}
-		} else {
-			return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
-		}
-
-		err = bh.Exec(ctx, "commit;")
-		if err != nil {
-			goto handleFailed
-		}
-		return value, nil
-	handleFailed:
-		//ROLLBACK the transaction
-		rbErr := bh.Exec(ctx, "rollback;")
-		if rbErr != nil {
-			return nil, rbErr
-		}
-		return nil, err
-	}
-	return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 }
 
 func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
