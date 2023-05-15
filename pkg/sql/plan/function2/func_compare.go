@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/constraints"
 )
 
 func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
@@ -75,71 +74,75 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedTypeArith1[bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
+		return optimizedTypeTemplate1[bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
 			return a == b
 		})
 	case types.T_int8:
-		return optimizedTypeArith1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return optimizedTypeTemplate1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a == b
 		})
 	case types.T_int16:
-		return optimizedTypeArith1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return optimizedTypeTemplate1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a == b
 		})
 	case types.T_int32:
-		return optimizedTypeArith1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return optimizedTypeTemplate1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a == b
 		})
 	case types.T_int64:
-		return optimizedTypeArith1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return optimizedTypeTemplate1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a == b
 		})
 	case types.T_uint8:
-		return optimizedTypeArith1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return optimizedTypeTemplate1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a == b
 		})
 	case types.T_uint16:
-		return optimizedTypeArith1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return optimizedTypeTemplate1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a == b
 		})
 	case types.T_uint32:
-		return optimizedTypeArith1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return optimizedTypeTemplate1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a == b
 		})
 	case types.T_uint64:
-		return optimizedTypeArith1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return optimizedTypeTemplate1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a == b
 		})
 	case types.T_uuid:
-		return optimizedTypeArith1[types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
+		return optimizedTypeTemplate1[types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
 			return a == b
 		})
 	case types.T_float32:
-		return optimizedTypeArith1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return optimizedTypeTemplate1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a == b
 		})
 	case types.T_float64:
-		return optimizedTypeArith1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return optimizedTypeTemplate1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a == b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return valueStrCompare(parameters, rs, uint64(length), bytes.Equal)
+		return optimizedTypeTemplate1ForStr2[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
+			return v1 == v2
+		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrCompare(parameters, rs, uint64(length), bytes.Equal)
+		return optimizedTypeTemplate1ForStr2[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
+			return v1 == v2
+		})
 	case types.T_date:
-		return optimizedTypeArith1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return optimizedTypeTemplate1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a == b
 		})
 	case types.T_datetime:
-		return optimizedTypeArith1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return optimizedTypeTemplate1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a == b
 		})
 	case types.T_time:
-		return optimizedTypeArith1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return optimizedTypeTemplate1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a == b
 		})
 	case types.T_timestamp:
-		return optimizedTypeArith1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return optimizedTypeTemplate1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a == b
 		})
 	case types.T_decimal64:
@@ -154,159 +157,22 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	panic("unreached code")
 }
 
-func valueCompare[T bool | constraints.Integer | constraints.Float |
-	types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid](
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b T) bool) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[T](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[T](params[1])
-
-	if params[0].IsConst() {
-		v1, null1 := col1.GetValue(0)
-		if null1 {
-			for i := uint64(0); i < length; i++ {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			}
-		} else {
-			for i := uint64(0); i < length; i++ {
-				v2, null2 := col2.GetValue(i)
-				if null2 {
-					if err := result.Append(false, true); err != nil {
-						return err
-					}
-				} else {
-					if err := result.Append(cmpFn(v1, v2), false); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	if params[1].IsConst() {
-		v2, null2 := col2.GetValue(0)
-		if null2 {
-			for i := uint64(0); i < length; i++ {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			}
-		} else {
-			for i := uint64(0); i < length; i++ {
-				v1, null1 := col1.GetValue(i)
-				if null1 {
-					if err := result.Append(false, true); err != nil {
-						return err
-					}
-				} else {
-					if err := result.Append(cmpFn(v1, v2), false); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := col1.GetValue(i)
-		v2, null2 := col2.GetValue(i)
-		if err := result.Append(cmpFn(v1, v2), null1 || null2); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func valueStrCompare(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
-	cmpFn func(a, b []byte) bool) error {
-	col1 := vector.GenerateFunctionStrParameter(params[0])
-	col2 := vector.GenerateFunctionStrParameter(params[1])
-
-	if params[0].IsConst() {
-		v1, null1 := col1.GetStrValue(0)
-		if null1 {
-			for i := uint64(0); i < length; i++ {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			}
-		} else {
-			for i := uint64(0); i < length; i++ {
-				v2, null2 := col2.GetStrValue(i)
-				if null2 {
-					if err := result.Append(false, true); err != nil {
-						return err
-					}
-				} else {
-					if err := result.Append(cmpFn(v1, v2), false); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	if params[1].IsConst() {
-		v2, null2 := col2.GetStrValue(0)
-		if null2 {
-			for i := uint64(0); i < length; i++ {
-				if err := result.Append(false, true); err != nil {
-					return err
-				}
-			}
-		} else {
-			for i := uint64(0); i < length; i++ {
-				v1, null1 := col1.GetStrValue(i)
-				if null1 {
-					if err := result.Append(false, true); err != nil {
-						return err
-					}
-				} else {
-					if err := result.Append(cmpFn(v1, v2), false); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := col1.GetStrValue(i)
-		v2, null2 := col2.GetStrValue(i)
-		if null1 || null2 {
-			if err := result.Append(false, true); err != nil {
-				return err
-			}
-		} else {
-			if err := result.Append(cmpFn(v1, v2), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func valueDec64Compare(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
+	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
 	cmpFn func(a, b types.Decimal64) bool) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](params[1])
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](parameters[1])
 
-	m := col2.GetType().Scale - col1.GetType().Scale
+	m := p2.GetType().Scale - p1.GetType().Scale
 
 	rsVec := result.GetResultVector()
 	rss := vector.MustFixedCol[bool](rsVec)
 
-	if params[0].IsConst() && params[1].IsConst() {
-		v1, null1 := col1.GetValue(0)
-		v2, null2 := col2.GetValue(0)
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+
+	if c1 && c2 {
+		v1, null1 := p1.GetValue(0)
+		v2, null2 := p2.GetValue(0)
 		if null1 || null2 {
 			nulls.AddRange(rsVec.GetNulls(), 0, length)
 		} else {
@@ -325,17 +191,17 @@ func valueDec64Compare(
 		return nil
 	}
 
-	if params[0].IsConst() {
-		v1, null1 := col1.GetValue(0)
+	if c1 {
+		v1, null1 := p1.GetValue(0)
 		if null1 {
 			nulls.AddRange(rsVec.GetNulls(), 0, length)
 		} else {
 			if m >= 0 {
 				x, _ := v1.Scale(m)
-				if col2.WithAnyNullValue() {
-					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
+				if p2.WithAnyNullValue() {
+					nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
-						v2, null2 := col2.GetValue(i)
+						v2, null2 := p2.GetValue(i)
 						if null2 {
 							continue
 						}
@@ -343,15 +209,15 @@ func valueDec64Compare(
 					}
 				} else {
 					for i := uint64(0); i < length; i++ {
-						v2, _ := col2.GetValue(i)
+						v2, _ := p2.GetValue(i)
 						rss[i] = cmpFn(x, v2)
 					}
 				}
 			} else {
-				if col2.WithAnyNullValue() {
-					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
+				if p2.WithAnyNullValue() {
+					nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
-						v2, null2 := col2.GetValue(i)
+						v2, null2 := p2.GetValue(i)
 						if null2 {
 							continue
 						}
@@ -359,9 +225,10 @@ func valueDec64Compare(
 						rss[i] = cmpFn(v1, y)
 					}
 				} else {
+					scaleMy := -m
 					for i := uint64(0); i < length; i++ {
-						v2, _ := col2.GetValue(i)
-						y, _ := v2.Scale(-m)
+						v2, _ := p2.GetValue(i)
+						y, _ := v2.Scale(scaleMy)
 						rss[i] = cmpFn(v1, y)
 					}
 				}
@@ -371,16 +238,16 @@ func valueDec64Compare(
 		return nil
 	}
 
-	if params[1].IsConst() {
-		v2, null2 := col2.GetValue(0)
+	if c2 {
+		v2, null2 := p2.GetValue(0)
 		if null2 {
 			nulls.AddRange(rsVec.GetNulls(), 0, length)
 		} else {
 			if m >= 0 {
-				if col1.WithAnyNullValue() {
-					nulls.Or(rsVec.GetNulls(), params[0].GetNulls(), rsVec.GetNulls())
+				if p1.WithAnyNullValue() {
+					nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
-						v1, null1 := col1.GetValue(i)
+						v1, null1 := p1.GetValue(i)
 						if null1 {
 							continue
 						}
@@ -389,17 +256,17 @@ func valueDec64Compare(
 					}
 				} else {
 					for i := uint64(0); i < length; i++ {
-						v1, _ := col1.GetValue(i)
+						v1, _ := p1.GetValue(i)
 						x, _ := v1.Scale(m)
 						rss[i] = cmpFn(x, v2)
 					}
 				}
 			} else {
 				y, _ := v2.Scale(-m)
-				if col1.WithAnyNullValue() {
-					nulls.Or(rsVec.GetNulls(), params[0].GetNulls(), rsVec.GetNulls())
+				if p1.WithAnyNullValue() {
+					nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
-						v1, null1 := col1.GetValue(i)
+						v1, null1 := p1.GetValue(i)
 						if null1 {
 							continue
 						}
@@ -407,7 +274,7 @@ func valueDec64Compare(
 					}
 				} else {
 					for i := uint64(0); i < length; i++ {
-						v1, _ := col1.GetValue(i)
+						v1, _ := p1.GetValue(i)
 						rss[i] = cmpFn(v1, y)
 					}
 				}
@@ -416,27 +283,29 @@ func valueDec64Compare(
 		return nil
 	}
 
-	if col1.WithAnyNullValue() || col1.WithAnyNullValue() {
-		nulls.Or(params[0].GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 
+		resultNsp := rsVec.GetNulls()
 		if m >= 0 {
 			for i := uint64(0); i < length; i++ {
-				if rsVec.GetNulls().Contains(i) {
+				if resultNsp.Contains(i) {
 					continue
 				}
-				v1, _ := col1.GetValue(i)
-				v2, _ := col2.GetValue(i)
+				v1, _ := p1.GetValue(i)
+				v2, _ := p2.GetValue(i)
 				x, _ := v1.Scale(m)
 				rss[i] = cmpFn(x, v2)
 			}
 		} else {
+			scaleMy := -m
 			for i := uint64(0); i < length; i++ {
-				if rsVec.GetNulls().Contains(i) {
+				if resultNsp.Contains(i) {
 					continue
 				}
-				v1, _ := col1.GetValue(i)
-				v2, _ := col2.GetValue(i)
-				y, _ := v2.Scale(-m)
+				v1, _ := p1.GetValue(i)
+				v2, _ := p2.GetValue(i)
+				y, _ := v2.Scale(scaleMy)
 				rss[i] = cmpFn(v1, y)
 			}
 		}
@@ -445,16 +314,17 @@ func valueDec64Compare(
 
 	if m >= 0 {
 		for i := uint64(0); i < length; i++ {
-			v1, _ := col1.GetValue(i)
-			v2, _ := col2.GetValue(i)
+			v1, _ := p1.GetValue(i)
+			v2, _ := p2.GetValue(i)
 			x, _ := v1.Scale(m)
 			rss[i] = cmpFn(x, v2)
 		}
 	} else {
+		scaleMy := -m
 		for i := uint64(0); i < length; i++ {
-			v1, _ := col1.GetValue(i)
-			v2, _ := col2.GetValue(i)
-			y, _ := v2.Scale(-m)
+			v1, _ := p1.GetValue(i)
+			v2, _ := p2.GetValue(i)
+			y, _ := v2.Scale(scaleMy)
 			rss[i] = cmpFn(v1, y)
 		}
 	}
@@ -462,19 +332,21 @@ func valueDec64Compare(
 }
 
 func valueDec128Compare(
-	params []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
+	parameters []*vector.Vector, result *vector.FunctionResult[bool], length uint64,
 	cmpFn func(a, b types.Decimal128) bool) error {
-	col1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[0])
-	col2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](params[1])
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](parameters[1])
 
-	m := col2.GetType().Scale - col1.GetType().Scale
+	m := p2.GetType().Scale - p1.GetType().Scale
 
 	rsVec := result.GetResultVector()
 	rss := vector.MustFixedCol[bool](rsVec)
 
-	if params[0].IsConst() && params[1].IsConst() {
-		v1, null1 := col1.GetValue(0)
-		v2, null2 := col2.GetValue(0)
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+
+	if c1 && c2 {
+		v1, null1 := p1.GetValue(0)
+		v2, null2 := p2.GetValue(0)
 		if null1 || null2 {
 			nulls.AddRange(rsVec.GetNulls(), 0, length)
 		} else {
@@ -493,17 +365,17 @@ func valueDec128Compare(
 		return nil
 	}
 
-	if params[0].IsConst() {
-		v1, null1 := col1.GetValue(0)
+	if c1 {
+		v1, null1 := p1.GetValue(0)
 		if null1 {
 			nulls.AddRange(rsVec.GetNulls(), 0, length)
 		} else {
 			if m >= 0 {
 				x, _ := v1.Scale(m)
-				if col2.WithAnyNullValue() {
-					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
+				if p2.WithAnyNullValue() {
+					nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
-						v2, null2 := col2.GetValue(i)
+						v2, null2 := p2.GetValue(i)
 						if null2 {
 							continue
 						}
@@ -511,15 +383,15 @@ func valueDec128Compare(
 					}
 				} else {
 					for i := uint64(0); i < length; i++ {
-						v2, _ := col2.GetValue(i)
+						v2, _ := p2.GetValue(i)
 						rss[i] = cmpFn(x, v2)
 					}
 				}
 			} else {
-				if col2.WithAnyNullValue() {
-					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
+				if p2.WithAnyNullValue() {
+					nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
-						v2, null2 := col2.GetValue(i)
+						v2, null2 := p2.GetValue(i)
 						if null2 {
 							continue
 						}
@@ -527,9 +399,10 @@ func valueDec128Compare(
 						rss[i] = cmpFn(v1, y)
 					}
 				} else {
+					scaleMy := -m
 					for i := uint64(0); i < length; i++ {
-						v2, _ := col2.GetValue(i)
-						y, _ := v2.Scale(-m)
+						v2, _ := p2.GetValue(i)
+						y, _ := v2.Scale(scaleMy)
 						rss[i] = cmpFn(v1, y)
 					}
 				}
@@ -539,35 +412,35 @@ func valueDec128Compare(
 		return nil
 	}
 
-	if params[1].IsConst() {
-		v2, null2 := col2.GetValue(0)
+	if c2 {
+		v2, null2 := p2.GetValue(0)
 		if null2 {
 			nulls.AddRange(rsVec.GetNulls(), 0, length)
 		} else {
 			if m >= 0 {
-				if col1.WithAnyNullValue() {
-					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
+				if p1.WithAnyNullValue() {
+					nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
-						v1, null1 := col1.GetValue(i)
+						v1, null1 := p1.GetValue(i)
 						if null1 {
 							continue
 						}
 						x, _ := v1.Scale(m)
-						rss[i] = cmpFn(x, v1)
+						rss[i] = cmpFn(x, v2)
 					}
 				} else {
 					for i := uint64(0); i < length; i++ {
-						v1, _ := col1.GetValue(i)
+						v1, _ := p1.GetValue(i)
 						x, _ := v1.Scale(m)
 						rss[i] = cmpFn(x, v2)
 					}
 				}
 			} else {
 				y, _ := v2.Scale(-m)
-				if col1.WithAnyNullValue() {
-					nulls.Or(rsVec.GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
+				if p1.WithAnyNullValue() {
+					nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
 					for i := uint64(0); i < length; i++ {
-						v1, null1 := col1.GetValue(i)
+						v1, null1 := p1.GetValue(i)
 						if null1 {
 							continue
 						}
@@ -575,7 +448,7 @@ func valueDec128Compare(
 					}
 				} else {
 					for i := uint64(0); i < length; i++ {
-						v1, _ := col1.GetValue(i)
+						v1, _ := p1.GetValue(i)
 						rss[i] = cmpFn(v1, y)
 					}
 				}
@@ -584,27 +457,29 @@ func valueDec128Compare(
 		return nil
 	}
 
-	if col1.WithAnyNullValue() || col1.WithAnyNullValue() {
-		nulls.Or(params[0].GetNulls(), params[1].GetNulls(), rsVec.GetNulls())
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
 
+		resultNsp := rsVec.GetNulls()
 		if m >= 0 {
 			for i := uint64(0); i < length; i++ {
-				if rsVec.GetNulls().Contains(i) {
+				if resultNsp.Contains(i) {
 					continue
 				}
-				v1, _ := col1.GetValue(i)
-				v2, _ := col2.GetValue(i)
+				v1, _ := p1.GetValue(i)
+				v2, _ := p2.GetValue(i)
 				x, _ := v1.Scale(m)
 				rss[i] = cmpFn(x, v2)
 			}
 		} else {
+			scaleMy := -m
 			for i := uint64(0); i < length; i++ {
-				if rsVec.GetNulls().Contains(i) {
+				if resultNsp.Contains(i) {
 					continue
 				}
-				v1, _ := col1.GetValue(i)
-				v2, _ := col2.GetValue(i)
-				y, _ := v2.Scale(-m)
+				v1, _ := p1.GetValue(i)
+				v2, _ := p2.GetValue(i)
+				y, _ := v2.Scale(scaleMy)
 				rss[i] = cmpFn(v1, y)
 			}
 		}
@@ -613,16 +488,17 @@ func valueDec128Compare(
 
 	if m >= 0 {
 		for i := uint64(0); i < length; i++ {
-			v1, _ := col1.GetValue(i)
-			v2, _ := col2.GetValue(i)
+			v1, _ := p1.GetValue(i)
+			v2, _ := p2.GetValue(i)
 			x, _ := v1.Scale(m)
 			rss[i] = cmpFn(x, v2)
 		}
 	} else {
+		scaleMy := -m
 		for i := uint64(0); i < length; i++ {
-			v1, _ := col1.GetValue(i)
-			v2, _ := col2.GetValue(i)
-			y, _ := v2.Scale(-m)
+			v1, _ := p1.GetValue(i)
+			v2, _ := p2.GetValue(i)
+			y, _ := v2.Scale(scaleMy)
 			rss[i] = cmpFn(v1, y)
 		}
 	}
@@ -634,75 +510,75 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedTypeArith1[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
+		return optimizedTypeTemplate1[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return x && !y
 		})
 	case types.T_int8:
-		return optimizedTypeArith1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return optimizedTypeTemplate1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a > b
 		})
 	case types.T_int16:
-		return optimizedTypeArith1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return optimizedTypeTemplate1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a > b
 		})
 	case types.T_int32:
-		return optimizedTypeArith1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return optimizedTypeTemplate1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a > b
 		})
 	case types.T_int64:
-		return optimizedTypeArith1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return optimizedTypeTemplate1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a > b
 		})
 	case types.T_uint8:
-		return optimizedTypeArith1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return optimizedTypeTemplate1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a > b
 		})
 	case types.T_uint16:
-		return optimizedTypeArith1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return optimizedTypeTemplate1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a > b
 		})
 	case types.T_uint32:
-		return optimizedTypeArith1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return optimizedTypeTemplate1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a > b
 		})
 	case types.T_uint64:
-		return optimizedTypeArith1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return optimizedTypeTemplate1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a > b
 		})
 	case types.T_uuid:
-		return optimizedTypeArith1[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
+		return optimizedTypeTemplate1[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) > 0
 		})
 	case types.T_float32:
-		return optimizedTypeArith1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return optimizedTypeTemplate1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a > b
 		})
 	case types.T_float64:
-		return optimizedTypeArith1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return optimizedTypeTemplate1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a > b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+		return optimizedTypeTemplate1ForStr1[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) > 0
 		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+		return optimizedTypeTemplate1ForStr1[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) > 0
 		})
 	case types.T_date:
-		return optimizedTypeArith1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return optimizedTypeTemplate1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a > b
 		})
 	case types.T_datetime:
-		return optimizedTypeArith1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return optimizedTypeTemplate1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a > b
 		})
 	case types.T_time:
-		return optimizedTypeArith1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return optimizedTypeTemplate1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a > b
 		})
 	case types.T_timestamp:
-		return optimizedTypeArith1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return optimizedTypeTemplate1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a > b
 		})
 	case types.T_decimal64:
@@ -722,75 +598,75 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedTypeArith1[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
+		return optimizedTypeTemplate1[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return x || !y
 		})
 	case types.T_int8:
-		return optimizedTypeArith1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return optimizedTypeTemplate1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a >= b
 		})
 	case types.T_int16:
-		return optimizedTypeArith1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return optimizedTypeTemplate1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a >= b
 		})
 	case types.T_int32:
-		return optimizedTypeArith1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return optimizedTypeTemplate1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a >= b
 		})
 	case types.T_int64:
-		return optimizedTypeArith1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return optimizedTypeTemplate1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a >= b
 		})
 	case types.T_uint8:
-		return optimizedTypeArith1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return optimizedTypeTemplate1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a >= b
 		})
 	case types.T_uint16:
-		return optimizedTypeArith1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return optimizedTypeTemplate1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a >= b
 		})
 	case types.T_uint32:
-		return optimizedTypeArith1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return optimizedTypeTemplate1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a >= b
 		})
 	case types.T_uint64:
-		return optimizedTypeArith1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return optimizedTypeTemplate1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a >= b
 		})
 	case types.T_uuid:
-		return optimizedTypeArith1[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
+		return optimizedTypeTemplate1[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) >= 0
 		})
 	case types.T_float32:
-		return optimizedTypeArith1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return optimizedTypeTemplate1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a >= b
 		})
 	case types.T_float64:
-		return optimizedTypeArith1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return optimizedTypeTemplate1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a >= b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+		return optimizedTypeTemplate1ForStr1[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) >= 0
 		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+		return optimizedTypeTemplate1ForStr1[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) >= 0
 		})
 	case types.T_date:
-		return optimizedTypeArith1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return optimizedTypeTemplate1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a >= b
 		})
 	case types.T_datetime:
-		return optimizedTypeArith1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return optimizedTypeTemplate1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a >= b
 		})
 	case types.T_time:
-		return optimizedTypeArith1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return optimizedTypeTemplate1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a >= b
 		})
 	case types.T_timestamp:
-		return optimizedTypeArith1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return optimizedTypeTemplate1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a >= b
 		})
 	case types.T_decimal64:
@@ -810,75 +686,75 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedTypeArith1[bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
+		return optimizedTypeTemplate1[bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
 			return a != b
 		})
 	case types.T_int8:
-		return optimizedTypeArith1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return optimizedTypeTemplate1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a != b
 		})
 	case types.T_int16:
-		return optimizedTypeArith1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return optimizedTypeTemplate1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a != b
 		})
 	case types.T_int32:
-		return optimizedTypeArith1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return optimizedTypeTemplate1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a != b
 		})
 	case types.T_int64:
-		return optimizedTypeArith1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return optimizedTypeTemplate1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a != b
 		})
 	case types.T_uint8:
-		return optimizedTypeArith1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return optimizedTypeTemplate1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a != b
 		})
 	case types.T_uint16:
-		return optimizedTypeArith1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return optimizedTypeTemplate1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a != b
 		})
 	case types.T_uint32:
-		return optimizedTypeArith1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return optimizedTypeTemplate1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a != b
 		})
 	case types.T_uint64:
-		return optimizedTypeArith1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return optimizedTypeTemplate1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a != b
 		})
 	case types.T_uuid:
-		return optimizedTypeArith1[types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
+		return optimizedTypeTemplate1[types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
 			return a != b
 		})
 	case types.T_float32:
-		return optimizedTypeArith1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return optimizedTypeTemplate1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a != b
 		})
 	case types.T_float64:
-		return optimizedTypeArith1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return optimizedTypeTemplate1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a != b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
-			return !bytes.Equal(a, b)
+		return optimizedTypeTemplate1ForStr2[bool](parameters, rs, proc, length, func(a, b string) bool {
+			return a != b
 		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
-			return !bytes.Equal(a, b)
+		return optimizedTypeTemplate1ForStr2[bool](parameters, rs, proc, length, func(a, b string) bool {
+			return a != b
 		})
 	case types.T_date:
-		return optimizedTypeArith1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return optimizedTypeTemplate1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a != b
 		})
 	case types.T_datetime:
-		return optimizedTypeArith1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return optimizedTypeTemplate1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a != b
 		})
 	case types.T_time:
-		return optimizedTypeArith1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return optimizedTypeTemplate1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a != b
 		})
 	case types.T_timestamp:
-		return optimizedTypeArith1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return optimizedTypeTemplate1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a != b
 		})
 	case types.T_decimal64:
@@ -898,75 +774,75 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedTypeArith1[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
+		return optimizedTypeTemplate1[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return !x && y
 		})
 	case types.T_int8:
-		return optimizedTypeArith1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return optimizedTypeTemplate1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a < b
 		})
 	case types.T_int16:
-		return optimizedTypeArith1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return optimizedTypeTemplate1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a < b
 		})
 	case types.T_int32:
-		return optimizedTypeArith1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return optimizedTypeTemplate1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a < b
 		})
 	case types.T_int64:
-		return optimizedTypeArith1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return optimizedTypeTemplate1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a < b
 		})
 	case types.T_uint8:
-		return optimizedTypeArith1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return optimizedTypeTemplate1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a < b
 		})
 	case types.T_uint16:
-		return optimizedTypeArith1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return optimizedTypeTemplate1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a < b
 		})
 	case types.T_uint32:
-		return optimizedTypeArith1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return optimizedTypeTemplate1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a < b
 		})
 	case types.T_uint64:
-		return optimizedTypeArith1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return optimizedTypeTemplate1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a < b
 		})
 	case types.T_uuid:
-		return optimizedTypeArith1[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
+		return optimizedTypeTemplate1[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) < 0
 		})
 	case types.T_float32:
-		return optimizedTypeArith1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return optimizedTypeTemplate1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a < b
 		})
 	case types.T_float64:
-		return optimizedTypeArith1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return optimizedTypeTemplate1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a < b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+		return optimizedTypeTemplate1ForStr1[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) < 0
 		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+		return optimizedTypeTemplate1ForStr1[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) < 0
 		})
 	case types.T_date:
-		return optimizedTypeArith1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return optimizedTypeTemplate1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a < b
 		})
 	case types.T_datetime:
-		return optimizedTypeArith1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return optimizedTypeTemplate1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a < b
 		})
 	case types.T_time:
-		return optimizedTypeArith1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return optimizedTypeTemplate1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a < b
 		})
 	case types.T_timestamp:
-		return optimizedTypeArith1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return optimizedTypeTemplate1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a < b
 		})
 	case types.T_decimal64:
@@ -986,75 +862,75 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedTypeArith1[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
+		return optimizedTypeTemplate1[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return !x || y
 		})
 	case types.T_int8:
-		return optimizedTypeArith1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return optimizedTypeTemplate1[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a <= b
 		})
 	case types.T_int16:
-		return optimizedTypeArith1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return optimizedTypeTemplate1[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a <= b
 		})
 	case types.T_int32:
-		return optimizedTypeArith1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return optimizedTypeTemplate1[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a <= b
 		})
 	case types.T_int64:
-		return optimizedTypeArith1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return optimizedTypeTemplate1[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a <= b
 		})
 	case types.T_uint8:
-		return optimizedTypeArith1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return optimizedTypeTemplate1[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a <= b
 		})
 	case types.T_uint16:
-		return optimizedTypeArith1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return optimizedTypeTemplate1[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a <= b
 		})
 	case types.T_uint32:
-		return optimizedTypeArith1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return optimizedTypeTemplate1[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a <= b
 		})
 	case types.T_uint64:
-		return optimizedTypeArith1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return optimizedTypeTemplate1[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a <= b
 		})
 	case types.T_uuid:
-		return optimizedTypeArith1[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
+		return optimizedTypeTemplate1[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) <= 0
 		})
 	case types.T_float32:
-		return optimizedTypeArith1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return optimizedTypeTemplate1[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a <= b
 		})
 	case types.T_float64:
-		return optimizedTypeArith1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return optimizedTypeTemplate1[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a <= b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+		return optimizedTypeTemplate1ForStr1[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) <= 0
 		})
 	case types.T_binary, types.T_varbinary:
-		return valueStrCompare(parameters, rs, uint64(length), func(a, b []byte) bool {
+		return optimizedTypeTemplate1ForStr1[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) <= 0
 		})
 	case types.T_date:
-		return optimizedTypeArith1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return optimizedTypeTemplate1[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a <= b
 		})
 	case types.T_datetime:
-		return optimizedTypeArith1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return optimizedTypeTemplate1[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a <= b
 		})
 	case types.T_time:
-		return optimizedTypeArith1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return optimizedTypeTemplate1[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a <= b
 		})
 	case types.T_timestamp:
-		return optimizedTypeArith1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return optimizedTypeTemplate1[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a <= b
 		})
 	case types.T_decimal64:
