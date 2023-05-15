@@ -89,6 +89,14 @@ func (b *ObjectColumnMetasBuilder) GetPKData() []containers.Vector {
 	return b.pkData
 }
 
+func (b *ObjectColumnMetasBuilder) SetPKNdv(idx uint16, ndv uint32) {
+	b.metas[idx].SetNdv(ndv)
+}
+
+func (b *ObjectColumnMetasBuilder) GetTotalRow() uint32 {
+	return b.totalRow
+}
+
 func (b *ObjectColumnMetasBuilder) Build() (uint32, []objectio.ColumnMeta) {
 	for i := range b.metas {
 		if b.sks[i] != nil { // rowid or types.TS
