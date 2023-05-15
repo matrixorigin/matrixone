@@ -514,6 +514,7 @@ var (
 		types.New(types.T_TS, 0, 0),                        // committs
 		types.New(types.T_uuid, 0, 0),                      // segment_id
 	}
+
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}
 	// used by memengine or tae
@@ -607,4 +608,57 @@ const (
 	PLAN_IDX         = 11
 	AST_IDX          = 12
 	COLUMN_MAP_IDX   = 13
+)
+
+var (
+	MetadataScanInfoTypes = []types.Type{
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // column_name
+		types.New(types.T_Blockid, types.MaxVarcharLen, 0), // block_id
+		types.New(types.T_bool, 0, 0),                      // entry_state
+		types.New(types.T_bool, 0, 0),                      // sorted
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // meta_loc
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // delta_loc
+		types.New(types.T_TS, 0, 0),                        // commit_ts
+		types.New(types.T_uuid, 0, 0),                      // meta_seg
+		types.New(types.T_int64, 0, 0),                     // row_count
+		types.New(types.T_int64, 0, 0),                     // null_count
+		types.New(types.T_int64, 0, 0),                     // compress_size
+		types.New(types.T_int64, 0, 0),                     // origin_size
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // min
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // max
+	}
+
+	MetadataScanInfoNames = []string{
+		"column_name",
+		"block_id",
+		"entry_state",
+		"sorted",
+		"meta_loc",
+		"delta_loc",
+		"commit_ts",
+		"meta_seg",
+		"row_count",
+		"null_count",
+		"compress_size",
+		"origin_size",
+		"min",
+		"max",
+	}
+)
+
+const (
+	COL_NAME      = 0
+	BLOCK_ID      = 1
+	ENTRY_STATE   = 2
+	SORTED        = 3
+	META_LOC      = 4
+	DELTA_LOC     = 5
+	COMMIT_TS     = 6
+	META_SEG      = 7
+	ROW_CNT       = 8
+	NULL_CNT      = 9
+	COMPRESS_SIZE = 10
+	ORIGIN_SIZE   = 11
+	MIN           = 12
+	MAX           = 13
 )

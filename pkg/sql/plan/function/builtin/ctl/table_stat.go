@@ -30,6 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	AllColumns = "*"
+)
+
 // MoTableRows returns an estimated row number of a table.
 func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec := vector.NewVec(types.T_int64.ToType())
@@ -118,18 +122,25 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 			}
 		}
 		rel.Ranges(proc.Ctx, nil)
-		rows, err := rel.Rows(proc.Ctx)
+		/*
+			rows, err := rel.Rows(proc.Ctx)
+			if err != nil {
+				return nil, err
+			}
+			attrs, err := rel.TableColumns(proc.Ctx)
+			if err != nil {
+				return nil, err
+			}
+			size := int64(0)
+			for _, attr := range attrs {
+				size += rows * int64(attr.Type.TypeSize())
+			}
+		*/
+		size, err := rel.Size(proc.Ctx, AllColumns)
 		if err != nil {
 			return nil, err
 		}
-		attrs, err := rel.TableColumns(proc.Ctx)
-		if err != nil {
-			return nil, err
-		}
-		size := int64(0)
-		for _, attr := range attrs {
-			size += rows * int64(attr.Type.TypeSize())
-		}
+
 		if err := vector.AppendFixed(vec, size, false, proc.Mp()); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err

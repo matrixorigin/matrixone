@@ -667,6 +667,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 
 func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
 	if node == nil || node.TableDef == nil { // like : select 1, 2
+		fmt.Printf("constructValueScanBatch: node == nil || node.TableDef == nil\n")
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
 		bat.InitZsOne(1)
@@ -1995,6 +1996,14 @@ func (c *Compile) NumCPU() int {
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
+	if cpunum <= 0 || blocks <= 0 {
+		return 1
+	}
+
+	if cpunum <= blocks {
+		return cpunum
+	}
+	return blocks
 	if blocks < cpunum {
 		if blocks <= 0 {
 			return 1

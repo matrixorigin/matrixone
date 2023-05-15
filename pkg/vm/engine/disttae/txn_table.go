@@ -186,8 +186,50 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 }
 
 func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
-	// TODO
-	return 0, nil
+	size, _, err := tbl.GetCompressAndOriginSize(ctx, name)
+	return int64(size), err
+}
+
+func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) (uint64, uint64, error) {
+	compressedSize := uint64(0)
+	originSize := uint64(0)
+
+	cols := tbl.getTableDef().GetCols()
+	var (
+		err  error
+		meta objectio.ObjectMeta
+	)
+	for _, blks := range tbl.blockInfos {
+		for _, blk := range blks {
+			location := blk.MetaLocation()
+			if objectio.IsSameObjectLocVsMeta(location, meta) {
+				continue
+			} else {
+				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+					return compressedSize, originSize, err
+				}
+			}
+		}
+	}
+
+	if name == "*" {
+		// calculate all columns
+		for i := range cols {
+			colmeta := meta.MustGetColumn(uint16(cols[i].Seqnum)).Location()
+			compressedSize += uint64(colmeta.Length())
+			originSize += uint64(colmeta.OriginSize())
+		}
+	} else {
+		for i := range cols {
+			if cols[i].Name == name {
+				colmeta := meta.MustGetColumn(uint16(cols[i].Seqnum)).Location()
+				compressedSize += uint64(colmeta.Length())
+				originSize += uint64(colmeta.OriginSize())
+			}
+		}
+	}
+
+	return compressedSize, originSize, nil
 }
 
 func (tbl *txnTable) LoadDeletesForBlock(blockID *types.Blockid, deleteBlockId map[types.Blockid][]int, deletesRowId map[types.Rowid]uint8) error {
