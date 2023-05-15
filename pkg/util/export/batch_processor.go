@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
@@ -315,7 +316,8 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error {
 	select {
 	case <-c.stopCh:
-		return moerr.NewInternalError(ctx, "stopped")
+		ctx = errutil.ContextWithNoReport(ctx, true)
+		return moerr.NewInternalError(ctx, "MOCollector stopped")
 	case c.awakeCollect <- item:
 		return nil
 	}
