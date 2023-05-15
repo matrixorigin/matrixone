@@ -418,7 +418,7 @@ func insertAutoValues[T constraints.Integer](
 	}()
 
 	vs := vector.MustFixedCol[T](vec)
-	autoCount := nulls.Length(vec.GetNulls())
+	autoCount := vec.GetNulls().Count()
 	lastInsertValue := uint64(0)
 
 	// has manual values, we reuse skipped auto values, and update cache max value to store
