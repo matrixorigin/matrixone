@@ -32,10 +32,6 @@ import (
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 4
 
-const MAX_ALLOWED_PACKET_ERROR = "packet for query is too large"
-
-const STATEMENT_INFO_TABLE = "statement_info"
-
 var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
 // DefaultSqlWriter SqlWriter is a writer that writes data to a SQL database.
@@ -83,21 +79,8 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	var err error
 	var cnt int
 	cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
-	//var stmt string
-	//dbConn, err := db.InitOrRefreshDBConn(false)
-	//
-	//if dbConn != nil {
-	//	stmt, cnt, err = generateInsertStatement(sw.buffer, sw.tbl)
-	//	_, err = dbConn.Exec(stmt)
-	//	if err != nil {
-	//		if strings.Contains(err.Error(), MAX_ALLOWED_PACKET_ERROR) && sw.tbl.Table == STATEMENT_INFO_TABLE {
-	//
-	//		}
-	//	}
-	//}
 
 	if err != nil {
-		// Need to clean the buffer anyway, no need to handle the error here
 		sw.dumpBufferToCSV()
 	}
 	sw.buffer = sw.buffer[:0] // Clear the buffer
@@ -204,46 +187,4 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 		return 0, err
 	}
 	return cnt, nil
-}
-
-func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
-
-	baseStr := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
-
-	sb := strings.Builder{}
-	defer sb.Reset()
-
-	for idx, row := range records {
-		if len(row) == 0 {
-			continue
-		}
-
-		sb.WriteString("(")
-		for i, field := range row {
-			if i != 0 {
-				sb.WriteString(",")
-			}
-			if tbl.Columns[i].ColType == table.TJson {
-				var js interface{}
-				_ = json.Unmarshal([]byte(field), &js)
-				escapedJSON, _ := json.Marshal(js)
-				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
-			} else {
-				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
-				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
-				} else {
-					sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
-				}
-			}
-		}
-		sb.WriteString(")")
-
-		if idx != len(records)-1 {
-			sb.WriteString(",")
-		}
-	}
-	stmt := baseStr + sb.String() + ";"
-
-	return stmt, len(records), nil
 }
