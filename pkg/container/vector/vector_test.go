@@ -387,7 +387,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{2, 1}, mp)
 		vs := MustFixedCol[bool](v)
 		require.Equal(t, []bool{true, false}, vs)
-		require.Equal(t, "[true false]-&{<nil>}", v.String())
+		require.Equal(t, "[true false]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -398,7 +398,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[int8](v)
 		require.Equal(t, []int8{2, 3}, vs)
-		require.Equal(t, "[2 3]-&{<nil>}", v.String())
+		require.Equal(t, "[2 3]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -409,7 +409,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{0, 3}, mp)
 		vs := MustFixedCol[int16](v)
 		require.Equal(t, []int16{1, 4}, vs)
-		require.Equal(t, "[1 4]-&{<nil>}", v.String())
+		require.Equal(t, "[1 4]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -420,7 +420,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[int32](v)
 		require.Equal(t, []int32{2, 3}, vs)
-		require.Equal(t, "[2 3]-&{<nil>}", v.String())
+		require.Equal(t, "[2 3]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -431,7 +431,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[int64](v)
 		require.Equal(t, []int64{2, 3}, vs)
-		require.Equal(t, "[2 3]-&{<nil>}", v.String())
+		require.Equal(t, "[2 3]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -442,7 +442,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[uint8](v)
 		require.Equal(t, []uint8{2, 3}, vs)
-		require.Equal(t, "[2 3]-&{<nil>}", v.String())
+		require.Equal(t, "[2 3]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -453,7 +453,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{0, 3}, mp)
 		vs := MustFixedCol[uint16](v)
 		require.Equal(t, []uint16{1, 4}, vs)
-		require.Equal(t, "[1 4]-&{<nil>}", v.String())
+		require.Equal(t, "[1 4]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -464,7 +464,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[uint32](v)
 		require.Equal(t, []uint32{2, 3}, vs)
-		require.Equal(t, "[2 3]-&{<nil>}", v.String())
+		require.Equal(t, "[2 3]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -475,7 +475,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[uint64](v)
 		require.Equal(t, []uint64{2, 3}, vs)
-		require.Equal(t, "[2 3]-&{<nil>}", v.String())
+		require.Equal(t, "[2 3]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -486,7 +486,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[float32](v)
 		require.Equal(t, []float32{2, 3}, vs)
-		require.Equal(t, "[2 3]-&{<nil>}", v.String())
+		require.Equal(t, "[2 3]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -497,7 +497,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[float64](v)
 		require.Equal(t, []float64{2, 3}, vs)
-		require.Equal(t, "[2 3]-&{<nil>}", v.String())
+		require.Equal(t, "[2 3]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -509,7 +509,7 @@ func TestShuffle(t *testing.T) {
 		vs := MustStrCol(v)
 		require.Equal(t, []string{"2", "3"}, vs)
 		require.Equal(t, [][]byte{[]byte("2"), []byte("3")}, MustBytesCol(v))
-		require.Equal(t, "[2 3]-&{<nil>}", v.String())
+		require.Equal(t, "[2 3]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -520,7 +520,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[types.Date](v)
 		require.Equal(t, []types.Date{2, 3}, vs)
-		require.Equal(t, "[0001-01-03 0001-01-04]-&{<nil>}", v.String())
+		require.Equal(t, "[0001-01-03 0001-01-04]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -531,7 +531,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[types.Datetime](v)
 		require.Equal(t, []types.Datetime{2, 3}, vs)
-		require.Equal(t, "[0001-01-01 00:00:00 0001-01-01 00:00:00]-&{<nil>}", v.String())
+		require.Equal(t, "[0001-01-01 00:00:00 0001-01-01 00:00:00]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -542,7 +542,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[types.Time](v)
 		require.Equal(t, []types.Time{2, 3}, vs)
-		require.Equal(t, "[00:00:00 00:00:00]-&{<nil>}", v.String())
+		require.Equal(t, "[00:00:00 00:00:00]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -553,7 +553,7 @@ func TestShuffle(t *testing.T) {
 		v.Shuffle([]int64{1, 2}, mp)
 		vs := MustFixedCol[types.Timestamp](v)
 		require.Equal(t, []types.Timestamp{2, 3}, vs)
-		require.Equal(t, "[0001-01-01 00:00:00.000002 UTC 0001-01-01 00:00:00.000003 UTC]-&{<nil>}", v.String())
+		require.Equal(t, "[0001-01-01 00:00:00.000002 UTC 0001-01-01 00:00:00.000003 UTC]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -564,7 +564,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Decimal64](v))
-		require.Equal(t, "[0 0]-&{<nil>}", v.String())
+		require.Equal(t, "[0 0]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -575,7 +575,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Decimal128](v))
-		require.Equal(t, "[{0 0} {0 0}]-&{<nil>}", v.String())
+		require.Equal(t, "[{0 0} {0 0}]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -586,7 +586,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Uuid](v))
-		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]-&{<nil>}", v.String())
+		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -597,7 +597,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedCol[types.TS](v))
-		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0]]-&{<nil>}", v.String())
+		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0]]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -608,7 +608,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Rowid](v))
-		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]-&{<nil>}", v.String())
+		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
@@ -619,7 +619,7 @@ func TestShuffle(t *testing.T) {
 		require.NoError(t, err)
 		v.Shuffle([]int64{1, 2}, mp)
 		require.Equal(t, vs[1:3], MustFixedCol[types.Blockid](v))
-		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]-&{<nil>}", v.String())
+		require.Equal(t, "[[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]]-[]", v.String())
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}

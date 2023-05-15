@@ -610,7 +610,13 @@ func SetJoinBatchValues(joinBat, bat *batch.Batch, sel int64, length int,
 
 var noColumnBatchForZoneMap = []*batch.Batch{batch.NewWithSize(0)}
 
-func EvaluateFilterByZoneMap(proc *process.Process, expr *plan.Expr, meta objectio.ColumnMetaFetcher, columnMap map[int]int) (selected bool) {
+func EvaluateFilterByZoneMap(
+	proc *process.Process,
+	expr *plan.Expr,
+	meta objectio.ColumnMetaFetcher,
+	columnMap map[int]int,
+	zms []objectio.ZoneMap,
+	vecs []*vector.Vector) (selected bool) {
 	if expr == nil {
 		selected = true
 		return
@@ -632,7 +638,7 @@ func EvaluateFilterByZoneMap(proc *process.Process, expr *plan.Expr, meta object
 		return false
 	}
 
-	zm := evaluateFilterByZoneMap(proc, expr, meta, columnMap)
+	zm := evaluateFilterByZoneMap(proc, expr, meta, columnMap, zms, vecs)
 	if !zm.IsInited() || zm.GetType() != types.T_bool {
 		selected = true
 	} else {
@@ -645,131 +651,136 @@ func evaluateFilterByZoneMap(
 	proc *process.Process,
 	expr *plan.Expr,
 	meta objectio.ColumnMetaFetcher,
-	columnMap map[int]int) (v objectio.ZoneMap) {
+	columnMap map[int]int,
+	zms []objectio.ZoneMap,
+	vecs []*vector.Vector) (v objectio.ZoneMap) {
 	var err error
 
 	switch t := expr.Expr.(type) {
 	case *plan.Expr_C:
-		if v, err = getConstZM(proc.Ctx, expr, proc); err != nil {
-			v = objectio.NewZM(types.T_bool, 0)
+		if zms[expr.AuxId] == nil {
+			if zms[expr.AuxId], err = getConstZM(proc.Ctx, expr, proc); err != nil {
+				zms[expr.AuxId] = objectio.NewZM(types.T_bool, 0)
+			}
 		}
-		return
+
 	case *plan.Expr_Col:
-		v = meta.MustGetColumn(uint16(columnMap[int(t.Col.ColPos)])).ZoneMap()
-		return
+		zms[expr.AuxId] = meta.MustGetColumn(uint16(columnMap[int(t.Col.ColPos)])).ZoneMap()
+
 	case *plan.Expr_F:
 		id := t.F.GetFunc().GetObj()
 		if overload, errGetFunc := function2.GetFunctionById(proc.Ctx, id); errGetFunc != nil {
-			v = objectio.NewZM(types.T_bool, 0)
-			return
+			zms[expr.AuxId].Reset()
+
 		} else {
-			params := make([]objectio.ZoneMap, len(t.F.Args))
-			for i := range params {
-				params[i] = evaluateFilterByZoneMap(proc, t.F.Args[i], meta, columnMap)
-				if !params[i].IsInited() {
-					return params[i]
+			args := t.F.Args
+			for _, arg := range args {
+				zms[arg.AuxId] = evaluateFilterByZoneMap(proc, arg, meta, columnMap, zms, vecs)
+				if !zms[arg.AuxId].IsInited() {
+					zms[expr.AuxId].Reset()
 				}
 			}
+
 			var res, ok bool
 			switch t.F.Func.ObjName {
 			case ">":
-				if res, ok = params[0].AnyGT(params[1]); !ok {
-					v = objectio.NewZM(types.T_bool, 0)
+				if res, ok = zms[args[0].AuxId].AnyGT(zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
 				} else {
-					v = index.BoolToZM(res)
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
-				return
+
 			case "<":
-				if res, ok = params[0].AnyLT(params[1]); !ok {
-					v = objectio.NewZM(types.T_bool, 0)
+				if res, ok = zms[args[0].AuxId].AnyLT(zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
 				} else {
-					v = index.BoolToZM(res)
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
-				return
+
 			case ">=":
-				if res, ok = params[0].AnyGE(params[1]); !ok {
-					v = objectio.NewZM(types.T_bool, 0)
+				if res, ok = zms[args[0].AuxId].AnyGE(zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
 				} else {
-					v = index.BoolToZM(res)
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
-				return
+
 			case "<=":
-				if res, ok = params[0].AnyLE(params[1]); !ok {
-					v = objectio.NewZM(types.T_bool, 0)
+				if res, ok = zms[args[0].AuxId].AnyLE(zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
 				} else {
-					v = index.BoolToZM(res)
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
-				return
+
 			case "=":
-				if res, ok = params[0].Intersect(params[1]); !ok {
-					v = objectio.NewZM(types.T_bool, 0)
+				if res, ok = zms[args[0].AuxId].Intersect(zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
 				} else {
-					v = index.BoolToZM(res)
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
-				return
+
 			case "and":
-				if res, ok = params[0].And(params[1]); !ok {
-					v = objectio.NewZM(types.T_bool, 0)
+				if res, ok = zms[args[0].AuxId].And(zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
 				} else {
-					v = index.BoolToZM(res)
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
-				return
+
 			case "or":
-				if res, ok = params[0].Or(params[1]); !ok {
-					v = objectio.NewZM(types.T_bool, 0)
+				if res, ok = zms[args[0].AuxId].Or(zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
 				} else {
-					v = index.BoolToZM(res)
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
 				}
-				return
+
 			case "+":
-				if v, ok = index.ZMPlus(params[0], params[1]); !ok {
-					v = objectio.NewZM(types.T_bool, 0)
-				}
-				return
+				zms[expr.AuxId] = index.ZMPlus(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
+
 			case "-":
-				if v, ok = index.ZMMinus(params[0], params[1]); !ok {
-					v = objectio.NewZM(types.T_bool, 0)
-				}
-				return
+				zms[expr.AuxId] = index.ZMMinus(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
+
 			case "*":
-				if v, ok = index.ZMMulti(params[0], params[1]); !ok {
-					v = objectio.NewZM(types.T_bool, 0)
-				}
-				return
-			}
+				zms[expr.AuxId] = index.ZMMulti(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
-			vecParams := make([]*vector.Vector, len(params))
-			defer func() {
-				for i := range vecParams {
-					if vecParams[i] != nil {
-						vecParams[i].Free(proc.Mp())
-						vecParams[i] = nil
+			default:
+				vecParams := make([]*vector.Vector, len(args))
+				defer func() {
+					for i := range vecParams {
+						if vecParams[i] != nil {
+							vecParams[i].Free(proc.Mp())
+							vecParams[i] = nil
+						}
 					}
-				}
-			}()
-			for i := range vecParams {
-				if vecParams[i], err = index.ZMToVector(params[i], proc.Mp()); err != nil {
-					v = objectio.NewZM(types.T_bool, 0)
-					return
-				}
-			}
+				}()
 
-			fn := overload.GetExecuteMethod()
-			typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
-			result := vector.NewFunctionResultWrapper(typ, proc.Mp())
-			err = result.PreExtendAndReset(2)
-			if err != nil {
-				v = objectio.NewZM(types.T_bool, 0)
-			}
-			if err = fn(vecParams, result, proc, 2); err != nil {
-				v = objectio.NewZM(types.T_bool, 0)
-				return
-			}
-			defer result.GetResultVector().Free(proc.Mp())
-			v = index.VectorToZM(result.GetResultVector())
+				ivecs := make([]*vector.Vector, len(args))
+				for i, arg := range args {
+					if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
+						zms[expr.AuxId].Reset()
+						return zms[expr.AuxId]
+					}
+					ivecs[i] = vecs[arg.AuxId]
+				}
 
-			return
+				fn := overload.GetExecuteMethod()
+				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+				if err = result.PreExtendAndReset(2); err != nil {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+				if err = fn(vecParams, result, proc, 2); err != nil {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+				defer result.GetResultVector().Free(proc.Mp())
+				zms[expr.AuxId] = index.VectorToZM(result.GetResultVector(), zms[expr.AuxId])
+
+			}
 		}
+
+	default:
+		zms[expr.AuxId].Reset()
 	}
-	return objectio.NewZM(types.T_bool, 0)
+
+	return zms[expr.AuxId]
 }

@@ -89,7 +89,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 func TestNewBinaryFuseFilter(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	typ := types.T_uint32.ToType()
-	data := containers.MockVector3(typ, 2000)
+	data := containers.MockVector2(typ, 2000, 0)
 	defer data.Close()
 	_, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)

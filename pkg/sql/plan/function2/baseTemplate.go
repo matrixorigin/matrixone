@@ -189,7 +189,7 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 							if null2 {
 								r, ifnull := fValueNull(v1)
 								if !ifnull {
-									rsVec.GetNulls().Np.Remove(i)
+									rsVec.GetNulls().Del(i)
 									rss[i] = r
 								}
 							} else {
@@ -212,21 +212,21 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 							} else {
 								r, ifnull := fNullValue(v2)
 								if ifnull {
-									rsVec.GetNulls().Np.Add(i)
+									rsVec.GetNulls().Add(i)
 								} else {
 									rss[i] = r
 								}
 							}
 						}
 					} else {
-						if rsVec.GetNulls().Np == nil {
+						if rsVec.GetNulls() == nil {
 							rsVec.SetNulls(nulls.NewWithSize(0))
 						}
 						for i := uint64(0); i < uint64(length); i++ {
 							v2, _ := p2.GetValue(i)
 							r, ifnull := fNullValue(v2)
 							if ifnull {
-								rsVec.GetNulls().Np.Add(i)
+								rsVec.GetNulls().Add(i)
 							} else {
 								rss[i] = r
 							}
@@ -246,7 +246,7 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 							if null1 {
 								r, ifnull := fNullValue(v2)
 								if !ifnull {
-									rsVec.GetNulls().Np.Remove(i)
+									rsVec.GetNulls().Del(i)
 									rss[i] = r
 								}
 							} else {
@@ -271,21 +271,21 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 							} else {
 								r, ifnull := fValueNull(v1)
 								if ifnull {
-									rsVec.GetNulls().Np.Add(i)
+									rsVec.GetNulls().Add(i)
 								} else {
 									rss[i] = r
 								}
 							}
 						}
 					} else {
-						if rsVec.GetNulls().Np == nil {
+						if rsVec.GetNulls() == nil {
 							rsVec.SetNulls(nulls.NewWithSize(0))
 						}
 						for i := uint64(0); i < uint64(length); i++ {
 							v1, _ := p1.GetValue(i)
 							r, ifnull := fValueNull(v1)
 							if ifnull {
-								rsVec.GetNulls().Np.Add(i)
+								rsVec.GetNulls().Add(i)
 							} else {
 								rss[i] = r
 							}
@@ -305,13 +305,13 @@ func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
 					if null1 && !null2 {
 						r, rnull := fNullValue(v2)
 						if !rnull {
-							rsVec.GetNulls().Np.Remove(i)
+							rsVec.GetNulls().Del(i)
 							rss[i] = r
 						}
 					} else if null2 && !null1 {
 						r, rnull := fValueNull(v1)
 						if !rnull {
-							rsVec.GetNulls().Np.Remove(i)
+							rsVec.GetNulls().Del(i)
 							rss[i] = r
 						}
 					} else if !null1 && !null2 {
@@ -735,19 +735,19 @@ func optimizedTypeTemplate1ForMod[
 						continue
 					}
 					if v2 == 0 {
-						rsVec.GetNulls().Np.Add(i)
+						rsVec.GetNulls().Add(i)
 					} else {
 						rss[i] = modFn(v1, v2)
 					}
 				}
 			} else {
-				if rsVec.GetNulls().Np == nil {
+				if rsVec.GetNulls() == nil {
 					rsVec.SetNulls(nulls.NewWithSize(0))
 				}
 				for i := uint64(0); i < uint64(length); i++ {
 					v2, _ := p2.GetValue(i)
 					if v2 == 0 {
-						rsVec.GetNulls().Np.Add(i)
+						rsVec.GetNulls().Add(i)
 					} else {
 						rss[i] = modFn(v1, v2)
 					}
@@ -791,7 +791,7 @@ func optimizedTypeTemplate1ForMod[
 				continue
 			}
 			if v2 == 0 {
-				rsVec.GetNulls().Np.Add(i)
+				rsVec.GetNulls().Add(i)
 			} else {
 				rss[i] = modFn(v1, v2)
 			}
@@ -799,14 +799,14 @@ func optimizedTypeTemplate1ForMod[
 		return nil
 	}
 
-	if rsVec.GetNulls().Np == nil {
+	if rsVec.GetNulls() == nil {
 		rsVec.SetNulls(nulls.NewWithSize(0))
 	}
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		if v2 == 0 {
-			rsVec.GetNulls().Np.Add(i)
+			rsVec.GetNulls().Add(i)
 		} else {
 			rss[i] = modFn(v1, v2)
 		}

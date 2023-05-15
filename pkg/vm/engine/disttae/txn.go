@@ -415,10 +415,12 @@ func evalFilterExprWithZonemap(
 	ctx context.Context,
 	meta objectio.ColumnMetaFetcher,
 	expr *plan.Expr,
+	zms []objectio.ZoneMap,
+	vecs []*vector.Vector,
 	columnMap map[int]int,
 	proc *process.Process,
 ) (selected bool) {
-	return colexec.EvaluateFilterByZoneMap(proc, expr, meta, columnMap)
+	return colexec.EvaluateFilterByZoneMap(proc, expr, meta, columnMap, zms, vecs)
 }
 
 /* used by multi-dn

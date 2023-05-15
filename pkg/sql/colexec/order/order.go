@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -124,7 +123,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) (bool, er
 
 	// skip sort for const vector
 	if !ovec.IsConst() {
-		nullCnt := nulls.Length(ovec.GetNulls())
+		nullCnt := ovec.GetNulls().Count()
 		if nullCnt < ovec.Length() {
 			if ovec.GetType().IsVarlen() {
 				strCol = vector.MustStrCol(ovec)
@@ -149,7 +148,7 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) (bool, er
 		vec := ctr.vecs[i].vec
 		// skip sort for const vector
 		if !vec.IsConst() {
-			nullCnt := nulls.Length(vec.GetNulls())
+			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
 				if vec.GetType().IsVarlen() {
 					strCol = vector.MustStrCol(vec)

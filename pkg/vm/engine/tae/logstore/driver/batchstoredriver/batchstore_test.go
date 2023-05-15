@@ -58,10 +58,10 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 			panic(moerr.NewInternalErrorNoCtx("logic error %d<%d", e.Lsn, tempLsn))
 		}
 		tempLsn = e.Lsn
-		_, err = s.Read(e.Lsn)
+		_, err = s.Read(e.Lsn, nil)
 		assert.NoError(t, err)
 		// logutil.Infof("lsn is %d",e.Lsn)
-	})
+	}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, maxlsn, s.GetCurrSeqNum())
 	assert.Equal(t, maxlsn, s.synced)
@@ -98,7 +98,7 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 		return func() {
 			e := entries[i]
 			assert.NoError(t, e.WaitDone())
-			e2, err := s.Read(e.Lsn)
+			e2, err := s.Read(e.Lsn, nil)
 			assert.NoError(t, err)
 			assert.Equal(t, e2.Entry.GetInfo().(*storeEntry.Info).GroupLSN, e.Info.GroupLSN)
 			e2.Entry.Free()

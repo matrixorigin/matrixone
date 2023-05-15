@@ -16,8 +16,6 @@ package vector
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -70,12 +68,12 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			scalarValue:  cols[0],
 		}
 	}
-	if v.GetNulls() != nil && v.GetNulls().Np != nil && v.GetNulls().Np.Len() > 0 {
+	if !v.nsp.EmptyByFlag() {
 		return &FunctionParameterNormal[T]{
 			typ:          *t,
 			sourceVector: v,
 			values:       cols,
-			nullMap:      v.GetNulls().Np,
+			nullMap:      v.GetNulls().GetBitmap(),
 		}
 	}
 	return &FunctionParameterWithoutNull[T]{
@@ -102,13 +100,14 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 			scalarStr:    cols[0].GetByteSlice(v.area),
 		}
 	}
-	if v.GetNulls() != nil && v.GetNulls().Np != nil && v.GetNulls().Np.Len() > 0 {
+
+	if !v.GetNulls().EmptyByFlag() {
 		if v.typ.Width != 0 && v.typ.Width <= types.VarlenaInlineSize {
 			return &FunctionParameterNormalSpecial1[types.Varlena]{
 				typ:          *t,
 				sourceVector: v,
 				strValues:    cols,
-				nullMap:      v.GetNulls().Np,
+				nullMap:      v.GetNulls().GetBitmap(),
 			}
 		}
 		return &FunctionParameterNormal[types.Varlena]{
@@ -116,7 +115,7 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 			sourceVector: v,
 			strValues:    cols,
 			area:         v.area,
-			nullMap:      v.GetNulls().Np,
+			nullMap:      v.GetNulls().GetBitmap(),
 		}
 	}
 	if v.typ.Width != 0 && v.typ.Width <= types.VarlenaInlineSize {
@@ -418,7 +417,7 @@ func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
 		// XXX LOW PERF
 		// if we can expand the nulls while appending null first times.
 		// or we can append from last to first. can reduce a lot of expansion.
-		nulls.Add(fr.vec.nsp, fr.length)
+		fr.vec.nsp.Add(fr.length)
 	} else {
 		fr.cols[fr.length] = val
 	}

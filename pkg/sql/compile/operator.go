@@ -17,8 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -75,6 +73,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1167,12 +1166,22 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string) *dispatch.Argument {
+func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, shuffle bool, shuffleColIdx int) *dispatch.Argument {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
 	if hasRemote {
-		arg.FuncId = dispatch.SendToAllFunc
+		if shuffle {
+			arg.FuncId = dispatch.ShuffleToAllFunc
+			arg.ShuffleColIdx = shuffleColIdx
+		} else {
+			arg.FuncId = dispatch.SendToAllFunc
+		}
 	} else {
-		arg.FuncId = dispatch.SendToAllLocalFunc
+		if shuffle {
+			arg.FuncId = dispatch.ShuffleToAllLocalFunc
+			arg.ShuffleColIdx = shuffleColIdx
+		} else {
+			arg.FuncId = dispatch.SendToAllLocalFunc
+		}
 	}
 
 	return arg

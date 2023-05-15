@@ -67,7 +67,6 @@ type BlockReader interface {
 	Fingerprint() *common.ID
 	Rows() int
 	Prefetch(idxes []uint16) error
-
 	// Why need rowmask?
 	// We don't update the index until committing the transaction. Before that, even if we deleted a row
 	// from a block, the index would not change. If then we insert a row with the same primary key as the
