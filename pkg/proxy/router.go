@@ -34,10 +34,16 @@ const (
 // Router is an interface to select CN server and connects to it.
 type Router interface {
 	// Route selects the best CN server according to the clientInfo.
+	// This is the only method that allocate *CNServer, and other
+	// SelectXXX method in this interface select CNServer from the
+	// ones it allocated.
 	Route(ctx context.Context, client clientInfo) (*CNServer, error)
 
 	// SelectByConnID selects the CN server which has the connection ID.
 	SelectByConnID(connID uint32) (*CNServer, error)
+
+	// SelectByTenant selects the CN servers belongs to the tenant.
+	SelectByTenant(tenant Tenant) ([]*CNServer, error)
 
 	// Connect connects to the CN server and returns the connection.
 	// It should take a handshakeResp as a parameter, which is the auth
@@ -46,6 +52,7 @@ type Router interface {
 }
 
 // CNServer represents the backend CN server, including salt, tenant, uuid and address.
+// When there is a new client connection, a new CNServer will be created.
 type CNServer struct {
 	// connID is the backend CN server's connection ID, which is global unique
 	// and is tracked in connManager.
@@ -114,7 +121,7 @@ func newRouter(
 
 // SelectByConnID implements the Router interface.
 func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
-	cn := r.rebalancer.connManager.getCNServer(connID)
+	cn := r.rebalancer.connManager.getCNServerByConnID(connID)
 	if cn == nil {
 		return nil, moerr.NewInternalErrorNoCtx("no available CN server.")
 	}
@@ -124,6 +131,11 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 		uuid: cn.uuid,
 		addr: cn.addr,
 	}, nil
+}
+
+// SelectByTenant implements the Router interface.
+func (r *router) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
+	return r.rebalancer.connManager.getCNServersByTenant(tenant), nil
 }
 
 // Route implements the Router interface.

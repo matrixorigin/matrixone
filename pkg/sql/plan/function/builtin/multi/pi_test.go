@@ -29,7 +29,6 @@ func Test_Pi(t *testing.T) {
 	convey.Convey("Test Pi function succ", t, func() {
 		vec, err := Pi(nil, nil)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(vec.GetNulls().Np, convey.ShouldBeNil)
 		data := vector.MustFixedCol[float64](vec)
 		ok := (data != nil)
 		if !ok {

@@ -555,13 +555,16 @@ func (blk *ablock) inMemoryBatchDedup(
 	txn txnif.TxnReader,
 	isCommitting bool,
 	keys containers.Vector,
-	rowmask *roaring.Bitmap) (err error) {
+	rowmask *roaring.Bitmap,
+	zm []byte,
+) (err error) {
 	var dupRow uint32
 	blk.RLock()
 	defer blk.RUnlock()
 	_, err = mnode.BatchDedup(
 		keys,
-		blk.checkConflictAndDupClosure(txn, isCommitting, &dupRow, rowmask))
+		blk.checkConflictAndDupClosure(txn, isCommitting, &dupRow, rowmask),
+		zm)
 
 	// definitely no duplicate
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
@@ -577,7 +580,9 @@ func (blk *ablock) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
-	precommit bool) (err error) {
+	precommit bool,
+	zm []byte,
+) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
@@ -586,7 +591,7 @@ func (blk *ablock) BatchDedup(
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask)
+		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask, zm)
 	} else {
 		return blk.PersistedBatchDedup(
 			node.MustPNode(),
@@ -594,7 +599,9 @@ func (blk *ablock) BatchDedup(
 			precommit,
 			keys,
 			rowmask,
-			true)
+			true,
+			zm,
+		)
 	}
 }
 

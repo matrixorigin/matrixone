@@ -386,7 +386,7 @@ func TestFromUnixTimeFloat64Null(t *testing.T) {
 		process := testutil.NewProc()
 		res, err := FromUnixTimeFloat64([]*vector.Vector{numVector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().Np.ToArray())
+		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().ToArray())
 	})
 }
 
@@ -421,7 +421,7 @@ func TestFromUnixTimeInt64Null(t *testing.T) {
 		process := testutil.NewProc()
 		res, err := FromUnixTimeInt64([]*vector.Vector{float64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().Np.ToArray())
+		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().ToArray())
 	})
 }
 
@@ -457,7 +457,7 @@ func TestFromUnixTimeInt64FormatNull(t *testing.T) {
 		process := testutil.NewProc()
 		res, err := FromUnixTimeInt64Format([]*vector.Vector{numVector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().Np.ToArray())
+		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().ToArray())
 	})
 }
 
@@ -493,7 +493,7 @@ func TestFromUnixTimeFloat64FormatNull(t *testing.T) {
 		process := testutil.NewProc()
 		res, err := FromUnixTimeFloat64Format([]*vector.Vector{numVector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
-		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().Np.ToArray())
+		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.GetNulls().ToArray())
 	})
 }
 

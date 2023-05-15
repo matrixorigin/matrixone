@@ -141,7 +141,7 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 		if bitmap.Contains(uint64(rowOffset)) {
 			continue
 		} else {
-			bitmap.Np.Add(uint64(rowOffset))
+			bitmap.Add(uint64(rowOffset))
 		}
 		if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
 			arg.ctr.blockId_type[str] = RawBatchOffset

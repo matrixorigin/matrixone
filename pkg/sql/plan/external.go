@@ -151,6 +151,17 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 	if err != nil || param.Local || param.ScanType == tree.S3 {
 		return DefaultHugeStats()
 	}
+
+	if param.ScanType == tree.S3 {
+		if err = InitS3Param(param); err != nil {
+			return DefaultHugeStats()
+		}
+	} else {
+		if err = InitInfileParam(param); err != nil {
+			return DefaultHugeStats()
+		}
+	}
+
 	param.FileService = builder.compCtx.GetProcess().FileService
 	param.Ctx = builder.compCtx.GetProcess().Ctx
 	_, spanReadDir := trace.Start(param.Ctx, "ReCalcNodeStats.ReadDir")
