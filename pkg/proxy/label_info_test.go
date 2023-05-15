@@ -60,7 +60,7 @@ func (c *mockHAKeeperClient) updateCN(uuid string, addr string, labels map[strin
 func (c *mockHAKeeperClient) Close() error                                   { return nil }
 func (c *mockHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) { return 0, nil }
 func (c *mockHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
-	return 0, nil
+	return uint64(nextClientConnID()), nil
 }
 func (c *mockHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
 	c.RLock()

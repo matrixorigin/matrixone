@@ -20,6 +20,7 @@ import (
 	"net"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"go.uber.org/zap"
 )
 
@@ -103,6 +105,8 @@ type clientConn struct {
 	connID uint32
 	// clientInfo is the information of the client.
 	clientInfo clientInfo
+	// haKeeperClient is the client of HAKeeper.
+	haKeeperClient logservice.ClusterHAKeeperClient
 	// moCluster is the CN server cache, which used to filter CN servers
 	// by CN labels.
 	moCluster clusterservice.MOCluster
@@ -127,6 +131,7 @@ func newClientConn(
 	logger *log.MOLogger,
 	cs *counterSet,
 	conn goetty.IOSession,
+	haKeeperClient logservice.ClusterHAKeeperClient,
 	mc clusterservice.MOCluster,
 	router Router,
 	tun *tunnel,
@@ -137,17 +142,21 @@ func newClientConn(
 		originIP = net.ParseIP(host)
 	}
 	c := &clientConn{
-		ctx:        ctx,
-		log:        logger,
-		counterSet: cs,
-		conn:       conn,
-		connID:     nextClientConnID(),
-		moCluster:  mc,
-		router:     router,
-		tun:        tun,
+		ctx:            ctx,
+		log:            logger,
+		counterSet:     cs,
+		conn:           conn,
+		haKeeperClient: haKeeperClient,
+		moCluster:      mc,
+		router:         router,
+		tun:            tun,
 		clientInfo: clientInfo{
 			originIP: originIP,
 		},
+	}
+	c.connID, err = c.genConnID()
+	if err != nil {
+		return nil, err
 	}
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
@@ -290,7 +299,7 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	// Before connect to backend server, update the salt.
 	cn.salt = c.mysqlProto.GetSalt()
 
-	return c.connAndExec(cn, e.stmt, resp)
+	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.backendConnID), resp)
 }
 
 // handleSetVar handles the set variable event.
@@ -330,7 +339,7 @@ func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent, resp chan<- []
 		cn.salt = c.mysqlProto.GetSalt()
 
 		go func(s *CNServer) {
-			query := fmt.Sprintf("kill connection %d", s.connID)
+			query := fmt.Sprintf("kill connection %d", s.backendConnID)
 			// No client to receive the result, so pass nil as the third
 			// parameter to ignore the result.
 			if err := c.connAndExec(s, query, nil); err != nil {
@@ -379,6 +388,9 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	// We have to set proxy connection ID after cn is returned.
+	cn.proxyConnID = c.connID
+
 	// Set the salt value of cn server.
 	cn.salt = c.mysqlProto.GetSalt()
 	sc, r, err := c.router.Connect(cn, c.handshakePack, c.tun)
@@ -432,4 +444,21 @@ func (c *clientConn) readPacket() (*frontend.Packet, error) {
 // nextClientConnID increases baseConnID by 1 and returns the result.
 func nextClientConnID() uint32 {
 	return atomic.AddUint32(&clientBaseConnID, 1)
+}
+
+// genConnID is used to generate globally unique connection ID.
+func (c *clientConn) genConnID() (uint32, error) {
+	if c.haKeeperClient == nil {
+		return nextClientConnID(), nil
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
+	defer cancel()
+	// Use the same key with frontend module to make sure the connection ID
+	// is unique globally.
+	connID, err := c.haKeeperClient.AllocateIDByKey(ctx, frontend.ConnIDAllocKey)
+	if err != nil {
+		return 0, err
+	}
+	// Convert uint64 to uint32 to adapt MySQL protocol.
+	return uint32(connID), nil
 }
