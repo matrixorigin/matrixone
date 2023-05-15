@@ -3217,7 +3217,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	_, err = meta.GetBlockData().GetByFilter(txn, filter)
 	assert.NoError(t, err)
 
-	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false)
+	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false, []byte{})
 	assert.Error(t, err)
 }
 
