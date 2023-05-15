@@ -1246,7 +1246,7 @@ const (
 				where role.role_id = mg.role_id 
 					and role.role_id != %d  
 					and mg.user_id = %d 
-					order by role.role_id;`
+					order by role.role_id asc;`
 
 	checkUdfArgs = `select args,function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
 
