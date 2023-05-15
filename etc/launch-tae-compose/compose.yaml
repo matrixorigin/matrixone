@@ -47,27 +47,27 @@ services:
         limits:
           memory: 12g
 
-#  cn-1:
-#    container_name: cn-1
-#    <<: *mo-common
-#    entrypoint: ["/mo-service", "-debug-http", ":12345", "-cfg", "/config/cn-1.toml"]
-#    depends_on:
-#      - dn
-#    ports:
-#      - "7001:6001"
-#      - "6002"
-#      - "22345:12345"
-#    profiles:
-#      - launch-tae-multi-CN-tae-DN
-#    environment:
-#      - AWS_ACCESS_KEY_ID=minio
-#      - AWS_SECRET_ACCESS_KEY=minio123
-#    networks:
-#      monet:
-#    deploy:
-#      resources:
-#        limits:
-#          memory: 12g
+  cn-1:
+    container_name: cn-1
+    <<: *mo-common
+    entrypoint: ["/mo-service", "-debug-http", ":12345", "-cfg", "/config/cn-1.toml"]
+    depends_on:
+      - dn
+    ports:
+      - "7001:6001"
+      - "6002"
+      - "22345:12345"
+    profiles:
+      - launch-tae-multi-CN-tae-DN
+    environment:
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+    networks:
+      monet:
+    deploy:
+      resources:
+        limits:
+          memory: 12g
 
   dn:
     container_name: dn
