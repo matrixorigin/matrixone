@@ -16,15 +16,23 @@ package rpc
 
 import (
 	"context"
+	"encoding/hex"
+	struntime "runtime"
 	"sync"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
+)
+
+const (
+	maxRingBufferSize = 10000
 )
 
 // WithServerMaxMessageSize set max rpc message size
@@ -64,6 +72,12 @@ type server struct {
 		maxMessageSize int
 		enableCompress bool
 	}
+
+	// in order not to block tcp, the data read from tcp will be put into this ringbuffer. This ringbuffer will
+	// be consumed by many goroutines concurrently, and the number of goroutines will be set to the number of
+	// cpu's number.
+	queue   chan executor
+	stopper *stopper.Stopper
 }
 
 // NewTxnServer create a txn server. One DNStore corresponds to one TxnServer
@@ -74,6 +88,9 @@ func NewTxnServer(
 	s := &server{
 		rt:       rt,
 		handlers: make(map[txn.TxnMethod]TxnRequestHandleFunc),
+		queue:    make(chan executor, maxRingBufferSize),
+		stopper: stopper.NewStopper("txn rpc server",
+			stopper.WithLogger(rt.Logger().RawLogger())),
 	}
 	s.pool.requests = sync.Pool{
 		New: func() any {
@@ -103,9 +120,9 @@ func NewTxnServer(
 		codecOpts = append(codecOpts, morpc.WithCodecEnableCompress(mp))
 	}
 	rpc, err := morpc.NewRPCServer("txn-server", address,
-		morpc.NewMessageCodec(s.acquireRequest,
-			codecOpts...),
+		morpc.NewMessageCodec(s.acquireRequest, codecOpts...),
 		morpc.WithServerLogger(s.rt.Logger().RawLogger()),
+		morpc.WithServerDisableAutoCancelContext(),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(morpc.RPCMessage)
 			if !m.InternalMessage() {
@@ -122,10 +139,12 @@ func NewTxnServer(
 }
 
 func (s *server) Start() error {
+	s.startProcessors()
 	return s.rpc.Start()
 }
 
 func (s *server) Close() error {
+	s.stopper.Stop()
 	return s.rpc.Close()
 }
 
@@ -133,17 +152,31 @@ func (s *server) RegisterMethodHandler(m txn.TxnMethod, h TxnRequestHandleFunc) 
 	s.handlers[m] = h
 }
 
+func (s *server) startProcessors() {
+	n := struntime.NumCPU()
+	for i := 0; i < n; i++ {
+		if err := s.stopper.RunTask(s.handleTxnRequest); err != nil {
+			panic(err)
+		}
+	}
+}
+
 // onMessage a client connection has a separate read goroutine. The onMessage invoked in this read goroutine.
-func (s *server) onMessage(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+func (s *server) onMessage(
+	ctx context.Context,
+	msg morpc.RPCMessage,
+	sequence uint64,
+	cs morpc.ClientSession) error {
 	ctx, span := trace.Debug(ctx, "server.onMessage")
 	defer span.End()
-	m, ok := request.(*txn.TxnRequest)
-	if !ok {
-		s.rt.Logger().Fatal("received invalid message", zap.Any("message", request))
-	}
-	defer s.releaseRequest(m)
 
+	m, ok := msg.Message.(*txn.TxnRequest)
+	if !ok {
+		s.rt.Logger().Fatal("received invalid message", zap.Any("message", msg))
+	}
 	if s.options.filter != nil && !s.options.filter(m) {
+		s.releaseRequest(m)
+		msg.Cancel()
 		return nil
 	}
 
@@ -155,18 +188,23 @@ func (s *server) onMessage(ctx context.Context, request morpc.Message, sequence 
 
 	select {
 	case <-ctx.Done():
+		s.releaseRequest(m)
+		msg.Cancel()
 		return nil
 	default:
 	}
 
-	resp := s.acquireResponse()
-	if err := handler(ctx, m, resp); err != nil {
-		s.releaseResponse(resp)
-		return err
+	t := time.Now()
+	s.queue <- executor{
+		t:       t,
+		ctx:     ctx,
+		cancel:  msg.Cancel,
+		req:     m,
+		cs:      cs,
+		handler: handler,
+		s:       s,
 	}
-
-	resp.RequestID = m.RequestID
-	return cs.Write(ctx, resp)
+	return nil
 }
 
 func (s *server) acquireResponse() *txn.TxnResponse {
@@ -185,4 +223,45 @@ func (s *server) acquireRequest() morpc.Message {
 func (s *server) releaseRequest(req *txn.TxnRequest) {
 	req.Reset()
 	s.pool.requests.Put(req)
+}
+
+func (s *server) handleTxnRequest(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case req := <-s.queue:
+			if txnID, err := req.exec(); err != nil {
+				if s.rt.Logger().Enabled(zap.DebugLevel) {
+					s.rt.Logger().Error("handle txn request failed",
+						zap.String("txn-id", hex.EncodeToString(txnID)),
+						zap.Error(err))
+				}
+			}
+		}
+	}
+}
+
+type executor struct {
+	t       time.Time
+	ctx     context.Context
+	cancel  context.CancelFunc
+	req     *txn.TxnRequest
+	cs      morpc.ClientSession
+	handler TxnRequestHandleFunc
+	s       *server
+}
+
+func (r executor) exec() ([]byte, error) {
+	defer r.cancel()
+	defer r.s.releaseRequest(r.req)
+	resp := r.s.acquireResponse()
+	if err := r.handler(r.ctx, r.req, resp); err != nil {
+		r.s.releaseResponse(resp)
+		return r.req.Txn.ID, err
+	}
+	resp.RequestID = r.req.RequestID
+	txnID := r.req.Txn.ID
+	err := r.cs.Write(r.ctx, resp)
+	return txnID, err
 }
