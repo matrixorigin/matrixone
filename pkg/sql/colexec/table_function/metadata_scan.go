@@ -60,7 +60,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	fmt.Printf("[metadatascan] first: %s, second: %s\n", tb, col)
 	fmt.Printf("arg.Attrs = %s\n", arg.Attrs)
 
-	dbname, tablename, colname, err := handleDbAndTable(vector.MustStrCol(tb), vector.MustStrCol(col))
+	dbname, tablename, colname, err := handleDatasourceInfo(vector.MustStrCol(tb), vector.MustStrCol(col))
 	if err != nil {
 		return false, err
 	}
@@ -101,17 +101,14 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	return true, nil
 }
 
-func handleDbAndTable(first []string, second []string) (string, string, string, error) {
-	if len(first) != 1 {
-		return "", "", "", moerr.NewInternalErrorNoCtx("wrong len of first(more than 1)")
+func handleDatasourceInfo(first []string, second []string) (string, string, string, error) {
+	if len(first) != 1 || len(second) != 1 {
+		return "", "", "", moerr.NewInternalErrorNoCtx("wrong input len")
 	}
 	s := first[0]
 	strs := strings.Split(s, ".")
 	if len(strs) != 2 {
-		return "", "", "", moerr.NewInternalErrorNoCtx("wrong len of first(xx.xx)")
-	}
-	if len(second) != 1 {
-		return "", "", "", moerr.NewInternalErrorNoCtx("wrong len of second(xx.xx)")
+		return "", "", "", moerr.NewInternalErrorNoCtx("wrong len of db and tbl input")
 	}
 	return strs[0], strs[1], second[0], nil
 }
