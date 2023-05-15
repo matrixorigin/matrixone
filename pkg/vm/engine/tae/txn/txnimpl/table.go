@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -931,6 +932,10 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	if err = index.BatchUpdateZM(inputZM, keys); err != nil {
 		return
 	}
+	var (
+		name objectio.ObjectNameShort
+		bf   objectio.BloomFilter
+	)
 	maxBlockID := &types.Blockid{}
 	for it.Valid() {
 		blkH := it.GetBlock()
@@ -956,12 +961,28 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 				rowmask = deleteNode.GetRowMaskRefLocked()
 			}
 		}
+		location := blk.FastGetMetaLoc()
+		if len(location) == 0 {
+			bf = objectio.BloomFilter{}
+		} else if !objectio.IsSameObjectLocVsShort(location, &name) {
+			if bf, err = indexwrapper.LoadBF(
+				context.Background(),
+				location,
+				tbl.store.indexCache,
+				tbl.store.dataFactory.Fs.Service,
+				false,
+			); err != nil {
+				return
+			}
+		}
+		name = *objectio.ToObjectNameShort(&blk.ID)
+
 		if err = blkData.BatchDedup(
 			tbl.store.txn,
 			keys, rowmask,
 			false,
 			inputZM,
-			objectio.BloomFilter{},
+			bf,
 		); err != nil {
 			// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 			return
