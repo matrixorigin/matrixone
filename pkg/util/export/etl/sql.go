@@ -30,7 +30,7 @@ import (
 )
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
-const MAX_CHUNK_SIZE = 1024 * 1024 * 6
+const MAX_CHUNK_SIZE = 1024 * 1024 * 4
 
 const MAX_ALLOWED_PACKET_ERROR = "packet for query is too large"
 
