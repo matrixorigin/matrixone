@@ -197,6 +197,8 @@ message Expr {
 		ExprList	list	= 11;
 		MaxValue	max		= 12;
 	}
+
+	int32 aux_id = 13;
 }
 
 enum CompressType {

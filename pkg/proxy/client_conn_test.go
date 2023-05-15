@@ -273,7 +273,7 @@ func createNewClientConn(t *testing.T) (ClientConn, func()) {
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 	cs := newCounterSet()
-	cc, err := newClientConn(ctx, logger, cs, s, nil, nil, nil)
+	cc, err := newClientConn(ctx, logger, cs, s, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cc)
 	return cc, func() {
