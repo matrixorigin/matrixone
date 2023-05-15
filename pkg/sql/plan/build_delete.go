@@ -58,7 +58,6 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	beginIdx := 0
 	for i, tableDef := range tblInfo.tableDefs {
 		deleteBindCtx := NewBindContext(builder, nil)
-
 		delPlanCtx := &dmlPlanCtx{
 			objRef:          tblInfo.objRef[i],
 			tableDef:        tableDef,
@@ -69,6 +68,13 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			rowIdPos:        getRowIdPos(tableDef),
 			allDelTableIDs:  allDelTableIDs,
 		}
+
+		nextSourceStep, err := makePreUpdateDeletePlan(ctx, builder, deleteBindCtx, delPlanCtx)
+		if err != nil {
+			return nil, err
+		}
+		delPlanCtx.sourceStep = nextSourceStep
+
 		err = buildDeletePlans(ctx, builder, deleteBindCtx, delPlanCtx)
 		if err != nil {
 			return nil, err

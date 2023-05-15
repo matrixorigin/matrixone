@@ -134,6 +134,7 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		PkColumn: ctx.PkColumn,
 		PkType:   DeepCopyType(ctx.PkType),
 		UkType:   DeepCopyType(ctx.UkType),
+		TableDef: DeepCopyTableDef(ctx.TableDef),
 	}
 	copy(newCtx.Columns, ctx.Columns)
 

@@ -52,14 +52,8 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 
 	defer proc.PutBatch(bat)
 
-	var newBat *batch.Batch
-	if arg.IsUpdate {
-		newBat = batch.NewWithSize(len(arg.Attrs) + 1)
-		newBat.Attrs = make([]string, 0, len(arg.Attrs)+1)
-	} else {
-		newBat = batch.NewWithSize(len(arg.Attrs))
-		newBat.Attrs = make([]string, 0, len(arg.Attrs))
-	}
+	newBat := batch.NewWithSize(len(arg.Attrs))
+	newBat.Attrs = make([]string, 0, len(arg.Attrs))
 	for idx := range arg.Attrs {
 		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
 		newBat.SetVector(int32(idx), proc.GetVector(*bat.GetVector(int32(idx)).GetType()))
@@ -70,15 +64,15 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	}
 	newBat.Zs = append(newBat.Zs, bat.Zs...)
 
-	if !arg.IsUpdate {
-		if arg.HasAutoCol {
-			err := genAutoIncrCol(newBat, proc, arg)
-			if err != nil {
-				newBat.Clean(proc.GetMPool())
-				return false, err
-			}
+	// if !arg.IsUpdate {
+	if arg.HasAutoCol {
+		err := genAutoIncrCol(newBat, proc, arg)
+		if err != nil {
+			newBat.Clean(proc.GetMPool())
+			return false, err
 		}
 	}
+	// }
 
 	// check new rows not null
 	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
@@ -103,11 +97,12 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	if arg.IsUpdate {
 		idx := len(bat.Vecs) - 1
 		newBat.Attrs = append(newBat.Attrs, catalog.Row_ID)
-		newBat.SetVector(int32(idx), proc.GetVector(*bat.GetVector(int32(idx)).GetType()))
-		err := newBat.Vecs[idx].UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
+		rowIdVec := proc.GetVector(*bat.GetVector(int32(idx)).GetType())
+		err := rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
 		if err != nil {
 			return false, err
 		}
+		newBat.Vecs = append(newBat.Vecs, rowIdVec)
 	}
 
 	proc.SetInputBatch(newBat)
