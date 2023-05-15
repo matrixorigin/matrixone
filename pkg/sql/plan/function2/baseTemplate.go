@@ -934,8 +934,8 @@ func optimizedTypeTemplate1ForDiv[
 func optimizedTypeTemplate1ForStr1[T2 bool](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 []byte) T2) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Varlena](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Varlena](parameters[1])
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[T2](result)
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedCol[T2](rsVec)
@@ -1029,8 +1029,8 @@ func optimizedTypeTemplate1ForStr1[T2 bool](
 func optimizedTypeTemplate1ForStr2[T2 bool](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 string) T2) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[types.Varlena](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[types.Varlena](parameters[1])
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[T2](result)
 	rsVec := rs.GetResultVector()
 	rss := vector.MustFixedCol[T2](rsVec)

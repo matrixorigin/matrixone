@@ -54,7 +54,7 @@ var _ FunctionParameterWrapper[int64] = &FunctionParameterScalarNull[int64]{}
 var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterNormalSpecial1[types.Varlena]{}
 var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterWithoutNullSpecial1[types.Varlena]{}
 
-func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionParameterWrapper[T] {
+func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector) FunctionParameterWrapper[T] {
 	t := v.GetType()
 	if v.IsConstNull() {
 		return &FunctionParameterScalarNull[T]{
@@ -192,7 +192,7 @@ func (p *FunctionParameterNormalSpecial1[T]) GetSourceVector() *Vector {
 	return p.sourceVector
 }
 
-func (p *FunctionParameterNormalSpecial1[T]) GetValue(idx uint64) (T, bool) {
+func (p *FunctionParameterNormalSpecial1[T]) GetValue(_ uint64) (T, bool) {
 	panic("please use GetStrValue method.")
 }
 
@@ -261,7 +261,7 @@ func (p *FunctionParameterWithoutNullSpecial1[T]) GetSourceVector() *Vector {
 	return p.sourceVector
 }
 
-func (p *FunctionParameterWithoutNullSpecial1[T]) GetValue(idx uint64) (T, bool) {
+func (p *FunctionParameterWithoutNullSpecial1[T]) GetValue(_ uint64) (T, bool) {
 	panic("please use GetStrValue method.")
 }
 
@@ -459,10 +459,6 @@ func (fr *FunctionResult[T]) SetResultVector(v *Vector) {
 
 func (fr *FunctionResult[T]) GetResultVector() *Vector {
 	return fr.vec
-}
-
-func (fr *FunctionResult[T]) ConvertToParameter() FunctionParameterWrapper[T] {
-	return GenerateFunctionFixedTypeParameter[T](fr.vec)
 }
 
 func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameterWrapper[types.Varlena] {
