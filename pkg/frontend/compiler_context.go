@@ -661,7 +661,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 		}
 	}
 	tableName := obj.GetObjName()
-	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
+	ctx, table, _ := tcc.getRelation(dbName, tableName, sub)
 	return table.Stats(ctx, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
 }
 
