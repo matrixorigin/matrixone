@@ -130,7 +130,36 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	return rows, nil
 }
 
+func (tbl *txnTable) ForeachBlock(
+	state *logtailreplay.PartitionState,
+	fn func(block logtailreplay.BlockEntry) error,
+) (err error) {
+	ts := types.TimestampToTS(tbl.txn.meta.SnapshotTS)
+	iter := state.NewBlocksIter(ts)
+	for iter.Next() {
+		entry := iter.Entry()
+		if err = fn(entry); err != nil {
+			break
+		}
+	}
+	iter.Close()
+	return
+}
+
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
+	var (
+		err   error
+		parts []*logtailreplay.PartitionState
+	)
+	if parts, err = tbl.getParts(ctx); err != nil {
+		return nil, nil, err
+	}
+
+	onePartFn := func(state *logtailreplay.PartitionState) error {
+		var err error
+		return err
+	}
+
 	if len(tbl.blockInfos) == 0 {
 		return nil, nil, moerr.NewInvalidInputNoCtx("table meta is nil")
 	}
