@@ -131,6 +131,9 @@ func (w *BlockWriter) WriteBatchWithOutIndex(batch *batch.Batch) (objectio.Block
 
 func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objectio.Extent, error) {
 	if w.objMetaBuilder != nil {
+		if w.isSetPK {
+			w.objMetaBuilder.SetPKNdv(w.pk, w.objMetaBuilder.GetTotalRow())
+		}
 		cnt, meta := w.objMetaBuilder.Build()
 		w.writer.WriteObjectMeta(ctx, cnt, meta)
 		columnsData := w.objMetaBuilder.GetPKData()
