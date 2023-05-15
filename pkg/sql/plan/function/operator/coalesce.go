@@ -155,7 +155,7 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 	rsCols := vector.MustFixedCol[T](rs)
 
 	rs.SetNulls(nulls.NewWithSize(vecLen))
-	rs.GetNulls().Np.AddRange(0, uint64(vecLen))
+	rs.GetNulls().AddRange(0, uint64(vecLen))
 
 	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
@@ -172,10 +172,10 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 					rsCols[j] = cols[0]
 				}
 			}
-			rs.GetNulls().Np = nil
+			rs.GetNulls().Reset()
 			return rs, nil
 		} else {
-			nullsLength := nulls.Length(input.GetNulls())
+			nullsLength := input.GetNulls().Count()
 			if nullsLength == vecLen {
 				// all null do nothing
 				continue
@@ -186,19 +186,20 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 						rsCols[j] = cols[j]
 					}
 				}
-				rs.GetNulls().Np = nil
+				rs.GetNulls().Reset()
 				return rs, nil
 			} else {
 				// some nulls
 				for j := 0; j < vecLen; j++ {
 					if rs.GetNulls().Contains(uint64(j)) && !input.GetNulls().Contains(uint64(j)) {
 						rsCols[j] = cols[j]
-						rs.GetNulls().Np.Remove(uint64(j))
+						rs.GetNulls().Unset(uint64(j))
 					}
 				}
 
-				if rs.GetNulls().Np.IsEmpty() {
-					rs.GetNulls().Np = nil
+				// XXX Is this really an optimization?
+				if rs.GetNulls().IsEmpty() {
+					rs.GetNulls().Reset()
 					return rs, nil
 				}
 			}
@@ -232,7 +233,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 
 	rs := make([]string, vecLen)
 	nsp := nulls.NewWithSize(vecLen)
-	nsp.Np.AddRange(0, uint64(vecLen))
+	nsp.AddRange(0, uint64(vecLen))
 
 	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
@@ -249,7 +250,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			nsp = nil
 			break
 		} else {
-			nullsLength := nulls.Length(input.GetNulls())
+			nullsLength := input.GetNulls().Count()
 			if nullsLength == vecLen {
 				// all null do nothing
 				continue
@@ -267,12 +268,12 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 				for j := 0; j < vecLen; j++ {
 					if nsp.Contains(uint64(j)) && !input.GetNulls().Contains(uint64(j)) {
 						rs[j] = cols[j]
-						nsp.Np.Remove(uint64(j))
+						nsp.Unset(uint64(j))
 					}
 				}
 
 				// now if is empty, break
-				if nsp.Np.IsEmpty() {
+				if nsp.IsEmpty() {
 					nsp = nil
 					break
 				}
