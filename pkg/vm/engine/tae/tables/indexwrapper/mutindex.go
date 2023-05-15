@@ -100,16 +100,25 @@ func (idx *mutableIndex) Dedup(key any, skipfn func(row uint32) (err error)) (er
 	return
 }
 
-func (idx *mutableIndex) BatchDedup(keys containers.Vector,
-	skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
-	if keys.Length() == 1 {
-		err = idx.Dedup(keys.ShallowGet(0), skipfn)
-		return
-	}
-	exist := idx.zonemap.FastContainsAny(keys)
-	// 1. all keys are definitely not existed
-	if !exist {
-		return
+func (idx *mutableIndex) BatchDedup(
+	keys containers.Vector,
+	skipfn func(row uint32) (err error),
+	zm []byte,
+) (keyselects *roaring.Bitmap, err error) {
+	inputZM := index.ZM(zm)
+	if inputZM.Valid() {
+		if exist := idx.zonemap.FastIntersect(inputZM); !exist {
+			return
+		}
+	} else {
+		if keys.Length() == 1 {
+			err = idx.Dedup(keys.ShallowGet(0), skipfn)
+			return
+		}
+		// 1. all keys are definitely not existed
+		if exist := idx.zonemap.FastContainsAny(keys); !exist {
+			return
+		}
 	}
 	op := func(v []byte, _ bool, _ int) error {
 		rows, err := idx.art.Search(v)
@@ -182,7 +191,9 @@ func (idx *nonPkMutIndex) Dedup(key any, _ func(uint32) error) (err error) {
 
 func (idx *nonPkMutIndex) BatchDedup(
 	keys containers.Vector,
-	skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
+	skipfn func(row uint32) (err error),
+	_ []byte,
+) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := idx.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {

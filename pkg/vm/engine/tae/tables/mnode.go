@@ -89,8 +89,10 @@ func (node *memoryNode) IsPersisted() bool { return false }
 
 func (node *memoryNode) BatchDedup(
 	keys containers.Vector,
-	skipFn func(row uint32) error) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn)
+	skipFn func(row uint32) error,
+	zm []byte,
+) (sels *roaring.Bitmap, err error) {
+	return node.pkIndex.BatchDedup(keys, skipFn, zm)
 }
 
 func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {
@@ -113,6 +115,10 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 	}
 	vec := node.data.Vecs[idx]
 	return vec.Get(row), vec.IsNull(row)
+}
+
+func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+	return node.data.Vecs[colIdx].Foreach(op, sels)
 }
 
 func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {

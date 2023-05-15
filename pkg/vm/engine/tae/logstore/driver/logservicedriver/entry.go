@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 type MetaType uint8
@@ -281,13 +282,13 @@ func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 		mashalMu: sync.RWMutex{}}
 }
 
-func (r *recordEntry) replay(h driver.ApplyHandle) (addr *common.ClosedIntervals) {
+func (r *recordEntry) replay(h driver.ApplyHandle, allocator logstoreEntry.Allocator) (addr *common.ClosedIntervals) {
 	bbuf := bytes.NewBuffer(r.baseEntry.payload)
 	lsns := make([]uint64, 0)
 	for lsn := range r.meta.addr {
 		lsns = append(lsns, lsn)
 		e := entry.NewEmptyEntry()
-		e.ReadFrom(bbuf)
+		e.ReadFromWithAllocator(bbuf, allocator)
 		h(e)
 		e.Entry.Free()
 	}
@@ -329,12 +330,12 @@ func (r *recordEntry) unmarshal() {
 	r.unmarshaled.Store(1)
 }
 
-func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
+func (r *recordEntry) readEntry(lsn uint64, allocator logstoreEntry.Allocator) *entry.Entry {
 	r.unmarshal()
 	offset := r.meta.addr[lsn]
 	bbuf := bytes.NewBuffer(r.baseEntry.payload[offset:])
 	e := entry.NewEmptyEntry()
-	e.ReadFrom(bbuf)
+	e.ReadFromWithAllocator(bbuf, allocator)
 	e.Lsn = lsn
 	return e
 }

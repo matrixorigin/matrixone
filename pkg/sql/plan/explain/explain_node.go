@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"strconv"
 )
 
@@ -369,6 +370,10 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
 		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+
+	if plan2.NeedShuffle(ndesc.Node) {
+		buf.WriteString(" shuffle: true ")
 	}
 	return buf.String(), nil
 }

@@ -353,12 +353,17 @@ func (tbl *txnTable) rangesOnePart(
 	var (
 		isMonoExpr     bool
 		meta           objectio.ObjectMeta
+		zms            []objectio.ZoneMap
+		vecs           []*vector.Vector
 		columnMap      map[int]int
 		skipThisObject bool
 	)
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	if isMonoExpr = plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
+		cnt := plan2.AssignAuxIdForExpr(expr, 0)
+		zms = make([]objectio.ZoneMap, cnt)
+		vecs = make([]*vector.Vector, cnt)
 		columnMap, _, _, _ = plan2.GetColumnsByExpr(expr, tableDef)
 	}
 
@@ -385,13 +390,13 @@ func (tbl *txnTable) rangesOnePart(
 				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
 					return
 				}
-				if skipThisObject = !evalFilterExprWithZonemap(errCtx, meta, expr, columnMap, proc); skipThisObject {
+				if skipThisObject = !evalFilterExprWithZonemap(errCtx, meta, expr, zms, vecs, columnMap, proc); skipThisObject {
 					continue
 				}
 			}
 
 			// eval filter expr on the block
-			need = evalFilterExprWithZonemap(errCtx, meta.GetBlockMeta(uint32(location.ID())), expr, columnMap, proc)
+			need = evalFilterExprWithZonemap(errCtx, meta.GetBlockMeta(uint32(location.ID())), expr, zms, vecs, columnMap, proc)
 		}
 
 		// if the block is not needed, skip it
@@ -604,7 +609,8 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	}
 	var packer *types.Packer
 	put := tbl.db.txn.engine.packerPool.Get(&packer)
-	defer put()
+	defer put.Put()
+
 	if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
 		return err
 	}
@@ -786,7 +792,8 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 
 	var packer *types.Packer
 	put := tbl.db.txn.engine.packerPool.Get(&packer)
-	defer put()
+	defer put.Put()
+
 	if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
 		return err
 	}
@@ -873,7 +880,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		if ok {
 			var packer *types.Packer
 			put := tbl.db.txn.engine.packerPool.Get(&packer)
-			defer put()
+			defer put.Put()
 			encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
 		}
 	}

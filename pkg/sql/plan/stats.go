@@ -484,7 +484,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				output *= getExprNdv(groupby, nil, node.NodeId, builder)
 			}
 			if output > input {
-				output = input
+				output = math.Min(input, output*math.Pow(childStats.Selectivity, 0.8))
 			}
 			node.Stats = &plan.Stats{
 				Outcnt:      output,
@@ -682,5 +682,5 @@ func andSelectivity(s1, s2 float64) float64 {
 	if s1 > 0.15 || s2 > 0.15 || s1*s2 > 0.1 {
 		return s1 * s2
 	}
-	return math.Min(s1, s2) * math.Max(math.Pow(s1, math.Pow(s2, 2)), math.Pow(s2, math.Pow(s1, 2)))
+	return math.Min(s1, s2) * math.Max(math.Pow(s1, s2), math.Pow(s2, s1))
 }

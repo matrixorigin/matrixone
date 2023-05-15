@@ -22,8 +22,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -1561,5 +1560,28 @@ func onlyContainsTag(filter *Expr, tag int32) bool {
 		return true
 	default:
 		return true
+	}
+}
+
+func AssignAuxIdForExpr(expr *plan.Expr, start int32) int32 {
+	expr.AuxId = start
+	vertexCnt := int32(1)
+
+	if f, ok := expr.Expr.(*plan.Expr_F); ok {
+		for _, child := range f.F.Args {
+			vertexCnt += AssignAuxIdForExpr(child, start+vertexCnt)
+		}
+	}
+
+	return vertexCnt
+}
+
+func ResetAuxIdForExpr(expr *plan.Expr) {
+	expr.AuxId = 0
+
+	if f, ok := expr.Expr.(*plan.Expr_F); ok {
+		for _, child := range f.F.Args {
+			ResetAuxIdForExpr(child)
+		}
 	}
 }
