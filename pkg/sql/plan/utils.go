@@ -1025,10 +1025,7 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	bat.Zs = []int64{1}
 	for i, expr := range exprList {
 		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
-		if tmpexpr != nil {
-			expr = tmpexpr
-		}
-		newExprList[i] = expr
+		newExprList[i] = tmpexpr
 	}
 	return colexec.RewriteFilterExprList(newExprList)
 }

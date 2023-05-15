@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"sort"
 	"strings"
@@ -550,7 +551,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		} else {
 			colsData := node.RowsetData.Cols
 			rowCount := float64(len(colsData[0].Data))
-			blockNumber := rowCount/8192 + 1
+			blockNumber := rowCount/float64(options.DefaultBlockMaxRows) + 1
 			node.Stats = &plan.Stats{
 				TableCnt:    (rowCount),
 				BlockNum:    int32(blockNumber),
@@ -599,7 +600,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 			stats.Selectivity = stats.Outcnt / stats.TableCnt
 			stats.Cost = stats.TableCnt
-			stats.BlockNum = int32(stats.Outcnt/8192 + 1)
+			stats.BlockNum = int32(stats.Outcnt/float64(options.DefaultBlockMaxRows) + 1)
 
 			node.Stats = stats
 		}
