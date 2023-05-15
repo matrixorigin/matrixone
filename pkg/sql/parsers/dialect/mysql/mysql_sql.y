@@ -356,7 +356,7 @@ import (
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE
 
 // SET tokens
-%token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
+%token <str> NAMES GLOBAL PERSIST SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
 %token <str> LOCAL EVENTS PLUGINS
 
 // Functions
@@ -1910,6 +1910,15 @@ var_assignment:
         }
     }
 |   GLOBAL var_name equal_or_assignment set_expr
+    {
+        $$ = &tree.VarAssignmentExpr{
+            System: true,
+            Global: true,
+            Name: $2,
+            Value: $4,
+        }
+    }
+|   PERSIST var_name equal_or_assignment set_expr
     {
         $$ = &tree.VarAssignmentExpr{
             System: true,
@@ -9181,6 +9190,7 @@ non_reserved_keyword:
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
 |   GLOBAL
+|   PERSIST
 |   GRANT
 |   INT
 |   INTEGER
