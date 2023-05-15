@@ -366,14 +366,27 @@ func (tbl *txnTable) rangesOnePart(
 	var (
 		isMonoExpr     bool
 		meta           objectio.ObjectMeta
+		zms            []objectio.ZoneMap
+		vecs           []*vector.Vector
 		columnMap      map[int]int
 		skipThisObject bool
 	)
+
+	defer func() {
+		for i := range vecs {
+			if vecs[i] != nil {
+				vecs[i].Free(proc.Mp())
+			}
+		}
+	}()
 
 	hasDeletes := len(deletes) > 0
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	if isMonoExpr = plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
+		cnt := plan2.AssignAuxIdForExpr(expr, 0)
+		zms = make([]objectio.ZoneMap, cnt)
+		vecs = make([]*vector.Vector, cnt)
 		columnMap, _, _, _ = plan2.GetColumnsByExpr(expr, tableDef)
 	}
 
@@ -398,13 +411,13 @@ func (tbl *txnTable) rangesOnePart(
 				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
 					return
 				}
-				if skipThisObject = !evalFilterExprWithZonemap(errCtx, meta, expr, columnMap, proc); skipThisObject {
+				if skipThisObject = !evalFilterExprWithZonemap(errCtx, meta, expr, zms, vecs, columnMap, proc); skipThisObject {
 					continue
 				}
 			}
 
 			// eval filter expr on the block
-			need = evalFilterExprWithZonemap(errCtx, meta.GetBlockMeta(uint32(location.ID())), expr, columnMap, proc)
+			need = evalFilterExprWithZonemap(errCtx, meta.GetBlockMeta(uint32(location.ID())), expr, zms, vecs, columnMap, proc)
 		}
 
 		// if the block is not needed, skip it
