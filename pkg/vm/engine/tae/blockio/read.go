@@ -132,9 +132,12 @@ func BlockReadInner(
 	for _, offset := range deleteOffset {
 		deletedRows = append(deletedRows, int64(offset))
 	}
-	sort.Slice(deletedRows, func(i, j int) bool {
-		return deletedRows[i] < deletedRows[j]
-	})
+	if len(deleteOffset) > 0 {
+		sort.Slice(deletedRows, func(i, j int) bool {
+			return deletedRows[i] < deletedRows[j]
+		})
+	}
+
 	result = batch.NewWithSize(len(loaded.Vecs))
 	for i, col := range loaded.Vecs {
 		typ := *col.GetType()
