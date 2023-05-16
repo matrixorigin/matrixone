@@ -424,7 +424,7 @@ import (
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
-%type <statement> show_function_status_stmt show_node_list_stmt show_locks_stmt
+%type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> show_servers_stmt
@@ -2766,6 +2766,7 @@ show_stmt:
 |   show_roles_stmt
 |   show_collation_stmt
 |   show_function_status_stmt
+|   show_procedure_status_stmt
 |   show_node_list_stmt
 |   show_locks_stmt
 |   show_table_num_stmt
@@ -2826,9 +2827,20 @@ db_name_opt:
 show_function_status_stmt:
     SHOW FUNCTION STATUS like_opt where_expression_opt
     {
-       $$ = &tree.ShowFunctionStatus{
+       $$ = &tree.ShowFunctionOrProcedureStatus{
             Like: $4,
             Where: $5,
+            IsFunction: true,
+        }
+    }
+
+show_procedure_status_stmt:
+    SHOW PROCEDURE STATUS like_opt where_expression_opt
+    {
+        $$ = &tree.ShowFunctionOrProcedureStatus{
+            Like: $4,
+            Where: $5,
+            IsFunction: false,
         }
     }
 
@@ -2901,10 +2913,6 @@ show_target:
 |    TRIGGERS from_or_in_opt db_name_opt
     {
         $$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowTriggers}
-    }
-|    PROCEDURE STATUS
-    {
-        $$ = &tree.ShowTarget{Type: tree.ShowProcedureStatus}
     }
 |    EVENTS from_or_in_opt db_name_opt
     {

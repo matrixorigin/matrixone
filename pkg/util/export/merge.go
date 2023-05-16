@@ -290,9 +290,9 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	defer cacheFileData.Reset()
 	sqlWriter := etl.NewSqlWriter(ctx, m.Table, nil)
 
-	for _, path := range files {
+	for _, fp := range files {
 		// open reader
-		reader, err := newETLReader(ctx, m.Table, m.FS, path.FilePath, path.FileSize, m.mp)
+		reader, err := newETLReader(ctx, m.Table, m.FS, fp.FilePath, fp.FileSize, m.mp)
 		if err != nil {
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
@@ -305,7 +305,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 			if err = row.ParseRow(line); err != nil {
 				m.logger.Error("parse ETL rows failed",
 					logutil.TableField(m.Table.GetIdentify()),
-					logutil.PathField(path.FilePath),
+					logutil.PathField(fp.FilePath),
 					logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", line), 102400)),
 				)
 				reader.Close()
@@ -315,7 +315,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 		}
 		if err != nil {
 			m.logger.Warn("failed to read file",
-				logutil.PathField(path.FilePath), zap.Error(err))
+				logutil.PathField(fp.FilePath), zap.Error(err))
 			reader.Close()
 			return err
 		}
@@ -325,22 +325,25 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 			if err = cacheFileData.Flush(sqlWriter, m.Table); err != nil {
 				m.logger.Error("failed to write sql",
 					logutil.TableField(m.Table.GetIdentify()),
-					logutil.PathField(path.FilePath),
+					logutil.PathField(fp.FilePath),
 					logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", line), 102400)),
 				)
 				reader.Close()
 				return err
 			}
+			reader.Close()
 			cacheFileData.Reset()
 		}
 		// delete empty file or file already uploaded
 		if cacheFileData.Size() == 0 {
-			if err = m.FS.Delete(ctx, path.FilePath); err != nil {
+			if err = m.FS.Delete(ctx, fp.FilePath); err != nil {
 				m.logger.Warn("failed to delete file", zap.Error(err))
 				return err
 			}
 		}
 		reader.Close()
+		// todo: adjust the sleep settings
+		time.Sleep(20 * time.Second)
 	}
 
 	return nil
@@ -535,9 +538,8 @@ func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath stri
 		return writer, nil
 	} else {
 		// CSV
-		//sw := sqlWriter.NewSqlWriter(ctx)
 		fsWriter := etl.NewFSWriter(ctx, fs, etl.WithFilePath(filePath))
-		return etl.NewCSVWriter(ctx, bytes.NewBuffer(buf), fsWriter), nil
+		return etl.NewCSVWriter(ctx, fsWriter), nil
 	}
 }
 
@@ -720,20 +722,17 @@ func InitCronExpr(ctx context.Context, duration time.Duration) error {
 }
 
 var maxFileSize atomic.Int64
-var mergedExtension = table.GetExtension(table.CsvExtension)
 
 func InitMerge(ctx context.Context, SV *config.ObservabilityParameters) error {
 	var err error
 	mergeCycle := SV.MergeCycle.Duration
 	filesize := SV.MergeMaxFileSize
-	ext := SV.MergedExtension
 	if mergeCycle > 0 {
-		err = InitCronExpr(ctx, time.Minute)
+		err = InitCronExpr(ctx, 5*time.Minute)
 		if err != nil {
 			return err
 		}
 	}
 	maxFileSize.Store(int64(filesize * mpool.MB))
-	mergedExtension = table.GetExtension(ext)
 	return nil
 }

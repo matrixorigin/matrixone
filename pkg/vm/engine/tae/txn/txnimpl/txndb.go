@@ -458,7 +458,9 @@ func (db *txnDB) ApplyCommit() (err error) {
 			return
 		}
 	}
-	logutil.Debugf("Txn-%X ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("Txn-%X ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	})
 	return
 }
 
@@ -483,7 +485,7 @@ func (db *txnDB) PrePrepare() (err error) {
 	}
 	for _, table := range db.tables {
 		if err = table.PrePrepare(); err != nil {
-			panic(err)
+			return
 		}
 	}
 	return
@@ -507,7 +509,9 @@ func (db *txnDB) PrepareCommit() (err error) {
 		}
 	}
 
-	logutil.Debugf("Txn-%X PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("Txn-%X PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	})
 
 	return
 }

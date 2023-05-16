@@ -27,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -50,24 +48,21 @@ func (txn *Transaction) getBlockInfos(
 		}
 		var objectName objectio.ObjectNameShort
 		state := states[i]
-		blocks[i] = make([]catalog.BlockInfo, 0, state.Blocks.Len())
-		iter := state.Blocks.Iter()
-		for ok := iter.First(); ok; ok = iter.Next() {
-			entry := iter.Item()
-			if !entry.Visible(ts) {
-				continue
-			}
-			location := entry.BlockInfo.MetaLocation()
+		iter := state.NewBlocksIter(ts)
+		for iter.Next() {
+			entry := iter.Entry()
+			location := entry.MetaLocation()
 			if !objectio.IsSameObjectLocVsShort(location, &objectName) {
 				// Prefetch object meta
 				if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
+					iter.Close()
 					return
 				}
 				objectName = *location.Name().Short()
 			}
 			blocks[i] = append(blocks[i], entry.BlockInfo)
 		}
-		iter.Release()
+		iter.Close()
 	}
 	return
 }
@@ -96,18 +91,20 @@ func (txn *Transaction) WriteBatch(
 	truncate bool) error {
 	txn.readOnly = false
 	bat.Cnt = 1
-	if typ == INSERT && !insertBatchHasRowId {
-		txn.genBlock()
-		len := bat.Length()
-		vec := vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < len; i++ {
-			if err := vector.AppendFixed(vec, txn.genRowId(), false,
-				txn.proc.Mp()); err != nil {
-				return err
+	if typ == INSERT {
+		if !insertBatchHasRowId {
+			txn.genBlock()
+			len := bat.Length()
+			vec := vector.NewVec(types.T_Rowid.ToType())
+			for i := 0; i < len; i++ {
+				if err := vector.AppendFixed(vec, txn.genRowId(), false,
+					txn.proc.Mp()); err != nil {
+					return err
+				}
 			}
+			bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+			bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 		}
-		bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
-		bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 		// for TestPrimaryKeyCheck
 		if txn.blockId_raw_batch != nil {
 			txn.blockId_raw_batch[*txn.getCurrentBlockId()] = bat
@@ -127,15 +124,6 @@ func (txn *Transaction) WriteBatch(
 	})
 	txn.Unlock()
 	return nil
-}
-
-func (txn *Transaction) CleanNilBatch() {
-	for i := 0; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
-			txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
-			i--
-		}
-	}
 }
 
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
@@ -189,7 +177,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		for i := 0; i < len(mp[key]); i++ {
 			s3Writer.Put(mp[key][i], txn.proc)
 		}
-		err = s3Writer.MergeBlock(len(s3Writer.Bats), txn.proc, false)
+		err = s3Writer.SortAndFlush(txn.proc)
 
 		if err != nil {
 			return err
@@ -423,51 +411,30 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-// needRead determine if a block needs to be read
-func needRead(
+func evalFilterExprWithZonemap(
 	ctx context.Context,
+	meta objectio.ColumnMetaFetcher,
 	expr *plan.Expr,
-	meta objectio.ObjectMeta,
-	blkInfo catalog.BlockInfo,
-	tableDef *plan.TableDef,
+	zms []objectio.ZoneMap,
+	vecs []*vector.Vector,
 	columnMap map[int]int,
-	defCols, exprCols []int,
-	maxCol int,
-	proc *process.Process) bool {
-	var err error
+	proc *process.Process,
+) (selected bool) {
 	if expr == nil {
-		return true
+		selected = true
+		return
 	}
-	notReportErrCtx := errutil.ContextWithNoReport(ctx, true)
-
-	// if expr match no columns, just eval expr
 	if len(columnMap) == 0 {
-		bat := batch.NewWithSize(0)
-		defer bat.Clean(proc.Mp())
-		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
-		if err != nil {
-			return true
-		}
-		return ifNeed
+		selected = evalNoColumnFilterExpr(ctx, expr, proc)
+		return
 	}
-
-	buildVectors, err := buildColumnsZMVectors(meta, int(blkInfo.MetaLocation().ID()), defCols, tableDef, proc.Mp())
-	if err != nil || len(buildVectors) == 0 {
-		return true
+	zm := colexec.EvalFilterByZonemap(ctx, meta, expr, zms, vecs, columnMap, proc)
+	if !zm.IsInited() || zm.GetType() != types.T_bool {
+		selected = true
+	} else {
+		selected = types.DecodeBool(zm.GetMaxBuf())
 	}
-	bat := batch.NewWithSize(maxCol + 1)
-	defer bat.Clean(proc.Mp())
-	for i := range defCols {
-		bat.SetVector(int32(exprCols[i]), buildVectors[i])
-	}
-	bat.SetZs(buildVectors[0].Length(), proc.Mp())
-
-	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, expr, bat, proc)
-	if err != nil {
-		return true
-	}
-
-	return ifNeed
+	return
 }
 
 /* used by multi-dn

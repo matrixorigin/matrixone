@@ -100,7 +100,7 @@ func FieldString(ivecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		return rvec, nil
 	} else {
 		//if the first vector is null
-		nullsLength := nulls.Length(vec0.GetNulls())
+		nullsLength := vec0.GetNulls().Count()
 		if nullsLength == vecLen {
 			return rvec, nil
 		}
@@ -214,7 +214,7 @@ func FieldNumber[T number](ivecs []*vector.Vector, proc *process.Process) (*vect
 		return rvec, nil
 	} else {
 		//if the first vector is null
-		nullsLength := nulls.Length(vec0.GetNulls())
+		nullsLength := vec0.GetNulls().Count()
 		if nullsLength == vecLen {
 			return rvec, nil
 		}

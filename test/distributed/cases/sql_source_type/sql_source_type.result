@@ -12,7 +12,7 @@ sleep(15)
 select statement, sql_source_type from system.statement_info where user="dump" order by request_at desc limit 4;
 statement    sql_source_type
 show tables    cloud_user_sql
-/* cloud_nonuser */ use system    cloud_nonuser_sql
+use system    cloud_nonuser_sql
 select * from __mo_t1    external_sql
 insert into __mo_t1 values(1)    external_sql
 drop account if exists sql_source_type;

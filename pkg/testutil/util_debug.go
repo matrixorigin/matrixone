@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
@@ -30,7 +31,8 @@ func OperatorCatchBatch(operatorName string, bat *batch.Batch) string {
 	}
 	str := fmt.Sprintf("`%s` operator catch a batch, batch length is %d\n", operatorName, bat.Length())
 	for i, vec := range bat.Vecs {
-		str += fmt.Sprintf("[vec %d[type is %d, %p] : len is %d]\n", i,
+		str += fmt.Sprintf("[vec-%d(%s)[type is %v, %p] : len is %d]\n", i,
+			bat.Attrs[i],
 			vec.GetType().Oid, vec,
 			vec.Length())
 	}

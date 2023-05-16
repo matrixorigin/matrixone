@@ -20,6 +20,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -90,8 +91,10 @@ func (node *persistedNode) Rows() uint32 {
 
 func (node *persistedNode) BatchDedup(
 	keys containers.Vector,
-	skipFn func(row uint32) error) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn)
+	skipFn func(row uint32) error,
+	zm []byte,
+) (sels *roaring.Bitmap, err error) {
+	return node.pkIndex.BatchDedup(keys, skipFn, zm)
 }
 
 func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
@@ -107,14 +110,13 @@ func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
 }
 
 func (node *persistedNode) GetColumnDataWindow(
+	readSchema *catalog.Schema,
 	from uint32,
 	to uint32,
-	colIdx int,
+	col int,
 ) (vec containers.Vector, err error) {
 	var data containers.Vector
-	if data, err = node.block.LoadPersistedColumnData(
-		colIdx,
-	); err != nil {
+	if data, err = node.block.LoadPersistedColumnData(readSchema, col); err != nil {
 		return
 	}
 	if to-from == uint32(data.Length()) {
@@ -127,19 +129,20 @@ func (node *persistedNode) GetColumnDataWindow(
 }
 
 func (node *persistedNode) GetDataWindow(
-	from, to uint32) (bat *containers.Batch, err error) {
-	data, err := node.block.LoadPersistedData()
-	if err != nil {
-		return
-	}
+	readSchema *catalog.Schema, from, to uint32) (bat *containers.Batch, err error) {
+	panic("to be implemented")
+	// data, err := node.block.LoadPersistedData()
+	// if err != nil {
+	// 	return
+	// }
 
-	if to-from == uint32(data.Length()) {
-		bat = data
-	} else {
-		bat = data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
-		data.Close()
-	}
-	return
+	// if to-from == uint32(data.Length()) {
+	// 	bat = data
+	// } else {
+	// 	bat = data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+	// 	data.Close()
+	// }
+	// return
 }
 
 func (node *persistedNode) IsPersisted() bool { return true }
@@ -155,7 +158,7 @@ func (node *persistedNode) ApplyAppend(
 	panic(moerr.NewInternalErrorNoCtx("not supported"))
 }
 
-func (node *persistedNode) GetValueByRow(row, col int) (v any, isNull bool) {
+func (node *persistedNode) GetValueByRow(_ *catalog.Schema, _, _ int) (v any, isNull bool) {
 	panic(moerr.NewInternalErrorNoCtx("todo"))
 }
 

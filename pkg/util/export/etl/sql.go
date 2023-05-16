@@ -31,16 +31,12 @@ import (
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 4
-const BUFFER_FLUSH_LIMIT = 512 // Adjust this value according to your requirements
-
-const PACKET_TOO_LARGE = "packet for query is too large"
 
 var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
 // DefaultSqlWriter SqlWriter is a writer that writes data to a SQL database.
 type DefaultSqlWriter struct {
 	ctx       context.Context
-	semaphore chan struct{}
 	csvWriter *CSVWriter
 	tbl       *table.Table
 	buffer    [][]string
@@ -50,7 +46,6 @@ type DefaultSqlWriter struct {
 func NewSqlWriter(ctx context.Context, tbl *table.Table, csv *CSVWriter) *DefaultSqlWriter {
 	return &DefaultSqlWriter{
 		ctx:       ctx,
-		semaphore: make(chan struct{}, 3),
 		csvWriter: csv,
 		tbl:       tbl,
 	}
@@ -71,30 +66,24 @@ func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 
 func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 	sw.buffer = append(sw.buffer, row.ToStrings())
-
-	if len(sw.buffer) >= BUFFER_FLUSH_LIMIT*3 {
-		if _, err := sw.flushBuffer(); err != nil {
-			return err
-		}
-	}
+	//sw.flushBuffer(false)
 	return nil
 }
 
-func (sw *DefaultSqlWriter) flushBuffer() (int, error) {
+func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	sw.mux.Lock()
 	defer sw.mux.Unlock()
-	if len(sw.buffer) == 0 {
-		return 0, nil
-	}
-	cnt, err := sw.WriteRowRecords(sw.buffer, sw.tbl, false)
+
+	var err error
+	var cnt int
+	cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
+
 	if err != nil {
-		if err := sw.dumpBufferToCSV(); err != nil {
-			return 0, err
-		}
-		return cnt, nil
+		sw.dumpBufferToCSV()
 	}
 	sw.buffer = sw.buffer[:0] // Clear the buffer
-	return cnt, nil
+	cnt, err = sw.csvWriter.FlushAndClose()
+	return cnt, err
 }
 
 func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
@@ -105,69 +94,21 @@ func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
 	for _, row := range sw.buffer {
 		sw.csvWriter.WriteStrings(row)
 	}
-	sw.buffer = sw.buffer[:0] // Clear the buffer
 	return nil
 }
 
 func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
-	sw.flushBuffer()
-	cnt, err := sw.csvWriter.FlushAndClose()
-	if err != nil {
-		return 0, err
+	if len(sw.buffer) == 0 {
+		return 0, nil
 	}
+	cnt, err := sw.flushBuffer(true)
 	sw.buffer = nil
 	sw.tbl = nil
+	sw.csvWriter = nil
 	return cnt, err
 }
 
-//
-//func generateInsertStatement(records [][]string, tbl *table.Table) (string, int, error) {
-//
-//	sb := strings.Builder{}
-//	defer sb.Reset()
-//	sb.WriteString("INSERT INTO")
-//	sb.WriteString(" `" + tbl.Database + "`." + tbl.Table + " ")
-//	sb.WriteString("VALUES ")
-//
-//	// write values
-//	for idx, row := range records {
-//		if len(row) == 0 {
-//			continue
-//		}
-//		sb.WriteString("(")
-//		for i, field := range row {
-//			if i != 0 {
-//				sb.WriteString(",")
-//			}
-//			if tbl.Columns[i].ColType == table.TJson {
-//				var js interface{}
-//				err := json.Unmarshal([]byte(field), &js)
-//				if err != nil {
-//					return "", 0, err
-//				}
-//				escapedJSON, _ := json.Marshal(js)
-//				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
-//			} else {
-//				// escape single quote abd backslash
-//				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
-//				// truncate string if it's too long caused by escape for varchar
-//				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-//					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
-//				} else {
-//					sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
-//				}
-//			}
-//		}
-//		if idx == len(records)-1 {
-//			sb.WriteString(");")
-//		} else {
-//			sb.WriteString("),")
-//		}
-//	}
-//	return sb.String(), len(records), nil
-//}
-
-func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
+func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
 	if len(records) == 0 {
 		return 0, nil
 	}
@@ -177,8 +118,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 	sb := strings.Builder{}
 	defer sb.Reset()
 
-	// Start a new transaction
-	tx, err := db.Begin()
+	tx, err := sqlDb.Begin()
 	if err != nil {
 		return 0, err
 	}
@@ -211,9 +151,9 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 
 		if sb.Len() >= maxLen || idx == len(records)-1 {
 			stmt := baseStr + sb.String() + ";"
-			_, err := db.Exec(stmt)
+			_, err := tx.Exec(stmt)
 			if err != nil {
-				tx.Rollback() // Rollback the transaction on error
+				tx.Rollback()
 				return 0, err
 			}
 			sb.Reset()
@@ -222,8 +162,7 @@ func bulkInsert(db *sql.DB, records [][]string, tbl *table.Table, maxLen int) (i
 		}
 	}
 
-	err = tx.Commit() // Commit the transaction
-	if err != nil {
+	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 

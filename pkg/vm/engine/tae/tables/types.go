@@ -16,6 +16,7 @@ package tables
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -32,18 +33,20 @@ type NodeT interface {
 		txn txnif.AsyncTxn,
 	) (from int, err error)
 
-	GetDataWindow(from, to uint32) (bat *containers.Batch, err error)
+	GetDataWindow(readSchema *catalog.Schema, from, to uint32) (bat *containers.Batch, err error)
 	GetColumnDataWindow(
+		readSchema *catalog.Schema,
 		from uint32,
 		to uint32,
-		colIdx int,
+		col int,
 	) (vec containers.Vector, err error)
 
-	GetValueByRow(row, col int) (v any, isNull bool)
+	GetValueByRow(readSchema *catalog.Schema, row, col int) (v any, isNull bool)
 	GetRowsByKey(key any) (rows []uint32, err error)
 	BatchDedup(
 		keys containers.Vector,
 		skipFn func(row uint32) error,
+		zm []byte,
 	) (sels *roaring.Bitmap, err error)
 	ContainsKey(key any) (ok bool, err error)
 

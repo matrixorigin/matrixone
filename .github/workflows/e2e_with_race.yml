@@ -1,7 +1,7 @@
 name: MatrixOne e2e CI(Race-Enabled)
 
 on:
-  pull_request:
+  pull_request_target:
     types: [ closed ]
     branches: [ main,'[0-9]+.[0-9]+.[0-9]+' ]
 
@@ -95,7 +95,7 @@ jobs:
         if: ${{ always() || cancelled() }}
         continue-on-error: true
         with:
-          name: multi-cn-e2e_linux_x86_reports
+          name: multi-cn-e2e-with-race-linux-x86-reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
@@ -103,7 +103,7 @@ jobs:
         if: ${{ failure() || cancelled() }}
         uses: chf007/action-wechat-work@master
         env:
-          WECHAT_WORK_BOT_WEBHOOK: ${{secrets.WECHAT_WORK_BOT_WEBHOOK}}
+          WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_WORK_BOT_WEBHOOK }}
         with:
           msgtype: markdown
           content: "MatrixOne e2e CI(Race-Enabled) failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})<@shuqi.qin>"

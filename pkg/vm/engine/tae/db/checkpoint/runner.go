@@ -461,7 +461,7 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 
 	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
-	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name)
+	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name, 0, nil)
 	if err != nil {
 		return err
 	}
@@ -485,7 +485,7 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 
 	segmentid := objectio.NewSegmentid()
 	name := objectio.BuildObjectName(segmentid, 0)
-	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name)
+	writer, err := blockio.NewBlockWriterNew(r.fs.Service, name, 0, nil)
 	if err != nil {
 		return
 	}

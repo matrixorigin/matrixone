@@ -89,6 +89,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 
 	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 	return ap.ctr.sendFunc(bat, ap, proc)
@@ -105,7 +106,7 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 			return false, moerr.NewInternalErrorNoCtx("wait notify message timeout")
 		case <-proc.Ctx.Done():
 			arg.ctr.prepared = true
-			logutil.Errorf("conctx done during dispatch")
+			logutil.Infof("conctx done during dispatch")
 			return true, nil
 		case csinfo := <-proc.DispatchNotifyCh:
 			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{

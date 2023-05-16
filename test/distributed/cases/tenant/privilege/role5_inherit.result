@@ -31,7 +31,6 @@ internal error: do not have privilege to execute the statement
 grant drop database on account * to rx;
 internal error: do not have privilege to execute the statement
 grant drop table on database * to rx;
-internal error: do not have privilege to execute the statement
 grant test to rx,bill;
 internal error: do not have privilege to execute the statement
 grant dev to rx,bill;
@@ -65,7 +64,6 @@ grant create database on account * to rx;
 internal error: do not have privilege to execute the statement
 grant drop database on account * to rx;
 grant drop table on database * to rx;
-internal error: do not have privilege to execute the statement
 grant test to rx,bill;
 internal error: do not have privilege to execute the statement
 grant dev to rx,bill;
@@ -96,7 +94,6 @@ grant create database on account * to rx;
 internal error: do not have privilege to execute the statement
 grant drop database on account * to rx;
 grant drop table on database * to rx;
-internal error: do not have privilege to execute the statement
 grant test to rx,bill;
 internal error: do not have privilege to execute the statement
 grant dev to rx,bill;
@@ -129,7 +126,6 @@ grant create database on account * to rx;
 internal error: do not have privilege to execute the statement
 grant drop database on account * to rx;
 grant drop table on database * to rx;
-internal error: do not have privilege to execute the statement
 grant test to rx,bill;
 internal error: do not have privilege to execute the statement
 grant dev to rx,bill;

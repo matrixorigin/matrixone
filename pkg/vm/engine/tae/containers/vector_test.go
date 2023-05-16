@@ -22,9 +22,19 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestDnConst(t *testing.T) {
+	m := mpool.MustNewZero()
+	v := movec.NewConstNull(types.T_int32.ToType(), 20, m)
+	v.IsConstNull()
+	dnv := ToDNVector(v)
+	require.True(t, dnv.IsNull(2))
+}
 
 func withAllocator(opt Options) Options {
 	opt.Allocator = mpool.MustNewZero()
@@ -70,7 +80,7 @@ func TestVector1(t *testing.T) {
 	assert.Equal(t, int32(32), vec.Get(1).(int32))
 	assert.Equal(t, int32(1), vec.Get(2).(int32))
 	assert.Equal(t, int32(100), vec.Get(3).(int32))
-	vec2 := NewVector[int32](types.T_int32.ToType())
+	vec2 := NewVector(types.T_int32.ToType())
 	vec2.Extend(vec)
 	assert.Equal(t, 4, vec2.Length())
 	assert.Equal(t, int32(12), vec2.Get(0).(int32))
@@ -494,7 +504,7 @@ func BenchmarkForeachVector(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			ForeachVectorWindow(int64s, 0, rows, func(int64, bool, int) (err error) {
 				return
-			}, nil)
+			}, nil, nil)
 		}
 	})
 
@@ -513,7 +523,7 @@ func BenchmarkForeachVector(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			ForeachVectorWindow(chars, 0, rows, func([]byte, bool, int) (err error) {
 				return
-			}, nil)
+			}, nil, nil)
 		}
 	})
 }
@@ -557,7 +567,7 @@ func BenchmarkFunctions(b *testing.B) {
 	b.Run("func-new", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ForeachVectorWindow(vec, 0, vec.Length(), MakeForeachVectorOp(vec.GetType().Oid, funcs), nil)
+			ForeachVectorWindow(vec, 0, vec.Length(), MakeForeachVectorOp(vec.GetType().Oid, funcs), nil, nil)
 		}
 	})
 	b.Run("func-old", func(b *testing.B) {
@@ -640,7 +650,7 @@ func TestForeachSelectBitmap(t *testing.T) {
 		rows := roaring.New()
 		op := getOverload(vecType.Oid, t, rows, vec)
 
-		ForeachVectorWindow(vec, 0, vec.Length(), op, sels)
+		ForeachVectorWindow(vec, 0, vec.Length(), op, nil, sels)
 		assert.Equal(t, uint64(2), rows.GetCardinality())
 		assert.True(t, rows.Contains(2))
 		assert.True(t, rows.Contains(6))
@@ -649,4 +659,10 @@ func TestForeachSelectBitmap(t *testing.T) {
 		f(vecType, false)
 	}
 
+	vec2 := MockVector(types.T_int32.ToType(), 10, true, nil)
+	defer vec2.Close()
+
+	_ = ForeachVectorWindow(vec2, 0, 5, nil, func(_ any, _ bool, _ int) (err error) {
+		return
+	}, nil)
 }

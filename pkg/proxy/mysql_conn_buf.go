@@ -26,6 +26,8 @@ import (
 const (
 	// the default message buffer size, 8K.
 	defaultBufLen = 8192
+	// defaultExtraBufLen is the default extra buffer size, 2K.
+	defaultExtraBufLen = 2048
 	// MySQL header length is 4 bytes, with 3 bytes data length
 	// and 1 byte sequence number.
 	mysqlHeadLen = 4
@@ -79,7 +81,15 @@ type msgBuf struct {
 	name string
 	src  io.Reader
 	// buf keeps message which is read from src. It can contain multiple messages.
+	// The default available part of buffer is only [0:defaultBufLen]. The rest part
+	// [defaultBufLen:] is used to save data to handle events when the first part is full.
+	//
+	// TODO(volgariver6): As a result, only the event statement whose length is less
+	// than defaultExtraBufLen is supported.
 	buf []byte
+	// availLen is the available length of the buffer.
+	availLen int
+	extraLen int
 	// begin, end is the range that the data is available in the buf.
 	begin, end int
 	// writeMu controls the mutex to lock when write a MySQL packet with net.Write().
@@ -94,15 +104,22 @@ type msgBuf struct {
 func newMsgBuf(
 	name string, src io.Reader, bufLen int, reqC chan IEvent, respC chan []byte,
 ) *msgBuf {
+	var availLen, extraLen int
 	if bufLen < mysqlHeadLen {
-		bufLen = defaultBufLen
+		availLen = defaultBufLen
+		extraLen = defaultExtraBufLen
+		bufLen = availLen + extraLen
+	} else {
+		availLen = bufLen
 	}
 	return &msgBuf{
-		src:   src,
-		buf:   make([]byte, bufLen),
-		name:  name,
-		reqC:  reqC,
-		respC: respC,
+		src:      src,
+		buf:      make([]byte, bufLen),
+		availLen: availLen,
+		extraLen: extraLen,
+		name:     name,
+		reqC:     reqC,
+		respC:    respC,
 	}
 }
 
@@ -113,7 +130,7 @@ func (b *msgBuf) readAvail() int {
 
 // writeAvail returns the position that is available to write.
 func (b *msgBuf) writeAvail() int {
-	return len(b.buf) - b.end
+	return b.availLen - b.end
 }
 
 // preRecv tries to receive a MySQL packet from remote. It receives
@@ -159,6 +176,7 @@ func (b *msgBuf) consumeMsg(msg []byte, dst io.Writer) bool {
 	req := eventReqPool.Get().(*eventReq)
 	defer eventReqPool.Put(req)
 	req.msg = msg
+	req.dst = dst
 	e, r := makeEvent(req)
 	if e == nil {
 		return false
@@ -190,9 +208,22 @@ func (b *msgBuf) sendTo(dst io.Writer) (int, error) {
 	}
 
 	// Try to consume the message synchronously.
-	// FIXME: if the buffer is full, we may get a part of MySQL packet.
-	if b.consumeMsg(b.buf[readPos:writePos], dst) {
-		return len(b.buf[readPos:writePos]), nil
+	extraLen := 0
+	if dataLeft > 0 && dataLeft < b.extraLen {
+		// If the available part can hold the left data, receive it and save
+		// the data at the position of writePos.
+		extraLen, err = io.ReadFull(b.src, b.buf[writePos:writePos+dataLeft])
+		if err != nil {
+			return writePos - readPos + extraLen, err
+		}
+		if extraLen < dataLeft {
+			return extraLen, io.ErrShortWrite
+		}
+		writePos += extraLen
+		dataLeft = 0
+	}
+	if dataLeft == 0 && b.consumeMsg(b.buf[readPos:writePos], dst) {
+		return writePos - readPos, nil
 	}
 
 	b.writeMu.Lock()
@@ -228,7 +259,7 @@ func (b *msgBuf) receive() ([]byte, error) {
 		return nil, err
 	}
 
-	if size <= len(b.buf) {
+	if size <= b.availLen {
 		if err := b.receiveAtLeast(size); err != nil {
 			return nil, err
 		}
@@ -252,7 +283,7 @@ func (b *msgBuf) receive() ([]byte, error) {
 }
 
 func (b *msgBuf) receiveAtLeast(n int) error {
-	if n < 0 || n > len(b.buf) {
+	if n < 0 || n > b.availLen {
 		return moerr.NewInternalErrorNoCtx("invalid receive bytes size %d", n)
 	}
 	// Buffer already has n bytes.
@@ -264,7 +295,7 @@ func (b *msgBuf) receiveAtLeast(n int) error {
 		b.end = copy(b.buf, b.buf[b.begin:b.end])
 		b.begin = 0
 	}
-	c, err := io.ReadAtLeast(b.src, b.buf[b.end:], minReadSize)
+	c, err := io.ReadAtLeast(b.src, b.buf[b.end:b.availLen], minReadSize)
 	b.end += c
 	return err
 }

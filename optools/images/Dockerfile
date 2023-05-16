@@ -1,4 +1,4 @@
-FROM golang:1.19-buster as builder
+FROM golang:1.20-buster as builder
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
@@ -33,4 +33,4 @@ WORKDIR /
 
 EXPOSE 6001
 
-ENTRYPOINT [ "/mo-service", "-debug-http=:12345 -launch", "/etc/quickstart/launch.toml"]
+ENTRYPOINT [ "/mo-service", "-debug-http=:12345", "-launch", "/etc/quickstart/launch.toml"]

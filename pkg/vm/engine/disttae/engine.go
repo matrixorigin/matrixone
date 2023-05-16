@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -384,7 +385,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		}
 		table.tableId = catalog.MO_DATABASE_ID
 		table.tableName = catalog.MO_DATABASE
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_DATABASE_DAT_ID_IDX,
 			catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
 			e.delTransaction(txn)
 			return err
@@ -400,7 +401,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 
 		table.tableId = catalog.MO_COLUMNS_ID
 		table.tableName = catalog.MO_COLUMNS
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
+		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
 			catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
 			e.delTransaction(txn)
 			return err
@@ -421,7 +422,6 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return nil
 	}
 	err := txn.DumpBatch(true, 0)
-	txn.CleanNilBatch()
 	if err != nil {
 		return err
 	}
@@ -444,10 +444,19 @@ func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 	return nil
 }
 
-func (e *Engine) Nodes() (engine.Nodes, error) {
+func (e *Engine) Nodes(isInternal bool, tenant string, cnLabel map[string]string) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetCNService(clusterservice.NewSelector(), func(c metadata.CNService) bool {
+	var selector clusterservice.Selector
+	if isInternal || strings.ToLower(tenant) == "sys" {
+		selector = clusterservice.NewSelector()
+	} else {
+		selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ)
+	}
+	if len(cnLabel) > 0 {
+		selector = selector.SelectByLabel(cnLabel, clusterservice.EQ)
+	}
+	cluster.GetCNService(selector, func(c metadata.CNService) bool {
 		nodes = append(nodes, engine.Node{
 			Mcpu: runtime.NumCPU(),
 			Id:   c.ServiceID,
@@ -474,13 +483,13 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
 			rds[i] = &blockReader{
-				fs:         e.fs,
-				tableDef:   tblDef,
-				primaryIdx: -1,
-				expr:       expr,
-				ts:         ts,
-				ctx:        ctx,
-				blks:       []*catalog.BlockInfo{blks[i]},
+				fs:            e.fs,
+				tableDef:      tblDef,
+				primarySeqnum: -1,
+				expr:          expr,
+				ts:            ts,
+				ctx:           ctx,
+				blks:          []*catalog.BlockInfo{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {

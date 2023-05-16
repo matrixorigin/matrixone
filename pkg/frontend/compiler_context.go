@@ -381,6 +381,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 
 	var clusterByDef *plan2.ClusterByDef
 	var cols []*plan2.ColDef
+	var schemaVersion uint32
 	var defs []*plan2.TableDefType
 	var properties []*plan2.Property
 	var TableType, Createsql string
@@ -417,6 +418,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				Comment:   attr.Attr.Comment,
 				ClusterBy: attr.Attr.ClusterBy,
 				Hidden:    attr.Attr.IsHidden,
+				Seqnum:    uint32(attr.Attr.Seqnum),
 			}
 			// Is it a composite primary key
 			if attr.Attr.Name == catalog.CPrimaryKeyColName {
@@ -476,6 +478,8 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 				}
 				partitionInfo = p
 			}
+		} else if v, ok := def.(*engine.VersionDef); ok {
+			schemaVersion = v.Version
 		}
 	}
 	if len(properties) > 0 {
@@ -520,6 +524,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		RefChildTbls: refChildTbls,
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
+		Version:      schemaVersion,
 	}
 	return obj, tableDef
 }
@@ -689,6 +694,9 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	// read meta's data
 	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, "", moerr.NewResultFileNotFound(proc.Ctx, makeResultMetaPath(proc.SessionInfo.Account, uuid))
+		}
 		return nil, "", err
 	}
 	// cols
@@ -740,4 +748,9 @@ func (tcc *TxnCompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta 
 
 func (tcc *TxnCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return isDbPublishing(tcc.GetContext(), dbName, tcc.GetSession())
+}
+
+// makeResultMetaPath gets query result meta path
+func makeResultMetaPath(accountName string, statementId string) string {
+	return fmt.Sprintf("query_result_meta/%s_%s.blk", accountName, statementId)
 }
