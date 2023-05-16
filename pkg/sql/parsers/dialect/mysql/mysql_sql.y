@@ -2595,22 +2595,34 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-     ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
-     {
+    ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
+    {
         $$ = &tree.AlterDataBaseConfig{
             DbName:$3,
             UpdateConfig: $7,
             IsAccountLevel: false,
         }
-     }
-|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
-     {
+    }
+|   ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
+    {
         $$ = &tree.AlterDataBaseConfig{
             AccountName:$4,
             UpdateConfig: $8,
             IsAccountLevel: true,
         }
-     }
+    }
+|   ALTER ACCOUNT CONFIG SET MYSQL_COMPATIBILITY_MODE  var_name equal_or_assignment set_expr
+    {
+        assignments := []*tree.VarAssignmentExpr{
+            &tree.VarAssignmentExpr{
+                System: true,
+                Global: true,
+                Name: $6,
+                Value: $8,
+            },
+        }
+        $$ = &tree.SetVar{Assignments: assignments} 
+    }
     
 alter_account_auth_option:
 {
