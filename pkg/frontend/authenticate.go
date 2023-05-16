@@ -8312,15 +8312,19 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	return err
 }
 
-func doCheckRole(ses *Session) error {
+func doCheckRole(ctx context.Context, ses *Session) error {
 	var err error
 	tenantInfo := ses.GetTenantInfo()
 	currentAccount := tenantInfo.GetTenant()
 	currentRole := tenantInfo.GetDefaultRole()
-	if currentAccount == sysAccountName && currentRole != moAdminRoleName {
-		err = moerr.NewInternalError(ses.GetRequestContext(), "do not have privilege to execute the statement")
-	} else if currentRole != accountAdminRoleName {
-		err = moerr.NewInternalError(ses.GetRequestContext(), "do not have privilege to execute the statement")
+	if currentAccount == sysAccountName {
+		if currentRole != moAdminRoleName {
+			err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+		}
+	} else {
+		if currentRole != accountAdminRoleName {
+			err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+		}
 	}
 	return err
 }
