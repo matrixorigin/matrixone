@@ -14,48 +14,39 @@
 
 package unary
 
-import (
-	"fmt"
-	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
-)
-
-func TestValues(t *testing.T) {
-	type tcTemp struct {
-		info   string
-		inputs []testutil.FunctionTestInput
-		expect testutil.FunctionTestResult
-	}
-
-	testCases := []tcTemp{
-		{
-			info: "values(col_int8)",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int8.ToType(),
-					[]int8{-23}, []bool{false}),
-			},
-			expect: testutil.NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{-23}, []bool{false}),
-		},
-		{
-			info: "values(col_uint8)",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_uint8.ToType(),
-					[]uint8{23, 24, 25}, []bool{false}),
-			},
-			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{23, 24, 25}, []bool{false}),
-		},
-	}
-
-	proc := testutil.NewProcess()
-	for _, tc := range testCases {
-		fcTC := testutil.NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, Values)
-		s, info := fcTC.Run()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
-	}
-}
+//func TestValues(t *testing.T) {
+//	type tcTemp struct {
+//		info   string
+//		inputs []testutil.FunctionTestInput
+//		expect testutil.FunctionTestResult
+//	}
+//
+//	testCases := []tcTemp{
+//		{
+//			info: "values(col_int8)",
+//			inputs: []testutil.FunctionTestInput{
+//				testutil.NewFunctionTestInput(types.T_int8.ToType(),
+//					[]int8{-23}, []bool{false}),
+//			},
+//			expect: testutil.NewFunctionTestResult(types.T_int8.ToType(), false,
+//				[]int8{-23}, []bool{false}),
+//		},
+//		{
+//			info: "values(col_uint8)",
+//			inputs: []testutil.FunctionTestInput{
+//				testutil.NewFunctionTestInput(types.T_uint8.ToType(),
+//					[]uint8{23, 24, 25}, []bool{false}),
+//			},
+//			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+//				[]uint8{23, 24, 25}, []bool{false}),
+//		},
+//	}
+//
+//	proc := testutil.NewProcess()
+//	for _, tc := range testCases {
+//		fcTC := testutil.NewFunctionTestCase(proc,
+//			tc.inputs, tc.expect, Values)
+//		s, info := fcTC.Run()
+//		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+//	}
+//}

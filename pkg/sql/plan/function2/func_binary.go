@@ -998,6 +998,46 @@ func datetimeFormat(ctx context.Context, datetime types.Datetime, format string)
 	return buf.String(), nil
 }
 
+var (
+	// WeekdayNames lists names of weekdays, which are used in builtin function `date_format`.
+	WeekdayNames = []string{
+		"Monday",
+		"Tuesday",
+		"Wednesday",
+		"Thursday",
+		"Friday",
+		"Saturday",
+		"Sunday",
+	}
+
+	// MonthNames lists names of months, which are used in builtin function `date_format`.
+	MonthNames = []string{
+		"January",
+		"February",
+		"March",
+		"April",
+		"May",
+		"June",
+		"July",
+		"August",
+		"September",
+		"October",
+		"November",
+		"December",
+	}
+
+	// AbbrevWeekdayName lists Abbreviation of week names, which are used int builtin function 'date_format'
+	AbbrevWeekdayName = []string{
+		"Sun",
+		"Mon",
+		"Tue",
+		"Wed",
+		"Thu",
+		"Fri",
+		"Sat",
+	}
+)
+
 // makeDateFormat: Get the format string corresponding to the date according to a single format character
 func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Buffer) error {
 	switch b {

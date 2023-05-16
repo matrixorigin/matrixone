@@ -26,7 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2/function2Util"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
+	"math/rand"
 	"strings"
 	"time"
 	"unsafe"
@@ -1211,4 +1214,299 @@ func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nu
 		res[idx] = DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetime) + ADZeroSeconds
 	}
 	return res, nil
+}
+
+func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			sinValue, err := momath.Sin(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(sinValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInSinh(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			sinValue, err := momath.Sinh(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(sinValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInCos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			sinValue, err := momath.Cos(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(sinValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInCot(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			sinValue, err := momath.Cot(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(sinValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInTan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			sinValue, err := momath.Tan(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(sinValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			sinValue, err := momath.Exp(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(sinValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInACos(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			sinValue, err := momath.Acos(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(sinValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInATan(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			sinValue, err := momath.Atan(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(sinValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if v1 == 0 {
+				return moerr.NewInvalidArg(proc.Ctx, "Atan first input", 0)
+			}
+			if err := rs.Append(math.Atan(v2/v1), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			sinValue, err := momath.Ln(v)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(sinValue, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[1])
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if v1 == float64(1) {
+				return moerr.NewInvalidArg(proc.Ctx, "log base", 1)
+			}
+			tempV1, err := momath.Ln(v1)
+			if err != nil {
+				return moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
+			}
+			tempV2, err := momath.Ln(v2)
+			if err != nil {
+				return moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
+			}
+			if err = rs.Append(tempV2/tempV1, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+type opBuiltInRand struct {
+	seed *rand.Rand
+}
+
+func newOpBuiltInRand() *opBuiltInRand {
+	return new(opBuiltInRand)
+}
+
+func builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v := rand.Float64()
+		if err := rs.Append(v, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if !parameters[0].IsConst() {
+		return moerr.NewInvalidArg(proc.Ctx, "parameter of rand", "column")
+	}
+	if parameters[0].IsConstNull() {
+		return moerr.NewInvalidArg(proc.Ctx, "parameter of rand", "null")
+	}
+
+	p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
+	rs := vector.MustFunctionResult[float64](result)
+
+	seedNumber, _ := p1.GetValue(0)
+	if op.seed == nil {
+		op.seed = rand.New(rand.NewSource(seedNumber))
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		v := op.seed.Float64()
+		if err := rs.Append(v, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }

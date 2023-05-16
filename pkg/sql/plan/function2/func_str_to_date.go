@@ -157,7 +157,7 @@ func builtInStrToTime(parameters []*vector.Vector, result vector.FunctionResultW
 
 func coreStrToDate(cctx context.Context, t *GeneralTime, date string, format string) bool {
 	ctx := make(map[string]int)
-	success := strToDate(cctx, t, date, format, ctx)
+	success := strToDate2(cctx, t, date, format, ctx)
 	if !success {
 		return false
 	}
@@ -169,7 +169,7 @@ func coreStrToDate(cctx context.Context, t *GeneralTime, date string, format str
 
 // strToDate converts date string according to format,
 // the value will be stored in argument ctx. the second return value is true when success
-func strToDate(cctx context.Context, t *GeneralTime, date string, format string, ctx map[string]int) (success bool) {
+func strToDate2(cctx context.Context, t *GeneralTime, date string, format string, ctx map[string]int) (success bool) {
 	date = trimWhiteSpace(date)
 	format = trimWhiteSpace(format)
 
@@ -197,7 +197,7 @@ func strToDate(cctx context.Context, t *GeneralTime, date string, format string,
 		return false
 	}
 
-	return strToDate(cctx, t, dateRemain, formatRemain, ctx)
+	return strToDate2(cctx, t, dateRemain, formatRemain, ctx)
 }
 
 // checkMysqlTime fixes the Time use the values in the context.

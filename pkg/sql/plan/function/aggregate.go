@@ -16,11 +16,11 @@ package function
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 )
 
 func initAggregateFunction() {
@@ -583,7 +583,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) && !operator.IsBinary(inputs[0]) {
+				if !function2.IsNumeric(inputs[0]) && !function2.IsDecimal(inputs[0]) && !function2.IsBinary(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
 				_, err := agg.ReturnType(agg.AggregateBitAnd, inputs[0].ToType())
@@ -613,7 +613,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) && !operator.IsBinary(inputs[0]) {
+				if !function2.IsNumeric(inputs[0]) && !function2.IsDecimal(inputs[0]) && !function2.IsBinary(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
 				_, err := agg.ReturnType(agg.AggregateBitOr, inputs[0].ToType())
@@ -643,7 +643,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) && !operator.IsBinary(inputs[0]) {
+				if !function2.IsNumeric(inputs[0]) && !function2.IsDecimal(inputs[0]) && !function2.IsBinary(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
 				_, err := agg.ReturnType(agg.AggregateBitXor, inputs[0].ToType())
@@ -673,7 +673,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
+				if !function2.IsNumeric(inputs[0]) && !function2.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
 				t, err := agg.ReturnType(agg.AggregateVariance, inputs[0].ToType())
@@ -709,7 +709,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
+				if !function2.IsNumeric(inputs[0]) && !function2.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
 				t, err := agg.ReturnType(agg.AggregateStdDevPop, inputs[0].ToType())

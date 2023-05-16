@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package operator
+package function2
 
 import (
 	"fmt"
@@ -23,12 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
-
-type tcTemp struct {
-	info   string
-	inputs []testutil.FunctionTestInput
-	expect testutil.FunctionTestResult
-}
 
 func initCastTestCase() []tcTemp {
 	var testCases []tcTemp
