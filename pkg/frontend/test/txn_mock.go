@@ -478,17 +478,17 @@ func (mr *MockTxnOperatorMockRecorder) Txn() *gomock.Call {
 }
 
 // UpdateSnapshot mocks base method.
-func (m *MockTxnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (m *MockTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateSnapshot", ts)
+	ret := m.ctrl.Call(m, "UpdateSnapshot", ctx, ts)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UpdateSnapshot indicates an expected call of UpdateSnapshot.
-func (mr *MockTxnOperatorMockRecorder) UpdateSnapshot(ts interface{}) *gomock.Call {
+func (mr *MockTxnOperatorMockRecorder) UpdateSnapshot(ctx, ts interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshot", reflect.TypeOf((*MockTxnOperator)(nil).UpdateSnapshot), ts)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshot", reflect.TypeOf((*MockTxnOperator)(nil).UpdateSnapshot), ctx, ts)
 }
 
 // Write mocks base method.
@@ -686,17 +686,17 @@ func (mr *MockDebugableTxnOperatorMockRecorder) Txn() *gomock.Call {
 }
 
 // UpdateSnapshot mocks base method.
-func (m *MockDebugableTxnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (m *MockDebugableTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateSnapshot", ts)
+	ret := m.ctrl.Call(m, "UpdateSnapshot", ctx, ts)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UpdateSnapshot indicates an expected call of UpdateSnapshot.
-func (mr *MockDebugableTxnOperatorMockRecorder) UpdateSnapshot(ts interface{}) *gomock.Call {
+func (mr *MockDebugableTxnOperatorMockRecorder) UpdateSnapshot(ctx, ts interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshot", reflect.TypeOf((*MockDebugableTxnOperator)(nil).UpdateSnapshot), ts)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshot", reflect.TypeOf((*MockDebugableTxnOperator)(nil).UpdateSnapshot), ctx, ts)
 }
 
 // Write mocks base method.

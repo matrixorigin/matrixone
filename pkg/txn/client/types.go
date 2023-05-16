@@ -82,8 +82,9 @@ type TxnOperator interface {
 	// after the non-CN coordinator completes the transaction operation.
 	Snapshot() ([]byte, error)
 	// UpdateSnapshot in some scenarios, we need to boost the snapshotTimestamp to eliminate
-	// the w-w conflict
-	UpdateSnapshot(ts timestamp.Timestamp) error
+	// the w-w conflict.
+	// If ts is empty, it will use the latest commit timestamp which is received from DN.
+	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
 	// operation information.
 	ApplySnapshot(data []byte) error

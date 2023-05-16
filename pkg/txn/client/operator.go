@@ -163,7 +163,8 @@ type txnOperator struct {
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
 	}
-	workspace Workspace
+	workspace       Workspace
+	timestampWaiter TimestampWaiter
 }
 
 func newTxnOperator(
@@ -247,12 +248,26 @@ func (tc *txnOperator) Snapshot() ([]byte, error) {
 	return snapshot.Marshal()
 }
 
-func (tc *txnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (tc *txnOperator) UpdateSnapshot(
+	ctx context.Context,
+	ts timestamp.Timestamp) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if err := tc.checkStatus(true); err != nil {
 		return err
 	}
+
+	// we need to waiter the latest snapshot ts which is greater than the current snapshot
+	if ts.IsEmpty() {
+		lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
+			ctx,
+			tc.mu.txn.SnapshotTS)
+		if err != nil {
+			return err
+		}
+		ts = lastSnapshotTS
+	}
+
 	if tc.mu.txn.SnapshotTS.Less(ts) {
 		tc.mu.txn.SnapshotTS = ts
 	}

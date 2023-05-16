@@ -360,6 +360,6 @@ func (o *testOperator) AddLockTable(lock.LockTable) error {
 	return nil
 }
 
-func (o *testOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
 }

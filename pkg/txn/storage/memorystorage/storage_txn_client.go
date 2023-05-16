@@ -226,6 +226,6 @@ func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
 	panic("should not call")
 }
 
-func (s *StorageTxnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (s *StorageTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
 }

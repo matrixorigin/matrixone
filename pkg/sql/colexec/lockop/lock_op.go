@@ -122,7 +122,9 @@ func Call(
 			return false, err
 		}
 
-		if txnFeature.RefreshExpressionEnabled() {
+		// refreshTS is last commit ts + 1, because we need see the committed data.
+		if txnFeature.RefreshExpressionEnabled() &&
+			target.refreshTimestampIndexInBatch != -1 {
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
 			ts := types.BuildTS(refreshTS.PhysicalTime, refreshTS.LogicalTime)
 			n := priVec.Length()
@@ -218,10 +220,11 @@ func Lock(
 	}
 
 	// forward rc's snapshot ts
-	if err := txnOp.UpdateSnapshot(result.Timestamp); err != nil {
+	snapshotTS := result.Timestamp.Next()
+	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	return result.Timestamp.Next(), nil
+	return snapshotTS, nil
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to

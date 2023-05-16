@@ -162,14 +162,21 @@ func (client *txnClient) New(
 		WithTxnClose(client),
 		WithUpdateLastCommitTSFunc(client.updateLastCommitTS),
 		WithTxnLockService(client.lockService))
-	return newTxnOperator(
+	op := newTxnOperator(
 		client.sender,
 		txnMeta,
-		options...), nil
+		options...)
+	op.timestampWaiter = client.timestampWaiter
+	return op, nil
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
-	return newTxnOperatorWithSnapshot(client.sender, snapshot)
+	op, err := newTxnOperatorWithSnapshot(client.sender, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	op.timestampWaiter = client.timestampWaiter
+	return op, nil
 }
 
 func (client *txnClient) Close() error {

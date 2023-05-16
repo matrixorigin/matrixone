@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRead(t *testing.T) {
@@ -419,6 +420,48 @@ func TestAddLockTable(t *testing.T) {
 
 		// changed lock table
 		assert.Error(t, tc.AddLockTable(lock.LockTable{Table: 1, Version: 2}))
+	})
+}
+
+func TestUpdateSnaphotTS(t *testing.T) {
+	runOperatorTests(t,
+		func(
+			ctx context.Context,
+			tc *txnOperator,
+			_ *testTxnSender) {
+			ts := int64(1000)
+			tc.mu.txn.SnapshotTS = newTestTimestamp(0)
+			require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts)))
+			require.Equal(t, newTestTimestamp(ts), tc.Txn().SnapshotTS)
+
+			require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts-1)))
+			require.Equal(t, newTestTimestamp(ts), tc.Txn().SnapshotTS)
+
+			require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts+1)))
+			require.Equal(t, newTestTimestamp(ts+1), tc.Txn().SnapshotTS)
+		})
+}
+
+func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
+	runTimestampWaiterTests(t, func(waiter *timestampWaiter) {
+		runOperatorTests(t,
+			func(
+				ctx context.Context,
+				tc *txnOperator,
+				_ *testTxnSender) {
+				tc.timestampWaiter = waiter
+				tc.mu.txn.SnapshotTS = newTestTimestamp(10)
+
+				ts := int64(100)
+				c := make(chan struct{})
+				go func() {
+					defer close(c)
+					waiter.NotifyLatestCommitTS(newTestTimestamp(ts))
+				}()
+				<-c
+				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(0)))
+				require.Equal(t, newTestTimestamp(ts).Next(), tc.Txn().SnapshotTS)
+			})
 	})
 }
 
