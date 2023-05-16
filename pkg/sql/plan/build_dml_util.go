@@ -263,7 +263,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			idNameMap[col.ColId] = col.Name
 			nameIdxMap[col.Name] = int32(idx)
 		}
-		baseProject := builder.qry.Nodes[lastNodeId].ProjectList
+		baseProject := getProjectionByLastNode(builder, lastNodeId)
 
 		for _, tableId := range delCtx.tableDef.RefChildTbls {
 			// stmt: delete p, c from child_tbl c join parent_tbl p on c.pid = p.id , skip
@@ -1022,6 +1022,10 @@ func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, lastNodeId i
 
 func getProjectionByLastNode(builder *QueryBuilder, lastNodeId int32) []*Expr {
 	lastNode := builder.qry.Nodes[lastNodeId]
+	projLength := len(lastNode.ProjectList)
+	if projLength == 0 {
+		return getProjectionByLastNode(builder, lastNode.Children[0])
+	}
 	projection := make([]*Expr, len(lastNode.ProjectList))
 	for i, expr := range lastNode.ProjectList {
 		name := ""
