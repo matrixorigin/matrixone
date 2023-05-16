@@ -228,7 +228,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 				vectmp := vector.MustFixedCol[int32](ctr.bat.Vecs[0])
 				for i := range vectmp {
 					if vectmp[i] == 1998122 {
-						logutil.Warnf("!!! group by output 1998122")
+						logutil.Warnf("!!! %p  group by output 1998122", proc)
 					}
 				}
 			}

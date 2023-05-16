@@ -162,6 +162,16 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := ap.ShuffleRegIdxRemote[regIdx]
 		batToSend := shuffledBats[batIndex]
+
+		if batToSend != nil && batToSend.Vecs[0].GetType().Oid == 22 {
+			vectmp := vector.MustFixedCol[int32](batToSend.Vecs[0])
+			for i := range vectmp {
+				if vectmp[i] == 1998122 {
+					logutil.Warnf("!!! %p send 1998122 to remote %v", proc, r.uuid)
+				}
+			}
+		}
+
 		if batToSend != nil {
 			encodeData, errEncode := types.Encode(batToSend)
 			if errEncode != nil {
@@ -179,6 +189,16 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 	for _, reg := range ap.LocalRegs {
 		batIndex := ap.ShuffleRegIdxLocal[regIdx]
 		batToSend := shuffledBats[batIndex]
+
+		if batToSend != nil && batToSend.Vecs[0].GetType().Oid == 22 {
+			vectmp := vector.MustFixedCol[int32](batToSend.Vecs[0])
+			for i := range vectmp {
+				if vectmp[i] == 1998122 {
+					logutil.Warnf("!!! %p send 1998122 to local %p", proc, reg.Ch)
+				}
+			}
+		}
+
 		if batToSend != nil {
 			select {
 			case <-reg.Ctx.Done():
