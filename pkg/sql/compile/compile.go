@@ -251,7 +251,7 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) error {
 	var wg sync.WaitGroup
 	errC := make(chan error, len(c.scope))
-	// fmt.Printf("%+v", DebugShowScopes(c.scope))
+	// fmt.Printf("run sql %+v", DebugShowScopes(c.scope))
 	// reset early for multi steps
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -842,7 +842,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 			dataScope.Instructions = append(dataScope.Instructions, vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructDispatchLocal(false, regs),
+				Arg: constructDispatchLocal(false, false, regs),
 			})
 			for i := range scopes {
 				insertArg, err := constructInsert(n, c.e, c.proc)
@@ -931,7 +931,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		rs := c.newMergeScope(ss)
 		rs.appendInstruction(vm.Instruction{
 			Op:  vm.Dispatch,
-			Arg: constructDispatchLocal(true, receivers),
+			Arg: constructDispatchLocal(true, true, receivers),
 		})
 
 		return []*Scope{rs}, nil
@@ -2087,7 +2087,7 @@ func (c *Compile) newJoinProbeScope(s *Scope, ss []*Scope) *Scope {
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatchLocal(false, extraRegisters(ss, 0)),
+		Arg: constructDispatchLocal(false, false, extraRegisters(ss, 0)),
 	})
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())
@@ -2107,7 +2107,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructDispatchLocal(true, extraRegisters(ss, 1)),
+		Arg: constructDispatchLocal(true, false, extraRegisters(ss, 1)),
 	})
 	rs.IsEnd = true
 	rs.Proc = process.NewWithAnalyze(s.Proc, s.Proc.Ctx, 1, c.anal.Nodes())

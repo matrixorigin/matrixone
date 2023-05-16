@@ -663,7 +663,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Result:    t.Result,
 		}
 	case *dispatch.Argument:
-		in.Dispatch = &pipeline.Dispatch{FuncId: int32(t.FuncId)}
+		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, FuncId: int32(t.FuncId)}
 		in.Dispatch.LocalConnector = make([]*pipeline.Connector, len(t.LocalRegs))
 		for i := range t.LocalRegs {
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
@@ -1028,6 +1028,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			}
 		}
 		v.Arg = &dispatch.Argument{
+			IsSink:     t.IsSink,
 			FuncId:     int(t.FuncId),
 			LocalRegs:  regs,
 			RemoteRegs: rrs,

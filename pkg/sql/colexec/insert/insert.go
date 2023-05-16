@@ -119,14 +119,6 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 					return false, err
 				}
 			}
-
-			for _, writer := range ap.ctr.partitionS3Writers {
-				err = writer.Output(proc)
-				if err != nil {
-					ap.ctr.state = End
-					return false, err
-				}
-			}
 		} else {
 			// Normal non partition table
 			s3Writer := ap.ctr.s3Writer
@@ -135,11 +127,9 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 				ap.ctr.state = End
 				return false, err
 			}
-			err := s3Writer.Output(proc)
-			if err != nil {
-				return false, err
-			}
 		}
+		proc.SetInputBatch(&batch.Batch{})
+
 	} else {
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
 		insertBat.Attrs = ap.InsertCtx.Attrs
