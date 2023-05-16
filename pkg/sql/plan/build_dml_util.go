@@ -172,6 +172,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					return err
 				}
 
+				uniqueTblPkPos := uniqueDeleteIdx + 1
+				uniqueTblPkTyp := uniqueTableDef.Cols[0].Typ
 				if isUpdate {
 					// do it like simple update
 					lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
@@ -180,7 +182,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					{
 						//sink_scan -> lock -> delete
 						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
-						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false)
+						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp)
 						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 						if err != nil {
 							return err
@@ -228,7 +230,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					}
 				} else {
 					// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
-					delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false)
+					delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp)
 					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 					if err != nil {
 						return err
@@ -246,7 +248,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		partExprIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		lastNodeId = appendPreDeleteNode(builder, bindCtx, delCtx.objRef, delCtx.tableDef, lastNodeId)
 	}
-	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true)
+	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
+	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, pkPos, pkTyp)
 	lastNodeId, err := makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 	if err != nil {
 		return err
@@ -1006,6 +1009,9 @@ func makeInsertPlan(
 						Col: &plan.ColRef{ColPos: 0, Name: tableDef.Cols[pkPos].Name},
 					},
 				}, makePlan2Type(&varcharType))
+				if err != nil {
+					return err
+				}
 
 				assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
 				if err != nil {
@@ -1028,31 +1034,17 @@ func makeInsertPlan(
 
 // makeOneDeletePlan
 // lock -> delete
-func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, delNodeInfo *deleteNodeInfo) (int32, error) {
-	// need confirm : append a project to add refresh timestamp column
-	// projectProjection := getProjectionByLastNode(builder, lastNodeId)
-	// typ := types.T_TS.ToType()
-	// projectProjection = append(projectProjection, &plan.Expr{
-	// 	Typ: makePlan2Type(&typ),
-	// 	Expr: &plan.Expr_C{
-	// 		C: &Const{
-	// 			Isnull: true,
-	// 		},
-	// 	},
-	// })
-	// lastNodeId = builder.appendNode(&Node{
-	// 	NodeType:    plan.Node_PROJECT,
-	// 	Children:    []int32{lastNodeId},
-	// 	ProjectList: projectProjection,
-	// }, bindCtx)
-	// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-
+func makeOneDeletePlan(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	lastNodeId int32,
+	delNodeInfo *deleteNodeInfo,
+) (int32, error) {
 	// append lock
-	pkPos, pkTyp := getPkPos(delNodeInfo.tableDef, false)
 	lockTarget := &plan.LockTarget{
 		TableId:            delNodeInfo.tableDef.TblId,
-		PrimaryColIdxInBat: int32(pkPos),
-		PrimaryColTyp:      pkTyp,
+		PrimaryColIdxInBat: int32(delNodeInfo.pkPos),
+		PrimaryColTyp:      delNodeInfo.pkTyp,
 		RefreshTsIdxInBat:  -1, //unsupport now
 		FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
 	}
@@ -1120,7 +1112,7 @@ func haveUniqueKey(tableDef *TableDef) bool {
 
 // makeDeleteNodeInfo Get `DeleteNode` based on TableDef
 func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef,
-	deleteIdx int, partitionIdx int, addAffectedRows bool) *deleteNodeInfo {
+	deleteIdx int, partitionIdx int, addAffectedRows bool, pkPos int, pkTyp *Type) *deleteNodeInfo {
 	delNodeInfo := &deleteNodeInfo{
 		objRef:          objRef,
 		tableDef:        tableDef,
@@ -1128,6 +1120,8 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 		partitionIdx:    partitionIdx,
 		addAffectedRows: addAffectedRows,
 		IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
+		pkPos:           pkPos,
+		pkTyp:           pkTyp,
 	}
 
 	if tableDef.Partition != nil {
@@ -1150,6 +1144,8 @@ type deleteNodeInfo struct {
 	partTableIDs    []uint64 // Align array index with the partition number
 	partitionIdx    int      // The array index position of the partition expression column
 	addAffectedRows bool
+	pkPos           int
+	pkTyp           *plan.Type
 }
 
 // Calculate the offset index of partition expression, and the sub tableIds of the partition table
@@ -1227,25 +1223,6 @@ func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, l
 			}},
 	}
 	lastNodeId = builder.appendNode(groupByNode, bindCtx)
-	return lastNodeId, nil
-}
-
-func appendAssertEqNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, colExpr *plan.Expr, expectedInt int64) (int32, error) {
-	eqCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{MakePlan2Int64ConstExprWithType(expectedInt), colExpr})
-	if err != nil {
-		return -1, err
-	}
-	filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, makePlan2StringConstExprWithType("duplicate check error 2222")})
-	if err != nil {
-		return -1, err
-	}
-	filterNode := &Node{
-		NodeType:   plan.Node_FILTER,
-		Children:   []int32{lastNodeId},
-		FilterList: []*Expr{filterExpr},
-		IsEnd:      true,
-	}
-	lastNodeId = builder.appendNode(filterNode, bindCtx)
 	return lastNodeId, nil
 }
 

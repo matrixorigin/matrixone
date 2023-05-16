@@ -168,6 +168,8 @@ func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 		name = "Pre Insert"
 	case plan.Node_PRE_INSERT_UK:
 		name = "Pre Insert Unique"
+	case plan.Node_LOCK_OP:
+		name = "Lock Op"
 	default:
 		return name, moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
