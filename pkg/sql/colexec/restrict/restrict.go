@@ -57,8 +57,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
 
-	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
-	for i := range filterList {
+	for i := range ap.ctr.executors {
 		vec, err := ap.ctr.executors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			bat.Clean(proc.Mp())
@@ -72,22 +71,36 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if !vec.GetType().IsBoolean() {
 			return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
-		bs := vector.MustFixedCol[bool](vec)
+
+		bs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 		if vec.IsConst() {
-			if vec.IsConstNull() || !bs[0] {
+			v, null := bs.GetValue(0)
+			if null || !v {
 				bat.Shrink(nil)
 			}
 		} else {
 			sels := proc.Mp().GetSels()
-			for i, b := range bs {
-				if b && !vec.GetNulls().Contains(uint64(i)) {
-					sels = append(sels, int64(i))
+			l := uint64(vec.Length())
+			if bs.WithAnyNullValue() {
+				for j := uint64(0); j < l; j++ {
+					v, null := bs.GetValue(j)
+					if !null && v {
+						sels = append(sels, int64(j))
+					}
+				}
+			} else {
+				for j := uint64(0); j < l; j++ {
+					v, _ := bs.GetValue(j)
+					if v {
+						sels = append(sels, int64(j))
+					}
 				}
 			}
 			bat.Shrink(sels)
 			proc.Mp().PutSels(sels)
 		}
 	}
+
 	anal.Output(bat, isLast)
 	proc.SetInputBatch(bat)
 	return false, nil
