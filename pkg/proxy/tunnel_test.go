@@ -44,7 +44,7 @@ func TestTunnelClientToServer(t *testing.T) {
 	clientProxy, client := net.Pipe()
 	serverProxy, server := net.Pipe()
 
-	cc := newMockClientConn(clientProxy, "t1", labelInfo{}, nil, tu)
+	cc := newMockClientConn(clientProxy, "t1", clientInfo{}, nil, tu)
 	require.NotNil(t, cc)
 
 	sc := newMockServerConn(serverProxy)
@@ -199,7 +199,7 @@ func TestTunnelServerClient(t *testing.T) {
 	clientProxy, client := net.Pipe()
 	serverProxy, server := net.Pipe()
 
-	cc := newMockClientConn(clientProxy, "t1", labelInfo{}, nil, tu)
+	cc := newMockClientConn(clientProxy, "t1", clientInfo{}, nil, tu)
 	require.NotNil(t, cc)
 
 	sc := newMockServerConn(serverProxy)
@@ -268,7 +268,7 @@ func TestTunnelClose(t *testing.T) {
 			if withRun {
 				p1, p2 := net.Pipe()
 
-				cc := newMockClientConn(p1, "t1", labelInfo{}, nil, nil)
+				cc := newMockClientConn(p1, "t1", clientInfo{}, nil, nil)
 				require.NotNil(t, cc)
 
 				sc := newMockServerConn(p2)
@@ -295,7 +295,7 @@ func TestTunnelReplaceConn(t *testing.T) {
 	tu := newTunnel(ctx, nil, nil)
 	defer tu.Close()
 
-	cc := newMockClientConn(clientProxy, "t1", labelInfo{}, nil, tu)
+	cc := newMockClientConn(clientProxy, "t1", clientInfo{}, nil, tu)
 	require.NotNil(t, cc)
 
 	sc := newMockServerConn(serverProxy)
@@ -611,7 +611,7 @@ func TestReplaceServerConn(t *testing.T) {
 		require.NoError(t, tu.Close())
 	}()
 
-	cc := newMockClientConn(clientProxy, "t1", labelInfo{}, nil, tu)
+	cc := newMockClientConn(clientProxy, "t1", clientInfo{}, nil, tu)
 	require.NotNil(t, cc)
 
 	sc := newMockServerConn(serverProxy)

@@ -96,7 +96,7 @@ func (c *mockNetConn) SetWriteDeadline(t time.Time) error {
 type mockClientConn struct {
 	conn        net.Conn
 	tenant      Tenant
-	labelInfo   labelInfo // need to set it explicitly
+	clientInfo  clientInfo // need to set it explicitly
 	router      Router
 	tun         *tunnel
 	setVarStmts []string
@@ -105,14 +105,14 @@ type mockClientConn struct {
 var _ ClientConn = (*mockClientConn)(nil)
 
 func newMockClientConn(
-	conn net.Conn, tenant Tenant, li labelInfo, router Router, tun *tunnel,
+	conn net.Conn, tenant Tenant, ci clientInfo, router Router, tun *tunnel,
 ) ClientConn {
 	c := &mockClientConn{
-		conn:      conn,
-		tenant:    tenant,
-		labelInfo: li,
-		router:    router,
-		tun:       tun,
+		conn:       conn,
+		tenant:     tenant,
+		clientInfo: ci,
+		router:     router,
+		tun:        tun,
 	}
 	return c
 }
@@ -124,7 +124,7 @@ func (c *mockClientConn) RawConn() net.Conn                  { return c.conn }
 func (c *mockClientConn) GetTenant() Tenant                  { return c.tenant }
 func (c *mockClientConn) SendErrToClient(string)             {}
 func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
-	cn, err := c.router.SelectByLabel(c.labelInfo)
+	cn, err := c.router.Route(context.TODO(), c.clientInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -134,12 +134,12 @@ func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 		return nil, err
 	}
 	// Set the label session variable.
-	if err := sc.ExecStmt(c.labelInfo.genSetVarStmt(), nil); err != nil {
+	if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
 		return nil, err
 	}
 	// Set the use defined variables, including session variables and user variables.
 	for _, stmt := range c.setVarStmts {
-		if err := sc.ExecStmt(stmt, nil); err != nil {
+		if _, err := sc.ExecStmt(stmt, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -159,6 +159,26 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		c.setVarStmts = append(c.setVarStmts, ev.stmt)
 		sendResp([]byte("ok"), resp)
 		return nil
+	case *suspendAccountEvent:
+		cns, err := c.router.SelectByTenant(ev.account)
+		if err != nil {
+			sendResp([]byte(err.Error()), resp)
+			return err
+		}
+		for _, cn := range cns {
+			sendResp([]byte(cn.addr), resp)
+		}
+		return nil
+	case *dropAccountEvent:
+		cns, err := c.router.SelectByTenant(ev.account)
+		if err != nil {
+			sendResp([]byte(err.Error()), resp)
+			return err
+		}
+		for _, cn := range cns {
+			sendResp([]byte(cn.addr), resp)
+		}
+		return nil
 	default:
 		sendResp([]byte("type not supported"), resp)
 		return moerr.NewInternalErrorNoCtx("type not supported")
@@ -166,7 +186,7 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 }
 func (c *mockClientConn) Close() error { return nil }
 
-func testStartClient(t *testing.T, tp *testProxyHandler, li labelInfo, cn *CNServer) func() {
+func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNServer) func() {
 	if cn.salt == nil || len(cn.salt) != 20 {
 		cn.salt = testSlat
 	}
@@ -185,7 +205,7 @@ func testStartClient(t *testing.T, tp *testProxyHandler, li labelInfo, cn *CNSer
 	tu := newTunnel(tp.ctx, tp.logger, tp.counterSet)
 	sc, _, err := tp.ru.Connect(cn, testPacket, tu)
 	require.NoError(t, err)
-	cc := newMockClientConn(clientProxy, "t1", li, tp.ru, tu)
+	cc := newMockClientConn(clientProxy, "t1", ci, tp.ru, tu)
 	err = tu.run(cc, sc)
 	require.NoError(t, err)
 	select {
@@ -198,10 +218,10 @@ func testStartClient(t *testing.T, tp *testProxyHandler, li labelInfo, cn *CNSer
 	}
 }
 
-func testStartNClients(t *testing.T, tp *testProxyHandler, li labelInfo, cn *CNServer, n int) func() {
+func testStartNClients(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNServer, n int) func() {
 	var cleanFns []func()
 	for i := 0; i < n; i++ {
-		c := testStartClient(t, tp, li, cn)
+		c := testStartClient(t, tp, ci, cn)
 		cleanFns = append(cleanFns, c)
 	}
 	return func() {
@@ -212,34 +232,34 @@ func testStartNClients(t *testing.T, tp *testProxyHandler, li labelInfo, cn *CNS
 }
 
 func TestAccountParser(t *testing.T) {
-	a := accountInfo{}
+	a := clientInfo{}
 	err := a.parse("t1:u1")
 	require.NoError(t, err)
-	require.Equal(t, string(a.tenant), "t1")
+	require.Equal(t, string(a.labelInfo.Tenant), "t1")
 	require.Equal(t, a.username, "u1")
 
-	a = accountInfo{}
+	a = clientInfo{}
 	err = a.parse("t1#u1")
 	require.NoError(t, err)
-	require.Equal(t, string(a.tenant), "t1")
+	require.Equal(t, string(a.labelInfo.Tenant), "t1")
 	require.Equal(t, a.username, "u1")
 
-	a = accountInfo{}
+	a = clientInfo{}
 	err = a.parse(":u1")
 	require.NoError(t, err)
-	require.Equal(t, string(a.tenant), "")
+	require.Equal(t, string(a.labelInfo.Tenant), "")
 	require.Equal(t, a.username, "u1")
 
-	a = accountInfo{}
+	a = clientInfo{}
 	err = a.parse("a1:")
 	require.Error(t, err)
-	require.Equal(t, string(a.tenant), "")
+	require.Equal(t, string(a.labelInfo.Tenant), "")
 	require.Equal(t, a.username, "")
 
-	a = accountInfo{}
+	a = clientInfo{}
 	err = a.parse("u1")
 	require.NoError(t, err)
-	require.Equal(t, string(a.tenant), "")
+	require.Equal(t, string(a.labelInfo.Tenant), "")
 	require.Equal(t, a.username, "u1")
 }
 
@@ -253,7 +273,7 @@ func createNewClientConn(t *testing.T) (ClientConn, func()) {
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 	cs := newCounterSet()
-	cc, err := newClientConn(ctx, logger, cs, s, nil, nil, nil)
+	cc, err := newClientConn(ctx, logger, cs, s, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cc)
 	return cc, func() {

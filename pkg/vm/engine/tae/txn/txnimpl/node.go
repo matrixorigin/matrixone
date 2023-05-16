@@ -53,6 +53,10 @@ func (n *node) Close() error {
 	return nil
 }
 
+func (n *node) IsPersisted() bool {
+	return true
+}
+
 func (n *node) Append(data *containers.Batch, offset uint32) (appended uint32, err error) {
 	panic("not supported")
 }

@@ -43,22 +43,22 @@ import (
 
 var _ engine.Relation = new(txnTable)
 
-func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
+func (tbl *txnTable) Stats(ctx context.Context, statsInfoMap any) bool {
 	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
 	if !ok {
-		return plan2.DefaultStats(), nil
+		return false
 	}
 	if len(tbl.blockInfos) == 0 || !tbl.blockInfosUpdated {
-		err := tbl.updateBlockInfos(ctx, expr)
+		err := tbl.updateBlockInfos(ctx)
 		if err != nil {
-			return plan2.DefaultStats(), err
+			return false
 		}
 	}
 	if len(tbl.blockInfos) > 0 {
-		return CalcStats(ctx, tbl.blockInfos, expr, tbl.getTableDef(), tbl.db.txn.proc, s)
+		return CalcStats(ctx, tbl.blockInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
 	} else {
 		// no meta means not flushed yet, very small table
-		return plan2.DefaultStats(), nil
+		return false
 	}
 }
 
@@ -130,52 +130,77 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	return rows, nil
 }
 
+func (tbl *txnTable) ForeachBlock(
+	state *logtailreplay.PartitionState,
+	fn func(block logtailreplay.BlockEntry) error,
+) (err error) {
+	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
+	iter := state.NewBlocksIter(ts)
+	for iter.Next() {
+		entry := iter.Entry()
+		if err = fn(entry); err != nil {
+			break
+		}
+	}
+	iter.Close()
+	return
+}
+
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
-	if len(tbl.blockInfos) == 0 {
-		return nil, nil, moerr.NewInvalidInputNoCtx("table meta is nil")
+	var (
+		err   error
+		parts []*logtailreplay.PartitionState
+	)
+	if parts, err = tbl.getParts(ctx); err != nil {
+		return nil, nil, err
 	}
 
+	var inited bool
 	cols := tbl.getTableDef().GetCols()
 	dataLength := len(cols) - 1
 
-	tableTypes := make([]uint8, dataLength)
-
 	tableVal := make([][2]any, dataLength)
+	tableTypes := make([]uint8, dataLength)
 	zms := make([]objectio.ZoneMap, dataLength)
 
-	var (
-		err  error
-		init bool
-		meta objectio.ObjectMeta
-	)
-	for _, blks := range tbl.blockInfos {
-		for _, blk := range blks {
-			location := blk.MetaLocation()
-			if objectio.IsSameObjectLocVsMeta(location, meta) {
-				continue
-			} else {
-				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
-					return nil, nil, err
-				}
-			}
-			if !init {
-				for idx := range zms {
-					zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
-					tableTypes[idx] = uint8(cols[idx].Typ.Id)
-				}
-
-				init = true
-			} else {
-				for idx := range zms {
-					zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
-					if !zm.IsInited() {
-						continue
-					}
-					index.UpdateZM(zms[idx], zm.GetMaxBuf())
-					index.UpdateZM(zms[idx], zm.GetMinBuf())
-				}
-			}
+	var meta objectio.ObjectMeta
+	onBlkFn := func(blk logtailreplay.BlockEntry) error {
+		var err error
+		location := blk.MetaLocation()
+		if objectio.IsSameObjectLocVsMeta(location, meta) {
+			return nil
 		}
+		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+			return err
+		}
+		if inited {
+			for idx := range zms {
+				zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
+				if !zm.IsInited() {
+					continue
+				}
+				index.UpdateZM(zms[idx], zm.GetMaxBuf())
+				index.UpdateZM(zms[idx], zm.GetMinBuf())
+			}
+		} else {
+			for idx := range zms {
+				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
+				tableTypes[idx] = uint8(cols[idx].Typ.Id)
+			}
+			inited = true
+		}
+
+		return nil
+	}
+
+	for _, part := range parts {
+		if err = tbl.ForeachBlock(part, onBlkFn); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	if !inited {
+		return nil, nil, moerr.NewInvalidInputNoCtx("table meta is nil")
 	}
 
 	for idx, zm := range zms {
@@ -198,11 +223,7 @@ func (tbl *txnTable) LoadDeletesForBlock(blockID *types.Blockid, deleteBlockId m
 			if err != nil {
 				return err
 			}
-			s3BlockReader, err := blockio.NewObjectReader(tbl.db.txn.engine.fs, location)
-			if err != nil {
-				return err
-			}
-			rowIdBat, err := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, []uint16{0}, nil, location.ID(), tbl.db.txn.proc.GetMPool())
+			rowIdBat, err := blockio.LoadColumns(tbl.db.txn.proc.Ctx, []uint16{0}, nil, tbl.db.txn.engine.fs, location, tbl.db.txn.proc.GetMPool())
 			if err != nil {
 				return err
 			}
@@ -256,7 +277,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 	tbl.db.txn.Unlock()
 
 	// make sure we have the block infos snapshot
-	if err = tbl.updateBlockInfos(ctx, expr); err != nil {
+	if err = tbl.updateBlockInfos(ctx); err != nil {
 		return
 	}
 
@@ -370,14 +391,27 @@ func (tbl *txnTable) rangesOnePart(
 	var (
 		isMonoExpr     bool
 		meta           objectio.ObjectMeta
+		zms            []objectio.ZoneMap
+		vecs           []*vector.Vector
 		columnMap      map[int]int
 		skipThisObject bool
 	)
+
+	defer func() {
+		for i := range vecs {
+			if vecs[i] != nil {
+				vecs[i].Free(proc.Mp())
+			}
+		}
+	}()
 
 	hasDeletes := len(deletes) > 0
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
 	if isMonoExpr = plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
+		cnt := plan2.AssignAuxIdForExpr(expr, 0)
+		zms = make([]objectio.ZoneMap, cnt)
+		vecs = make([]*vector.Vector, cnt)
 		columnMap, _, _, _ = plan2.GetColumnsByExpr(expr, tableDef)
 	}
 
@@ -402,13 +436,13 @@ func (tbl *txnTable) rangesOnePart(
 				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
 					return
 				}
-				if skipThisObject = !evalFilterExprWithZonemap(errCtx, meta, expr, columnMap, proc); skipThisObject {
+				if skipThisObject = !evalFilterExprWithZonemap(errCtx, meta, expr, zms, vecs, columnMap, proc); skipThisObject {
 					continue
 				}
 			}
 
 			// eval filter expr on the block
-			need = evalFilterExprWithZonemap(errCtx, meta.GetBlockMeta(uint32(location.ID())), expr, columnMap, proc)
+			need = evalFilterExprWithZonemap(errCtx, meta.GetBlockMeta(uint32(location.ID())), expr, zms, vecs, columnMap, proc)
 		}
 
 		// if the block is not needed, skip it
@@ -627,7 +661,8 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	}
 	var packer *types.Packer
 	put := tbl.db.txn.engine.packerPool.Get(&packer)
-	defer put()
+	defer put.Put()
+
 	if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
 		return err
 	}
@@ -715,11 +750,6 @@ func (tbl *txnTable) compaction() error {
 			err = e
 			return false
 		}
-		s3BlockReader, e := blockio.NewObjectReader(tbl.db.txn.engine.fs, location)
-		if e != nil {
-			err = e
-			return false
-		}
 		if tbl.seqnums == nil {
 			n := len(tbl.tableDef.Cols) - 1
 			idxs := make([]uint16, 0, n)
@@ -732,7 +762,7 @@ func (tbl *txnTable) compaction() error {
 			tbl.seqnums = idxs
 			tbl.typs = typs
 		}
-		bat, e := s3BlockReader.LoadColumns(tbl.db.txn.proc.Ctx, tbl.seqnums, tbl.typs, location.ID(), tbl.db.txn.proc.GetMPool())
+		bat, e := blockio.LoadColumns(tbl.db.txn.proc.Ctx, tbl.seqnums, tbl.typs, tbl.db.txn.engine.fs, location, tbl.db.txn.proc.GetMPool())
 		if e != nil {
 			err = e
 			return false
@@ -814,7 +844,8 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 
 	var packer *types.Packer
 	put := tbl.db.txn.engine.packerPool.Get(&packer)
-	defer put()
+	defer put.Put()
+
 	if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
 		return err
 	}
@@ -901,7 +932,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		if ok {
 			var packer *types.Packer
 			put := tbl.db.txn.engine.packerPool.Get(&packer)
-			defer put()
+			defer put.Put()
 			encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
 		}
 	}
@@ -1273,7 +1304,7 @@ func (tbl *txnTable) getParts(ctx context.Context) ([]*logtailreplay.PartitionSt
 	return tbl._parts, nil
 }
 
-func (tbl *txnTable) updateBlockInfos(ctx context.Context, expr *plan.Expr) (err error) {
+func (tbl *txnTable) updateBlockInfos(ctx context.Context) (err error) {
 	tbl.dnList = []int{0}
 
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))

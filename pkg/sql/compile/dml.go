@@ -15,7 +15,7 @@
 package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
@@ -54,12 +54,16 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 				return 0, err
 			}
 
-			// truncate autoIncr table
-			err = colexec.MoveAutoIncrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
+			// keep old offset.
+			err = incrservice.GetAutoIncrementService().Reset(
+				c.ctx,
+				oldId,
+				newId,
+				true,
+				c.proc.TxnOperator)
 			if err != nil {
 				return 0, err
 			}
-
 		}
 
 		return uint64(affectRows), nil

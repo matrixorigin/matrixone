@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
+	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 var Metasize = 2
@@ -245,9 +246,9 @@ func (vf *vFile) Destroy() error {
 	return err
 }
 
-func (vf *vFile) Replay(r *replayer) error {
+func (vf *vFile) Replay(r *replayer, allocator logstoreEntry.Allocator) error {
 	for {
-		if err := r.replayHandler(vf); err != nil {
+		if err := r.replayHandler(vf, allocator); err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
@@ -264,7 +265,7 @@ func (vf *vFile) OnLogInfo(info any) {
 		panic(err)
 	}
 }
-func (vf *vFile) Load(lsn uint64) (*entry.Entry, error) {
+func (vf *vFile) Load(lsn uint64, allocator logstoreEntry.Allocator) (*entry.Entry, error) {
 	offset, err := vf.GetOffsetByLSN(lsn)
 	if err == ErrVFileGroupNotExist || err == ErrVFileLsnNotExist {
 		for i := 0; i < 10; i++ {
@@ -289,14 +290,14 @@ func (vf *vFile) Load(lsn uint64) (*entry.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return vf.readEntryAt(offset)
+	return vf.readEntryAt(offset, allocator)
 }
-func (vf *vFile) LoadByOffset(offset int) (*entry.Entry, error) {
-	return vf.readEntryAt(offset)
+func (vf *vFile) LoadByOffset(offset int, allocator logstoreEntry.Allocator) (*entry.Entry, error) {
+	return vf.readEntryAt(offset, allocator)
 }
-func (vf *vFile) readEntryAt(offset int) (*entry.Entry, error) {
+func (vf *vFile) readEntryAt(offset int, allocator logstoreEntry.Allocator) (*entry.Entry, error) {
 	e := entry.NewEmptyEntry()
-	_, err := e.ReadAt(vf.File, offset)
+	_, err := e.ReadAt(vf.File, offset, allocator)
 	return e, err
 }
 func (vf *vFile) OnReplayCommitted() {

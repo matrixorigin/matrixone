@@ -76,8 +76,10 @@ func (e *EntireEngine) Database(ctx context.Context, databaseName string, op cli
 	return e.Engine.Database(ctx, databaseName, op)
 }
 
-func (e *EntireEngine) Nodes() (cnNodes Nodes, err error) {
-	return e.Engine.Nodes()
+func (e *EntireEngine) Nodes(
+	isInternal bool, tenant string, cnLabel map[string]string) (cnNodes Nodes, err error,
+) {
+	return e.Engine.Nodes(isInternal, tenant, cnLabel)
 }
 
 func (e *EntireEngine) Hints() Hints {

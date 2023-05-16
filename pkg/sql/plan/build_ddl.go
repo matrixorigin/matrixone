@@ -181,11 +181,16 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 			Width: 0,
 			Scale: 0,
 		},
+		Primary: true,
 		Default: &plan.Default{
 			NullAbility:  true,
 			Expr:         nil,
 			OriginString: "",
 		},
+	}
+	cs.TableDef.Pkey = &PrimaryKeyDef{
+		Names:       []string{Sequence_cols_name[4]},
+		PkeyColName: Sequence_cols_name[4],
 	}
 	for i := 5; i <= 6; i++ {
 		cols[i] = &plan.ColDef{

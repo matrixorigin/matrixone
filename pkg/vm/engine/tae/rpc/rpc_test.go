@@ -172,6 +172,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		tbTestID,
 		dbTestID,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -361,6 +362,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		tbTestID,
 		dbTestID,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -636,6 +638,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		IDAlloc.NextTable(),
 		dbTestId,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -648,6 +651,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		IDAlloc.NextTable(),
 		dbTestId,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -680,9 +684,9 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	tbTestId := tbH.ID()
 	rDefs, _ := TableDefs(tbH)
 	//assert.Equal(t, 3, len(rDefs))
-	rAttr := rDefs[0].(*engine.AttributeDef).Attr
+	rAttr := rDefs[1].(*engine.AttributeDef).Attr
 	assert.Equal(t, true, rAttr.Default.NullAbility)
-	rAttr = rDefs[1].(*engine.AttributeDef).Attr
+	rAttr = rDefs[2].(*engine.AttributeDef).Attr
 	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 
 	err = txn.Commit()
@@ -799,7 +803,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
-	schema := catalog.MockSchema(2, -1)
+	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -884,6 +888,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		IDAlloc.NextTable(),
 		dbTestId,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -919,7 +924,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	assert.NoError(t, err)
 	tbTestId := tbH.ID()
 	rDefs, _ := TableDefs(tbH)
-	assert.Equal(t, 3, len(rDefs))
+	assert.Equal(t, 4, len(rDefs))
 	rAttr := rDefs[0].(*engine.AttributeDef).Attr
 	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[1].(*engine.AttributeDef).Attr
@@ -1093,7 +1098,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
-	schema := catalog.MockSchema(2, -1)
+	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -1177,6 +1182,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		IDAlloc.NextTable(),
 		dbTestId,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -1211,7 +1217,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	assert.NoError(t, err)
 	tbTestId := tbH.ID()
 	rDefs, _ := TableDefs(tbH)
-	assert.Equal(t, 3, len(rDefs))
+	assert.Equal(t, 4, len(rDefs))
 	rAttr := rDefs[0].(*engine.AttributeDef).Attr
 	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[1].(*engine.AttributeDef).Attr
@@ -1405,7 +1411,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
-	schema := catalog.MockSchema(2, -1)
+	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -1525,6 +1531,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		IDAlloc.NextTable(),
 		dbTestId,
 		dbName,
+		schema.Constraint,
 		handle.m,
 		defs,
 	)
@@ -1562,7 +1569,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.NoError(t, err)
 		tbTestId = tbH.ID()
 		rDefs, _ := TableDefs(tbH)
-		assert.Equal(t, 3, len(rDefs))
+		assert.Equal(t, 4, len(rDefs))
 		rAttr := rDefs[0].(*engine.AttributeDef).Attr
 		assert.Equal(t, true, rAttr.Default.NullAbility)
 		rAttr = rDefs[1].(*engine.AttributeDef).Attr

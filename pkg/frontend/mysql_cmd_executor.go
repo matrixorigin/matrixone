@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/util/format"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -268,16 +269,32 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return motrace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time, envStmt []string, sqlTypes []string, err error) context.Context {
+var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
+	envStmt []string, sqlTypes []string, err error) context.Context {
 	retErr := moerr.NewParseError(ctx, err.Error())
-	sqlType := sqlTypes[0]
-	for i, sql := range envStmt {
-		if i < len(sqlTypes) {
-			sqlType = sqlTypes[i]
+	/*
+		!!!NOTE: the sql may be empty string.
+		So, the sqlTypes may be empty slice.
+	*/
+	sqlType := ""
+	if len(sqlTypes) > 0 {
+		sqlType = sqlTypes[0]
+	} else {
+		sqlType = externSql
+	}
+	if len(envStmt) > 0 {
+		for i, sql := range envStmt {
+			if i < len(sqlTypes) {
+				sqlType = sqlTypes[i]
+			}
+			ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+			motrace.EndStatement(ctx, retErr, 0)
 		}
-		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
+	} else {
+		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
 		motrace.EndStatement(ctx, retErr, 0)
 	}
+
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
@@ -2374,6 +2391,24 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(sql)
 	ses.GetExportParam().Outfile = false
+
+	v, err := ses.GetSessionVar("default_account")
+	if err != nil {
+		return err
+	}
+	var tid uint32
+	if id, ok := v.(string); ok && id != "" {
+		tid = format.MustParseStringUint32(id)
+		requestCtx = context.WithValue(
+			requestCtx,
+			defines.TenantIDKey{},
+			tid)
+		ses.SetRequestContext(requestCtx)
+		if ses.GetTenantInfo() != nil {
+			ses.GetTenantInfo().SetTenantID(tid)
+		}
+	}
+
 	pu := ses.GetParameterUnit()
 	proc := process.New(
 		requestCtx,
@@ -2381,8 +2416,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetTxnHandler().GetTxnClient(),
 		nil,
 		pu.FileService,
-		pu.LockService,
-		ses.GetAutoIncrCacheManager())
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3314,8 +3348,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.TxnClient,
 		nil,
 		pu.FileService,
-		pu.LockService,
-		ses.GetAutoIncrCacheManager())
+		pu.LockService)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3652,16 +3685,11 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 
 func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
 	if queryPlan != nil && queryPlan.GetQuery() != nil {
-		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
-		options := &explain.ExplainOptions{
-			Verbose: true,
-			Analyze: true,
-			Format:  explain.EXPLAIN_FORMAT_TEXT,
-		}
-		marshalPlan := explainQuery.BuildJsonPlan(ctx, uuid, options)
+		marshalPlan := explain.BuildJsonPlan(ctx, uuid, &explain.MarshalPlanOptions, queryPlan.GetQuery())
 		stats.RowsRead, stats.BytesScan = marshalPlan.StatisticsRead()
-		// data transform to json datastruct
-		buffer := &bytes.Buffer{}
+		// XXX, `buffer` can be used repeatedly as a global variable in the future
+		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
+		buffer := bytes.NewBuffer(make([]byte, 0, 8192))
 		encoder := json.NewEncoder(buffer)
 		encoder.SetEscapeHTML(false)
 		err := encoder.Encode(marshalPlan)
@@ -3676,6 +3704,7 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 			if len(marshalPlan.Steps) > 1 {
 				logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(marshalPlan.Steps))
 			}
+			// XXX, `buffer` can be used repeatedly as a global variable in the future
 			buffer := &bytes.Buffer{}
 			encoder := json.NewEncoder(buffer)
 			encoder.SetEscapeHTML(false)

@@ -643,7 +643,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 	return priDefs
 }
 
-func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
+func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 
 	dbName := obj.GetSchemaName()
 	checkSub := true
@@ -652,7 +652,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 	}
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub)
 	if err != nil {
-		return
+		return false
 	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{
@@ -661,16 +661,8 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		}
 	}
 	tableName := obj.GetObjName()
-	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
-	if err != nil {
-		return
-	}
-	if e != nil {
-		cols, _ := table.TableColumns(ctx)
-		fixColumnName(cols, e)
-	}
-	stats, _ = table.Stats(ctx, e, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
-	return stats
+	ctx, table, _ := tcc.getRelation(dbName, tableName, sub)
+	return table.Stats(ctx, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
@@ -694,6 +686,9 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	// read meta's data
 	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, "", moerr.NewResultFileNotFound(proc.Ctx, makeResultMetaPath(proc.SessionInfo.Account, uuid))
+		}
 		return nil, "", err
 	}
 	// cols
@@ -745,4 +740,9 @@ func (tcc *TxnCompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta 
 
 func (tcc *TxnCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return isDbPublishing(tcc.GetContext(), dbName, tcc.GetSession())
+}
+
+// makeResultMetaPath gets query result meta path
+func makeResultMetaPath(accountName string, statementId string) string {
+	return fmt.Sprintf("query_result_meta/%s_%s.blk", accountName, statementId)
 }

@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -188,7 +187,7 @@ func newVectors(ts []types.Type, random bool, n int, m *mpool.MPool) []*vector.V
 	vecs := make([]*vector.Vector, len(ts))
 	for i := range vecs {
 		vecs[i] = newVector(n, ts[i], m, random, nil)
-		nulls.New(vecs[i].GetNulls(), n)
+		vecs[i].GetNulls().InitWithSize(n)
 	}
 	return vecs
 }
@@ -197,8 +196,8 @@ func newVectorsWithNull(ts []types.Type, random bool, n int, m *mpool.MPool) []*
 	vecs := make([]*vector.Vector, len(ts))
 	for i := range vecs {
 		vecs[i] = newVector(n, ts[i], m, random, nil)
-		nulls.New(vecs[i].GetNulls(), n)
 		nsp := vecs[i].GetNulls()
+		nsp.InitWithSize(n)
 		for j := 0; j < n; j++ {
 			if j%2 == 0 {
 				nsp.Set(uint64(j))

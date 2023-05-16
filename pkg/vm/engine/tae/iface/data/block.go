@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type CheckpointUnit interface {
@@ -82,18 +81,18 @@ type Block interface {
 
 	GetTotalChanges() int
 	CollectChangesInRange(startTs, endTs types.TS) (*model.BlockView, error)
-	CollectAppendLogIndexes(startTs, endTs types.TS) ([]*wal.Index, error)
 
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
 
-	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap, precommit bool) error
+	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap, precommit bool, zm []byte) error
 	//TODO::
 	//BatchDedupByMetaLoc(txn txnif.AsyncTxn, fs *objectio.ObjectFS,
 	//	metaLoc objectio.Location, rowmask *roaring.Bitmap, precommit bool) error
 
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
+	Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error
 	PPString(level common.PPLevel, depth int, prefix string) string
 
 	Init() error
