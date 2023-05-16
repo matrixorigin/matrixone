@@ -216,10 +216,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
 
-		// A mock autoIncrCaches.
-		aicm := &defines.AutoIncrCacheManager{}
-
-		err = InitSysTenant(ctx, aicm)
+		err = InitSysTenant(ctx)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -1963,7 +1960,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				rows := [][]interface{}{
 					{ses.GetTenantInfo().GetDefaultRoleID()},
@@ -2071,7 +2068,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 				if i == 0 {
 					rows = [][]interface{}{}
 				} else {
@@ -2156,7 +2153,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				rows := [][]interface{}{
 					{ses.GetTenantInfo().GetDefaultRoleID()},
@@ -2244,7 +2241,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				if i == 0 {
 					rows = [][]interface{}{}
@@ -2310,7 +2307,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 				rows := [][]interface{}{
 					{ses.GetTenantInfo().GetDefaultRoleID()},
 				}
@@ -2377,7 +2374,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				if i == 0 {
 					rows = [][]interface{}{}
@@ -5855,8 +5852,7 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -5910,8 +5906,7 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -5961,8 +5956,7 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6020,8 +6014,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6074,8 +6067,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6128,8 +6120,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6178,8 +6169,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6229,8 +6219,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6276,8 +6265,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6330,8 +6318,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6374,8 +6361,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6422,8 +6408,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6470,8 +6455,7 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6528,8 +6512,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6578,8 +6561,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6622,8 +6604,7 @@ func Test_doDropAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx, pu)
 		ses.rm = rm
 
 		//no result set
@@ -6827,7 +6808,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Ref().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, GSysVariables, false, nil)
+	ses := NewSession(proto, nil, pu, GSysVariables, false)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,

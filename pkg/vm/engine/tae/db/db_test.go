@@ -1644,32 +1644,8 @@ func TestLogIndex1(t *testing.T) {
 	}
 	{
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
-		meta := getOneBlockMeta(rel)
-		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(txns[0].GetStartTS(), txns[len(txns)-1].GetCommitTS())
-		assert.NoError(t, err)
-		assert.Equal(t, len(txns), len(indexes))
-		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
-		assert.NoError(t, err)
-		assert.Equal(t, len(txns)-1, len(indexes))
-		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[2].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
-		assert.NoError(t, err)
-		assert.Equal(t, len(txns)-2, len(indexes))
-		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[3].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
-		assert.NoError(t, err)
-		assert.Equal(t, len(txns)-3, len(indexes))
-		assert.NoError(t, txn.Commit())
-	}
-	{
-		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		blk := getOneBlock(rel)
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-
-		var zeroV types.TS
-		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(zeroV.Next(), txn.GetStartTS())
-		assert.NoError(t, err)
-		for i, index := range indexes {
-			t.Logf("%d: %s", i, index.String())
-		}
 
 		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx())
 		assert.Nil(t, err)
@@ -2461,7 +2437,8 @@ func TestMergeBlocks(t *testing.T) {
 func TestSegDelLogtail(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, -1)
 	schema.BlockMaxRows = 10
@@ -2469,7 +2446,7 @@ func TestSegDelLogtail(t *testing.T) {
 	bat := catalog.MockBatch(schema, 30)
 	defer bat.Close()
 
-	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
+	createRelationAndAppend(t, 0, tae.DB, "db", schema, bat, true)
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -2485,8 +2462,8 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	compactBlocks(t, 0, tae, "db", schema, false)
-	mergeBlocks(t, 0, tae, "db", schema, false)
+	compactBlocks(t, 0, tae.DB, "db", schema, false)
+	mergeBlocks(t, 0, tae.DB, "db", schema, false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	resp, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
@@ -2518,6 +2495,39 @@ func TestSegDelLogtail(t *testing.T) {
 	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
 	checkAllColRowsByScan(t, rel, bat.Length()-5, false)
 	assert.Nil(t, txn.Commit())
+
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
+	require.NoError(t, err)
+
+	check := func() {
+		ckpEntries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+		require.Equal(t, 1, len(ckpEntries))
+		entry := ckpEntries[0]
+		ins, del, cnins, segdel, err := entry.GetByTableID(tae.Fs, tid)
+		require.NoError(t, err)
+		require.Equal(t, uint32(6), ins.Vecs[0].Len)
+		require.Equal(t, uint32(6), del.Vecs[0].Len)
+		require.Equal(t, uint32(6), cnins.Vecs[0].Len)
+		require.Equal(t, uint32(1), segdel.Vecs[0].Len)
+		require.Equal(t, 2, len(del.Vecs))
+		require.Equal(t, 2, len(segdel.Vecs))
+	}
+	check()
+
+	tae.restart()
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
+	checkAllColRowsByScan(t, rel, bat.Length()-5, false)
+	assert.Nil(t, txn.Commit())
+
+	check()
+
 }
 
 // delete
@@ -3207,7 +3217,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	_, err = meta.GetBlockData().GetByFilter(txn, filter)
 	assert.NoError(t, err)
 
-	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false)
+	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false, []byte{}, objectio.BloomFilter{})
 	assert.Error(t, err)
 }
 
@@ -4575,22 +4585,30 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
+			ins, del, _, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			t.Log(common.PrintApiBatch(ins, 3))
-			t.Log(common.PrintApiBatch(del, 3))
+			if ins != nil {
+				t.Log(common.PrintApiBatch(ins, 3))
+			}
+			if del != nil {
+				t.Log(common.PrintApiBatch(del, 3))
+			}
 		}
 	}
 	tae.restart()
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, err := entry.GetByTableID(tae.Fs, tid)
+			ins, del, _, _, err := entry.GetByTableID(tae.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
-			t.Log(common.PrintApiBatch(ins, 3))
-			t.Log(common.PrintApiBatch(del, 3))
+			if ins != nil {
+				t.Log(common.PrintApiBatch(ins, 3))
+			}
+			if del != nil {
+				t.Log(common.PrintApiBatch(del, 3))
+			}
 		}
 	}
 }
@@ -5324,6 +5342,165 @@ func TestGCDropTable(t *testing.T) {
 	tables2 := manager2.GetInputs()
 	assert.True(t, tables1.Compare(tables2))
 	tae.restart()
+}
+
+func TestAlterRenameTbl(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	schema.Constraint = []byte("start version")
+	schema.Comment = "comment version"
+
+	{
+		var err error
+		txn, _ := tae.StartTxn(nil)
+		txn.CreateDatabase("xx", "", "")
+		require.NoError(t, txn.Commit())
+		txn1, _ := tae.StartTxn(nil)
+		txn2, _ := tae.StartTxn(nil)
+
+		db, _ := txn1.GetDatabase("xx")
+		_, err = db.CreateRelation(schema)
+		require.NoError(t, err)
+
+		db1, _ := txn2.GetDatabase("xx")
+		_, err = db1.CreateRelation(schema)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
+		require.NoError(t, txn1.Rollback())
+		require.NoError(t, txn2.Rollback())
+
+	}
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db", "", "")
+	created, _ := db.CreateRelation(schema)
+	tid := created.ID()
+	txn.Commit()
+
+	// concurrent create and in txn alter check
+	txn0, _ := tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	tbl, _ := db.GetRelationByName("test") // 1002
+	require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "test", "ultra-test")))
+	_, err := db.GetRelationByName("test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	tbl, err = db.GetRelationByName("ultra-test")
+	require.NoError(t, err)
+	require.Equal(t, tid, tbl.ID())
+
+	require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "ultra-test", "ultraman-test")))
+	_, err = db.GetRelationByName("test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	_, err = db.GetRelationByName("ultra-test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	tbl, err = db.GetRelationByName("ultraman-test")
+	require.NoError(t, err)
+	require.Equal(t, tid, tbl.ID())
+
+	// concurrent txn should see test
+	txn1, _ := tae.StartTxn(nil)
+	db, err = txn1.GetDatabase("db")
+	require.NoError(t, err)
+	tbl, err = db.GetRelationByName("test")
+	require.NoError(t, err)
+	require.Equal(t, tid, tbl.ID())
+	_, err = db.GetRelationByName("ultraman-test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	require.NoError(t, txn1.Commit())
+
+	require.NoError(t, txn.Commit())
+
+	txn2, _ := tae.StartTxn(nil)
+	db, err = txn2.GetDatabase("db")
+	require.NoError(t, err)
+	_, err = db.GetRelationByName("test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	_, err = db.GetRelationByName("ultra-test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	tbl, err = db.GetRelationByName("ultraman-test")
+	require.NoError(t, err)
+	require.Equal(t, tid, tbl.ID())
+
+	require.NoError(t, txn2.Commit())
+
+	// should see test, not newest name
+	db, err = txn0.GetDatabase("db")
+	require.NoError(t, err)
+	_, err = db.GetRelationByName("ultraman-test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	_, err = db.GetRelationByName("ultra-test")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	tbl, err = db.GetRelationByName("test")
+	require.NoError(t, err)
+	require.Equal(t, tid, tbl.ID())
+
+	txn3, _ := tae.StartTxn(nil)
+	db, _ = txn3.GetDatabase("db")
+	rel, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	require.NotEqual(t, rel.ID(), tid)
+	require.NoError(t, txn3.Commit())
+
+	t.Log(1, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		tbl, _ := db.GetRelationByName("test")
+		require.Error(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "unmatch", "yyyy")))
+		require.NoError(t, txn.Rollback())
+	}
+	// alter back to original schema
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		tbl, _ := db.GetRelationByName("test")
+		require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "test", "xx")))
+		require.NoError(t, txn.Commit())
+
+		t.Log(2, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
+		txn, _ = tae.StartTxn(nil)
+		db, _ = txn.GetDatabase("db")
+		tbl, _ = db.GetRelationByName("xx")
+		require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "xx", "test")))
+		require.NoError(t, txn.Commit())
+
+		t.Log(3, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
+	}
+
+	// rename duplicate and rollback
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		schema.Name = "other"
+		_, err := db.CreateRelation(schema)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit())
+
+		t.Log(4, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
+		txn, _ = tae.StartTxn(nil)
+		db, _ = txn.GetDatabase("db")
+		tbl, _ = db.GetRelationByName("test")
+		require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "test", "toBeRollback1")))
+		require.NoError(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "toBeRollback1", "toBeRollback2")))
+		require.Error(t, tbl.AlterTable(context.TODO(), api.NewRenameTableReq(0, 0, "toBeRollback2", "other"))) // duplicate
+		require.NoError(t, txn.Rollback())
+
+		t.Log(5, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
+	}
+	tae.restart()
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	dbentry := db.GetMeta().(*catalog.DBEntry)
+	t.Log(dbentry.PrettyNameIndex())
+	require.NoError(t, txn.Commit())
 }
 
 func TestAlterTableBasic(t *testing.T) {

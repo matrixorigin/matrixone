@@ -359,7 +359,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 				if thenv.IsConstNull() {
 					for idx := range results {
 						if !flag[idx] {
-							nsp.Np.Add(uint64(idx))
+							nsp.Add(uint64(idx))
 							flag[idx] = true
 						}
 					}
@@ -377,7 +377,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 				for idx := range results {
 					if !flag[idx] {
 						if nulls.Contains(thenv.GetNulls(), uint64(idx)) {
-							nsp.Np.Add(uint64(idx))
+							nsp.Add(uint64(idx))
 						} else {
 							results[idx] = thencols[idx]
 						}
@@ -390,7 +390,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 				for idx := range results {
 					if !flag[idx] {
 						if !nulls.Contains(whenv.GetNulls(), uint64(idx)) && whencols[idx] {
-							nsp.Np.Add(uint64(idx))
+							nsp.Add(uint64(idx))
 							flag[idx] = true
 						}
 					}
@@ -410,7 +410,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 				if !flag[idx] {
 					if !nulls.Contains(whenv.GetNulls(), uint64(idx)) && whencols[idx] {
 						if nulls.Contains(thenv.GetNulls(), uint64(idx)) {
-							nsp.Np.Add(uint64(idx))
+							nsp.Add(uint64(idx))
 						} else {
 							results[idx] = thencols[idx]
 						}

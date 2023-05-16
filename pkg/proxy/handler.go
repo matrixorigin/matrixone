@@ -41,6 +41,8 @@ type handler struct {
 	router Router
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
+	// haKeeperClient is the client to communicate with HAKeeper.
+	haKeeperClient logservice.ClusterHAKeeperClient
 }
 
 var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN servers")
@@ -84,14 +86,24 @@ func newProxyHandler(
 		return nil, err
 	}
 
+	ru := newRouter(mc, re, false)
+	// Decorate the router if plugin is enabled
+	if cfg.Plugin != nil {
+		p, err := newRPCPlugin(cfg.Plugin.Backend, cfg.Plugin.Timeout)
+		if err != nil {
+			return nil, err
+		}
+		ru = newPluginRouter(ru, p)
+	}
 	return &handler{
-		ctx:        context.Background(),
-		logger:     runtime.Logger(),
-		config:     cfg,
-		stopper:    st,
-		moCluster:  mc,
-		counterSet: cs,
-		router:     newRouter(mc, re, false),
+		ctx:            context.Background(),
+		logger:         runtime.Logger(),
+		config:         cfg,
+		stopper:        st,
+		moCluster:      mc,
+		counterSet:     cs,
+		router:         ru,
+		haKeeperClient: c,
 	}, nil
 }
 
@@ -107,7 +119,9 @@ func (h *handler) handle(c goetty.IOSession) error {
 		_ = t.Close()
 	}()
 
-	cc, err := newClientConn(h.ctx, h.logger, h.counterSet, c, h.moCluster, h.router, t)
+	cc, err := newClientConn(
+		h.ctx, h.logger, h.counterSet, c, h.haKeeperClient, h.moCluster, h.router, t,
+	)
 	if err != nil {
 		return err
 	}
@@ -177,6 +191,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 func (h *handler) Close() error {
 	if h != nil {
 		h.moCluster.Close()
+		_ = h.haKeeperClient.Close()
 	}
 	return nil
 }

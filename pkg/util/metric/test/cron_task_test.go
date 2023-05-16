@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -64,6 +63,10 @@ func TestCalculateStorageUsage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitDNStoreTaskServiceCreatedIndexed(ctx, 0)
+	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
+
 	ctrl := gomock.NewController(t)
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
@@ -76,7 +79,6 @@ func TestCalculateStorageUsage(t *testing.T) {
 	table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-	table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(int32(100), int64(1000000), int64(1000000), nil).AnyTimes()
 	table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 	db := mock_frontend.NewMockDatabase(ctrl)
@@ -91,11 +93,8 @@ func TestCalculateStorageUsage(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
 	pu.SV.SetDefaultValues()
 
-	// Mock autoIncrCache
-	aicm := &defines.AutoIncrCacheManager{}
-
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu, aicm)
+		return frontend.NewInternalExecutor(pu)
 	}
 
 	qStub := gostub.Stub(&metric.QuitableWait, func(ctx2 context.Context) (*time.Ticker, error) {

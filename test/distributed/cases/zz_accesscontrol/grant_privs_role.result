@@ -201,7 +201,6 @@ tables_in_grant_db
 create table grant_table_05 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
 create role 'role_account_priv_10';
 grant create table,drop table on database * to role_account_priv_10;
-internal error: do not have privilege to execute the statement
 drop role role_account_priv_6;
 create database testdb4;
 create database testdb5;

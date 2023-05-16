@@ -22,8 +22,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -1026,12 +1025,20 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	bat.Zs = []int64{1}
 	for i, expr := range exprList {
 		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
-		if tmpexpr != nil {
-			expr = tmpexpr
-		}
-		newExprList[i] = expr
+		newExprList[i] = tmpexpr
 	}
 	return colexec.RewriteFilterExprList(newExprList)
+}
+
+func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnName(tableDef, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
+	}
 }
 
 // this function will be deleted soon
@@ -1335,7 +1342,10 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 		w := csv.NewWriter(buf)
 		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
 			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
-		if param.S3Param.Provider == "minio" {
+		if strings.ToLower(param.S3Param.Provider) != "" && strings.ToLower(param.S3Param.Provider) != "minio" {
+			return nil, "", moerr.NewBadConfig(param.Ctx, "the provider only support 'minio' now")
+		}
+		if strings.ToLower(param.S3Param.Provider) == "minio" {
 			opts = append(opts, "is-minio=true")
 		}
 		if err = w.Write(opts); err != nil {
@@ -1558,5 +1568,28 @@ func onlyContainsTag(filter *Expr, tag int32) bool {
 		return true
 	default:
 		return true
+	}
+}
+
+func AssignAuxIdForExpr(expr *plan.Expr, start int32) int32 {
+	expr.AuxId = start
+	vertexCnt := int32(1)
+
+	if f, ok := expr.Expr.(*plan.Expr_F); ok {
+		for _, child := range f.F.Args {
+			vertexCnt += AssignAuxIdForExpr(child, start+vertexCnt)
+		}
+	}
+
+	return vertexCnt
+}
+
+func ResetAuxIdForExpr(expr *plan.Expr) {
+	expr.AuxId = 0
+
+	if f, ok := expr.Expr.(*plan.Expr_F); ok {
+		for _, child := range f.F.Args {
+			ResetAuxIdForExpr(child)
+		}
 	}
 }

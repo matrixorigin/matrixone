@@ -27,9 +27,20 @@ create table db1.t2(a int);
 internal error: do not have privilege to execute the statement
 set role role2;
 create table db1.t2(a int);
+insert into db1.t2 values(1);
+insert into db1.t2 values(2);
+insert into db1.t2 values(3);
 set role public;
 create table db1.t3(a int);
 internal error: do not have privilege to execute the statement
 set secondary role all;
 create table db1.t3(a int);
+select * from db1.t2;
+internal error: do not have privilege to execute the statement
+grant all on table db1.t2 to role1;
+select * from db1.t2;
+a
+1
+2
+3
 drop account default_1;

@@ -56,11 +56,8 @@ type CommandInfo struct {
 }
 type Info struct {
 	Group       uint32
-	TxnId       string
 	Checkpoints []*CkpRanges
-	Uncommits   string
-
-	GroupLSN uint64
+	GroupLSN    uint64
 
 	TargetLsn uint64
 	Info      any
@@ -78,15 +75,6 @@ func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 8
-	var sn int64
-	if sn, err = objectio.WriteString(info.TxnId, w); err != nil {
-		return
-	}
-	n += sn
-	if sn, err = objectio.WriteString(info.Uncommits, w); err != nil {
-		return
-	}
-	n += sn
 	if _, err = w.Write(types.EncodeUint64(&info.TargetLsn)); err != nil {
 		return
 	}
@@ -153,15 +141,6 @@ func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 8
-	var sn int64
-	if info.TxnId, sn, err = objectio.ReadString(r); err != nil {
-		return
-	}
-	n += sn
-	if info.Uncommits, sn, err = objectio.ReadString(r); err != nil {
-		return
-	}
-	n += sn
 	if _, err = r.Read(types.EncodeUint64(&info.TargetLsn)); err != nil {
 		return
 	}
@@ -236,7 +215,7 @@ func (info *Info) ToString() string {
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	default:
-		s := fmt.Sprintf("customized entry G%d<%d>{T%s}", info.Group, info.GroupLSN, info.TxnId)
+		s := fmt.Sprintf("customized entry G%d<%d>", info.Group, info.GroupLSN)
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	}
@@ -278,7 +257,6 @@ func (b *Base) IsPrintTime() bool {
 func (b *Base) reset() {
 	b.descriptor.reset()
 	if b.node != nil {
-		common.LogAllocator.Free(b.node)
 		b.node = nil
 	}
 	b.payload = nil
@@ -336,7 +314,6 @@ func (b *Base) GetInfo() any {
 
 func (b *Base) UnmarshalFromNode(n []byte, own bool) error {
 	if b.node != nil {
-		common.LogAllocator.Free(b.node)
 		b.node = nil
 	}
 	if own {
@@ -351,7 +328,6 @@ func (b *Base) UnmarshalFromNode(n []byte, own bool) error {
 
 func (b *Base) SetPayload(buf []byte) error {
 	if b.node != nil {
-		common.LogAllocator.Free(b.node)
 		b.node = nil
 	}
 	b.payload = buf
@@ -359,9 +335,9 @@ func (b *Base) SetPayload(buf []byte) error {
 	return nil
 }
 
-func (b *Base) Unmarshal(buf []byte) error {
+func (b *Base) Unmarshal(buf []byte, allocator Allocator) error {
 	bbuf := bytes.NewBuffer(buf)
-	_, err := b.ReadFrom(bbuf)
+	_, err := b.ReadFromWithAllocator(bbuf, allocator)
 	return err
 }
 func (b *Base) GetLsn() (gid uint32, lsn uint64) {
@@ -383,7 +359,7 @@ func (b *Base) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (b *Base) ReadFrom(r io.Reader) (int64, error) {
+func (b *Base) ReadFromWithAllocator(r io.Reader, allocator Allocator) (int64, error) {
 	metaBuf := b.GetMetaBuf()
 	_, err := r.Read(metaBuf)
 	if err != nil {
@@ -391,9 +367,13 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 	}
 
 	if b.node == nil {
-		b.node, err = common.LogAllocator.Alloc(b.GetPayloadSize())
-		if err != nil {
-			panic(err)
+		if allocator != nil {
+			b.node, err = allocator.Alloc(b.GetPayloadSize())
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			b.node = make([]byte, b.GetPayloadSize())
 		}
 		b.payload = b.node[:b.GetPayloadSize()]
 	}
@@ -421,16 +401,20 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 	return int64(n1 + n2), nil
 }
 
-func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
+func (b *Base) ReadAt(r *os.File, offset int, allocator Allocator) (int, error) {
 	metaBuf := b.GetMetaBuf()
 	n, err := r.ReadAt(metaBuf, int64(offset))
 	if err != nil {
 		return n, err
 	}
 	if b.node == nil {
-		b.node, err = common.LogAllocator.Alloc(b.GetPayloadSize())
-		if err != nil {
-			panic(err)
+		if allocator != nil {
+			b.node, err = allocator.Alloc(b.GetPayloadSize())
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			b.node = make([]byte, b.GetPayloadSize())
 		}
 		b.payload = b.node[:b.GetPayloadSize()]
 	}

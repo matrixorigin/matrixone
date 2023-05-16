@@ -105,8 +105,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	aicm := &defines.AutoIncrCacheManager{}
-	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	rm, _ := NewRoutineManager(ctx, pu)
 	rm.SetSkipCheckUser(true)
 
 	wg := sync.WaitGroup{}
@@ -145,6 +144,22 @@ func newMrsForConnectionId(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForSleep(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("sleep")
+	col1.SetColumnType(defines.MYSQL_TYPE_TINY)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func TestKIll(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
@@ -166,13 +181,39 @@ func TestKIll(t *testing.T) {
 
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
+
 	noResultSet := make(map[string]bool)
-	resultSet := make(map[string]genMrs)
-	resultSet[sql1] = func(ses *Session) *MysqlResultSet {
-		mrs := newMrsForConnectionId([][]interface{}{
-			{ses.GetConnectionID()},
-		})
-		return mrs
+	resultSet := make(map[string]*result)
+	resultSet[sql1] = &result{
+		gen: func(ses *Session) *MysqlResultSet {
+			mrs := newMrsForConnectionId([][]interface{}{
+				{ses.GetConnectionID()},
+			})
+			return mrs
+		},
+		isSleepSql: false,
+	}
+
+	sql5 := "select sleep(30);"
+	resultSet[sql5] = &result{
+		gen: func(ses *Session) *MysqlResultSet {
+			return newMrsForSleep([][]interface{}{
+				{uint8(0)},
+			})
+		},
+		isSleepSql: true,
+		seconds:    30,
+	}
+
+	sql6 := "select sleep(30);"
+	resultSet[sql6] = &result{
+		gen: func(ses *Session) *MysqlResultSet {
+			return newMrsForSleep([][]interface{}{
+				{uint8(0)},
+			})
+		},
+		isSleepSql: true,
+		seconds:    30,
 	}
 
 	var wrapperStubFunc = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
@@ -204,8 +245,7 @@ func TestKIll(t *testing.T) {
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	// A mock autoincrcache manager.
-	aicm := &defines.AutoIncrCacheManager{}
-	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	rm, _ := NewRoutineManager(ctx, pu)
 	rm.SetSkipCheckUser(true)
 
 	wg := sync.WaitGroup{}
@@ -237,17 +277,67 @@ func TestKIll(t *testing.T) {
 	err = connIdRow.Scan(&conn2Id)
 	require.NoError(t, err)
 
+	wgSleep := sync.WaitGroup{}
+	wgSleep.Add(1)
+
+	//===================================
+	//connection 1 exec : select sleep(30);
+	go func() {
+		defer wgSleep.Done()
+		var resultId int
+		connIdRow = conn1.QueryRow(sql5)
+		err = connIdRow.Scan(&resultId)
+		require.NoError(t, err)
+	}()
+
+	//sleep before cancel
+	time.Sleep(time.Second * 2)
+
 	//conn2 kills the query
 	sql3 = fmt.Sprintf("kill query %d;", conn1Id)
 	noResultSet[sql3] = true
 	_, err = conn2.Exec(sql3)
 	require.NoError(t, err)
 
+	//check killed result
+	wgSleep.Wait()
+	res := resultSet[sql5]
+	require.Equal(t, res.resultX.Load(), contextCancel)
+
+	//================================
+
+	//connection 1 exec : select sleep(30);
+	wgSleep2 := sync.WaitGroup{}
+	wgSleep2.Add(1)
+	go func() {
+		defer wgSleep2.Done()
+		var resultId int
+		connIdRow = conn1.QueryRow(sql6)
+		err = connIdRow.Scan(&resultId)
+		require.NoError(t, err)
+	}()
+
+	//sleep before cancel
+	time.Sleep(time.Second * 2)
+
 	//conn2 kills the connection 1
 	sql2 = fmt.Sprintf("kill %d;", conn1Id)
 	noResultSet[sql2] = true
 	_, err = conn2.Exec(sql2)
 	require.NoError(t, err)
+
+	//check killed result
+	wgSleep2.Wait()
+	res = resultSet[sql6]
+	require.Equal(t, res.resultX.Load(), contextCancel)
+
+	//==============================
+	//conn 1 is killed by conn2
+	//check conn1 is disconnected or not
+	err = conn1.Ping()
+	require.Error(t, err)
+
+	//==============================
 
 	//conn2 kills itself
 	sql4 = fmt.Sprintf("kill %d;", conn2Id)
@@ -1184,7 +1274,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 		return moerr.NewInternalError(ctx, "message is not Packet")
 	}
 
-	ses := NewSession(pro, nil, pu, nil, false, nil)
+	ses := NewSession(pro, nil, pu, nil, false)
 	ses.SetRequestContext(ctx)
 	pro.SetSession(ses)
 
@@ -1801,7 +1891,7 @@ func Test_openpacket(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
-		ses := NewSession(proto, nil, pu, nil, false, nil)
+		ses := NewSession(proto, nil, pu, nil, false)
 		ses.SetRequestContext(context.TODO())
 		proto.ses = ses
 
@@ -1829,7 +1919,7 @@ func Test_openpacket(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
-		ses := NewSession(proto, nil, pu, nil, false, nil)
+		ses := NewSession(proto, nil, pu, nil, false)
 		ses.SetRequestContext(context.TODO())
 		proto.ses = ses
 
@@ -2169,7 +2259,7 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2202,7 +2292,7 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2235,7 +2325,7 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		proto.ses = ses
 
@@ -2271,7 +2361,7 @@ func Test_resultset(t *testing.T) {
 		}
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil)
+		ses := NewSession(proto, nil, pu, &gSys, false)
 		ses.SetRequestContext(ctx)
 		ses.cmd = COM_STMT_EXECUTE
 		proto.ses = ses

@@ -26,7 +26,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -69,18 +68,30 @@ func Test_inc_dec(t *testing.T) {
 	assert.False(t, rt.connectionBeCounted.Load())
 }
 
+const (
+	contextCancel int32 = -2
+	timeout       int32 = -1
+)
+
 type genMrs func(ses *Session) *MysqlResultSet
 
+type result struct {
+	gen        genMrs
+	isSleepSql bool
+	seconds    int
+	resultX    atomic.Int32
+}
+
 var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
-	sql2result map[string]genMrs,
+	sql2result map[string]*result,
 	sql2NoResultSet map[string]bool, sql string, stmt tree.Statement, proc *process.Process) ComputationWrapper {
 	var mrs *MysqlResultSet
 	var columns []interface{}
 	var ok, ok2 bool
 	var err error
-	var gen genMrs
-	if gen, ok = sql2result[sql]; ok {
-		mrs = gen(ses)
+	var res *result
+	if res, ok = sql2result[sql]; ok {
+		mrs = res.gen(ses)
 		for _, col := range mrs.Columns {
 			columns = append(columns, col)
 		}
@@ -94,6 +105,14 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) error {
 		proto := ses.GetMysqlProtocol()
 		if mrs != nil {
+			if res.isSleepSql {
+				select {
+				case <-time.After(time.Duration(res.seconds) * time.Second):
+					res.resultX.Store(timeout)
+				case <-proc.Ctx.Done():
+					res.resultX.Store(contextCancel)
+				}
+			}
 			err = proto.SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount())
 			if err != nil {
 				logutil.Errorf("flush error %v", err)
@@ -134,7 +153,7 @@ func Test_ConnectionCount(t *testing.T) {
 	require.NoError(t, err)
 
 	noResultSet := make(map[string]bool)
-	resultSet := make(map[string]genMrs)
+	resultSet := make(map[string]*result)
 
 	var wrapperStubFunc = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 		var cw []ComputationWrapper = nil
@@ -166,8 +185,7 @@ func Test_ConnectionCount(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	aicm := &defines.AutoIncrCacheManager{}
-	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	rm, _ := NewRoutineManager(ctx, pu)
 	rm.SetSkipCheckUser(true)
 
 	wg := sync.WaitGroup{}

@@ -26,15 +26,22 @@ const (
 	BenchmarkRows = 8192
 )
 
+func newBm(n int) *Bitmap {
+	var bm Bitmap
+	bm.InitWithSize(n)
+	return &bm
+}
+
 func TestNulls(t *testing.T) {
-	np := New(Rows)
+	np := newBm(Rows)
 	np.AddRange(0, 0)
 	np.AddRange(1, 10)
 	require.Equal(t, 9, np.Count())
-	np.Clear()
+	np.Reset()
 
 	ok := np.IsEmpty()
 	require.Equal(t, true, ok)
+	np.TryExpandWithSize(10)
 	np.Add(0)
 	ok = np.Contains(0)
 	require.Equal(t, true, ok)
@@ -60,16 +67,16 @@ func TestNulls(t *testing.T) {
 	fmt.Printf("size: %v\n", np.Size())
 	fmt.Printf("numbers: %v\n", np.Count())
 
-	nq := New(Rows)
+	nq := newBm(Rows)
 	nq.Unmarshal(np.Marshal())
 
 	require.Equal(t, np.ToArray(), nq.ToArray())
 
-	np.Clear()
+	np.Reset()
 }
 
 func BenchmarkAdd(b *testing.B) {
-	np := New(BenchmarkRows)
+	np := newBm(BenchmarkRows)
 	for i := 0; i < b.N; i++ {
 		for j := 0; j < BenchmarkRows; j++ {
 			np.Add(uint64(j))
@@ -84,8 +91,8 @@ func BenchmarkAdd(b *testing.B) {
 }
 
 func TestC(t *testing.T) {
-	bm3 := New(10000)
-	bm5 := New(10000)
+	bm3 := newBm(10000)
+	bm5 := newBm(10000)
 
 	require.True(t, bm3.IsEmpty())
 	require.True(t, bm3.C_IsEmpty())
@@ -123,7 +130,7 @@ func TestC(t *testing.T) {
 }
 
 func TestBitmapIterator_Next(t *testing.T) {
-	np := New(BenchmarkRows)
+	np := newBm(BenchmarkRows)
 	np.AddRange(0, 64)
 
 	// | 63 -- 0 | 127 -- 64 | 191 -- 128 | 255 -- 192 | 319 -- 256 | 383 -- 320 | ... |

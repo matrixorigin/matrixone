@@ -85,6 +85,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"go.uber.org/zap"
@@ -505,9 +506,11 @@ func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode 
 }
 
 func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.MetadataMVCCNode], insBatch, delBatch *containers.Batch, delete bool, committs, createts, deletets types.TS) {
-	logutil.Debugf("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
-		e.AsCommonID().String(), e.IsAppendable(),
-		createts.ToString(), node.DeletedAt.ToString(), node.BaseNode.MetaLoc, node.BaseNode.DeltaLoc)
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
+			e.AsCommonID().String(), e.IsAppendable(),
+			createts.ToString(), node.DeletedAt.ToString(), node.BaseNode.MetaLoc, node.BaseNode.DeltaLoc)
+	})
 	is_sorted := false
 	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
 		is_sorted = true
@@ -721,7 +724,7 @@ func LoadCheckpointEntries(
 	entries := make([]*api.Entry, 0)
 	for i := range locations {
 		data := datas[i]
-		ins, del, cnIns, err := data.GetTableData(tableID)
+		ins, del, cnIns, segDel, err := data.GetTableData(tableID)
 		if err != nil {
 			return nil, err
 		}
@@ -760,6 +763,17 @@ func LoadCheckpointEntries(
 				DatabaseId:   dbID,
 				DatabaseName: dbName,
 				Bat:          del,
+			}
+			entries = append(entries, entry)
+		}
+		if segDel != nil {
+			entry := &api.Entry{
+				EntryType:    api.Entry_Delete,
+				TableId:      tableID,
+				TableName:    fmt.Sprintf("_%d_seg", tableID),
+				DatabaseId:   dbID,
+				DatabaseName: dbName,
+				Bat:          segDel,
 			}
 			entries = append(entries, entry)
 		}

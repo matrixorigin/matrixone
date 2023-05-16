@@ -214,6 +214,15 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Extra.DroppedAttrs = append(s.Extra.DroppedAttrs, coldef.Name)
 		s.Extra.ColumnChanged = true
 		return s.Finalize(true)
+	case apipb.AlterKind_RenameTable:
+		rename := req.GetRenameTable()
+		if rename.OldName != s.Name {
+			return moerr.NewInternalErrorNoCtx("unmatched old schema name")
+		}
+		if s.Extra.OldName == "" {
+			s.Extra.OldName = s.Name
+		}
+		s.Name = rename.NewName
 	default:
 		return moerr.NewNYINoCtx("unsupported alter kind: %v", req.Kind)
 	}

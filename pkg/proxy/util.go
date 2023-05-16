@@ -18,9 +18,24 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"regexp"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+)
+
+var (
+	begin    = "[bB][eE][gG][iI][nN]"
+	commit   = "[cC][oO][mM][mM][iI][tT]"
+	rollback = "[rR][oO][lL][lL][bB][aA][cC][kK]"
+
+	beginPattern = fmt.Sprintf("^%s(%s)%s%s%s$",
+		spaceAtLeastZero, begin, spaceAtLeastZero, end, spaceAtLeastZero)
+	commitPattern = fmt.Sprintf("^%s(%s)%s%s%s$",
+		spaceAtLeastZero, commit, spaceAtLeastZero, end, spaceAtLeastZero)
+	rollbackPattern = fmt.Sprintf("^%s(%s)%s%s%s$",
+		spaceAtLeastZero, rollback, spaceAtLeastZero, end, spaceAtLeastZero)
 )
 
 // makeOKPacket returns an OK packet
@@ -115,42 +130,20 @@ func pickTunnels(tuns tunnelSet, n int) []*tunnel {
 
 // isStmtBegin returns true iff it is begin statement.
 func isStmtBegin(c []byte) bool {
-	if len(c) != 5 {
-		return false
-	}
-	return (c[0] == 'b' || c[0] == 'B') &&
-		(c[1] == 'e' || c[1] == 'E') &&
-		(c[2] == 'g' || c[2] == 'G') &&
-		(c[3] == 'i' || c[3] == 'I') &&
-		(c[4] == 'n' || c[4] == 'N')
+	matched, _ := regexp.MatchString(beginPattern, string(c))
+	return matched
 }
 
 // isStmtCommit returns true iff it is commit statement.
 func isStmtCommit(c []byte) bool {
-	if len(c) != 6 {
-		return false
-	}
-	return (c[0] == 'c' || c[0] == 'C') &&
-		(c[1] == 'o' || c[1] == 'O') &&
-		(c[2] == 'm' || c[2] == 'M') &&
-		(c[3] == 'm' || c[3] == 'M') &&
-		(c[4] == 'i' || c[4] == 'I') &&
-		(c[5] == 't' || c[5] == 'T')
+	matched, _ := regexp.MatchString(commitPattern, string(c))
+	return matched
 }
 
 // isStmtRollback returns true iff it is rollback statement.
 func isStmtRollback(c []byte) bool {
-	if len(c) != 8 {
-		return false
-	}
-	return (c[0] == 'r' || c[0] == 'R') &&
-		(c[1] == 'o' || c[1] == 'O') &&
-		(c[2] == 'l' || c[2] == 'L') &&
-		(c[3] == 'l' || c[3] == 'L') &&
-		(c[4] == 'b' || c[4] == 'B') &&
-		(c[5] == 'a' || c[5] == 'A') &&
-		(c[6] == 'c' || c[6] == 'C') &&
-		(c[7] == 'k' || c[7] == 'K')
+	matched, _ := regexp.MatchString(rollbackPattern, string(c))
+	return matched
 }
 
 // sortMap sorts a complex map instance.

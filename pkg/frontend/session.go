@@ -175,8 +175,6 @@ type Session struct {
 
 	statsCache *plan2.StatsCache
 
-	autoIncrCacheManager *defines.AutoIncrCacheManager
-
 	seqCurValues map[uint64]string
 
 	seqLastValue string
@@ -214,7 +212,7 @@ func (ses *Session) setRoutine(rt *Routine) {
 	ses.rt = rt
 }
 
-func (ses *Session) getRoutin() *Routine {
+func (ses *Session) getRoutine() *Routine {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.rt
@@ -263,19 +261,6 @@ func (ses *Session) GetSqlHelper() *SqlHelper {
 	return ses.sqlHelper
 }
 
-// The update version. Four function.
-func (ses *Session) SetAutoIncrCacheManager(aicm *defines.AutoIncrCacheManager) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.autoIncrCacheManager = aicm
-}
-
-func (ses *Session) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.autoIncrCacheManager
-}
-
 const saveQueryIdCnt = 10
 
 func (ses *Session) pushQueryId(uuid string) {
@@ -304,7 +289,7 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool, aicm *defines.AutoIncrCacheManager) *Session {
+func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool) *Session {
 	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient)
 	ses := &Session{
 		protocol: proto,
@@ -352,7 +337,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
-	ses.SetAutoIncrCacheManager(aicm)
 
 	var err error
 	if ses.mp == nil {
@@ -432,9 +416,8 @@ func NewBackgroundSession(
 	PU *config.ParameterUnit,
 	gSysVars *GlobalSystemVariables) *BackgroundSession {
 	connCtx := upstream.GetConnectContext()
-	aicm := upstream.GetAutoIncrCacheManager()
 
-	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false, aicm)
+	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.upstream = upstream
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := motrace.StatementFromContext(reqCtx); stmt != nil {
@@ -1378,7 +1361,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		tenant.SetDefaultRole(defaultRole)
 	}
 	// record the id :routine pair in RoutineManager
-	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutin(), accountVersion)
+	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
 	logInfo(sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)
@@ -1452,17 +1435,6 @@ func changeVersion(ctx context.Context, ses *Session, db string) error {
 		ses.GetTenantInfo().SetVersion(version)
 	}
 	return err
-}
-
-func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			fixColumnName(cols, arg)
-		}
-	case *plan.Expr_Col:
-		exprImpl.Col.Name = cols[exprImpl.Col.ColPos].Name
-	}
 }
 
 // fakeDataSetFetcher gets the result set from the pipeline and save it in the session.
@@ -1688,4 +1660,26 @@ func (ses *Session) getLastCommitTS() timestamp.Timestamp {
 		}
 	}
 	return minTS
+}
+
+// getCNLabels parse the session variable and returns map[string]string.
+func (ses *Session) getCNLabels() map[string]string {
+	label, ok := ses.sysVars["cn_label"]
+	if !ok {
+		return nil
+	}
+	labelStr, ok := label.(string)
+	if !ok {
+		return nil
+	}
+	labels := strings.Split(labelStr, ",")
+	res := make(map[string]string, len(labels))
+	for _, kvStr := range labels {
+		kvs := strings.Split(kvStr, "=")
+		if len(kvs) != 2 {
+			continue
+		}
+		res[kvs[0]] = kvs[1]
+	}
+	return res
 }

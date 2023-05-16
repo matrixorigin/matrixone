@@ -46,13 +46,28 @@ func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, 
 	}
 }
 
+const (
+	stripCloudUser    = "/* cloud_user */"
+	stripCloudNonUser = "/* cloud_nonuser */"
+)
+
 var HandleSqlForRecord = func(sql string) []string {
 	split := SplitSqlBySemicolon(sql)
 	for i := range split {
+		//!!! remove method here assumes that the format of stripCloudUser or stripCloudNonUser
+		// can not be changed, otherwise, the following code will not work.
+		// It is case-sensitive and error-prone also.
+
 		// Remove /* cloud_user */ prefix
-		p0 := strings.Index(split[i], "/* cloud_user */")
+		p0 := strings.Index(split[i], stripCloudUser)
 		if p0 >= 0 {
-			split[i] = split[i][0:p0] + split[i][p0+16:len(split[i])]
+			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudUser):len(split[i])]
+		}
+
+		// remove /* cloud_nonuser */ prefix
+		p0 = strings.Index(split[i], stripCloudNonUser)
+		if p0 >= 0 {
+			split[i] = split[i][0:p0] + split[i][p0+len(stripCloudNonUser):len(split[i])]
 		}
 
 		// Hide secret key for split[i],
@@ -101,14 +116,20 @@ var HandleSqlForRecord = func(sql string) []string {
 			}
 			split[i] = builder.String()
 		}
+		split[i] = strings.TrimSpace(split[i])
 	}
 	return split
 }
 
 func SplitSqlBySemicolon(sql string) []string {
 	var ret []string
+	if len(sql) == 0 {
+		// case 1 : "" => [""]
+		return []string{sql}
+	}
 	scanner := mysql.NewScanner(dialect.MYSQL, sql)
 	lastEnd := 0
+	endWithSemicolon := false
 	for scanner.Pos < len(sql) {
 		typ, _ := scanner.Scan()
 		for scanner.Pos < len(sql) && typ != ';' {
@@ -117,10 +138,36 @@ func SplitSqlBySemicolon(sql string) []string {
 		if typ == ';' {
 			ret = append(ret, sql[lastEnd:scanner.Pos-1])
 			lastEnd = scanner.Pos
+			endWithSemicolon = true
 		} else {
 			ret = append(ret, sql[lastEnd:scanner.Pos])
-			return ret
+			endWithSemicolon = false
 		}
 	}
+
+	if len(ret) == 0 {
+		//!!!NOTE there is at least one element in ret slice
+		panic("there is at least one element")
+	}
+	//handle whitespace characters in the front and end of the sql
+	for i := range ret {
+		ret[i] = strings.TrimSpace(ret[i])
+	}
+	// do nothing
+	//if len(ret) == 1 {
+	//	//case 1 : "   " => [""]
+	//	//case 2 : " abc " = > ["abc"]
+	//	//case 3 : " /* abc */  " = > ["/* abc */"]
+	//}
+	if len(ret) > 1 {
+		last := len(ret) - 1
+		if !endWithSemicolon && len(ret[last]) == 0 {
+			//case 3 : "abc;   " => ["abc"]
+			//if the last one is end empty, remove it
+			ret = ret[:last]
+		}
+		//case 4 : "abc; def; /* abc */  " => ["abc", "def", "/* abc */"]
+	}
+
 	return ret
 }

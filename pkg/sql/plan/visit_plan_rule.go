@@ -57,14 +57,16 @@ func NewGetParamRule() *GetParamRule {
 func (rule *GetParamRule) MatchNode(node *Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		rule.schemas = append(rule.schemas, &plan.ObjectRef{
-			Server:     node.ObjRef.Server,
-			Db:         node.ObjRef.Db,
-			Schema:     node.ObjRef.Schema,
-			Obj:        node.ObjRef.Obj,
-			ServerName: node.ObjRef.ServerName,
-			DbName:     node.ObjRef.DbName,
-			SchemaName: node.ObjRef.SchemaName,
-			ObjName:    node.ObjRef.ObjName,
+			Server:           node.ObjRef.Server,
+			Db:               node.ObjRef.Db,
+			Schema:           node.ObjRef.Schema,
+			Obj:              node.ObjRef.Obj,
+			ServerName:       node.ObjRef.ServerName,
+			DbName:           node.ObjRef.DbName,
+			SchemaName:       node.ObjRef.SchemaName,
+			ObjName:          node.ObjRef.ObjName,
+			PubAccountId:     node.ObjRef.PubAccountId,
+			SubscriptionName: node.ObjRef.SubscriptionName,
 		})
 	}
 	return false
