@@ -159,6 +159,9 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
+	if nodeID < 0 || builder == nil {
+		return -1
+	}
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
 		return -1
@@ -182,13 +185,11 @@ func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builde
 	case *plan.Expr_F:
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
-		case "=", ">", ">=", "<=", "<":
-			//assume col is on the left side
-			return getExprNdv(exprImpl.F.Args[0], ndvMap, nodeID, builder)
 		case "year":
 			return getExprNdv(exprImpl.F.Args[0], ndvMap, nodeID, builder) / 365
 		default:
-			return -1
+			//assume col is on the left side
+			return getExprNdv(exprImpl.F.Args[0], ndvMap, nodeID, builder)
 		}
 	case *plan.Expr_Col:
 		if ndvMap != nil {
@@ -278,6 +279,8 @@ func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 		switch funcName {
 		case "=":
 			return estimateEqualitySelectivity(expr, s.NdvMap)
+		case "!=", "<>":
+			return 0.9
 		case ">", "<", ">=", "<=":
 			return estimateNonEqualitySelectivity(expr, funcName, s)
 		case "and":
@@ -294,6 +297,13 @@ func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 			return orSelectivity(sel1, sel2)
 		case "like":
 			return 0.2
+		case "in":
+			// use ndv map,do not need nodeID
+			ndv := getExprNdv(expr, s.NdvMap, -1, nil)
+			if ndv > 10 {
+				return 10 / ndv
+			}
+			return 0.5
 		default:
 			return 0.15
 		}
@@ -303,12 +313,14 @@ func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 	return 1
 }
 
-func estimateFilterWeight(ctx context.Context, expr *plan.Expr, w float64) float64 {
+func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 	switch expr.Typ.Id {
 	case int32(types.T_decimal64):
 		w += 64
 	case int32(types.T_decimal128):
 		w += 128
+	case int32(types.T_float32), int32(types.T_float64):
+		w += 8
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_text), int32(types.T_json):
 		w += 4
 	}
@@ -318,21 +330,20 @@ func estimateFilterWeight(ctx context.Context, expr *plan.Expr, w float64) float
 		switch funcImpl.Func.GetObjName() {
 		case "like":
 			w += 10
+		case "cast":
+			w += 3
 		case "in":
-			w += 5
+			w += 2
+		case "<>", "!=":
+			w += 1.2
 		case "<", "<=":
 			w += 1.1
 		default:
 			w += 1
 		}
 		for _, child := range exprImpl.F.Args {
-			w += estimateFilterWeight(ctx, child, 0)
+			w += estimateFilterWeight(child, 0)
 		}
-	}
-	if CheckExprIsMonotonic(ctx, expr) {
-		//this is a monotonic filter
-		//calc selectivity is too heavy now. will change this in the future
-		w *= 0.1
 	}
 	return w
 }
@@ -347,6 +358,12 @@ func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil && len(node.FilterList) > 1 {
+			sc := builder.compCtx.GetStatsCache()
+			if sc == nil {
+				return
+			}
+			s := sc.GetStatsInfoMap(node.TableDef.TblId)
+
 			bat := batch.NewWithSize(0)
 			bat.Zs = []int64{1}
 			for i := range node.FilterList {
@@ -356,7 +373,9 @@ func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 				}
 			}
 			sort.Slice(node.FilterList, func(i, j int) bool {
-				return estimateFilterWeight(builder.GetContext(), node.FilterList[i], 0) <= estimateFilterWeight(builder.GetContext(), node.FilterList[j], 0)
+				cost1 := estimateFilterWeight(node.FilterList[i], 0) * estimateExprSelectivity(node.FilterList[i], s)
+				cost2 := estimateFilterWeight(node.FilterList[j], 0) * estimateExprSelectivity(node.FilterList[j], s)
+				return cost1 <= cost2
 			})
 		}
 	}
@@ -599,8 +618,10 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats := new(plan.Stats)
 	stats.TableCnt = s.TableCnt
 	if len(node.FilterList) > 0 {
+		for i := range node.FilterList {
+			fixColumnName(node.TableDef, node.FilterList[i])
+		}
 		expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
-		fixColumnName(node.TableDef, expr)
 		stats.Selectivity = estimateExprSelectivity(expr, s)
 	} else {
 		stats.Selectivity = 1
