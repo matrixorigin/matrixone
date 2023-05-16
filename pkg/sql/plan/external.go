@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"io"
 	"strings"
@@ -212,6 +213,6 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		Cost:        cost,
 		Selectivity: 1,
 		TableCnt:    cost,
-		BlockNum:    int32(cost / 8192),
+		BlockNum:    int32(cost / float64(options.DefaultBlockMaxRows)),
 	}
 }

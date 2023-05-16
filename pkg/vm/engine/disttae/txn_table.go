@@ -43,22 +43,22 @@ import (
 
 var _ engine.Relation = new(txnTable)
 
-func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
+func (tbl *txnTable) Stats(ctx context.Context, statsInfoMap any) bool {
 	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
 	if !ok {
-		return plan2.DefaultStats(), nil
+		return false
 	}
 	if len(tbl.blockInfos) == 0 || !tbl.blockInfosUpdated {
-		err := tbl.updateBlockInfos(ctx, expr)
+		err := tbl.updateBlockInfos(ctx)
 		if err != nil {
-			return plan2.DefaultStats(), err
+			return false
 		}
 	}
 	if len(tbl.blockInfos) > 0 {
-		return CalcStats(ctx, tbl.blockInfos, expr, tbl.getTableDef(), tbl.db.txn.proc, s)
+		return CalcStats(ctx, tbl.blockInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
 	} else {
 		// no meta means not flushed yet, very small table
-		return plan2.DefaultStats(), nil
+		return false
 	}
 }
 
@@ -277,7 +277,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 	tbl.db.txn.Unlock()
 
 	// make sure we have the block infos snapshot
-	if err = tbl.updateBlockInfos(ctx, expr); err != nil {
+	if err = tbl.updateBlockInfos(ctx); err != nil {
 		return
 	}
 
@@ -1283,7 +1283,7 @@ func (tbl *txnTable) getParts(ctx context.Context) ([]*logtailreplay.PartitionSt
 	return tbl._parts, nil
 }
 
-func (tbl *txnTable) updateBlockInfos(ctx context.Context, expr *plan.Expr) (err error) {
+func (tbl *txnTable) updateBlockInfos(ctx context.Context) (err error) {
 	tbl.dnList = []int{0}
 
 	_, created := tbl.db.txn.createMap.Load(genTableKey(ctx, tbl.tableName, tbl.db.databaseId))

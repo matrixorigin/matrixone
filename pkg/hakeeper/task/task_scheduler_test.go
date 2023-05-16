@@ -203,7 +203,7 @@ func TestSchedulerCreateTasks(t *testing.T) {
 	currentTick := uint64(0)
 
 	assert.NoError(t, scheduler.Create(context.Background(),
-		[]task.TaskMetadata{{ID: "1"}}))
+		[]task.TaskMetadata{{ID: "1"}}, true))
 
 	// Schedule empty task
 	scheduler.Schedule(cnState, currentTick)

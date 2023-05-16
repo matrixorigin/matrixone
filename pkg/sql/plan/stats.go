@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"sort"
 	"strings"
@@ -268,7 +269,7 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName string, tableCnt flo
 }
 
 // estimate output lines for a filter
-func EstimateOutCnt(expr *plan.Expr, s *StatsInfoMap) float64 {
+func estimateOutCnt(expr *plan.Expr, s *StatsInfoMap) float64 {
 	tableCnt := s.TableCnt
 	if expr == nil {
 		return tableCnt
@@ -285,8 +286,8 @@ func EstimateOutCnt(expr *plan.Expr, s *StatsInfoMap) float64 {
 			outcnt = estimateOutCntForNonEquality(expr, funcName, tableCnt, s)
 		case "and":
 			//get the smaller one of two children, and tune it down a little bit
-			out1 := EstimateOutCnt(exprImpl.F.Args[0], s)
-			out2 := EstimateOutCnt(exprImpl.F.Args[1], s)
+			out1 := estimateOutCnt(exprImpl.F.Args[0], s)
+			out2 := estimateOutCnt(exprImpl.F.Args[1], s)
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
 				outcnt = (out1 + out2) - tableCnt
 			} else {
@@ -294,8 +295,8 @@ func EstimateOutCnt(expr *plan.Expr, s *StatsInfoMap) float64 {
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
-			out1 := EstimateOutCnt(exprImpl.F.Args[0], s)
-			out2 := EstimateOutCnt(exprImpl.F.Args[1], s)
+			out1 := estimateOutCnt(exprImpl.F.Args[0], s)
+			out2 := estimateOutCnt(exprImpl.F.Args[1], s)
 			if out1 == out2 {
 				outcnt = out1 + out2
 			} else {
@@ -550,7 +551,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		} else {
 			colsData := node.RowsetData.Cols
 			rowCount := float64(len(colsData[0].Data))
-			blockNumber := rowCount/8192 + 1
+			blockNumber := rowCount/float64(options.DefaultBlockMaxRows) + 1
 			node.Stats = &plan.Stats{
 				TableCnt:    (rowCount),
 				BlockNum:    int32(blockNumber),
@@ -574,9 +575,34 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if node.ObjRef != nil && leafNode {
 			if !needStats(node.TableDef) {
 				node.Stats = DefaultStats()
-			} else {
-				node.Stats = builder.compCtx.Stats(node.ObjRef, rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess()))
+				return
 			}
+			if !builder.compCtx.Stats(node.ObjRef) {
+				node.Stats = DefaultStats()
+				return
+			}
+			//get statsInfoMap from statscache
+			sc := builder.compCtx.GetStatsCache()
+			if sc == nil {
+				node.Stats = DefaultStats()
+				return
+			}
+			s := sc.GetStatsInfoMap(node.TableDef.TblId)
+
+			stats := new(plan.Stats)
+			stats.TableCnt = s.TableCnt
+			if len(node.FilterList) > 0 {
+				expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
+				fixColumnName(node.TableDef, expr)
+				stats.Outcnt = estimateOutCnt(expr, s)
+			} else {
+				stats.Outcnt = stats.TableCnt
+			}
+			stats.Selectivity = stats.Outcnt / stats.TableCnt
+			stats.Cost = stats.TableCnt
+			stats.BlockNum = int32(stats.Outcnt/float64(options.DefaultBlockMaxRows) + 1)
+
+			node.Stats = stats
 		}
 
 	case plan.Node_FILTER:
