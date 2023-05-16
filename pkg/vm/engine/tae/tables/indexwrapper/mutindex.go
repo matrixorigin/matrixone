@@ -18,6 +18,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -104,6 +105,7 @@ func (idx *mutableIndex) BatchDedup(
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
 	zm []byte,
+	_ objectio.BloomFilter,
 ) (keyselects *roaring.Bitmap, err error) {
 	inputZM := index.ZM(zm)
 	if inputZM.Valid() {
@@ -193,6 +195,7 @@ func (idx *nonPkMutIndex) BatchDedup(
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
 	_ []byte,
+	_ objectio.BloomFilter,
 ) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := idx.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed

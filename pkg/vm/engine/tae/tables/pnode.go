@@ -93,8 +93,9 @@ func (node *persistedNode) BatchDedup(
 	keys containers.Vector,
 	skipFn func(row uint32) error,
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn, zm)
+	return node.pkIndex.BatchDedup(keys, skipFn, zm, bf)
 }
 
 func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
