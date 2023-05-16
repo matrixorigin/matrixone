@@ -25,6 +25,7 @@ import (
 )
 
 // TxnOption options for setup transaction
+// FIXME(fagongzi): refactor TxnOption to avoid mem alloc
 type TxnOption func(*txnOperator)
 
 // TxnClientCreateOption options for create txn
@@ -127,6 +128,15 @@ type DebugableTxnOperator interface {
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
+}
+
+// CallbackTxnOperator callback txn operator
+type EventableTxnOperator interface {
+	TxnOperator
+
+	// AppendEventCallback append callback. All append callbacks will be called sequentially
+	// if event happend.
+	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta))
 }
 
 // TxnIDGenerator txn id generator
