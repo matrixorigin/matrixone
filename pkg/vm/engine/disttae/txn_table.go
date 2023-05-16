@@ -31,12 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memorytable"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1233,39 +1231,39 @@ func (tbl *txnTable) updateLocalState(
 	protoBatch.Vecs = newVecs
 
 	switch typ {
-
 	case INSERT:
-		// this batch is from user, rather than logtail, use primaryIdx
-		primaryKeys := tbl.localState.HandleRowsInsert(ctx, protoBatch, tbl.primaryIdx, packer)
+		return
+		/*
+			// this batch is from user, rather than logtail, use primaryIdx
+			primaryKeys := tbl.localState.HandleRowsInsert(ctx, protoBatch, tbl.primaryIdx, packer)
 
-		// check primary key
-		for idx, primaryKey := range primaryKeys {
-			iter := tbl.localState.NewPrimaryKeyIter(ts, primaryKey)
-			n := 0
-			for iter.Next() {
-				n++
-			}
-			iter.Close()
-			if n > 1 {
-				primaryKeyVector := bat.Vecs[tbl.primaryIdx+1 /* skip the first row id column */]
+			// check primary key
+			for idx, primaryKey := range primaryKeys {
+				iter := tbl.localState.NewPrimaryKeyIter(ts, primaryKey)
+				n := 0
+				for iter.Next() {
+					n++
+				}
+				iter.Close()
+				if n > 1 {
+					primaryKeyVector := bat.Vecs[tbl.primaryIdx+1] //skip the first row id column
 				nullableVec := memorytable.VectorAt(primaryKeyVector, idx)
-				return moerr.NewDuplicateEntry(
-					ctx,
-					common.TypeStringValue(
-						*primaryKeyVector.GetType(),
-						nullableVec.Value, nullableVec.IsNull,
-					),
-					bat.Attrs[tbl.primaryIdx+1],
-				)
+					return moerr.NewDuplicateEntry(
+						ctx,
+						common.TypeStringValue(
+							*primaryKeyVector.GetType(),
+							nullableVec.Value, nullableVec.IsNull,
+						),
+						bat.Attrs[tbl.primaryIdx+1],
+					)
+				}
 			}
-		}
-
+		*/
 	case DELETE:
 		tbl.localState.HandleRowsDelete(ctx, protoBatch)
 
 	default:
 		panic(fmt.Sprintf("unknown type: %v", typ))
-
 	}
 
 	return

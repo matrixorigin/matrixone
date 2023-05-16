@@ -223,7 +223,10 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 }
 
 func (bat *Batch) Clean(m *mpool.MPool) {
-	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
+	if atomic.LoadInt64(&bat.Cnt) == 0 {
+		panic("batch is already cleaned")
+	}
+	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
 		return
 	}
 	for _, vec := range bat.Vecs {
@@ -238,8 +241,9 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	}
 	if len(bat.Zs) != 0 {
 		m.PutSels(bat.Zs)
-		bat.Zs = nil
 	}
+	bat.Attrs = nil
+	bat.Zs = nil
 	bat.Vecs = nil
 }
 

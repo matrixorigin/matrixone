@@ -197,7 +197,10 @@ func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 }
 
 func (proc *Process) PutBatch(bat *batch.Batch) {
-	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
+	if atomic.LoadInt64(&bat.Cnt) == 0 {
+		panic("put batch with zero cnt")
+	}
+	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
 		return
 	}
 	for i := range bat.Vecs {
@@ -209,16 +212,17 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 			}
 		}
 	}
-	bat.Vecs = nil
 	for _, agg := range bat.Aggs {
 		if agg != nil {
 			agg.Free(proc.Mp())
 		}
 	}
-	if len(bat.Zs) != 0 {
-		proc.Mp().PutSels(bat.Zs)
+	if bat.Zs != nil {
+		proc.GetMPool().PutSels(bat.Zs)
 		bat.Zs = nil
 	}
+	bat.Vecs = nil
+	bat.Attrs = nil
 }
 
 func (proc *Process) FreeVectors() {

@@ -159,6 +159,8 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			// insert into table, insertBat will be deeply copied into txn's workspace.
 			err := insertCtx.Rel.Write(proc.Ctx, insertBat)
 			if err != nil {
+				proc.SetInputBatch(nil)
+				insertBat.Clean(proc.GetMPool())
 				return false, err
 			}
 		}

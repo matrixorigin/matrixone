@@ -54,6 +54,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		vec, err := colexec.EvalExpr(bat, proc, filterList[i])
 		if err != nil {
 			bat.Clean(proc.Mp())
+			proc.SetInputBatch(nil)
 			return false, err
 		}
 		defer vec.Free(proc.Mp())

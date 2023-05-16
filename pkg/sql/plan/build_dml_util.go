@@ -802,10 +802,32 @@ func makeInsertPlan(
 					},
 				},
 			}
-			lastNodeId, err = appendAssertEqNode(builder, bindCtx, lastNodeId, countColExpr, 1)
+
+			eqCheckExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{MakePlan2Int64ConstExprWithType(1), countColExpr})
 			if err != nil {
 				return err
 			}
+			varcharType := types.T_varchar.ToType()
+			varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
+				Typ: tableDef.Cols[pkPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
+				},
+			}, makePlan2Type(&varcharType))
+			if err != nil {
+				return err
+			}
+			filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{eqCheckExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
+			if err != nil {
+				return err
+			}
+			filterNode := &Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{lastNodeId},
+				FilterList: []*Expr{filterExpr},
+				IsEnd:      true,
+			}
+			lastNodeId = builder.appendNode(filterNode, bindCtx)
 			builder.appendStep(lastNodeId)
 		}
 	}
@@ -874,7 +896,7 @@ func makeInsertPlan(
 					Children:    []int32{lastNodeId, rightId},
 					JoinType:    plan.Node_INNER,
 					OnList:      []*Expr{condExpr},
-					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr},
+					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
 				}, bindCtx)
 
 				// append filter node
@@ -905,10 +927,18 @@ func makeInsertPlan(
 				}
 
 				lastNodeId = builder.appendNode(&Node{
-					NodeType:    plan.Node_FILTER,
-					Children:    []int32{lastNodeId},
-					FilterList:  []*Expr{filterExpr},
-					ProjectList: []*Expr{colExpr},
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{lastNodeId},
+					FilterList: []*Expr{filterExpr},
+					ProjectList: []*Expr{
+						colExpr,
+						{
+							Typ: tableDef.Cols[pkPos].Typ,
+							Expr: &plan.Expr_Col{
+								Col: &plan.ColRef{ColPos: 2, Name: tableDef.Cols[pkPos].Name},
+							},
+						},
+					},
 				}, bindCtx)
 
 				// append assert node
@@ -916,7 +946,18 @@ func makeInsertPlan(
 				if err != nil {
 					return err
 				}
-				assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, makePlan2StringConstExprWithType("duplicate check error")})
+
+				varcharType := types.T_varchar.ToType()
+				varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
+					Typ: tableDef.Cols[pkPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
+					},
+				}, makePlan2Type(&varcharType))
+				if err != nil {
+					return err
+				}
+				assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
 				if err != nil {
 					return err
 				}
@@ -958,7 +999,15 @@ func makeInsertPlan(
 					return err
 				}
 
-				assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, makePlan2StringConstExprWithType("duplicate check error 3333")})
+				varcharType := types.T_varchar.ToType()
+				varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
+					Typ: tableDef.Cols[pkPos].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{ColPos: 0, Name: tableDef.Cols[pkPos].Name},
+					},
+				}, makePlan2Type(&varcharType))
+
+				assertExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*Expr{isEmptyExpr, varcharExpr, makePlan2StringConstExprWithType(tableDef.Cols[pkPos].Name)})
 				if err != nil {
 					return err
 				}
@@ -1157,15 +1206,25 @@ func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, l
 		Children: []int32{lastNodeId},
 		GroupBy:  []*Expr{colExpr},
 		AggList:  []*Expr{aggExpr},
-		ProjectList: []*Expr{{
-			Typ: makePlan2Type(&countType),
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: -2,
-					ColPos: 1,
+		ProjectList: []*Expr{
+			{
+				Typ: makePlan2Type(&countType),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -2,
+						ColPos: 1,
+					},
 				},
 			},
-		}},
+			{
+				Typ: colExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -2,
+						ColPos: 0,
+					},
+				},
+			}},
 	}
 	lastNodeId = builder.appendNode(groupByNode, bindCtx)
 	return lastNodeId, nil

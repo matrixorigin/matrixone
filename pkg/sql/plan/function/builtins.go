@@ -3287,6 +3287,9 @@ var builtins = map[int]Functions{
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			if len(inputs) == 3 {
+				return 1, nil
+			}
 			if len(inputs) != 2 {
 				return wrongFunctionParameters, nil
 			}
@@ -3314,6 +3317,29 @@ var builtins = map[int]Functions{
 						flag, isNull := checkFlags.GetValue(i)
 						if isNull || !flag {
 							return moerr.NewInternalError(proc.Ctx, errMsg)
+						}
+						err := res.Append(true, false)
+						if err != nil {
+							return err
+						}
+					}
+					return nil
+				},
+			},
+			{
+				Index:               1,
+				UseNewFramework:     true,
+				Volatile:            false,
+				Args:                []types.T{types.T_bool, types.T_varchar, types.T_varchar},
+				ParameterMustScalar: []bool{false, false, true},
+				ReturnTyp:           types.T_bool,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+					res := vector.MustFunctionResult[bool](result)
+					for i := uint64(0); i < uint64(length); i++ {
+						flag, isNull := checkFlags.GetValue(i)
+						if isNull || !flag {
+							return moerr.NewDuplicateEntry(proc.Ctx, parameters[1].GetStringAt(int(i)), parameters[2].GetStringAt(int(i)))
 						}
 						err := res.Append(true, false)
 						if err != nil {
