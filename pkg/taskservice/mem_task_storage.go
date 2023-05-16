@@ -52,6 +52,10 @@ func (s *memTaskStorage) Close() error {
 	return nil
 }
 
+func (s *memTaskStorage) Bootstrap(ctx context.Context) error {
+	return nil
+}
+
 func (s *memTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
 	s.Lock()
 	defer s.Unlock()
