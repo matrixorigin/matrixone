@@ -15,7 +15,6 @@
 package morpc
 
 import (
-	"runtime"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -99,7 +98,7 @@ func (c *Config) Adjust() {
 		c.SendQueueSize = 100000
 	}
 	if c.ServerWorkers == 0 {
-		c.ServerWorkers = runtime.NumCPU() * 2
+		c.ServerWorkers = 50
 	}
 }
 
