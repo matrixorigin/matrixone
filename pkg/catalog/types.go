@@ -692,8 +692,8 @@ func (m *MetadataScanInfo) FillBlockInfo(info *BlockInfo) {
 	m.SegId = info.SegmentID
 }
 
-func EncodeMetadataScanInfo(info MetadataScanInfo) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), MetadataScanInfoSize)
+func EncodeMetadataScanInfo(info *MetadataScanInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(info)), MetadataScanInfoSize)
 }
 
 func DecodeMetadataScanInfo(buf []byte) *MetadataScanInfo {

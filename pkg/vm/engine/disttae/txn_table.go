@@ -283,7 +283,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 
 	ret := make([][]byte, 0, len(infoList))
 	for i := range infoList {
-		ret = append(ret, catalog.EncodeMetadataScanInfo(*infoList[i]))
+		ret = append(ret, catalog.EncodeMetadataScanInfo(infoList[i]))
 	}
 	return ret, nil
 }
