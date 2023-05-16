@@ -974,6 +974,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 			); err != nil {
 				return
 			}
+			// TODO: do object first
 		}
 		name = *objectio.ToObjectNameShort(&blk.ID)
 
