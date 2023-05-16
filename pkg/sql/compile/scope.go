@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"hash/crc32"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -106,8 +107,26 @@ func (s *Scope) MergeRun(c *Compile) error {
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
+		str := ""
+		for i := range s.RemoteReceivRegInfos {
+			if i != 0 {
+				str += " ,"
+			}
+			str += s.RemoteReceivRegInfos[i].Uuid.String()
+		}
+
+		localstr := ""
+		for i := range s.Proc.Reg.MergeReceivers {
+			if i != 0 {
+				str += " ,"
+			}
+			localstr += fmt.Sprintf("%p", s.Proc.Reg.MergeReceivers[i].Ch)
+		}
+
+		fmt.Printf("[mergerun] proc %p with receive uuid %s and local ch %s\n", s.Proc, str, localstr)
 		s.notifyAndReceiveFromRemote(errReceiveChan)
 	}
+
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
