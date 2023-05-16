@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -53,7 +52,6 @@ func WithMessageHandle(f func(ctx context.Context,
 	fs fileservice.FileService,
 	lockService lockservice.LockService,
 	cli client.TxnClient,
-	aicm *defines.AutoIncrCacheManager,
 	mAcquirer func() morpc.Message) error) Option {
 	return func(s *service) {
 		s.requestHandler = f

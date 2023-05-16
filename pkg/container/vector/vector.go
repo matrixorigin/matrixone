@@ -19,12 +19,11 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
 const (
@@ -1988,9 +1987,12 @@ func (v *Vector) String() string {
 	}
 }
 
-func SetConstNull(vec *Vector, len int, mp *mpool.MPool) error {
-	vec.Free(mp)
+func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {
+	if len(vec.data) > 0 {
+		vec.data = vec.data[:0]
+	}
 	vec.class = CONSTANT
+	vec.length = length
 	return nil
 }
 

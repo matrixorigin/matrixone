@@ -102,7 +102,6 @@ create table t1(a int);
 create view v1 as select * from t1;
 SELECT relname, rel_createsql,relkind FROM mo_catalog.mo_tables WHERE reldatabase='test' order by relname;
 relname    rel_createsql    relkind
-%!%mo_increment_columns        
 t1    create table t1 (a int)    r
 v1    create view v1 as select * from t1;    v
 drop database test;
