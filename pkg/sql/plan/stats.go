@@ -573,36 +573,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
-			if !needStats(node.TableDef) {
-				node.Stats = DefaultStats()
-				return
-			}
-			if !builder.compCtx.Stats(node.ObjRef) {
-				node.Stats = DefaultStats()
-				return
-			}
-			//get statsInfoMap from statscache
-			sc := builder.compCtx.GetStatsCache()
-			if sc == nil {
-				node.Stats = DefaultStats()
-				return
-			}
-			s := sc.GetStatsInfoMap(node.TableDef.TblId)
-
-			stats := new(plan.Stats)
-			stats.TableCnt = s.TableCnt
-			if len(node.FilterList) > 0 {
-				expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
-				fixColumnName(node.TableDef, expr)
-				stats.Outcnt = estimateOutCnt(expr, s)
-			} else {
-				stats.Outcnt = stats.TableCnt
-			}
-			stats.Selectivity = stats.Outcnt / stats.TableCnt
-			stats.Cost = stats.TableCnt
-			stats.BlockNum = int32(stats.Outcnt/float64(options.DefaultBlockMaxRows) + 1)
-
-			node.Stats = stats
+			node.Stats = calcScanStats(node, builder)
 		}
 
 	case plan.Node_FILTER:
@@ -624,6 +595,36 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats = DefaultStats()
 		}
 	}
+}
+
+func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
+	if !needStats(node.TableDef) {
+		return DefaultStats()
+	}
+	if !builder.compCtx.Stats(node.ObjRef) {
+		return DefaultStats()
+	}
+	//get statsInfoMap from statscache
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil {
+		return DefaultStats()
+	}
+	s := sc.GetStatsInfoMap(node.TableDef.TblId)
+
+	stats := new(plan.Stats)
+	stats.TableCnt = s.TableCnt
+	if len(node.FilterList) > 0 {
+		expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
+		fixColumnName(node.TableDef, expr)
+		stats.Outcnt = estimateOutCnt(expr, s)
+	} else {
+		stats.Outcnt = stats.TableCnt
+	}
+	stats.Selectivity = stats.Outcnt / stats.TableCnt
+	stats.Cost = stats.TableCnt
+	stats.BlockNum = int32(stats.Outcnt/float64(options.DefaultBlockMaxRows) + 1)
+
+	return stats
 }
 
 func needStats(tableDef *TableDef) bool {
