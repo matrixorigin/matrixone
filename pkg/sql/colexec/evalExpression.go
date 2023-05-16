@@ -742,16 +742,6 @@ func evaluateFilterByZoneMap(
 				zms[expr.AuxId] = index.ZMMulti(zms[args[0].AuxId], zms[args[1].AuxId], zms[expr.AuxId])
 
 			default:
-				vecParams := make([]*vector.Vector, len(args))
-				defer func() {
-					for i := range vecParams {
-						if vecParams[i] != nil {
-							vecParams[i].Free(proc.Mp())
-							vecParams[i] = nil
-						}
-					}
-				}()
-
 				ivecs := make([]*vector.Vector, len(args))
 				for i, arg := range args {
 					if vecs[arg.AuxId], err = index.ZMToVector(zms[arg.AuxId], vecs[arg.AuxId], proc.Mp()); err != nil {
@@ -768,7 +758,7 @@ func evaluateFilterByZoneMap(
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
-				if err = fn(vecParams, result, proc, 2); err != nil {
+				if err = fn(ivecs, result, proc, 2); err != nil {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
