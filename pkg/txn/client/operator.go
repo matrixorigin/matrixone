@@ -364,12 +364,12 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 		tc.mu.Unlock()
 	}()
 
-	if len(tc.mu.txn.DNShards) == 0 {
-		return nil
-	}
-
 	if tc.needUnlockLocked() {
 		defer tc.unlock(ctx)
+	}
+
+	if len(tc.mu.txn.DNShards) == 0 {
+		return nil
 	}
 
 	result, err := tc.handleError(tc.doSend(ctx, []txn.TxnRequest{{

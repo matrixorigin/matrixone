@@ -46,9 +46,8 @@ import (
 var (
 	defaultListenAddress    = "127.0.0.1:6002"
 	defaultCtlListenAddress = "127.0.0.1:19958"
-	// TODO(fagongzi): make rc and pessimistic as default
-	defaultTxnIsolation = txn.TxnIsolation_SI
-	defaultTxnMode      = txn.TxnMode_Optimistic
+	defaultTxnIsolation     = txn.TxnIsolation_RC
+	defaultTxnMode          = txn.TxnMode_Pessimistic
 )
 
 type Service interface {

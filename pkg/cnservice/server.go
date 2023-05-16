@@ -104,11 +104,14 @@ func NewService(
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
 	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
 
-	srv.pu = pu
-	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
+	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	if _, err = srv.getHAKeeperClient(); err != nil {
+
+	srv.pu = pu
+	srv.pu.LockService = srv.lockService
+	srv.pu.HAKeeperClient = srv._hakeeperClient
+	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
 
@@ -349,7 +352,6 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 			return
 		}
 		s._hakeeperClient = client
-		s.pu.HAKeeperClient = client
 		s.initClusterService()
 		s.initLockService()
 	})
@@ -486,6 +488,9 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 func (s *service) initLockService() {
 	cfg := s.cfg.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(cfg)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(
+		runtime.LockService,
+		s.lockService)
 }
 
 // put the waiting-next type msg into client session's cache and return directly

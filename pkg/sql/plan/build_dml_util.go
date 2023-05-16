@@ -636,8 +636,24 @@ func makeInsertPlan(
 	// make plan : sink_scan -> lock -> insert
 	{
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+		// Get table partition information
+		partitionIdx, paritionTableIds := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
 
 		// todo: append lock
+		pkPos, pkTyp := getPkPos(tableDef, false)
+		lockTarget := &plan.LockTarget{
+			TableId:            tableDef.TblId,
+			PrimaryColIdxInBat: int32(pkPos),
+			PrimaryColTyp:      pkTyp,
+			RefreshTsIdxInBat:  0, //unsupport now
+			FilterColIdxInBat:  int32(partitionIdx),
+		}
+		lockNode := &Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lastNodeId},
+			LockTargets: []*plan.LockTarget{lockTarget},
+		}
+		lastNodeId = builder.appendNode(lockNode, bindCtx)
 
 		// append project node
 		projectProjection := getProjectionByLastNode(builder, lastNodeId)
@@ -664,8 +680,6 @@ func makeInsertPlan(
 		if len(insertProjection) > len(tableDef.Cols) {
 			insertProjection = insertProjection[:len(tableDef.Cols)]
 		}
-		// Get table partition information
-		partitionIdx, paritionTableIds := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
 
 		insertNode := &Node{
 			NodeType: plan.Node_INSERT,
@@ -985,20 +999,20 @@ func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, lastNodeId i
 	// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 
 	// append lock
-	// pkPos, pkTyp := getPkPos(delNodeInfo.tableDef, false)
-	// lockTarget := &plan.LockTarget{
-	// 	TableId:            delNodeInfo.tableDef.TblId,
-	// 	PrimaryColIdxInBat: int32(pkPos),
-	// 	PrimaryColTyp:      pkTyp,
-	// 	RefreshTsIdxInBat:  0,
-	// 	FilterColIdxInBat:  0,
-	// }
-	// lockNode := &Node{
-	// 	NodeType:    plan.Node_LOCK_OP,
-	// 	Children:    []int32{lastNodeId},
-	// 	LockTargets: []*plan.LockTarget{lockTarget},
-	// }
-	// lastNodeId = builder.appendNode(lockNode, bindCtx)
+	pkPos, pkTyp := getPkPos(delNodeInfo.tableDef, false)
+	lockTarget := &plan.LockTarget{
+		TableId:            delNodeInfo.tableDef.TblId,
+		PrimaryColIdxInBat: int32(pkPos),
+		PrimaryColTyp:      pkTyp,
+		RefreshTsIdxInBat:  0, //unsupport now
+		FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
+	}
+	lockNode := &Node{
+		NodeType:    plan.Node_LOCK_OP,
+		Children:    []int32{lastNodeId},
+		LockTargets: []*plan.LockTarget{lockTarget},
+	}
+	lastNodeId = builder.appendNode(lockNode, bindCtx)
 
 	// append delete node
 	deleteNode := &Node{

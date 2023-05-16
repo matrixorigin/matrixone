@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -77,6 +78,7 @@ type Engine struct {
 	sync.RWMutex
 	mp         *mpool.MPool
 	fs         fileservice.FileService
+	ls         lockservice.LockService
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache

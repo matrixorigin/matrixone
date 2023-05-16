@@ -25,9 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -64,9 +66,15 @@ func New(
 		dnMap[services[i].ServiceID] = i
 	}
 
+	ls, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.LockService)
+	if !ok {
+		logutil.Fatalf("missing lock service")
+	}
+
 	e := &Engine{
 		mp:         mp,
 		fs:         fs,
+		ls:         ls.(lockservice.LockService),
 		cli:        cli,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
@@ -330,7 +338,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.cli,
 		op,
 		e.fs,
-		nil,
+		e.ls,
 		nil,
 	)
 
