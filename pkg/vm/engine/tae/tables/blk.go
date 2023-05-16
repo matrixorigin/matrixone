@@ -121,6 +121,7 @@ func (blk *block) BatchDedup(
 	rowmask *roaring.Bitmap,
 	precommit bool,
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
@@ -137,6 +138,7 @@ func (blk *block) BatchDedup(
 		rowmask,
 		false,
 		zm,
+		bf,
 	)
 }
 
