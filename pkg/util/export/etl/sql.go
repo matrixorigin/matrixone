@@ -37,7 +37,6 @@ var _ SqlWriter = (*DefaultSqlWriter)(nil)
 // DefaultSqlWriter SqlWriter is a writer that writes data to a SQL database.
 type DefaultSqlWriter struct {
 	ctx       context.Context
-	semaphore chan struct{}
 	csvWriter *CSVWriter
 	tbl       *table.Table
 	buffer    [][]string
@@ -47,7 +46,6 @@ type DefaultSqlWriter struct {
 func NewSqlWriter(ctx context.Context, tbl *table.Table, csv *CSVWriter) *DefaultSqlWriter {
 	return &DefaultSqlWriter{
 		ctx:       ctx,
-		semaphore: make(chan struct{}, 3),
 		csvWriter: csv,
 		tbl:       tbl,
 	}
