@@ -1022,7 +1022,7 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	}
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	for i, _ := range exprList {
+	for i := range exprList {
 		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
 		exprList[i] = tmpexpr
 	}
