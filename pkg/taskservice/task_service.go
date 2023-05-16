@@ -63,6 +63,10 @@ func NewTaskService(
 	}
 }
 
+func (s *taskService) Bootstrap(ctx context.Context) error {
+	return s.store.Bootstrap(ctx)
+}
+
 func (s *taskService) Create(ctx context.Context, value task.TaskMetadata) error {
 	for {
 		select {

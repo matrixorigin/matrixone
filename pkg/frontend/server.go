@@ -22,15 +22,14 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // RelationName counter for the new connection
 var initConnectionID uint32 = 1000
 
-// connIDAllocKey is used get connection ID from HAKeeper.
-var connIDAllocKey = "____server_conn_id"
+// ConnIDAllocKey is used get connection ID from HAKeeper.
+var ConnIDAllocKey = "____server_conn_id"
 
 // MOServer MatrixOne Server
 type MOServer struct {
@@ -69,9 +68,9 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) *MOServer {
+func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MOServer {
 	codec := NewSqlCodec()
-	rm, err := NewRoutineManager(ctx, pu, aicm)
+	rm, err := NewRoutineManager(ctx, pu)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
