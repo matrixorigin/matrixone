@@ -263,17 +263,16 @@ func (c *Compile) Run(_ uint64) error {
 			wg.Done()
 		}(s)
 	}
-	go func() {
-		wg.Wait()
-		c.scope = nil
-		close(errC)
-	}()
+	defer c.proc.FreeVectors()
+
+	wg.Wait()
+	c.scope = nil
+	close(errC)
 	for e := range errC {
 		if e != nil {
 			return e
 		}
 	}
-	c.proc.FreeVectors()
 	return nil
 }
 
