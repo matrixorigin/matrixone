@@ -17,7 +17,6 @@ package rpc
 import (
 	"context"
 	"encoding/hex"
-	struntime "runtime"
 	"sync"
 	"time"
 
@@ -29,10 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
-)
-
-const (
-	maxRingBufferSize = 10000
 )
 
 // WithServerMaxMessageSize set max rpc message size
@@ -57,6 +52,20 @@ func WithServerMessageFilter(filter func(*txn.TxnRequest) bool) ServerOption {
 	}
 }
 
+// WithServerQueueBufferSize set queue buffer size
+func WithServerQueueBufferSize(value int) ServerOption {
+	return func(s *server) {
+		s.options.maxChannelBufferSize = value
+	}
+}
+
+// WithServerQueueWorkers set worker number
+func WithServerQueueWorkers(value int) ServerOption {
+	return func(s *server) {
+		s.options.workers = value
+	}
+}
+
 type server struct {
 	rt       runtime.Runtime
 	rpc      morpc.RPCServer
@@ -68,9 +77,11 @@ type server struct {
 	}
 
 	options struct {
-		filter         func(*txn.TxnRequest) bool
-		maxMessageSize int
-		enableCompress bool
+		filter               func(*txn.TxnRequest) bool
+		maxMessageSize       int
+		enableCompress       bool
+		maxChannelBufferSize int
+		workers              int
 	}
 
 	// in order not to block tcp, the data read from tcp will be put into this ringbuffer. This ringbuffer will
@@ -88,7 +99,6 @@ func NewTxnServer(
 	s := &server{
 		rt:       rt,
 		handlers: make(map[txn.TxnMethod]TxnRequestHandleFunc),
-		queue:    make(chan executor, maxRingBufferSize),
 		stopper: stopper.NewStopper("txn rpc server",
 			stopper.WithLogger(rt.Logger().RawLogger())),
 	}
@@ -139,6 +149,7 @@ func NewTxnServer(
 }
 
 func (s *server) Start() error {
+	s.queue = make(chan executor, s.options.maxChannelBufferSize)
 	s.startProcessors()
 	return s.rpc.Start()
 }
@@ -153,8 +164,7 @@ func (s *server) RegisterMethodHandler(m txn.TxnMethod, h TxnRequestHandleFunc) 
 }
 
 func (s *server) startProcessors() {
-	n := struntime.NumCPU()
-	for i := 0; i < n; i++ {
+	for i := 0; i < s.options.workers; i++ {
 		if err := s.stopper.RunTask(s.handleTxnRequest); err != nil {
 			panic(err)
 		}

@@ -15,6 +15,7 @@
 package morpc
 
 import (
+	"runtime"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -58,6 +59,11 @@ type Config struct {
 	// EnableCompress enable compress message
 	EnableCompress bool `toml:"enable-compress"`
 
+	// ServerWorkers number of server workers for handle requests
+	ServerWorkers int `toml:"server-workers"`
+	// ServerBufferQueueSize queue size for server buffer requetsts
+	ServerBufferQueueSize int `toml:"server-buffer-queue-size"`
+
 	// BackendOptions extra backend options
 	BackendOptions []BackendOption `toml:"-"`
 	// ClientOptions extra client options
@@ -88,6 +94,12 @@ func (c *Config) Adjust() {
 	}
 	if c.PayloadCopyBufferSize == 0 {
 		c.PayloadCopyBufferSize = toml.ByteSize(defaultPayloadCopyBufferSize)
+	}
+	if c.SendQueueSize == 0 {
+		c.SendQueueSize = 100000
+	}
+	if c.ServerWorkers == 0 {
+		c.ServerWorkers = runtime.NumCPU() * 2
 	}
 }
 
