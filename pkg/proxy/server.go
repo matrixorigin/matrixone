@@ -73,7 +73,7 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 		goetty.WithAppLogger(s.runtime.Logger().RawLogger()),
 		goetty.WithAppHandleSessionFunc(s.handler.handle),
 		goetty.WithAppSessionOptions(
-			goetty.WithSessionCodec(frontend.NewSqlCodec()),
+			goetty.WithSessionCodec(WithProxyProtocolCodec(frontend.NewSqlCodec())),
 			goetty.WithSessionLogger(s.runtime.Logger().RawLogger()),
 		),
 	)
