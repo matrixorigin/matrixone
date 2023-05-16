@@ -320,7 +320,7 @@ func init() {
 		"properties":               PROPERTIES,
 		"privileges":               PRIVILEGES,
 		"plugins":                  PLUGINS,
-		"persiet":                  PERSIST,
+		"persist":                  PERSIST,
 		"query":                    QUERY,
 		"quarter":                  QUARTER,
 		"quick":                    QUICK,
