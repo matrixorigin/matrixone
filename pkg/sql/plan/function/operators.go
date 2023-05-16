@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3478,7 +3479,7 @@ var operators = map[int]Functions{
 		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			// cast-operator should check param types strictly
 			if len(inputs) == 2 {
-				if operator.IfTypeCastSupported(inputs[0], inputs[1]) {
+				if function2.IfTypeCastSupported(inputs[0], inputs[1]) {
 					return 0, nil
 				}
 			}
@@ -3491,7 +3492,7 @@ var operators = map[int]Functions{
 				FlexibleReturnType: func(parameters []types.Type) types.Type {
 					return parameters[1]
 				},
-				NewFn: operator.NewCast,
+				NewFn: function2.NewCast,
 			},
 		},
 	},

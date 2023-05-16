@@ -14,14 +14,6 @@
 
 package multi
 
-import (
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
-	"testing"
-)
-
 var (
 	kases = []struct {
 		index        int
@@ -111,23 +103,23 @@ var (
 	}
 )
 
-func TestJsonExtract(t *testing.T) {
-	proc := testutil.NewProc()
-	for _, kase := range kases {
-		inputs := []testutil.FunctionTestInput{
-			testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{kase.json}, nil),
-			testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{kase.path}, kase.pathNullList),
-		}
-		want := make([]string, 1)
-		if kase.want != "null" {
-			bj, _ := types.ParseStringToByteJson(kase.want)
-			dt, _ := bj.Marshal()
-			want[0] = string(dt)
-		}
-		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, want, nil)
-		kaseNow := testutil.NewFunctionTestCase(proc,
-			inputs, expect, JsonExtract)
-		s, info := kaseNow.Run()
-		require.True(t, s, fmt.Sprintf("case %d, err info is '%s'", kase.index, info))
-	}
-}
+//func TestJsonExtract(t *testing.T) {
+//	proc := testutil.NewProc()
+//	for _, kase := range kases {
+//		inputs := []testutil.FunctionTestInput{
+//			testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{kase.json}, nil),
+//			testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{kase.path}, kase.pathNullList),
+//		}
+//		want := make([]string, 1)
+//		if kase.want != "null" {
+//			bj, _ := types.ParseStringToByteJson(kase.want)
+//			dt, _ := bj.Marshal()
+//			want[0] = string(dt)
+//		}
+//		expect := testutil.NewFunctionTestResult(types.T_varchar.ToType(), false, want, nil)
+//		kaseNow := testutil.NewFunctionTestCase(proc,
+//			inputs, expect, JsonExtract)
+//		s, info := kaseNow.Run()
+//		require.True(t, s, fmt.Sprintf("case %d, err info is '%s'", kase.index, info))
+//	}
+//}

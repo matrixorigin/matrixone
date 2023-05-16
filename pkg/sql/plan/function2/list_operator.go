@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1780,7 +1779,7 @@ var supportedOperators = []FuncNew{
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			// cast-operator should check param types strictly
 			if len(inputs) == 2 {
-				if operator.IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
+				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
 					return newCheckResultWithSuccess(0)
 				}
 			}
@@ -1795,7 +1794,7 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-						return operator.NewCast(parameters, result, proc, length)
+						return NewCast(parameters, result, proc, length)
 					}
 				},
 			},
