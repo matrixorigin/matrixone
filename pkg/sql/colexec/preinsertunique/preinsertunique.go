@@ -62,7 +62,8 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 	var bitMap *nulls.Nulls
 
 	uniqueColumnPos := argument.PreInsertCtx.Columns
-	pkPos := argument.PreInsertCtx.PkColumn
+	pkPos := int(argument.PreInsertCtx.PkColumn)
+	tableDef := argument.PreInsertCtx.TableDef
 
 	var insertUniqueBat *batch.Batch
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
@@ -91,14 +92,16 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
-		err := genCompositePrimaryKey(inputBat, proc, argument.PreInsertCtx.TableDef)
+		err := genCompositePrimaryKey(inputBat, proc, tableDef)
 		if err != nil {
 			insertUniqueBat.Clean(proc.GetMPool())
 			return false, err
 		}
-		compPkInBat := len(inputBat.Vecs) - 1
-		insertUniqueBat.SetVector(pkColPos, proc.GetVector(*inputBat.GetVector(int32(compPkInBat)).GetType()))
-		err = insertUniqueBat.Vecs[pkColPos].UnionBatch(inputBat.Vecs[compPkInBat], 0, inputBat.Vecs[compPkInBat].Length(), nil, proc.Mp())
+		if tableDef != nil || tableDef.Pkey.CompPkeyCol != nil {
+			pkPos = len(inputBat.Vecs) - 1
+		}
+		insertUniqueBat.SetVector(pkColPos, proc.GetVector(*inputBat.GetVector(int32(pkPos)).GetType()))
+		err = insertUniqueBat.Vecs[pkColPos].UnionBatch(inputBat.Vecs[pkPos], 0, inputBat.Vecs[pkPos].Length(), nil, proc.Mp())
 		if err != nil {
 			insertUniqueBat.Clean(proc.GetMPool())
 			return false, err

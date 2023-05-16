@@ -81,6 +81,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		updateColLength := len(tableDef.Cols)
 		projectProjection := make([]*Expr, updateColLength*2+1)
 		var insertColPos []int
+		updateColPosMap := make(map[string]int)
 		for i, col := range tableDef.Cols {
 			projectProjection[i] = &plan.Expr{
 				Typ: col.Typ,
@@ -101,6 +102,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 				},
 			}
 			insertColPos = append(insertColPos, updateColLength+i+1)
+			updateColPosMap[col.Name] = updateColLength + i + 1
 		}
 		rowIdPos := updateColLength
 		projectProjection[updateColLength] = &plan.Expr{
@@ -135,6 +137,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 			updateColLength: updateColLength,
 			rowIdPos:        rowIdPos,
 			insertColPos:    insertColPos,
+			updateColPosMap: updateColPosMap,
 		}
 		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
 		if err != nil {
