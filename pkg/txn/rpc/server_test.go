@@ -184,6 +184,9 @@ func TestTimeoutRequestCannotHandled(t *testing.T) {
 
 func runTestTxnServer(t *testing.T, addr string, testFunc func(s *server), opts ...ServerOption) {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
+	opts = append(opts,
+		WithServerQueueBufferSize(100),
+		WithServerQueueWorkers(2))
 	s, err := NewTxnServer(addr,
 		newTestRuntime(clock.NewHLCClock(func() int64 { return 0 }, 0), logutil.GetPanicLogger()),
 		opts...)
