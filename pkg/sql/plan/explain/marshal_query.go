@@ -191,14 +191,14 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	case plan.Node_DELETE:
 		if m.node.DeleteCtx != nil {
 			ctx := m.node.DeleteCtx.Ref
-			result += ctx.SchemaName + "." + ctx.ObjName
+			buf.WriteString(ctx.SchemaName + "." + ctx.ObjName)
 		} else {
-			return result, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
+			return "", moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_INSERT:
 		if m.node.InsertCtx != nil {
 			ctx := m.node.InsertCtx.Ref
-			result += ctx.SchemaName + "." + ctx.ObjName
+			buf.WriteString(ctx.SchemaName + "." + ctx.ObjName)
 		} else {
 			return "", moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}

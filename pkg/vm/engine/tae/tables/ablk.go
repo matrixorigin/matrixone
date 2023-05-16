@@ -602,6 +602,7 @@ func (blk *ablock) BatchDedup(
 	// 		zm,
 	// 	)
 	// }
+	return nil
 }
 
 func (blk *ablock) persistedCollectAppendInRange(

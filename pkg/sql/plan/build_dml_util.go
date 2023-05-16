@@ -1777,12 +1777,12 @@ func makePreUpdateDeletePlan(
 		if err != nil {
 			return -1, err
 		}
-		// filterProjection := getProjectionByLastNode(builder, lastNodeId)
+		filterProjection := getProjectionByLastNode(builder, lastNodeId)
 		filterNode := &Node{
-			NodeType:   plan.Node_FILTER,
-			Children:   []int32{lastNodeId},
-			FilterList: []*Expr{nullCheckExpr},
-			// ProjectList: filterProjection,
+			NodeType:    plan.Node_FILTER,
+			Children:    []int32{lastNodeId},
+			FilterList:  []*Expr{nullCheckExpr},
+			ProjectList: filterProjection,
 		}
 		lastNodeId = builder.appendNode(filterNode, bindCtx)
 	}

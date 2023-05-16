@@ -2461,6 +2461,9 @@ func (c *Compile) setAnalyzeCurrent(updateScopes []*Scope, nextId int) {
 
 func updateScopesLastFlag(updateScopes []*Scope) {
 	for _, s := range updateScopes {
+		if len(s.Instructions) == 0 {
+			continue
+		}
 		last := len(s.Instructions) - 1
 		s.Instructions[last].IsLast = true
 	}
