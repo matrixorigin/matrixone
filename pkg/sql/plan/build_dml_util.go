@@ -966,13 +966,45 @@ func makeInsertPlan(
 // makeOneDeletePlan
 // lock -> delete
 func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, delNodeInfo *deleteNodeInfo) (int32, error) {
-	// todo: append lock
+	// need confirm : append a project to add refresh timestamp column
+	// projectProjection := getProjectionByLastNode(builder, lastNodeId)
+	// typ := types.T_TS.ToType()
+	// projectProjection = append(projectProjection, &plan.Expr{
+	// 	Typ: makePlan2Type(&typ),
+	// 	Expr: &plan.Expr_C{
+	// 		C: &Const{
+	// 			Isnull: true,
+	// 		},
+	// 	},
+	// })
+	// lastNodeId = builder.appendNode(&Node{
+	// 	NodeType:    plan.Node_PROJECT,
+	// 	Children:    []int32{lastNodeId},
+	// 	ProjectList: projectProjection,
+	// }, bindCtx)
+	// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+
+	// append lock
+	// pkPos, pkTyp := getPkPos(delNodeInfo.tableDef, false)
+	// lockTarget := &plan.LockTarget{
+	// 	TableId:            delNodeInfo.tableDef.TblId,
+	// 	PrimaryColIdxInBat: int32(pkPos),
+	// 	PrimaryColTyp:      pkTyp,
+	// 	RefreshTsIdxInBat:  0,
+	// 	FilterColIdxInBat:  0,
+	// }
+	// lockNode := &Node{
+	// 	NodeType:    plan.Node_LOCK_OP,
+	// 	Children:    []int32{lastNodeId},
+	// 	LockTargets: []*plan.LockTarget{lockTarget},
+	// }
+	// lastNodeId = builder.appendNode(lockNode, bindCtx)
 
 	// append delete node
 	deleteNode := &Node{
-		NodeType:    plan.Node_DELETE,
-		Children:    []int32{lastNodeId},
-		ProjectList: getProjectionByLastNode(builder, lastNodeId),
+		NodeType: plan.Node_DELETE,
+		Children: []int32{lastNodeId},
+		// ProjectList: getProjectionByLastNode(builder, lastNodeId),
 		DeleteCtx: &plan.DeleteCtx{
 			RowIdIdx:          int32(delNodeInfo.deleteIndex),
 			Ref:               delNodeInfo.objRef,

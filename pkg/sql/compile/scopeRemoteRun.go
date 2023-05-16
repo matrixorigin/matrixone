@@ -21,7 +21,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -642,6 +644,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			IsUpdate:   t.IsUpdate,
 			Attrs:      t.Attrs,
 		}
+	case *lockop.Argument:
+		in.LockOp = &pipeline.LockOp{
+			Targets: t.CopyToPipelineTarget(),
+		}
 	case *preinsertunique.Argument:
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
 			PreInsertUkCtx: t.PreInsertCtx,
@@ -969,6 +975,14 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			HasAutoCol: t.GetHasAutoCol(),
 			IsUpdate:   t.GetIsUpdate(),
 		}
+	case vm.LockOp:
+		t := opr.GetLockOp()
+		lockArg := lockop.NewArgument()
+		for _, target := range t.Targets {
+			typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
+			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+		}
+		v.Arg = lockArg
 	case vm.PreInsertUnique:
 		t := opr.GetPreInsertUnique()
 		v.Arg = &preinsertunique.Argument{

@@ -121,6 +121,18 @@ message PreInsert {
   bool is_update          = 6;
 }
 
+message LockTarget {
+  uint64 table_id           	  = 1;
+  int32 primary_col_idx_in_bat  = 2;
+  plan.Type primary_col_typ     = 3;
+  int32 refresh_ts_idx_in_bat   = 4;
+  int32 filter_col_idx_in_bat   = 5;
+}
+
+message LockOp {
+  repeated LockTarget targets = 1;
+}
+
 message PreInsertUnique {
   plan.PreInsertUkCtx pre_insert_uk_ctx = 1;
 }
@@ -320,6 +332,7 @@ message Instruction{
   RightAntiJoin right_anti_join = 30;
 
   Deletion delete = 31;
+  LockOp lock_op = 32;
 }
 
 message AnalysisList {

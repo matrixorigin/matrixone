@@ -24,7 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -273,6 +275,21 @@ func (opts LockOptions) WithFilterRows(
 // NewArgument create new lock op argument.
 func NewArgument() *Argument {
 	return &Argument{}
+}
+
+// AddLockTarget add lock targets
+func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
+	targets := make([]*pipeline.LockTarget, len(arg.targets))
+	for i, target := range arg.targets {
+		targets[i] = &pipeline.LockTarget{
+			TableId:            target.tableID,
+			PrimaryColIdxInBat: target.primaryColumnIndexInBatch,
+			PrimaryColTyp:      plan.MakePlan2Type(&target.primaryColumnType),
+			RefreshTsIdxInBat:  target.refreshTimestampIndexInBatch,
+			FilterColIdxInBat:  target.filterColIndexInBatch,
+		}
+	}
+	return targets
 }
 
 // AddLockTarget add lock targets

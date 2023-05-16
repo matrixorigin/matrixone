@@ -877,6 +877,27 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil
+	case plan.Node_LOCK_OP:
+		curr := c.anal.curr
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		lockOpArg, err := constructLockOp(n, c.proc)
+		if err != nil {
+			return nil, err
+		}
+		currentFirstFlag := c.anal.isFirst
+		for i := range ss {
+			ss[i].appendInstruction(vm.Instruction{
+				Op:      vm.LockOp,
+				Idx:     c.anal.curr,
+				IsFirst: currentFirstFlag,
+				Arg:     lockOpArg,
+			})
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		return ss, nil
 	case plan.Node_FUNCTION_SCAN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))

@@ -153,6 +153,19 @@ func DeepCopyPreDeleteCtx(ctx *plan.PreDeleteCtx) *plan.PreDeleteCtx {
 	return newCtx
 }
 
+func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
+	if target == nil {
+		return nil
+	}
+	return &plan.LockTarget{
+		TableId:            target.TableId,
+		PrimaryColIdxInBat: target.PrimaryColIdxInBat,
+		PrimaryColTyp:      DeepCopyType(target.PrimaryColTyp),
+		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
+		FilterColIdxInBat:  target.FilterColIdxInBat,
+	}
+}
+
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
 		NodeType:        node.NodeType,
@@ -182,11 +195,16 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		PreInsertUkCtx:  DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
 		PreDeleteCtx:    DeepCopyPreDeleteCtx(node.PreDeleteCtx),
 		OnDuplicateKey:  DeepCopyOnDupliateKeyCtx(node.OnDuplicateKey),
+		LockTargets:     make([]*plan.LockTarget, len(node.LockTargets)),
 		IsEnd:           node.IsEnd,
 	}
 
 	copy(newNode.Children, node.Children)
 	copy(newNode.BindingTags, node.BindingTags)
+
+	for idx, target := range node.LockTargets {
+		newNode.LockTargets[idx] = DeepCopyLockTarget(target)
+	}
 
 	for idx, expr := range node.ProjectList {
 		newNode.ProjectList[idx] = DeepCopyExpr(expr)

@@ -550,7 +550,9 @@ message Node {
 
 		//
 		INSERT = 51;
-		DELETE = 53;
+		DELETE = 52;
+		//
+		LOCK_OP = 53;
 
 		//
 		INTERSECT = 54;
@@ -647,6 +649,15 @@ message Node {
 	OnDuplicateKeyCtx on_duplicate_key = 35;
 
 	bool IsEnd = 36;
+	repeated LockTarget lock_targets = 37;
+}
+
+message LockTarget {
+  uint64 table_id           	= 1;
+  int32 primary_col_idx_in_bat  = 2;
+  Type primary_col_typ          = 3;
+  int32 refresh_ts_idx_in_bat   = 4;
+  int32 filter_col_idx_in_bat   = 5;
 }
 
 message PreInsertUkCtx {
@@ -770,6 +781,7 @@ message Plan {
 	}
 	// AttachedPlan for the ddl statements, Attached Plan is used to modify related metadata
 	Plan AttachedPlan = 5;
+	int32 try_run_times = 6;
 }
 
 message column{

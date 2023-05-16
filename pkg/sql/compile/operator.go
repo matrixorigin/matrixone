@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
@@ -516,6 +517,15 @@ func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique
 		Ctx:          proc.Ctx,
 		PreInsertCtx: preCtx,
 	}, nil
+}
+
+func constructLockOp(n *plan.Node, proc *process.Process) (*lockop.Argument, error) {
+	arg := lockop.NewArgument()
+	for _, target := range n.LockTargets {
+		typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
+		arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+	}
+	return arg, nil
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
