@@ -80,6 +80,7 @@ func NewCompactBlockTask(
 	if err != nil {
 		return
 	}
+	defer seg.Close()
 	task.compacted, err = seg.GetBlock(meta.ID)
 	if err != nil {
 		return
@@ -144,6 +145,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		common.OperandField(task.meta.Repr()))
 	now := time.Now()
 	seg := task.compacted.GetSegment()
+	defer seg.Close()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
 	preparer, empty, err := task.PrepareData()
@@ -187,6 +189,7 @@ func (task *compactBlockTask) Execute() (err error) {
 			if err != nil {
 				return err
 			}
+			defer createOnSeg.Close()
 		}
 
 		if _, err = task.createAndFlushNewBlock(createOnSeg, preparer, deletes); err != nil {

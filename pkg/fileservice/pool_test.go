@@ -35,7 +35,7 @@ func TestBytesPool(t *testing.T) {
 			for j := 0; j < 200; j++ {
 				var bs *[]byte
 				put := pool.Get(&bs)
-				defer put()
+				defer put.Put()
 				binary.PutUvarint(*bs, uint64(i))
 			}
 		}()
@@ -53,7 +53,7 @@ func BenchmarkBytesPool(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		var v any
 		put := pool.Get(&v)
-		put()
+		put.Put()
 	}
 }
 
@@ -67,7 +67,7 @@ func BenchmarkParallelBytesPool(b *testing.B) {
 		for pb.Next() {
 			var v any
 			put := pool.Get(&v)
-			put()
+			put.Put()
 		}
 	})
 }

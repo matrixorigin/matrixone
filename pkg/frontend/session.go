@@ -173,8 +173,6 @@ type Session struct {
 
 	statsCache *plan2.StatsCache
 
-	autoIncrCacheManager *defines.AutoIncrCacheManager
-
 	seqCurValues map[uint64]string
 
 	seqLastValue string
@@ -261,19 +259,6 @@ func (ses *Session) GetSqlHelper() *SqlHelper {
 	return ses.sqlHelper
 }
 
-// The update version. Four function.
-func (ses *Session) SetAutoIncrCacheManager(aicm *defines.AutoIncrCacheManager) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.autoIncrCacheManager = aicm
-}
-
-func (ses *Session) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.autoIncrCacheManager
-}
-
 const saveQueryIdCnt = 10
 
 func (ses *Session) pushQueryId(uuid string) {
@@ -302,7 +287,7 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool, aicm *defines.AutoIncrCacheManager) *Session {
+func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool) *Session {
 	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient)
 	ses := &Session{
 		protocol: proto,
@@ -350,7 +335,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
-	ses.SetAutoIncrCacheManager(aicm)
 
 	var err error
 	if ses.mp == nil {
@@ -430,9 +414,8 @@ func NewBackgroundSession(
 	PU *config.ParameterUnit,
 	gSysVars *GlobalSystemVariables) *BackgroundSession {
 	connCtx := upstream.GetConnectContext()
-	aicm := upstream.GetAutoIncrCacheManager()
 
-	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false, aicm)
+	ses := NewSession(&FakeProtocol{}, mp, PU, gSysVars, false)
 	ses.upstream = upstream
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := motrace.StatementFromContext(reqCtx); stmt != nil {
@@ -1438,17 +1421,6 @@ func changeVersion(ctx context.Context, ses *Session, db string) error {
 		ses.GetTenantInfo().SetVersion(version)
 	}
 	return err
-}
-
-func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			fixColumnName(cols, arg)
-		}
-	case *plan.Expr_Col:
-		exprImpl.Col.Name = cols[exprImpl.Col.ColPos].Name
-	}
 }
 
 // fakeDataSetFetcher gets the result set from the pipeline and save it in the session.

@@ -31,7 +31,6 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -42,7 +41,6 @@ type RoutineManager struct {
 	clients        map[goetty.IOSession]*Routine
 	pu             *config.ParameterUnit
 	tlsConfig      *tls.Config
-	aicm           *defines.AutoIncrCacheManager
 	accountRoutine *AccountRoutineManager
 }
 
@@ -129,10 +127,6 @@ func (ar *AccountRoutineManager) deepCopyRoutineMap() map[int64]map[*Routine]uin
 	return tempRoutineMap
 }
 
-func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
-	return rm.aicm
-}
-
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
 	return rm.pu
 }
@@ -176,7 +170,7 @@ func (rm *RoutineManager) getConnID() (uint32, error) {
 	}
 	ctx, cancel := context.WithTimeout(rm.ctx, time.Second*2)
 	defer cancel()
-	connID, err := rm.pu.HAKeeperClient.AllocateIDByKey(ctx, connIDAllocKey)
+	connID, err := rm.pu.HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
 	if err != nil {
 		return 0, err
 	}
@@ -202,7 +196,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm)
+	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true)
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetConnectContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
@@ -515,7 +509,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 	rm.cleanKillQueue()
 }
 
-func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) (*RoutineManager, error) {
+func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {
 	accountRoutine := &AccountRoutineManager{
 		killQueueMu:       sync.RWMutex{},
 		accountId2Routine: make(map[int64]map[*Routine]uint64),
@@ -530,7 +524,6 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 		accountRoutine: accountRoutine,
 	}
 
-	rm.aicm = aicm
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)
 		if err != nil {

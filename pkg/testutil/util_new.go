@@ -23,12 +23,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -38,14 +39,27 @@ func NewProcess() *process.Process {
 	return NewProcessWithMPool(mp)
 }
 
+func SetupAutoIncrService() {
+	rt := runtime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
+		runtime.SetupProcessLevelRuntime(rt)
+	}
+	rt.SetGlobalVariables(
+		runtime.AutoIncrmentService,
+		incrservice.NewIncrService(
+			incrservice.NewMemStore(),
+			incrservice.Config{}))
+}
+
 func NewProcessWithMPool(mp *mpool.MPool) *process.Process {
+	SetupAutoIncrService()
 	proc := process.New(
 		context.Background(),
 		mp,
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
 		NewFS(),
-		nil,
 		nil,
 	)
 	proc.Lim.Size = 1 << 20
@@ -88,7 +102,8 @@ func NewBatch(ts []types.Type, random bool, n int, m *mpool.MPool) *batch.Batch 
 	bat.InitZsOne(n)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
-		nulls.New(bat.Vecs[i].GetNulls(), n)
+		// XXX do we need to init nulls here?   can we be lazy?
+		bat.Vecs[i].GetNulls().InitWithSize(n)
 	}
 	return bat
 }
@@ -98,7 +113,7 @@ func NewBatchWithNulls(ts []types.Type, random bool, n int, m *mpool.MPool) *bat
 	bat.InitZsOne(n)
 	for i := range bat.Vecs {
 		bat.Vecs[i] = NewVector(n, ts[i], m, random, nil)
-		nulls.New(bat.Vecs[i].GetNulls(), n)
+		bat.Vecs[i].GetNulls().InitWithSize(n)
 		nsp := bat.Vecs[i].GetNulls()
 		for j := 0; j < n; j++ {
 			if j%2 == 0 {

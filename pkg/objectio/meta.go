@@ -254,6 +254,10 @@ func (bh BlockHeader) IsEmpty() bool {
 
 type BloomFilter []byte
 
+func (bf BloomFilter) Size() int {
+	return len(bf)
+}
+
 func (bf BloomFilter) BlockCount() uint32 {
 	return types.DecodeUint32(bf[:blockCountLen])
 }
@@ -264,6 +268,10 @@ func (bf BloomFilter) GetBloomFilter(BlockID uint32) []byte {
 	offset := types.DecodeUint32(bf[offStart:offEnd])
 	length := types.DecodeUint32(bf[offStart+blockLen : offEnd+blockLen])
 	return bf[offset : offset+length]
+}
+
+func (bf BloomFilter) GetObjectBloomFilter() []byte {
+	return bf.GetBloomFilter(bf.BlockCount())
 }
 
 type ZoneMapArea []byte

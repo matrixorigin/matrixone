@@ -281,7 +281,7 @@ func readBlockData(
 }
 
 func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (*batch.Batch, error) {
-	bat, err := LoadColumns(ctx, []uint16{0, 1, 2}, nil, fs, deltaloc, nil)
+	bat, err := LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +296,7 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows []int64)
 	deletedRows := nulls.NewWithSize(0)
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
-	aborts := vector.MustFixedCol[bool](deletes.Vecs[2])
+	aborts := vector.MustFixedCol[bool](deletes.Vecs[3])
 
 	for i, rowid := range rowids {
 		if aborts[i] || tss[i].Greater(ts) {
@@ -310,13 +310,12 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows []int64)
 		return
 	}
 
-	rows = make([]int64, 0, nulls.Length(deletedRows))
-
-	it := deletedRows.Np.Iterator()
-	for it.HasNext() {
-		row := it.Next()
-		rows = append(rows, int64(row))
+	itr := deletedRows.GetBitmap().Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		rows = append(rows, int64(r))
 	}
+
 	return
 }
 

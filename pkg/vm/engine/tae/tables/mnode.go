@@ -18,6 +18,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -89,8 +90,11 @@ func (node *memoryNode) IsPersisted() bool { return false }
 
 func (node *memoryNode) BatchDedup(
 	keys containers.Vector,
-	skipFn func(row uint32) error) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn)
+	skipFn func(row uint32) error,
+	zm []byte,
+	bf objectio.BloomFilter,
+) (sels *roaring.Bitmap, err error) {
+	return node.pkIndex.BatchDedup(keys, skipFn, zm, bf)
 }
 
 func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {
@@ -113,6 +117,10 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 	}
 	vec := node.data.Vecs[idx]
 	return vec.Get(row), vec.IsNull(row)
+}
+
+func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+	return node.data.Vecs[colIdx].Foreach(op, sels)
 }
 
 func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {

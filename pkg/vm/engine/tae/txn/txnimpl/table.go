@@ -33,7 +33,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -102,6 +104,7 @@ type txnTable struct {
 	logs         []wal.LogEntry
 
 	dedupedSegmentHint uint64
+	dedupedBlockID     *types.Blockid
 
 	txnEntries *txnEntries
 	csnStart   uint32
@@ -735,13 +738,12 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 	blockIt := h.MakeBlockIt()
 	for blockIt.Valid() {
 		h := blockIt.GetBlock()
+		defer h.Close()
 		if h.IsUncommitted() {
 			blockIt.Next()
 			continue
 		}
 		offset, err = h.GetByFilter(filter)
-		// block := h.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		// offset, err = block.GetByFilter(tbl.store.txn, filter)
 		if err == nil {
 			id = h.Fingerprint()
 			break
@@ -817,17 +819,34 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 
 func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) error {
 	switch req.Kind {
-	case apipb.AlterKind_UpdateConstraint, apipb.AlterKind_UpdateComment, apipb.AlterKind_AddColumn, apipb.AlterKind_DropColumn:
+	case apipb.AlterKind_UpdateConstraint,
+		apipb.AlterKind_UpdateComment,
+		apipb.AlterKind_AddColumn,
+		apipb.AlterKind_DropColumn,
+		apipb.AlterKind_RenameTable:
 	default:
 		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.store.txn.GetMemo().AddCatalogChange()
 	isNewNode, newSchema, err := tbl.entry.AlterTable(ctx, tbl.store.txn, req)
-	tbl.schema = newSchema // update new schema to txn local schema
 	if isNewNode {
 		tbl.txnEntries.Append(tbl.entry)
 	}
+	if err != nil {
+		return err
+	}
+	if req.Kind == apipb.AlterKind_RenameTable {
+		rename := req.GetRenameTable()
+		// udpate name index in db entry
+		tenantID := newSchema.AcInfo.TenantID
+		err = tbl.entry.GetDB().RenameTableInTxn(rename.OldName, rename.NewName, tbl.entry.ID, tenantID, tbl.store.txn, isNewNode)
+		if err != nil {
+			return err
+		}
+	}
+
+	tbl.schema = newSchema // update new schema to txn local schema
 	//TODO(aptend): handle written data in localseg, keep the batch aligned with the new schema
 	return err
 }
@@ -847,6 +866,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
+	var zm index.ZM
 	for _, node := range tbl.localSegment.nodes {
 		if node.IsPersisted() {
 			err = tbl.DoPrecommitDedupByNode(node)
@@ -860,8 +880,17 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 			return err
 		}
 		pkVec := bat.Vecs[tbl.schema.GetSingleSortKeyIdx()]
-		err = tbl.DoPrecommitDedupByPK(pkVec)
-		if err != nil {
+		if zm.Valid() {
+			zm.ResetMinMax()
+		} else {
+			pkType := pkVec.GetType()
+			zm = index.NewZM(pkType.Oid, pkType.Scale)
+		}
+		if err = index.BatchUpdateZM(zm, pkVec); err != nil {
+			bat.Close()
+			return err
+		}
+		if err = tbl.DoPrecommitDedupByPK(pkVec, zm); err != nil {
 			bat.Close()
 			return err
 		}
@@ -879,18 +908,45 @@ func (tbl *txnTable) updateDedupedSegmentHint(hint uint64) {
 	}
 }
 
+func (tbl *txnTable) updateDedupedBlockID(id *types.Blockid) {
+	if tbl.dedupedBlockID == nil {
+		tbl.dedupedBlockID = id
+		return
+	}
+	if tbl.dedupedBlockID.Compare(*id) > 0 {
+		tbl.dedupedBlockID = id
+	}
+}
+
 // DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
 func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
+	r := trace.StartRegion(context.Background(), "DedupSnapByPK")
+	defer r.End()
 	h := newRelation(tbl)
 	it := newRelationBlockItOnSnap(h)
 	maxSegmentHint := uint64(0)
+	pkType := keys.GetType()
+	inputZM := index.NewZM(pkType.Oid, pkType.Scale)
+	if err = index.BatchUpdateZM(inputZM, keys); err != nil {
+		return
+	}
+	var (
+		name objectio.ObjectNameShort
+		bf   objectio.BloomFilter
+	)
+	maxBlockID := &types.Blockid{}
 	for it.Valid() {
-		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+		blkH := it.GetBlock()
+		blk := blkH.GetMeta().(*catalog.BlockEntry)
+		blkH.Close()
 		segmentHint := blk.GetSegment().SortHint
 		if segmentHint > maxSegmentHint {
 			maxSegmentHint = segmentHint
+		}
+		if blk.ID.Compare(*maxBlockID) > 0 {
+			maxBlockID = &blk.ID
 		}
 		blkData := blk.GetBlockData()
 		if blkData == nil {
@@ -905,13 +961,37 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 				rowmask = deleteNode.GetRowMaskRefLocked()
 			}
 		}
-		if err = blkData.BatchDedup(tbl.store.txn, keys, rowmask, false); err != nil {
+		location := blk.FastGetMetaLoc()
+		if len(location) == 0 {
+			bf = objectio.BloomFilter{}
+		} else if !objectio.IsSameObjectLocVsShort(location, &name) {
+			if bf, err = indexwrapper.LoadBF(
+				context.Background(),
+				location,
+				tbl.store.indexCache,
+				tbl.store.dataFactory.Fs.Service,
+				false,
+			); err != nil {
+				return
+			}
+			// TODO: do object first
+		}
+		name = *objectio.ToObjectNameShort(&blk.ID)
+
+		if err = blkData.BatchDedup(
+			tbl.store.txn,
+			keys, rowmask,
+			false,
+			inputZM,
+			bf,
+		); err != nil {
 			// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 			return
 		}
 		it.Next()
 	}
 	tbl.updateDedupedSegmentHint(maxSegmentHint)
+	tbl.updateDedupedBlockID(maxBlockID)
 	return
 }
 
@@ -955,7 +1035,14 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 				vec := containers.ToDNVector(bat.Vecs[0])
 				loaded[i] = vec
 			}
-			if err = blkData.BatchDedup(tbl.store.txn, loaded[i], rowmask, false); err != nil {
+			if err = blkData.BatchDedup(
+				tbl.store.txn,
+				loaded[i],
+				rowmask,
+				false,
+				[]byte{},
+				objectio.BloomFilter{},
+			); err != nil {
 				// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
 				loaded[i].Close()
 				return
@@ -974,7 +1061,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 //  2. it is called when txn dequeues from preparing queue.
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
-func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
+func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, zm index.ZM) (err error) {
 	trace.WithRegion(context.Background(), "DoPrecommitDedupByPK", func() {
 		segIt := tbl.entry.MakeSegmentIt(false)
 		for segIt.Valid() {
@@ -1012,6 +1099,11 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 			blkIt := seg.MakeBlockIt(false)
 			for blkIt.Valid() {
 				blk := blkIt.Get().GetPayload()
+				if seg.SortHint == tbl.dedupedSegmentHint {
+					if blk.ID.Compare(*tbl.dedupedBlockID) < 0 {
+						break
+					}
+				}
 				{
 					blk.RLock()
 					shouldSkip = blk.HasDropCommittedLocked() || blk.IsCreatingOrAborted()
@@ -1033,7 +1125,14 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector) (err error) {
 						rowmask = deleteNode.GetRowMaskRefLocked()
 					}
 				}
-				if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true); err != nil {
+				if err = blkData.BatchDedup(
+					tbl.store.txn,
+					pks,
+					rowmask,
+					true,
+					zm,
+					objectio.BloomFilter{},
+				); err != nil {
 					return
 				}
 				blkIt.Next()
@@ -1112,7 +1211,14 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 					rowmask = deleteNode.GetRowMaskRefLocked()
 				}
 			}
-			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask, true); err != nil {
+			if err = blkData.BatchDedup(
+				tbl.store.txn,
+				pks,
+				rowmask,
+				true,
+				[]byte{},
+				objectio.BloomFilter{},
+			); err != nil {
 				return err
 			}
 			blkIt.Next()

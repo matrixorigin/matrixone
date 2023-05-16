@@ -248,15 +248,8 @@ func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
 			}
 			node.AnalyzeInfo = &info
 		}
-		// generator query explain
-		explainQuery := NewExplainQueryImpl(queryPlan)
-		options := &ExplainOptions{
-			Verbose: true,
-			Analyze: true,
-			Format:  EXPLAIN_FORMAT_TEXT,
-		}
 
-		marshalPlan := explainQuery.BuildJsonPlan(ctx, uuid.New(), options)
+		marshalPlan := BuildJsonPlan(ctx, uuid.New(), &MarshalPlanOptions, queryPlan)
 		//marshal, err := json.Marshal(marshalPlan)
 
 		buffer := &bytes.Buffer{}

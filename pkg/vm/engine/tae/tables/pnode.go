@@ -91,8 +91,11 @@ func (node *persistedNode) Rows() uint32 {
 
 func (node *persistedNode) BatchDedup(
 	keys containers.Vector,
-	skipFn func(row uint32) error) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn)
+	skipFn func(row uint32) error,
+	zm []byte,
+	bf objectio.BloomFilter,
+) (sels *roaring.Bitmap, err error) {
+	return node.pkIndex.BatchDedup(keys, skipFn, zm, bf)
 }
 
 func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
@@ -124,6 +127,19 @@ func (node *persistedNode) GetColumnDataWindow(
 		data.Close()
 	}
 	return
+}
+
+func (node *persistedNode) Foreach(
+	readSchema *catalog.Schema,
+	colIdx int, op func(v any, isNull bool, row int) error, sel *roaring.Bitmap) (err error) {
+	var data containers.Vector
+	if data, err = node.block.LoadPersistedColumnData(
+		readSchema,
+		colIdx,
+	); err != nil {
+		return
+	}
+	return data.Foreach(op, sel)
 }
 
 func (node *persistedNode) GetDataWindow(

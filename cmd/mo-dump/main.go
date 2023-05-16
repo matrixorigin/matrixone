@@ -20,13 +20,14 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func (t *Tables) String() string {
@@ -133,6 +134,20 @@ func main() {
 		New: func() any {
 			return &bytes.Buffer{}
 		},
+	}
+	left, right := 0, len(createTable)-1
+	for left < right {
+		for left < len(createTable) && tables[left].Kind != catalog.SystemViewRel {
+			left++
+		}
+		for right >= 0 && tables[right].Kind == catalog.SystemViewRel {
+			right--
+		}
+		if left >= right {
+			break
+		}
+		createTable[left], createTable[right] = createTable[right], createTable[left]
+		tables[left], tables[right] = tables[right], tables[left]
 	}
 	for i, create := range createTable {
 		tbl := tables[i]
@@ -375,7 +390,8 @@ func convertValue(v any, typ string) string {
 		// see https://github.com/matrixorigin/matrixone/issues/8050#issuecomment-1431251524
 		return string(ret)
 	default:
-		return "'" + strings.Replace(string(ret), "'", "\\'", -1) + "'"
+		str := strings.Replace(string(ret), "\\", "\\\\", -1)
+		return "'" + strings.Replace(str, "'", "\\'", -1) + "'"
 	}
 }
 

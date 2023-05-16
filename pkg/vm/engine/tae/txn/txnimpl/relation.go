@@ -136,6 +136,7 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	it := h.MakeBlockIt()
 	for it.Valid() {
 		block := it.GetBlock()
+		defer block.Close()
 		s = fmt.Sprintf("%s\n%s", s, block.String())
 		it.Next()
 	}
@@ -282,7 +283,7 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 			id.BlockID, row = model.DecodePhyAddrKey(&rid)
 			err = h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
 			return
-		}, nil)
+		}, nil, nil)
 	return
 }
 
