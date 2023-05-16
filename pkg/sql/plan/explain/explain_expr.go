@@ -70,6 +70,11 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			buf.WriteString("'" + val.Sval + "'")
 		case *plan.Const_Bval:
 			fmt.Fprintf(buf, "%v", val.Bval)
+		case *plan.Const_Decimal64Val:
+			fmt.Fprintf(buf, "%s", types.Decimal64(val.Decimal64Val.A).Format(expr.Typ.GetScale()))
+		case *plan.Const_Decimal128Val:
+			fmt.Fprintf(buf, "%s",
+				types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}.Format(expr.Typ.GetScale()))
 		}
 
 	case *plan.Expr_F:
