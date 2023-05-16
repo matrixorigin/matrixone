@@ -16,7 +16,7 @@ package frontend
 
 import (
 	"context"
-	"sync"
+	"github.com/sasha-s/go-deadlock"
 	"sync/atomic"
 	"time"
 
@@ -46,7 +46,7 @@ type Routine struct {
 
 	ses *Session
 
-	closeOnce sync.Once
+	closeOnce deadlock.Once
 
 	inProcessRequest bool
 
@@ -54,7 +54,7 @@ type Routine struct {
 
 	connectionBeCounted atomic.Bool
 
-	mu sync.Mutex
+	mu deadlock.Mutex
 }
 
 func (rt *Routine) increaseCount(counter func()) {
