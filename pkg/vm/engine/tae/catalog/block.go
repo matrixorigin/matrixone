@@ -384,7 +384,9 @@ func (entry *BlockEntry) UpdateMetaLoc(txn txnif.TxnReader, metaLoc objectio.Loc
 	var node *MVCCNode[*MetadataMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
 	node.BaseNode.Update(baseNode)
-	entry.Location = metaLoc
+	if !entry.IsAppendable() {
+		entry.Location = metaLoc
+	}
 	return
 }
 
