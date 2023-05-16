@@ -56,17 +56,12 @@ type binaryFuseFilter struct {
 }
 
 func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
-	hashes := make([]uint64, 0, data.Length())
-	op := func(v []byte, _ bool, _ int) error {
-		hash := hashV1(v)
-		hashes = append(hashes, hash)
-		return nil
-	}
-	var err error
-	if err = containers.ForeachWindowBytes(data, 0, data.Length(), op, nil); err != nil {
-		return nil, err
-	}
+	return NewBinaryFuseFilterByVectors([]containers.Vector{data})
+}
+
+func buildFuseFilter(hashes []uint64) (StaticFilter, error) {
 	var inner *xorfilter.BinaryFuse8
+	var err error
 	if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
 		if err.Error() == FuseFilterError {
 			// 230+ duplicate keys in hashes
@@ -80,6 +75,22 @@ func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
 	sf := &binaryFuseFilter{}
 	sf.BinaryFuse8 = *inner
 	return sf, nil
+}
+
+func NewBinaryFuseFilterByVectors(datas []containers.Vector) (StaticFilter, error) {
+	hashes := make([]uint64, 0)
+	op := func(v []byte, _ bool, _ int) error {
+		hash := hashV1(v)
+		hashes = append(hashes, hash)
+		return nil
+	}
+	var err error
+	for _, data := range datas {
+		if err = containers.ForeachWindowBytes(data, 0, data.Length(), op, nil); err != nil {
+			return nil, err
+		}
+	}
+	return buildFuseFilter(hashes)
 }
 
 func (filter *binaryFuseFilter) MayContainsKey(key []byte) (bool, error) {

@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"bytes"
 	"context"
 	"strconv"
 	"strings"
@@ -22,6 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+// The global variable is used to serialize plan and avoid objects being repeatedly created
+var MarshalPlanOptions = ExplainOptions{
+	Verbose: true,
+	Analyze: true,
+	Format:  EXPLAIN_FORMAT_TEXT,
+}
 
 func ConvertNode(ctx context.Context, node *plan.Node, options *ExplainOptions) (*Node, error) {
 	marshalNodeImpl := NewMarshalNodeImpl(node)
@@ -167,17 +175,18 @@ func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 }
 
 func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptions) (string, error) {
-	var result string
+	//var result string
+	buf := bytes.NewBuffer(make([]byte, 0, 400))
 	var err error
 	switch m.node.NodeType {
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
 		if m.node.ObjRef != nil {
-			result += m.node.ObjRef.GetSchemaName() + "." + m.node.ObjRef.GetObjName()
+			buf.WriteString(m.node.ObjRef.GetSchemaName() + "." + m.node.ObjRef.GetObjName())
 		} else if m.node.TableDef != nil {
-			result += m.node.TableDef.GetName()
+			buf.WriteString(m.node.TableDef.GetName())
 		} else {
-			return result, moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
+			return "", moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_DELETE:
 		if m.node.DeleteCtx != nil {
@@ -191,43 +200,43 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 			ctx := m.node.InsertCtx.Ref
 			result += ctx.SchemaName + "." + ctx.ObjName
 		} else {
-			return result, moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
+			return "", moerr.NewInternalError(ctx, "Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_PROJECT, plan.Node_VALUE_SCAN, plan.Node_UNION, plan.Node_UNION_ALL,
 		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
 		//"title" : "STORE.S_STORE_NAME,STORE.S_STORE_ID,WSS.D_WEEK_SEQ"
 		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		result, err = exprs.GetDescription(ctx, options)
+		err = exprs.GetDescription(ctx, options, buf)
 		if err != nil {
-			return result, err
+			return "", err
 		}
 	case plan.Node_AGG:
 		// "SUM(IFF(DATE_DIM.D_DAY_NAME = 'Sunday', STORE_SALES.SS_SALES_PRICE, null))"
 		exprs := NewExprListDescribeImpl(m.node.AggList)
-		result, err = exprs.GetDescription(ctx, options)
+		err = exprs.GetDescription(ctx, options, buf)
 		if err != nil {
-			return result, err
+			return "", err
 		}
 	case plan.Node_FILTER:
 		//"title" : "(D_0.D_MONTH_SEQ >= 1189) AND (D_0.D_MONTH_SEQ <= 1200)",
 		exprs := NewExprListDescribeImpl(m.node.FilterList)
-		result, err = exprs.GetDescription(ctx, options)
+		err = exprs.GetDescription(ctx, options, buf)
 		if err != nil {
-			return result, err
+			return "", err
 		}
 	case plan.Node_JOIN:
 		//"title" : "(DATE_DIM.D_DATE_SK = STORE_SALES.SS_SOLD_DATE_SK)",
 		exprs := NewExprListDescribeImpl(m.node.OnList)
-		result, err = exprs.GetDescription(ctx, options)
+		err = exprs.GetDescription(ctx, options, buf)
 		if err != nil {
-			return result, err
+			return "", err
 		}
 	case plan.Node_SORT:
 		//"title" : "STORE.S_STORE_NAME ASC NULLS LAST,STORE.S_STORE_ID ASC NULLS LAST,WSS.D_WEEK_SEQ ASC NULLS LAST",
 		orderByDescImpl := NewOrderByDescribeImpl(m.node.OrderBy)
-		result, err = orderByDescImpl.GetDescription(ctx, options)
+		err = orderByDescImpl.GetDescription(ctx, options, buf)
 		if err != nil {
-			return result, err
+			return "", err
 		}
 	//todo
 	case plan.Node_PRE_INSERT:
@@ -245,7 +254,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	default:
 		return "", moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
-	return strings.TrimSpace(result), nil
+	return strings.TrimSpace(buf.String()), nil
 }
 
 func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOptions) ([]Label, error) {
@@ -504,23 +513,25 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 
 	// Get Limit And Offset info
 	if m.node.Limit != nil {
-		limitInfo, err := describeExpr(ctx, m.node.Limit, options)
+		buf := bytes.NewBuffer(make([]byte, 0, 80))
+		err := describeExpr(ctx, m.node.Limit, options, buf)
 		if err != nil {
 			return nil, err
 		}
 		labels = append(labels, Label{
 			Name:  "Number of rows",
-			Value: limitInfo,
+			Value: buf.String(),
 		})
 
 		if m.node.Offset != nil {
-			offsetInfo, err := describeExpr(ctx, m.node.Offset, options)
+			buf.Reset()
+			err := describeExpr(ctx, m.node.Offset, options, buf)
 			if err != nil {
 				return nil, err
 			}
 			labels = append(labels, Label{
 				Name:  "Offset",
-				Value: offsetInfo,
+				Value: buf.String(),
 			})
 		} else {
 			labels = append(labels, Label{
@@ -664,13 +675,15 @@ func GetExprsLabelValue(ctx context.Context, exprList []*plan.Expr, options *Exp
 	if exprList == nil {
 		return make([]string, 0), nil
 	}
-	result := make([]string, 0)
+	result := make([]string, 0, len(exprList))
+	buf := bytes.NewBuffer(make([]byte, 0, 200))
 	for _, v := range exprList {
-		descV, err := describeExpr(ctx, v, options)
+		buf.Reset()
+		err := describeExpr(ctx, v, options, buf)
 		if err != nil {
 			return result, err
 		}
-		result = append(result, descV)
+		result = append(result, buf.String())
 	}
 	return result, nil
 }
@@ -679,16 +692,18 @@ func GetOrderByLabelValue(ctx context.Context, orderbyList []*plan.OrderBySpec, 
 	if orderbyList == nil {
 		return make([]string, 0), nil
 	}
-	result := make([]string, 0)
+	result := make([]string, 0, len(orderbyList))
+	buf := bytes.NewBuffer(make([]byte, 0, 200))
 	for _, v := range orderbyList {
-		descExpr, err := describeExpr(ctx, v.Expr, options)
+		buf.Reset()
+		err := describeExpr(ctx, v.Expr, options, buf)
 		if err != nil {
 			return result, err
 		}
 
 		flagKey := int32(v.Flag)
 		orderbyFlag := plan.OrderBySpec_OrderByFlag_name[flagKey]
-		result = append(result, descExpr+" "+orderbyFlag)
+		result = append(result, buf.String()+" "+orderbyFlag)
 	}
 	return result, nil
 }

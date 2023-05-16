@@ -506,7 +506,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string, txn client.TxnOperato
 		}
 		bat.Clean(mp)
 	}
-	panic("unreachable")
+	return 0, 0, nil, moerr.NewInternalError(param.ctx, "the tableID can not find, maybe modify")
 }
 
 func updateAutoIncrTable(param *AutoIncrParam, delBat *batch.Batch, curNum uint64, name string, txn client.TxnOperator, mp *mpool.MPool) error {

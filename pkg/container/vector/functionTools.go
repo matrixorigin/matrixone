@@ -65,12 +65,12 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionP
 			scalarValue:  cols[0],
 		}
 	}
-	if v.GetNulls() != nil && v.GetNulls().Np != nil && v.GetNulls().Np.Len() > 0 {
+	if !v.nsp.EmptyByFlag() {
 		return &FunctionParameterNormal[T]{
 			typ:          *t,
 			sourceVector: v,
 			values:       cols,
-			nullMap:      v.GetNulls().Np,
+			nullMap:      v.GetNulls().GetBitmap(),
 		}
 	}
 	return &FunctionParameterWithoutNull[T]{
@@ -97,13 +97,13 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 			scalarStr:    cols[0].GetByteSlice(v.area),
 		}
 	}
-	if v.GetNulls() != nil && v.GetNulls().Np != nil && v.GetNulls().Np.Len() > 0 {
+	if !v.GetNulls().EmptyByFlag() {
 		return &FunctionParameterNormal[types.Varlena]{
 			typ:          *t,
 			sourceVector: v,
 			strValues:    cols,
 			area:         v.area,
-			nullMap:      v.GetNulls().Np,
+			nullMap:      v.GetNulls().GetBitmap(),
 		}
 	}
 	return &FunctionParameterWithoutNull[types.Varlena]{

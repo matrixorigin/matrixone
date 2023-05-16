@@ -15,8 +15,10 @@
 package explain
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -65,10 +67,10 @@ func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataB
 	return nil
 }
 
-func (e *ExplainQueryImpl) BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions) *ExplainData {
-	nodes := e.QueryPlan.Nodes
+func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions, query *plan.Query) *ExplainData {
+	nodes := query.Nodes
 	expdata := NewExplainData(uuid)
-	for index, rootNodeId := range e.QueryPlan.Steps {
+	for index, rootNodeId := range query.Steps {
 		graphData := NewGraphData()
 		err := PreOrderPlan(ctx, nodes[rootNodeId], nodes, graphData, options)
 		if err != nil {
@@ -141,11 +143,13 @@ func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings,
 					rowsetDataDescImpl := &RowsetDataDescribeImpl{
 						RowsetData: nodedescImpl.Node.RowsetData,
 					}
-					rowsetInfo, err := rowsetDataDescImpl.GetDescription(ctx, options)
+					// Provide a relatively balanced initial capacity [360] for byte slice to prevent multiple memory requests
+					buf := bytes.NewBuffer(make([]byte, 0, 360))
+					err := rowsetDataDescImpl.GetDescription(ctx, options, buf)
 					if err != nil {
 						return err
 					}
-					settings.buffer.PushNewLine(rowsetInfo, false, settings.level)
+					settings.buffer.PushNewLine(buf.String(), false, settings.level)
 				}
 			}
 		}

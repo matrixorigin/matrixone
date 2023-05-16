@@ -60,7 +60,7 @@ func TestAnd2(t *testing.T) {
 	}
 	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false, false, false, false, false, false, false, false, false, false}, cols)
-	require.Equal(t, []uint64{3, 5}, cv.GetNulls().Np.ToArray())
+	require.Equal(t, []uint64{3, 5}, cv.GetNulls().ToArray())
 }
 
 func TestOr(t *testing.T) {
@@ -100,7 +100,7 @@ func TestOr2(t *testing.T) {
 	}
 	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{true, true, true, true, true, true, true, true, true, true}, cols)
-	require.Equal(t, []uint64{3, 7}, cv.GetNulls().Np.ToArray())
+	require.Equal(t, []uint64{3, 7}, cv.GetNulls().ToArray())
 }
 
 func TestXor(t *testing.T) {
@@ -140,7 +140,7 @@ func TestXor2(t *testing.T) {
 	}
 	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{true, true, true, true, true, true, true, true, true, true}, cols)
-	require.Equal(t, []uint64{3, 5, 7}, cv.GetNulls().Np.ToArray())
+	require.Equal(t, []uint64{3, 5, 7}, cv.GetNulls().ToArray())
 }
 
 func TestNot(t *testing.T) {
@@ -172,7 +172,7 @@ func TestNot2(t *testing.T) {
 	}
 	cols := vector.MustFixedCol[bool](cv)
 	require.Equal(t, []bool{false, true, true, false, false}, cols)
-	require.Equal(t, []uint64{5}, cv.GetNulls().Np.ToArray())
+	require.Equal(t, []uint64{5}, cv.GetNulls().ToArray())
 }
 
 func TestNot3(t *testing.T) {
