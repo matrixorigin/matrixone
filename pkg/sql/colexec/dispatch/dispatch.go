@@ -49,15 +49,12 @@ func Prepare(proc *process.Process, arg any) error {
 		ap.prepareRemote(proc)
 
 	case ShuffleToAllFunc:
-		if ctr.remoteRegsCnt == 0 {
-			return moerr.NewInternalError(proc.Ctx, "ShuffleToAllFunc should include RemoteRegs")
-		}
-		if len(ap.LocalRegs) == 0 {
-			ap.ctr.sendFunc = shuffleToAllRemoteFunc
+		ap.ctr.sendFunc = shuffleToAllFunc
+		if ap.ctr.remoteRegsCnt > 0 {
+			ap.prepareRemote(proc)
 		} else {
-			ap.ctr.sendFunc = shuffleToAllFunc
+			ap.prepareLocal()
 		}
-		ap.prepareRemote(proc)
 		ap.initSelsForShuffleReuse()
 
 	case SendToAnyFunc:
@@ -77,14 +74,6 @@ func Prepare(proc *process.Process, arg any) error {
 		}
 		ctr.sendFunc = sendToAllLocalFunc
 		ap.prepareLocal()
-
-	case ShuffleToAllLocalFunc:
-		if ctr.remoteRegsCnt != 0 {
-			return moerr.NewInternalError(proc.Ctx, "ShuffleToAllLocalFunc should not send to remote")
-		}
-		ctr.sendFunc = shuffleToAllLocalFunc
-		ap.prepareLocal()
-		ap.initSelsForShuffleReuse()
 
 	case SendToAnyLocalFunc:
 		if ctr.remoteRegsCnt != 0 {

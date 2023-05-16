@@ -46,7 +46,6 @@ const (
 
 	//shuffle to all reg functions
 	ShuffleToAllFunc
-	ShuffleToAllLocalFunc
 )
 
 type WrapperClientSession struct {
@@ -88,7 +87,9 @@ type Argument struct {
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
 	// for shuffle
-	ShuffleColIdx int
+	ShuffleColIdx       int
+	ShuffleRegIdxLocal  []int
+	ShuffleRegIdxRemote []int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
