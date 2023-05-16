@@ -128,6 +128,8 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 				return false, err
 			}
 		}
+		proc.SetInputBatch(&batch.Batch{})
+
 	} else {
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))
 		insertBat.Attrs = ap.InsertCtx.Attrs

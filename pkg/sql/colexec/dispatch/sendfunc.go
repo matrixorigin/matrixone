@@ -16,9 +16,10 @@ package dispatch
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"hash/crc32"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -120,6 +121,10 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 			logutil.Infof("proc context done during dispatch to local")
 			return true, nil
 		case <-reg.Ctx.Done():
+			if ap.IsSink {
+				//	atomic.AddInt64(&bat.Cnt, -1)
+				continue
+			}
 			handleUnsent(proc, bat, refCountAdd, int64(i))
 			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
 		case reg.Ch <- bat:
