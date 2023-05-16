@@ -423,6 +423,11 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 		}
+	case vm.LockOp:
+		t := sourceIns.Arg.(*lockop.Argument)
+		arg := new(lockop.Argument)
+		*arg = *t
+		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
