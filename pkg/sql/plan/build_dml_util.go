@@ -645,7 +645,7 @@ func makeInsertPlan(
 			TableId:            tableDef.TblId,
 			PrimaryColIdxInBat: int32(pkPos),
 			PrimaryColTyp:      pkTyp,
-			RefreshTsIdxInBat:  0, //unsupport now
+			RefreshTsIdxInBat:  -1, //unsupport now
 			FilterColIdxInBat:  int32(partitionIdx),
 		}
 		lockNode := &Node{
@@ -1004,7 +1004,7 @@ func makeOneDeletePlan(builder *QueryBuilder, bindCtx *BindContext, lastNodeId i
 		TableId:            delNodeInfo.tableDef.TblId,
 		PrimaryColIdxInBat: int32(pkPos),
 		PrimaryColTyp:      pkTyp,
-		RefreshTsIdxInBat:  0, //unsupport now
+		RefreshTsIdxInBat:  -1, //unsupport now
 		FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
 	}
 	lockNode := &Node{
