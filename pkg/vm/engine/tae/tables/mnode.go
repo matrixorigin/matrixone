@@ -18,6 +18,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -91,8 +92,9 @@ func (node *memoryNode) BatchDedup(
 	keys containers.Vector,
 	skipFn func(row uint32) error,
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn, zm)
+	return node.pkIndex.BatchDedup(keys, skipFn, zm, bf)
 }
 
 func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {
