@@ -62,6 +62,7 @@ type lockTarget struct {
 	fetcher                      FetchLockRowsFunc
 	filter                       RowsFilter
 	filterColIndexInBatch        int32
+	lockTable                    bool
 }
 
 // RowsFilter used to filter row from primary vector. The row will not lock if filter return false.

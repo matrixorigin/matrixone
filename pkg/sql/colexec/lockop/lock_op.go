@@ -109,7 +109,8 @@ func Call(
 				WithLockMode(lock.LockMode_Exclusive).
 				WithFetchLockRowsFunc(target.fetcher).
 				WithMaxBytesPerLock(int(proc.LockService.GetConfig().MaxLockRowBytes)).
-				WithFilterRows(target.filter, filterCols),
+				WithFilterRows(target.filter, filterCols).
+				WithLockTable(target.lockTable),
 		)
 		if getLogger().Enabled(zap.DebugLevel) {
 			getLogger().Debug("lock result",
@@ -245,8 +246,8 @@ func (opts LockOptions) WithLockMode(mode lock.LockMode) LockOptions {
 }
 
 // WithLockTable set lock all table
-func (opts LockOptions) WithLockTable() LockOptions {
-	opts.lockTable = true
+func (opts LockOptions) WithLockTable(lockTabel bool) LockOptions {
+	opts.lockTable = lockTabel
 	return opts
 }
 
@@ -307,6 +308,17 @@ func (arg *Argument) AddLockTarget(
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 	})
+	return arg
+}
+
+// LockTable lock all table, used for delete, truncate and drop table
+func (arg *Argument) LockTable(tableID uint64) *Argument {
+	for idx := range arg.targets {
+		if arg.targets[idx].tableID == tableID {
+			arg.targets[idx].lockTable = true
+			break
+		}
+	}
 	return arg
 }
 
