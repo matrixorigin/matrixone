@@ -199,38 +199,36 @@ func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builde
 	return -1
 }
 
-func estimateOutCntForEquality(expr *plan.Expr, tableCnt float64, ndvMap map[string]float64) float64 {
+func estimateEqualitySelectivity(expr *plan.Expr, ndvMap map[string]float64) float64 {
 	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	ret, _ := CheckFilter(expr)
 	if !ret {
-		return tableCnt / 100
+		return 0.01
 	}
-
 	ndv := getExprNdv(expr, ndvMap, 0, nil)
 	if ndv > 0 {
-		return tableCnt / ndv
+		return 1 / ndv
 	}
-
-	return tableCnt / 100
+	return 0.01
 }
 
-func calcOutCntByMinMax(funcName string, tableCnt, min, max, val float64) float64 {
+func calcSelectivityByMinMax(funcName string, min, max, val float64) float64 {
 	switch funcName {
 	case ">", ">=":
-		return (max - val) / (max - min) * tableCnt
+		return (max - val) / (max - min)
 	case "<", "<=":
-		return (val - min) / (max - min) * tableCnt
+		return (val - min) / (max - min)
 	}
 	return -1 // never reach here
 }
 
-func estimateOutCntForNonEquality(expr *plan.Expr, funcName string, tableCnt float64, s *StatsInfoMap) float64 {
+func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, tableCnt float64, s *StatsInfoMap) float64 {
 	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	ret, _ := CheckFilter(expr)
 	if !ret {
-		return tableCnt / 10
+		return 0.1
 	}
 
 	//check strict filter, otherwise can not estimate outcnt by min/max val
@@ -239,15 +237,15 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName string, tableCnt flo
 		switch s.DataTypeMap[col.Name] {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 			if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
-				return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.I64Val))
+				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.I64Val))
 			}
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 			if val, valOk := constExpr.Value.(*plan.Const_U64Val); valOk {
-				return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.U64Val))
+				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.U64Val))
 			}
 		case types.T_date:
 			if val, valOk := constExpr.Value.(*plan.Const_Dateval); valOk {
-				return calcOutCntByMinMax(funcName, tableCnt, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.Dateval))
+				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.Dateval))
 			}
 		}
 	}
@@ -260,62 +258,63 @@ func estimateOutCntForNonEquality(expr *plan.Expr, funcName string, tableCnt flo
 			if val, valOk := constExpr.Value.(*plan.Const_I64Val); valOk {
 				minVal := types.Date(s.MinValMap[col.Name])
 				maxVal := types.Date(s.MaxValMap[col.Name])
-				return calcOutCntByMinMax(funcName, tableCnt, float64(minVal.Year()), float64(maxVal.Year()), float64(val.I64Val))
+				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), float64(val.I64Val))
 			}
 		}
 	}
 
-	return tableCnt / 10
+	return 0.1
 }
 
 // estimate output lines for a filter
-func estimateOutCnt(expr *plan.Expr, s *StatsInfoMap) float64 {
+func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 	tableCnt := s.TableCnt
 	if expr == nil {
-		return tableCnt
+		return 1
 	}
-	var outcnt float64
+
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "=":
-			outcnt = estimateOutCntForEquality(expr, tableCnt, s.NdvMap)
+			return estimateEqualitySelectivity(expr, s.NdvMap)
 		case ">", "<", ">=", "<=":
 			//for filters like a>1, no good way to estimate, return 3 * equality
-			outcnt = estimateOutCntForNonEquality(expr, funcName, tableCnt, s)
+			return estimateNonEqualitySelectivity(expr, funcName, tableCnt, s)
 		case "and":
 			//get the smaller one of two children, and tune it down a little bit
-			out1 := estimateOutCnt(exprImpl.F.Args[0], s)
-			out2 := estimateOutCnt(exprImpl.F.Args[1], s)
-			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (out1+out2) > tableCnt {
-				outcnt = (out1 + out2) - tableCnt
+			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], s)
+			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], s)
+			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (sel1+sel2) > 1 {
+				return sel1 + sel2 - 1
 			} else {
-				outcnt = andSelectivity(out1/tableCnt, out2/tableCnt) * tableCnt
+				return andSelectivity(sel1, sel2)
 			}
 		case "or":
 			//get the bigger one of two children, and tune it up a little bit
-			out1 := estimateOutCnt(exprImpl.F.Args[0], s)
-			out2 := estimateOutCnt(exprImpl.F.Args[1], s)
-			if out1 == out2 {
-				outcnt = out1 + out2
+			var sel float64
+			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], s)
+			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], s)
+			if math.Abs(sel1-sel2) < 0.001 {
+				sel = sel1 + sel2
 			} else {
-				outcnt = math.Max(out1, out2) * 1.5
+				sel = math.Max(sel1, sel2) * 1.5
+			}
+			if sel > 1 {
+				return 1
+			} else {
+				return sel
 			}
 		default:
 			//no good way to estimate, just 0.15*cost
-			outcnt = tableCnt * 0.15
+			return 0.15
 		}
 	case *plan.Expr_C:
-		outcnt = tableCnt
+		return 1
 	}
-	if outcnt > tableCnt {
-		//outcnt must be smaller than cost
-		outcnt = tableCnt
-	} else if outcnt < 1 {
-		outcnt = 1
-	}
-	return outcnt
+
+	return 1
 }
 
 func estimateFilterWeight(ctx context.Context, expr *plan.Expr, w float64) float64 {
@@ -616,11 +615,11 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if len(node.FilterList) > 0 {
 		expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
 		fixColumnName(node.TableDef, expr)
-		stats.Outcnt = estimateOutCnt(expr, s)
+		stats.Selectivity = estimateExprSelectivity(expr, s)
 	} else {
-		stats.Outcnt = stats.TableCnt
+		stats.Selectivity = 1
 	}
-	stats.Selectivity = stats.Outcnt / stats.TableCnt
+	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt
 	stats.BlockNum = int32(stats.Outcnt/float64(options.DefaultBlockMaxRows) + 1)
 
