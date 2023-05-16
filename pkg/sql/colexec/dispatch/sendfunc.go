@@ -158,9 +158,10 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 	}
 
 	// send to remote regs
+	regIdx := 0
 	for _, r := range ap.ctr.remoteReceivers {
-		regIdx := 0
-		batToSend := shuffledBats[ap.ShuffleRegIdxRemote[regIdx]]
+		batIndex := ap.ShuffleRegIdxRemote[regIdx]
+		batToSend := shuffledBats[batIndex]
 		if batToSend != nil {
 			encodeData, errEncode := types.Encode(batToSend)
 			if errEncode != nil {
@@ -174,9 +175,10 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 	}
 
 	//send to all local regs
+	regIdx = 0
 	for _, reg := range ap.LocalRegs {
-		regIdx := 0
-		batToSend := shuffledBats[ap.ShuffleRegIdxLocal[regIdx]]
+		batIndex := ap.ShuffleRegIdxLocal[regIdx]
+		batToSend := shuffledBats[batIndex]
 		if batToSend != nil {
 			select {
 			case <-reg.Ctx.Done():
