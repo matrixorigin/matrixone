@@ -50,9 +50,13 @@ func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 	case types.T_int32:
 		groupByCol := vector.MustFixedCol[int32](groupByVec)
 		for row, v := range groupByCol {
+
 			regIndex := v % int32(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 			lenShuffledSels[regIndex]++
+			if v == 1998122 {
+				logutil.Warnf("!!!! got 1998122, send to reg index %v", regIndex)
+			}
 		}
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
