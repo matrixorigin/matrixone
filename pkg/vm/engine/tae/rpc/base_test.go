@@ -588,6 +588,7 @@ func makeCreateTableEntries(
 	tableId uint64,
 	dbId uint64,
 	dbName string,
+	constraint []byte,
 	m *mpool.MPool,
 	defs []engine.TableDef,
 ) ([]*api.Entry, error) {
@@ -601,7 +602,7 @@ func makeCreateTableEntries(
 	{
 		bat, err := genCreateTableTuple(
 			sql, ac.accountId, ac.userId, ac.roleId,
-			name, tableId, dbId, dbName, comment, m)
+			name, tableId, dbId, dbName, comment, constraint, m)
 		if err != nil {
 			return nil, err
 		}
@@ -641,6 +642,7 @@ func genCreateTableTuple(
 	databaseId uint64,
 	databaseName string,
 	comment string,
+	constraint []byte,
 	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
@@ -723,7 +725,7 @@ func genCreateTableTuple(
 		}
 		idx = catalog.MO_TABLES_CONSTRAINT_IDX
 		bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[idx]) // constraint
-		if err := vector.AppendBytes(bat.Vecs[idx], []byte(""), false, m); err != nil {
+		if err := vector.AppendBytes(bat.Vecs[idx], []byte(constraint), false, m); err != nil {
 			return nil, err
 		}
 		idx = catalog.MO_TABLES_VERSION_IDX

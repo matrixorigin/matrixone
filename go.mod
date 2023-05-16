@@ -17,7 +17,7 @@ require (
 	github.com/docker/go-units v0.4.0
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20221212132037-abf2d4c05484
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
-	github.com/go-sql-driver/mysql v1.6.0
+	github.com/go-sql-driver/mysql v1.7.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.1.2
@@ -47,6 +47,8 @@ require (
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 	golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
+	gorm.io/driver/mysql v1.5.0
+	gorm.io/gorm v1.25.0
 )
 
 require (
@@ -77,6 +79,8 @@ require (
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/hashicorp/memberlist v0.3.1 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/miekg/dns v1.1.26 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
