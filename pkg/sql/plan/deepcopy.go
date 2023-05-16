@@ -163,6 +163,7 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 		PrimaryColTyp:      DeepCopyType(target.PrimaryColTyp),
 		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
 		FilterColIdxInBat:  target.FilterColIdxInBat,
+		LockTable:          target.LockTable,
 	}
 }
 

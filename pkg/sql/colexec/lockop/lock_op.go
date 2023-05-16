@@ -291,6 +291,7 @@ func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
 			PrimaryColTyp:      plan.MakePlan2Type(&target.primaryColumnType),
 			RefreshTsIdxInBat:  target.refreshTimestampIndexInBatch,
 			FilterColIdxInBat:  target.filterColIndexInBatch,
+			LockTable:          target.lockTable,
 		}
 	}
 	return targets
@@ -301,12 +302,14 @@ func (arg *Argument) AddLockTarget(
 	tableID uint64,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
-	refreshTimestampIndexInBatch int32) *Argument {
+	refreshTimestampIndexInBatch int32,
+	lockTable bool) *Argument {
 	arg.targets = append(arg.targets, lockTarget{
 		tableID:                      tableID,
 		primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
+		lockTable:                    lockTable,
 	})
 	return arg
 }
@@ -336,7 +339,8 @@ func (arg *Argument) AddLockTargetWithPartition(
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
-	partitionTableIDMappingInBatch int32) *Argument {
+	partitionTableIDMappingInBatch int32,
+	lockTable bool) *Argument {
 	if len(tableIDs) == 0 {
 		panic("invalid partition table ids")
 	}
@@ -346,7 +350,9 @@ func (arg *Argument) AddLockTargetWithPartition(
 		return arg.AddLockTarget(tableIDs[0],
 			primaryColumnIndexInBatch,
 			primaryColumnType,
-			refreshTimestampIndexInBatch)
+			refreshTimestampIndexInBatch,
+			lockTable,
+		)
 	}
 
 	for _, tableID := range tableIDs {

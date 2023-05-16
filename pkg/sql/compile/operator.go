@@ -529,7 +529,7 @@ func constructLockOp(n *plan.Node, proc *process.Process) (*lockop.Argument, err
 	arg := lockop.NewArgument()
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
-		arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+		arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockTable())
 	}
 	return arg, nil
 }

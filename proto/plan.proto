@@ -660,6 +660,7 @@ message LockTarget {
   Type primary_col_typ          = 3;
   int32 refresh_ts_idx_in_bat   = 4;
   int32 filter_col_idx_in_bat   = 5;
+  bool lock_table 				= 6;
 }
 
 message PreInsertUkCtx {

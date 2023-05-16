@@ -253,6 +253,8 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "sink_scan", nil
 	case plan.Node_ON_DUPLICATE_KEY:
 		return "on_duplicate_key", nil
+	case plan.Node_LOCK_OP:
+		return "lock_op", nil
 	default:
 		return "", moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
@@ -495,6 +497,11 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_SINK_SCAN:
 		labels = append(labels, Label{
 			Name:  "sink scan",
+			Value: []string{},
+		})
+	case plan.Node_LOCK_OP:
+		labels = append(labels, Label{
+			Name:  "lock op",
 			Value: []string{},
 		})
 	default:

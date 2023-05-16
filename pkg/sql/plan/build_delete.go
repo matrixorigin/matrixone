@@ -56,6 +56,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 
 	// append delete plans
 	beginIdx := 0
+	needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
 	for i, tableDef := range tblInfo.tableDefs {
 		deleteBindCtx := NewBindContext(builder, nil)
 		delPlanCtx := &dmlPlanCtx{
@@ -67,6 +68,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			updateColLength: 0,
 			rowIdPos:        getRowIdPos(tableDef),
 			allDelTableIDs:  allDelTableIDs,
+			lockTable:       needLockTable,
 		}
 
 		nextSourceStep, err := makePreUpdateDeletePlan(ctx, builder, deleteBindCtx, delPlanCtx)

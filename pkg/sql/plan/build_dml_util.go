@@ -34,6 +34,7 @@ type dmlPlanCtx struct {
 	updateColPosMap   map[string]int
 	allDelTableIDs    map[uint64]struct{}
 	isFkRecursionCall bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
+	lockTable         bool //we need lock table in stmt: delete from tbl
 }
 
 // buildInsertPlans  build insert plan.
