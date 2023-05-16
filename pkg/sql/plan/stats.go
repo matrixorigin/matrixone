@@ -223,7 +223,7 @@ func calcSelectivityByMinMax(funcName string, min, max, val float64) float64 {
 	return -1 // never reach here
 }
 
-func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, tableCnt float64, s *StatsInfoMap) float64 {
+func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, s *StatsInfoMap) float64 {
 	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
 	ret, _ := CheckFilter(expr)
@@ -268,7 +268,6 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, tableCnt f
 
 // estimate output lines for a filter
 func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
-	tableCnt := s.TableCnt
 	if expr == nil {
 		return 1
 	}
@@ -280,10 +279,8 @@ func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 		case "=":
 			return estimateEqualitySelectivity(expr, s.NdvMap)
 		case ">", "<", ">=", "<=":
-			//for filters like a>1, no good way to estimate, return 3 * equality
-			return estimateNonEqualitySelectivity(expr, funcName, tableCnt, s)
+			return estimateNonEqualitySelectivity(expr, funcName, s)
 		case "and":
-			//get the smaller one of two children, and tune it down a little bit
 			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], s)
 			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], s)
 			if canMergeToBetweenAnd(exprImpl.F.Args[0], exprImpl.F.Args[1]) && (sel1+sel2) > 1 {
@@ -292,28 +289,17 @@ func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 				return andSelectivity(sel1, sel2)
 			}
 		case "or":
-			//get the bigger one of two children, and tune it up a little bit
-			var sel float64
 			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], s)
 			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], s)
-			if math.Abs(sel1-sel2) < 0.001 {
-				sel = sel1 + sel2
-			} else {
-				sel = math.Max(sel1, sel2) * 1.5
-			}
-			if sel > 1 {
-				return 1
-			} else {
-				return sel
-			}
+			return orSelectivity(sel1, sel2)
+		case "like":
+			return 0.2
 		default:
-			//no good way to estimate, just 0.15*cost
 			return 0.15
 		}
 	case *plan.Expr_C:
 		return 1
 	}
-
 	return 1
 }
 
@@ -709,4 +695,18 @@ func andSelectivity(s1, s2 float64) float64 {
 		return s1 * s2
 	}
 	return math.Min(s1, s2) * math.Max(math.Pow(s1, s2), math.Pow(s2, s1))
+}
+
+func orSelectivity(s1, s2 float64) float64 {
+	var s float64
+	if math.Abs(s1-s2) < 0.001 && s1 < 0.2 {
+		s = s1 + s2
+	} else {
+		s = math.Max(s1, s2) * 1.5
+	}
+	if s > 1 {
+		return 1
+	} else {
+		return s
+	}
 }
