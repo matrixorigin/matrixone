@@ -64,17 +64,7 @@ func (tbl *txnTable) Stats(ctx context.Context, statsInfoMap any) bool {
 
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	tbl.db.txn.Lock()
-	for _, entry := range tbl.db.txn.writes {
-		if entry.databaseId != tbl.db.databaseId {
-			continue
-		}
-		if entry.tableId != tbl.tableId {
-			continue
-		}
-		writes = append(writes, entry)
-	}
-	tbl.db.txn.Unlock()
+	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
 
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
@@ -263,18 +253,10 @@ func (tbl *txnTable) reset(newId uint64) {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]byte, err error) {
 	tbl.db.txn.DumpBatch(false, 0)
-	tbl.db.txn.Lock()
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = len(tbl.db.txn.writes)
 
-	// get all writes for this table from the current transaction
-	for i, entry := range tbl.db.txn.writes {
-		if entry.databaseId != tbl.db.databaseId || entry.tableId != tbl.tableId {
-			continue
-		}
-		tbl.writes = append(tbl.writes, tbl.db.txn.writes[i])
-	}
-	tbl.db.txn.Unlock()
+	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
 
 	// make sure we have the block infos snapshot
 	if err = tbl.updateBlockInfos(ctx); err != nil {
