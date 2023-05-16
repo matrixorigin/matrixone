@@ -17,8 +17,8 @@ package frontend
 import (
 	"context"
 	"github.com/fagongzi/goetty/v2"
-	"github.com/sasha-s/go-deadlock"
 	"go.uber.org/zap"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -51,7 +51,7 @@ type internalMiniExec interface {
 }
 
 type internalExecutor struct {
-	deadlock.Mutex
+	sync.Mutex
 	proto        *internalProtocol
 	executor     internalMiniExec // MySqlCmdExecutor struct impls miniExec
 	pu           *config.ParameterUnit
@@ -199,7 +199,7 @@ func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions)
 var _ MysqlProtocol = &internalProtocol{}
 
 type internalProtocol struct {
-	deadlock.Mutex
+	sync.Mutex
 	stashResult bool
 	result      *internalExecResult
 	database    string

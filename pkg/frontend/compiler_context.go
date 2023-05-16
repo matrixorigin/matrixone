@@ -30,8 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/sasha-s/go-deadlock"
 	"strconv"
+	"sync"
 )
 
 type TxnCompilerContext struct {
@@ -42,7 +42,7 @@ type TxnCompilerContext struct {
 	buildAlterView       bool
 	dbOfView, nameOfView string
 	sub                  *plan.SubscriptionMeta
-	mu                   deadlock.Mutex
+	mu                   sync.Mutex
 }
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}

@@ -17,11 +17,11 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/sasha-s/go-deadlock"
 	"math"
 	bits2 "math/bits"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -806,7 +806,7 @@ func (sv SystemVariable) GetDefault() interface{} {
 }
 
 type GlobalSystemVariables struct {
-	mu deadlock.Mutex
+	mu sync.Mutex
 	// name -> value/default
 	sysVars map[string]interface{}
 }

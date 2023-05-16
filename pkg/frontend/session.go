@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/sasha-s/go-deadlock"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -134,7 +134,7 @@ type Session struct {
 
 	debugStr string
 
-	mu deadlock.Mutex
+	mu sync.Mutex
 
 	flag         bool
 	lastInsertID uint64

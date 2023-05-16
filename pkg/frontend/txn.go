@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/sasha-s/go-deadlock"
+	"sync"
 )
 
 type TxnHandler struct {
@@ -42,8 +42,8 @@ type TxnHandler struct {
 	// default 24 hours.
 	txnCtx       context.Context
 	txnCtxCancel context.CancelFunc
-	mu           deadlock.Mutex
-	entryMu      deadlock.Mutex
+	mu           sync.Mutex
+	entryMu      sync.Mutex
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {

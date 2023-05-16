@@ -20,12 +20,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/sasha-s/go-deadlock"
 	"io"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -120,7 +120,7 @@ type MysqlCmdExecutor struct {
 
 	doQueryFunc doComQueryFunc
 
-	mu deadlock.Mutex
+	mu sync.Mutex
 }
 
 func NewMysqlCmdExecutor() *MysqlCmdExecutor {

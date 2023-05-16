@@ -20,7 +20,6 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"github.com/sasha-s/go-deadlock"
 	"math"
 	"reflect"
 	"strconv"
@@ -54,7 +53,7 @@ import (
 )
 
 type TestRoutineManager struct {
-	rwlock  deadlock.Mutex
+	rwlock  sync.Mutex
 	clients map[goetty.IOSession]*Routine
 
 	pu *config.ParameterUnit

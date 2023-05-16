@@ -17,8 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/sasha-s/go-deadlock"
 	"math"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -193,7 +193,7 @@ type Protocol interface {
 }
 
 type ProtocolImpl struct {
-	m deadlock.Mutex
+	m sync.Mutex
 
 	io IOPackage
 

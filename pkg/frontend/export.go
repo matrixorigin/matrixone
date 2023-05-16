@@ -25,11 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/sasha-s/go-deadlock"
 	"golang.org/x/sync/errgroup"
 	"io"
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -84,7 +84,7 @@ var escape byte = '"'
 
 type CloseExportData struct {
 	stopExportData chan interface{}
-	onceClose      deadlock.Once
+	onceClose      sync.Once
 }
 
 func NewCloseExportData() *CloseExportData {
