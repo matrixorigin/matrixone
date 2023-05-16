@@ -242,9 +242,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	defer func() {
 		logutil.Debugf("resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 	}()
-	var rt *Routine
-
-	rt = rm.deleteRoutine(rs)
+	rt := rm.deleteRoutine(rs)
 
 	if rt != nil {
 		ses := rt.getSession()
@@ -264,7 +262,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 }
 
-func (rm *RoutineManager) getRoutineById(id uint64) *Routine{
+func (rm *RoutineManager) getRoutineById(id uint64) *Routine {
 	var rt *Routine = nil
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
@@ -283,8 +281,7 @@ if killConnection is true, the query will be canceled first, then the network wi
 if killConnection is false, only the query will be canceled. the connection keeps intact.
 */
 func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
-	var rt *Routine = nil
-	rt =  rm.getRoutineById(id)
+	rt := rm.getRoutineById(id)
 
 	killMyself := idThatKill == id
 	if rt != nil {
