@@ -240,7 +240,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		eng.EXPECT().Hints().Return(hints).AnyTimes()
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil), gSysVars, false, nil)
+		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil), gSysVars, false)
 		session.SetRequestContext(context.Background())
 		session.SetConnectContext(context.Background())
 		return session
@@ -291,7 +291,7 @@ func TestVariables(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).AnyTimes()
-		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil), gSysVars, true, nil)
+		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, txnClient, nil), gSysVars, true)
 		session.SetRequestContext(context.Background())
 		return session
 	}
@@ -566,7 +566,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		session := NewSession(proto, nil, pu, gSysVars, false, nil)
+		session := NewSession(proto, nil, pu, gSysVars, false)
 		session.SetRequestContext(context.Background())
 		session.SetConnectContext(context.Background())
 		return session
@@ -644,7 +644,7 @@ func TestSession_GetTempTableStorage(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		session := NewSession(proto, nil, pu, gSysVars, false, nil)
+		session := NewSession(proto, nil, pu, gSysVars, false)
 		session.SetRequestContext(context.Background())
 		session.SetConnectContext(context.Background())
 		return session
@@ -675,7 +675,7 @@ func TestIfInitedTempEngine(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		session := NewSession(proto, nil, pu, gSysVars, false, nil)
+		session := NewSession(proto, nil, pu, gSysVars, false)
 		session.SetRequestContext(context.Background())
 		return session
 	}
@@ -703,7 +703,7 @@ func TestSetTempTableStorage(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		session := NewSession(proto, nil, pu, gSysVars, false, nil)
+		session := NewSession(proto, nil, pu, gSysVars, false)
 		session.SetRequestContext(context.Background())
 		return session
 	}

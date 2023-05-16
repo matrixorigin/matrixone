@@ -55,7 +55,7 @@ type TaskScheduler interface {
 
 	// Create an asynchronous task that executes a single time, this method is idempotent, the
 	// same task is not created repeatedly based on multiple calls.
-	Create(context.Context, []task.TaskMetadata) error
+	Create(context.Context, []task.TaskMetadata, bool) error
 
 	// StartScheduleCronTask start schedule cron tasks. A timer will be started to pull the latest CronTask
 	// from the TaskStore at regular intervals, and a timer will be maintained in memory for all Cron's to be

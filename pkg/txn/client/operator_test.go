@@ -368,10 +368,6 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
 		assert.False(t, tc2.option.coordinator)
 		tc2.option.coordinator = true
-		tc.option.updateLastCommitTSFunc = nil
-		tc2.option.updateLastCommitTSFunc = nil
-		tc.option.closeFunc = nil
-		tc2.option.closeFunc = nil
 		assert.Equal(t, tc.option, tc2.option)
 		assert.Equal(t, 1, len(tc2.mu.lockTables))
 	}, WithTxnReadyOnly(), WithTxnDisable1PCOpt())
@@ -426,13 +422,13 @@ func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *test
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	ts := newTestTxnSender()
-	c := NewTxnClient(ts)
-	txn, err := c.New(ctx, newTestTimestamp(0), options...)
-	assert.Nil(t, err)
-
-	tc(ctx, txn.(*txnOperator), ts)
+	RunTxnTests(func(
+		c TxnClient,
+		ts rpc.TxnSender) {
+		txn, err := c.New(ctx, newTestTimestamp(0), options...)
+		assert.Nil(t, err)
+		tc(ctx, txn.(*txnOperator), ts.(*testTxnSender))
+	})
 }
 
 func newDNRequest(op uint32, dn uint64) txn.TxnRequest {
