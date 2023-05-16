@@ -281,7 +281,7 @@ func (n *MVCCHandle) CollectAppendLocked(
 	return
 }
 
-func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap *roaring.Bitmap) {
+func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap, deletes *roaring.Bitmap) {
 	n.RLock()
 	defer n.RUnlock()
 	if n.deletes.IsEmpty() {
@@ -313,6 +313,10 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 				}
 				for it.HasNext() {
 					row := it.Next()
+					if deletes == nil {
+						deletes = roaring.New()
+					}
+					deletes.Add(row)
 					rowIDVec.Append(model.EncodePhyAddrKeyWithPrefix(prefix, row), false)
 					commitTSVec.Append(node.GetEnd(), false)
 					abortVec.Append(node.IsAborted(), false)
