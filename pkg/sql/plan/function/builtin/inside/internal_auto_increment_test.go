@@ -64,7 +64,7 @@ func TestInternalAutoIncrement(t *testing.T) {
 			table.EXPECT().TableDefs(gomock.Any()).Return(buildTableDefs(columnNames, columnTypes), nil).AnyTimes()
 			table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 			table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-			table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+			table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(false).AnyTimes()
 			table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return([]engine.Reader{nil}, nil).AnyTimes()
 			table.EXPECT().GetTableID(gomock.Any()).Return(tableID).AnyTimes()
 			table.EXPECT().Rows(gomock.Any()).Return(int64(10), nil).AnyTimes()

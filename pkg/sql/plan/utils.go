@@ -1025,12 +1025,20 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	bat.Zs = []int64{1}
 	for i, expr := range exprList {
 		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
-		if tmpexpr != nil {
-			expr = tmpexpr
-		}
-		newExprList[i] = expr
+		newExprList[i] = tmpexpr
 	}
 	return colexec.RewriteFilterExprList(newExprList)
+}
+
+func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnName(tableDef, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
+	}
 }
 
 // this function will be deleted soon

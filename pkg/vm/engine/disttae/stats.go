@@ -147,37 +147,25 @@ func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, table
 func CalcStats(
 	ctx context.Context,
 	blocks [][]catalog.BlockInfo,
-	expr *plan.Expr,
 	tableDef *plan.TableDef,
 	proc *process.Process,
 	s *plan2.StatsInfoMap,
-) (stats *plan.Stats, err error) {
+) bool {
 	var blockNumTotal int
 
 	for i := range blocks {
 		blockNumTotal += len(blocks[i])
 	}
 	if blockNumTotal == 0 {
-		return plan2.DefaultStats(), nil
+		return false
 	}
 
 	if s.NeedUpdate(blockNumTotal) {
 		info, err := getInfoFromZoneMap(ctx, blocks, tableDef, proc)
 		if err != nil {
-			return plan2.DefaultStats(), nil
+			return false
 		}
 		plan2.UpdateStatsInfoMap(info, blockNumTotal, tableDef, s)
 	}
-
-	stats = new(plan.Stats)
-	stats.TableCnt = s.TableCnt
-	if expr != nil {
-		stats.Outcnt = plan2.EstimateOutCnt(expr, s)
-	} else {
-		stats.Outcnt = stats.TableCnt
-	}
-	stats.Selectivity = stats.Outcnt / stats.TableCnt
-	stats.Cost = stats.TableCnt
-	stats.BlockNum = int32(stats.Outcnt/8192 + 1)
-	return stats, nil
+	return true
 }
