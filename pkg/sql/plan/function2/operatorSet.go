@@ -609,7 +609,7 @@ func operatorOpIsNull(parameters []*vector.Vector, result vector.FunctionResultW
 	}
 
 	null := parameters[0].GetNulls()
-	if !null.Any() {
+	if null.IsEmpty() {
 		for i := uint64(0); i < uint64(length); i++ {
 			if err := rs.Append(false, false); err != nil {
 				return err

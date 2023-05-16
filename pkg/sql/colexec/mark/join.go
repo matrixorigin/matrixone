@@ -346,13 +346,19 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 	if err != nil {
 		return condUnkown, err
 	}
-	bs := vector.MustFixedCol[bool](vec)
-	for _, b := range bs {
-		if b {
+
+	bs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+	j := uint64(vec.Length())
+	hasNull := false
+	for i := uint64(0); i < j; i++ {
+		b, null := bs.GetValue(i)
+		if null {
+			hasNull = true
+		} else if b {
 			return condTrue, nil
 		}
 	}
-	if nulls.Any(vec.GetNulls()) {
+	if hasNull {
 		return condUnkown, nil
 	}
 	return condFalse, nil

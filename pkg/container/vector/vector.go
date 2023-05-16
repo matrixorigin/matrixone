@@ -1706,7 +1706,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			}
 			ws := MustFixedCol[uint32](w)
 			if w.IsConst() {
-				return appendOneFixed(v, ws[0], false, mp)
+				return SetConstFixed(v, ws[0], length, mp)
 			}
 			return SetConstFixed(v, ws[sel], length, mp)
 		}
@@ -2262,6 +2262,7 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 	vec.class = CONSTANT
 	col := vec.col.([]T)
 	col[0] = val
+	vec.data = vec.data[:vec.Capacity()]
 	vec.SetLength(length)
 	return nil
 }

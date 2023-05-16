@@ -68,7 +68,7 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vect
 			scalarValue:  cols[0],
 		}
 	}
-	if !v.nsp.EmptyByFlag() {
+	if !v.nsp.IsEmpty() {
 		return &FunctionParameterNormal[T]{
 			typ:          *t,
 			sourceVector: v,

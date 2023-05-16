@@ -157,10 +157,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		hasTrue := false
 		hasNull := false
 		if vec.IsConst() {
-			if vec.IsConstNull() {
+			v, null := rs.GetValue(0)
+			if null {
 				hasNull = true
 			} else {
-				hasTrue, _ = rs.GetValue(0)
+				hasTrue = v
 			}
 		} else {
 			for j := uint64(0); j < uint64(vec.Length()); j++ {
