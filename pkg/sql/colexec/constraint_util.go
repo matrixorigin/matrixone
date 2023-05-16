@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -110,9 +111,15 @@ func FilterAndUpdateByRowId(
 
 			// fill auto incr column
 			if info.HasAutoCol {
-				if err = UpdateInsertBatch(proc, tableDef.Cols, updateBatch, uint64(ref[i].Obj), ref[i].SchemaName, tableDef.Name); err != nil {
+				lastInsertID, err := incrservice.GetAutoIncrementService().
+					InsertValues(
+						proc.Ctx,
+						tableDef.TblId,
+						updateBatch)
+				if err != nil {
 					return 0, err
 				}
+				proc.SetLastInsertID(lastInsertID)
 			}
 
 			// check new rows not null
