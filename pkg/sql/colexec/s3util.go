@@ -236,6 +236,9 @@ func (w *S3Writer) ResetMetaLocBat(proc *process.Process) {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
+	if w.metaLocBat != nil {
+		w.metaLocBat.Clean(proc.GetMPool())
+	}
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
 	metaLocBat := batch.NewWithSize(len(attrs))
 	metaLocBat.Attrs = attrs
