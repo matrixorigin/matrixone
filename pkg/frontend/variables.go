@@ -1283,6 +1283,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("net_buffer_length", 1024, 1048576, false),
 		Default:           16384,
 	},
+	"default_account": {
+		Name:              "default_account",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("default_account"),
+		Default:           "",
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
