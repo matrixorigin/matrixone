@@ -32,7 +32,6 @@ import (
 type MockCompilerContext struct {
 	objects         map[string]*ObjectRef
 	tables          map[string]*TableDef
-	stats           map[string]*Stats
 	pks             map[string][]int
 	id2name         map[uint64]string
 	isDml           bool
@@ -720,7 +719,6 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		objects: objects,
 		tables:  tables,
 		id2name: id2name,
-		stats:   stats,
 		pks:     pks,
 		ctx:     context.TODO(),
 	}
@@ -790,8 +788,8 @@ func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) 
 	return defs
 }
 
-func (m *MockCompilerContext) Stats(obj *ObjectRef, e *Expr) *Stats {
-	return m.stats[obj.ObjName]
+func (m *MockCompilerContext) Stats(obj *ObjectRef) bool {
+	return false
 }
 
 func (m *MockCompilerContext) GetStatsCache() *StatsCache {

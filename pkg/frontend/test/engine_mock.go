@@ -73,18 +73,17 @@ func (mr *MockStatisticsMockRecorder) Size(ctx, columnName interface{}) *gomock.
 }
 
 // Stats mocks base method.
-func (m *MockStatistics) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
+func (m *MockStatistics) Stats(ctx context.Context, statsInfoMap any) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", ctx, expr, statsInfoMap)
-	ret0, _ := ret[0].(*plan.Stats)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret := m.ctrl.Call(m, "Stats", ctx, statsInfoMap)
+	ret0, _ := ret[0].(bool)
+	return ret0
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockStatisticsMockRecorder) Stats(ctx, expr, statsInfoMap interface{}) *gomock.Call {
+func (mr *MockStatisticsMockRecorder) Stats(ctx, statsInfoMap interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockStatistics)(nil).Stats), ctx, expr, statsInfoMap)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockStatistics)(nil).Stats), ctx, statsInfoMap)
 }
 
 // MockTableDef is a mock of TableDef interface.
@@ -385,18 +384,17 @@ func (mr *MockRelationMockRecorder) Size(ctx, columnName interface{}) *gomock.Ca
 }
 
 // Stats mocks base method.
-func (m *MockRelation) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
+func (m *MockRelation) Stats(ctx context.Context, statsInfoMap any) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", ctx, expr, statsInfoMap)
-	ret0, _ := ret[0].(*plan.Stats)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret := m.ctrl.Call(m, "Stats", ctx, statsInfoMap)
+	ret0, _ := ret[0].(bool)
+	return ret0
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockRelationMockRecorder) Stats(ctx, expr, statsInfoMap interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Stats(ctx, statsInfoMap interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockRelation)(nil).Stats), ctx, expr, statsInfoMap)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockRelation)(nil).Stats), ctx, statsInfoMap)
 }
 
 // TableColumns mocks base method.
