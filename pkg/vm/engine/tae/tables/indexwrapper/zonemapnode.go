@@ -20,7 +20,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -28,16 +27,19 @@ import (
 type ZmReader struct {
 	metaLoc objectio.Location
 	seqnum  uint16
-	reader  *blockio.BlockReader
+	fs      *objectio.ObjectFS
 	cache   atomic.Pointer[index.ZM]
 }
 
-func NewZmReader(fs *objectio.ObjectFS, idx uint16, metaLoc objectio.Location) *ZmReader {
-	reader, _ := blockio.NewObjectReader(fs.Service, metaLoc)
+func NewZmReader(
+	fs *objectio.ObjectFS,
+	idx uint16,
+	metaLoc objectio.Location,
+) *ZmReader {
 	return &ZmReader{
 		metaLoc: metaLoc,
 		seqnum:  idx,
-		reader:  reader,
+		fs:      fs,
 	}
 }
 
@@ -46,12 +48,11 @@ func (r *ZmReader) getZoneMap() (*index.ZM, error) {
 	if cached != nil {
 		return cached, nil
 	}
-	zmList, err := r.reader.LoadZoneMaps(context.Background(), []uint16{r.seqnum}, r.metaLoc.ID(), nil)
+	meta, err := objectio.FastLoadObjectMeta(context.Background(), &r.metaLoc, r.fs.Service)
 	if err != nil {
-		// TODOa: Error Handling?
 		return nil, err
 	}
-	zm := zmList[0].Clone()
+	zm := meta.GetBlockMeta(uint32(r.metaLoc.ID())).MustGetColumn(r.seqnum).ZoneMap().Clone()
 	r.cache.Store(&zm)
 	return &zm, err
 }
