@@ -420,7 +420,7 @@ func evalFilterExprWithZonemap(
 	columnMap map[int]int,
 	proc *process.Process,
 ) (selected bool) {
-	return colexec.EvaluateFilterByZoneMap(proc, expr, meta, columnMap, zms, vecs)
+	return colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
 }
 
 /* used by multi-dn

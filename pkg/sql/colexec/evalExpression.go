@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -610,7 +611,108 @@ func SetJoinBatchValues(joinBat, bat *batch.Batch, sel int64, length int,
 
 var noColumnBatchForZoneMap = []*batch.Batch{batch.NewWithSize(0)}
 
+func getConstZM(
+	ctx context.Context,
+	expr *plan.Expr,
+	proc *process.Process,
+) (zm index.ZM, err error) {
+	c := expr.Expr.(*plan.Expr_C)
+	if c.C.GetIsnull() {
+		zm = index.NewZM(types.T(expr.Typ.Id), expr.Typ.Scale)
+		return
+	}
+	switch c.C.GetValue().(type) {
+	case *plan.Const_Bval:
+		zm = index.NewZM(constBType.Oid, 0)
+		v := c.C.GetBval()
+		index.UpdateZM(zm, types.EncodeBool(&v))
+	case *plan.Const_I8Val:
+		zm = index.NewZM(constI8Type.Oid, 0)
+		v := int8(c.C.GetI8Val())
+		index.UpdateZM(zm, types.EncodeInt8(&v))
+	case *plan.Const_I16Val:
+		zm = index.NewZM(constI16Type.Oid, 0)
+		v := int16(c.C.GetI16Val())
+		index.UpdateZM(zm, types.EncodeInt16(&v))
+	case *plan.Const_I32Val:
+		zm = index.NewZM(constI32Type.Oid, 0)
+		v := c.C.GetI32Val()
+		index.UpdateZM(zm, types.EncodeInt32(&v))
+	case *plan.Const_I64Val:
+		zm = index.NewZM(constI64Type.Oid, 0)
+		v := c.C.GetI64Val()
+		index.UpdateZM(zm, types.EncodeInt64(&v))
+	case *plan.Const_U8Val:
+		zm = index.NewZM(constU8Type.Oid, 0)
+		v := uint8(c.C.GetU8Val())
+		index.UpdateZM(zm, types.EncodeUint8(&v))
+	case *plan.Const_U16Val:
+		zm = index.NewZM(constU16Type.Oid, 0)
+		v := uint16(c.C.GetU16Val())
+		index.UpdateZM(zm, types.EncodeUint16(&v))
+	case *plan.Const_U32Val:
+		zm = index.NewZM(constU32Type.Oid, 0)
+		v := c.C.GetU32Val()
+		index.UpdateZM(zm, types.EncodeUint32(&v))
+	case *plan.Const_U64Val:
+		zm = index.NewZM(constU64Type.Oid, 0)
+		v := c.C.GetU64Val()
+		index.UpdateZM(zm, types.EncodeUint64(&v))
+	case *plan.Const_Fval:
+		zm = index.NewZM(constFType.Oid, 0)
+		v := c.C.GetFval()
+		index.UpdateZM(zm, types.EncodeFloat32(&v))
+	case *plan.Const_Dval:
+		zm = index.NewZM(constDType.Oid, 0)
+		v := c.C.GetDval()
+		index.UpdateZM(zm, types.EncodeFloat64(&v))
+	case *plan.Const_Dateval:
+		zm = index.NewZM(constDateType.Oid, 0)
+		v := c.C.GetDateval()
+		index.UpdateZM(zm, types.EncodeInt32(&v))
+	case *plan.Const_Timeval:
+		zm = index.NewZM(constTimeType.Oid, 0)
+		v := c.C.GetTimeval()
+		index.UpdateZM(zm, types.EncodeInt64(&v))
+	case *plan.Const_Datetimeval:
+		zm = index.NewZM(constDatetimeType.Oid, 0)
+		v := c.C.GetDatetimeval()
+		index.UpdateZM(zm, types.EncodeInt64(&v))
+	case *plan.Const_Decimal64Val:
+		v := c.C.GetDecimal64Val()
+		zm = index.NewZM(types.T_decimal64, expr.Typ.Scale)
+		d64 := types.Decimal64(v.A)
+		index.UpdateZM(zm, types.EncodeDecimal64(&d64))
+	case *plan.Const_Decimal128Val:
+		v := c.C.GetDecimal128Val()
+		zm = index.NewZM(types.T_decimal128, expr.Typ.Scale)
+		d128 := types.Decimal128{B0_63: uint64(v.A), B64_127: uint64(v.B)}
+		index.UpdateZM(zm, types.EncodeDecimal128(&d128))
+	case *plan.Const_Timestampval:
+		v := c.C.GetTimestampval()
+		scale := expr.Typ.Scale
+		if scale < 0 || scale > 6 {
+			err = moerr.NewInternalError(proc.Ctx, "invalid timestamp scale")
+			return
+		}
+		zm = index.NewZM(constTimestampTypes[0].Oid, scale)
+		index.UpdateZM(zm, types.EncodeInt64(&v))
+	case *plan.Const_Sval:
+		zm = index.NewZM(constSType.Oid, 0)
+		v := c.C.GetSval()
+		index.UpdateZM(zm, []byte(v))
+	case *plan.Const_Defaultval:
+		zm = index.NewZM(constBType.Oid, 0)
+		v := c.C.GetDefaultval()
+		index.UpdateZM(zm, types.EncodeBool(&v))
+	default:
+		err = moerr.NewNYI(ctx, fmt.Sprintf("const expression %v", c.C.GetValue()))
+	}
+	return
+}
+
 func EvaluateFilterByZoneMap(
+	ctx context.Context, // why we need a context here, to escape trace?
 	proc *process.Process,
 	expr *plan.Expr,
 	meta objectio.ColumnMetaFetcher,
@@ -638,7 +740,7 @@ func EvaluateFilterByZoneMap(
 		return false
 	}
 
-	zm := evaluateFilterByZoneMap(proc, expr, meta, columnMap, zms, vecs)
+	zm := evaluateFilterByZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
 	if !zm.IsInited() || zm.GetType() != types.T_bool {
 		selected = true
 	} else {
@@ -648,6 +750,7 @@ func EvaluateFilterByZoneMap(
 }
 
 func evaluateFilterByZoneMap(
+	ctx context.Context,
 	proc *process.Process,
 	expr *plan.Expr,
 	meta objectio.ColumnMetaFetcher,
@@ -659,7 +762,7 @@ func evaluateFilterByZoneMap(
 	switch t := expr.Expr.(type) {
 	case *plan.Expr_C:
 		if zms[expr.AuxId] == nil {
-			if zms[expr.AuxId], err = getConstZM(proc.Ctx, expr, proc); err != nil {
+			if zms[expr.AuxId], err = getConstZM(ctx, expr, proc); err != nil {
 				zms[expr.AuxId] = objectio.NewZM(types.T_bool, 0)
 			}
 		}
@@ -669,13 +772,13 @@ func evaluateFilterByZoneMap(
 
 	case *plan.Expr_F:
 		id := t.F.GetFunc().GetObj()
-		if overload, errGetFunc := function2.GetFunctionById(proc.Ctx, id); errGetFunc != nil {
+		if overload, errGetFunc := function2.GetFunctionById(ctx, id); errGetFunc != nil {
 			zms[expr.AuxId].Reset()
 
 		} else {
 			args := t.F.Args
 			for _, arg := range args {
-				zms[arg.AuxId] = evaluateFilterByZoneMap(proc, arg, meta, columnMap, zms, vecs)
+				zms[arg.AuxId] = evaluateFilterByZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
 				if !zms[arg.AuxId].IsInited() {
 					zms[expr.AuxId].Reset()
 				}

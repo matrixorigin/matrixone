@@ -61,6 +61,9 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 				proc.Ctx,
 				tableId,
 				autoIncrCol)
+			if err != nil {
+				return err
+			}
 			if err = rs.Append(autoIncrement, false); err != nil {
 				return err
 			}
