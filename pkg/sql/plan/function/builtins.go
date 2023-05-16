@@ -18,10 +18,8 @@ import (
 	"context"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/ctl"
@@ -30,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/seq"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/unary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func initBuiltIns() {

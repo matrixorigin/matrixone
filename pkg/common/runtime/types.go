@@ -28,6 +28,10 @@ const (
 	LockService = "lock-service"
 	// CtlService ctl service
 	CtlService = "ctl-service"
+	// AutoIncrmentService auto increment service
+	AutoIncrmentService = "auto-increment-service"
+	// HAKeeperClient hakeeper client
+	HAKeeperClient = "hakeeper-client"
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"
 	// TxnMode runtime default txn mode
