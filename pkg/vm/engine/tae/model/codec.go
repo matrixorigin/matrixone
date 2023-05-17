@@ -18,13 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func EncodePhyAddrKeyWithPrefix(prefix []byte, offset uint32) types.Rowid {
-	var rowid types.Rowid
-	copy(rowid[:], prefix)
-	copy(rowid[types.BlockidSize:], types.EncodeUint32(&offset))
-	return rowid
-}
-
 func DecodePhyAddrKeyFromValue(v any) (blockId types.Blockid, offset uint32) {
 	rowid := v.(types.Rowid)
 	return DecodePhyAddrKey(&rowid)
