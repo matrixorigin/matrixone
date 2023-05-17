@@ -3339,6 +3339,14 @@ var builtins = map[int]Functions{
 					for i := uint64(0); i < uint64(length); i++ {
 						flag, isNull := checkFlags.GetValue(i)
 						if isNull || !flag {
+							if parameters[1].GetType().Oid == types.T_varchar && parameters[1].GetType().Width == types.MaxVarcharLen {
+								bytes := parameters[1].GetBytesAt(int(i))
+								tuples, _, err := types.DecodeTuple(bytes)
+								if err == nil {
+									errMsg := tuples.ErrString()
+									return moerr.NewDuplicateEntry(proc.Ctx, errMsg, parameters[2].GetStringAt(int(i)))
+								}
+							}
 							return moerr.NewDuplicateEntry(proc.Ctx, parameters[1].GetStringAt(int(i)), parameters[2].GetStringAt(int(i)))
 						}
 						err := res.Append(true, false)
