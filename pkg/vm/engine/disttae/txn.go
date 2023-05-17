@@ -300,8 +300,8 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	cnRowIdOffsets := make([]int64, 0, len(rowids))
 	for i, rowid := range rowids {
 		// process cn block deletes
-		uid := rowid.GetSegid()
-		blkid := *rowid.GetBlockid()
+		uid := rowid.BorrowSegmentID()
+		blkid := rowid.CloneBlockID()
 		deleteBlkId[blkid] = true
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
@@ -346,11 +346,11 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 				continue
 			}
 			// skip 2 above
-			if !vs[0].GetSegid().Eq(txn.segId) {
+			if !vs[0].BorrowSegmentID().Eq(txn.segId) {
 				continue
 			}
 			// current batch is not be deleted
-			if !deleteBlkId[*vs[0].GetBlockid()] {
+			if !deleteBlkId[vs[0].CloneBlockID()] {
 				continue
 			}
 			min2 := vs[0].GetRowOffset()
@@ -399,7 +399,7 @@ func (txn *Transaction) genBlock() {
 
 func (txn *Transaction) getCurrentBlockId() *types.Blockid {
 	rowId := types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
-	return rowId.GetBlockid()
+	return rowId.BorrowBlockID()
 }
 
 func (txn *Transaction) genRowId() types.Rowid {
