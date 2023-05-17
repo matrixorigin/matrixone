@@ -77,16 +77,11 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
-	errChan := make(chan error, len(s.PreScopes))
-	for _, scope := range s.PreScopes {
-		switch scope.Magic {
-		case Merge:
-			go func(s *Scope) {
-				errChan <- s.MergeRun(c)
-			}(scope)
+	if s.Plan.AttachedPlan != nil {
+		if err := c.runPlan(s.Plan.AttachedPlan); err != nil {
+			return err
 		}
 	}
-
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
@@ -97,12 +92,6 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	err := c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
-	}
-
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -151,28 +140,11 @@ func (s *Scope) AlterView(c *Compile) error {
 }
 
 func (s *Scope) AlterTable(c *Compile) error {
-	errChan := make(chan error, len(s.PreScopes))
-	for i := range s.PreScopes {
-		switch s.PreScopes[i].Magic {
-		case Merge:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.MergeRun(c)
-			}(s.PreScopes[i])
-			// case Update:
-			// 	go func(cs *Scope) {
-			// 		var err error
-			// 		defer func() {
-			// 			errChan <- err
-			// 		}()
-			// 		_, err = cs.Update(c)
-			// 	}(s.PreScopes[i])
+	if s.Plan.AttachedPlan != nil {
+		if err := c.runPlan(s.Plan.AttachedPlan); err != nil {
+			return err
 		}
 	}
-
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := c.db
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
@@ -418,12 +390,6 @@ func (s *Scope) AlterTable(c *Compile) error {
 		}
 		err = s.addRefChildTbl(c, fkRelation, tblId)
 		if err != nil {
-			return err
-		}
-	}
-
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
 			return err
 		}
 	}
@@ -765,20 +731,11 @@ func (s *Scope) CreateIndex(c *Compile) error {
 }
 
 func (s *Scope) DropIndex(c *Compile) error {
-	errChan := make(chan error, len(s.PreScopes))
-	for i := range s.PreScopes {
-		switch s.PreScopes[i].Magic {
-		case Merge:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.MergeRun(c)
-			}(s.PreScopes[i])
+	if s.Plan.AttachedPlan != nil {
+		if err := c.runPlan(s.Plan.AttachedPlan); err != nil {
+			return err
 		}
 	}
-
 	qry := s.Plan.GetDdl().GetDropIndex()
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
@@ -816,11 +773,6 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 		if err = d.Delete(c.ctx, qry.IndexTableName); err != nil {
-			return err
-		}
-	}
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
 			return err
 		}
 	}
@@ -1119,20 +1071,11 @@ func (s *Scope) DropSequence(c *Compile) error {
 }
 
 func (s *Scope) DropTable(c *Compile) error {
-	errChan := make(chan error, len(s.PreScopes))
-	for i := range s.PreScopes {
-		switch s.PreScopes[i].Magic {
-		case Merge:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				err = cs.MergeRun(c)
-			}(s.PreScopes[i])
+	if s.Plan.AttachedPlan != nil {
+		if err := c.runPlan(s.Plan.AttachedPlan); err != nil {
+			return err
 		}
 	}
-
 	qry := s.Plan.GetDdl().GetDropTable()
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
@@ -1226,12 +1169,6 @@ func (s *Scope) DropTable(c *Compile) error {
 			if err != nil {
 				return err
 			}
-		}
-	}
-
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
-			return err
 		}
 	}
 	return nil

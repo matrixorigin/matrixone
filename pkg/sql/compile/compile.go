@@ -295,18 +295,9 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_DROP_DATABASE:
-			var preScopes []*Scope
-			var err error
-			if pn.AttachedPlan != nil {
-				preScopes, err = c.compileAttachedScope(ctx, pn.AttachedPlan)
-				if err != nil {
-					return nil, err
-				}
-			}
 			return []*Scope{{
-				Magic:     DropDatabase,
-				Plan:      pn,
-				PreScopes: preScopes,
+				Magic: DropDatabase,
+				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return []*Scope{{
@@ -319,32 +310,14 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_ALTER_TABLE:
-			var preScopes []*Scope
-			var err error
-			if pn.AttachedPlan != nil {
-				preScopes, err = c.compileAttachedScope(ctx, pn.AttachedPlan)
-				if err != nil {
-					return nil, err
-				}
-			}
 			return []*Scope{{
-				Magic:     AlterTable,
-				Plan:      pn,
-				PreScopes: preScopes,
+				Magic: AlterTable,
+				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_DROP_TABLE:
-			var preScopes []*Scope
-			var err error
-			if pn.AttachedPlan != nil {
-				preScopes, err = c.compileAttachedScope(ctx, pn.AttachedPlan)
-				if err != nil {
-					return nil, err
-				}
-			}
 			return []*Scope{{
-				Magic:     DropTable,
-				Plan:      pn,
-				PreScopes: preScopes,
+				Magic: DropTable,
+				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
 			return []*Scope{{
@@ -367,18 +340,9 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_DROP_INDEX:
-			var preScopes []*Scope
-			var err error
-			if pn.AttachedPlan != nil {
-				preScopes, err = c.compileAttachedScope(ctx, pn.AttachedPlan)
-				if err != nil {
-					return nil, err
-				}
-			}
 			return []*Scope{{
-				Magic:     DropIndex,
-				Plan:      pn,
-				PreScopes: preScopes,
+				Magic: DropIndex,
+				Plan:  pn,
 			}}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
@@ -2582,4 +2546,15 @@ func (s *Scope) affectedRows() uint64 {
 		}
 	}
 	return affectedRows
+}
+
+// compile and run a plan - not a good way,  just for remove the hack code
+// the beast way is to run sql
+func (c *Compile) runPlan(pn *plan.Plan) error {
+	newC := New(c.addr, c.db, c.sql, c.tenant, c.uid, c.ctx, c.e,
+		c.proc, c.stmt, c.isInternal, c.cnLabel)
+	if err := newC.Compile(c.ctx, pn, nil, nil); err != nil {
+		return err
+	}
+	return newC.Run(0)
 }
