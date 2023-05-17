@@ -98,8 +98,6 @@ func (sender *messageSenderOnClient) send(
 	scopeData, procData []byte, messageType uint64) error {
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-		_ = cancel
 		message := cnclient.AcquireMessage()
 		message.SetID(sender.streamSender.ID())
 		message.SetMessageType(pipeline.PipelineMessage)
@@ -107,15 +105,12 @@ func (sender *messageSenderOnClient) send(
 		message.SetProcData(procData)
 		message.SetSequence(0)
 		message.SetSid(pipeline.Last)
-		return sender.streamSender.Send(timeoutCtx, message)
+		return sender.streamSender.Send(sender.ctx, message)
 	}
 
 	start := 0
 	cnt := uint64(0)
 	for start < sdLen {
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-		_ = cancel
-
 		end := start + maxMessageSizeToMoRpc
 
 		message := cnclient.AcquireMessage()
@@ -131,7 +126,7 @@ func (sender *messageSenderOnClient) send(
 			message.SetSid(pipeline.WaitingNext)
 		}
 
-		if err := sender.streamSender.Send(timeoutCtx, message); err != nil {
+		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
 		}
 		cnt++
