@@ -72,6 +72,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	lastNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
 	lastNode := builder.qry.Nodes[lastNodeId]
 	newCols := make([]*ColDef, 0, len(updatePlanCtx.tableDef.Cols))
+	oldRowIdPos := len(updatePlanCtx.tableDef.Cols) - 1
 	for _, col := range updatePlanCtx.tableDef.Cols {
 		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 			continue
@@ -79,7 +80,8 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		newCols = append(newCols, col)
 	}
 	updatePlanCtx.tableDef.Cols = newCols
-	projectProjection := make([]*Expr, len(updatePlanCtx.insertColPos)+1)
+	insertColLength := len(updatePlanCtx.insertColPos) + 1
+	projectProjection := make([]*Expr, insertColLength)
 	for i, idx := range updatePlanCtx.insertColPos {
 		name := ""
 		if col, ok := lastNode.ProjectList[idx].Expr.(*plan.Expr_Col); ok {
@@ -95,8 +97,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			},
 		}
 	}
-	oldRowIdPos := len(updatePlanCtx.insertColPos)
-	projectProjection[oldRowIdPos] = &plan.Expr{
+	projectProjection[insertColLength-1] = &plan.Expr{
 		Typ: lastNode.ProjectList[oldRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -922,7 +923,7 @@ func makeInsertPlan(
 					return err
 				}
 				colExpr := &Expr{
-					Typ: pkTyp,
+					Typ: rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							Name: rowIdDef.Name,
@@ -1232,9 +1233,9 @@ func getPkPos(tableDef *TableDef, ignoreFakePK bool) (int, *Type) {
 		return -1, nil
 	}
 	pkName := tableDef.Pkey.PkeyColName
-	if pkName == catalog.CPrimaryKeyColName {
-		return len(tableDef.Cols) - 1, makeHiddenColTyp()
-	}
+	// if pkName == catalog.CPrimaryKeyColName {
+	// 	return len(tableDef.Cols) - 1, makeHiddenColTyp()
+	// }
 	for i, col := range tableDef.Cols {
 		if col.Name == pkName {
 			if ignoreFakePK && col.Name == catalog.FakePrimaryKeyColName {
@@ -1448,7 +1449,6 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	}
 	if len(hiddenColumnTyp) > 0 {
 		for i, typ := range hiddenColumnTyp {
-
 			preInsertProjection = append(preInsertProjection, &plan.Expr{
 				Typ: typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{

@@ -236,19 +236,14 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 
 	var newCols []*ColDef
 	for _, col := range tableDef.Cols {
-		if col.Hidden {
-			if col.Name == catalog.Row_ID {
-				if tblInfo.typ != "insert" {
-					newCols = append(newCols, col)
-				}
-			} else if col.Name == catalog.FakePrimaryKeyColName {
+		if col.Hidden && tblInfo.typ == "insert" {
+			if col.Name == catalog.FakePrimaryKeyColName {
 				// fake pk is auto increment, need to fill.
 				// TODO(fagongzi): we need to use a separate tag to mark the columns
 				// for these behaviors, instead of using column names, which needs to
 				// be changed after 0.8
 				newCols = append(newCols, col)
 			}
-			// }
 		} else {
 			newCols = append(newCols, col)
 		}
@@ -509,8 +504,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		rightTableDef := DeepCopyTableDef(tableDef)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
 		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
-		rowIdCol := MakeRowIdColDef()
-		rightTableDef.Cols = append(rightTableDef.Cols, rowIdCol)
+		if rightTableDef.Pkey != nil && rightTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+			rightTableDef.Cols = append(rightTableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		}
+		if rightTableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(rightTableDef.ClusterBy.Name) {
+			rightTableDef.Cols = append(rightTableDef.Cols, MakeHiddenColDefByName(rightTableDef.ClusterBy.Name))
+		}
+		rightTableDef.Cols = append(rightTableDef.Cols, MakeRowIdColDef())
 		rightTableDef.Name2ColIndex = map[string]int32{}
 		for i, col := range rightTableDef.Cols {
 			rightTableDef.Name2ColIndex[col.Name] = int32(i)

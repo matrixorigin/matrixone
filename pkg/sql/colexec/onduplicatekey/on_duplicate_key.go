@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -96,23 +97,20 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	}
 
 	tableDef := insertArg.TableDef
-	columnCount := len(tableDef.Cols)
-	uniqueCols := plan2.GetUniqueColAndIdxFromTableDef(tableDef)
-	checkExpr, err := plan2.GenUniqueColCheckExpr(proc.Ctx, tableDef, uniqueCols)
-	if err != nil {
-		return err
-	}
-
+	insertColCount := 0 //columns without hidden columns
 	if insertArg.ctr.insertBat == nil {
 		attrs := make([]string, 0, len(originBatch.Vecs))
-		for i := 0; i < 2; i++ {
-			for j := 0; j < columnCount; j++ {
-				attrs = append(attrs, tableDef.Cols[j].Name)
+		for _, col := range tableDef.Cols {
+			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+				continue
 			}
+			attrs = append(attrs, col.Name)
+			insertColCount++
 		}
-		for i := len(attrs); i < len(originBatch.Vecs); i++ {
-			attrs = append(attrs, "")
+		for _, col := range tableDef.Cols {
+			attrs = append(attrs, col.Name)
 		}
+		attrs = append(attrs, catalog.Row_ID)
 		insertArg.ctr.insertBat = batch.NewWithSize(len(attrs))
 		insertArg.ctr.insertBat.Attrs = attrs
 
@@ -126,6 +124,18 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			ckVec := vector.NewVec(*v.GetType())
 			insertArg.ctr.checkConflictBat.SetVector(int32(i), ckVec)
 		}
+	} else {
+		for _, col := range tableDef.Cols {
+			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+				continue
+			}
+			insertColCount++
+		}
+	}
+	uniqueCols := plan2.GetUniqueColAndIdxFromTableDef(tableDef)
+	checkExpr, err := plan2.GenUniqueColCheckExpr(proc.Ctx, tableDef, uniqueCols, insertColCount)
+	if err != nil {
+		return err
 	}
 
 	insertBatch := insertArg.ctr.insertBat
@@ -143,7 +153,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		}
 
 		// check if uniqueness conflict found in checkConflictBatch
-		oldConflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpr, uniqueCols, columnCount)
+		oldConflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpr, uniqueCols, insertColCount)
 		if err != nil {
 			return err
 		}
@@ -157,20 +167,20 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				}
 			}
 
-			for j := 0; j < columnCount; j++ {
+			for j := 0; j < insertColCount; j++ {
 				fromVec := insertBatch.Vecs[j]
-				toVec := newBatch.Vecs[j+columnCount]
+				toVec := newBatch.Vecs[j+insertColCount]
 				err := toVec.Copy(fromVec, 0, int64(oldConflictIdx), proc.Mp())
 				if err != nil {
 					return err
 				}
 			}
-			newBatch, err := updateOldBatch(newBatch, updateExpr, proc, columnCount, attrs)
+			newBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
 			if err != nil {
 				return err
 			}
 			// update the oldConflictIdx of insertBatch by newBatch
-			for j := 0; j < columnCount; j++ {
+			for j := 0; j < insertColCount; j++ {
 				fromVec := newBatch.Vecs[j]
 				toVec := insertBatch.Vecs[j]
 				err := toVec.Copy(fromVec, int64(oldConflictIdx), 0, proc.Mp())
@@ -190,11 +200,11 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 				checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 			} else {
-				newBatch, err := updateOldBatch(newBatch, updateExpr, proc, columnCount, attrs)
+				newBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
 				if err != nil {
 					return err
 				}
-				conflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpr, uniqueCols, columnCount)
+				conflictIdx, conflictMsg, err := checkConflict(proc, newBatch, checkConflictBatch, checkExpr, uniqueCols, insertColCount)
 				if err != nil {
 					return err
 				}

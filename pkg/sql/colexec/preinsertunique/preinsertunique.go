@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -63,7 +62,7 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 
 	uniqueColumnPos := argument.PreInsertCtx.Columns
 	pkPos := int(argument.PreInsertCtx.PkColumn)
-	tableDef := argument.PreInsertCtx.TableDef
+	// tableDef := argument.PreInsertCtx.TableDef
 
 	var insertUniqueBat *batch.Batch
 	isUpdate := inputBat.Vecs[len(inputBat.Vecs)-1].GetType().Oid == types.T_Rowid
@@ -90,54 +89,19 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 	insertUniqueBat.SetVector(indexColPos, vec)
 	insertUniqueBat.SetZs(vec.Length(), proc.Mp())
 
+	vec = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
+	insertUniqueBat.SetVector(pkColPos, vec)
+
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
-		err := genCompositePrimaryKey(inputBat, proc, tableDef)
-		if err != nil {
-			insertUniqueBat.Clean(proc.GetMPool())
-			return false, err
-		}
-		if tableDef != nil || tableDef.Pkey.CompPkeyCol != nil {
-			pkPos = len(inputBat.Vecs) - 1
-		}
-		insertUniqueBat.SetVector(pkColPos, proc.GetVector(*inputBat.GetVector(int32(pkPos)).GetType()))
-		err = insertUniqueBat.Vecs[pkColPos].UnionBatch(inputBat.Vecs[pkPos], 0, inputBat.Vecs[pkPos].Length(), nil, proc.Mp())
-		if err != nil {
-			insertUniqueBat.Clean(proc.GetMPool())
-			return false, err
-		}
-
 		insertUniqueBat.SetVector(rowIdColPos, proc.GetVector(*inputBat.GetVector(int32(rowIdInBat)).GetType()))
-		err = insertUniqueBat.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
+		err := insertUniqueBat.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
 		if err != nil {
 			insertUniqueBat.Clean(proc.GetMPool())
 			return false, err
 		}
-	} else {
-		vec = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
-		insertUniqueBat.SetVector(pkColPos, vec)
 	}
 
 	proc.SetInputBatch(insertUniqueBat)
 	return false, nil
-}
-
-func genCompositePrimaryKey(bat *batch.Batch, proc *process.Process, tableDef *plan.TableDef) error {
-	// Check whether the composite primary key column is included
-	if tableDef.Pkey == nil || tableDef.Pkey.CompPkeyCol == nil {
-		return nil
-	}
-	var attrs []string
-	for _, col := range tableDef.Cols {
-		if col.Hidden {
-			if col.Name == catalog.Row_ID {
-				attrs = append(attrs, col.Name)
-			}
-		} else {
-			attrs = append(attrs, col.Name)
-		}
-	}
-	bat.Attrs = attrs
-
-	return util.FillCompositeKeyBatch(bat, catalog.CPrimaryKeyColName, tableDef.Pkey.Names, proc)
 }

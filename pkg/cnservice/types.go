@@ -47,7 +47,7 @@ var (
 	defaultListenAddress    = "127.0.0.1:6002"
 	defaultCtlListenAddress = "127.0.0.1:19958"
 	defaultTxnIsolation     = txn.TxnIsolation_RC
-	defaultTxnMode          = txn.TxnMode_Pessimistic
+	defaultTxnMode          = txn.TxnMode_Optimistic
 )
 
 type Service interface {

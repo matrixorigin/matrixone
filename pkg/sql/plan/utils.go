@@ -1524,9 +1524,8 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 // if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
 // we get batch like [1,2,3,4, origin_a, origin_b, origin_c, origin_d, row_id ....]。
 // we get expr like:  []*Expr{ 1=origin_a ,  (2 = origin_b and 3 = origin_c) }
-func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int) ([]*Expr, error) {
+func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, colCount int) ([]*Expr, error) {
 	checkExpr := make([]*Expr, len(uniqueCols))
-	colCount := len(tableDef.Cols)
 
 	for i, uniqueColMap := range uniqueCols {
 		var condExpr *Expr

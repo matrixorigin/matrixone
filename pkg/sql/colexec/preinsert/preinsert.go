@@ -64,7 +64,6 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	}
 	newBat.Zs = append(newBat.Zs, bat.Zs...)
 
-	// if !arg.IsUpdate {
 	if arg.HasAutoCol {
 		err := genAutoIncrCol(newBat, proc, arg)
 		if err != nil {
@@ -72,7 +71,6 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 			return false, err
 		}
 	}
-	// }
 
 	// check new rows not null
 	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)

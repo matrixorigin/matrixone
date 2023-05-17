@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Plan, err error) {
@@ -64,13 +65,20 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	objRef := tblInfo.objRef[0]
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
 		// append on duplicate key node
+		tableDef = DeepCopyTableDef(tableDef)
+		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+			tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+		}
+		if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+			tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+		}
 		dupProjection := getProjectionByLastNode(builder, lastNodeId)
 		onDuplicateKeyNode := &Node{
 			NodeType:    plan.Node_ON_DUPLICATE_KEY,
 			Children:    []int32{lastNodeId},
 			ProjectList: dupProjection,
 			OnDuplicateKey: &plan.OnDuplicateKeyCtx{
-				TableDef:        DeepCopyTableDef(tableDef),
+				TableDef:        tableDef,
 				OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
 				OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
 			},
@@ -78,12 +86,22 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		lastNodeId = builder.appendNode(onDuplicateKeyNode, bindCtx)
 
 		// append project node to make batch like update logic, not insert
-		updateColLength := len(tableDef.Cols)
-		projectProjection := make([]*Expr, updateColLength*2+1)
-		var insertColPos []int
+		updateColLength := 0
 		updateColPosMap := make(map[string]int)
+		var insertColPos []int
+		var projectProjection []*Expr
+		tableDef = DeepCopyTableDef(tableDef)
+		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
+		colLength := len(tableDef.Cols)
+		rowIdPos := colLength - 1
+		for _, col := range tableDef.Cols {
+			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+				continue
+			}
+			updateColLength++
+		}
 		for i, col := range tableDef.Cols {
-			projectProjection[i] = &plan.Expr{
+			projectProjection = append(projectProjection, &plan.Expr{
 				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
@@ -91,8 +109,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 						Name:   col.Name,
 					},
 				},
-			}
-			projectProjection[i+updateColLength+1] = &plan.Expr{
+			})
+		}
+		for i := 0; i < updateColLength; i++ {
+			col := tableDef.Cols[i]
+			projectProjection = append(projectProjection, &plan.Expr{
 				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
@@ -100,19 +121,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 						Name:   col.Name,
 					},
 				},
-			}
-			insertColPos = append(insertColPos, updateColLength+i+1)
-			updateColPosMap[col.Name] = updateColLength + i + 1
-		}
-		rowIdPos := updateColLength
-		projectProjection[updateColLength] = &plan.Expr{
-			Typ: dupProjection[len(dupProjection)-1].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: int32(len(dupProjection) - 1),
-					Name:   catalog.Row_ID,
-				},
-			},
+			})
+			updateColPosMap[col.Name] = colLength + i
+			insertColPos = append(insertColPos, colLength+i)
 		}
 		projectNode := &Node{
 			NodeType:    plan.Node_PROJECT,
@@ -126,7 +137,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		sourceStep = builder.appendStep(lastNodeId)
 
 		// append plans like update
-		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
 		updateBindCtx := NewBindContext(builder, nil)
 		upPlanCtx := &dmlPlanCtx{
 			objRef:          objRef,
