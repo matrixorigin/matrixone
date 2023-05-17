@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -460,7 +461,8 @@ func (seg *localSegment) Rows() (n uint32) {
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	if !seg.table.GetLocalSchema().HasPK() {
 		id = seg.table.entry.AsCommonID()
-		id.BlockID, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		rid := filter.Val.(types.Rowid)
+		id.BlockID, offset = rid.Decode()
 		return
 	}
 	id = seg.entry.AsCommonID()
