@@ -19,8 +19,11 @@ bucket = "mo-test"
 endpoint = "http://minio:9000"
 key-prefix = "server/data"
 
+[metacache]
+memory-capacity = "64MB"
+
 [fileservice.cache]
-memory-capacity = "512MB"
+memory-capacity = "256MB"
 disk-capacity = "8GB"
 disk-path = "mo-data/file-service-cache"
 disk-min-evict-interval = "7m"
