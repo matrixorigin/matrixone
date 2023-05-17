@@ -101,7 +101,7 @@ func Call(
 		if target.filter != nil {
 			filterCols = vector.MustFixedCol[int](bat.GetVector(target.filterColIndexInBatch))
 		}
-		refreshTS, err := Lock(
+		refreshTS, err := doLock(
 			proc.Ctx,
 			target.tableID,
 			txnOp,
@@ -154,11 +154,37 @@ func Call(
 	return false, nil
 }
 
-// Lock locks a set of data so that no other transaction can modify it.
+// LockTable lock table, all rows in the table will be locked, and wait current txn
+// closed.
+func LockTable(
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type) error {
+	if !proc.TxnOperator.Txn().IsPessimistic() {
+		return nil
+	}
+	parker := types.NewPacker(proc.Mp())
+	defer parker.FreeMem()
+
+	opts := DefaultLockOptions(parker).
+		WithLockTable(true).
+		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
+	_, err := doLock(
+		proc.Ctx,
+		tableID,
+		proc.TxnOperator,
+		proc.LockService,
+		nil,
+		pkType,
+		opts)
+	return err
+}
+
+// doLock locks a set of data so that no other transaction can modify it.
 // The data is described by the primary key. When the returned timestamp.IsEmpty
 // is false, it means there is a conflict with other transactions and the data to
 // be manipulated has been modified, you need to get the latest data at timestamp.
-func Lock(
+func doLock(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
