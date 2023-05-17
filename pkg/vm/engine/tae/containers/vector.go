@@ -328,6 +328,10 @@ func (vec *vectorWrapper) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	_ = vec.extendWithOffset(src.GetDownstreamVector(), srcOff, srcLen)
 }
 
+func (vec *vectorWrapper) ExtendVec(src *cnVector.Vector) (err error) {
+	return vec.extendWithOffset(src, 0, src.Length())
+}
+
 func (vec *vectorWrapper) extendWithOffset(src *cnVector.Vector, srcOff, srcLen int) (err error) {
 	if vec.downstreamVector.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("extend to const vectorWrapper"))
