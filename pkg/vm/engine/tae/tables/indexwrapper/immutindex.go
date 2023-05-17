@@ -66,6 +66,7 @@ func (index *immutableIndex) BatchDedup(
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (keyselects *roaring.Bitmap, err error) {
 	var exist bool
 	inputZM := idxpkg.ZM(zm)
@@ -84,7 +85,7 @@ func (index *immutableIndex) BatchDedup(
 		}
 	}
 	if index.bfReader != nil {
-		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys)
+		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, bf)
 		// 2. check bloomfilter has some unknown error. return err
 		if err != nil {
 			err = TranslateError(err)

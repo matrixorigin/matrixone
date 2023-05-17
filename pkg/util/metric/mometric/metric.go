@@ -68,7 +68,8 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	var initOpts InitOptions
 	opts = append(opts,
 		withExportInterval(SV.MetricExportInterval),
-		withUpdateInterval(SV.MetricUpdateStorageUsageInterval.Duration),
+		withUpdateInterval(SV.MetricStorageUsageUpdateInterval.Duration),
+		withCheckNewInterval(SV.MetricStorageUsageCheckNewInterval.Duration),
 		withMultiTable(SV.MetricMultiTable),
 	)
 	for _, opt := range opts {
@@ -116,6 +117,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	}
 
 	metric.SetUpdateStorageUsageInterval(initOpts.updateInterval)
+	metric.SetStorageUsageCheckNewInterval(initOpts.checkNewInterval)
 	logutil.Infof("metric with ExportInterval: %v", initOpts.exportInterval)
 	logutil.Infof("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
 }
@@ -292,6 +294,9 @@ type InitOptions struct {
 	// updateInterval, update StorageUsage interval
 	// set by withUpdateInterval
 	updateInterval time.Duration
+	// checkNewAccountInterval, check new account Internal to collect new account for metric StorageUsage
+	// set by withCheckNewInterval
+	checkNewInterval time.Duration
 }
 
 type InitOption func(*InitOptions)
@@ -327,6 +332,12 @@ func withExportInterval(sec int) InitOption {
 func withUpdateInterval(interval time.Duration) InitOption {
 	return InitOption(func(opts *InitOptions) {
 		opts.updateInterval = interval
+	})
+}
+
+func withCheckNewInterval(interval time.Duration) InitOption {
+	return InitOption(func(opts *InitOptions) {
+		opts.checkNewInterval = interval
 	})
 }
 

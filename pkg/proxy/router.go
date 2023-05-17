@@ -54,9 +54,11 @@ type Router interface {
 // CNServer represents the backend CN server, including salt, tenant, uuid and address.
 // When there is a new client connection, a new CNServer will be created.
 type CNServer struct {
-	// connID is the backend CN server's connection ID, which is global unique
+	// backendConnID is the backend CN server's connection ID, which is global unique
 	// and is tracked in connManager.
-	connID uint32
+	backendConnID uint32
+	// clientConnID is the connection ID in proxy side.
+	proxyConnID uint32
 	// salt is generated in proxy module and will be sent to backend
 	// server when build connection.
 	salt []byte
@@ -127,9 +129,10 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 	}
 	// Return a new CNServer instance for temporary connection.
 	return &CNServer{
-		salt: cn.salt,
-		uuid: cn.uuid,
-		addr: cn.addr,
+		backendConnID: cn.backendConnID,
+		salt:          cn.salt,
+		uuid:          cn.uuid,
+		addr:          cn.addr,
 	}, nil
 }
 
@@ -211,7 +214,7 @@ func (r *router) Connect(
 		return nil, nil, err
 	}
 	// After handshake with backend CN server, set the connID of serverConn.
-	cn.connID = sc.ConnID()
+	cn.backendConnID = sc.ConnID()
 
 	// After connect succeed, track the connection.
 	r.rebalancer.connManager.connect(cn, t)

@@ -22,8 +22,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -1021,17 +1020,24 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	if proc == nil {
 		return nil
 	}
-	newExprList := make([]*plan.Expr, len(exprList))
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	for i, expr := range exprList {
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
-		if tmpexpr != nil {
-			expr = tmpexpr
-		}
-		newExprList[i] = expr
+	for i := range exprList {
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
+		exprList[i] = tmpexpr
 	}
-	return colexec.RewriteFilterExprList(newExprList)
+	return colexec.RewriteFilterExprList(exprList)
+}
+
+func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnName(tableDef, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
+	}
 }
 
 // this function will be deleted soon
@@ -1561,5 +1567,28 @@ func onlyContainsTag(filter *Expr, tag int32) bool {
 		return true
 	default:
 		return true
+	}
+}
+
+func AssignAuxIdForExpr(expr *plan.Expr, start int32) int32 {
+	expr.AuxId = start
+	vertexCnt := int32(1)
+
+	if f, ok := expr.Expr.(*plan.Expr_F); ok {
+		for _, child := range f.F.Args {
+			vertexCnt += AssignAuxIdForExpr(child, start+vertexCnt)
+		}
+	}
+
+	return vertexCnt
+}
+
+func ResetAuxIdForExpr(expr *plan.Expr) {
+	expr.AuxId = 0
+
+	if f, ok := expr.Expr.(*plan.Expr_F); ok {
+		for _, child := range f.F.Args {
+			ResetAuxIdForExpr(child)
+		}
 	}
 }
