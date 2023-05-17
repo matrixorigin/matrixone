@@ -84,19 +84,15 @@ func (gc *GroupConcat) MarshalBinary() (data []byte, err error) {
 
 // encoding.BinaryUnmarshaler
 func (gc *GroupConcat) UnmarshalBinary(data []byte) error {
+	var err error
+
 	eg := &EncodeGroupConcat{}
 	types.Decode(data, eg)
 	m := mpool.MustNewZeroNoFixed()
-	da1, err := m.Alloc(len(eg.InsertsStrData))
-	if err != nil {
-		return err
-	}
+	da1 := make([]byte, len(eg.InsertsStrData))
 	copy(da1, eg.InsertsStrData)
 	gc.inserts = types.DecodeStringSlice(da1)
-	da2, err := m.Alloc(len(eg.ResStrData))
-	if err != nil {
-		return err
-	}
+	da2 := make([]byte, len(eg.ResStrData))
 	copy(da2, eg.ResStrData)
 	gc.res = types.DecodeStringSlice(da2)
 	gc.arg = eg.Arg
