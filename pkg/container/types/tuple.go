@@ -660,6 +660,9 @@ func decodeTuple(b []byte) (Tuple, int, error) {
 		case b[i] == timestampCode:
 			el, off = decodeInt(timestampCode, b[i+1:])
 			off += 1
+		case b[i] == timeCode:
+			el, off = decodeInt(timeCode, b[i+1:])
+			off += 1
 		case b[i] == decimal64Code:
 			dEl, off = decodeBytes(b[i+1:])
 			var bb [8]byte
