@@ -570,7 +570,7 @@ func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *container
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		rid := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
 		txnNode := txnbase.ReadTuple(delTxn, i)
-		catalog.onReplayDeleteSegment(dbid, tid, rid.GetSegid(), txnNode)
+		catalog.onReplayDeleteSegment(dbid, tid, rid.BorrowSegmentID(), txnNode)
 	}
 }
 func (catalog *Catalog) onReplayCreateSegment(
@@ -687,6 +687,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 			blkun.Update(un)
 		} else {
 			blk.Insert(un)
+			blk.Location = un.BaseNode.MetaLoc
 		}
 		return
 	}
@@ -694,6 +695,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	blk.ID = cmd.ID.BlockID
 	blk.BlockNode = cmd.node
 	blk.BaseEntryImpl.Insert(un)
+	blk.Location = un.BaseNode.MetaLoc
 	blk.segment = seg
 	blk.blkData = dataFactory.MakeBlockFactory()(blk)
 	if observer != nil {
@@ -722,8 +724,8 @@ func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.
 		dbid := delTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 		rid := del.GetVectorByName(AttrRowID).Get(i).(types.Rowid)
-		blkID := rid.GetBlockid()
-		sid := blkID.Segment()
+		blkID := rid.BorrowBlockID()
+		sid := rid.BorrowSegmentID()
 		un := txnbase.ReadTuple(delTxn, i)
 		metaLoc := delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte)
 		deltaLoc := delTxn.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Get(i).([]byte)
@@ -792,6 +794,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 		}
 	}
 	blk.Insert(un)
+	blk.Location = un.BaseNode.MetaLoc
 }
 func (catalog *Catalog) onReplayDeleteBlock(
 	dbid, tid uint64,
@@ -842,6 +845,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		},
 	}
 	blk.Insert(un)
+	blk.Location = un.BaseNode.MetaLoc
 }
 func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)

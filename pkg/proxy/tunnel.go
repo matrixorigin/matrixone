@@ -480,10 +480,3 @@ func (p *pipe) pause(ctx context.Context) error {
 	}
 	return nil
 }
-
-// inTxn returns if the session is in a txn.
-func (p *pipe) inTxn() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.mu.inTxn
-}

@@ -44,9 +44,13 @@ func TestSendWithSingleRequest(t *testing.T) {
 		assert.NoError(t, s.Close())
 	}()
 
-	s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+	s.RegisterRequestHandler(func(
+		ctx context.Context,
+		request morpc.RPCMessage,
+		sequence uint64,
+		cs morpc.ClientSession) error {
 		return cs.Write(ctx, &txn.TxnResponse{
-			RequestID: request.GetID(),
+			RequestID: request.Message.GetID(),
 			Method:    txn.TxnMethod_Write,
 		})
 	})
@@ -83,9 +87,13 @@ func TestSendEnableCompressWithSingleRequest(t *testing.T) {
 		assert.NoError(t, s.Close())
 	}()
 
-	s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+	s.RegisterRequestHandler(func(
+		ctx context.Context,
+		request morpc.RPCMessage,
+		sequence uint64,
+		cs morpc.ClientSession) error {
 		return cs.Write(ctx, &txn.TxnResponse{
-			RequestID: request.GetID(),
+			RequestID: request.Message.GetID(),
 			Method:    txn.TxnMethod_Write,
 		})
 	})
@@ -122,8 +130,12 @@ func TestSendWithMultiDN(t *testing.T) {
 			assert.NoError(t, s.Close())
 		}()
 
-		s.RegisterRequestHandler(func(ctx context.Context, m morpc.Message, sequence uint64, cs morpc.ClientSession) error {
-			request := m.(*txn.TxnRequest)
+		s.RegisterRequestHandler(func(
+			ctx context.Context,
+			m morpc.RPCMessage,
+			sequence uint64,
+			cs morpc.ClientSession) error {
+			request := m.Message.(*txn.TxnRequest)
 			return cs.Write(ctx, &txn.TxnResponse{
 				RequestID:    request.GetID(),
 				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetDN().Address, sequence))},
@@ -181,8 +193,12 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 			assert.NoError(t, s.Close())
 		}()
 
-		s.RegisterRequestHandler(func(ctx context.Context, m morpc.Message, sequence uint64, cs morpc.ClientSession) error {
-			request := m.(*txn.TxnRequest)
+		s.RegisterRequestHandler(func(
+			ctx context.Context,
+			m morpc.RPCMessage,
+			sequence uint64,
+			cs morpc.ClientSession) error {
+			request := m.Message.(*txn.TxnRequest)
 			return cs.Write(ctx, &txn.TxnResponse{
 				RequestID:    request.GetID(),
 				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetDN().Address, sequence))},
@@ -300,9 +316,13 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 		assert.NoError(t, s.Close())
 	}()
 
-	s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+	s.RegisterRequestHandler(func(
+		ctx context.Context,
+		request morpc.RPCMessage,
+		sequence uint64,
+		cs morpc.ClientSession) error {
 		return cs.Write(ctx, &txn.TxnResponse{
-			RequestID: request.GetID(),
+			RequestID: request.Message.GetID(),
 			Method:    txn.TxnMethod_Write,
 			CNOpResponse: &txn.CNOpResponse{
 				Payload: make([]byte, size),

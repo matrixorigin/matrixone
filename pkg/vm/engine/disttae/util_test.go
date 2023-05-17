@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -271,7 +272,10 @@ func TestEvalZonemapFilter(t *testing.T) {
 
 	for _, tc := range cases {
 		for i, expr := range tc.exprs {
-			zm := evalFilterExprWithZonemap(context.Background(), tc.meta, expr, columnMap, proc)
+			cnt := plan2.AssignAuxIdForExpr(expr, 0)
+			zms := make([]objectio.ZoneMap, cnt)
+			vecs := make([]*vector.Vector, cnt)
+			zm := evalFilterExprWithZonemap(context.Background(), tc.meta, expr, zms, vecs, columnMap, proc)
 			require.Equal(t, tc.expect[i], zm, tc.desc[i])
 		}
 	}
