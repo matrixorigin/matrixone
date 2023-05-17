@@ -107,24 +107,26 @@ func (s *Scope) MergeRun(c *Compile) error {
 	var errReceiveChan chan error
 	if len(s.RemoteReceivRegInfos) > 0 {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
+		s.notifyAndReceiveFromRemote(errReceiveChan)
 		str := ""
 		for i := range s.RemoteReceivRegInfos {
 			if i != 0 {
 				str += " ,"
 			}
 			str += s.RemoteReceivRegInfos[i].Uuid.String()
+			str += fmt.Sprintf("(%d)", s.RemoteReceivRegInfos[i].Idx)
 		}
 
 		localstr := ""
 		for i := range s.Proc.Reg.MergeReceivers {
 			if i != 0 {
-				str += " ,"
+				localstr += " ,"
 			}
-			localstr += fmt.Sprintf("%p", s.Proc.Reg.MergeReceivers[i].Ch)
+			localstr += fmt.Sprintf("%d: %p", i, s.Proc.Reg.MergeReceivers[i].Ch)
 		}
 
-		fmt.Printf("[mergerun] proc %p with receive uuid %s and local ch %s\n", s.Proc, str, localstr)
-		s.notifyAndReceiveFromRemote(errReceiveChan)
+		fmt.Printf("[mergerun] proc %p with receive uuid [%s] and local ch [%s]\n", s.Proc, str, localstr)
+
 	}
 
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
