@@ -8,7 +8,7 @@ env:
    branch: main
 
 jobs:
-  docker-image-build:
+  docker_image_build:
     if: ${{ github.event.pull_request.merged == true }}
     runs-on: arm64-runner 
     timeout-minutes: 60
@@ -47,8 +47,8 @@ jobs:
           docker push $TAGS
 
   setup_mo_test_env:
-    if: ${{ github.event.pull_request.merged == true }}
-    needs: docker-image-build
+    if: ${{ needs.docker_image_build.result == 'success' && github.event.pull_request.merged == true }}
+    needs: docker_image_build
     runs-on: arm64-runner
     timeout-minutes: 60
     name: SETUP MO TEST ENV
@@ -96,12 +96,12 @@ jobs:
        
       - name: ECHO mo-big-data.yaml
         run: |
-          echo '${{ needs.docker-image-build.outputs.version }}'
+          echo '${{ needs.docker_image_build.outputs.version }}'
 
           cd $GITHUB_WORKSPACE/matrixone
           sed -i 's/nsformobigtest/mo-big-data-${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/big_data_eks/mo_big_data.yaml
           sed -i 's/s3pathformobigtest/mo-big-data\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/big_data_eks/mo_big_data.yaml
-          sed -i "s/imagetag/${{ needs.docker-image-build.outputs.version }}/g" $GITHUB_WORKSPACE/matrixone/optools/big_data_eks/mo_big_data.yaml
+          sed -i "s/imagetag/${{ needs.docker_image_build.outputs.version }}/g" $GITHUB_WORKSPACE/matrixone/optools/big_data_eks/mo_big_data.yaml
           cat $GITHUB_WORKSPACE/matrixone/optools/big_data_eks/mo_big_data.yaml
 
       - name: Clean EKS ENV
@@ -123,11 +123,11 @@ jobs:
 
 
   test:
-    if: ${{ always() && !cancelled() && github.event.pull_request.merged == true }}  #
+    if: ${{ needs.setup_mo_test_env.result == 'success' && github.event.pull_request.merged == true }}  #
     name: MO BIG DATA TOTAL TEST
     runs-on: arm64-runner
     timeout-minutes: 120
-    needs: [setup_mo_test_env,docker-image-build]
+    needs: [setup_mo_test_env,docker_image_build]
     steps:
       - name: Clone mo-load-data Repo
         uses: actions/checkout@v3
@@ -390,10 +390,10 @@ jobs:
 
 
   clean_up_env:
-    if: ${{ always() && !cancelled() && github.event.pull_request.merged == true }} #
+    if: ${{ needs.setup_mo_test_env.result == 'success' && github.event.pull_request.merged == true }} #
     name: CLEAN UP ENV
     runs-on: arm64-runner
-    needs: [docker-image-build,setup_mo_test_env,test]
+    needs: [docker_image_build,setup_mo_test_env,test]
     steps:
 
       - name: Checkout
