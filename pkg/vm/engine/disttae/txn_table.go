@@ -1027,8 +1027,8 @@ func (tbl *txnTable) newReader(
 				if len(vs) == 0 {
 					continue
 				}
-				blkId := vs[0].GetBlockid()
-				if !meta_blocks[*blkId] {
+				blkId := vs[0].CloneBlockID()
+				if !meta_blocks[blkId] {
 					for _, v := range vs {
 						deletes[v] = 0
 					}
