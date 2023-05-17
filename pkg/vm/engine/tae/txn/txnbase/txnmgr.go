@@ -482,7 +482,7 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-		if op.Txn.GetError() == nil && op.Op == OpCommit {
+		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
 			if err := op.Txn.PrepareWAL(); err != nil {
 				panic(err)
 			}
