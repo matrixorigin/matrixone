@@ -41,7 +41,7 @@ func DecodePhyAddrKeyFromValue(v any) (blockId types.Blockid, offset uint32) {
 }
 
 func DecodePhyAddrKey(src *types.Rowid) (blockId types.Blockid, offset uint32) {
-	blockId = *src.GetBlockid()
+	blockId = src.CloneBlockID()
 	offset = types.DecodeUint32(src[types.BlockidSize:])
 	return
 }
