@@ -16,7 +16,9 @@ package objectio
 import (
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 var (
@@ -181,4 +183,22 @@ func (s *Seqnums) InitWithColCnt(colcnt int) {
 	}
 	s.MaxSeq = uint16(colcnt) - 1
 	s.MetaColCnt = uint16(colcnt)
+}
+
+func ConstructRowidColumn(
+	id *Blockid, start, length uint32, mp *mpool.MPool,
+) (vec *vector.Vector, err error) {
+	vec = vector.NewVec(RowidType)
+	vec.PreExtend(int(length), mp)
+	for i := uint32(0); i < length; i++ {
+		rid := NewRowid(id, start+i)
+		if err = vector.AppendFixed(vec, *rid, false, mp); err != nil {
+			break
+		}
+	}
+	if err != nil {
+		vec.Free(mp)
+		vec = nil
+	}
+	return
 }
