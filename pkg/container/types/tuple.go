@@ -60,7 +60,7 @@ import (
  * in the composite_primary_key_util.go, we default use method2 to encode tupleElement
  */
 
-type TupleElement interface{}
+type TupleElement any
 
 type Tuple []TupleElement
 
@@ -69,11 +69,13 @@ func (tp Tuple) String() string {
 }
 
 func (tp Tuple) ErrString() string {
-	res := ""
+	res := "("
 	for i, t := range tp {
 		switch t := t.(type) {
-		case bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64, []byte:
+		case bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64:
 			res += fmt.Sprintf("%v", t)
+		case []byte:
+			res += *(*string)(unsafe.Pointer(&t))
 		case Date:
 			res += fmt.Sprintf("%v", t.String())
 		case Time:
@@ -93,6 +95,7 @@ func (tp Tuple) ErrString() string {
 			res += ","
 		}
 	}
+	res += ")"
 	return res
 }
 

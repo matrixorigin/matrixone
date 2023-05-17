@@ -47,10 +47,10 @@ col1    col2    col3    col4
 2    Bob    25.0    zbcvdf
 3    Carol    23.0    zbcvdf
 4    Dora    29.0    zbcvdf
-insert into t3 values(4,"Dora", 29,'zbcvdf');
+insert into t3 values(4,"Dora", 28,'zbcvdf');
 Duplicate entry '4' for key 'col1'
-insert into t3 values(5,"Dora", 29,'zbcvdf');
-Duplicate entry '4601446f72610020c1e80000' for key '__mo_index_idx_col'
+insert into t3 values(6,"Dora", 29,'zbcvdf');
+Duplicate entry '(Dora,29)' for key '__mo_index_idx_col'
 drop table t3;
 create table t4(a int, b int, key(c));
 invalid input: column 'c' is not exist
