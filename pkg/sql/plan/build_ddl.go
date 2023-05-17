@@ -538,6 +538,7 @@ func addPartitionTableDef(ctx context.Context, mainTableName string, createTable
 			Name: partitionTableName,
 			Cols: createTable.TableDef.Cols, //same as the main table's column defs
 		}
+		partitionTableDefs[i].Pkey = createTable.TableDef.GetPkey()
 		partitionTableDefs[i].Defs = append(partitionTableDefs[i].Defs, partitionPropsDef)
 	}
 	partitionDef.PartitionTableNames = partitionTableNames

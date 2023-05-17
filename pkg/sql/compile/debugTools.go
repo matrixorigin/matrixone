@@ -83,6 +83,7 @@ var debugMagicNames = map[magicType]string{
 	Insert:         "Insert",
 	InsertValues:   "InsertValues",
 	MergeDelete:    "MergeDelete",
+	MergeInsert:    "MergeInsert",
 }
 
 var _ = DebugShowScopes
