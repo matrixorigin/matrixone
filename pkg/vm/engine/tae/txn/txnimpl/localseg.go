@@ -175,7 +175,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			seg.tableHandle = tableData.GetHandle()
 		}
 		appended := uint32(0)
-		vec := containers.MakeVector(catalog.PhyAddrColumnType)
+		vec := containers.MakeVector(objectio.RowidType)
 		for appended < node.RowsWithoutDeletes() {
 			appender, err := seg.tableHandle.GetAppender()
 			if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
@@ -212,7 +212,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			}
 			blockId := appender.GetMeta().(*catalog.BlockEntry).ID
 			col, err := model.PreparePhyAddrData(
-				catalog.PhyAddrColumnType,
+				objectio.RowidType,
 				&blockId,
 				anode.GetMaxRow()-toAppend,
 				toAppend)

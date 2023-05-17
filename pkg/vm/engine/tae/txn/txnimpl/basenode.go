@@ -166,7 +166,7 @@ func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 }
 
 func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, &n.bnode.meta.ID, startRow, length)
+	col, err := model.PreparePhyAddrData(objectio.RowidType, &n.bnode.meta.ID, startRow, length)
 	if err != nil {
 		return
 	}

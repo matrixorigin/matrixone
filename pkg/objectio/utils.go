@@ -19,6 +19,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+var (
+	RowidType types.Type
+)
+
+func init() {
+	RowidType = types.T_Rowid.ToType()
+}
+
 type CreateSegOpt struct {
 	Id *types.Uuid
 }

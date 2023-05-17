@@ -195,7 +195,7 @@ func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 
 func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	col, err := model.PreparePhyAddrData(
-		catalog.PhyAddrColumnType,
+		objectio.RowidType,
 		&node.block.meta.ID,
 		startRow,
 		length)
