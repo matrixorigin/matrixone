@@ -140,7 +140,7 @@ create account test_tenant_1 admin_name 'test_account' identified by '111';
 select sleep(16);
 sleep(16)
 0
-select statement, result_count from statement_info where user="dump" order by request_at desc limit 76;
+select statement, result_count from statement_info where user="dump" and statement not like '%mo_ctl%' order by request_at desc limit 76;
 statement    result_count
 create account test_tenant_1 admin_name 'test_account' identified by '******'    0
 use system    0

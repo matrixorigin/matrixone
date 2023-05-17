@@ -47,6 +47,7 @@ type InsertNode interface {
 	FillBlockView(view *model.BlockView, colIdxes []int) (err error)
 	FillColumnView(*model.ColumnView) error
 	Window(start, end uint32) (*containers.Batch, error)
+	WindowColumn(start, end uint32, pos int) (containers.Vector, error)
 	GetSpace() uint32
 	Rows() uint32
 	GetValue(col int, row uint32) (any, bool, error)

@@ -156,7 +156,8 @@ select sleep(1);
 -- @session:id=1&user=query_type:admin:accountadmin&password=123456
 select sleep(15);
 -- @session
-select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="external_sql" and status != "Running" order by request_at desc limit 112;
+-- mo-tester will exec "select mo_ctl('cn','synccommit','')" while switch conn
+select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 112;
 
 
 -- test cloud_user_sql type
@@ -320,7 +321,7 @@ select sleep(15);
 -- @session:id=1&user=query_type:admin:accountadmin&password=123456
 select sleep(15);
 -- @session
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and status != "Running" order by request_at desc limit 68;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
 
 begin;
 use statement_query_type;
