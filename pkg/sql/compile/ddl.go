@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -951,6 +952,13 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		isTemp = true
 	}
 
+	if !isTemp {
+		// before dropping table, lock it. It only works on pessimistic mode.
+		if err := lockTable(c.proc, rel); err != nil {
+			return err
+		}
+	}
+
 	if isTemp {
 		// memoryengine truncate always return 0, so for temporary table, just use origin tableId as newId
 		_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
@@ -1112,6 +1120,13 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 		isTemp = true
+	}
+
+	if !isTemp {
+		// before dropping table, lock it. It only works on pessimistic mode.
+		if err := lockTable(c.proc, rel); err != nil {
+			return err
+		}
 	}
 
 	// update tableDef of foreign key's table
@@ -1659,4 +1674,22 @@ func getValue[T constraints.Integer](minus bool, num any) T {
 		}
 	}
 	return v
+}
+
+func lockTable(
+	proc *process.Process,
+	rel engine.Relation) error {
+	id := rel.GetTableID(proc.Ctx)
+	defs, err := rel.GetPrimaryKeys(proc.Ctx)
+	if err != nil {
+		return err
+	}
+	if len(defs) != 1 {
+		panic("invalid primary keys")
+	}
+
+	return lockop.LockTable(
+		proc,
+		id,
+		defs[0].Type)
 }
