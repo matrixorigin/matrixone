@@ -26,6 +26,7 @@ import (
 
 var allSupportedFunctions [1000]FuncNew
 
+// register all supported functions.
 func initAllSupportedFunctions() {
 	for _, fn := range supportedOperators {
 		allSupportedFunctions[fn.functionId] = fn
@@ -119,12 +120,14 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
 		r.retType = f.Overloads[r.overloadId].retType(args)
+		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 
 	case succeedWithCast:
 		r.overloadId = int32(check.idx)
 		r.needCast = true
 		r.targetTypes = check.finalType
 		r.retType = f.Overloads[r.overloadId].retType(r.targetTypes)
+		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 
 	case failedFunctionParametersWrong:
 		if f.isFunction() {
@@ -167,6 +170,8 @@ type FuncGetResult struct {
 	overloadId int32
 	retType    types.Type
 
+	cannotRunInParallel bool
+
 	needCast    bool
 	targetTypes []types.Type
 }
@@ -181,6 +186,10 @@ func (fr *FuncGetResult) ShouldDoImplicitTypeCast() (typs []types.Type, should b
 
 func (fr *FuncGetResult) GetReturnType() types.Type {
 	return fr.retType
+}
+
+func (fr *FuncGetResult) CannotRunInParallel() bool {
+	return fr.cannotRunInParallel
 }
 
 func encodeOverloadID(fid, overloadId int32) (overloadID int64) {
@@ -259,9 +268,18 @@ type overload struct {
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them, and if so, we will record the special id of it.
 	// This id will be passed to the real execution framework of Agg function and window function.
+	//
+	// XXX define a special structure to records this information may suitable ?
 	isAgg     bool
 	isWin     bool
 	specialId int
+
+	// if true, overload was unable to run in parallel.
+	// For example,
+	//		rand(1) cannot run in parallel because it should use the same rand seed.
+	//
+	// TODO: there is not a good place to use that in plan now. the attribute is not effective.
+	cannotParallel bool
 
 	// if true, overload cannot be folded
 	volatile bool
@@ -279,6 +297,10 @@ func (ov *overload) IsRealTimeRelated() bool {
 
 func (ov *overload) IsAgg() bool {
 	return ov.isAgg
+}
+
+func (ov *overload) CannotExecuteInParallel() bool {
+	return ov.cannotParallel
 }
 
 func (ov *overload) GetSpecialId() int {

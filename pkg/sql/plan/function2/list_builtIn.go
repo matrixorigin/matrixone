@@ -2190,8 +2190,10 @@ var supportedMathBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_int64},
+				overloadId:     0,
+				args:           []types.T{types.T_int64},
+				cannotParallel: true,
+				volatile:       true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},
@@ -2203,6 +2205,7 @@ var supportedMathBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       nil,
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_float64.ToType()
 				},

@@ -1498,10 +1498,11 @@ func (op *opBuiltInRand) builtInRand(parameters []*vector.Vector, result vector.
 	p1 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)
 
-	seedNumber, _ := p1.GetValue(0)
 	if op.seed == nil {
+		seedNumber, _ := p1.GetValue(0)
 		op.seed = rand.New(rand.NewSource(seedNumber))
 	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		v := op.seed.Float64()
 		if err := rs.Append(v, false); err != nil {

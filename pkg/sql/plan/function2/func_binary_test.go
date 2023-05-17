@@ -2283,9 +2283,9 @@ func initReplaceTestCase() []tcTemp {
 		{
 			info: "Single string case1",
 			input: [][]string{
-				[]string{"abc"},
-				[]string{"a"},
-				[]string{"d"},
+				{"abc"},
+				{"a"},
+				{"d"},
 			},
 
 			expect: []string{"dbc"},
@@ -2294,9 +2294,9 @@ func initReplaceTestCase() []tcTemp {
 		{
 			info: "Single string case2",
 			input: [][]string{
-				[]string{".*.*.*"},
-				[]string{".*"},
-				[]string{"n"},
+				{".*.*.*"},
+				{".*"},
+				{"n"},
 			},
 
 			expect: []string{"nnn"},
@@ -2305,9 +2305,9 @@ func initReplaceTestCase() []tcTemp {
 		{
 			info: "Single string case3",
 			input: [][]string{
-				[]string{"当时明月 在 当时"},
-				[]string{"当时"},
-				[]string{"此时"},
+				{"当时明月 在 当时"},
+				{"当时"},
+				{"此时"},
 			},
 
 			expect: []string{"此时明月 在 此时"},
@@ -2316,9 +2316,9 @@ func initReplaceTestCase() []tcTemp {
 		{
 			info: "Single string case4",
 			input: [][]string{
-				[]string{"123"},
-				[]string{""},
-				[]string{"n"},
+				{"123"},
+				{""},
+				{"n"},
 			},
 
 			expect: []string{"123"},

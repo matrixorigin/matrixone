@@ -31,6 +31,7 @@ import (
 // f, err := GetFunctionByName(name, types)
 // rule.Action(f)
 //
+// TODO: not implement now.
 
 type FunctionSpecialRule interface {
 	RetTypeAdjust(p *types.Type)

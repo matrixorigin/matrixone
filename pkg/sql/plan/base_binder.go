@@ -1280,7 +1280,6 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	//funcID, returnType, argsCastType, err = function.GetFunctionByName(ctx, name, argsType)
 	fGet, err := function2.GetFunctionByName(ctx, name, argsType)
 	if err != nil {
 		return nil, err
