@@ -184,7 +184,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					{
 						//sink_scan -> lock -> delete
 						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
-						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp)
+						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
 						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 						if err != nil {
 							return err
@@ -232,7 +232,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					}
 				} else {
 					// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
-					delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp)
+					delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
 					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 					if err != nil {
 						return err
@@ -251,7 +251,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		lastNodeId = appendPreDeleteNode(builder, bindCtx, delCtx.objRef, delCtx.tableDef, lastNodeId)
 	}
 	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
-	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, pkPos, pkTyp)
+	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, pkPos, pkTyp, delCtx.lockTable)
 	lastNodeId, err := makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
 	if err != nil {
 		return err
@@ -1081,6 +1081,7 @@ func makeOneDeletePlan(
 		PrimaryColTyp:      delNodeInfo.pkTyp,
 		RefreshTsIdxInBat:  -1, //unsupport now
 		FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
+		LockTable:          delNodeInfo.lockTable,
 	}
 	lockNode := &Node{
 		NodeType:    plan.Node_LOCK_OP,
@@ -1146,7 +1147,7 @@ func haveUniqueKey(tableDef *TableDef) bool {
 
 // makeDeleteNodeInfo Get `DeleteNode` based on TableDef
 func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef,
-	deleteIdx int, partitionIdx int, addAffectedRows bool, pkPos int, pkTyp *Type) *deleteNodeInfo {
+	deleteIdx int, partitionIdx int, addAffectedRows bool, pkPos int, pkTyp *Type, lockTable bool) *deleteNodeInfo {
 	delNodeInfo := &deleteNodeInfo{
 		objRef:          objRef,
 		tableDef:        tableDef,
@@ -1156,6 +1157,7 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 		IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
 		pkPos:           pkPos,
 		pkTyp:           pkTyp,
+		lockTable:       lockTable,
 	}
 
 	if tableDef.Partition != nil {
@@ -1180,6 +1182,7 @@ type deleteNodeInfo struct {
 	addAffectedRows bool
 	pkPos           int
 	pkTyp           *plan.Type
+	lockTable       bool
 }
 
 // Calculate the offset index of partition expression, and the sub tableIds of the partition table
