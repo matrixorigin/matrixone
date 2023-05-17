@@ -54,6 +54,7 @@ func Prepare(proc *process.Process, v any) error {
 		arg.targets[idx].fetcher = GetFetchRowsFunc(arg.targets[idx].primaryColumnType)
 	}
 	arg.parker = types.NewPacker(proc.Mp())
+	arg.err = nil
 	return nil
 }
 
@@ -70,20 +71,22 @@ func Call(
 	v any,
 	_ bool,
 	_ bool) (bool, error) {
+	arg, ok := v.(*Argument)
+	if !ok {
+		getLogger().Fatal("invalid argument",
+			zap.Any("argument", arg))
+	}
+
 	bat := proc.InputBatch()
 	if bat == nil {
-		return true, nil
+		// all lock added, reutrn retry errror if needed
+		return true, arg.err
 	}
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
 
-	arg, ok := v.(*Argument)
-	if !ok {
-		getLogger().Fatal("invalid argument",
-			zap.Any("argument", arg))
-	}
 	txnFeature := proc.TxnClient.(client.TxnClientWithFeature)
 	txnOp := proc.TxnOperator
 	needRetry := false
@@ -141,8 +144,12 @@ func Call(
 			needRetry = true
 		}
 	}
-	if needRetry {
-		return true, moerr.NewTxnNeedRetry(proc.Ctx)
+	// when a transaction needs to operate on many data, there may be multiple conflicts on the
+	// data, and if you go to retry every time a conflict occurs, you will also encounter conflicts
+	// when you retry. We need to return the conflict after all the locks have been added successfully,
+	// so that the retry will definitely succeed because all the locks have been put.
+	if needRetry && arg.err == nil {
+		arg.err = moerr.NewTxnNeedRetry(proc.Ctx)
 	}
 	return false, nil
 }
@@ -371,6 +378,7 @@ func (arg *Argument) Free(
 	if arg.parker != nil {
 		arg.parker.FreeMem()
 	}
+	arg.err = nil
 }
 
 func getRowsFilter(

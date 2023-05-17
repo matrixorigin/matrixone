@@ -52,6 +52,9 @@ type LockOptions struct {
 type Argument struct {
 	parker  *types.Packer
 	targets []lockTarget
+
+	// conflict on rc
+	err error
 }
 
 type lockTarget struct {

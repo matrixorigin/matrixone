@@ -154,7 +154,7 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 			s.getLockTable), nil
 	}
 
-	waitingList, err := s.getTxnWaitingList(txn.TxnID, txn.CreatedOn)
+	waitingList, err := s.getTxnWaitingListOnRemote(txn.TxnID, txn.CreatedOn)
 	if err != nil {
 		return false, err
 	}
