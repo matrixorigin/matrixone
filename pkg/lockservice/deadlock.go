@@ -26,7 +26,7 @@ import (
 
 type detector struct {
 	serviceID         string
-	c                 chan pb.WaitTxn
+	c                 chan deadlockTxn
 	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error)
 	waitTxnAbortFunc  func(pb.WaitTxn)
 	ignoreTxns        sync.Map // txnID -> any
@@ -47,7 +47,7 @@ func newDeadlockDetector(
 	waitTxnAbortFunc func(pb.WaitTxn)) *detector {
 	d := &detector{
 		serviceID:         serviceID,
-		c:                 make(chan pb.WaitTxn, 1024),
+		c:                 make(chan deadlockTxn, 1024),
 		waitTxnsFetchFunc: waitTxnsFetchFunc,
 		waitTxnAbortFunc:  waitTxnAbortFunc,
 		stopper: stopper.NewStopper("deadlock-detector",
@@ -73,14 +73,19 @@ func (d *detector) txnClosed(txnID []byte) {
 	d.ignoreTxns.Delete(v)
 }
 
-func (d *detector) check(txn pb.WaitTxn) error {
+func (d *detector) check(
+	holdTxnID []byte,
+	txn pb.WaitTxn) error {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	if d.mu.closed {
 		return ErrDeadlockDetectorClosed
 	}
 
-	d.c <- txn
+	d.c <- deadlockTxn{
+		holdTxnID: holdTxnID,
+		waitTxn:   txn,
+	}
 	return nil
 }
 
@@ -96,11 +101,11 @@ func (d *detector) doCheck(ctx context.Context) {
 			return
 		case txn := <-d.c:
 			w.reset(txn)
-			v := string(txn.TxnID)
+			v := string(txn.waitTxn.TxnID)
 			hasDeadlock, err := d.checkDeadlock(w)
 			if hasDeadlock || err != nil {
 				d.ignoreTxns.Store(v, struct{}{})
-				d.waitTxnAbortFunc(txn)
+				d.waitTxnAbortFunc(txn.waitTxn)
 			}
 		}
 	}
@@ -131,6 +136,7 @@ func (d *detector) checkDeadlock(w *waiters) (bool, error) {
 type waiters struct {
 	serviceID  string
 	ignoreTxns *sync.Map
+	holdTxnID  []byte
 	waitTxns   []pb.WaitTxn
 	pos        int
 }
@@ -148,6 +154,9 @@ func (w *waiters) String() string {
 }
 
 func (w *waiters) add(txn pb.WaitTxn) bool {
+	if bytes.Equal(w.holdTxnID, txn.TxnID) {
+		return false
+	}
 	for i := 0; i < w.pos; i++ {
 		if bytes.Equal(w.waitTxns[i].TxnID, txn.TxnID) {
 			w.waitTxns = append(w.waitTxns, txn)
@@ -162,12 +171,18 @@ func (w *waiters) add(txn pb.WaitTxn) bool {
 	return true
 }
 
-func (w *waiters) reset(txn pb.WaitTxn) {
+func (w *waiters) reset(txn deadlockTxn) {
 	w.pos = 0
+	w.holdTxnID = txn.holdTxnID
 	w.waitTxns = w.waitTxns[:0]
-	w.waitTxns = append(w.waitTxns, txn)
+	w.waitTxns = append(w.waitTxns, txn.waitTxn)
 }
 
 func (w *waiters) completed() bool {
 	return w.pos == len(w.waitTxns)
+}
+
+type deadlockTxn struct {
+	holdTxnID []byte
+	waitTxn   pb.WaitTxn
 }

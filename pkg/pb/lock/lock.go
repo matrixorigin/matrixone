@@ -194,7 +194,7 @@ func (m *GetTxnLockRequest) DebugString() string {
 func (m *GetTxnLockResponse) DebugString() string {
 	return fmt.Sprintf("%d-%s",
 		m.Value,
-		bytesArrayString(m.WaitingList))
+		waitTxnArrayString(m.WaitingList))
 }
 
 func (m *GetWaitingListRequest) DebugString() string {
