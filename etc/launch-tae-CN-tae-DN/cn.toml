@@ -24,7 +24,7 @@ backend = "DISK"
 data-dir = "mo-data/s3"
 
 [fileservice.cache]
-memory-capacity = "128MB"
+memory-capacity = "256MB"
 disk-capacity = "8GB"
 disk-path = "mo-data/file-service-cache"
 disk-min-evict-interval = "7m"
