@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
@@ -195,15 +194,6 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	var err error
 	bat := proc.InputBatch()
-	if bat != nil && bat.Vecs[0].GetType().Oid == 22 {
-		vectmp := vector.MustFixedCol[int32](bat.Vecs[0])
-		for i := range vectmp {
-			if vectmp[i] == 1998122 {
-				logutil.Warnf("!!! group by got 1998122")
-			}
-		}
-	}
-
 	if bat == nil {
 		if ctr.bat != nil {
 			if ap.NeedEval {
@@ -223,16 +213,6 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			}
 			anal.Output(ctr.bat, isLast)
 			proc.SetInputBatch(ctr.bat)
-
-			if ctr.bat != nil && ctr.bat.Vecs[0].GetType().Oid == 22 {
-				vectmp := vector.MustFixedCol[int32](ctr.bat.Vecs[0])
-				for i := range vectmp {
-					if vectmp[i] == 1998122 {
-						logutil.Warnf("!!! %p  group by output 1998122", proc)
-					}
-				}
-			}
-
 			ctr.bat = nil
 			return true, nil
 		}

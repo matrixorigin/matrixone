@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -136,7 +137,9 @@ func (arg *Argument) prepareRemote(proc *process.Process) {
 	arg.ctr.prepared = false
 	arg.ctr.isRemote = true
 	arg.ctr.remoteReceivers = make([]*WrapperClientSession, 0, arg.ctr.remoteRegsCnt)
-	for _, rr := range arg.RemoteRegs {
+	arg.ctr.remoteToIdx = make(map[uuid.UUID]int)
+	for i, rr := range arg.RemoteRegs {
+		arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
 		colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc)
 	}
 }

@@ -167,9 +167,8 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 	}
 
 	// send to remote regs
-	regIdx := 0
 	for _, r := range ap.ctr.remoteReceivers {
-		batIndex := ap.ShuffleRegIdxRemote[regIdx]
+		batIndex := ap.ctr.remoteToIdx[r.uuid]
 		batToSend := shuffledBats[batIndex]
 
 		if batToSend != nil && batToSend.Vecs[0].GetType().Oid == 22 {
@@ -181,7 +180,6 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 				}
 			}
 		}
-
 		if batToSend != nil {
 			encodeData, errEncode := types.Encode(batToSend)
 			if errEncode != nil {
@@ -191,13 +189,11 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 				return false, err
 			}
 		}
-		regIdx++
 	}
 
 	//send to all local regs
-	regIdx = 0
-	for _, reg := range ap.LocalRegs {
-		batIndex := ap.ShuffleRegIdxLocal[regIdx]
+	for i, reg := range ap.LocalRegs {
+		batIndex := ap.ShuffleRegIdxLocal[i]
 		batToSend := shuffledBats[batIndex]
 
 		if batToSend != nil && batToSend.Vecs[0].GetType().Oid == 22 {
@@ -217,7 +213,6 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 			case reg.Ch <- batToSend:
 			}
 		}
-		regIdx++
 	}
 
 	return false, nil

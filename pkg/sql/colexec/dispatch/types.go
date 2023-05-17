@@ -75,6 +75,7 @@ type container struct {
 	// for shuffle reuse memory
 	sels            [][]int32
 	lenshuffledSels []int
+	remoteToIdx     map[uuid.UUID]int
 }
 
 type Argument struct {
