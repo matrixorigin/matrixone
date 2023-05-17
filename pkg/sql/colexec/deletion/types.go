@@ -124,14 +124,15 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 	var bitmap *nulls.Nulls
 	arg.ctr.debug_len += uint32(len(vs))
 	for _, rowId := range vs {
-		blkid := rowId.GetBlockid()
-		segid := rowId.GetSegid()
+		blkid := rowId.CloneBlockID()
+		segid := rowId.CloneSegmentID()
 		blkOffset := rowId.GetBlockOffset()
 		rowOffset := rowId.GetRowOffset()
 		if blkOffset%uint16(arg.Nbucket) != uint16(arg.IBucket) {
 			continue
 		}
 		arg.ctr.deleted_length += 1
+		// FIXME: string(blkid[:]) means heap allocation, just take the id type itself
 		str := string(blkid[:])
 		offsetFlag := false
 		if arg.ctr.blockId_bitmap[str] == nil {
@@ -143,6 +144,7 @@ func (arg *Argument) SplitBatch(proc *process.Process, bat *batch.Batch) error {
 		} else {
 			bitmap.Add(uint64(rowOffset))
 		}
+		// FIXME: string(segid[:]) means heap allocation, just take the id type itself
 		if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
 			arg.ctr.blockId_type[str] = RawBatchOffset
 			offsetFlag = true
