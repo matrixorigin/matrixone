@@ -54,9 +54,6 @@ func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 			regIndex := v % int32(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 			lenShuffledSels[regIndex]++
-			if v == 1998122 {
-				logutil.Warnf("!!!! got 1998122, send to reg index %v", regIndex)
-			}
 		}
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
@@ -140,15 +137,6 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	return false, nil
 }
 
-func debugprint(ap *Argument) {
-	for i, r := range ap.ctr.remoteReceivers {
-		logutil.Warnf("remote %v, %v ", i, r.uuid)
-	}
-	for i, reg := range ap.LocalRegs {
-		logutil.Warnf("remote %v, %v ", i, reg.Ch)
-	}
-}
-
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
 func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
@@ -170,16 +158,6 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := ap.ctr.remoteToIdx[r.uuid]
 		batToSend := shuffledBats[batIndex]
-
-		if batToSend != nil && batToSend.Vecs[0].GetType().Oid == 22 {
-			vectmp := vector.MustFixedCol[int32](batToSend.Vecs[0])
-			for i := range vectmp {
-				if vectmp[i] == 1998122 {
-					logutil.Warnf("!!! %p send 1998122 to remote %v", proc, r.uuid)
-					debugprint(ap)
-				}
-			}
-		}
 		if batToSend != nil {
 			encodeData, errEncode := types.Encode(batToSend)
 			if errEncode != nil {
@@ -195,17 +173,6 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 	for i, reg := range ap.LocalRegs {
 		batIndex := ap.ShuffleRegIdxLocal[i]
 		batToSend := shuffledBats[batIndex]
-
-		if batToSend != nil && batToSend.Vecs[0].GetType().Oid == 22 {
-			vectmp := vector.MustFixedCol[int32](batToSend.Vecs[0])
-			for i := range vectmp {
-				if vectmp[i] == 1998122 {
-					logutil.Warnf("!!! %p send 1998122 to local %p", proc, reg.Ch)
-					debugprint(ap)
-				}
-			}
-		}
-
 		if batToSend != nil {
 			select {
 			case <-reg.Ctx.Done():

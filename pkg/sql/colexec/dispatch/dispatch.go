@@ -17,7 +17,6 @@ package dispatch
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -158,25 +157,6 @@ func (arg *Argument) initSelsForShuffleReuse() {
 		}
 		arg.ctr.lenshuffledSels = make([]int, arg.ctr.aliveRegCnt)
 	}
-
-	localstr := ""
-	for i := range arg.ShuffleRegIdxLocal {
-		if i != 0 {
-			localstr += " ,"
-		}
-		localstr += fmt.Sprintf("%d -> %p", arg.ShuffleRegIdxLocal[i], arg.LocalRegs[i].Ch)
-	}
-
-	remotestr := ""
-	for i := range arg.ShuffleRegIdxRemote {
-		if i != 0 {
-			remotestr += " ,"
-		}
-		remotestr += fmt.Sprintf("%d -> %s", arg.ShuffleRegIdxRemote[i], &arg.RemoteRegs[i].Uuid)
-	}
-
-	fmt.Printf("[shuffleinfo] local: [%s], remote: [%s]\n", localstr, remotestr)
-
 }
 
 func (arg *Argument) getSels() ([][]int32, []int) {
