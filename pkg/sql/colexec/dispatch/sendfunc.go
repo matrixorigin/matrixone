@@ -140,6 +140,15 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	return false, nil
 }
 
+func debugprint(ap *Argument) {
+	for i, r := range ap.ctr.remoteReceivers {
+		logutil.Warnf("remote %v, %v ", i, r.uuid)
+	}
+	for i, reg := range ap.LocalRegs {
+		logutil.Warnf("remote %v, %v ", i, reg.Ch)
+	}
+}
+
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
 func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
@@ -168,6 +177,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 			for i := range vectmp {
 				if vectmp[i] == 1998122 {
 					logutil.Warnf("!!! %p send 1998122 to remote %v", proc, r.uuid)
+					debugprint(ap)
 				}
 			}
 		}
@@ -195,6 +205,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 			for i := range vectmp {
 				if vectmp[i] == 1998122 {
 					logutil.Warnf("!!! %p send 1998122 to local %p", proc, reg.Ch)
+					debugprint(ap)
 				}
 			}
 		}
