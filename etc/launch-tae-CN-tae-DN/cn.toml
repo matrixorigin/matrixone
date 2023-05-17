@@ -12,7 +12,7 @@ service-addresses = [
 ]
 
 [metacache]
-memory-capacity = "600MB"
+memory-capacity = "64MB"
 
 [[fileservice]]
 name = "LOCAL"
@@ -24,7 +24,7 @@ backend = "DISK"
 data-dir = "mo-data/s3"
 
 [fileservice.cache]
-memory-capacity = "512MB"
+memory-capacity = "128MB"
 disk-capacity = "8GB"
 disk-path = "mo-data/file-service-cache"
 disk-min-evict-interval = "7m"
