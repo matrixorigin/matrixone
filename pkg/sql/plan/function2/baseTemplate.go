@@ -32,9 +32,9 @@ type templateTr1 interface {
 	bool
 }
 
-// XXX it's just a function template file.
-// Still in test phase, plz use it carefully.
-func optimizedTpsToTrFn[T1 templateTp1, T2 templateTr1](
+// I hope it can generate all functions according to some easy parameters.
+// not yet ok. and may change soon. plz use it carefully if you really need it.
+func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](
 	fValueNull func(v1 T1) (T2, bool), alwaysNull1 bool,
 	fNullValue func(v2 T1) (T2, bool), alwaysNull2 bool,
 	fValueValue func(v1, v2 T1) (T2, bool), neverNull bool,
@@ -598,10 +598,10 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-// optimizedTypeTemplate1 for binary functions whose
+// optimizedBinaryTemplateRecFixedReturnFixed for binary functions whose
 // result of f(x, y) is null if any one of x, y is null value.
 // and if x, y were all normal value, result will not be an error.
-func optimizedTypeTemplate1[
+func optimizedBinaryTemplateRecFixedReturnFixed[
 	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
 	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v1, v2 T) T2) error {
@@ -697,7 +697,7 @@ func optimizedTypeTemplate1[
 	return nil
 }
 
-func optimizedTypeTemplate1ForMod[
+func specialTemplateForModFunction[
 	T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	modFn func(v1, v2 T) T) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
@@ -814,7 +814,7 @@ func optimizedTypeTemplate1ForMod[
 	return nil
 }
 
-func optimizedTypeTemplate1ForDiv[
+func specialTemplateForDivFunction[
 	T constraints.Float, T2 constraints.Float | int64](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	divFn func(v1, v2 T) T2) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
@@ -931,7 +931,7 @@ func optimizedTypeTemplate1ForDiv[
 	return nil
 }
 
-func optimizedTypeTemplate1ForStr1[T2 bool](
+func optimizedBinaryTemplateRecBytesReturnFixed[T2 bool](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 []byte) T2) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1026,7 +1026,7 @@ func optimizedTypeTemplate1ForStr1[T2 bool](
 	return nil
 }
 
-func optimizedTypeTemplate1ForStr2[T2 bool](
+func optimizedBinaryTemplateRecStringReturnFixed[T2 bool](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 string) T2) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1123,11 +1123,11 @@ func optimizedTypeTemplate1ForStr2[T2 bool](
 	return nil
 }
 
-// optimizedTypeTemplate1 for unary functions whose result of f(x) is null if x is null.
+// optimizedUnaryTemplateRecFixedReturnFixed for unary functions whose result of f(x) is null if x is null.
 // and if x was not null, result will be not null.
-func optimizedTypeTemplate2[
-	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
-	T2 constraints.Integer | constraints.Float | bool | types.Timestamp](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+func optimizedUnaryTemplateRecFixedReturnFixed[
+	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128,
+	T2 constraints.Integer | constraints.Float | bool | types.Timestamp | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) T2) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[T2](result)
@@ -1168,7 +1168,7 @@ func optimizedTypeTemplate2[
 	return nil
 }
 
-func optimizedTypeTemplate2ForStr1[
+func optimizedUnaryTemplateRecBytesReturnFixed[
 	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) T2) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1210,7 +1210,7 @@ func optimizedTypeTemplate2ForStr1[
 	return nil
 }
 
-func optimizedTypeTemplate2ForStr2[
+func optimizedUnaryTemplateRecStringReturnFixed[
 	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) T2) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1248,6 +1248,609 @@ func optimizedTypeTemplate2ForStr2[
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, _ := p1.GetStrValue(i)
 		rss[i] = resultFn(function2Util.QuickBytesToStr(v1))
+	}
+	return nil
+}
+
+func optimizedUnaryTemplateRecBytesReturnBytes(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) []byte) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r := resultFn(v1)
+
+			for i := uint64(0); i < uint64(length); i++ {
+				if err := rs.AppendBytes(r, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			if null1 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				r := resultFn(v1)
+				if err := rs.AppendBytes(r, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		r := resultFn(v1)
+		if err := rs.AppendBytes(r, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedUnaryTemplateRecBytesReturnString(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) string) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r := resultFn(v1)
+
+			for i := uint64(0); i < uint64(length); i++ {
+				if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			if null1 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				r := resultFn(v1)
+				if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		r := resultFn(v1)
+		if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedUnaryTemplateRecStringReturnString(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v string) string) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r := resultFn(function2Util.QuickBytesToStr(v1))
+
+			for i := uint64(0); i < uint64(length); i++ {
+				if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			if null1 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				r := resultFn(function2Util.QuickBytesToStr(v1))
+				if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		r := resultFn(function2Util.QuickBytesToStr(v1))
+		if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedUnaryTemplateRecFixedReturnString[
+	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v T) string) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			rb := resultFn(v1)
+			r := function2Util.QuickStrToBytes(rb)
+
+			for i := uint64(0); i < uint64(length); i++ {
+				if err := rs.AppendBytes(r, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			if null1 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				rb := resultFn(v1)
+				r := function2Util.QuickStrToBytes(rb)
+				if err := rs.AppendBytes(r, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetValue(i)
+		rb := resultFn(v1)
+		r := function2Util.QuickStrToBytes(rb)
+		if err := rs.AppendBytes(r, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedUnaryTemplateRecFixedReturnStringWithErrorCheck[
+	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v T) (string, error)) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			rb, err := resultFn(v1)
+			if err != nil {
+				return err
+			}
+			r := function2Util.QuickStrToBytes(rb)
+
+			for i := uint64(0); i < uint64(length); i++ {
+				if err = rs.AppendBytes(r, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			if null1 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				rb, err := resultFn(v1)
+				if err != nil {
+					return err
+				}
+				r := function2Util.QuickStrToBytes(rb)
+				if err = rs.AppendBytes(r, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetValue(i)
+		rb, err := resultFn(v1)
+		if err != nil {
+			return err
+		}
+		r := function2Util.QuickStrToBytes(rb)
+		if err = rs.AppendBytes(r, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedUnaryTemplateRecStringReturnBytesWithErrorCheck(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v string) ([]byte, error)) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := resultFn(function2Util.QuickBytesToStr(v1))
+			if err != nil {
+				return err
+			}
+
+			for i := uint64(0); i < uint64(length); i++ {
+				if err = rs.AppendBytes(r, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			if null1 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				r, err := resultFn(function2Util.QuickBytesToStr(v1))
+				if err != nil {
+					return err
+				}
+				if err = rs.AppendBytes(r, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		r, err := resultFn(function2Util.QuickBytesToStr(v1))
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes(r, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedUnaryTemplateRecBytesReturnStringWithErrorCheck(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) (string, error)) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			rb, err := resultFn(v1)
+			if err != nil {
+				return err
+			}
+			r := function2Util.QuickStrToBytes(rb)
+			for i := uint64(0); i < uint64(length); i++ {
+				if err = rs.AppendBytes(r, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			if null1 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				rb, err := resultFn(v1)
+				if err != nil {
+					return err
+				}
+				r := function2Util.QuickStrToBytes(rb)
+				if err = rs.AppendBytes(r, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		rb, err := resultFn(v1)
+		if err != nil {
+			return err
+		}
+		r := function2Util.QuickStrToBytes(rb)
+		if err = rs.AppendBytes(r, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedUnaryTemplateRecFixedReturnFixedWithErrorCheck[
+	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128,
+	T2 constraints.Integer | constraints.Float | bool | types.Timestamp | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v T) (T2, error)) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	rs := vector.MustFunctionResult[T2](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[T2](rsVec)
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := resultFn(v1)
+			if err != nil {
+				return err
+			}
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	var err error
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			if null1 {
+				continue
+			}
+			rss[i], err = resultFn(v1)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetValue(i)
+		rss[i], err = resultFn(v1)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedUnaryTemplateRecBytesReturnFixedWithErrorCheck[
+	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) (T2, error)) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[T2](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[T2](rsVec)
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := resultFn(v1)
+			if err != nil {
+				return err
+			}
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	var err error
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			if null1 {
+				continue
+			}
+			rss[i], err = resultFn(v1)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		rss[i], err = resultFn(v1)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedUnaryTemplateRecStringReturnFixedWithErrorCheck[
+	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v string) (T2, error)) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[T2](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[T2](rsVec)
+
+	c1 := parameters[0].IsConst()
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := resultFn(function2Util.QuickBytesToStr(v1))
+			if err != nil {
+				return err
+			}
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	var err error
+	if p1.WithAnyNullValue() {
+		nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			if null1 {
+				continue
+			}
+			rss[i], err = resultFn(function2Util.QuickBytesToStr(v1))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		rss[i], err = resultFn(function2Util.QuickBytesToStr(v1))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedNoParamTemplateReturnFixed[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128](
+	result vector.FunctionResultWrapper, proc *process.Process, length int, resultFn func() T) error {
+	rs := vector.MustFunctionResult[T](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[T](rsVec)
+
+	for i := 0; i < length; i++ {
+		rss[i] = resultFn()
+	}
+	return nil
+}
+
+func optimizedNoParamTemplateReturnBytes(
+	result vector.FunctionResultWrapper, proc *process.Process, length int, resultFn func() []byte) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := 0; i < length; i++ {
+		if err := rs.AppendBytes(resultFn(), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optimizedNoParamTemplateReturnBytesWithErrorCheck(
+	result vector.FunctionResultWrapper, proc *process.Process, length int, resultFn func() ([]byte, error)) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	for i := 0; i < length; i++ {
+		r, err := resultFn()
+		if err != nil {
+			return err
+		}
+		if err = rs.AppendBytes(r, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }

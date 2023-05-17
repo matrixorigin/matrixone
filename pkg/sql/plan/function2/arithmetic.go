@@ -111,43 +111,43 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return optimizedTypeTemplate1[uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 + v2
 		})
 	case types.T_uint16:
-		return optimizedTypeTemplate1[uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
 			return v1 + v2
 		})
 	case types.T_uint32:
-		return optimizedTypeTemplate1[uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
 			return v1 + v2
 		})
 	case types.T_uint64:
-		return optimizedTypeTemplate1[uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
 			return v1 + v2
 		})
 	case types.T_int8:
-		return optimizedTypeTemplate1[int8, int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int8, int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
 			return v1 + v2
 		})
 	case types.T_int16:
-		return optimizedTypeTemplate1[int16, int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int16, int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
 			return v1 + v2
 		})
 	case types.T_int32:
-		return optimizedTypeTemplate1[int32, int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int32, int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
 			return v1 + v2
 		})
 	case types.T_int64:
-		return optimizedTypeTemplate1[int64, int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int64, int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
 			return v1 + v2
 		})
 	case types.T_float32:
-		return optimizedTypeTemplate1[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
 			return v1 + v2
 		})
 	case types.T_float64:
-		return optimizedTypeTemplate1[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
 			return v1 + v2
 		})
 	case types.T_decimal64:
@@ -168,43 +168,43 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return optimizedTypeTemplate1[uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 - v2
 		})
 	case types.T_uint16:
-		return optimizedTypeTemplate1[uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
 			return v1 - v2
 		})
 	case types.T_uint32:
-		return optimizedTypeTemplate1[uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
 			return v1 - v2
 		})
 	case types.T_uint64:
-		return optimizedTypeTemplate1[uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
 			return v1 - v2
 		})
 	case types.T_int8:
-		return optimizedTypeTemplate1[int8, int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int8, int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
 			return v1 - v2
 		})
 	case types.T_int16:
-		return optimizedTypeTemplate1[int16, int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int16, int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
 			return v1 - v2
 		})
 	case types.T_int32:
-		return optimizedTypeTemplate1[int32, int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int32, int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
 			return v1 - v2
 		})
 	case types.T_int64:
-		return optimizedTypeTemplate1[int64, int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int64, int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
 			return v1 - v2
 		})
 	case types.T_float32:
-		return optimizedTypeTemplate1[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
 			return v1 - v2
 		})
 	case types.T_float64:
-		return optimizedTypeTemplate1[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
 			return v1 - v2
 		})
 	case types.T_decimal64:
@@ -218,11 +218,11 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return r, err
 		})
 	case types.T_date:
-		return optimizedTypeTemplate1[types.Date, int64](parameters, result, proc, length, func(v1, v2 types.Date) int64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[types.Date, int64](parameters, result, proc, length, func(v1, v2 types.Date) int64 {
 			return int64(v1 - v2)
 		})
 	case types.T_datetime:
-		return optimizedTypeTemplate1[types.Datetime, int64](parameters, result, proc, length, func(v1, v2 types.Datetime) int64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[types.Datetime, int64](parameters, result, proc, length, func(v1, v2 types.Datetime) int64 {
 			return v1.DatetimeMinusWithSecond(v2)
 		})
 	}
@@ -233,43 +233,43 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return optimizedTypeTemplate1[uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 * v2
 		})
 	case types.T_uint16:
-		return optimizedTypeTemplate1[uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint16, uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
 			return v1 * v2
 		})
 	case types.T_uint32:
-		return optimizedTypeTemplate1[uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint32, uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
 			return v1 * v2
 		})
 	case types.T_uint64:
-		return optimizedTypeTemplate1[uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
 			return v1 * v2
 		})
 	case types.T_int8:
-		return optimizedTypeTemplate1[int8, int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int8, int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
 			return v1 * v2
 		})
 	case types.T_int16:
-		return optimizedTypeTemplate1[int16, int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int16, int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
 			return v1 * v2
 		})
 	case types.T_int32:
-		return optimizedTypeTemplate1[int32, int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int32, int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
 			return v1 * v2
 		})
 	case types.T_int64:
-		return optimizedTypeTemplate1[int64, int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[int64, int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
 			return v1 * v2
 		})
 	case types.T_float32:
-		return optimizedTypeTemplate1[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
 			return v1 * v2
 		})
 	case types.T_float64:
-		return optimizedTypeTemplate1[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+		return optimizedBinaryTemplateRecFixedReturnFixed[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
 			return v1 * v2
 		})
 	case types.T_decimal64:
@@ -290,11 +290,11 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_float32:
-		return optimizedTypeTemplate1ForDiv[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+		return specialTemplateForDivFunction[float32, float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
 			return v1 / v2
 		})
 	case types.T_float64:
-		return optimizedTypeTemplate1ForDiv[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+		return specialTemplateForDivFunction[float64, float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
 			return v1 / v2
 		})
 	case types.T_decimal64:
@@ -314,12 +314,12 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	if paramType.Oid == types.T_float32 {
-		return optimizedTypeTemplate1ForDiv[float32, int64](parameters, result, proc, length, func(v1, v2 float32) int64 {
+		return specialTemplateForDivFunction[float32, int64](parameters, result, proc, length, func(v1, v2 float32) int64 {
 			return int64(v1 / v2)
 		})
 	}
 	if paramType.Oid == types.T_float64 {
-		return optimizedTypeTemplate1ForDiv[float64, int64](parameters, result, proc, length, func(v1, v2 float64) int64 {
+		return specialTemplateForDivFunction[float64, int64](parameters, result, proc, length, func(v1, v2 float64) int64 {
 			return int64(v1 / v2)
 		})
 	}
@@ -330,43 +330,43 @@ func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
 	case types.T_uint8:
-		return optimizedTypeTemplate1ForMod[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
+		return specialTemplateForModFunction[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 % v2
 		})
 	case types.T_uint16:
-		return optimizedTypeTemplate1ForMod[uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
+		return specialTemplateForModFunction[uint16](parameters, result, proc, length, func(v1, v2 uint16) uint16 {
 			return v1 % v2
 		})
 	case types.T_uint32:
-		return optimizedTypeTemplate1ForMod[uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
+		return specialTemplateForModFunction[uint32](parameters, result, proc, length, func(v1, v2 uint32) uint32 {
 			return v1 % v2
 		})
 	case types.T_uint64:
-		return optimizedTypeTemplate1ForMod[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+		return specialTemplateForModFunction[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
 			return v1 % v2
 		})
 	case types.T_int8:
-		return optimizedTypeTemplate1ForMod[int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
+		return specialTemplateForModFunction[int8](parameters, result, proc, length, func(v1, v2 int8) int8 {
 			return v1 % v2
 		})
 	case types.T_int16:
-		return optimizedTypeTemplate1ForMod[int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
+		return specialTemplateForModFunction[int16](parameters, result, proc, length, func(v1, v2 int16) int16 {
 			return v1 % v2
 		})
 	case types.T_int32:
-		return optimizedTypeTemplate1ForMod[int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
+		return specialTemplateForModFunction[int32](parameters, result, proc, length, func(v1, v2 int32) int32 {
 			return v1 % v2
 		})
 	case types.T_int64:
-		return optimizedTypeTemplate1ForMod[int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
+		return specialTemplateForModFunction[int64](parameters, result, proc, length, func(v1, v2 int64) int64 {
 			return v1 % v2
 		})
 	case types.T_float32:
-		return optimizedTypeTemplate1ForMod[float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
+		return specialTemplateForModFunction[float32](parameters, result, proc, length, func(v1, v2 float32) float32 {
 			return float32(math.Mod(float64(v1), float64(v2)))
 		})
 	case types.T_float64:
-		return optimizedTypeTemplate1ForMod[float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
+		return specialTemplateForModFunction[float64](parameters, result, proc, length, func(v1, v2 float64) float64 {
 			return math.Mod(v1, v2)
 		})
 	case types.T_decimal64:

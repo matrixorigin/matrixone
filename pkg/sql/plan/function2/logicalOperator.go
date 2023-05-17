@@ -19,21 +19,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var andFn = optimizedTpsToTrFn[bool, bool](
+var andFn = generalFunctionTemplateFactor[bool, bool](
 	func(v1 bool) (bool, bool) { return false, v1 }, false,
 	func(v2 bool) (bool, bool) { return false, v2 }, false,
 	func(v1, v2 bool) (bool, bool) { return v1 && v2, false }, true,
 	nil, true, true,
 )
 
-var orFn = optimizedTpsToTrFn[bool, bool](
+var orFn = generalFunctionTemplateFactor[bool, bool](
 	func(v1 bool) (bool, bool) { return v1, !v1 }, false,
 	func(v2 bool) (bool, bool) { return v2, !v2 }, false,
 	func(v1, v2 bool) (bool, bool) { return v1 || v2, false }, true,
 	nil, true, true,
 )
 
-var xorFn = optimizedTpsToTrFn[bool, bool](
+var xorFn = generalFunctionTemplateFactor[bool, bool](
 	nil, true,
 	nil, true,
 	func(v1, v2 bool) (bool, bool) { return v1 != v2, false }, true,
@@ -41,7 +41,7 @@ var xorFn = optimizedTpsToTrFn[bool, bool](
 )
 
 func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return optimizedTypeTemplate2[bool, bool](parameters, result, proc, length, func(v bool) bool {
+	return optimizedUnaryTemplateRecFixedReturnFixed[bool, bool](parameters, result, proc, length, func(v bool) bool {
 		return !v
 	})
 }
