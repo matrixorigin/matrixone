@@ -122,7 +122,7 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 			return true, nil
 		case <-reg.Ctx.Done():
 			if ap.IsSink {
-				//	atomic.AddInt64(&bat.Cnt, -1)
+				atomic.AddInt64(&bat.Cnt, -1)
 				continue
 			}
 			handleUnsent(proc, bat, refCountAdd, int64(i))
