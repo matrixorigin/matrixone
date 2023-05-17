@@ -214,6 +214,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				}
 			}
 		}
+		newBatch.Clean(proc.GetMPool())
 	}
 
 	return nil

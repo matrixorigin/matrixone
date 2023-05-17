@@ -1685,7 +1685,10 @@ func lockTable(
 		return err
 	}
 	if len(defs) != 1 {
-		panic("invalid primary keys")
+		// todo we have no primary key , when drop view
+		// maybe we need an interface to check if rel is a view?
+		return nil
+		// panic("invalid primary keys")
 	}
 
 	return lockop.LockTable(
