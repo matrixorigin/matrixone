@@ -84,6 +84,11 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) {
 	}
 }
 
+type tableIdNameKey struct {
+	id   uint64
+	name string
+}
+
 func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 	ts timestamp.Timestamp) ([]string, []uint64) {
 	var rs []string
@@ -93,7 +98,7 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 		AccountId:  accountId,
 		DatabaseId: databaseId,
 	}
-	mp := make(map[string]uint8)
+	mp := make(map[tableIdNameKey]uint8)
 	cc.tables.data.Ascend(key, func(item *TableItem) bool {
 		if item.AccountId != accountId {
 			return false
@@ -103,11 +108,13 @@ func (cc *CatalogCache) Tables(accountId uint32, databaseId uint64,
 		}
 		// In previous impl table id is used to deduplicate, but this a corner case: rename table t to newt, and rename newt back to t.
 		// In this case newt is first found deleted and taking the place of active t's tableid.
+		// What's more, if a table is truncated, a name can be occuppied by different ids. only use name to to dedup is also inadequate.
 		if item.Ts.Greater(ts) {
 			return true
 		}
-		if _, ok := mp[item.Name]; !ok {
-			mp[item.Name] = 0
+		key := tableIdNameKey{id: item.Id, name: item.Name}
+		if _, ok := mp[key]; !ok {
+			mp[key] = 0
 			if !item.deleted {
 				rs = append(rs, item.Name)
 				rids = append(rids, item.Id)
