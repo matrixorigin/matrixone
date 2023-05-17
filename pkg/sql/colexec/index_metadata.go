@@ -107,9 +107,11 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 			hasIndex = true
 			break
 		}
-		if _, ok := constraint.(*engine.PrimaryKeyDef); ok {
-			hasIndex = true
-			break
+		if pkdef, ok := constraint.(*engine.PrimaryKeyDef); ok {
+			if pkdef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+				hasIndex = true
+				break
+			}
 		}
 	}
 
