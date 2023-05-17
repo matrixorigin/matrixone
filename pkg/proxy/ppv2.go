@@ -32,6 +32,21 @@ const (
 	ProxyHeaderLength = 16
 )
 
+const (
+	unspec       = 0x00
+	tcpOverIPv4  = 0x11
+	udpOverIPv4  = 0x12
+	tcpOverIPv6  = 0x21
+	udpOverIPv6  = 0x22
+	unixStream   = 0x31
+	unixDatagram = 0x32
+)
+
+const (
+	ipv4AddrLength = 4
+	ipv6AddrLength = 16
+)
+
 func WithProxyProtocolCodec(c codec.Codec) codec.Codec {
 	return &proxyProtocolCodec{Codec: c}
 }
@@ -44,7 +59,7 @@ type proxyProtocolCodec struct {
 type ProxyHeaderV2 struct {
 	Signature          [12]byte
 	ProtocolVersionCmd uint8
-	ProtocolVersion    uint8
+	ProtocolFamily     uint8
 	Length             uint16
 }
 
@@ -95,26 +110,44 @@ func parseProxyHeaderV2(in *buf.ByteBuf) (*ProxyAddr, bool, error) {
 	// valid proxy header, consume the bytes
 	in.Skip(ProxyHeaderLength)
 
+	// According to ppv2:
+	//
+	// When a sender presents a
+	// LOCAL connection, it should not present any address, so it sets this field to
+	// zero. Receivers MUST always consider this field to skip the appropriate number
+	// of bytes and must not assume zero is presented for LOCAL connections.
+	//
+	// In practice, the proxy may add extra information (AWS NLB do this) in the proxy header
+	// which makes the body length > address length. So here we consume the entire body and
+	// read address from it.
+	body := make([]byte, header.Length)
+	if _, err := in.Read(body); err != nil {
+		return nil, false, moerr.NewInternalErrorNoCtx("cannot read proxy address, %s", err.Error())
+	}
+	bodyBuf := bytes.NewBuffer(body)
 	addr := &ProxyAddr{}
-	switch header.Length {
-	case 0:
-		// LOCAL connection, no source address will be presented
-		return addr, true, nil
-	case 12, 36:
-		if err := readProxyAddr(in, header.Length, addr); err != nil {
+	switch header.ProtocolFamily {
+	case tcpOverIPv4, udpOverIPv4:
+		if err := readProxyAddr(bodyBuf, ipv4AddrLength, addr); err != nil {
 			return nil, false, err
 		}
 		return addr, true, nil
+	case tcpOverIPv6, udpOverIPv6:
+		if err := readProxyAddr(bodyBuf, ipv6AddrLength, addr); err != nil {
+			return nil, false, err
+		}
+		return addr, true, nil
+	case unspec, unixStream, unixDatagram:
+		// no address to read
+		return addr, false, nil
 	default:
-		return nil, false, moerr.NewInternalErrorNoCtx("invalid source address length %d", header.Length)
+		return nil, false, moerr.NewInternalErrorNoCtx("unknown protocol family [%x]", header.ProtocolFamily)
 	}
 }
 
-func readProxyAddr(in *buf.ByteBuf, length uint16, addr *ProxyAddr) error {
-	// 4 presents source port (2 bytes) + target port (2 bytes)
-	addrLength := (length - 4) / 2
-	addr.SourceAddress = make(net.IP, addrLength)
-	addr.TargetAddress = make(net.IP, addrLength)
+func readProxyAddr(in io.Reader, length uint16, addr *ProxyAddr) error {
+	addr.SourceAddress = make(net.IP, length)
+	addr.TargetAddress = make(net.IP, length)
 	if err := binary.Read(in, binary.BigEndian, addr.SourceAddress); err != nil {
 		return err
 	}
