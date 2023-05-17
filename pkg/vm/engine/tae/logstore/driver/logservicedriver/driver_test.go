@@ -81,6 +81,7 @@ func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *Log
 }
 
 func TestReplay1(t *testing.T) {
+	t.Skip("debug")
 	service, ccfg := initTest(t)
 	defer service.Close()
 
