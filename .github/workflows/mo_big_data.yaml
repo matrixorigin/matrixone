@@ -133,7 +133,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-load-data
-          token: ${{secrets.TOOL_REPO_TOKEN}}
+          token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load-data
           ref: main
 
@@ -141,7 +141,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-ssb
-          token: ${{secrets.TOOL_REPO_TOKEN}}
+          token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-ssb
           ref: main
           
@@ -150,7 +150,7 @@ jobs:
         uses: actions/checkout@v2
         with:
           repository: matrixorigin/mo-tpch
-          token: ${{secrets.TOOL_REPO_TOKEN}}
+          token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-tpch
           ref: main
 
@@ -159,7 +159,7 @@ jobs:
         uses: actions/checkout@v2
         with:
           repository: matrixorigin/mo-load
-          token: ${{secrets.TOOL_REPO_TOKEN}}
+          token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load
           ref: main
 
@@ -168,7 +168,7 @@ jobs:
         uses: actions/checkout@v2
         with:
           repository: matrixorigin/mo-sysbench
-          token: ${{secrets.TOOL_REPO_TOKEN}}
+          token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-sysbench
           ref: main
 
@@ -177,7 +177,7 @@ jobs:
         uses: actions/checkout@v2
         with:
           repository: matrixorigin/mo-tpcc
-          token: ${{secrets.TOOL_REPO_TOKEN}}
+          token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-tpcc
           ref: main
           
