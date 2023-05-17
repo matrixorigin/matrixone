@@ -325,6 +325,10 @@ func (vec *vectorWrapper) CloneWindow(offset, length int, allocator ...*mpool.MP
 }
 
 func (vec *vectorWrapper) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+	_ = vec.extendWithOffset(src.GetDownstreamVector(), srcOff, srcLen)
+}
+
+func (vec *vectorWrapper) extendWithOffset(src *cnVector.Vector, srcOff, srcLen int) (err error) {
 	if vec.downstreamVector.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("extend to const vectorWrapper"))
 	}
@@ -333,12 +337,10 @@ func (vec *vectorWrapper) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	}
 
 	if srcOff == 0 && srcLen == src.Length() {
-		if err := cnVector.GetUnionAllFunction(
+		err = cnVector.GetUnionAllFunction(
 			*vec.GetType(),
 			vec.mpool,
-		)(vec.downstreamVector, src.GetDownstreamVector()); err != nil {
-			panic(err)
-		}
+		)(vec.downstreamVector, src)
 		return
 	}
 
@@ -346,10 +348,8 @@ func (vec *vectorWrapper) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	for j := 0; j < srcLen; j++ {
 		sels[j] = int32(j) + int32(srcOff)
 	}
-	err := vec.downstreamVector.Union(src.GetDownstreamVector(), sels, vec.GetAllocator())
-	if err != nil {
-		panic(err)
-	}
+	err = vec.downstreamVector.Union(src, sels, vec.mpool)
+	return
 }
 
 func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
