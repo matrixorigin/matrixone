@@ -725,6 +725,8 @@ func EvaluateFilterByZoneMap(
 	}
 
 	if len(columnMap) == 0 {
+		// XXX should we need to check expr.oid = bool or not ?
+
 		vec, err := EvalExpressionOnce(proc, expr, noColumnBatchForZoneMap)
 		if err != nil {
 			return true
