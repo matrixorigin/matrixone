@@ -28,7 +28,7 @@ key-prefix = "server/data"
 memory-capacity = "64MB"
 
 [fileservice.cache]
-memory-capacity = "256MB"
+memory-capacity = "128MB"
 disk-capacity = "8GB"
 disk-path = "mo-data/file-service-cache"
 disk-min-evict-interval = "7m"
