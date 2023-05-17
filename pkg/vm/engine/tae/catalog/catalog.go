@@ -683,8 +683,6 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	if err != nil {
 		panic(err)
 	}
-	fnum, _ := cmd.ID.BlockID.Offsets()
-	seg.OnReplayBlockID(fnum)
 	blk, err := seg.GetBlockEntryByID(&cmd.ID.BlockID)
 	un := cmd.mvccNode
 	un.SetLogIndex(idx)
@@ -768,8 +766,6 @@ func (catalog *Catalog) onReplayCreateBlock(
 		logutil.Info(catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
-	fnum, _ := blkid.Offsets()
-	seg.OnReplayBlockID(fnum)
 	blk, _ := seg.GetBlockEntryByID(blkid)
 	var un *MVCCNode[*MetadataMVCCNode]
 	if blk == nil {
