@@ -37,7 +37,7 @@ func String(_ any, buf *bytes.Buffer) {
 func Prepare(_ *proc, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = &container{
-		emptyBat: &batch.Batch{},
+		emptyBat: batch.EmptyBatch,
 	}
 	return nil
 }
@@ -53,13 +53,8 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
 	anal.Input(bat, isFirst)
 	if bat == nil {
 		if arg.ctr.insertBat != nil {
-			newBat := batch.NewWithSize(len(arg.ctr.insertBat.Vecs))
-			newBat.Attrs = arg.ctr.insertBat.Attrs
-			for idx := range arg.ctr.insertBat.Vecs {
-				newBat.SetVector(int32(idx), proc.GetVector(*arg.ctr.insertBat.GetVector(int32(idx)).GetType()))
-			}
-			if _, err := newBat.Append(proc.Ctx, proc.GetMPool(), arg.ctr.insertBat); err != nil {
-				newBat.Clean(proc.GetMPool())
+			newBat, err := arg.ctr.insertBat.Dup(proc.Mp())
+			if err != nil {
 				return false, err
 			}
 			anal.Output(newBat, isLast)
@@ -67,8 +62,10 @@ func Call(idx int, proc *proc, x any, isFirst, isLast bool) (bool, error) {
 		}
 		return true, nil
 	}
+
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
+		proc.SetInputBatch(arg.ctr.emptyBat)
 		return false, nil
 	}
 
@@ -219,39 +216,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		}
 	}
 
-	// make return batch like update statement
-	// updateAttrs := make([]string, 0, len(originBatch.Vecs))
-	// vecs := make([]*vector.Vector, 0, len(originBatch.Vecs))
-	// for i := columnCount; i < len(attrs); i++ {
-	// 	updateAttrs = append(updateAttrs, attrs[i])
-	// 	fromVec := insertBatch.Vecs[i]
-	// 	vec := vector.NewVec(*fromVec.GetType())
-	// 	err := vec.UnionMulti(fromVec, 0, fromVec.Length(), proc.GetMPool())
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	vecs = append(vecs, vec)
-	// }
-	// for i := 0; i < columnCount; i++ {
-	// 	updateAttrs = append(updateAttrs, attrs[i])
-	// 	fromVec := insertBatch.Vecs[i]
-	// 	vec := vector.NewVec(*fromVec.GetType())
-	// 	err := vec.UnionMulti(fromVec, 0, fromVec.Length(), proc.GetMPool())
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	vecs = append(vecs, vec)
-	// }
-	// updateBatch := batch.NewWithSize(len(updateAttrs))
-	// updateBatch.Attrs = updateAttrs
-	// for i, vec := range vecs {
-	// 	updateBatch.SetVector(int32(i), vec)
-	// }
-	// updateBatch.Zs = append(updateBatch.Zs, insertBatch.Zs...)
-	// insertBatch.Clean(proc.GetMPool())
-
 	return nil
-
 }
 
 func resetColPos(e *plan.Expr, columnCount int) {

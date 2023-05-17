@@ -22,6 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
+var (
+	EmptyBatch = &Batch{}
+)
+
 type EncodeBatch struct {
 	Zs       []int64
 	Vecs     []*vector.Vector

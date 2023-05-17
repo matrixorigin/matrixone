@@ -43,10 +43,10 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	for k := range arg.container.mp {
-		arg.container.mp[k].Clean(proc.GetMPool())
-		arg.container.mp[k] = nil
-	}
+	// for k := range arg.container.mp {
+	// 	arg.container.mp[k].Clean(proc.GetMPool())
+	// 	arg.container.mp[k] = nil
+	// }
 }
 
 func (arg *Argument) GetMetaLocBat(name string) {

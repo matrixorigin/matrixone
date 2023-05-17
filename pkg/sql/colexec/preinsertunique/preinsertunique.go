@@ -52,7 +52,9 @@ func Call(idx int, proc *process.Process, arg any, _, _ bool) (bool, error) {
 		return true, nil
 	}
 
-	if len(inputBat.Zs) == 0 {
+	if inputBat.Length() == 0 {
+		inputBat.Clean(proc.Mp())
+		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
 	defer proc.PutBatch(inputBat)

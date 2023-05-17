@@ -548,6 +548,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			if err := types.Decode([]byte(dsc.Block), bat); err != nil {
 				return nil, err
 			}
+			bat.Cnt = 1
 			s.DataSource.Bat = bat
 		}
 	}
@@ -1474,6 +1475,7 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
+	bat.Cnt = 1
 	//mp := proc.Mp()
 	err := types.Decode(data, bat)
 	// allocated memory of vec from mPool.

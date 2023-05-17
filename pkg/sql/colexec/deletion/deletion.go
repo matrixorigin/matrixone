@@ -111,6 +111,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	// empty batch
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
+		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
 
@@ -120,6 +121,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		// when the size is too large we will
 		// trigger write s3
 		p.SplitBatch(proc, bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
 
@@ -157,7 +159,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		}
 	}
 
-	proc.SetInputBatch(nil)
+	proc.SetInputBatch(batch.EmptyBatch)
 
 	if delCtx.AddAffectedRows {
 		atomic.AddUint64(&p.affectedRows, affectedRows)

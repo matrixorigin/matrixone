@@ -197,9 +197,11 @@ func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 }
 
 func (proc *Process) PutBatch(bat *batch.Batch) {
-	if atomic.LoadInt64(&bat.Cnt) == 0 {
-		// panic("put batch with zero cnt")
+	if bat == batch.EmptyBatch {
 		return
+	}
+	if atomic.LoadInt64(&bat.Cnt) == 0 {
+		panic("put batch with zero cnt")
 	}
 	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
 		return

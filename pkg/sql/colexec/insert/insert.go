@@ -99,6 +99,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 	}
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
+		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
 	defer proc.PutBatch(bat)
@@ -128,7 +129,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 				return false, err
 			}
 		}
-		proc.SetInputBatch(&batch.Batch{})
+		proc.SetInputBatch(batch.EmptyBatch)
 
 	} else {
 		insertBat := batch.NewWithSize(len(ap.InsertCtx.Attrs))

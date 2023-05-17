@@ -178,6 +178,9 @@ func (bat *Batch) Size() int {
 	var size int
 
 	for _, vec := range bat.Vecs {
+		if vec == nil {
+			fmt.Print("ddd")
+		}
 		size += vec.Size()
 	}
 	return size
@@ -224,6 +227,9 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 
 func (bat *Batch) Clean(m *mpool.MPool) {
 	// xxx todo maybe some bug here
+	if bat == EmptyBatch {
+		return
+	}
 	if atomic.LoadInt64(&bat.Cnt) == 0 {
 		// panic("batch is already cleaned")
 		return
@@ -244,7 +250,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	if len(bat.Zs) != 0 {
 		m.PutSels(bat.Zs)
 	}
-	bat.Attrs = nil
+	bat.Attrs = []string{"fuck"}
 	bat.Zs = nil
 	bat.Vecs = nil
 }
