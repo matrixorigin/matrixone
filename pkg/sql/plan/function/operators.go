@@ -906,7 +906,7 @@ var operators = map[int]Functions{
 
 	IN: {
 		Id:          IN,
-		Flag:        plan.Function_STRICT,
+		Flag:        plan.Function_STRICT | plan.Function_MONOTONIC,
 		Layout:      IN_PREDICATE,
 		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
