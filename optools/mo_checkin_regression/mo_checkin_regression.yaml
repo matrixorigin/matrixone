@@ -1,12 +1,15 @@
 apiVersion: core.matrixorigin.io/v1alpha1
 kind: MatrixOneCluster
 metadata:
-  name: mo-big-data
-  namespace: nsformobigtest
+  name: mo-checkin-regression
+  namespace: nsformocheckin
 spec:
   nodeSelector:
     role: mo-big-data-pr
   dn:
+    overlay:
+      imagePullSecrets:
+      - name: dockerhub
     cacheVolume:
       size: 100Gi
     sharedStorageCache:
@@ -39,6 +42,9 @@ spec:
         memory: 16Gi
   imageRepository: matrixorigin/matrixone
   logService:
+    overlay:
+      imagePullSecrets:
+      - name: dockerhub
     replicas: 3
     resources:
       requests:
@@ -49,7 +55,7 @@ spec:
         memory: 16Gi
     sharedStorage:
       s3:
-        path: s3pathformobigtest
+        path: s3pathformocheckin
         s3RetentionPolicy: Retain
         secretRef:
           name: aws-secret
@@ -84,6 +90,8 @@ spec:
       enable-cn-based-consistency = true
     replicas: 2
     overlay:
+      imagePullSecrets:
+      - name: dockerhub
       env:
       - name: GOMEMLIMIT
         value: "50000MiB"
