@@ -108,7 +108,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 		errReceiveChan = make(chan error, len(s.RemoteReceivRegInfos))
 		s.notifyAndReceiveFromRemote(errReceiveChan)
 	}
-
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
