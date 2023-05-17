@@ -275,14 +275,14 @@ func (bat *Batch) String() string {
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	rbat := NewWithSize(len(bat.Vecs))
 	rbat.SetAttributes(bat.Attrs)
-	for j := range bat.Vecs {
+	for j, vec := range bat.Vecs {
 		typ := *bat.GetVector(int32(j)).GetType()
-		vec := vector.NewVec(typ)
-		if err := vector.GetUnionAllFunction(typ, mp)(vec, bat.GetVector(int32(j))); err != nil {
+		rvec := vector.NewVec(typ)
+		if err := vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
 			rbat.Clean(mp)
 			return nil, err
 		}
-		rbat.SetVector(int32(j), vec)
+		rbat.SetVector(int32(j), rvec)
 	}
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	return rbat, nil

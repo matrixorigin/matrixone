@@ -625,13 +625,12 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		}
 		return tbl.db.txn.WriteFile(INSERT, tbl.db.databaseId, tbl.tableId, tbl.db.databaseName, tbl.tableName, fileName, ibat, tbl.db.txn.dnStores[0])
 	}
-	ibat := batch.NewWithSize(len(bat.Attrs))
-	ibat.SetAttributes(bat.Attrs)
-	for j := range bat.Vecs {
-		ibat.SetVector(int32(j), vector.NewVec(*bat.GetVector(int32(j)).GetType()))
-	}
 	ibat, err := bat.Dup(tbl.db.txn.proc.Mp())
 	if err != nil {
+		return err
+	}
+	if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
 	}
 	var packer *types.Packer
