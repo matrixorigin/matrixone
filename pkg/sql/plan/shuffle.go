@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	HashMapSizeForBucket = 100
+	HashMapSizeForBucket = 250000
 	MAXShuffleDOP        = 16
 )
 
@@ -53,6 +53,9 @@ func NeedShuffle(n *plan.Node) bool {
 		return false
 	}
 	if n.Stats.HashmapSize < HashMapSizeForBucket {
+		return false
+	}
+	if n.Stats.Outcnt/n.Stats.Cost < 0.1 {
 		return false
 	}
 
