@@ -267,7 +267,6 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, s *StatsIn
 	return 0.1
 }
 
-// estimate output lines for a filter
 func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 	if expr == nil {
 		return 1
@@ -346,6 +345,23 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 		}
 	}
 	return w
+}
+
+func estimateFilterBlockSelectivity(expr *plan.Expr, tableDef *plan.TableDef) float64 {
+	if !CheckExprIsMonotonic(nil, expr) {
+		return 1
+	}
+	ret, col := CheckFilter(expr)
+	if ret && col != nil {
+		switch getSortOrder(tableDef, col.Name) {
+		case -1:
+			return 1
+		case 0:
+			return 1
+		}
+	}
+	// do not know selectivity for this expr, default 0.5
+	return 0.5
 }
 
 func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
