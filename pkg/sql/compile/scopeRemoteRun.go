@@ -980,7 +980,12 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		lockArg := lockop.NewArgument()
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
-			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockTable())
+			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+		}
+		for _, target := range t.Targets {
+			if target.LockTable {
+				lockArg.LockTable(target.TableId)
+			}
 		}
 		v.Arg = lockArg
 	case vm.PreInsertUnique:

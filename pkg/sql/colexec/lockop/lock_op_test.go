@@ -185,7 +185,7 @@ func runLockOpTest(
 			tsType := types.New(types.T_TS, 0, 0)
 			arg := NewArgument()
 			for idx, table := range tables {
-				arg.AddLockTarget(table, offset, pkType, offset+1, false)
+				arg.AddLockTarget(table, offset, pkType, offset+1)
 				offset += 2
 
 				vec := vector.NewVec(pkType)

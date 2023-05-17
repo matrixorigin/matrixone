@@ -368,17 +368,17 @@ func (c *Compile) cnListStrategy() {
 	}
 }
 
-func (c *Compile) compileAttachedScope(ctx context.Context, attachedPlan *plan.Plan) ([]*Scope, error) {
-	query := attachedPlan.Plan.(*plan.Plan_Query)
-	attachedScope, err := c.compileQuery(ctx, query.Query)
-	if err != nil {
-		return nil, err
-	}
-	for _, s := range attachedScope {
-		s.Plan = attachedPlan
-	}
-	return attachedScope, nil
-}
+// func (c *Compile) compileAttachedScope(ctx context.Context, attachedPlan *plan.Plan) ([]*Scope, error) {
+// 	query := attachedPlan.Plan.(*plan.Plan_Query)
+// 	attachedScope, err := c.compileQuery(ctx, query.Query)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	for _, s := range attachedScope {
+// 		s.Plan = attachedPlan
+// 	}
+// 	return attachedScope, nil
+// }
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
