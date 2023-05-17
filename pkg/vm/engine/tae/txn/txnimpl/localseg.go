@@ -209,10 +209,10 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			if err != nil {
 				return err
 			}
-			prefix := appender.GetMeta().(*catalog.BlockEntry).MakeKey()
+			blockId := appender.GetMeta().(*catalog.BlockEntry).ID
 			col, err := model.PreparePhyAddrData(
 				catalog.PhyAddrColumnType,
-				prefix,
+				&blockId,
 				anode.GetMaxRow()-toAppend,
 				toAppend)
 			if err != nil {

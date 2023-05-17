@@ -18,16 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// EncodeBlockKeyPrefix [48 Bit (BlockID) + 48 Bit (SegmentID)]
-func EncodeBlockKeyPrefix(segmentId, blockId uint64) []byte {
-	buf := make([]byte, 12)
-	tempBuf := types.EncodeUint64(&segmentId)
-	copy(buf[0:], tempBuf[2:])
-	tempBuf = types.EncodeUint64(&blockId)
-	copy(buf[6:], tempBuf[2:])
-	return buf
-}
-
 func EncodePhyAddrKeyWithPrefix(prefix []byte, offset uint32) types.Rowid {
 	var rowid types.Rowid
 	copy(rowid[:], prefix)

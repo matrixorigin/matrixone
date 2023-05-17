@@ -182,12 +182,12 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, []uint16,
 	return found, idxes, typs
 }
 
-func preparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32, pool *mpool.MPool) (col *vector.Vector, err error) {
+func preparePhyAddrData(typ types.Type, id *types.Blockid, startRow, length uint32, pool *mpool.MPool) (col *vector.Vector, err error) {
 	col = vector.NewVec(typ)
 	col.PreExtend(int(length), pool)
 	for i := uint32(0); i < length; i++ {
-		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
-		vector.AppendFixed(col, rowid, false, pool)
+		rowid := objectio.NewRowid(id, startRow+i)
+		vector.AppendFixed(col, *rowid, false, pool)
 	}
 	return
 }
@@ -207,7 +207,7 @@ func readBlockData(
 		// generate rowid
 		if rowid, err = preparePhyAddrData(
 			types.T_Rowid.ToType(),
-			info.BlockID[:],
+			&info.BlockID,
 			0,
 			info.MetaLocation().Rows(),
 			m,
