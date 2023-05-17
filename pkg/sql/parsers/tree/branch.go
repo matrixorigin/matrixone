@@ -15,6 +15,7 @@
 package tree
 
 type ElseIfStmt struct {
+	statementImpl
 	Cond Expr
 	Body []Statement
 }
@@ -30,6 +31,8 @@ func (node *ElseIfStmt) Format(ctx *FmtCtx) {
 		}
 	}
 }
+func (node *ElseIfStmt) GetStatementType() string { return "ElseIf Statement" }
+func (node *ElseIfStmt) GetQueryType() string     { return QueryTypeTCL }
 
 type IfStmt struct {
 	statementImpl
@@ -70,6 +73,7 @@ func (node *IfStmt) GetStatementType() string { return "If Statement" }
 func (node *IfStmt) GetQueryType() string     { return QueryTypeTCL }
 
 type WhenStmt struct {
+	statementImpl
 	Cond Expr
 	Body []Statement
 }
@@ -85,6 +89,8 @@ func (node *WhenStmt) Format(ctx *FmtCtx) {
 		}
 	}
 }
+func (node *WhenStmt) GetStatementType() string { return "When Statement" }
+func (node *WhenStmt) GetQueryType() string     { return QueryTypeTCL }
 
 type CaseStmt struct {
 	statementImpl

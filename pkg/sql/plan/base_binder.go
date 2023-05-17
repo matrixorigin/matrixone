@@ -31,6 +31,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -90,6 +91,29 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindRangeCond(exprImpl, depth, isRoot)
 
 	case *tree.UnresolvedName:
+		// check existence
+		if b.GetContext() != nil && b.GetContext().Value(defines.InSp{}) != nil && b.GetContext().Value(defines.InSp{}).(bool) {
+			tmpScope := b.GetContext().Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+			for i := len(*tmpScope) - 1; i >= 0; i-- {
+				curScope := (*tmpScope)[i]
+				if _, ok := curScope[strings.ToLower(exprImpl.Parts[0])]; ok {
+					expr = &Expr{
+						Typ: &plan.Type{
+							Id: int32(types.T_any),
+						},
+						Expr: &plan.Expr_V{
+							V: &plan.VarRef{
+								Name:   exprImpl.Parts[0],
+								System: false,
+								Global: false,
+							},
+						},
+					}
+					err = nil
+					return
+				}
+			}
+		}
 		expr, err = b.impl.BindColRef(exprImpl, depth, isRoot)
 
 	case *tree.CastExpr:
