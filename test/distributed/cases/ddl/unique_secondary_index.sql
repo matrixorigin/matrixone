@@ -34,7 +34,9 @@ insert into index_06 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
 select * from index_06;
 create table index_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned,unique key id1(col1),key id2(col4));
 insert into index_07 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+-- @bvt:issue#9510
 insert into index_07 values (1,2,20.23,56),(1,4,100.00,90);
+-- @bvt:issue
 select * from index_07;
 create table index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned,unique key id1(col1),key id2(col4));
 insert into index_08 values (1,2,20.23,56),(1,4,100.00,90);
@@ -63,7 +65,9 @@ create table index_14 (col1 bigint auto_increment primary key,col2 timestamp,col
 insert into index_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
 insert into index_14(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table index_15 (col1 bigint primary key,col2 bool,unique key c2(col2));
+-- @bvt:issue#9510
 insert into index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
+-- @bvt:issue
 insert into index_15 values (1,TRUE),(2,FALSE),(3,NULL);
 select * from index_15;
 -- blob/json/text type not support unique index
@@ -240,7 +244,9 @@ select * from create_index_06;
 create table create_index_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned);
 create unique index int_unsigned_index on create_index_07(col1);
 insert into create_index_07 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+-- @bvt:issue#9510
 insert into create_index_07 values (1,2,20.23,56),(1,4,100.00,90);
+-- @bvt:issue
 select * from create_index_07;
 create table create_index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned);
 create unique index bigint_unsigned_index on create_index_08(col1);
@@ -276,7 +282,9 @@ insert into create_index_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01
 insert into create_index_14(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
 create table create_index_15 (col1 bigint primary key,col2 bool);
 create unique index bool_index on create_index_15(col2);
+-- @bvt:issue#9510
 insert into create_index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
+-- @bvt:issue
 insert into create_index_15 values (1,TRUE),(2,FALSE),(3,NULL);
 select * from create_index_15;
 -- blob/json/text type not support unique index
