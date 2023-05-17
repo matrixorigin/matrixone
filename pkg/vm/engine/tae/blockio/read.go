@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
@@ -302,7 +301,7 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows []int64)
 		if aborts[i] || tss[i].Greater(ts) {
 			continue
 		}
-		_, row := model.DecodePhyAddrKey(&rowid)
+		row := rowid.GetRowOffset()
 		nulls.Add(deletedRows, uint64(row))
 	}
 

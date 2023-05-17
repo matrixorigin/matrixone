@@ -280,7 +280,7 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 	err = containers.ForeachVectorWindow(
 		keys, 0, keys.Length(),
 		func(rid types.Rowid, _ bool, _ int) (err error) {
-			id.BlockID, row = model.DecodePhyAddrKey(&rid)
+			id.BlockID, row = rid.Decode()
 			err = h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
 			return
 		}, nil, nil)

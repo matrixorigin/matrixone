@@ -20,11 +20,5 @@ import (
 
 func DecodePhyAddrKeyFromValue(v any) (blockId types.Blockid, offset uint32) {
 	rowid := v.(types.Rowid)
-	return DecodePhyAddrKey(&rowid)
-}
-
-func DecodePhyAddrKey(src *types.Rowid) (blockId types.Blockid, offset uint32) {
-	blockId = src.CloneBlockID()
-	offset = types.DecodeUint32(src[types.BlockidSize:])
-	return
+	return rowid.Decode()
 }

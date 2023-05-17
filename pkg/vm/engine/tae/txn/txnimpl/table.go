@@ -164,7 +164,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 		return
 	}
 	changed = true
-	nid.BlockID, nrow = model.DecodePhyAddrKey(&rowID)
+	nid.BlockID, nrow = rowID.Decode()
 	return
 }
 
@@ -226,7 +226,7 @@ func (tbl *txnTable) recurTransferDelete(
 			msg)
 		return
 	}
-	blockID, offset := model.DecodePhyAddrKey(&rowID)
+	blockID, offset := rowID.Decode()
 	newID := &common.ID{
 		TableID: id.TableID,
 		BlockID: blockID,
