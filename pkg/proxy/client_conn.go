@@ -236,9 +236,9 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 	case *setVarEvent:
 		return c.handleSetVar(ev)
 	case *suspendAccountEvent:
-		return c.handleSuspendAccount(ev, resp)
+		return c.handleSuspendAccount(ev)
 	case *dropAccountEvent:
-		return c.handleDropAccount(ev, resp)
+		return c.handleDropAccount(ev)
 	default:
 	}
 	return nil
@@ -309,23 +309,7 @@ func (c *clientConn) handleSetVar(e *setVarEvent) error {
 }
 
 // handleSuspendAccountEvent handles the suspend account event.
-func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent, resp chan<- []byte) error {
-	// a temp cn server.
-	cn := &CNServer{
-		addr: e.addr,
-		salt: c.mysqlProto.GetSalt(),
-	}
-	csp, _ := c.tun.getPipes()
-	if csp.inTxn() {
-		// TODO(volgariver6): this is for the compatibility with the case that we are
-		// now in a transaction. suspend or drop operation can not be activated within a
-		// transaction.
-		c.sendErr(moerr.NewInternalErrorNoCtx("administrative command is unsupported in transactions").Error(), resp)
-	}
-	if err := c.connAndExec(cn, e.stmt, resp); err != nil {
-		return err
-	}
-
+func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent) error {
 	// handle kill connection.
 	cns, err := c.router.SelectByTenant(e.account)
 	if err != nil {
@@ -355,14 +339,13 @@ func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent, resp chan<- []
 }
 
 // handleDropAccountEvent handles the drop account event.
-func (c *clientConn) handleDropAccount(e *dropAccountEvent, resp chan<- []byte) error {
+func (c *clientConn) handleDropAccount(e *dropAccountEvent) error {
 	se := &suspendAccountEvent{
 		baseEvent: e.baseEvent,
 		stmt:      e.stmt,
 		account:   e.account,
-		addr:      e.addr,
 	}
-	return c.handleSuspendAccount(se, resp)
+	return c.handleSuspendAccount(se)
 }
 
 // Close implements the ClientConn interface.

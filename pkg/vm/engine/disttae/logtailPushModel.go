@@ -345,27 +345,29 @@ func (client *pushClient) unusedTableGCTicker() {
 
 			t := time.Now()
 			client.subscribed.mutex.Lock()
+			func() {
+				defer client.subscribed.mutex.Unlock()
 
-			shouldClean := t.Add(-unsubscribeTimer)
-			for k, v := range client.subscribed.m {
-				if ifShouldNotDistribute(k.db, k.tbl) {
-					// never unsubscribe the mo_databases, mo_tables, mo_columns.
-					continue
-				}
-				if !v.isDeleting && !v.latestTime.After(shouldClean) {
-					if err := client.unsubscribeTable(ctx, api.TableID{DbId: k.db, TbId: k.tbl}); err == nil {
-						logutil.Infof("sign tbl[dbId: %d, tblId: %d] unsubscribing", k.db, k.tbl)
-						client.subscribed.m[k] = tableSubscribeStatus{
-							isDeleting: true,
-							latestTime: v.latestTime,
-						}
+				shouldClean := t.Add(-unsubscribeTimer)
+				for k, v := range client.subscribed.m {
+					if ifShouldNotDistribute(k.db, k.tbl) {
+						// never unsubscribe the mo_databases, mo_tables, mo_columns.
 						continue
-					} else {
-						logutil.Errorf("sign tbl[dbId: %d, tblId: %d] unsubscribing failed, err : %s", k.db, k.tbl, err.Error())
+					}
+					if !v.isDeleting && !v.latestTime.After(shouldClean) {
+						if err := client.unsubscribeTable(ctx, api.TableID{DbId: k.db, TbId: k.tbl}); err == nil {
+							logutil.Infof("sign tbl[dbId: %d, tblId: %d] unsubscribing", k.db, k.tbl)
+							client.subscribed.m[k] = tableSubscribeStatus{
+								isDeleting: true,
+								latestTime: v.latestTime,
+							}
+							continue
+						} else {
+							logutil.Errorf("sign tbl[dbId: %d, tblId: %d] unsubscribing failed, err : %s", k.db, k.tbl, err.Error())
+						}
 					}
 				}
-			}
-			client.subscribed.mutex.Unlock()
+			}()
 		}
 	}()
 }
@@ -391,12 +393,13 @@ type tableSubscribeStatus struct {
 
 func (s *subscribedTable) initTableSubscribeRecord() {
 	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.m = make(map[subscribeID]tableSubscribeStatus)
-	s.mutex.Unlock()
 }
 
 func (s *subscribedTable) getTableSubscribe(dbId, tblId uint64) bool {
 	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	status, ok := s.m[subscribeID{dbId, tblId}]
 	if ok {
 		if status.isDeleting {
@@ -408,24 +411,23 @@ func (s *subscribedTable) getTableSubscribe(dbId, tblId uint64) bool {
 			}
 		}
 	}
-	s.mutex.Unlock()
 	return ok
 }
 
 func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
 	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.m[subscribeID{dbId, tblId}] = tableSubscribeStatus{
 		isDeleting: false,
 		latestTime: time.Now(),
 	}
-	s.mutex.Unlock()
 	logutil.Infof("subscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	delete(s.m, subscribeID{dbId, tblId})
-	s.mutex.Unlock()
 	logutil.Infof("unsubscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
 }
 
@@ -434,52 +436,40 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 type syncLogTailTimestamp struct {
 	timestampWaiter client.TimestampWaiter
 	ready           atomic.Bool
-	tList           []struct {
-		time timestamp.Timestamp
-		sync.RWMutex
-	}
+	tList           []atomic.Pointer[timestamp.Timestamp]
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
 	r.timestampWaiter = timestampWaiter
 	r.ready.Store(false)
 	if len(r.tList) == 0 {
-		r.tList = make([]struct {
-			time timestamp.Timestamp
-			sync.RWMutex
-		}, parallelNums+1)
-	} else {
-		for i := range r.tList {
-			r.tList[i].Lock()
-		}
-		for i := range r.tList {
-			r.tList[i].time = timestamp.Timestamp{}
-		}
-		for i := range r.tList {
-			r.tList[i].Unlock()
-		}
+		r.tList = make(
+			[]atomic.Pointer[timestamp.Timestamp],
+			parallelNums+1,
+		)
+	}
+	for i := range r.tList {
+		r.tList[i].Store(new(timestamp.Timestamp))
 	}
 }
 
 func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
-	r.tList[0].RLock()
-	minT := r.tList[0].time
-	r.tList[0].RUnlock()
-	for i := 1; i < len(r.tList); i++ {
-		r.tList[i].RLock()
-		tempT := r.tList[i].time
-		r.tList[i].RUnlock()
-		if tempT.Less(minT) {
-			minT = tempT
+	var minT timestamp.Timestamp
+	for i := 0; i < len(r.tList); i++ {
+		t := *r.tList[i].Load()
+		if i == 0 {
+			minT = t
+		} else {
+			if t.Less(minT) {
+				minT = t
+			}
 		}
 	}
 	return minT
 }
 
 func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
-	r.tList[index].Lock()
-	r.tList[index].time = newTimestamp
-	r.tList[index].Unlock()
+	r.tList[index].Store(&newTimestamp)
 	r.timestampWaiter.NotifyLatestCommitTS(r.getTimestamp())
 }
 
@@ -725,7 +715,7 @@ func distributeUpdateResponse(
 
 func distributeUnSubscribeResponse(
 	_ context.Context,
-	e *Engine,
+	_ *Engine,
 	response *logtail.UnSubscribeResponse,
 	recRoutines []routineController) error {
 	tbl := response.Table

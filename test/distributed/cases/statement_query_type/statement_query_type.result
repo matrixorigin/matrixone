@@ -207,7 +207,7 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="external_sql" and status != "Running" order by request_at desc limit 112;
+select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 112;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    external_sql
 use system    Other    external_sql
@@ -617,7 +617,7 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and status != "Running" order by request_at desc limit 68;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    cloud_nonuser_sql
 drop database test_db    DDL    cloud_nonuser_sql
