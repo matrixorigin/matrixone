@@ -50,6 +50,7 @@ func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 	case types.T_int32:
 		groupByCol := vector.MustFixedCol[int32](groupByVec)
 		for row, v := range groupByCol {
+
 			regIndex := v % int32(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 			lenShuffledSels[regIndex]++
@@ -84,26 +85,6 @@ func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 	return shuffledBats, nil
 }
 
-// common sender: shuffle to all LocalReceiver
-func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	shuffledBats, err := getShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
-	if err != nil {
-		return false, err
-	}
-
-	for i, reg := range ap.LocalRegs {
-		if shuffledBats[i] != nil {
-			select {
-			case <-reg.Ctx.Done():
-				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
-			case reg.Ch <- shuffledBats[i]:
-			}
-		}
-	}
-
-	return false, nil
-}
-
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	refCountAdd := int64(ap.ctr.localRegsCnt - 1)
@@ -126,38 +107,6 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		}
 	}
 
-	return false, nil
-}
-
-// common sender: shuffle to all RemoteReceiver
-func shuffleToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	if !ap.ctr.prepared {
-		end, err := ap.waitRemoteRegsReady(proc)
-		if err != nil {
-			return false, err
-		}
-		if end {
-			return true, nil
-		}
-	}
-
-	shuffledBats, err := getShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
-	if err != nil {
-		return false, err
-	}
-
-	// send to remote regs
-	for i, r := range ap.ctr.remoteReceivers {
-		if shuffledBats[i] != nil {
-			encodeData, errEncode := types.Encode(shuffledBats[i])
-			if errEncode != nil {
-				return false, errEncode
-			}
-			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
-				return false, err
-			}
-		}
-	}
 	return false, nil
 }
 
@@ -204,11 +153,13 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 	if err != nil {
 		return false, err
 	}
-	regIdx := 0
+
 	// send to remote regs
 	for _, r := range ap.ctr.remoteReceivers {
-		if shuffledBats[regIdx] != nil {
-			encodeData, errEncode := types.Encode(shuffledBats[regIdx])
+		batIndex := ap.ctr.remoteToIdx[r.uuid]
+		batToSend := shuffledBats[batIndex]
+		if batToSend != nil {
+			encodeData, errEncode := types.Encode(batToSend)
 			if errEncode != nil {
 				return false, errEncode
 			}
@@ -216,19 +167,19 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 				return false, err
 			}
 		}
-		regIdx++
 	}
 
 	//send to all local regs
-	for _, reg := range ap.LocalRegs {
-		if shuffledBats[regIdx] != nil {
+	for i, reg := range ap.LocalRegs {
+		batIndex := ap.ShuffleRegIdxLocal[i]
+		batToSend := shuffledBats[batIndex]
+		if batToSend != nil {
 			select {
 			case <-reg.Ctx.Done():
 				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
-			case reg.Ch <- shuffledBats[regIdx]:
+			case reg.Ch <- batToSend:
 			}
 		}
-		regIdx++
 	}
 
 	return false, nil
