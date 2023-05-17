@@ -1366,3 +1366,52 @@ func TestReplayDatabaseEntry(t *testing.T) {
 	assert.Equal(t, datypStr, dbEntry.GetDatType())
 	assert.Equal(t, createSqlStr, dbEntry.GetCreateSql())
 }
+
+func TestReplaySegmentNextObjectIdx(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	schema := catalog.MockSchemaAll(1, -1)
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db", "", "")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	seg, err := rel.CreateSegment(false)
+	assert.NoError(t, err)
+	for i := 0; i < 20; i++ {
+		_, err = seg.CreateBlock(false)
+		assert.NoError(t, err)
+	}
+	assert.NoError(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
+	seg, err = rel.GetSegment(seg.GetID())
+	assert.NoError(t, err)
+	blk, err := seg.CreateBlock(false)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Rollback())
+
+	tae.restart()
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
+	seg, err = rel.GetSegment(seg.GetID())
+	assert.NoError(t, err)
+	blk2, err := seg.CreateBlock(false)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, blk2.ID().Compare(blk.ID()))
+	assert.NoError(t, txn.Rollback())
+
+}

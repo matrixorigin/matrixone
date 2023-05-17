@@ -321,6 +321,12 @@ func (entry *SegmentEntry) CreateBlock(
 	return
 }
 
+func (entry *SegmentEntry) OnReplayBlockID(id uint16) {
+	if entry.nextObjectIdx <= id {
+		entry.nextObjectIdx = id
+	}
+}
+
 func (entry *SegmentEntry) DropBlockEntry(id *objectio.Blockid, txn txnif.AsyncTxn) (deleted *BlockEntry, err error) {
 	blk, err := entry.GetBlockEntryByID(id)
 	if err != nil {
