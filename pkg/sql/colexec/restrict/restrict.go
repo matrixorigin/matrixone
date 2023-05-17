@@ -57,7 +57,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
 
+	var sels []int64
 	for i := range ap.ctr.executors {
+		if bat.Length() == 0 {
+			break
+		}
+
 		vec, err := ap.ctr.executors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			bat.Clean(proc.Mp())
@@ -79,7 +84,11 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				bat.Shrink(nil)
 			}
 		} else {
-			sels := proc.Mp().GetSels()
+			if sels == nil {
+				sels = proc.Mp().GetSels()
+			}
+			sels = sels[:0]
+
 			l := uint64(vec.Length())
 			if bs.WithAnyNullValue() {
 				for j := uint64(0); j < l; j++ {
@@ -97,8 +106,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				}
 			}
 			bat.Shrink(sels)
-			proc.Mp().PutSels(sels)
 		}
+	}
+	if sels != nil {
+		proc.Mp().PutSels(sels)
 	}
 
 	anal.Output(bat, isLast)

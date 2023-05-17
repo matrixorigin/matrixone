@@ -332,7 +332,7 @@ var supportedOperators = []FuncNew{
 	// operator `xor`
 	{
 		functionId: XOR,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT,
 		layout:     BINARY_LOGICAL_OPERATOR,
 		checkFn:    fixedTypeMatch,
 
@@ -1154,7 +1154,7 @@ var supportedOperators = []FuncNew{
 	// operator `mod`
 	{
 		functionId: MOD,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {

@@ -3413,7 +3413,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `year`
 	{
 		functionId: YEAR,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 

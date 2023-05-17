@@ -289,22 +289,10 @@ func generalBin[T binT](ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	rs := vector.MustFunctionResult[int64](result)
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetStrValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(int64(len(v)*8), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func BitLengthFunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2ForStr2[int64](ivecs, result, proc, length, func(v string) int64 {
+		return int64(len(v) * 8)
+	})
 }
 
 func CurrentDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
@@ -331,58 +319,22 @@ func CurrentDate(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return nil
 }
 
-func DateToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	rs := vector.MustFunctionResult[types.Date](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func DateToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Date, types.Date](ivecs, result, proc, length, func(v types.Date) types.Date {
+		return v
+	})
 }
 
-func DatetimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	rs := vector.MustFunctionResult[types.Date](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.ToDate(), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func DatetimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Datetime, types.Date](ivecs, result, proc, length, func(v types.Datetime) types.Date {
+		return v.ToDate()
+	})
 }
 
-func TimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	rs := vector.MustFunctionResult[types.Date](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.ToDate(), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func TimeToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Time, types.Date](ivecs, result, proc, length, func(v types.Time) types.Date {
+		return v.ToDate()
+	})
 }
 
 func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -407,58 +359,22 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func DateToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint8](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.Day(), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func DateToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
+		return v.Day()
+	})
 }
 
-func DatetimeToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint8](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.Day(), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func DatetimeToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
+		return v.Day()
+	})
 }
 
-func DayOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint16](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.DayOfYear(), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func DayOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Date, uint16](ivecs, result, proc, length, func(v types.Date) uint16 {
+		return v.DayOfYear()
+	})
 }
 
 func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -690,15 +606,8 @@ func TimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 	rs := vector.MustFunctionResult[types.Time](result)
 	ivec := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(v, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v, false); err != nil {
-				return err
-			}
+		if err := rs.Append(ivec.GetValue(i)); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -809,54 +718,23 @@ func Decimal128ToTime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func DateToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[types.Timestamp](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.ToTimestamp(proc.SessionInfo.TimeZone), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedTypeTemplate2[types.Date, types.Timestamp](ivecs, result, proc, length, func(v types.Date) types.Timestamp {
+		return v.ToTimestamp(proc.SessionInfo.TimeZone)
+	})
 }
 
 func DatetimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[types.Timestamp](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.ToTimestamp(proc.SessionInfo.TimeZone), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedTypeTemplate2[types.Datetime, types.Timestamp](ivecs, result, proc, length, func(v types.Datetime) types.Timestamp {
+		return v.ToTimestamp(proc.SessionInfo.TimeZone)
+	})
 }
 
 func TimestampToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
 	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v, false); err != nil {
-				return err
-			}
+		if err := rs.Append(ivec.GetValue(i)); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -899,111 +777,39 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func TimestampToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint8](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Hour()), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedTypeTemplate2[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
+		return uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Hour())
+	})
 }
 
 func DatetimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint8](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(uint8(v.Hour()), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedTypeTemplate2[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
+		return uint8(v.Hour())
+	})
 }
 
 func TimestampToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint8](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Minute()), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedTypeTemplate2[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
+		return uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Minute())
+	})
 }
 
 func DatetimeToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint8](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(uint8(v.Minute()), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedTypeTemplate2[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
+		return uint8(v.Minute())
+	})
 }
 
 func TimestampToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint8](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Sec()), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedTypeTemplate2[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
+		return uint8(v.ToDatetime(proc.SessionInfo.TimeZone).Sec())
+	})
 }
 
 func DatetimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	rs := vector.MustFunctionResult[uint8](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(uint8(v.Sec()), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedTypeTemplate2[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
+		return uint8(v.Sec())
+	})
 }
 
 func doBinary(orig []byte) []byte {
@@ -1114,32 +920,13 @@ func hexEncodeInt64(xs int64) string {
 	return fmt.Sprintf("%X", xs)
 }
 
-// Length
-
-func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	rs := vector.MustFunctionResult[int64](result)
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetStrValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			res := strLength(function2Util.QuickBytesToStr(v))
-			if err := rs.Append(res, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2ForStr2[int64](ivecs, result, proc, length, strLength)
 }
 
 func strLength(xs string) int64 {
 	return int64(len(xs))
 }
-
-// LengthUTF8
 
 func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint64](result)
@@ -1163,8 +950,6 @@ func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 func strLengthUTF8(xs []byte) uint64 {
 	return lengthutf8.CountUTF8CodePoints(xs)
 }
-
-// Ltrim
 
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 
@@ -1192,8 +977,6 @@ func ltrim(xs string) string {
 	return strings.TrimLeft(xs, " ")
 }
 
-// Rtrim
-
 func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
@@ -1219,8 +1002,6 @@ func Rtrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 func rtrim(xs string) string {
 	return strings.TrimRight(xs, " ")
 }
-
-// Reverse
 
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 
@@ -1252,8 +1033,6 @@ func reverse(str string) string {
 	}
 	return string(runes)
 }
-
-// Oct
 
 func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	ivec := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
@@ -1329,46 +1108,20 @@ func octFloat[T constraints.Float](xs T) (types.Decimal128, error) {
 		}
 	}
 	return res, nil
-
 }
 
-// Month
-
-func DateToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-	rs := vector.MustFunctionResult[uint8](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.Month(), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func DateToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
+		return v.Month()
+	})
 }
 
-func DatetimeToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	rs := vector.MustFunctionResult[uint8](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.Month(), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func DatetimeToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
+		return v.Month()
+	})
 }
+
 func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[uint8](result)
@@ -1394,42 +1147,18 @@ func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
-// Year
+func DateToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
+		return int64(v.Year())
+	})
+}
 
-func DateToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-	rs := vector.MustFunctionResult[int64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(int64(v.Year()), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func DatetimeToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+		return int64(v.Year())
+	})
 }
-func DatetimeToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	rs := vector.MustFunctionResult[int64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(int64(v.Year()), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
+
 func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[int64](result)
@@ -1452,82 +1181,29 @@ func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-// Week
-
-func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-	rs := vector.MustFunctionResult[uint8](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.WeekOfYear2(), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	rs := vector.MustFunctionResult[uint8](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v.ToDate().WeekOfYear2(), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Date, uint8](ivecs, result, proc, length, func(v types.Date) uint8 {
+		return v.WeekOfYear2()
+	})
 }
 
-// Weekday
-
-func DateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-	rs := vector.MustFunctionResult[int64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(int64(v.DayOfWeek2()), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	ivec := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	rs := vector.MustFunctionResult[int64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(int64(v.ToDate().DayOfWeek2()), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Datetime, uint8](ivecs, result, proc, length, func(v types.Datetime) uint8 {
+		return v.ToDate().WeekOfYear2()
+	})
 }
 
-// Info functions
+func DateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
+		return int64(v.DayOfWeek2())
+	})
+}
+
+func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+		return int64(v.ToDate().DayOfWeek2())
+	})
+}
 
 func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[uint64](result)
@@ -1555,7 +1231,6 @@ func LastInsertID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs := vector.MustFunctionResult[uint64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		//TODO: Validate: Code: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L206
 		if err := rs.Append(proc.SessionInfo.LastInsertID, false); err != nil {
 			return err
 		}
@@ -1573,11 +1248,9 @@ func LastQueryIDWithoutParam(_ []*vector.Vector, result vector.FunctionResultWra
 				return err
 			}
 		}
-		// LAST_QUERY_ID(-1) returns the most recently-executed query (equivalent to LAST_QUERY_ID()).
 		var idx int
 		idx, err = makeQueryIdIdx(-1, cnt, proc)
 		if err != nil {
-			//TODO: Validate: https://github.com/m-schen/matrixone/blob/9e8ef37e2a6f34873ceeb3c101ec9bb14a82a8a7/pkg/sql/plan/function/builtin/unary/infomation_function.go#L223
 			return err
 		}
 
@@ -1664,10 +1337,6 @@ func User(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	}
 	return nil
 }
-
-// ********* Multi from here on *******
-
-// PI
 
 func Pi(_ []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	rs := vector.MustFunctionResult[float64](result)

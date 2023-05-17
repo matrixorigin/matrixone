@@ -40,24 +40,8 @@ var xorFn = optimizedTpsToTrFn[bool, bool](
 	nil, true, true,
 )
 
-func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
-	rs := vector.MustFunctionResult[bool](result)
-
-	if !p1.WithAnyNullValue() {
-		rss := vector.MustFixedCol[bool](rs.GetResultVector())
-		for i := uint64(0); i < uint64(length); i++ {
-			v, _ := p1.GetValue(i)
-			rss[i] = !v
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetValue(i)
-		if err := rs.Append(!v1, null1); err != nil {
-			return err
-		}
-	}
-	return nil
+func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return optimizedTypeTemplate2[bool, bool](parameters, result, proc, length, func(v bool) bool {
+		return !v
+	})
 }
