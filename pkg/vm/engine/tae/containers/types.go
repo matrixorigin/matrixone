@@ -87,10 +87,11 @@ type Vector interface {
 }
 
 type Batch struct {
-	Attrs   []string
-	Vecs    []Vector
-	Deletes *roaring.Bitmap
-	Nameidx map[string]int
+	Attrs    []string
+	Vecs     []Vector
+	Deletes  *roaring.Bitmap
+	Nameidx  map[string]int
+	borrowed bool
 	// refidx  map[int]int
 }
 

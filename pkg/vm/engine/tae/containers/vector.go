@@ -37,6 +37,8 @@ type vectorWrapper struct {
 
 	// Used in Append()
 	mpool *mpool.MPool
+
+	borrowed bool
 }
 
 func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
@@ -246,17 +248,20 @@ func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *roari
 }
 
 func (vec *vectorWrapper) Close() {
-	vec.releaseDownstream()
+	if !vec.borrowed {
+		vec.releaseDownstream()
+	}
 }
 
 func (vec *vectorWrapper) releaseDownstream() {
-	if vec.downstreamVector == nil {
+	if vec.downstreamVector == nil || vec.borrowed {
 		return
 	}
 	if !vec.downstreamVector.NeedDup() {
 		vec.downstreamVector.Free(vec.mpool)
 	}
 	vec.downstreamVector = nil
+	vec.borrowed = false
 }
 
 func (vec *vectorWrapper) Allocated() int {
@@ -378,6 +383,7 @@ func (vec *vectorWrapper) GetDownstreamVector() *cnVector.Vector {
 
 func (vec *vectorWrapper) setDownstreamVector(dsVec *cnVector.Vector) {
 	vec.downstreamVector = dsVec
+	vec.borrowed = true
 }
 
 /****** Below functions are not used in critical path. Used mainly for testing */

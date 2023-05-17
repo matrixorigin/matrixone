@@ -46,24 +46,35 @@ type Vector struct {
 	// area for holding large strings.
 	area []byte
 
-	capacity int
-	length   int
+	length int
 
 	nsp nulls.Nulls // nulls list
 
-	cantFreeData bool
-	cantFreeArea bool
+	frozen bool
 
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
 }
 
 func (v *Vector) Reset(typ types.Type) {
+	// XXX This is totally FUBAR.   What the hell is this?
+	// All we want is to reuse the memory?    Why not pool
+	// handle everything for us?
 	v.typ = typ
-	//v.data = v.data[:0]
-	v.area = v.area[:0]
+	if v.frozen {
+		v.data = nil
+		v.area = nil
+		v.frozen = false
+	} else {
+		if len(v.data) != 0 {
+			v.data = v.data[:0]
+		}
+		if len(v.area) != 0 {
+			v.area = v.area[:0]
+		}
+	}
+
 	v.length = 0
-	//v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.nsp.Reset()
 }
 
@@ -77,10 +88,6 @@ func (v *Vector) UnsafeGetRawData() []byte {
 
 func (v *Vector) Length() int {
 	return v.length
-}
-
-func (v *Vector) Capacity() int {
-	return v.capacity
 }
 
 func (v *Vector) SetLength(n int) {
@@ -122,7 +129,7 @@ func (v *Vector) SetIsBin(isBin bool) {
 }
 
 func (v *Vector) NeedDup() bool {
-	return v.cantFreeArea || v.cantFreeData
+	return v.frozen
 }
 
 func GetFixedAt[T any](v *Vector, idx int) T {
@@ -130,6 +137,13 @@ func GetFixedAt[T any](v *Vector, idx int) T {
 		idx = 0
 	}
 	return v.col.([]T)[idx]
+}
+
+func (v *Vector) GetFixedRaw(i int) []byte {
+	if v.IsConst() {
+		i = 0
+	}
+	return v.data[i*v.typ.TypeSize() : (i+1)*v.typ.TypeSize()]
 }
 
 func (v *Vector) GetBytesAt(i int) []byte {
@@ -187,6 +201,18 @@ func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) *V
 		SetConstFixed(vec, val, length, mp)
 	}
 
+	return vec
+}
+
+func NewConstFixedRaw(typ types.Type, val []byte, length int, mp *mpool.MPool) *Vector {
+	vec := &Vector{
+		typ:   typ,
+		class: CONSTANT,
+	}
+
+	if length > 0 {
+		SetConstFixedRaw(vec, val, length, mp)
+	}
 	return vec
 }
 
@@ -274,21 +300,18 @@ func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
 }
 
 func (v *Vector) Free(mp *mpool.MPool) {
-	if !v.cantFreeData {
+	if !v.frozen {
+		// XXX v.nsp is not managed by mpool
 		mp.Free(v.data)
-	}
-	if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
+
+	v.frozen = false
 	v.class = FLAT
 	v.col = nil
 	v.data = nil
 	v.area = nil
-	v.capacity = 0
 	v.length = 0
-	v.cantFreeData = false
-	v.cantFreeArea = false
-
 	v.nsp.Reset()
 }
 
@@ -348,6 +371,10 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
+	// this sucker is unmarshalled, therefore data/area/nsp all
+	// reference the same memory as the input data, cannot be freed
+	v.frozen = true
+
 	// read class
 	v.class = int(data[0])
 	data = data[1:]
@@ -388,9 +415,6 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	} else {
 		v.nsp.Reset()
 	}
-
-	v.cantFreeData = true
-	v.cantFreeArea = true
 
 	return nil
 }
@@ -450,24 +474,19 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 }
 
 func (v *Vector) ToConst(row, length int, mp *mpool.MPool) *Vector {
-	w := NewConstNull(v.typ, length, mp)
+	var w *Vector
 	if v.IsConstNull() || v.nsp.Contains(uint64(row)) {
+		w = NewConstNull(v.typ, length, mp)
 		return w
 	}
 
-	if v.IsConst() {
-		row = 0
-	}
-
-	sz := v.typ.TypeSize()
-	w.data = v.data[row*sz : (row+1)*sz]
-	w.setupColFromData()
 	if v.typ.IsVarlen() {
-		w.area = v.area
+		val := v.GetBytesAt(row)
+		w = NewConstBytes(v.typ, val, length, mp)
+	} else {
+		val := v.GetFixedRaw(row)
+		w = NewConstFixedRaw(v.typ, val, length, mp)
 	}
-	w.cantFreeData = true
-	w.cantFreeArea = true
-
 	return w
 }
 
@@ -1997,7 +2016,7 @@ func SetConstNull(vec *Vector, length int, mp *mpool.MPool) error {
 }
 
 func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error {
-	if vec.capacity == 0 {
+	if len(vec.data) < vec.typ.TypeSize() {
 		if err := extend(vec, 1, mp); err != nil {
 			return err
 		}
@@ -2008,11 +2027,22 @@ func SetConstFixed[T any](vec *Vector, val T, length int, mp *mpool.MPool) error
 	return nil
 }
 
+func SetConstFixedRaw(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
+	if len(vec.data) < vec.typ.TypeSize() {
+		if err := extend(vec, 1, mp); err != nil {
+			return err
+		}
+	}
+	copy(vec.data, val)
+	vec.SetLength(length)
+	return nil
+}
+
 func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 	var err error
 	var va types.Varlena
 
-	if vec.capacity == 0 {
+	if len(vec.data) < vec.typ.TypeSize() {
 		if err := extend(vec, 1, mp); err != nil {
 			return err
 		}
@@ -2334,7 +2364,13 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 }
 
 func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) error {
+	if v.frozen {
+		panic(moerr.NewInternalErrorNoCtx("can't shuffle frozen vector"))
+	}
+
 	sz := v.typ.TypeSize()
+
+	// save old data just for freeing
 	olddata := v.data[:v.length*sz]
 	ns := len(sels)
 	vs := MustFixedCol[T](v)
@@ -2347,12 +2383,9 @@ func shuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) 
 	ws := v.col.([]T)[:ns]
 	shuffle.FixedLengthShuffle(vs, ws, sels)
 	nulls.Filter(&v.nsp, sels, false)
-	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
-	if v.cantFreeData {
-		v.cantFreeData = false
-	} else {
-		mp.Free(olddata)
-	}
+
+	// free old data
+	mp.Free(olddata)
 	v.length = ns
 	return nil
 }
@@ -2385,8 +2418,8 @@ func (v *Vector) Window(start, end int) (*Vector, error) {
 	if v.typ.IsVarlen() {
 		w.area = v.area
 	}
-	w.cantFreeData = true
-	w.cantFreeArea = true
+
+	w.frozen = true
 	return w, nil
 }
 
@@ -2398,17 +2431,10 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	}
 	nulls.Range(&v.nsp, uint64(start), uint64(end), uint64(start), &w.nsp)
 	length := (end - start) * v.typ.TypeSize()
+
 	if mp == nil {
-		w.data = make([]byte, length)
-		copy(w.data, v.data[start*v.typ.TypeSize():end*v.typ.TypeSize()])
-		w.length = end - start
-		w.setupColFromData()
-		if v.typ.IsVarlen() {
-			w.area = make([]byte, len(v.area))
-			copy(w.area, v.area)
-		}
-		w.cantFreeData = true
-		w.cantFreeArea = true
+		// FUBAR.
+		panic(moerr.NewInternalErrorNoCtx("clone window without mp is fucked"))
 	} else {
 		err := w.PreExtend(end-start, mp)
 		if err != nil {

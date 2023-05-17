@@ -48,8 +48,9 @@ func ToCNBatch(dnBat *Batch) *batch.Batch {
 	return cnBat
 }
 
-func ToDNBatch(cnBat *batch.Batch) *Batch {
+func ToDNBatch(cnBat *batch.Batch, borrow bool) *Batch {
 	dnBat := NewEmptyBatch()
+	dnBat.borrowed = borrow
 	for i, vec := range cnBat.Vecs {
 		v := ToDNVector(vec)
 		dnBat.AddVector(cnBat.Attrs[i], v)
@@ -65,28 +66,28 @@ func ToDNVector(v *movec.Vector) Vector {
 
 // ### Deep copy Functions
 
-func CopyToCNVector(vec Vector) (mov *movec.Vector) {
+func CopyToCNVector(vec Vector, mp *mpool.MPool) *movec.Vector {
 	//TODO: can be updated if Dup(nil) is supported by CN vector.
 	vecLen := vec.GetDownstreamVector().Length()
-	res, err := vec.GetDownstreamVector().CloneWindow(0, vecLen, nil)
+	res, err := vec.GetDownstreamVector().CloneWindow(0, vecLen, mp)
 	if err != nil {
 		panic(err)
 	}
 	return res
 }
 
-func CopyToCNVectors(vecs []Vector) []*movec.Vector {
+func CopyToCNVectors(vecs []Vector, mp *mpool.MPool) []*movec.Vector {
 	movecs := make([]*movec.Vector, len(vecs))
 	for i := range movecs {
-		movecs[i] = CopyToCNVector(vecs[i])
+		movecs[i] = CopyToCNVector(vecs[i], mp)
 	}
 	return movecs
 }
 
-func CopyToCNBatch(bat *Batch) *batch.Batch {
+func CopyToCNBatch(bat *Batch, mp *mpool.MPool) *batch.Batch {
 	ret := batch.New(true, bat.Attrs)
 	for i := range bat.Vecs {
-		ret.Vecs[i] = CopyToCNVector(bat.Vecs[i])
+		ret.Vecs[i] = CopyToCNVector(bat.Vecs[i], mp)
 	}
 	return ret
 }
@@ -233,7 +234,7 @@ func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool) {
 
 // ### Only used in testcases
 
-func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
+func SplitBatch(bat *batch.Batch, cnt int, mp *mpool.MPool) []*batch.Batch {
 	if cnt == 1 {
 		return []*batch.Batch{bat}
 	}
@@ -244,7 +245,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 		for i := 0; i < cnt; i++ {
 			newBat := batch.New(true, bat.Attrs)
 			for j := 0; j < len(bat.Vecs); j++ {
-				window, _ := bat.Vecs[j].CloneWindow(i*rows, (i+1)*rows, nil)
+				window, _ := bat.Vecs[j].CloneWindow(i*rows, (i+1)*rows, mp)
 				newBat.Vecs[j] = window
 			}
 			bats = append(bats, newBat)
@@ -272,7 +273,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 	for _, row := range rowArray {
 		newBat := batch.New(true, bat.Attrs)
 		for j := 0; j < len(bat.Vecs); j++ {
-			window, _ := bat.Vecs[j].CloneWindow(start, start+row, nil)
+			window, _ := bat.Vecs[j].CloneWindow(start, start+row, mp)
 			newBat.Vecs[j] = window
 		}
 		start += row
@@ -321,7 +322,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(bool, bool, int) error)
 		}
-		return ForeachWindowFixed[bool](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -333,7 +334,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(int8, bool, int) error)
 		}
-		return ForeachWindowFixed[int8](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -345,7 +346,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(int16, bool, int) error)
 		}
-		return ForeachWindowFixed[int16](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -357,7 +358,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(int32, bool, int) error)
 		}
-		return ForeachWindowFixed[int32](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -369,7 +370,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(int64, bool, int) error)
 		}
-		return ForeachWindowFixed[int64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -381,7 +382,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(uint8, bool, int) error)
 		}
-		return ForeachWindowFixed[uint8](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -393,7 +394,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(uint16, bool, int) error)
 		}
-		return ForeachWindowFixed[uint16](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -405,7 +406,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(uint32, bool, int) error)
 		}
-		return ForeachWindowFixed[uint32](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -417,7 +418,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(uint64, bool, int) error)
 		}
-		return ForeachWindowFixed[uint64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -429,7 +430,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Decimal64, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Decimal64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -441,7 +442,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Decimal128, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Decimal128](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -453,7 +454,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Decimal256, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Decimal256](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -465,7 +466,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(float32, bool, int) error)
 		}
-		return ForeachWindowFixed[float32](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -477,7 +478,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(float64, bool, int) error)
 		}
-		return ForeachWindowFixed[float64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -489,7 +490,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Timestamp, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Timestamp](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -501,7 +502,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Date, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Date](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -513,7 +514,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Time, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Time](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -525,7 +526,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Datetime, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Datetime](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -537,7 +538,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.TS, bool, int) error)
 		}
-		return ForeachWindowFixed[types.TS](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -549,7 +550,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Blockid, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Blockid](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -561,7 +562,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Uuid, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Uuid](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -573,7 +574,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Rowid, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Rowid](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,

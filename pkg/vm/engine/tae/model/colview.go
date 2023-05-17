@@ -100,9 +100,10 @@ func (view *ColumnView) IsDeleted(row int) bool {
 }
 
 func (view *ColumnView) Close() {
-	if view.data != nil {
-		view.data.Close()
-	}
+	// view should never close anything.
+	// if view.data != nil {
+	// 	view.data.Close()
+	// }
 	view.data = nil
 	view.UpdateMask = nil
 	view.UpdateVals = nil

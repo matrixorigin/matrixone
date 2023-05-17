@@ -148,8 +148,11 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
-	if tgtCap := v.length + rows; tgtCap > v.capacity {
-		sz := v.typ.TypeSize()
+	if v.frozen {
+		panic(moerr.NewInternalErrorNoCtx("extend frozen vector"))
+	}
+	sz := v.typ.TypeSize()
+	if tgtCap := v.length + rows; tgtCap*sz > len(v.data) {
 		ndata, err := m.Grow(v.data, tgtCap*sz)
 		if err != nil {
 			return err
@@ -213,8 +216,6 @@ func (v *Vector) setupColFromData() {
 			panic(fmt.Sprintf("unknown type %s", v.typ.Oid))
 		}
 	}
-	tlen := v.GetType().TypeSize()
-	v.capacity = cap(v.data) / tlen
 }
 
 func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
@@ -236,11 +237,10 @@ func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
 
 func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
 	rvec := &Vector{
-		area:         vec.Area,
-		length:       int(vec.Len),
-		typ:          ProtoTypeToType(vec.Type),
-		cantFreeData: true,
-		cantFreeArea: true,
+		area:   vec.Area,
+		length: int(vec.Len),
+		typ:    ProtoTypeToType(vec.Type),
+		frozen: false,
 	}
 	if vec.IsConst {
 		rvec.class = CONSTANT

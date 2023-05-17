@@ -60,7 +60,7 @@ func TableNamesOfDB(db handle.Database) ([]string, error) {
 }
 
 func AppendDataToTable(rel handle.Relation, bat *batch.Batch) (err error) {
-	dnBat := containers.ToDNBatch(bat)
+	dnBat := containers.ToDNBatch(bat, true)
 	defer dnBat.Close()
 	err = rel.Append(dnBat)
 	return

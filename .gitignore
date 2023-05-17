@@ -4,6 +4,7 @@
 *.exe
 *.lib
 *.swp
+__debug_bin
 bin/
 y.go
 *.output

@@ -17,6 +17,7 @@ package moerr
 import (
 	"encoding/hex"
 	"fmt"
+	"time"
 )
 
 func NewInfoNoCtx(msg string) *Error {
@@ -28,6 +29,12 @@ func NewBadS3ConfigNoCtx(msg string) *Error {
 }
 
 func NewInternalErrorNoCtx(msg string, args ...any) *Error {
+	xmsg := fmt.Sprintf(msg, args...)
+	return newError(Context(), ErrInternal, xmsg)
+}
+
+func NewInternalErrorDebugHung(msg string, args ...any) *Error {
+	time.Sleep(time.Hour)
 	xmsg := fmt.Sprintf(msg, args...)
 	return newError(Context(), ErrInternal, xmsg)
 }

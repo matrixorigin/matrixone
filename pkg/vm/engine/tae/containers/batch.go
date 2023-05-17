@@ -209,8 +209,10 @@ func (bat *Batch) PPString(num int) string {
 }
 
 func (bat *Batch) Close() {
-	for _, vec := range bat.Vecs {
-		vec.Close()
+	if !bat.borrowed {
+		for _, vec := range bat.Vecs {
+			vec.Close()
+		}
 	}
 }
 

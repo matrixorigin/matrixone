@@ -663,7 +663,7 @@ func TestCopy(t *testing.T) {
 	}
 }
 
-func TestCloneWindowWithMpNil(t *testing.T) {
+func TestCloneWindowWithMp(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec1 := NewVec(types.T_int32.ToType())
 	AppendFixed(vec1, int32(1), false, mp)
@@ -671,12 +671,12 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	AppendFixed(vec1, int32(3), false, mp)
 	require.False(t, vec1.NeedDup())
 
-	vec2, err := vec1.CloneWindow(0, vec1.Length(), nil)
+	vec2, err := vec1.CloneWindow(0, vec1.Length(), mp)
 	require.NoError(t, err)
 	vec1.Free(mp)
 
 	t.Log(vec2.String())
-	require.True(t, vec2.NeedDup())
+	require.False(t, vec2.NeedDup())
 	require.Equal(t, int32(1), GetFixedAt[int32](vec2, 0))
 	require.True(t, vec2.GetNulls().Contains(uint64(1)))
 	require.Equal(t, int32(3), GetFixedAt[int32](vec2, 2))
@@ -687,11 +687,11 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	AppendBytes(vec3, []byte("uuu"), false, mp)
 	require.False(t, vec3.NeedDup())
 
-	vec4, err := vec3.CloneWindow(0, vec3.Length(), nil)
+	vec4, err := vec3.CloneWindow(0, vec3.Length(), mp)
 	require.NoError(t, err)
 	vec3.Free(mp)
 
-	require.True(t, vec4.NeedDup())
+	require.False(t, vec4.NeedDup())
 	require.Equal(t, 1, len(vec4.GetBytesAt(0)))
 	require.Equal(t, 3, len(vec4.GetBytesAt(2)))
 	require.True(t, vec4.GetNulls().Contains(uint64(1)))

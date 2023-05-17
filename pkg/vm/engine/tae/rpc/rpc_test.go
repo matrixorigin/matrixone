@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -47,6 +48,7 @@ import (
 func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
+	mp := mpool.MustNewZeroNoFixed()
 
 	//create  file service;
 	//dir := testutils.GetDefaultTestPath(ModuleName, t)
@@ -191,7 +193,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]), false)
 		}
 		offset += 50
-		metaLocMoBat := containers.CopyToCNBatch(metaLocBat)
+		metaLocMoBat := containers.CopyToCNBatch(metaLocBat, mp)
 		addS3BlkEntry, err := makePBEntry(INSERT, dbTestID,
 			tbTestID, dbName, schema.Name, obj.String(), metaLocMoBat)
 		assert.NoError(t, err)
@@ -220,6 +222,8 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
+
+	mp := mpool.MustNewZeroNoFixed()
 
 	//create  file service;
 	//dir := testutils.GetDefaultTestPath(ModuleName, t)
@@ -261,10 +265,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 
 	moBats := make([]*batch.Batch, 4)
-	moBats[0] = containers.CopyToCNBatch(taeBats[0])
-	moBats[1] = containers.CopyToCNBatch(taeBats[1])
-	moBats[2] = containers.CopyToCNBatch(taeBats[2])
-	moBats[3] = containers.CopyToCNBatch(taeBats[3])
+	moBats[0] = containers.CopyToCNBatch(taeBats[0], mp)
+	moBats[1] = containers.CopyToCNBatch(taeBats[1], mp)
+	moBats[2] = containers.CopyToCNBatch(taeBats[2], mp)
+	moBats[3] = containers.CopyToCNBatch(taeBats[3], mp)
 
 	//write taeBats[0], taeBats[1] two blocks into file service
 	objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -382,7 +386,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc1), false)
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc2), false)
-	metaLocMoBat1 := containers.CopyToCNBatch(metaLocBat1)
+	metaLocMoBat1 := containers.CopyToCNBatch(metaLocBat1, mp)
 	addS3BlkEntry1, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName1.String(), metaLocMoBat1)
 	assert.NoError(t, err)
@@ -395,7 +399,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//add one non-appendable block from S3 into "tbtest" table
 	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat2.Vecs[0].Append([]byte(metaLoc3), false)
-	metaLocMoBat2 := containers.CopyToCNBatch(metaLocBat2)
+	metaLocMoBat2 := containers.CopyToCNBatch(metaLocBat2, mp)
 	addS3BlkEntry2, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName2.String(), metaLocMoBat2)
 	assert.NoError(t, err)
@@ -509,7 +513,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	delLocBat.Vecs[0].Append([]byte(delLoc3), false)
 	delLocBat.Vecs[0].Append([]byte(delLoc4), false)
 
-	delLocMoBat := containers.CopyToCNBatch(delLocBat)
+	delLocMoBat := containers.CopyToCNBatch(delLocBat, mp)
 	var delApiEntries []*api.Entry
 	deleteS3BlkEntry, err := makePBEntry(DELETE, dbTestID,
 		tbTestID, dbName, schema.Name, objName3.String(), delLocMoBat)
@@ -558,6 +562,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
+	mp := mpool.MustNewZeroNoFixed()
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
@@ -694,7 +699,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 
 	//DML: insert batch into table
 	insertTxn := mock1PCTxn(handle.db)
-	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100))
+	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100), mp)
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -802,6 +807,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
+	mp := mpool.MustNewZeroNoFixed()
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
@@ -933,7 +939,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	assert.NoError(t, err)
 
 	//DML::insert batch into table
-	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100))
+	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100), mp)
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -960,7 +966,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	//insert 20 rows, then rollback the txn
 	//FIXME::??
 	//batch.SetLength(moBat, 20)
-	moBat = containers.CopyToCNBatch(catalog.MockBatch(schema, 20))
+	moBat = containers.CopyToCNBatch(catalog.MockBatch(schema, 20), mp)
 	insertEntry, err = makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -1013,7 +1019,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 
 	assert.NoError(t, txn.Commit())
 
-	hideBats := containers.SplitBatch(delBat, 5)
+	hideBats := containers.SplitBatch(delBat, 5, mp)
 	//delete 20 rows by 2PC txn
 	//batch.SetLength(hideBats[0], 20)
 	deleteEntry, err := makePBEntry(
@@ -1097,6 +1103,8 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
+
+	mp := mpool.MustNewZeroNoFixed()
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
@@ -1226,7 +1234,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	assert.NoError(t, err)
 
 	//DML::insert batch into table
-	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100))
+	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100), mp)
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -1252,7 +1260,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	//insert 20 rows ,then rollback
 	//FIXME::??
 	//batch.SetLength(moBat, 20)
-	moBat = containers.CopyToCNBatch(catalog.MockBatch(schema, 20))
+	moBat = containers.CopyToCNBatch(catalog.MockBatch(schema, 20), mp)
 	insertEntry, err = makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -1276,7 +1284,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	rollbackTxn = mock2PCTxn(handle.db)
 	//insert 10 rows ,then rollback
 	//batch.SetLength(moBat, 10)
-	moBat = containers.CopyToCNBatch(catalog.MockBatch(schema, 10))
+	moBat = containers.CopyToCNBatch(catalog.MockBatch(schema, 10), mp)
 	insertEntry, err = makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -1324,7 +1332,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 
 	assert.NoError(t, txn.Commit())
 
-	hideBats := containers.SplitBatch(delBat, 5)
+	hideBats := containers.SplitBatch(delBat, 5, mp)
 	//delete 20 rows by 2PC txn
 	//batch.SetLength(delBat, 20)
 	deleteEntry, err := makePBEntry(
@@ -1410,6 +1418,8 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	handle := mockTAEHandle(t, opts)
 	defer handle.HandleClose(context.TODO())
+
+	mp := mpool.MustNewZeroNoFixed()
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "tbtest"
@@ -1589,7 +1599,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Wait()
 
 	//DML::insert batch into table
-	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100))
+	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100), mp)
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -1665,7 +1675,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.NoError(t, txn.Commit())
 	}
 
-	hideBats := containers.SplitBatch(delBat, 5)
+	hideBats := containers.SplitBatch(delBat, 5, mp)
 	//delete 20 rows by 2PC txn
 	deleteTxn := mock2PCTxn(handle.db)
 	//batch.SetLength(delBat, 20)

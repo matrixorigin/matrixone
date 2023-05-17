@@ -242,6 +242,11 @@ func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step, 
 
 func updateVector[T constraints.Integer](vec *vector.Vector, length, curNum, stepNum uint64) {
 	vs := vector.MustFixedCol[T](vec)
+
+	if len(vs) < int(length) {
+		panic(moerr.NewInternalErrorNoCtx("updateVector: length is too large"))
+	}
+
 	rowIndex := uint64(0)
 	for rowIndex = 0; rowIndex < length; rowIndex++ {
 		if nulls.Contains(vec.GetNulls(), uint64(rowIndex)) {

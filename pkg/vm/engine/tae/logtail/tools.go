@@ -20,8 +20,8 @@ import (
 	"hash/fnv"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -193,6 +193,14 @@ func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batc
 
 // consume containers.Batch to construct api batch
 func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {
-	mobat := containers.CopyToCNBatch(bat)
-	return batch.BatchToProtoBatch(mobat)
+	rbat := new(api.Batch)
+	rbat.Attrs = bat.Attrs
+	for _, vec := range bat.Vecs {
+		rvec, err := vector.VectorToProtoVector(vec.GetDownstreamVector())
+		if err != nil {
+			return nil, err
+		}
+		rbat.Vecs = append(rbat.Vecs, rvec)
+	}
+	return rbat, nil
 }
