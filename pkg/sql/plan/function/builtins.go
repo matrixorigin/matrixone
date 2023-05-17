@@ -3282,6 +3282,57 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	NOT_IN_ROWS: {
+		Id:     ASSERT,
+		Flag:   plan.Function_STRICT,
+		Layout: STANDARD_FUNCTION,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			if len(inputs) != 2 {
+				return wrongFunctionParameters, nil
+			}
+			if inputs[0] != types.T_Rowid || inputs[1] != types.T_Rowid {
+				return wrongFunctionParameters, nil
+			}
+			return 0, inputs
+		},
+		Overloads: []Function{
+			{
+				Index:               0,
+				UseNewFramework:     true,
+				Volatile:            false,
+				Args:                []types.T{types.T_Rowid, types.T_Rowid},
+				ParameterMustScalar: []bool{false, false},
+				ReturnTyp:           types.T_bool,
+				NewFn: func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+					leftRow := vector.GenerateFunctionFixedTypeParameter[types.Rowid](parameters[0])
+					rightRow := vector.GenerateFunctionFixedTypeParameter[types.Rowid](parameters[1])
+					res := vector.MustFunctionResult[bool](result)
+					rightRowIdMap := make(map[types.Rowid]struct{})
+					for i := uint64(0); i < uint64(length); i++ {
+						rightRowId, isNull := rightRow.GetValue(i)
+						if !isNull {
+							rightRowIdMap[rightRowId] = struct{}{}
+						}
+					}
+
+					for i := uint64(0); i < uint64(length); i++ {
+						leftRowId, isNull := leftRow.GetValue(i)
+						notInRows := false
+						if !isNull {
+							if _, ok := rightRowIdMap[leftRowId]; !ok {
+								notInRows = true
+							}
+						}
+						err := res.Append(notInRows, false)
+						if err != nil {
+							return err
+						}
+					}
+					return nil
+				},
+			},
+		},
+	},
 	ASSERT: {
 		Id:     ASSERT,
 		Flag:   plan.Function_STRICT,

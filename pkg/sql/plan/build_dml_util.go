@@ -873,23 +873,81 @@ func makeInsertPlan(
 				lastNodeId = builder.appendNode(&plan.Node{
 					NodeType:    plan.Node_JOIN,
 					Children:    []int32{lastNodeId, rightId},
-					JoinType:    plan.Node_INNER,
+					JoinType:    plan.Node_LEFT,
 					OnList:      []*Expr{condExpr},
 					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
 				}, bindCtx)
 
-				// append filter node
-				filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "!=", []*Expr{
-					{
-						Typ: rowIdDef.Typ,
+				// append agg node.
+				aggGroupBy := []*Expr{
+					{Typ: rowIdExpr.Typ,
 						Expr: &plan.Expr_Col{
-							Col: &ColRef{ColPos: 0, Name: rowIdDef.Name},
+							Col: &ColRef{
+								ColPos: 0,
+								Name:   catalog.Row_ID,
+							},
+						}},
+					{Typ: rowIdExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								ColPos: 1,
+								Name:   catalog.Row_ID,
+							},
+						}},
+					{Typ: pkColExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								ColPos: 2,
+								Name:   tableDef.Pkey.PkeyColName,
+							},
+						}},
+				}
+				aggProject := []*Expr{
+					{Typ: rowIdExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								RelPos: 1,
+								ColPos: 0,
+								Name:   catalog.Row_ID,
+							},
+						}},
+					{Typ: rowIdExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								RelPos: 1,
+								ColPos: 1,
+								Name:   catalog.Row_ID,
+							},
+						}},
+					{Typ: pkColExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								RelPos: 1,
+								ColPos: 2,
+								Name:   tableDef.Pkey.PkeyColName,
+							},
+						}},
+				}
+				aggNode := &Node{
+					NodeType:    plan.Node_AGG,
+					Children:    []int32{lastNodeId},
+					GroupBy:     aggGroupBy,
+					ProjectList: aggProject,
+				}
+				lastNodeId = builder.appendNode(aggNode, bindCtx)
+
+				// append filter node
+				filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "not_in_rows", []*Expr{
+					{
+						Typ: rowIdExpr.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{ColPos: 1, Name: catalog.Row_ID},
 						},
 					},
 					{
-						Typ: rowIdDef.Typ,
+						Typ: rowIdExpr.Typ,
 						Expr: &plan.Expr_Col{
-							Col: &ColRef{ColPos: 1, Name: rowIdDef.Name},
+							Col: &ColRef{ColPos: 0, Name: catalog.Row_ID},
 						},
 					},
 				})
