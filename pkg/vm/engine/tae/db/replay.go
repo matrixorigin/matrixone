@@ -101,7 +101,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(payload[4:])
 	txnCmd := entry.(*txnbase.TxnCmd)
-	txnCmd.Idx = idxCtx
+	txnCmd.Lsn = lsn
 	if err != nil {
 		panic(err)
 	}
@@ -115,7 +115,7 @@ func (replayer *Replayer) applyTxnCmds() {
 			break
 		}
 		t0 := time.Now()
-		replayer.OnReplayTxn(txnCmd, txnCmd.Idx.LSN)
+		replayer.OnReplayTxn(txnCmd, txnCmd.Lsn)
 		txnCmd.Close()
 		replayer.applyDuration += time.Since(t0)
 
