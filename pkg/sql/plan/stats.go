@@ -348,8 +348,8 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(expr *plan.Expr, tableDef *plan.TableDef, s *StatsInfoMap) float64 {
-	if !CheckExprIsMonotonic(nil, expr) {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *StatsInfoMap) float64 {
+	if !CheckExprIsMonotonic(ctx, expr) {
 		return 1
 	}
 	ret, col := CheckFilter(expr)
@@ -659,7 +659,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 
 	var blockSel float64 = 1
 	for i := range node.FilterList {
-		blockSel = andSelectivity(blockSel, estimateFilterBlockSelectivity(node.FilterList[i], node.TableDef, s))
+		blockSel = andSelectivity(blockSel, estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s))
 	}
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
