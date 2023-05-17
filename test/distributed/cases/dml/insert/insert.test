@@ -245,7 +245,7 @@ select count(*) from t;
 insert into t select null;
 drop table t;
 # 3.compiste primary key test
-create table t(a int,b int,primary key(a,b));
+create table t(a int,b int);
 create table temp(c int);
 insert into temp select * from generate_series(1,200000) g;
 insert into t select c,c from temp;
@@ -265,7 +265,7 @@ insert into t select null,null;
 drop table t;
 drop table temp;
 # 4.unique key test
-create table t(a int unique);
+create table t(a int);
 insert into t select * from generate_series(1,200000) g;
 select count(*) from t;
 # abort,duplicate key
