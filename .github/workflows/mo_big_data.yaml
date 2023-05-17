@@ -1,4 +1,4 @@
-name:  MO Big Data Test On EKS
+name:  MO Checkin Regression On EKS
 
 on:
   pull_request_target:
@@ -386,7 +386,7 @@ jobs:
           WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_WORK_BOT_WEBHOOK }}
         with:
           msgtype: markdown
-          content: "MatrixOne Big Data CI failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})<@shuqi.qin><@JiejieJia><@SuDong>"
+          content: "MO Checkin Regression On EKS failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})  <@shuqi.qin><@JiejieJia><@SuDong>"
 
 
   clean_up_env:
