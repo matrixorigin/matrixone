@@ -214,7 +214,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: projectProjection,
 						}
 						lastNodeId = builder.appendNode(projectNode, bindCtx)
-						preUKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true)
+						preUKStep, err := appendPreInsertUkPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, idx, true, uniqueTableDef)
 						if err != nil {
 							return err
 						}
@@ -626,15 +626,6 @@ func makeInsertPlan(
 	addAffectedRows bool,
 	isFkRecursionCall bool,
 ) error {
-
-	// append hidden column to tableDef
-	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
-	}
-	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
-	}
-
 	var lastNodeId int32
 	var err error
 
@@ -643,23 +634,6 @@ func makeInsertPlan(
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 		// Get table partition information
 		partitionIdx, paritionTableIds := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
-
-		// todo: append lock
-		pkPos, pkTyp := getPkPos(tableDef, false)
-		lockTarget := &plan.LockTarget{
-			TableId:            tableDef.TblId,
-			PrimaryColIdxInBat: int32(pkPos),
-			PrimaryColTyp:      pkTyp,
-			RefreshTsIdxInBat:  -1, //unsupport now
-			FilterColIdxInBat:  int32(partitionIdx),
-		}
-		lockNode := &Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{lastNodeId},
-			LockTargets: []*plan.LockTarget{lockTarget},
-		}
-		lastNodeId = builder.appendNode(lockNode, bindCtx)
-
 		// append project node
 		projectProjection := getProjectionByLastNode(builder, lastNodeId)
 		if len(projectProjection) > len(tableDef.Cols) || tableDef.Partition != nil {
@@ -718,7 +692,7 @@ func makeInsertPlan(
 				}
 
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-				newSourceStep, err := appendPreInsertUkPlan(builder, bindCtx, tableDef, lastNodeId, idx, false)
+				newSourceStep, err := appendPreInsertUkPlan(builder, bindCtx, tableDef, lastNodeId, idx, false, idxTableDef)
 				if err != nil {
 					return err
 				}
@@ -1466,19 +1440,52 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		ProjectList: preInsertProjection,
 		PreInsertCtx: &plan.PreInsertCtx{
 			Ref:        objRef,
-			TableDef:   tableDef,
+			TableDef:   DeepCopyTableDef(tableDef),
 			HasAutoCol: hashAutoCol,
 			IsUpdate:   isUpdate,
 		},
 	}
 	lastNodeId = builder.appendNode(preInsertNode, bindCtx)
 
+	// append hidden column to tableDef
+	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
+	}
+	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
+	}
+	// Get table partition information
+	partitionIdx, _ := getPartSubTableIdsAndPartIndex(builder.compCtx, objRef, tableDef)
+
+	// todo: append lock
+	pkPos, pkTyp := getPkPos(tableDef, false)
+	lockTarget := &plan.LockTarget{
+		TableId:            tableDef.TblId,
+		PrimaryColIdxInBat: int32(pkPos),
+		PrimaryColTyp:      pkTyp,
+		RefreshTsIdxInBat:  -1, //unsupport now
+		FilterColIdxInBat:  int32(partitionIdx),
+	}
+	lockNode := &Node{
+		NodeType:    plan.Node_LOCK_OP,
+		Children:    []int32{lastNodeId},
+		LockTargets: []*plan.LockTarget{lockTarget},
+	}
+	lastNodeId = builder.appendNode(lockNode, bindCtx)
+
 	return lastNodeId
 }
 
 // appendPreInsertUkPlan  build preinsert plan.
 // sink_scan -> preinsert_uk -> sink
-func appendPreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, indexIdx int, isUpddate bool) (int32, error) {
+func appendPreInsertUkPlan(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeId int32,
+	indexIdx int,
+	isUpddate bool,
+	uniqueTableDef *TableDef) (int32, error) {
 	var useColumns []int32
 	idxDef := tableDef.Indexes[indexIdx]
 	partsMap := make(map[string]struct{})
@@ -1550,6 +1557,21 @@ func appendPreInsertUkPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef
 		},
 	}
 	lastNodeId = builder.appendNode(preInsertUkNode, bindCtx)
+
+	pkPos, pkTyp := getPkPos(uniqueTableDef, false)
+	lockTarget := &plan.LockTarget{
+		TableId:            uniqueTableDef.TblId,
+		PrimaryColIdxInBat: int32(pkPos),
+		PrimaryColTyp:      pkTyp,
+		RefreshTsIdxInBat:  -1, //unsupport now
+		FilterColIdxInBat:  -1,
+	}
+	lockNode := &Node{
+		NodeType:    plan.Node_LOCK_OP,
+		Children:    []int32{lastNodeId},
+		LockTargets: []*plan.LockTarget{lockTarget},
+	}
+	lastNodeId = builder.appendNode(lockNode, bindCtx)
 
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
