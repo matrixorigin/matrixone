@@ -108,6 +108,7 @@ jobs:
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
           if [ "$(kubectl -n mo-big-data-${{ github.event.pull_request.number }} get pod|grep "mo-big-data-*"|wc -l)" -ne 0 ];then export KUBECONFIG=$(pwd)/eks-ci; kubectl -n mo-big-data-${{ github.event.pull_request.number }} delete -f $GITHUB_WORKSPACE/matrixone/optools/big_data_eks/mo_big_data.yaml;sleep 30s;fi
+          kubectl get bucket -n mo-big-data-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-big-data-${{ github.event.pull_request.number }}")}'
           aws s3 rm s3://mo-big-data/${{ github.event.pull_request.number }} --recursive > /dev/null 2>&1
           
           
@@ -225,7 +226,7 @@ jobs:
           
       - name: Start Load SSB 10G Data And Test
         if: ${{ always() }}
-#         timeout-minutes: 6
+        timeout-minutes: 10
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -248,7 +249,7 @@ jobs:
 
       - name: Start TPCH 10G Test
         if: ${{ always() }}
-#         timeout-minutes: 2
+        timeout-minutes: 10
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -259,7 +260,7 @@ jobs:
       # start sysbench test
       - name: Start OLTP Insert Test With 100 Threads
         if: ${{ always() }}
-#         timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -278,7 +279,7 @@ jobs:
 
       - name: Start OLTP Delete Test With 100 Threads
         if: ${{ always() }}
-#         timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -295,7 +296,7 @@ jobs:
           
       - name: Start OLTP Update Test With 100 Threads
         if: ${{ always() }}
-#         timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -312,7 +313,7 @@ jobs:
 
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() }}
-#         timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -339,7 +340,7 @@ jobs:
 
       - name: Start TPCC 10 Warehouses 10 terminals Test
         if: ${{ always() }}
-#         timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -385,7 +386,7 @@ jobs:
           WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_WORK_BOT_WEBHOOK }}
         with:
           msgtype: markdown
-          content: "MatrixOne Big Data CI failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})<@shuqi.qin>"
+          content: "MatrixOne Big Data CI failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})<@shuqi.qin><@JiejieJia><@SuDong>"
 
 
   clean_up_env:
@@ -434,7 +435,7 @@ jobs:
           sed -i 's/nsformobigtest/mo-big-data-${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/big_data_eks/mo_big_data.yaml
           sed -i 's/s3pathformobigtest/mo-big-data\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/big_data_eks/mo_big_data.yaml
 
-          //delete matrixone cluster
+          #delete matrixone cluster
           cd $GITHUB_WORKSPACE
           export KUBECONFIG=$(pwd)/eks-ci
           kubectl -n mo-big-data-${{ github.event.pull_request.number }} get pod
@@ -448,4 +449,4 @@ jobs:
           aws s3 mv s3://mo-big-data/${{ github.event.pull_request.number }}/etl s3://mo-big-data/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1
           kubectl get bucket -n mo-big-data-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-big-data-${{ github.event.pull_request.number }}")}'
 
-          # kubectl delete namespace mo-big-data-${{ github.event.pull_request.number }}
+          kubectl delete namespace mo-big-data-${{ github.event.pull_request.number }}
