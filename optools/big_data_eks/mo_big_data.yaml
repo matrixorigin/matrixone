@@ -1,0 +1,97 @@
+apiVersion: core.matrixorigin.io/v1alpha1
+kind: MatrixOneCluster
+metadata:
+  name: mo-big-data
+  namespace: nsformobigtest
+spec:
+  nodeSelector:
+    role: mo-big-data-pr
+  dn:
+    cacheVolume:
+      size: 100Gi
+    sharedStorageCache:
+      memoryCacheSize: 1Gi
+      diskCacheSize: 100Gi
+    config: |
+      [dn.Txn.Storage]
+      backend = "TAE"
+      log-backend = "logservice"
+      [dn.Ckp]
+      flush-interval = "60s"
+      min-count = 100
+      scan-interval = "5s"
+      incremental-interval = "60s"
+      global-interval = "100000s"
+      [dn.LogtailServer]
+      rpc-max-message-size = "16KiB"
+      rpc-payload-copy-buffer-size = "16KiB"
+      rpc-enable-checksum = true
+      logtail-collect-interval = "2ms"
+      logtail-response-send-timeout = "10s"
+      max-logtail-fetch-failure = 5
+    replicas: 1
+    resources:
+      requests:
+        cpu: 6
+        memory: 12Gi
+      limits:
+        cpu: 8
+        memory: 16Gi
+  imageRepository: matrixorigin/matrixone
+  logService:
+    replicas: 3
+    resources:
+      requests:
+        cpu: 6
+        memory: 12Gi
+      limits:
+        cpu: 8
+        memory: 16Gi
+    sharedStorage:
+      s3:
+        path: s3pathformobigtest
+        s3RetentionPolicy: Retain
+        secretRef:
+          name: aws-secret
+    pvcRetentionPolicy: Delete
+    volume:
+      size: 100Gi
+    config: |
+      [log]
+      level = "info"
+      format = "json"
+      max-size = 512
+  tp:
+    cacheVolume:
+      size: 100Gi
+    sharedStorageCache:
+      memoryCacheSize: 1Gi
+      diskCacheSize: 100Gi
+    config: |
+      [cn.Engine]
+      type = "distributed-tae"
+      [log]
+      level = "debug"
+      format = "json"
+      max-size = 512
+      [cn.rpc]
+      send-queue-size = 2
+      busy-queue-size = 1
+      [cn]
+      turn-on-push-model = true
+      [cn.txn]
+      enable-sacrificing-freshness = true
+      enable-cn-based-consistency = true
+    replicas: 2
+    overlay:
+      env:
+      - name: GOMEMLIMIT
+        value: "50000MiB"
+    resources:
+      requests:
+        cpu: 6
+        memory: 12Gi
+      limits:
+        cpu: 8
+        memory: 16Gi
+  version: imagetag
