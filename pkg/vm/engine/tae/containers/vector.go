@@ -325,7 +325,9 @@ func (vec *vectorWrapper) CloneWindow(offset, length int, allocator ...*mpool.MP
 }
 
 func (vec *vectorWrapper) ExtendWithOffset(src Vector, srcOff, srcLen int) {
-	_ = vec.extendWithOffset(src.GetDownstreamVector(), srcOff, srcLen)
+	if err := vec.extendWithOffset(src.GetDownstreamVector(), srcOff, srcLen); err != nil {
+		panic(err)
+	}
 }
 
 func (vec *vectorWrapper) ExtendVec(src *cnVector.Vector) (err error) {

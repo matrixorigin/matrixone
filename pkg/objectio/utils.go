@@ -189,6 +189,16 @@ func ConstructRowidColumn(
 	id *Blockid, start, length uint32, mp *mpool.MPool,
 ) (vec *vector.Vector, err error) {
 	vec = vector.NewVec(RowidType)
+	if err = ConstructRowidColumnTo(vec, id, start, length, mp); err != nil {
+		vec = nil
+	}
+	return
+}
+
+func ConstructRowidColumnTo(
+	vec *vector.Vector,
+	id *Blockid, start, length uint32, mp *mpool.MPool,
+) (err error) {
 	vec.PreExtend(int(length), mp)
 	for i := uint32(0); i < length; i++ {
 		rid := NewRowid(id, start+i)
@@ -198,7 +208,6 @@ func ConstructRowidColumn(
 	}
 	if err != nil {
 		vec.Free(mp)
-		vec = nil
 	}
 	return
 }

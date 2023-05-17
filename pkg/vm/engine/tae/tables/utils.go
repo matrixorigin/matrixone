@@ -34,7 +34,7 @@ func LoadPersistedColumnData(
 	location objectio.Location,
 ) (vec containers.Vector, err error) {
 	if def.IsPhyAddr() {
-		return model.PreparePhyAddrData(objectio.RowidType, &id.BlockID, 0, location.Rows())
+		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows())
 	}
 	bat, err := blockio.LoadColumns(context.Background(), []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, fs.Service, location, nil)
 	if err != nil {

@@ -211,16 +211,18 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				return err
 			}
 			blockId := appender.GetMeta().(*catalog.BlockEntry).ID
-			col, err := model.PreparePhyAddrData(
-				objectio.RowidType,
+			col, err := objectio.ConstructRowidColumn(
 				&blockId,
 				anode.GetMaxRow()-toAppend,
-				toAppend)
+				toAppend,
+				common.DefaultAllocator)
 			if err != nil {
 				return err
 			}
-			defer col.Close()
-			vec.Extend(col)
+			defer col.Free(common.DefaultAllocator)
+			if err = vec.ExtendVec(col); err != nil {
+				return err
+			}
 			toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
 			ctx := &appendCtx{
 				driver: appender,
