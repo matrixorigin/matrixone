@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -932,7 +933,6 @@ var (
 
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
 		name,
-		owner,
 		args,
 		body,
 		db,
@@ -944,7 +944,7 @@ var (
 		comment,
 		character_set_client,
 		collation_connection,
-		database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+		database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -1077,6 +1077,8 @@ const (
 
 	//with_grant_option = true
 	checkRoleHasPrivilegeWGOFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d;`
+
+	checkRoleHasPrivilegeWGOOrWithOwnershipFormat = `select distinct role_id from mo_catalog.mo_role_privs where (with_grant_option = true and (privilege_id = %d or privilege_id = %d)) or privilege_id = %d;`
 
 	updateRolePrivsFormat = `update mo_catalog.mo_role_privs set operation_user_id = %d, granted_time = "%s", with_grant_option = %v where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
 
@@ -1263,6 +1265,21 @@ const (
 
 	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
 
+	// grant ownership on database
+	grantOwnershipOnDatabaseFormat = `grant ownership on database %s to %s;`
+
+	// grant ownership on table
+	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
+
+	// get the owner of the database
+	getOwnerOfDatabaseFormat = `select owner from mo_catalog.mo_database where datname = '%s';`
+
+	// get the owner of the table
+	getOwnerOfTableFormat = `select owner from mo_catalog.mo_tables where reldatabase = '%s' and relname = '%s';`
+
+	// get the roles of the current user
+	getRolesOfCurrentUserFormat = `select role_id from mo_catalog.mo_user_grant where user_id = %d;`
+
 	//delete user from mo_user,mo_user_grant
 	deleteUserFromMoUserFormat = `delete from mo_catalog.mo_user where user_id = %d;`
 
@@ -1297,6 +1314,8 @@ const (
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 	getPubInfoForSubFormat      = `select database_name,all_account,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
+
+	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s';`
 )
 
 var (
@@ -1533,6 +1552,10 @@ func getSqlForCheckRoleHasPrivilegeWGO(privilegeId int64) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeWGOFormat, privilegeId)
 }
 
+func getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(privilegeId, allPrivId, ownershipPrivId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOOrWithOwnershipFormat, privilegeId, allPrivId, ownershipPrivId)
+}
+
 func getSqlForUpdateRolePrivs(userId int64, timestamp string, withGrantOption bool, roleId int64, objType objectType, objId, privilegeId int64) string {
 	return fmt.Sprintf(updateRolePrivsFormat, userId, timestamp, withGrantOption, roleId, objType, objId, privilegeId)
 }
@@ -1730,6 +1753,10 @@ func getSqlForDeleteMysqlCompatbilityModeForAccount(ctx context.Context, account
 	return fmt.Sprintf(deleteMysqlCompatbilityModeForAccountFormat, account_name), nil
 }
 
+func getSqlForSpBody(ctx context.Context, name string, db string) (string, error) {
+	return fmt.Sprintf(fetchSqlOfSpFormat, name, db), nil
+}
+
 // isClusterTable decides a table is the index table or not
 func isIndexTable(name string) bool {
 	return strings.HasPrefix(name, catalog.IndexTableNamePrefix)
@@ -1745,6 +1772,31 @@ func isClusterTable(dbName, name string) bool {
 		}
 	}
 	return false
+}
+
+// getSqlForGrantOwnershipOnDatabase get the sql for grant ownership on database
+func getSqlForGrantOwnershipOnDatabase(dbName, roleName string) string {
+	return fmt.Sprintf(grantOwnershipOnDatabaseFormat, dbName, roleName)
+}
+
+// getSqlForGrantOwnershipOnTable get the sql for grant ownership on database
+func getSqlForGrantOwnershipOnTable(dbName, tbName, roleName string) string {
+	return fmt.Sprintf(grantOwnershipOnTableFormat, dbName, tbName, roleName)
+}
+
+// getSqlForGetOwnerOfDatabase get the sql for get the owner of the database
+func getSqlForGetOwnerOfDatabase(dbName string) string {
+	return fmt.Sprintf(getOwnerOfDatabaseFormat, dbName)
+}
+
+// getSqlForGetOwnerOfTable get the sql for get the owner of the table
+func getSqlForGetOwnerOfTable(dbName, tbName string) string {
+	return fmt.Sprintf(getOwnerOfTableFormat, dbName, tbName)
+}
+
+// getSqlForGetRolesOfCurrentUser get the sql for get the roles of the user
+func getSqlForGetRolesOfCurrentUser(userId int64) string {
+	return fmt.Sprintf(getRolesOfCurrentUserFormat, userId)
 }
 
 func isBannedDatabase(dbName string) bool {
@@ -6044,6 +6096,182 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	//for Create User statement with default role.
 	//TODO:
 
+	// support dropdatabase and droptable for owner
+	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil && priv.kind == privilegeKindGeneral {
+		switch st := stmt.(type) {
+		case *tree.DropDatabase:
+			// get the databasename
+			dbName := string(st.Name)
+			if _, inSet := sysDatabases[dbName]; inSet {
+				return ok, nil
+			}
+			return checkRoleWhetherDatabaseOwner(ctx, ses, dbName, ok)
+		case *tree.DropTable:
+			// get the databasename and tablename
+			if len(st.Names) != 1 {
+				return ok, nil
+			}
+			dbName := string(st.Names[0].SchemaName)
+			if len(dbName) == 0 {
+				dbName = ses.GetDatabaseName()
+			}
+			if _, inSet := sysDatabases[dbName]; inSet {
+				return ok, nil
+			}
+			tbName := string(st.Names[0].ObjectName)
+			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
+		}
+	}
+	return ok, nil
+}
+
+func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbName string, ok bool) (bool, error) {
+	var owner int64
+	var err error
+	var erArray []ExecResult
+	var sql string
+	roles := make([]int64, 0)
+	tenantInfo := ses.GetTenantInfo()
+	// current user
+	currentUser := tenantInfo.GetUserID()
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// getOwner of the table
+	sql = getSqlForGetOwnerOfTable(dbName, tbName)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return ok, nil
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return ok, nil
+	}
+
+	if execResultArrayHasData(erArray) {
+		owner, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return ok, nil
+		}
+	} else {
+		return ok, nil
+	}
+
+	// check role
+	if tenantInfo.useAllSecondaryRole {
+		sql = getSqlForGetRolesOfCurrentUser(int64(currentUser))
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return ok, nil
+		}
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return ok, nil
+		}
+
+		if execResultArrayHasData(erArray) {
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				role, err := erArray[0].GetInt64(ctx, i, 0)
+				if err != nil {
+					return ok, nil
+				}
+				roles = append(roles, role)
+			}
+		} else {
+			return ok, nil
+		}
+
+		// check the role whether the table's owner
+		for _, role := range roles {
+			if role == owner {
+				return true, nil
+			}
+		}
+	} else {
+		currentRole := tenantInfo.GetDefaultRoleID()
+		if owner == int64(currentRole) {
+			return true, nil
+		}
+	}
+	return ok, nil
+
+}
+
+func checkRoleWhetherDatabaseOwner(ctx context.Context, ses *Session, dbName string, ok bool) (bool, error) {
+	var owner int64
+	var err error
+	var erArray []ExecResult
+	var sql string
+	roles := make([]int64, 0)
+
+	tenantInfo := ses.GetTenantInfo()
+	// current user
+	currentUser := tenantInfo.GetUserID()
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	// getOwner of the database
+	sql = getSqlForGetOwnerOfDatabase(dbName)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return ok, nil
+	}
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return ok, nil
+	}
+
+	if execResultArrayHasData(erArray) {
+		owner, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return ok, nil
+		}
+	} else {
+		return ok, nil
+	}
+
+	// check role
+	if tenantInfo.useAllSecondaryRole {
+		sql = getSqlForGetRolesOfCurrentUser(int64(currentUser))
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return ok, nil
+		}
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return ok, nil
+		}
+
+		if execResultArrayHasData(erArray) {
+			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+				role, err := erArray[0].GetInt64(ctx, i, 0)
+				if err != nil {
+					return ok, nil
+				}
+				roles = append(roles, role)
+			}
+		} else {
+			return ok, nil
+		}
+
+		// check the role whether the database's owner
+		for _, role := range roles {
+			if role == owner {
+				return true, nil
+			}
+		}
+	} else {
+		currentRole := tenantInfo.GetDefaultRoleID()
+		if owner == int64(currentRole) {
+			return true, nil
+		}
+	}
 	return ok, nil
 }
 
@@ -6123,6 +6351,95 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 	return sql, err
 }
 
+// getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType return getSqlForCheckRoleHasPrivilegeWGO denpends on the pritype
+func getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType PrivilegeType) string {
+	switch privType {
+	// account level privleges
+	case PrivilegeTypeCreateAccount:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeDropAccount:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeAlterAccount:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeCreateUser:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeDropUser:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeAlterUser:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeCreateRole:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeDropRole:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeAlterRole:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeCreateDatabase:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeDropDatabase:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeShowDatabases:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeConnect:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeManageGrants:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeAccountAll:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeAccountOwnership:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+
+	// database level privileges
+	case PrivilegeTypeShowTables:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeCreateTable:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeDropTable:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeCreateView:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeDropView:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeAlterView:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeAlterTable:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeDatabaseAll:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership))
+	case PrivilegeTypeDatabaseOwnership:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+
+	// table level privileges
+	case PrivilegeTypeSelect:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeInsert:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeUpdate:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeTruncate:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeDelete:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeReference:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeIndex:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeTableAll:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeTableAll), int64(PrivilegeTypeTableOwnership))
+	case PrivilegeTypeTableOwnership:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+
+	// other privileges
+	case PrivilegeTypeExecute:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+	case PrivilegeTypeValues:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+
+	default:
+		return getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+	}
+
+}
+
 // getRoleSetThatPrivilegeGrantedToWGO gets all roles that the privilege granted to with with_grant_option = true
 // The algorithm 3
 func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec, privType PrivilegeType) (*btree.Set[int64], error) {
@@ -6130,7 +6447,7 @@ func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec,
 	var erArray []ExecResult
 	var id int64
 	rset := &btree.Set[int64]{}
-	sql := getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+	sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -7571,7 +7888,6 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	var checkExistence string
 	var argsJson []byte
 	// var fmtctx *tree.FmtCtx
-	var argList []tree.ProcedureArgDecl
 	var erArray []ExecResult
 
 	// a database must be selected or specified as qualifier when create a function
@@ -7588,7 +7904,19 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	defer bh.Close()
 
 	// build argmap and marshal as json
-	argList = make([]tree.ProcedureArgDecl, len(cp.Args))
+	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+
+	// build argmap and marshal as json
+	argList := make(map[string]tree.ProcedureArgForMarshal)
+	for i := 0; i < len(cp.Args); i++ {
+		curName := cp.Args[i].GetName(fmtctx)
+		fmtctx.Reset()
+		argList[curName] = tree.ProcedureArgForMarshal{
+			Name:      cp.Args[i].(*tree.ProcedureArgDecl).Name,
+			Type:      cp.Args[i].(*tree.ProcedureArgDecl).Type,
+			InOutType: cp.Args[i].(*tree.ProcedureArgDecl).InOutType,
+		}
+	}
 	argsJson, err = json.Marshal(argList)
 	if err != nil {
 		goto handleFailed
@@ -7618,7 +7946,6 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 
 	initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
 		string(cp.Name.Name.ObjectName),
-		ses.GetTenantInfo().GetDefaultRoleID(),
 		string(argsJson),
 		cp.Body, dbName,
 		tenant.User, types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
@@ -7936,11 +8263,109 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 	return defaultConfig, err
 }
 
-func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) error {
-	// 1. fetch sql query of the procedure
-	// 2. plsql.run(args, sql body)
-	// 3. catch any error and return
-	return nil
+func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]ExecResult, error) {
+	// fetch related
+	var spBody string
+	var dbName string
+	var sql string
+	var argstr string
+	var err error
+	var erArray []ExecResult
+	var argList map[string]tree.ProcedureArgForMarshal
+	// execute related
+	var interpreter Interpreter
+	var varScope [](map[string]interface{})
+	var argsMap map[string]tree.Expr
+	var argsAttr map[string]tree.InOutArgType
+
+	// a database must be selected or specified as qualifier when create a function
+	if call.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return nil, moerr.NewNoDBNoCtx()
+		}
+		dbName = ses.GetDatabaseName()
+	} else {
+		dbName = string(call.Name.Name.SchemaName)
+	}
+
+	sql, err = getSqlForSpBody(ctx, string(call.Name.Name.ObjectName), dbName)
+	if err != nil {
+		return nil, err
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	bh.ClearExecResultSet()
+
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		// function with provided name and db exists, for now we don't support overloading for stored procedure, so go to handle deletion.
+		spBody, err = erArray[0].GetString(ctx, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		argstr, err = erArray[0].GetString(ctx, 0, 1)
+		if err != nil {
+			return nil, err
+		}
+
+		// perform argument length validation
+		// postpone argument type check until actual execution of its procedure body. This will be handled by the binder.
+		err = json.Unmarshal([]byte(argstr), &argList)
+		if err != nil {
+			return nil, err
+		}
+		if len(argList) != len(call.Args) {
+			return nil, moerr.NewInvalidArg(ctx, string(call.Name.Name.ObjectName)+" procedure have invalid input args length", len(call.Args))
+		}
+	} else {
+		return nil, moerr.NewNoUDFNoCtx(string(call.Name.Name.ObjectName))
+	}
+
+	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+
+	argsAttr = make(map[string]tree.InOutArgType)
+	argsMap = make(map[string]tree.Expr) // map arg to param
+
+	// build argsAttr and argsMap
+	logutil.Info("Nuo:" + strconv.Itoa(len(argList)))
+	i := 0
+	for curName, v := range argList {
+		argsAttr[curName] = v.InOutType
+		argsMap[curName] = call.Args[i]
+		i++
+	}
+
+	interpreter.ctx = ctx
+	interpreter.fmtctx = fmtctx
+	interpreter.ses = ses
+	interpreter.varScope = &varScope
+	interpreter.bh = bh
+	interpreter.result = nil
+	interpreter.argsMap = argsMap
+	interpreter.argsAttr = argsAttr
+	interpreter.outParamMap = make(map[string]interface{})
+
+	err = interpreter.ExecuteSp(stmt[0], dbName)
+	if err != nil {
+		return nil, err
+	}
+	return interpreter.GetResult(), nil
 }
 
 func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
@@ -7969,7 +8394,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	// 2.grant database privilege
 	switch st := stmt.(type) {
 	case *tree.CreateDatabase:
-		sql = fmt.Sprintf(`grant ownership on database %s to %s;`, st.Name, currentRole)
+		sql = getSqlForGrantOwnershipOnDatabase(string(st.Name), currentRole)
 	case *tree.CreateTable:
 		// get database name
 		var dbName string
@@ -7980,7 +8405,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		}
 		// get table name
 		tableName := string(st.Table.ObjectName)
-		sql = fmt.Sprintf(`grant ownership on table %s.%s to %s;`, dbName, tableName, currentRole)
+		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, currentRole)
 	}
 
 	bh := ses.GetBackgroundExec(tenantCtx)

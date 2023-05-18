@@ -251,6 +251,9 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.groupVecs = make([]evalVector, len(ap.Exprs))
 	}
 
+	keyWidth := 0
+	groupVecsNullable := false
+
 	for i, expr := range ap.Exprs {
 		vec, err := colexec.EvalExpr(bat, proc, expr)
 		if err != nil {
@@ -259,6 +262,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		}
 		ctr.groupVecs[i].vec = vec
 		ctr.groupVecs[i].needFree = true
+
 		for j := range bat.Vecs {
 			if bat.Vecs[j] == vec {
 				ctr.groupVecs[i].needFree = false
@@ -269,29 +273,31 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			anal.Alloc(int64(vec.Size()))
 		}
 		ctr.vecs[i] = vec
+
+		groupVecsNullable = groupVecsNullable || (!expr.Typ.NotNullable)
+	}
+	for _, typ := range ap.Types {
+		width := typ.TypeSize()
+		if typ.IsVarlen() {
+			if typ.Width == 0 {
+				width = 128
+			} else {
+				width = int(typ.Width)
+			}
+		}
+		keyWidth += width
+		if groupVecsNullable {
+			keyWidth += 1
+		}
 	}
 
 	if ctr.bat == nil {
-		size := 0
 		ctr.bat = batch.NewWithSize(len(ap.Exprs))
 		ctr.bat.Zs = proc.Mp().GetSels()
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
-			switch vec.GetType().TypeSize() {
-			case 1:
-				size += 1 + 1
-			case 2:
-				size += 2 + 1
-			case 4:
-				size += 4 + 1
-			case 8:
-				size += 8 + 1
-			case 16:
-				size += 16 + 1
-			default:
-				size = 128
-			}
+			//ctr.bat.Vecs[i].GetType().SetNotNull(!groupVecsNullable)
 		}
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
 		if err = ctr.getBatchAggs(ap); err != nil {
@@ -300,14 +306,14 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		switch {
 		//case ctr.idx != nil:
 		//	ctr.typ = HIndex
-		case size <= 8:
+		case keyWidth <= 8:
 			ctr.typ = H8
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 				return false, err
 			}
 		default:
 			ctr.typ = HStr
-			if ctr.strHashMap, err = hashmap.NewStrMap(true, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 				return false, err
 			}
 		}

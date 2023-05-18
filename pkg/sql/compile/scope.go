@@ -675,7 +675,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
-				reg.Ch <- nil
+				close(reg.Ch)
 				errChan <- errStream
 				return
 			}

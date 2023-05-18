@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -421,7 +422,6 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return nil
 	}
 	err := txn.DumpBatch(true, 0)
-	txn.CleanNilBatch()
 	if err != nil {
 		return err
 	}
@@ -444,10 +444,19 @@ func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 	return nil
 }
 
-func (e *Engine) Nodes() (engine.Nodes, error) {
+func (e *Engine) Nodes(isInternal bool, tenant string, cnLabel map[string]string) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetCNService(clusterservice.NewSelector(), func(c metadata.CNService) bool {
+	var selector clusterservice.Selector
+	if isInternal || strings.ToLower(tenant) == "sys" {
+		selector = clusterservice.NewSelector()
+	} else {
+		selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ)
+	}
+	if len(cnLabel) > 0 {
+		selector = selector.SelectByLabel(cnLabel, clusterservice.EQ)
+	}
+	cluster.GetCNService(selector, func(c metadata.CNService) bool {
 		nodes = append(nodes, engine.Node{
 			Mcpu: runtime.NumCPU(),
 			Id:   c.ServiceID,
@@ -546,16 +555,16 @@ func (e *Engine) getDNServices() []DNStore {
 
 func (e *Engine) cleanMemoryTable() {
 	e.Lock()
+	defer e.Unlock()
 	e.partitions = make(map[[2]uint64]logtailreplay.Partitions)
-	e.Unlock()
 }
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	e.Lock()
+	defer e.Unlock()
 	// XXX it's probably not a good way to do that.
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
-	e.Unlock()
 	logutil.Infof("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }

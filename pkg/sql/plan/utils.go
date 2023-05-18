@@ -18,11 +18,10 @@ import (
 	"container/list"
 	"context"
 	"encoding/csv"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"path"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -36,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -518,6 +518,42 @@ func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
 	return false
 }
 
+// function filter means func(col) compared to const. for example year(col1)>1991
+func CheckFunctionFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, childFuncName string) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName := exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=", ">", "<", ">=", "<=":
+			switch child0 := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_F:
+				childFuncName = child0.F.Func.ObjName
+				switch childFuncName {
+				case "year":
+					switch child := child0.F.Args[0].Expr.(type) {
+					case *plan.Expr_Col:
+						col = child.Col
+					}
+				}
+			default:
+				return false, nil, nil, childFuncName
+			}
+			switch child1 := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				constExpr = child1.C
+				b = true
+				return
+			default:
+				return false, nil, nil, childFuncName
+			}
+		default:
+			return false, nil, nil, childFuncName
+		}
+	default:
+		return false, nil, nil, childFuncName
+	}
+}
+
 // strict filter means col compared to const. for example col1>1
 // func(col1)=1 is not strict
 func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, funcName string) {
@@ -863,7 +899,11 @@ func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 		dotIdx := strings.Index(colName, ".")
 		colName = colName[dotIdx+1:]
 		colIdx := tableDef.Name2ColIndex[colName]
-		(*columnMap)[int(idx)] = int(colIdx)
+		seqnum := int(colIdx) // for extenal scan case, tableDef has only Name2ColIndex, no Cols, leave seqnum as colIdx
+		if len(tableDef.Cols) > 0 {
+			seqnum = int(tableDef.Cols[colIdx].Seqnum)
+		}
+		(*columnMap)[int(idx)] = seqnum
 	}
 }
 
@@ -976,8 +1016,47 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-// handle the filter list for zonemap. rewrite and constFold
-// return monotonic filters and number of nonMonotonic filters
+func getSortOrder(tableDef *plan.TableDef, colName string) int {
+	if tableDef.Pkey != nil {
+		pkNames := tableDef.Pkey.Names
+		for i := range pkNames {
+			if pkNames[i] == colName {
+				return i
+			}
+		}
+	}
+	if tableDef.ClusterBy != nil {
+		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
+	}
+	return -1
+}
+
+// handle the filter list for Stats. rewrite and constFold
+func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+	if proc == nil {
+		return nil
+	}
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	for i := range exprList {
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
+		exprList[i] = tmpexpr
+	}
+	return colexec.RewriteFilterExprList(exprList)
+}
+
+func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnName(tableDef, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
+	}
+}
+
+// this function will be deleted soon
 func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
 	if proc == nil || proc.Ctx == nil {
 		return nil, nil
@@ -1278,7 +1357,10 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 		w := csv.NewWriter(buf)
 		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
 			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
-		if param.S3Param.Provider == "minio" {
+		if strings.ToLower(param.S3Param.Provider) != "" && strings.ToLower(param.S3Param.Provider) != "minio" {
+			return nil, "", moerr.NewBadConfig(param.Ctx, "the provider only support 'minio' now")
+		}
+		if strings.ToLower(param.S3Param.Provider) == "minio" {
 			opts = append(opts, "is-minio=true")
 		}
 		if err = w.Write(opts); err != nil {
@@ -1501,5 +1583,28 @@ func onlyContainsTag(filter *Expr, tag int32) bool {
 		return true
 	default:
 		return true
+	}
+}
+
+func AssignAuxIdForExpr(expr *plan.Expr, start int32) int32 {
+	expr.AuxId = start
+	vertexCnt := int32(1)
+
+	if f, ok := expr.Expr.(*plan.Expr_F); ok {
+		for _, child := range f.F.Args {
+			vertexCnt += AssignAuxIdForExpr(child, start+vertexCnt)
+		}
+	}
+
+	return vertexCnt
+}
+
+func ResetAuxIdForExpr(expr *plan.Expr) {
+	expr.AuxId = 0
+
+	if f, ok := expr.Expr.(*plan.Expr_F); ok {
+		for _, child := range f.F.Args {
+			ResetAuxIdForExpr(child)
+		}
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
+	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 type replayer struct {
@@ -63,20 +64,20 @@ func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *re
 	}
 }
 
-func (r *replayer) replay() {
+func (r *replayer) replay(allocator logstoreEntry.Allocator) {
 	var err error
 	r.truncatedLogserviceLsn = r.d.getLogserviceTruncate()
 	for !r.readRecords() {
 		for r.replayedLsn < r.safeLsn {
-			err := r.replayLogserviceEntry(r.replayedLsn+1, true)
+			err := r.replayLogserviceEntry(r.replayedLsn+1, true, allocator)
 			if err != nil {
 				panic(err)
 			}
 		}
 	}
-	err = r.replayLogserviceEntry(r.replayedLsn+1, false)
+	err = r.replayLogserviceEntry(r.replayedLsn+1, false, allocator)
 	for err != ErrAllRecordsRead {
-		err = r.replayLogserviceEntry(r.replayedLsn+1, false)
+		err = r.replayLogserviceEntry(r.replayedLsn+1, false, allocator)
 
 	}
 	r.d.lsns = make([]uint64, 0)
@@ -116,7 +117,7 @@ func (r *replayer) removeEntries(skipMap map[uint64]uint64) {
 		delete(r.driverLsnLogserviceLsnMap, lsn)
 	}
 }
-func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
+func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool, allocator logstoreEntry.Allocator) error {
 	logserviceLsn, ok := r.driverLsnLogserviceLsnMap[lsn]
 	if !ok {
 		if safe {
@@ -140,7 +141,7 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 		panic(err)
 	}
 	t0 := time.Now()
-	intervals := record.replay(r.replayHandle)
+	intervals := record.replay(r.replayHandle, allocator)
 	r.applyDuration += time.Since(t0)
 	r.d.onReplayRecordEntry(logserviceLsn, intervals)
 	r.onReplayDriverLsn(intervals.GetMax())

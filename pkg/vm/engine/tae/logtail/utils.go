@@ -158,6 +158,7 @@ func GlobalCheckpointDataFactory(end types.TS, versionInterval time.Duration) fu
 type CheckpointMeta struct {
 	blkInsertOffset *common.ClosedInterval
 	blkDeleteOffset *common.ClosedInterval
+	segDeleteOffset *common.ClosedInterval
 }
 
 func NewCheckpointMeta() *CheckpointMeta {
@@ -253,6 +254,8 @@ func (data *CheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta) 
 		insEnd := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockInsertBatchEnd).Get(i).(int32)
 		delStart := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Get(i).(int32)
 		delEnd := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Get(i).(int32)
+		segDelStart := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).Get(i).(int32)
+		segDelEnd := data.bats[MetaIDX].GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Get(i).(int32)
 		meta := new(CheckpointMeta)
 		if insStart != -1 {
 			meta.blkInsertOffset = &common.ClosedInterval{
@@ -266,14 +269,20 @@ func (data *CheckpointData) GetTableMeta(tableID uint64) (meta *CheckpointMeta) 
 				End:   uint64(delEnd),
 			}
 		}
+		if segDelStart != -1 {
+			meta.segDeleteOffset = &common.ClosedInterval{
+				Start: uint64(segDelStart),
+				End:   uint64(segDelEnd),
+			}
+		}
 		data.meta[tid] = meta
 		// logutil.Infof("GetTableMeta TID=%d, INTERVAL=%s", tid, meta.blkInsertOffset.String())
 	}
 	meta = data.meta[tableID]
 	return
 }
-func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns *api.Batch, err error) {
-	var insTaeBat, delTaeBat, cnInsTaeBat *containers.Batch
+func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
+	var insTaeBat, delTaeBat, cnInsTaeBat, segDelTaeBat *containers.Batch
 	switch tid {
 	case pkgcatalog.MO_DATABASE_ID:
 		insTaeBat = data.bats[DBInsertIDX]
@@ -335,36 +344,42 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns *api.Batch
 
 	meta := data.GetTableMeta(tid)
 	if meta == nil {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	insInterval := meta.blkInsertOffset
-	if insInterval != nil {
+	if insInterval != nil && insInterval.End-insInterval.Start > 0 {
 		insOffset := insInterval.Start
 		insLength := insInterval.End - insInterval.Start
 		insTaeBat = data.bats[BLKMetaInsertIDX].Window(int(insOffset), int(insLength))
-	}
-
-	delInterval := meta.blkDeleteOffset
-	if delInterval != nil {
-		delOffset := delInterval.Start
-		delLength := delInterval.End - delInterval.Start
-		delTaeBat = data.bats[BLKMetaDeleteIDX].Window(int(delOffset), int(delLength))
-		cnInsTaeBat = data.bats[BLKCNMetaInsertIDX].Window(int(delOffset), int(delLength))
-	}
-
-	if insTaeBat != nil {
 		ins, err = containersBatchToProtoBatch(insTaeBat)
 		if err != nil {
 			return
 		}
 	}
-	if delTaeBat != nil {
+
+	delInterval := meta.blkDeleteOffset
+	if delInterval != nil && delInterval.End-delInterval.Start > 0 {
+		delOffset := delInterval.Start
+		delLength := delInterval.End - delInterval.Start
+		delTaeBat = data.bats[BLKMetaDeleteIDX].Window(int(delOffset), int(delLength))
+		cnInsTaeBat = data.bats[BLKCNMetaInsertIDX].Window(int(delOffset), int(delLength))
 		del, err = containersBatchToProtoBatch(delTaeBat)
 		if err != nil {
 			return
 		}
 		cnIns, err = containersBatchToProtoBatch(cnInsTaeBat)
+		if err != nil {
+			return
+		}
+	}
+
+	segDelInterval := meta.segDeleteOffset
+	if segDelInterval != nil && segDelInterval.End-segDelInterval.Start > 0 {
+		segDelOffset := segDelInterval.Start
+		segDelLength := segDelInterval.End - segDelInterval.Start
+		segDelTaeBat = data.bats[SEGDeleteIDX].Window(int(segDelOffset), int(segDelLength))
+		segDel, err = containersBatchToProtoBatch(segDelTaeBat)
 		if err != nil {
 			return
 		}
@@ -401,6 +416,13 @@ func (data *CheckpointData) prepareMeta() {
 			bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchStart).Append(int32(meta.blkDeleteOffset.Start), false)
 			bat.GetVectorByName(SnapshotMetaAttr_BlockDeleteBatchEnd).Append(int32(meta.blkDeleteOffset.End), false)
 		}
+		if meta.segDeleteOffset == nil {
+			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).Append(int32(-1), false)
+			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Append(int32(-1), false)
+		} else {
+			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchStart).Append(int32(meta.segDeleteOffset.Start), false)
+			bat.GetVectorByName(SnapshotMetaAttr_SegDeleteBatchEnd).Append(int32(meta.segDeleteOffset.End), false)
+		}
 	}
 }
 
@@ -428,6 +450,26 @@ func (data *CheckpointData) UpdateBlkMeta(tid uint64, insStart, insEnd, delStart
 		} else {
 			if !meta.blkInsertOffset.TryMerge(common.ClosedInterval{Start: uint64(insStart), End: uint64(insEnd)}) {
 				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.blkInsertOffset, insStart, insEnd))
+			}
+		}
+	}
+}
+
+func (data *CheckpointData) UpdateSegMeta(tid uint64, delStart, delEnd int32) {
+	if delEnd < delStart {
+		return
+	}
+	meta, ok := data.meta[tid]
+	if !ok {
+		meta = NewCheckpointMeta()
+		data.meta[tid] = meta
+	}
+	if delEnd >= delStart {
+		if meta.segDeleteOffset == nil {
+			meta.segDeleteOffset = &common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}
+		} else {
+			if !meta.segDeleteOffset.TryMerge(common.ClosedInterval{Start: uint64(delStart), End: uint64(delEnd)}) {
+				panic(fmt.Sprintf("logic error interval %v, start %d, end %d", meta.segDeleteOffset, delStart, delEnd))
 			}
 		}
 	}
@@ -586,7 +628,16 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 			continue
 		}
 		dbNode := node
+		var created, dropped bool
 		if dbNode.HasDropCommitted() {
+			dropped = true
+			if dbNode.CreatedAt.Equal(dbNode.DeletedAt) {
+				created = true
+			}
+		} else {
+			created = true
+		}
+		if dropped {
 			// delScehma is empty, it will just fill rowid / commit ts
 			catalogEntry2Batch(
 				collector.data.bats[DBDeleteIDX],
@@ -598,7 +649,8 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 				dbNode.GetEnd())
 			dbNode.TxnMVCCNode.AppendTuple(collector.data.bats[DBDeleteTxnIDX])
 			collector.data.bats[DBDeleteTxnIDX].GetVectorByName(SnapshotAttr_DBID).Append(entry.GetID(), false)
-		} else {
+		}
+		if created {
 			catalogEntry2Batch(collector.data.bats[DBInsertIDX],
 				entry,
 				node,
@@ -635,7 +687,16 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			continue
 		}
 		tblNode := node
-		if !tblNode.HasDropCommitted() {
+		var created, dropped bool
+		if tblNode.HasDropCommitted() {
+			dropped = true
+			if tblNode.CreatedAt.Equal(tblNode.DeletedAt) {
+				created = true
+			}
+		} else {
+			created = true
+		}
+		if created {
 			for _, syscol := range catalog.SystemColumnSchema.ColDefs {
 				txnimpl.FillColumnRow(
 					entry,
@@ -674,7 +735,8 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			)
 
 			tblNode.TxnMVCCNode.AppendTuple(collector.data.bats[TBLInsertTxnIDX])
-		} else {
+		}
+		if dropped {
 			collector.data.bats[TBLDeleteTxnIDX].GetVectorByName(
 				SnapshotAttr_DBID).Append(entry.GetDB().GetID(), false)
 			collector.data.bats[TBLDeleteTxnIDX].GetVectorByName(
@@ -719,6 +781,7 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 	if len(mvccNodes) == 0 {
 		return nil
 	}
+	delStart := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
 	for _, node := range mvccNodes {
 		if node.IsAborted() {
 			continue
@@ -740,6 +803,8 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 			segNode.TxnMVCCNode.AppendTuple(collector.data.bats[SEGInsertTxnIDX])
 		}
 	}
+	delEnd := collector.data.bats[SEGDeleteIDX].GetVectorByName(catalog.AttrRowID).Length()
+	collector.data.UpdateSegMeta(entry.GetTable().ID, int32(delStart), int32(delEnd))
 	return nil
 }
 

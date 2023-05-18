@@ -170,7 +170,7 @@ func (db *txnDatabase) TruncateByID(id uint64, newTableId uint64) (rel handle.Re
 
 	oldRel, err := db.DropRelationByID(id)
 	if err != nil {
-		err = moerr.NewInternalErrorNoCtx("%v: truncate %d error", err, id)
+		err = moerr.NewInternalErrorNoCtx("%v: truncate error", err)
 		return
 	}
 	meta := oldRel.GetMeta().(*catalog.TableEntry)

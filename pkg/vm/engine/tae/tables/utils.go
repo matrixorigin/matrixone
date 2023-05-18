@@ -46,11 +46,7 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return constructRowId(id, location.Rows())
 	}
-	reader, err := blockio.NewObjectReader(fs.Service, location)
-	if err != nil {
-		return
-	}
-	bat, err := reader.LoadColumns(context.Background(), []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, location.ID(), nil)
+	bat, err := blockio.LoadColumns(context.Background(), []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, fs.Service, location, nil)
 	if err != nil {
 		return
 	}
@@ -62,19 +58,16 @@ func ReadPersistedBlockRow(location objectio.Location) int {
 }
 
 func LoadPersistedDeletes(
+	pkName string,
 	fs *objectio.ObjectFS,
 	location objectio.Location) (bat *containers.Batch, err error) {
-	reader, err := blockio.NewObjectReader(fs.Service, location)
-	if err != nil {
-		return
-	}
-	movbat, err := reader.LoadColumns(context.Background(), []uint16{0, 1, 2}, nil, location.ID(), nil)
+	movbat, err := blockio.LoadColumns(context.Background(), []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
 	if err != nil {
 		return
 	}
 	bat = containers.NewBatch()
-	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
-	for i := 0; i < 3; i++ {
+	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, pkName, catalog.AttrAborted}
+	for i := 0; i < 4; i++ {
 		bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
 	}
 	return

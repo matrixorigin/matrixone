@@ -220,7 +220,7 @@ func (c *Config) Validate() error {
 		c.TaskRunner.FetchInterval.Duration = time.Second * 10
 	}
 	if c.TaskRunner.FetchTimeout.Duration == 0 {
-		c.TaskRunner.FetchTimeout.Duration = time.Second * 5
+		c.TaskRunner.FetchTimeout.Duration = time.Second * 10
 	}
 	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
 		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5

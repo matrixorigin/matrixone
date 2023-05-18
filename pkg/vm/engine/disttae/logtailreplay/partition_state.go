@@ -139,22 +139,24 @@ func NewPartitionState(noData bool) *PartitionState {
 }
 
 func (p *PartitionState) Copy() *PartitionState {
-	checkpoints := make([]string, len(p.checkpoints))
-	copy(checkpoints, p.checkpoints)
-	return &PartitionState{
+	state := PartitionState{
 		rows:         p.rows.Copy(),
 		blocks:       p.blocks.Copy(),
 		primaryIndex: p.primaryIndex.Copy(),
-		checkpoints:  checkpoints,
 		noData:       p.noData,
 	}
+	if len(p.checkpoints) > 0 {
+		state.checkpoints = make([]string, len(p.checkpoints))
+		copy(state.checkpoints, p.checkpoints)
+	}
+	return &state
 }
 
 func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 	iter := p.rows.Iter()
 	defer iter.Release()
 
-	blockID := *rowID.GetBlockid()
+	blockID := rowID.CloneBlockID()
 	for ok := iter.Seek(RowEntry{
 		BlockID: blockID,
 		RowID:   rowID,
@@ -237,7 +239,7 @@ func (p *PartitionState) HandleRowsInsert(
 	for i, rowID := range rowIDVector {
 		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleInsert, func() {
 
-			blockID := *rowID.GetBlockid()
+			blockID := rowID.CloneBlockID()
 			pivot := RowEntry{
 				BlockID: blockID,
 				RowID:   rowID,
@@ -298,7 +300,7 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 	for i, rowID := range rowIDVector {
 		moprobe.WithRegion(ctx, moprobe.PartitionStateHandleDel, func() {
 
-			blockID := *rowID.GetBlockid()
+			blockID := rowID.CloneBlockID()
 			pivot := RowEntry{
 				BlockID: blockID,
 				RowID:   rowID,
@@ -335,8 +337,8 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 	blockIDVector := vector.MustFixedCol[types.Blockid](mustVectorFromProto(input.Vecs[2]))
 	entryStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[3]))
 	sortedStateVector := vector.MustFixedCol[bool](mustVectorFromProto(input.Vecs[4]))
-	metaLocationVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[5]))
-	deltaLocationVector := vector.MustBytesCol(mustVectorFromProto(input.Vecs[6]))
+	metaLocationVector := mustVectorFromProto(input.Vecs[5])
+	deltaLocationVector := mustVectorFromProto(input.Vecs[6])
 	commitTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[7]))
 	segmentIDVector := vector.MustFixedCol[types.Uuid](mustVectorFromProto(input.Vecs[8]))
 
@@ -355,10 +357,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				numInserted++
 			}
 
-			if location := objectio.Location(metaLocationVector[i]); !location.IsEmpty() {
+			if location := objectio.Location(metaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
 				entry.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
-			if location := objectio.Location(deltaLocationVector[i]); !location.IsEmpty() {
+			if location := objectio.Location(deltaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
 				entry.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
 			if id := segmentIDVector[i]; objectio.IsEmptySegid(&id) {
@@ -419,7 +421,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 
 	for i, rowID := range rowIDVector {
-		blockID := *rowID.GetBlockid()
+		blockID := rowID.CloneBlockID()
 		trace.WithRegion(ctx, "handle a row", func() {
 
 			pivot := BlockEntry{

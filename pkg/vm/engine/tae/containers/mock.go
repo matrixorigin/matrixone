@@ -317,33 +317,6 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 	return vec
 }
 
-func MockVector3(typ types.Type, rows int) Vector {
-	vec := MakeVector(typ)
-	switch typ.Oid {
-	case types.T_int32:
-		for i := 0; i < rows; i++ {
-			vec.Append(int32(rows), false)
-		}
-	case types.T_int64:
-		for i := 0; i < rows; i++ {
-			vec.Append(int64(rows), false)
-		}
-	case types.T_uint32:
-		for i := 0; i < rows; i++ {
-			vec.Append(uint32(i), false)
-			vec.Append(uint32(i), false)
-			i++
-		}
-	case types.T_uint64:
-		for i := 0; i < rows; i++ {
-			vec.Append(uint64(rows), false)
-		}
-	default:
-		panic("not support")
-	}
-	return vec
-}
-
 func MockBatchWithAttrs(vecTypes []types.Type, attrs []string, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
 	bat = MockNullableBatch(vecTypes, rows, uniqueIdx, provider)
 	bat.Attrs = attrs

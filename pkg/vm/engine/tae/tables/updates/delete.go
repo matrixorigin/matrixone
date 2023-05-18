@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -96,7 +97,7 @@ func (node *DeleteNode) IsNil() bool            { return node == nil }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
-
+func (node *DeleteNode) GetMeta() *catalog.BlockEntry { return node.chain.mvcc.meta }
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }

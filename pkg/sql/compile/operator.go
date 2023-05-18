@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1119,18 +1118,19 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 	scopeLen := len(ss)
 	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
-
+	arg.ShuffleRegIdxLocal = make([]int, 0, len(ss))
+	arg.ShuffleRegIdxRemote = make([]int, 0, len(ss))
 	hasRemote := false
-	for _, s := range ss {
+	for i, s := range ss {
 		if s.IsEnd {
 			continue
 		}
-
 		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
 			isSameCN(s.NodeInfo.Addr, currentCNAddr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
+			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
 			// Remote reg.
 			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
@@ -1141,7 +1141,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 				Uuid:     newUuid,
 				NodeAddr: s.NodeInfo.Addr,
 			})
-
+			arg.ShuffleRegIdxRemote = append(arg.ShuffleRegIdxRemote, i)
 			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
 				Idx:      idx,
 				Uuid:     newUuid,
@@ -1154,14 +1154,18 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string) *dispatch.Argument {
+func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, shuffle bool, shuffleColIdx int) *dispatch.Argument {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
+	if shuffle {
+		arg.FuncId = dispatch.ShuffleToAllFunc
+		arg.ShuffleColIdx = shuffleColIdx
+		return arg
+	}
 	if hasRemote {
 		arg.FuncId = dispatch.SendToAllFunc
 	} else {
 		arg.FuncId = dispatch.SendToAllLocalFunc
 	}
-
 	return arg
 }
 

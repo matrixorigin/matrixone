@@ -67,30 +67,25 @@ func TestProxyProtocolCodec_Decode(t *testing.T) {
 		require.Equal(t, 2, n)
 		data.WriteUint16(0)
 
-		pp := &proxyProtocolCodec{}
+		pp := WithProxyProtocolCodec(frontend.NewSqlCodec())
 		res, ok, err := pp.Decode(data)
 		require.NoError(t, err)
-		require.True(t, ok)
-		require.NotNil(t, res)
-		addr, ok := res.(*ProxyAddr)
-		require.True(t, ok)
-		require.Nil(t, addr.SourceAddress)
-		require.Equal(t, 0, int(addr.SourcePort))
-		require.Nil(t, addr.TargetAddress)
-		require.Equal(t, 0, int(addr.TargetPort))
+		require.False(t, ok)
+		require.Nil(t, res)
 	})
 
-	t.Run("remote address", func(t *testing.T) {
+	t.Run("ipv4 address", func(t *testing.T) {
 		data := buf.NewByteBuf(100)
 		n, err := data.Write([]byte(ProxyProtocolV2Signature))
 		require.NoError(t, err)
 		require.Equal(t, len(ProxyProtocolV2Signature), n)
 
-		// skip 2 bytes
-		n, err = data.Write([]byte{0, 0})
+		// ipv4
+		n, err = data.Write([]byte{0, tcpOverIPv4})
 		require.NoError(t, err)
 		require.Equal(t, 2, n)
-		// ipv4
+
+		// ipv4 length
 		data.WriteUint16(12)
 		// source address
 		err = data.WriteByte(10)
@@ -125,6 +120,47 @@ func TestProxyProtocolCodec_Decode(t *testing.T) {
 		require.Equal(t, "10.11.12.13", addr.SourceAddress.To4().String())
 		require.Equal(t, 8000, int(addr.SourcePort))
 		require.Equal(t, "20.21.22.23", addr.TargetAddress.To4().String())
+		require.Equal(t, 9000, int(addr.TargetPort))
+	})
+
+	t.Run("ipv6 address", func(t *testing.T) {
+		data := buf.NewByteBuf(100)
+		n, err := data.Write([]byte(ProxyProtocolV2Signature))
+		require.NoError(t, err)
+		require.Equal(t, len(ProxyProtocolV2Signature), n)
+
+		// ipv6
+		n, err = data.Write([]byte{0, tcpOverIPv6})
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+
+		// ipv4 length
+		data.WriteUint16(36)
+		// source address
+		for i := 0; i < 16; i++ {
+			err = data.WriteByte(byte(10 + i))
+			require.NoError(t, err)
+		}
+		// target address
+		for i := 0; i < 16; i++ {
+			err = data.WriteByte(byte(50 + i))
+			require.NoError(t, err)
+		}
+		// source port
+		data.WriteUint16(8000)
+		// target port
+		data.WriteUint16(9000)
+
+		pp := &proxyProtocolCodec{}
+		res, ok, err := pp.Decode(data)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.NotNil(t, res)
+		addr, ok := res.(*ProxyAddr)
+		require.True(t, ok)
+		require.Equal(t, "a0b:c0d:e0f:1011:1213:1415:1617:1819", addr.SourceAddress.To16().String())
+		require.Equal(t, 8000, int(addr.SourcePort))
+		require.Equal(t, "3233:3435:3637:3839:3a3b:3c3d:3e3f:4041", addr.TargetAddress.To16().String())
 		require.Equal(t, 9000, int(addr.TargetPort))
 	})
 

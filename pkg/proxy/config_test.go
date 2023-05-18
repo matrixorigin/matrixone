@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -29,4 +30,47 @@ func TestFillDefault(t *testing.T) {
 	require.NotEqual(t, 0, c.RebalanceToerance)
 	require.Less(t, c.RebalanceToerance, float64(1))
 	require.NotEqual(t, 0, c.Cluster.RefreshInterval.Duration)
+}
+
+func TestValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr bool
+	}{{
+		name: "empty",
+		cfg:  Config{},
+	}, {
+		name: "plugin enabled but no backend",
+		cfg: Config{
+			Plugin: &PluginConfig{},
+		},
+		wantErr: true,
+	}, {
+		name: "plugin enabled but no timeout",
+		cfg: Config{
+			Plugin: &PluginConfig{
+				Backend: "test",
+			},
+		},
+		wantErr: true,
+	}, {
+		name: "plugin valid",
+		cfg: Config{
+			Plugin: &PluginConfig{
+				Backend: "test",
+				Timeout: time.Second,
+			},
+		},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

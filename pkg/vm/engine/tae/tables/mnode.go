@@ -18,6 +18,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -37,8 +38,6 @@ type memoryNode struct {
 
 	//index for primary key : Art tree + ZoneMap.
 	pkIndex indexwrapper.Index
-	//index for non-primary key : ZoneMap.
-	indexes map[uint16]indexwrapper.Index
 }
 
 func newMemoryNode(block *baseBlock) *memoryNode {
@@ -52,36 +51,27 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 	opts := containers.Options{}
 	opts.Allocator = common.MutMemAllocator
 	impl.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
-	impl.initIndexes(schema)
+	impl.initPKIndex(schema)
 	impl.OnZeroCB = impl.close
 	return impl
 }
 
-func (node *memoryNode) initIndexes(schema *catalog.Schema) {
-	node.indexes = make(map[uint16]indexwrapper.Index)
-	for _, def := range schema.ColDefs {
-		if def.IsPhyAddr() {
-			continue
-		}
-		if def.IsRealPrimary() {
-			node.pkIndex = indexwrapper.NewPkMutableIndex(def.Type)
-			node.indexes[def.SeqNum] = node.pkIndex
-		} else {
-			node.indexes[def.SeqNum] = indexwrapper.NewMutableIndex(def.Type)
-		}
+func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
+	if !schema.HasPK() {
+		return
 	}
+	pkDef := schema.GetSingleSortKey()
+	node.pkIndex = indexwrapper.NewPkMutableIndex(pkDef.Type)
 }
 
 func (node *memoryNode) close() {
 	logutil.Infof("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
 	node.data.Close()
 	node.data = nil
-	for i, index := range node.indexes {
-		index.Close()
-		node.indexes[i] = nil
+	if node.pkIndex != nil {
+		node.pkIndex.Close()
+		node.pkIndex = nil
 	}
-	node.indexes = nil
-	node.pkIndex = nil
 	node.block = nil
 }
 
@@ -89,8 +79,11 @@ func (node *memoryNode) IsPersisted() bool { return false }
 
 func (node *memoryNode) BatchDedup(
 	keys containers.Vector,
-	skipFn func(row uint32) error) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn)
+	skipFn func(row uint32) error,
+	zm []byte,
+	bf objectio.BloomFilter,
+) (sels *roaring.Bitmap, err error) {
+	return node.pkIndex.BatchDedup(keys, skipFn, zm, bf)
 }
 
 func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {
@@ -113,6 +106,10 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 	}
 	vec := node.data.Vecs[idx]
 	return vec.Get(row), vec.IsNull(row)
+}
+
+func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+	return node.data.Vecs[colIdx].Foreach(op, sels)
 }
 
 func (node *memoryNode) GetRowsByKey(key any) (rows []uint32, err error) {

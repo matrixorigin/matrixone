@@ -667,6 +667,16 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{FuncId: int32(t.FuncId)}
+		in.Dispatch.ShuffleColIdx = int32(t.ShuffleColIdx)
+		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
+		for i := range t.ShuffleRegIdxLocal {
+			in.Dispatch.ShuffleRegIdxLocal[i] = int32(t.ShuffleRegIdxLocal[i])
+		}
+		in.Dispatch.ShuffleRegIdxRemote = make([]int32, len(t.ShuffleRegIdxRemote))
+		for i := range t.ShuffleRegIdxRemote {
+			in.Dispatch.ShuffleRegIdxRemote[i] = int32(t.ShuffleRegIdxRemote[i])
+		}
+
 		in.Dispatch.LocalConnector = make([]*pipeline.Connector, len(t.LocalRegs))
 		for i := range t.LocalRegs {
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
@@ -684,10 +694,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 		if len(t.RemoteRegs) > 0 {
 			in.Dispatch.RemoteConnector = make([]*pipeline.WrapNode, len(t.RemoteRegs))
-			for i, r := range t.RemoteRegs {
+			for i := range t.RemoteRegs {
 				wn := &pipeline.WrapNode{
-					NodeAddr: r.NodeAddr,
-					Uuid:     r.Uuid[:],
+					NodeAddr: t.RemoteRegs[i].NodeAddr,
+					Uuid:     t.RemoteRegs[i].Uuid[:],
 				}
 				in.Dispatch.RemoteConnector[i] = wn
 			}
@@ -1017,22 +1027,34 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 		rrs := make([]colexec.ReceiveInfo, 0)
 		if len(t.RemoteConnector) > 0 {
-			for _, rc := range t.RemoteConnector {
-				uid, err := uuid.FromBytes(rc.Uuid)
+			for i := range t.RemoteConnector {
+				uid, err := uuid.FromBytes(t.RemoteConnector[i].Uuid)
 				if err != nil {
 					return v, err
 				}
 				n := colexec.ReceiveInfo{
-					NodeAddr: rc.NodeAddr,
+					NodeAddr: t.RemoteConnector[i].NodeAddr,
 					Uuid:     uid,
 				}
 				rrs = append(rrs, n)
 			}
 		}
+		shuffleRegIdxLocal := make([]int, len(t.ShuffleRegIdxLocal))
+		for i := range t.ShuffleRegIdxLocal {
+			shuffleRegIdxLocal[i] = int(t.ShuffleRegIdxLocal[i])
+		}
+		shuffleRegIdxRemote := make([]int, len(t.ShuffleRegIdxRemote))
+		for i := range t.ShuffleRegIdxRemote {
+			shuffleRegIdxRemote[i] = int(t.ShuffleRegIdxRemote[i])
+		}
+
 		v.Arg = &dispatch.Argument{
-			FuncId:     int(t.FuncId),
-			LocalRegs:  regs,
-			RemoteRegs: rrs,
+			FuncId:              int(t.FuncId),
+			LocalRegs:           regs,
+			RemoteRegs:          rrs,
+			ShuffleColIdx:       int(t.ShuffleColIdx),
+			ShuffleRegIdxLocal:  shuffleRegIdxLocal,
+			ShuffleRegIdxRemote: shuffleRegIdxRemote,
 		}
 	case vm.Group:
 		t := opr.GetAgg()

@@ -76,7 +76,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 		}).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
-	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(&plan.Stats{}).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(true, "db", "v").AnyTimes()
 
 	qb := NewQueryBuilder(plan.Query_SELECT, ctx)

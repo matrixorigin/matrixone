@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -47,6 +48,15 @@ func Prepare(proc *process.Process, arg any) error {
 			ctr.sendFunc = sendToAllFunc
 		}
 		ap.prepareRemote(proc)
+
+	case ShuffleToAllFunc:
+		ap.ctr.sendFunc = shuffleToAllFunc
+		if ap.ctr.remoteRegsCnt > 0 {
+			ap.prepareRemote(proc)
+		} else {
+			ap.prepareLocal()
+		}
+		ap.initSelsForShuffleReuse()
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
@@ -106,7 +116,7 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 			return false, moerr.NewInternalErrorNoCtx("wait notify message timeout")
 		case <-proc.Ctx.Done():
 			arg.ctr.prepared = true
-			logutil.Errorf("conctx done during dispatch")
+			logutil.Infof("conctx done during dispatch")
 			return true, nil
 		case csinfo := <-proc.DispatchNotifyCh:
 			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{
@@ -126,7 +136,9 @@ func (arg *Argument) prepareRemote(proc *process.Process) {
 	arg.ctr.prepared = false
 	arg.ctr.isRemote = true
 	arg.ctr.remoteReceivers = make([]*WrapperClientSession, 0, arg.ctr.remoteRegsCnt)
-	for _, rr := range arg.RemoteRegs {
+	arg.ctr.remoteToIdx = make(map[uuid.UUID]int)
+	for i, rr := range arg.RemoteRegs {
+		arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
 		colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc)
 	}
 }
@@ -135,4 +147,22 @@ func (arg *Argument) prepareLocal() {
 	arg.ctr.prepared = true
 	arg.ctr.isRemote = false
 	arg.ctr.remoteReceivers = nil
+}
+
+func (arg *Argument) initSelsForShuffleReuse() {
+	if arg.ctr.sels == nil {
+		arg.ctr.sels = make([][]int32, arg.ctr.aliveRegCnt)
+		for i := 0; i < arg.ctr.aliveRegCnt; i++ {
+			arg.ctr.sels[i] = make([]int32, 8192)
+		}
+		arg.ctr.lenshuffledSels = make([]int, arg.ctr.aliveRegCnt)
+	}
+}
+
+func (arg *Argument) getSels() ([][]int32, []int) {
+	for i := range arg.ctr.sels {
+		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
+		arg.ctr.lenshuffledSels[i] = 0
+	}
+	return arg.ctr.sels, arg.ctr.lenshuffledSels
 }
