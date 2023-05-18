@@ -39,6 +39,10 @@ func (sh *sqlHelper) ExecSql(sql string) ([]interface{}, error) {
 	return mocks, nil
 }
 
+func (sh *sqlHelper) GetCompilerContext() any {
+	return nil
+}
+
 func TestSetVal(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

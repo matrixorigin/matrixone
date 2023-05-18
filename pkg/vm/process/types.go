@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -193,7 +192,6 @@ type vectorPool struct {
 type sqlHelper interface {
 	GetCompilerContext() any
 	ExecSql(string) ([]interface{}, error)
-	GetCompilerContext() plan.CompilerContext
 }
 
 type WrapCs struct {
