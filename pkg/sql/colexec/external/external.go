@@ -714,13 +714,6 @@ func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, 
 		return true
 	}
 
-	//external read, columns won't change, there is no need to use seqnum
-	zonemap, err := objectReader.LoadZoneMap(context.Background(), param.Filter.columns,
-		param.Zoneparam.bs[param.Zoneparam.offset], proc.GetMPool())
-	if err != nil {
-		return true
-	}
-
 	notReportErrCtx := errutil.ContextWithNoReport(proc.Ctx, true)
 
 	meta := param.Zoneparam.bs[param.Zoneparam.offset]
