@@ -188,9 +188,26 @@ func (n *anode) PrintDeletes() string {
 	return n.storage.mnode.data.Deletes.String()
 }
 
+func (n *anode) WindowColumn(start, end uint32, pos int) (vec containers.Vector, err error) {
+	data := n.storage.mnode.data
+	deletes := data.WindowDeletes(int(start), int(end-start))
+	if deletes != nil {
+		vec = data.Vecs[pos].CloneWindow(int(start), int(end-start))
+		vec.Compact(deletes)
+	} else {
+		vec = data.Vecs[pos].Window(int(start), int(end-start))
+	}
+	return
+}
+
 func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
-	bat = n.storage.mnode.data.CloneWindow(int(start), int(end-start))
-	bat.Compact()
+	data := n.storage.mnode.data
+	if data.HasDelete() {
+		bat = data.CloneWindow(int(start), int(end-start))
+		bat.Compact()
+	} else {
+		bat = data.Window(int(start), int(end-start))
+	}
 	return
 }
 

@@ -71,7 +71,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
 	//new session
-	ses := NewSession(proto, testPool, pu, GSysVariables, true)
+	ses := NewSession(proto, testPool, pu, GSysVariables, true, nil)
 	return ses
 }
 

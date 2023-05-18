@@ -131,9 +131,6 @@ func (vec *vectorWrapper) GetType() *types.Type {
 }
 
 func (vec *vectorWrapper) Extend(src Vector) {
-	if vec.downstreamVector.IsConst() {
-		panic(moerr.NewInternalErrorNoCtx("extend to const vectorWrapper"))
-	}
 	vec.ExtendWithOffset(src, 0, src.Length())
 }
 

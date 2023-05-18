@@ -114,14 +114,14 @@ func TestMakeEvent(t *testing.T) {
 			dst: n1,
 		})
 		require.NotNil(t, e)
-		require.True(t, r)
+		require.False(t, r)
 
 		e, r = makeEvent(&eventReq{
 			msg: makeSimplePacket("alter account if exists  a1 suspend"),
 			dst: n1,
 		})
 		require.NotNil(t, e)
-		require.True(t, r)
+		require.False(t, r)
 
 		e, r = makeEvent(&eventReq{
 			msg: makeSimplePacket("alter1 account a1 suspend"),
@@ -140,14 +140,14 @@ func TestMakeEvent(t *testing.T) {
 			dst: n1,
 		})
 		require.NotNil(t, e)
-		require.True(t, r)
+		require.False(t, r)
 
 		e, r = makeEvent(&eventReq{
 			msg: makeSimplePacket("drop account if exists a1"),
 			dst: n1,
 		})
 		require.NotNil(t, e)
-		require.True(t, r)
+		require.False(t, r)
 
 		e, r = makeEvent(&eventReq{
 			msg: makeSimplePacket("dr1op account a1"),

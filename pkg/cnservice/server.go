@@ -101,8 +101,11 @@ func NewService(
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 	frontend.InitServerVersion(pu.SV.MoVersion)
 
+	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
+	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
+
 	srv.pu = pu
-	if err = srv.initMOServer(ctx, pu); err != nil {
+	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
 	if _, err = srv.getHAKeeperClient(); err != nil {
@@ -139,6 +142,7 @@ func NewService(
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
 		cli client.TxnClient,
+		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error {
 		return nil
 	}
@@ -264,11 +268,12 @@ func (s *service) handleRequest(
 		s.fileService,
 		s.lockService,
 		s._txnClient,
+		s.aicm,
 		s.acquireMessage)
 	return nil
 }
 
-func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
+func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) error {
 	var err error
 	logutil.Infof("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 	cancelMoServerCtx, cancelMoServerFunc := context.WithCancel(ctx)
@@ -283,7 +288,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 		return err
 	}
 
-	s.createMOServer(cancelMoServerCtx, pu)
+	s.createMOServer(cancelMoServerCtx, pu, aicm)
 
 	return nil
 }
@@ -318,10 +323,10 @@ func (s *service) initEngine(
 	return nil
 }
 
-func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
+func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
-	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
+	s.mo = frontend.NewMOServer(moServerCtx, address, pu, aicm)
 }
 
 func (s *service) runMoServer() error {
@@ -343,10 +348,6 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 		if err != nil {
 			return
 		}
-
-		runtime.ProcessLevelRuntime().SetGlobalVariables(
-			runtime.HAKeeperClient,
-			client)
 		s._hakeeperClient = client
 		s.pu.HAKeeperClient = client
 		s.initClusterService()

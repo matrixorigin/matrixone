@@ -867,6 +867,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 		return
 	}
 	var zm index.ZM
+	pkColPos := tbl.schema.GetSingleSortKeyIdx()
 	for _, node := range tbl.localSegment.nodes {
 		if node.IsPersisted() {
 			err = tbl.DoPrecommitDedupByNode(node)
@@ -875,11 +876,10 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 			}
 			continue
 		}
-		bat, err := node.Window(0, node.Rows())
+		pkVec, err := node.WindowColumn(0, node.Rows(), pkColPos)
 		if err != nil {
 			return err
 		}
-		pkVec := bat.Vecs[tbl.schema.GetSingleSortKeyIdx()]
 		if zm.Valid() {
 			zm.ResetMinMax()
 		} else {
@@ -887,14 +887,14 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 			zm = index.NewZM(pkType.Oid, pkType.Scale)
 		}
 		if err = index.BatchUpdateZM(zm, pkVec); err != nil {
-			bat.Close()
+			pkVec.Close()
 			return err
 		}
 		if err = tbl.DoPrecommitDedupByPK(pkVec, zm); err != nil {
-			bat.Close()
+			pkVec.Close()
 			return err
 		}
-		bat.Close()
+		pkVec.Close()
 	}
 	return
 }
