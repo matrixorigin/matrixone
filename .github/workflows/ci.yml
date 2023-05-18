@@ -94,6 +94,7 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
           
+      #For some rules, the higher version of golang is not supported, so continue to use go 1.19 here
       - name: Set up Go
         uses: actions/setup-go@v3.4.0
         with:
