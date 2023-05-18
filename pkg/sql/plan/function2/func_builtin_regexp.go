@@ -62,17 +62,13 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 		if null1 || null2 {
-			if err := rs.Append(false, true); err != nil {
-				return err
-			}
+			rs.AppendMustNull()
 		} else {
 			match, err := op.regMap.regularMatchForLikeOp(v2, v1)
 			if err != nil {
 				return err
 			}
-			if err = rs.Append(match, false); err != nil {
-				return err
-			}
+			rs.AppendMustValue(match)
 		}
 	}
 	return nil
@@ -97,17 +93,13 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 		v1, null1 := p1.GetStrValue(i)
 		v2, null2 := p2.GetStrValue(i)
 		if null1 || null2 {
-			if err := rs.Append(false, true); err != nil {
-				return err
-			}
+			rs.AppendMustNull()
 		} else {
 			match, err := op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1))
 			if err != nil {
 				return err
 			}
-			if err = rs.Append(match, false); err != nil {
-				return err
-			}
+			rs.AppendMustValue(match)
 		}
 	}
 	return nil
@@ -290,23 +282,17 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 			for i := uint64(0); i < uint64(length); i++ {
 				v1, null1 := p1.GetStrValue(i)
 				if null1 {
-					if err := rs.Append(false, true); err != nil {
-						return true, err
-					}
+					rs.AppendMustNull()
 				} else {
 					for _, sp := range subpats {
 						idx := bytes.Index(v1, sp)
 						if idx == -1 {
-							if err := rs.Append(false, false); err != nil {
-								return true, err
-							}
+							rs.AppendMustValue(false)
 							continue outer
 						}
 						v1 = v1[idx+len(sp):]
 					}
-					if err := rs.Append(true, false); err != nil {
-						return true, err
-					}
+					rs.AppendMustValue(true)
 				}
 			}
 			return true, nil

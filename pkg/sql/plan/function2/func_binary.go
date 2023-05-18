@@ -785,31 +785,13 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 	}
 }
 
-func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-	rs := vector.MustFunctionResult[types.Date](result)
+func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	iTyp := types.IntervalType(unit)
 
-	starts := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := starts.GetValue(i)
-		v2, null2 := diffs.GetValue(i)
-
-		if null1 || null2 {
-			if err = rs.Append(v1, true); err != nil {
-				return err
-			}
-		} else {
-			val, err := doDateAdd(v1, v2, types.IntervalType(unit))
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(val, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedBinaryTemplateRecFixedReturnFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
+		return doDateAdd(v1, v2, iTyp)
+	})
 }
 
 func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
@@ -1254,66 +1236,28 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 	}
 }
 
-func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-	rs := vector.MustFunctionResult[types.Date](result)
+func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
-
-	starts := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	iTyp := types.IntervalType(unit)
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := starts.GetValue(i)
-		v2, null2 := diffs.GetValue(i)
 
-		if null1 || null2 {
-			if err = rs.Append(v1, true); err != nil {
-				return err
-			}
-		} else {
-			val, err := doDateSub(v1, v2, iTyp)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(val, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedBinaryTemplateRecFixedReturnFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
+		return doDateSub(v1, v2, iTyp)
+	})
 }
 
-func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-	rs := vector.MustFunctionResult[types.Datetime](result)
+func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
-
-	starts := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	scale := ivecs[0].GetType().Scale
 	iTyp := types.IntervalType(unit)
-	switch iTyp {
-	case types.MicroSecond:
+	if iTyp == types.MicroSecond {
 		scale = 6
 	}
+	rs := vector.MustFunctionResult[types.Datetime](result)
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := starts.GetValue(i)
-		v2, null2 := diffs.GetValue(i)
 
-		if null1 || null2 {
-			if err = rs.Append(v1, true); err != nil {
-				return err
-			}
-		} else {
-			val, err := doDatetimeSub(v1, v2, iTyp)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(val, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return optimizedBinaryTemplateRecFixedReturnFixedWithErrorCheck[types.Datetime, int64, types.Datetime](ivecs, result, proc, length, func(v1 types.Datetime, v2 int64) (types.Datetime, error) {
+		return doDatetimeSub(v1, v2, iTyp)
+	})
 }
 
 func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
@@ -1347,79 +1291,21 @@ func DateStringSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 }
 
 func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
-	rs := vector.MustFunctionResult[types.Timestamp](result)
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
-
-	starts := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
-	diffs := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	scale := ivecs[0].GetType().Scale
 	iTyp := types.IntervalType(unit)
-	switch iTyp {
-	case types.MicroSecond:
-		scale = 6
-	}
-	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := starts.GetValue(i)
-		v2, null2 := diffs.GetValue(i)
 
-		if null1 || null2 {
-			if err = rs.Append(v1, true); err != nil {
-				return err
-			}
-		} else {
-			val, err := doTimestampSub(proc.SessionInfo.TimeZone, v1, v2, iTyp)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(val, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	scale := ivecs[0].GetType().Scale
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+
+	return optimizedBinaryTemplateRecFixedReturnFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
+		return doTimestampSub(proc.SessionInfo.TimeZone, v1, v2, iTyp)
+	})
 }
 
 type number interface {
 	constraints.Unsigned | constraints.Signed | constraints.Float
 }
-
-// XXX confused check rule.
-//func filedCheck(overloads []overload, inputs []types.Type) checkResult {
-//	if len(inputs) > 1 {
-//		requiredType := make([]types.T, len(inputs))
-//		doubleIndex := -1 // index of overload which require all `double` type as parameters.
-//
-//		for i, over := range overloads {
-//			for _, t := range over.args {
-//				for j := range requiredType {
-//					if t == types.T_float64 {
-//						doubleIndex = i
-//					}
-//					requiredType[j] = t
-//				}
-//				if sta, _ := tryToMatch(inputs, requiredType); sta == matchDirectly {
-//					return newCheckResultWithSuccess(i)
-//				}
-//			}
-//		}
-//
-//		// try to convert all arguments to be double.
-//		if doubleIndex != -1 {
-//			for i := range requiredType {
-//				requiredType[i] = types.T_float64
-//			}
-//			if sta, _ := tryToMatch(inputs, requiredType); sta == matchByCast {
-//				castTypes := make([]types.Type, len(inputs))
-//				for j := range castTypes {
-//					castTypes[j] = types.T_float64.ToType()
-//				}
-//				return newCheckResultWithCast(doubleIndex, castTypes)
-//			}
-//		}
-//	}
-//	return newCheckResultWithFailure(failedFunctionParametersWrong)
-//}
 
 func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	tc := func(inputs []types.Type, t types.T) bool {
