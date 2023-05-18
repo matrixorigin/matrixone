@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -174,7 +175,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			seg.tableHandle = tableData.GetHandle()
 		}
 		appended := uint32(0)
-		vec := containers.MakeVector(catalog.PhyAddrColumnType)
+		vec := containers.MakeVector(objectio.RowidType)
 		for appended < node.RowsWithoutDeletes() {
 			appender, err := seg.tableHandle.GetAppender()
 			if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
@@ -209,17 +210,19 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			if err != nil {
 				return err
 			}
-			prefix := appender.GetMeta().(*catalog.BlockEntry).MakeKey()
-			col, err := model.PreparePhyAddrData(
-				catalog.PhyAddrColumnType,
-				prefix,
+			blockId := appender.GetMeta().(*catalog.BlockEntry).ID
+			col, err := objectio.ConstructRowidColumn(
+				&blockId,
 				anode.GetMaxRow()-toAppend,
-				toAppend)
+				toAppend,
+				common.DefaultAllocator)
 			if err != nil {
 				return err
 			}
-			defer col.Close()
-			vec.Extend(col)
+			defer col.Free(common.DefaultAllocator)
+			if err = vec.ExtendVec(col); err != nil {
+				return err
+			}
 			toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
 			ctx := &appendCtx{
 				driver: appender,
@@ -460,7 +463,8 @@ func (seg *localSegment) Rows() (n uint32) {
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	if !seg.table.GetLocalSchema().HasPK() {
 		id = seg.table.entry.AsCommonID()
-		id.BlockID, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		rid := filter.Val.(types.Rowid)
+		id.BlockID, offset = rid.Decode()
 		return
 	}
 	id = seg.entry.AsCommonID()
