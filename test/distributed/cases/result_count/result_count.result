@@ -1,3 +1,4 @@
+create account result_count admin_name 'test_account' identified by '111';
 begin;
 rollback;
 commit;
@@ -136,11 +137,10 @@ select * from unnest('{"a":1}') as f;
 col    seq    key    path    index    value    this
 UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 use system;
-create account test_tenant_1 admin_name 'test_account' identified by '111';
 select sleep(16);
 sleep(16)
 0
-select statement, result_count from statement_info where user="dump" and statement not like '%mo_ctl%' order by request_at desc limit 76;
+select statement, result_count from statement_info where user="result_count" order by request_at desc limit 76;
 statement    result_count
 create account test_tenant_1 admin_name 'test_account' identified by '******'    0
 use system    0
@@ -218,4 +218,4 @@ commit    0
 start transaction    0
 commit    0
 rollback    0
-drop account test_tenant_1;
+drop account result_count;

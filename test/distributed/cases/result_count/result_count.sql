@@ -1,3 +1,8 @@
+-- prepare
+create account result_count admin_name 'result_count' identified by '111';
+
+-- testcase
+-- @session:id=2&user=result_count:result_count&password=111
 -- transaction sql
 begin;
 rollback;
@@ -97,13 +102,12 @@ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 select * from unnest('{"a":1}') as f;
 use system;
-
--- test_tenant_1 wait 15s
-create account test_tenant_1 admin_name 'test_account' identified by '111';
--- @session:id=2&user=test_tenant_1:test_account&password=111
-select sleep(16);
 -- @session
 
-select statement, result_count from statement_info where user="dump" and statement not like '%mo_ctl%' order by request_at desc limit 76;
-drop account test_tenant_1;
+-- check result
+select sleep(16);
+select statement, result_count from statement_info where user="result_count" order by request_at desc limit 76;
+
+-- cleanup
+drop account result_count;
 
