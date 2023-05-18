@@ -602,9 +602,9 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 // result of f(x, y) is null if any one of x, y is null value.
 // and if x, y were all normal value, result will not be an error.
 func opBinaryFixedFixedToFixed[
-	T1 constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
-	T2 constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
-	Tr constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T1 types.FixedSizeTExceptStrType,
+	T2 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v1 T1, v2 T2) Tr) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T1](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
@@ -699,9 +699,9 @@ func opBinaryFixedFixedToFixed[
 }
 
 func opBinaryFixedFixedToFixedWithErrorCheck[
-	T1 constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
-	T2 constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
-	Tr constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T1 types.FixedSizeTExceptStrType,
+	T2 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v1 T1, v2 T2) (Tr, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T1](parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
@@ -814,6 +814,254 @@ func opBinaryFixedFixedToFixedWithErrorCheck[
 		v1, _ := p1.GetValue(i)
 		v2, _ := p2.GetValue(i)
 		r, err := resultFn(v1, v2)
+		if err != nil {
+			return err
+		}
+		rss[i] = r
+	}
+	return nil
+}
+
+func opBinaryStrFixedToFixedWithErrorCheck[
+	T2 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v1 string, v2 T2) (Tr, error)) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
+	rs := vector.MustFunctionResult[Tr](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[Tr](rsVec)
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 && c2 {
+		v1, null1 := p1.GetStrValue(0)
+		v2, null2 := p2.GetValue(0)
+		ifNull := null1 || null2
+		if ifNull {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := resultFn(function2Util.QuickBytesToStr(v1), v2)
+			if err != nil {
+				return err
+			}
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p2.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, null2 := p2.GetValue(i)
+					if null2 {
+						continue
+					}
+					r, err := resultFn(function2Util.QuickBytesToStr(v1), v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			} else {
+				rv1 := function2Util.QuickBytesToStr(v1)
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, _ := p2.GetValue(i)
+					r, err := resultFn(rv1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetValue(0)
+		if null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					if null1 {
+						continue
+					}
+					r, err := resultFn(function2Util.QuickBytesToStr(v1), v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, _ := p1.GetStrValue(i)
+					r, err := resultFn(function2Util.QuickBytesToStr(v1), v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 {
+				continue
+			}
+			r, err := resultFn(function2Util.QuickBytesToStr(v1), v2)
+			if err != nil {
+				return err
+			}
+			rss[i] = r
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		v2, _ := p2.GetValue(i)
+		r, err := resultFn(function2Util.QuickBytesToStr(v1), v2)
+		if err != nil {
+			return err
+		}
+		rss[i] = r
+	}
+	return nil
+}
+
+func opBinaryFixedStrToFixedWithErrorCheck[
+	T1 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v1 T1, v2 string) (Tr, error)) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T1](parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[Tr](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[Tr](rsVec)
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 && c2 {
+		v1, null1 := p1.GetValue(0)
+		v2, null2 := p2.GetStrValue(0)
+		ifNull := null1 || null2
+		if ifNull {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := resultFn(v1, function2Util.QuickBytesToStr(v2))
+			if err != nil {
+				return err
+			}
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p2.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, null2 := p2.GetStrValue(i)
+					if null2 {
+						continue
+					}
+					r, err := resultFn(v1, function2Util.QuickBytesToStr(v2))
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, _ := p2.GetStrValue(i)
+					r, err := resultFn(v1, function2Util.QuickBytesToStr(v2))
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetStrValue(0)
+		if null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			rv2 := function2Util.QuickBytesToStr(v2)
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetValue(i)
+					if null1 {
+						continue
+					}
+					r, err := resultFn(v1, rv2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, _ := p1.GetValue(i)
+					r, err := resultFn(v1, rv2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetStrValue(i)
+			if null1 || null2 {
+				continue
+			}
+			r, err := resultFn(v1, function2Util.QuickBytesToStr(v2))
+			if err != nil {
+				return err
+			}
+			rss[i] = r
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetValue(i)
+		v2, _ := p2.GetStrValue(i)
+		r, err := resultFn(v1, function2Util.QuickBytesToStr(v2))
 		if err != nil {
 			return err
 		}
@@ -1056,14 +1304,14 @@ func specialTemplateForDivFunction[
 	return nil
 }
 
-func opBinaryBytesBytesToFixed[T2 bool](
+func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2 []byte) T2) error {
+	arithFn func(v1, v2 []byte) Tr) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
-	rs := vector.MustFunctionResult[T2](result)
+	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T2](rsVec)
+	rss := vector.MustFixedCol[Tr](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	if c1 && c2 {
@@ -1151,14 +1399,14 @@ func opBinaryBytesBytesToFixed[T2 bool](
 	return nil
 }
 
-func opBinaryStrStrToFixed[T2 bool](
+func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	arithFn func(v1, v2 string) T2) error {
+	arithFn func(v1, v2 string) Tr) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
-	rs := vector.MustFunctionResult[T2](result)
+	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T2](rsVec)
+	rss := vector.MustFixedCol[Tr](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	if c1 && c2 {
@@ -1251,13 +1499,13 @@ func opBinaryStrStrToFixed[T2 bool](
 // opUnaryFixedToFixed for unary functions whose result of f(x) is null if x is null.
 // and if x was not null, result will be not null.
 func opUnaryFixedToFixed[
-	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128,
-	T2 constraints.Integer | constraints.Float | bool | types.Timestamp | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v T) T2) error {
+	T types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v T) Tr) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	rs := vector.MustFunctionResult[T2](result)
+	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T2](rsVec)
+	rss := vector.MustFixedCol[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	if c1 {
@@ -1294,12 +1542,12 @@ func opUnaryFixedToFixed[
 }
 
 func opUnaryBytesToFixed[
-	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) T2) error {
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) Tr) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	rs := vector.MustFunctionResult[T2](result)
+	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T2](rsVec)
+	rss := vector.MustFixedCol[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	if c1 {
@@ -1336,12 +1584,12 @@ func opUnaryBytesToFixed[
 }
 
 func opUnaryStrToFixed[
-	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v string) T2) error {
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v string) Tr) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	rs := vector.MustFunctionResult[T2](result)
+	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T2](rsVec)
+	rss := vector.MustFixedCol[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	if c1 {
@@ -1537,7 +1785,7 @@ func opUnaryStrToStr(
 }
 
 func opUnaryFixedToStr[
-	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) string) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1593,7 +1841,7 @@ func opUnaryFixedToStr[
 }
 
 func opUnaryFixedToStrWithErrorCheck[
-	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (string, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -1784,13 +2032,13 @@ func opUnaryBytesToStrWithErrorCheck(
 }
 
 func opUnaryFixedToFixedWithErrorCheck[
-	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128,
-	T2 constraints.Integer | constraints.Float | bool | types.Timestamp | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v T) (T2, error)) error {
+	T types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v T) (Tr, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	rs := vector.MustFunctionResult[T2](result)
+	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T2](rsVec)
+	rss := vector.MustFixedCol[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	if c1 {
@@ -1837,12 +2085,12 @@ func opUnaryFixedToFixedWithErrorCheck[
 }
 
 func opUnaryBytesToFixedWithErrorCheck[
-	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v []byte) (T2, error)) error {
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) (Tr, error)) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	rs := vector.MustFunctionResult[T2](result)
+	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T2](rsVec)
+	rss := vector.MustFixedCol[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	if c1 {
@@ -1889,12 +2137,12 @@ func opUnaryBytesToFixedWithErrorCheck[
 }
 
 func opUnaryStrToFixedWithErrorCheck[
-	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v string) (T2, error)) error {
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v string) (Tr, error)) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	rs := vector.MustFunctionResult[T2](result)
+	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T2](rsVec)
+	rss := vector.MustFixedCol[Tr](rsVec)
 
 	c1 := parameters[0].IsConst()
 	if c1 {
@@ -1940,11 +2188,11 @@ func opUnaryStrToFixedWithErrorCheck[
 	return nil
 }
 
-func opNoneParamToFixed[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128](
-	result vector.FunctionResultWrapper, proc *process.Process, length int, resultFn func() T) error {
-	rs := vector.MustFunctionResult[T](result)
+func opNoneParamToFixed[Tr types.FixedSizeTExceptStrType](
+	result vector.FunctionResultWrapper, proc *process.Process, length int, resultFn func() Tr) error {
+	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T](rsVec)
+	rss := vector.MustFixedCol[Tr](rsVec)
 
 	for i := 0; i < length; i++ {
 		rss[i] = resultFn()
