@@ -1,3 +1,9 @@
+-- prepare
+drop account if exists bvt_result_count;
+create account bvt_result_count admin_name 'admin' identified by '111';
+
+-- case 1
+-- @session:id=2&user=bvt_result_count:admin&password=111
 -- transaction sql
 begin;
 rollback;
@@ -26,8 +32,10 @@ set @a=1;
 prepare s1 from "select * from t1 where a>?";
 prepare s2 from "select * from t1 where a=?";
 
+-- @bvt:issue#9525
 execute s1 using @a;
 execute s2 using @a;
+-- @bvt:issue
 
 deallocate prepare s2;
 deallocate prepare s2;
@@ -46,12 +54,7 @@ drop table t1;
 drop view v2;
 drop database db1;
 
--- test create/drop account
-create account test_tenant_1 admin_name 'test_account' identified by '111';
-drop account test_tenant_1;
-
 -- test DCL sql
-create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 create role test_role;
 create user user_name identified by 'password';
 create database if not exists db1;
@@ -59,7 +62,6 @@ grant create table,drop table on database *.* to test_role;
 revoke test_role from user_name;
 drop user user_name;
 drop role test_role;
-drop account test_account;
 drop database db1;
 
 -- test transaction (insert/delete/update/select)
@@ -97,13 +99,23 @@ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 select * from unnest('{"a":1}') as f;
 use system;
-
--- test_tenant_1 wait 15s
-create account test_tenant_1 admin_name 'test_account' identified by '111';
--- @session:id=2&user=test_tenant_1:test_account&password=111
-select sleep(16);
 -- @session
+-- case 1: END
 
-select statement, result_count from statement_info where user="dump" and statement not like '%mo_ctl%' order by request_at desc limit 76;
-drop account test_tenant_1;
+-- case 2: 通过dump 账号测试 create account/drop account
+-- test create/drop account
+/* cloud_user */create account test_tenant_1 admin_name 'test_account' identified by '111';
+/* cloud_user */drop account test_tenant_1;
+-- case 2: END
+
+-- result check
+select sleep(16);
+use system;
+-- check case 1
+select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' order by request_at desc limit 70;
+-- check case 2
+select statement, result_count from statement_info where user="dump" and sql_source_type="cloud_user_sql" order by request_at desc limit 2;
+
+-- cleanup
+drop account if exists bvt_result_count;
 
