@@ -1,6 +1,8 @@
 -- prepare
 create account if not exists `query_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 
+-- CASE: part 1
+-- @session:id=1&user=query_type:admin:accountadmin&password=123456
 -- test TCL sql
 begin;
 commit;
@@ -153,13 +155,15 @@ rollback;
 
 use system;
 select sleep(1);
--- @session:id=1&user=query_type:admin:accountadmin&password=123456
-select sleep(15);
 -- @session
--- mo-tester will exec "select mo_ctl('cn','synccommit','')" while switch conn
-select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 112;
+
+-- RESULT CHECK: part 1
+select sleep(15);
+select statement,query_type,sql_source_type from  system.statement_info where account="query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 112;
 
 
+-- CASE: part 2
+-- @session:id=1&user=query_type:admin:accountadmin&password=123456
 -- test cloud_user_sql type
 /* cloud_user */ use statement_query_type;
 /* cloud_user */ begin;
@@ -237,11 +241,14 @@ select statement,query_type,sql_source_type from  system.statement_info where us
 /* cloud_user */ drop database test_db;
 
 /* cloud_user */ select sleep(1);
--- @session:id=1&user=query_type:admin:accountadmin&password=123456
-select sleep(15);
 -- @session
-/* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" order by request_at desc limit 68;
 
+-- RESULT CHECK: part 2
+select sleep(15);
+/* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="query_type" and sql_source_type="cloud_user_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
+
+-- CASE: part 3
+-- @session:id=1&user=query_type:admin:accountadmin&password=123456
 -- test cloud_no_user_sql type
 /* cloud_nonuser */ use statement_query_type;
 /* cloud_nonuser */ begin;
@@ -318,11 +325,13 @@ select sleep(15);
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
 /* cloud_nonuser */ select sleep(1);
--- @session:id=1&user=query_type:admin:accountadmin&password=123456
-select sleep(15);
 -- @session
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
 
+-- RESULT CHECK: part 3
+select sleep(15);
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where account="query_type" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
+
+-- CASE: last
 begin;
 use statement_query_type;
 create table test_table(col1 int,col2 varchar);
@@ -335,4 +344,6 @@ insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
 rollback ;
+
+-- cleanup
 drop account if exists query_type;

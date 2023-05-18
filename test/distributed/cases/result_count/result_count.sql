@@ -104,9 +104,9 @@ select * from unnest('{"a":1}') as f;
 use system;
 -- @session
 
--- check result
+-- result check
 select sleep(16);
-select statement, result_count from statement_info where user="result_count" order by request_at desc limit 76;
+select statement, result_count from statement_info where user="result_count" and statement not like '%mo_ctl%' order by request_at desc limit 76;
 
 -- cleanup
 drop account result_count;

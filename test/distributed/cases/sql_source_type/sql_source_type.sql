@@ -14,7 +14,7 @@ select * from __mo_t1;
 
 -- result check
 select sleep(16);
-select statement, sql_source_type from system.statement_info where user="sql_source_type" order by request_at desc limit 4;
+select statement, sql_source_type from system.statement_info where user="sql_source_type" and statement not like '%mo_ctl%' order by request_at desc limit 4;
 
 -- cleanup
 drop account if exists sql_source_type;
