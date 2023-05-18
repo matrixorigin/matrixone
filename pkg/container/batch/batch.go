@@ -250,7 +250,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	if len(bat.Zs) != 0 {
 		m.PutSels(bat.Zs)
 	}
-	bat.Attrs = []string{"fuck"}
+	bat.Attrs = nil
 	bat.Zs = nil
 	bat.Vecs = nil
 }

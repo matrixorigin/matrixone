@@ -68,6 +68,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if err := bat.UnmarshalBinary([]byte(metaLocBats[i])); err != nil {
 			return false, err
 		}
+		bat.Cnt = 1
 		err = ap.DelSource.Delete(proc.Ctx, bat, name)
 		if err != nil {
 			return false, err

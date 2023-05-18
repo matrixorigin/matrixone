@@ -839,21 +839,9 @@ func (ses *Session) SaveResultSet() {
 func (ses *Session) AppendResultBatch(bat *batch.Batch) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	// just copy
-	var err error
-	copied := &batch.Batch{
-		Cnt:   1,
-		Attrs: make([]string, len(bat.Attrs)),
-		Vecs:  make([]*vector.Vector, len(bat.Vecs)),
-		Zs:    make([]int64, len(bat.Zs)),
-	}
-	copy(copied.Attrs, bat.Attrs)
-	copy(copied.Zs, bat.Zs)
-	for i := range copied.Vecs {
-		copied.Vecs[i], err = bat.Vecs[i].Dup(ses.mp)
-		if err != nil {
-			return err
-		}
+	copied, err := bat.Dup(ses.mp)
+	if err != nil {
+		return err
 	}
 	ses.resultBatches = append(ses.resultBatches, copied)
 	return nil

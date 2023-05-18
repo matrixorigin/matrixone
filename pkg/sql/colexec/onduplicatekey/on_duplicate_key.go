@@ -160,6 +160,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 				oldRowId := vector.MustFixedCol[types.Rowid](insertBatch.Vecs[rowIdIdx])[oldConflictIdx]
 				newRowId := vector.MustFixedCol[types.Rowid](newBatch.Vecs[rowIdIdx])[0]
 				if !bytes.Equal(oldRowId[:], newRowId[:]) {
+					newBatch.Clean(proc.GetMPool())
 					return moerr.NewConstraintViolation(proc.Ctx, conflictMsg)
 				}
 			}
@@ -191,11 +192,13 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					return err
 				}
 			}
+			newBatch.Clean(proc.GetMPool())
 		} else {
 			// row id is null: means no uniqueness conflict found in origin rows
 			if len(oldRowIdVec) == 0 || originBatch.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
 				insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 				checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
+				newBatch.Clean(proc.GetMPool())
 			} else {
 				newBatch, err := updateOldBatch(newBatch, updateExpr, proc, insertColCount, attrs)
 				if err != nil {
@@ -212,9 +215,9 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 					insertBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 					checkConflictBatch.Append(proc.Ctx, proc.Mp(), newBatch)
 				}
+				newBatch.Clean(proc.GetMPool())
 			}
 		}
-		newBatch.Clean(proc.GetMPool())
 	}
 
 	return nil
@@ -287,32 +290,9 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 			}
 			newBatch.SetVector(int32(i), newVec)
 		}
-		// if expr, exists := updateExpr[attr]; exists && i < columnCount {
-		// 	runExpr := plan2.DeepCopyExpr(expr)
-		// 	resetColPos(runExpr, columnCount)
-		// 	newVec, err := colexec.EvalExpr(evalBatch, proc, runExpr)
-		// 	if err != nil {
-		// 		newBatch.Clean(proc.Mp())
-		// 		return nil, err
-		// 	}
-		// 	newBatch.SetVector(int32(i), newVec)
-		// } else {
-		// 	if i < columnCount {
-		// 		originVec = oldBatch.Vecs[i+columnCount]
-		// 	} else {
-		// 		originVec = oldBatch.Vecs[i]
-		// 	}
-		// 	newVec := vector.NewVec(*originVec.GetType())
-		// 	err := newVec.UnionOne(originVec, int64(rowIdx), proc.Mp())
-		// 	if err != nil {
-		// 		newBatch.Clean(proc.Mp())
-		// 		return nil, err
-		// 	}
-		// 	newBatch.SetVector(int32(i), newVec)
-		// }
 	}
 	newBatch.SetZs(1, proc.Mp())
-
+	evalBatch.Clean(proc.Mp())
 	return newBatch, nil
 }
 

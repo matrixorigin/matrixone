@@ -142,6 +142,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 	}
 	if len(bat.Vecs) == 0 {
 		bat.Clean(proc.GetMPool())
+		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
 
