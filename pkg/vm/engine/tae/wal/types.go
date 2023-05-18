@@ -42,7 +42,7 @@ type Driver interface {
 	LoadEntry(groupID uint32, lsn uint64) (LogEntry, error)
 	GetCurrSeqNum() uint64
 	GetPenddingCnt() uint64
-	Replay(handle store.ApplyHandle, allocator entry.Allocator) error
+	Replay(handle store.ApplyHandle) error
 	Start()
 	Close() error
 }
