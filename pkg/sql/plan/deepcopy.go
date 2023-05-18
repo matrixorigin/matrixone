@@ -665,6 +665,7 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				TableId:             df.DropTable.GetTableId(),
 				ForeignTbl:          DeepCopyNumberList(df.DropTable.GetForeignTbl()),
 				PartitionTableNames: DeepCopyStringList(df.DropTable.GetPartitionTableNames()),
+				IsView:              df.DropTable.IsView,
 			},
 		}
 

@@ -1087,6 +1087,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetDropTable()
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
+	isView := qry.GetIsView()
 
 	var dbSource engine.Database
 	var rel engine.Relation
@@ -1122,7 +1123,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if !isTemp {
+	if !isTemp && !isView {
 		// before dropping table, lock it. It only works on pessimistic mode.
 		if err := lockTable(c.proc, rel); err != nil {
 			return err
@@ -1685,10 +1686,7 @@ func lockTable(
 		return err
 	}
 	if len(defs) != 1 {
-		// todo we have no primary key , when drop view
-		// maybe we need an interface to check if rel is a view?
-		return nil
-		// panic("invalid primary keys")
+		panic("invalid primary keys")
 	}
 
 	return lockop.LockTable(

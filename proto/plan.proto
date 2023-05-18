@@ -984,6 +984,7 @@ message DropTable {
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
 	repeated string partition_table_names = 8;
+	bool isView = 9;
 }
 
 message AlterView {

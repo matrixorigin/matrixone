@@ -1245,6 +1245,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 
 		isView := (tableDef.ViewSql != nil)
+		dropTable.IsView = isView
 
 		if isView && !dropTable.IfExists {
 			// drop table v0, v0 is view
@@ -1369,6 +1370,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop view in subscription database")
 		}
 	}
+	dropTable.IsView = true
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
