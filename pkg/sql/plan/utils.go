@@ -1057,7 +1057,7 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 }
 
 // this function will be deleted soon
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) ([]*plan.Expr, *plan.Expr) {
 	if proc == nil || proc.Ctx == nil {
 		return nil, nil
 	}
@@ -1075,7 +1075,7 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Exp
 			nonMonoExprList = append(nonMonoExprList, expr)
 		}
 	}
-	return colexec.RewriteFilterExprList(monoExprList), colexec.RewriteFilterExprList(nonMonoExprList)
+	return monoExprList, colexec.RewriteFilterExprList(nonMonoExprList)
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
@@ -1094,8 +1094,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc)
-		if err != nil {
+		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc); err != nil {
 			return nil, err
 		}
 	}
@@ -1106,8 +1105,8 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if err != nil {
 		return nil, err
 	}
+	defer vec.Free(proc.Mp())
 	c := rule.GetConstantValue(vec, false)
-	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil
 	}

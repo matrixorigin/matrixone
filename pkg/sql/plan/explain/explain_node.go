@@ -372,8 +372,13 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 
-	if plan2.NeedShuffle(ndesc.Node) {
-		buf.WriteString(" shuffle: true ")
+	idx := plan2.GetShuffleIndexForGroupBy(ndesc.Node)
+	if idx >= 0 {
+		buf.WriteString(" shuffle: ")
+		err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+		if err != nil {
+			return "", err
+		}
 	}
 	return buf.String(), nil
 }
