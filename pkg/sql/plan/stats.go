@@ -294,6 +294,8 @@ func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], s)
 			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], s)
 			return orSelectivity(sel1, sel2)
+		case "not":
+			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], s)
 		case "like":
 			return 0.2
 		case "in":
@@ -493,9 +495,16 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				Selectivity: selectivity_out,
 			}
 
-		case plan.Node_SEMI, plan.Node_ANTI:
+		case plan.Node_SEMI:
 			node.Stats = &plan.Stats{
 				Outcnt:      leftStats.Outcnt * selectivity,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity_out,
+			}
+		case plan.Node_ANTI:
+			node.Stats = &plan.Stats{
+				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity),
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
 				Selectivity: selectivity_out,
@@ -515,7 +524,11 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			input := childStats.Outcnt
 			output := 1.0
 			for _, groupby := range node.GroupBy {
-				output *= getExprNdv(groupby, nil, node.NodeId, builder)
+				ndv := getExprNdv(groupby, nil, node.NodeId, builder)
+				if ndv > 1 {
+					groupby.Ndv = ndv
+					output *= ndv
+				}
 			}
 			if output > input {
 				output = math.Min(input, output*math.Pow(childStats.Selectivity, 0.8))

@@ -61,7 +61,6 @@ type TestRoutineManager struct {
 
 func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
-	pro.SetSkipCheckUser(true)
 	exe := NewMysqlCmdExecutor()
 	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu.SV, rs)
 
@@ -101,13 +100,13 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
+	pu.SV.SkipCheckUser = true
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
 	aicm := &defines.AutoIncrCacheManager{}
 	rm, _ := NewRoutineManager(ctx, pu, aicm)
-	rm.SetSkipCheckUser(true)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -179,6 +178,7 @@ func TestKIll(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
+	pu.SV.SkipCheckUser = true
 
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
@@ -248,7 +248,6 @@ func TestKIll(t *testing.T) {
 	// A mock autoincrcache manager.
 	aicm := &defines.AutoIncrCacheManager{}
 	rm, _ := NewRoutineManager(ctx, pu, aicm)
-	rm.SetSkipCheckUser(true)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -1268,7 +1267,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	if err != nil {
 		return err
 	}
-
+	pu.SV.SkipCheckUser = true
 	pro := routine.getProtocol().(*MysqlProtocolImpl)
 	packet, ok := msg.(*Packet)
 	pro.SetSequenceID(uint8(packet.SequenceID + 1))
@@ -1518,6 +1517,7 @@ func TestMysqlResultSet(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
+	pu.SV.SkipCheckUser = true
 
 	trm := NewTestRoutineManager(pu)
 
@@ -2666,10 +2666,10 @@ func Test_handleHandshake(t *testing.T) {
 		ioses.EXPECT().Ref().AnyTimes()
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
+		SV.SkipCheckUser = true
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
-		mp.SetSkipCheckUser(true)
 		payload := []byte{'a'}
 		_, err := mp.HandleHandshake(ctx, payload)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -2699,10 +2699,10 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	convey.Convey("handleHandshake succ", t, func() {
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
+		SV.SkipCheckUser = true
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
-		mp.SetSkipCheckUser(true)
 		var payload []byte
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload)
