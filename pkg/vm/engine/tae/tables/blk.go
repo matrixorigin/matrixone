@@ -20,6 +20,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -121,23 +122,22 @@ func (blk *block) BatchDedup(
 	precommit bool,
 	zm []byte,
 ) (err error) {
-	// defer func() {
-	// 	if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-	// 		logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
-	// 	}
-	// }()
-	// node := blk.PinNode()
-	// defer node.Unref()
-	// return blk.PersistedBatchDedup(
-	// 	node.MustPNode(),
-	// 	txn,
-	// 	precommit,
-	// 	keys,
-	// 	rowmask,
-	// 	false,
-	// 	zm,
-	// )
-	return nil
+	defer func() {
+		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
+		}
+	}()
+	node := blk.PinNode()
+	defer node.Unref()
+	return blk.PersistedBatchDedup(
+		node.MustPNode(),
+		txn,
+		precommit,
+		keys,
+		rowmask,
+		false,
+		zm,
+	)
 }
 
 func (blk *block) GetValue(
