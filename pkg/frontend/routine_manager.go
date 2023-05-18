@@ -129,6 +129,10 @@ func (ar *AccountRoutineManager) deepCopyRoutineMap() map[int64]map[*Routine]uin
 	return tempRoutineMap
 }
 
+func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
+	return rm.aicm
+}
+
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
 	return rm.pu
 }
