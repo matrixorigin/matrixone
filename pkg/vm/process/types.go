@@ -191,6 +191,7 @@ type vectorPool struct {
 }
 
 type sqlHelper interface {
+	GetCompilerContext() any
 	ExecSql(string) ([]interface{}, error)
 	GetCompilerContext() plan.CompilerContext
 }

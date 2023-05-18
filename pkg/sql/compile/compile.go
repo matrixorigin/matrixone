@@ -2555,7 +2555,8 @@ func (c *Compile) runSql(sql string, fill func(any, *batch.Batch) error) error {
 	if err != nil {
 		return err
 	}
-	pn, err := plan2.BuildPlan(c.proc.SessionInfo.SqlHelper.GetCompilerContext(), stmts[0])
+
+	pn, err := plan2.BuildPlan(c.proc.SessionInfo.SqlHelper.GetCompilerContext().(plan2.CompilerContext), stmts[0])
 	if err != nil {
 		return err
 	}

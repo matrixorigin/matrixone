@@ -1602,7 +1602,8 @@ type SqlHelper struct {
 	ses *Session
 }
 
-func (sh *SqlHelper) GetCompilerContext() plan2.CompilerContext {
+
+func (sh *SqlHelper) GetCompilerContext() any {
 	return sh.ses.txnCompileCtx
 }
 
