@@ -211,10 +211,15 @@ func (s *Service) ID() string {
 	return s.store.id()
 }
 
-func (s *Service) handleRPCRequest(ctx context.Context, req morpc.Message,
-	seq uint64, cs morpc.ClientSession) error {
+func (s *Service) handleRPCRequest(
+	ctx context.Context,
+	msg morpc.RPCMessage,
+	seq uint64,
+	cs morpc.ClientSession) error {
 	ctx, span := trace.Debug(ctx, "Service.handleRPCRequest")
 	defer span.End()
+
+	req := msg.Message
 	rr, ok := req.(*RPCRequest)
 	if !ok {
 		panic("unexpected message type")
