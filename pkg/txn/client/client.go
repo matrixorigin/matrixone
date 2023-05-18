@@ -61,10 +61,16 @@ func WithLockService(lockService lockservice.LockService) TxnClientCreateOption 
 //
 // If we need to ensure that all the transactions on a CN can read the writes of the previous committed
 // transaction, then we can use WithEenableCNBasedConsistency to turn on.
-func WithEnableSacrificingFreshness(timestampWaiter TimestampWaiter) TxnClientCreateOption {
+func WithEnableSacrificingFreshness() TxnClientCreateOption {
 	return func(tc *txnClient) {
-		tc.timestampWaiter = timestampWaiter
 		tc.enableSacrificingFreshness = true
+	}
+}
+
+// WithTimestampWaiter setup timestamp waiter to get the latest applied committed timestamp from logtail.
+func WithTimestampWaiter(waiter TimestampWaiter) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.timestampWaiter = waiter
 	}
 }
 

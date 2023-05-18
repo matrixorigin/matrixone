@@ -17,6 +17,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -230,6 +231,12 @@ func (tc *txnOperator) Txn() txn.TxnMeta {
 	return tc.getTxnMeta(false)
 }
 
+func (tc *txnOperator) TxnRef() *txn.TxnMeta {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return &tc.mu.txn
+}
+
 func (tc *txnOperator) Snapshot() ([]byte, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -255,6 +262,12 @@ func (tc *txnOperator) UpdateSnapshot(
 	defer tc.mu.Unlock()
 	if err := tc.checkStatus(true); err != nil {
 		return err
+	}
+
+	// ony push model support RC isolation
+	if tc.timestampWaiter == nil {
+		fmt.Printf(">>>>>> UpdateSnapshot skipped \n")
+		return nil
 	}
 
 	// we need to waiter the latest snapshot ts which is greater than the current snapshot

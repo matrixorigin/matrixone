@@ -159,6 +159,10 @@ func (s *StorageTxnOperator) Txn() txn.TxnMeta {
 	return s.meta
 }
 
+func (s *StorageTxnOperator) TxnRef() *txn.TxnMeta {
+	return &s.meta
+}
+
 func (s *StorageTxnOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 
 	// set op txn meta

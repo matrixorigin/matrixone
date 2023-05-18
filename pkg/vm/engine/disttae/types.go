@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -62,6 +63,10 @@ const (
 	MO_TABLE_LIST_ACCOUNT_IDX     = 2
 	MO_PRIMARY_OFF                = 2
 	INIT_ROWID_OFFSET             = math.MaxUint32
+)
+
+var (
+	_ client.Workspace = (*Transaction)(nil)
 )
 
 var GcCycle = 10 * time.Second
@@ -104,7 +109,7 @@ type Transaction struct {
 	// blockId uint64
 
 	// local timestamp for workspace operations
-	meta txn.TxnMeta
+	meta *txn.TxnMeta
 	op   client.TxnOperator
 
 	// writes cache stores any writes done by txn
@@ -148,6 +153,8 @@ type Transaction struct {
 	blockId_dn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 
 	batchSelectList map[*batch.Batch][]int64
+
+	statementID int
 }
 
 type Pos struct {
@@ -200,6 +207,28 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 
 func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int64) {
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
+}
+
+func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
+	txn.statementID++
+	if txn.statementID > 1 && txn.meta.IsRCIsolation() {
+		if err := txn.op.UpdateSnapshot(
+			ctx,
+			timestamp.Timestamp{}); err != nil {
+			logutil.Fatalf(err.Error())
+			return err
+		}
+		txn.resetSnapshot()
+	}
+	return nil
+}
+
+func (txn *Transaction) resetSnapshot() error {
+	txn.tableMap.Range(func(key, value interface{}) bool {
+		value.(*txnTable).resetSnapshot()
+		return true
+	})
+	return nil
 }
 
 // Entry represents a delete/insert

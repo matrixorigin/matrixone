@@ -258,6 +258,12 @@ func (tbl *txnTable) reset(newId uint64) {
 	tbl.localState = logtailreplay.NewPartitionState(true)
 }
 
+func (tbl *txnTable) resetSnapshot() {
+	tbl._parts = nil
+	tbl.blockInfos = nil
+	tbl.blockInfosUpdated = false
+}
+
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]byte, err error) {
 	tbl.db.txn.mergeTxnWorkspace()

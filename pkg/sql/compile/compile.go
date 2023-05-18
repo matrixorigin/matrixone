@@ -122,6 +122,14 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 			err = moerr.ConvertPanicError(ctx, e)
 		}
 	}()
+	txnOp := c.proc.TxnOperator
+	if txnOp != nil {
+		err := txnOp.GetWorkspace().IncrStatemenetID(c.proc.Ctx)
+		if err != nil {
+			return nil
+		}
+	}
+
 	// with values
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
 	c.ctx = c.proc.Ctx

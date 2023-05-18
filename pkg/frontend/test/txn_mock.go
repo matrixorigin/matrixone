@@ -477,6 +477,20 @@ func (mr *MockTxnOperatorMockRecorder) Txn() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Txn", reflect.TypeOf((*MockTxnOperator)(nil).Txn))
 }
 
+// TxnRef mocks base method.
+func (m *MockTxnOperator) TxnRef() *txn.TxnMeta {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TxnRef")
+	ret0, _ := ret[0].(*txn.TxnMeta)
+	return ret0
+}
+
+// TxnRef indicates an expected call of TxnRef.
+func (mr *MockTxnOperatorMockRecorder) TxnRef() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TxnRef", reflect.TypeOf((*MockTxnOperator)(nil).TxnRef))
+}
+
 // UpdateSnapshot mocks base method.
 func (m *MockTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	m.ctrl.T.Helper()
@@ -685,6 +699,20 @@ func (mr *MockDebugableTxnOperatorMockRecorder) Txn() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Txn", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Txn))
 }
 
+// TxnRef mocks base method.
+func (m *MockDebugableTxnOperator) TxnRef() *txn.TxnMeta {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TxnRef")
+	ret0, _ := ret[0].(*txn.TxnMeta)
+	return ret0
+}
+
+// TxnRef indicates an expected call of TxnRef.
+func (mr *MockDebugableTxnOperatorMockRecorder) TxnRef() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TxnRef", reflect.TypeOf((*MockDebugableTxnOperator)(nil).TxnRef))
+}
+
 // UpdateSnapshot mocks base method.
 func (m *MockDebugableTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	m.ctrl.T.Helper()
@@ -849,4 +877,18 @@ func NewMockWorkspace(ctrl *gomock.Controller) *MockWorkspace {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 	return m.recorder
+}
+
+// IncrStatemenetID mocks base method.
+func (m *MockWorkspace) IncrStatemenetID(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IncrStatemenetID", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// IncrStatemenetID indicates an expected call of IncrStatemenetID.
+func (mr *MockWorkspaceMockRecorder) IncrStatemenetID(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatemenetID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatemenetID), ctx)
 }

@@ -348,7 +348,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		op:              op,
 		proc:            proc,
 		engine:          e,
-		meta:            op.Txn(),
+		meta:            op.TxnRef(),
 		idGen:           e.idGen,
 		dnStores:        e.getDNServices(),
 		tableMap:        new(sync.Map),

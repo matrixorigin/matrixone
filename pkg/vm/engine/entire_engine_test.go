@@ -352,6 +352,10 @@ func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
 }
 
+func (o *testOperator) TxnRef() *txn.TxnMeta {
+	return &txn.TxnMeta{}
+}
+
 func (o *testOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	return nil, nil
 }
