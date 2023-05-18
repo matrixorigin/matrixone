@@ -18,10 +18,11 @@ import (
 	"container/list"
 	"context"
 	"encoding/csv"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"path"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -883,14 +884,14 @@ func containsParamRef(expr *plan.Expr) bool {
 	return ret
 }
 
-func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
 	if expr == nil {
 		return
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			getColumnMapByExpr(arg, tableDef, columnMap)
+			GetColumnMapByExpr(arg, tableDef, columnMap)
 		}
 
 	case *plan.Expr_Col:
@@ -913,7 +914,7 @@ func GetColumnsByExpr(
 ) (columnMap map[int]int, defColumns, exprColumns []int, maxCol int) {
 	columnMap = make(map[int]int)
 	// key = expr's ColPos,  value = tableDef's ColPos
-	getColumnMapByExpr(expr, tableDef, &columnMap)
+	GetColumnMapByExpr(expr, tableDef, &columnMap)
 
 	if len(columnMap) == 0 {
 		return

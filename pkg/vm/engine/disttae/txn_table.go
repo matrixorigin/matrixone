@@ -401,9 +401,10 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if anyMono {
-		columnMap, _, _, _ = plan2.GetColumnsByExpr(colexec.RewriteFilterExprList(exprs), tableDef)
+		columnMap = make(map[int]int)
 		zms = make([]objectio.ZoneMap, cnt)
 		vecs = make([]*vector.Vector, cnt)
+		plan2.GetColumnMapByExpr(colexec.RewriteFilterExprList(exprs), tableDef, &columnMap)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
@@ -430,10 +431,13 @@ func (tbl *txnTable) rangesOnePart(
 				}
 
 				skipObj = false
-				for i, expr := range exprs {
-					if isMono[i] && !evalFilterExprWithZonemap(errCtx, objMeta, expr, zms, vecs, columnMap, proc) {
-						skipObj = true
-						break
+				// here we only eval expr on the object meta if it has more than 2 blocks
+				if objMeta.BlockCount() > 2 {
+					for i, expr := range exprs {
+						if isMono[i] && !evalFilterExprWithZonemap(errCtx, objMeta, expr, zms, vecs, columnMap, proc) {
+							skipObj = true
+							break
+						}
 					}
 				}
 			}
