@@ -1180,6 +1180,8 @@ func (tbl *txnTable) updateLocalState(
 		return nil
 	}
 
+	tbl.Lock()
+	defer tbl.Unlock()
 	if tbl.primaryIdx < 0 {
 		// no primary key, skip
 		return nil
@@ -1269,9 +1271,7 @@ func (tbl *txnTable) updateLocalState(
 }
 
 func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
-	tbl.Lock()
 	tbl.localTS = tbl.localTS.Next()
-	tbl.Unlock()
 	return tbl.localTS
 }
 

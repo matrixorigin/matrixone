@@ -130,7 +130,7 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	bat.Cnt = 1
-	bat.Zs = rbat.Zs // if you drop rbat.Zs is ok, if you need return rbat,  you must deepcopy Zs.
+	bat.Zs = append(bat.Zs[:0], rbat.Zs...)
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = rbat.Attrs
 	// initialize bat.Aggs only if necessary

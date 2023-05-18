@@ -51,8 +51,9 @@ func String(v any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, v any) error {
 	arg := v.(*Argument)
+	arg.fetchers = make([]FetchLockRowsFunc, 0, len(arg.targets))
 	for idx := range arg.targets {
-		arg.targets[idx].fetcher = GetFetchRowsFunc(arg.targets[idx].primaryColumnType)
+		arg.fetchers = append(arg.fetchers, GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
 	}
 	arg.parker = types.NewPacker(proc.Mp())
 	arg.err = nil
@@ -92,7 +93,7 @@ func Call(
 	txnFeature := proc.TxnClient.(client.TxnClientWithFeature)
 	txnOp := proc.TxnOperator
 	needRetry := false
-	for _, target := range arg.targets {
+	for idx, target := range arg.targets {
 		getLogger().Debug("lock",
 			zap.Uint64("table", target.tableID),
 			zap.Bool("filter", target.filter != nil),
@@ -112,7 +113,7 @@ func Call(
 			target.primaryColumnType,
 			DefaultLockOptions(arg.parker).
 				WithLockMode(lock.LockMode_Exclusive).
-				WithFetchLockRowsFunc(target.fetcher).
+				WithFetchLockRowsFunc(arg.fetchers[idx]).
 				WithMaxBytesPerLock(int(proc.LockService.GetConfig().MaxLockRowBytes)).
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(target.lockTable),

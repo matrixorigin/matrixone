@@ -17,7 +17,6 @@ package client
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -266,7 +265,7 @@ func (tc *txnOperator) UpdateSnapshot(
 
 	// ony push model support RC isolation
 	if tc.timestampWaiter == nil {
-		fmt.Printf(">>>>>> UpdateSnapshot skipped \n")
+		// fmt.Printf(">>>>>> UpdateSnapshot skipped \n")
 		return nil
 	}
 

@@ -123,8 +123,8 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 				defer close(c)
 				arg2 := &Argument{}
 				arg2.err = nil
-				arg2.parker = types.NewPacker(proc.GetMPool())
 				arg2.targets = arg.targets
+				Prepare(proc, arg2)
 				defer arg2.parker.FreeMem()
 
 				_, err = Call(0, proc, arg2, false, false)
