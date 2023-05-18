@@ -30,6 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	AllColumns = "*"
+)
+
 // MoTableRows returns an estimated row number of a table.
 func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec := vector.NewVec(types.T_int64.ToType())
@@ -84,6 +88,7 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec := vector.NewVec(types.T_int64.ToType())
 	count := vecs[0].Length()
+	//fmt.Printf("[motablesize] count = %d\n", count)
 	dbs := vector.MustStrCol(vecs[0])
 	tbls := vector.MustStrCol(vecs[1])
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
@@ -92,43 +97,55 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
+		//fmt.Printf("[motablesize] %d: db = %s, tb = %s\n", i, dbs[i], tbls[i])
 		var rel engine.Relation
 		if isClusterTable(dbs[i], tbls[i]) {
 			//if it is the cluster table in the general account, switch into the sys account
 			ctx := context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 			db, err := e.Database(ctx, dbs[i], txn)
 			if err != nil {
+				vec.Free(proc.Mp())
 				return nil, err
 			}
 
 			rel, err = db.Relation(ctx, tbls[i])
 			if err != nil {
+				vec.Free(proc.Mp())
 				return nil, err
 			}
 
 		} else {
 			db, err := e.Database(proc.Ctx, dbs[i], txn)
 			if err != nil {
+				vec.Free(proc.Mp())
 				return nil, err
 			}
 
 			rel, err = db.Relation(proc.Ctx, tbls[i])
 			if err != nil {
+				vec.Free(proc.Mp())
 				return nil, err
 			}
 		}
 		rel.Ranges(proc.Ctx, nil)
-		rows, err := rel.Rows(proc.Ctx)
+		/*
+			rows, err := rel.Rows(proc.Ctx)
+			if err != nil {
+				return nil, err
+			}
+			attrs, err := rel.TableColumns(proc.Ctx)
+			if err != nil {
+				return nil, err
+			}
+			size := int64(0)
+			for _, attr := range attrs {
+				size += rows * int64(attr.Type.TypeSize())
+			}
+		*/
+		size, err := rel.Size(proc.Ctx, AllColumns)
 		if err != nil {
+			vec.Free(proc.Mp())
 			return nil, err
-		}
-		attrs, err := rel.TableColumns(proc.Ctx)
-		if err != nil {
-			return nil, err
-		}
-		size := int64(0)
-		for _, attr := range attrs {
-			size += rows * int64(attr.Type.TypeSize())
 		}
 		if err := vector.AppendFixed(vec, size, false, proc.Mp()); err != nil {
 			vec.Free(proc.Mp())

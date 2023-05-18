@@ -43,6 +43,10 @@ import (
 
 var _ engine.Relation = new(txnTable)
 
+const (
+	AllColumns = "*"
+)
+
 func (tbl *txnTable) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
 	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
 	if !ok {
@@ -186,8 +190,133 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 }
 
 func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
-	// TODO
-	return 0, nil
+	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	tbl.db.txn.Lock()
+	for _, entry := range tbl.db.txn.writes {
+		if entry.databaseId != tbl.db.databaseId {
+			continue
+		}
+		if entry.tableId != tbl.tableId {
+			continue
+		}
+		writes = append(writes, entry)
+	}
+	tbl.db.txn.Unlock()
+
+	originSize := int64(0)
+	deletes := make(map[types.Rowid]struct{})
+	for _, entry := range writes {
+		if entry.typ == INSERT {
+			originSize += int64(entry.bat.Size())
+		} else {
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.databaseId == catalog.MO_CATALOG_ID &&
+					entry.tableId == catalog.MO_TABLES_ID &&
+					entry.truncate {
+					continue
+				}
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = struct{}{}
+				}
+			}
+		}
+	}
+
+	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
+	parts, err := tbl.getParts(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, part := range parts {
+		iter := part.NewRowsIter(ts, nil, false)
+		for iter.Next() {
+			entry := iter.Entry()
+			if _, ok := deletes[entry.RowID]; ok {
+				continue
+			}
+			originSize += int64(entry.Batch.Size())
+		}
+		iter.Close()
+	}
+
+	_, size, err := tbl.GetCompressAndOriginSize(ctx, name)
+	if err != nil {
+		return 0, err
+	}
+	//fmt.Printf("[tablesize] tmp size = %d, block size = %d, sum = %d\n", originSize, size, originSize+size)
+	originSize += size
+	return originSize, nil
+}
+
+func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) (int64, int64, error) {
+	if len(tbl.blockInfos) == 0 {
+		return 0, 0, moerr.NewInvalidInputNoCtx("table meta is nil")
+	}
+
+	var (
+		err          error
+		meta         objectio.ObjectMeta
+		compressSize int64
+		originSize   int64
+	)
+	cols := tbl.getTableDef().GetCols()
+	if name == AllColumns { // get all columns size
+		for i := range tbl.blockInfos {
+			for j := range tbl.blockInfos[i] {
+				location := tbl.blockInfos[i][j].MetaLocation()
+				if !objectio.IsSameObjectLocVsMeta(location, meta) {
+					if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+						//fmt.Printf("[tablesize] err = %s\n", err)
+						return 0, 0, err
+					}
+				}
+				for k := range cols {
+					//fmt.Printf("[tablesize] accumulate col %s 's size\n", cols[k].Name)
+					extend := meta.MustGetColumn(uint16(cols[k].Seqnum)).Location()
+					compressSize += int64(extend.Length())
+					originSize += int64(extend.OriginSize())
+				}
+			}
+		}
+	} else {
+		var col *plan.ColDef
+		found := false
+		for i := range cols {
+			if cols[i].Name == name {
+				col = cols[i]
+				found = true
+				break
+			}
+		}
+		if !found {
+			return 0, 0, moerr.NewInternalError(ctx, "bad input col name %v", name)
+		}
+
+		for i := range tbl.blockInfos {
+			for j := range tbl.blockInfos[i] {
+				location := tbl.blockInfos[i][j].MetaLocation()
+				if !objectio.IsSameObjectLocVsMeta(location, meta) {
+					if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+						return 0, 0, err
+					}
+				}
+				extend := meta.MustGetColumn(uint16(col.Seqnum)).Location()
+				compressSize += int64(extend.Length())
+				originSize += int64(extend.OriginSize())
+			}
+		}
+	}
+
+	//fmt.Printf("[tablesize] compress size = %d, origin size = %d\n", compressSize, originSize)
+	return compressSize, originSize, nil
 }
 
 func (tbl *txnTable) LoadDeletesForBlock(blockID *types.Blockid, deleteBlockId map[types.Blockid][]int, deletesRowId map[types.Rowid]uint8) error {
@@ -541,6 +670,16 @@ func (tbl *txnTable) TableColumns(ctx context.Context) ([]*engine.Attribute, err
 	var attrs []*engine.Attribute
 	for _, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
+			attrs = append(attrs, &attr.Attr)
+		}
+	}
+	return attrs, nil
+}
+
+func (tbl *txnTable) GetColumnByName(ctx context.Context, colname string) ([]*engine.Attribute, error) {
+	var attrs []*engine.Attribute
+	for i := range tbl.defs {
+		if attr, ok := tbl.defs[i].(*engine.AttributeDef); ok {
 			attrs = append(attrs, &attr.Attr)
 		}
 	}
