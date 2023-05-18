@@ -26,14 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -65,7 +63,17 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		datType = catalog.SystemDBTypeSubscription
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	return c.e.Create(ctx, dbName, c.proc.TxnOperator)
+	err := c.e.Create(ctx,
+		dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+
+	// subscription database does not need to create auto increment table
+	if datType == catalog.SystemDBTypeSubscription {
+		return nil
+	}
+	return colexec.CreateAutoIncrTable(c.e, c.ctx, c.proc, dbName)
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -432,6 +440,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
+	tableCols := planCols
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
@@ -579,12 +588,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	return maybeCreateAutoIncrement(
-		c.ctx,
-		dbSource,
-		qry.GetTableDef(),
-		c.proc.TxnOperator,
-		nil)
+	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
@@ -600,6 +604,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
+	tableCols := planCols
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
@@ -662,14 +667,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		}
 	}
 
-	return maybeCreateAutoIncrement(
-		c.ctx,
-		tmpDBSource,
-		qry.GetTableDef(),
-		c.proc.TxnOperator,
-		func() string {
-			return engine.GetTempTableName(dbName, tblName)
-		})
+	return colexec.CreateAutoIncrCol(c.e, c.ctx, tmpDBSource, c.proc, tableCols, defines.TEMPORARY_DBNAME, engine.GetTempTableName(dbName, tblName))
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {
@@ -1071,18 +1069,17 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	}
 
+	id := rel.GetTableID(c.ctx)
+
 	if isTemp {
-		oldId = rel.GetTableID(c.ctx)
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, engine.GetTempTableName(dbName, tblName), dbSource, c.proc, id, newId, defines.TEMPORARY_DBNAME)
+	} else {
+		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
 	}
-	err = incrservice.GetAutoIncrementService().Reset(
-		c.ctx,
-		oldId,
-		newId,
-		false,
-		c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -1195,10 +1192,10 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			incrservice.GetAutoIncrementService().Delete(
-				c.ctx,
-				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
+			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
+			if err != nil {
+				return err
+			}
 		}
 
 	} else {
@@ -1220,10 +1217,7 @@ func (s *Scope) DropTable(c *Compile) error {
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
 			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			incrservice.GetAutoIncrementService().Delete(
-				c.ctx,
-				rel.GetTableID(c.ctx),
-				c.proc.TxnOperator)
+			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
 			if err != nil {
 				return err
 			}
@@ -1723,32 +1717,4 @@ func getValue[T constraints.Integer](minus bool, num any) T {
 		}
 	}
 	return v
-}
-
-func maybeCreateAutoIncrement(
-	ctx context.Context,
-	db engine.Database,
-	def *plan.TableDef,
-	txnOp client.TxnOperator,
-	nameResolver func() string) error {
-	if def.TblId == 0 {
-		name := def.Name
-		if nameResolver != nil {
-			name = nameResolver()
-		}
-		tb, err := db.Relation(ctx, name)
-		if err != nil {
-			return err
-		}
-		def.TblId = tb.GetTableID(ctx)
-	}
-	cols := incrservice.GetAutoColumnFromDef(def)
-	if len(cols) == 0 {
-		return nil
-	}
-	return incrservice.GetAutoIncrementService().Create(
-		ctx,
-		def.TblId,
-		cols,
-		txnOp)
 }

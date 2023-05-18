@@ -845,12 +845,12 @@ type stream struct {
 	cancel           context.CancelFunc
 
 	// reset fields
-	id                   uint64
-	sequence             uint32
-	lastReceivedSequence uint32
-	mu                   struct {
-		sync.RWMutex
-		closed bool
+	id uint64
+	mu struct {
+		sync.Mutex
+		closed               bool
+		sequence             uint32
+		lastReceivedSequence uint32
 	}
 }
 
@@ -878,9 +878,9 @@ func newStream(
 
 func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
-	s.sequence = 0
 	s.unlockAfterClose = unlockAfterClose
-	s.lastReceivedSequence = 0
+	s.mu.sequence = 0
+	s.mu.lastReceivedSequence = 0
 	s.mu.closed = false
 	for {
 		select {
@@ -915,9 +915,9 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	f.ref()
 	defer f.Close()
 
-	s.mu.RLock()
+	s.mu.Lock()
 	if s.mu.closed {
-		s.mu.RUnlock()
+		s.mu.Unlock()
 		return moerr.NewStreamClosedNoCtx()
 	}
 
@@ -927,7 +927,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	// 2. backend read goroutine:   cancelActiveStream -> backend.Lock
 	// 3. backend read goroutine:   cancelActiveStream -> stream.Lock : deadlock here
 	// 4. current goroutine:        f.Close -> backend.Lock           : deadlock here
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	if err != nil {
 		return err
@@ -940,20 +940,20 @@ func (s *stream) doSendLocked(
 	ctx context.Context,
 	f *Future,
 	request Message) error {
-	s.sequence++
+	s.mu.sequence++
 	f.init(RPCMessage{
 		Ctx:            ctx,
 		Message:        request,
 		stream:         true,
-		streamSequence: s.sequence,
+		streamSequence: s.mu.sequence,
 	})
 
 	return s.sendFunc(f)
 }
 
 func (s *stream) Receive() (chan Message, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.mu.closed {
 		return nil, moerr.NewStreamClosedNoCtx()
 	}
@@ -1000,11 +1000,11 @@ func (s *stream) done(
 		panic("BUG")
 	}
 	if response != nil &&
-		message.streamSequence != s.lastReceivedSequence+1 {
+		message.streamSequence != s.mu.lastReceivedSequence+1 {
 		response = nil
 	}
 
-	s.lastReceivedSequence = message.streamSequence
+	s.mu.lastReceivedSequence = message.streamSequence
 	select {
 	case s.c <- response:
 	case <-ctx.Done():

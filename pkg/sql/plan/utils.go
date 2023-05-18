@@ -18,6 +18,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/csv"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"path"
 	"strings"
@@ -1013,6 +1014,21 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	default:
 		return true
 	}
+}
+
+func getSortOrder(tableDef *plan.TableDef, colName string) int {
+	if tableDef.Pkey != nil {
+		pkNames := tableDef.Pkey.Names
+		for i := range pkNames {
+			if pkNames[i] == colName {
+				return i
+			}
+		}
+	}
+	if tableDef.ClusterBy != nil {
+		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
+	}
+	return -1
 }
 
 // handle the filter list for Stats. rewrite and constFold

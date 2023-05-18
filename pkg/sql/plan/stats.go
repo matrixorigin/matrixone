@@ -267,7 +267,6 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, s *StatsIn
 	return 0.1
 }
 
-// estimate output lines for a filter
 func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 	if expr == nil {
 		return 1
@@ -346,6 +345,36 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 		}
 	}
 	return w
+}
+
+// harsh estimate of block selectivity, will improve it in the future
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *StatsInfoMap) float64 {
+	if !CheckExprIsMonotonic(ctx, expr) {
+		return 1
+	}
+	ret, col := CheckFilter(expr)
+
+	if ret && col != nil {
+		var sel float64
+		switch getSortOrder(tableDef, col.Name) {
+		case -1:
+			return 1
+		case 0:
+			sel = estimateExprSelectivity(expr, s)
+		case 1:
+			sel = estimateExprSelectivity(expr, s) * 3
+		case 2:
+			sel = estimateExprSelectivity(expr, s) * 10
+		default:
+			return 0.5
+		}
+		if sel > 0.5 {
+			return 0.5
+		}
+	}
+
+	// do not know selectivity for this expr, default 0.5
+	return 0.5
 }
 
 func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
@@ -627,8 +656,13 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		stats.Selectivity = 1
 	}
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
-	stats.Cost = stats.TableCnt
-	stats.BlockNum = int32(stats.Outcnt/float64(options.DefaultBlockMaxRows) + 1)
+
+	var blockSel float64 = 1
+	for i := range node.FilterList {
+		blockSel = andSelectivity(blockSel, estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s))
+	}
+	stats.Cost = stats.TableCnt * blockSel
+	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 
 	return stats
 }
