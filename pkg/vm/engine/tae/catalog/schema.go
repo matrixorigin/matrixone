@@ -777,7 +777,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		phyAddrDef := &ColDef{
 			Name:        PhyAddrColumnName,
 			Comment:     PhyAddrColumnComment,
-			Type:        PhyAddrColumnType,
+			Type:        objectio.RowidType,
 			Hidden:      true,
 			NullAbility: false,
 			PhyAddr:     true,

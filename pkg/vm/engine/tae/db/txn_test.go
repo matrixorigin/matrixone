@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -259,7 +260,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 				return
 			}
 			id = blk.Fingerprint()
-			key := model.EncodePhyAddrKeyWithPrefix(id.BlockID[:], uint32(row))
+			key := *objectio.NewRowid(&id.BlockID, uint32(row))
 			cntv, _, err := rel.GetValueByPhyAddrKey(key, 2)
 			if err != nil {
 				return

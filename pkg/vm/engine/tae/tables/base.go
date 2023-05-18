@@ -240,7 +240,7 @@ func (blk *baseBlock) FillPersistedDeletes(
 			continue
 		}
 		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
-		_, row := model.DecodePhyAddrKey(&rowid)
+		row := rowid.GetRowOffset()
 		if view.DeleteMask == nil {
 			view.DeleteMask = roaring.NewBitmap()
 		}
