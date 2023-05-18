@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -56,19 +57,21 @@ type internalExecutor struct {
 	executor     internalMiniExec // MySqlCmdExecutor struct impls miniExec
 	pu           *config.ParameterUnit
 	baseSessOpts ie.SessionOverrideOptions
+	aicm         *defines.AutoIncrCacheManager
 }
 
-func NewInternalExecutor(pu *config.ParameterUnit) *internalExecutor {
-	return newIe(pu, NewMysqlCmdExecutor())
+func NewInternalExecutor(pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) *internalExecutor {
+	return newIe(pu, NewMysqlCmdExecutor(), aicm)
 }
 
-func newIe(pu *config.ParameterUnit, inner internalMiniExec) *internalExecutor {
+func newIe(pu *config.ParameterUnit, inner internalMiniExec, aicm *defines.AutoIncrCacheManager) *internalExecutor {
 	proto := &internalProtocol{result: &internalExecResult{}}
 	ret := &internalExecutor{
 		proto:        proto,
 		executor:     inner,
 		pu:           pu,
 		baseSessOpts: ie.NewOptsBuilder().Finish(),
+		aicm:         aicm,
 	}
 	return ret
 }
@@ -169,7 +172,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		logutil.Fatalf("internalExecutor cannot create mpool in newCmdSession")
 		panic(err)
 	}
-	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true)
+	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true, ie.aicm)
 	sess.SetRequestContext(ctx)
 	sess.SetConnectContext(ctx)
 
