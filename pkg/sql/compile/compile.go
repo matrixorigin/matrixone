@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -2099,8 +2100,7 @@ func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
 
 // Number of cpu's available on the current machine
 func (c *Compile) NumCPU() int {
-	return 1
-	// return runtime.NumCPU()
+	return runtime.NumCPU()
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {

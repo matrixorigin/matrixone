@@ -21,7 +21,9 @@ select * from index_03 where col2=-2147483648;
 create table index_04 (col1 bigint,col2 int primary key,col3 float,col4 bigint,unique key id1(col1),key id2(col4));
 insert into index_04 values (67834,2,20.23,4090),(67834,4,100.00,4091);
 insert into index_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
+-- @bvt:issue#9510
 insert into index_04 values (3,2,20.23,4090),(2,4,100.00,4091),(4,4,100.00,4090);
+-- @bvt:issue
 select * from index_04;
 select * from index_04 where col1 between 10 and 1000000;
 create table index_05 (col1 smallint unique key,col2 int primary key,col3 float,col4 smallint,key id2(col4));
