@@ -94,10 +94,12 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
           
+      # - name: Set up Go
+      #   uses: actions/setup-go@v3.4.0
+      #   with:
+      #     go-version: '1.20.4'
       - name: Set up Go
-        uses: actions/setup-go@v3.4.0
-        with:
-          go-version: '1.20.4'
+        uses: ./.github/actions/setup_env
           
       - name: Prepare ENV
         run: |
