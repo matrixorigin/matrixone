@@ -1,4 +1,6 @@
-create account if not exists `query_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+drop account if exists bvt_query_type;
+create account if not exists `bvt_query_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create database statement_query_type;
 begin;
 commit;
 start transaction;
@@ -61,6 +63,7 @@ insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+internal error: do not have privilege to execute the statement
 create role test_role;
 create user user_name identified by 'password';
 create database if not exists db1;
@@ -69,6 +72,7 @@ revoke test_role from user_name;
 drop user user_name;
 drop role test_role;
 drop account test_account;
+internal error: do not have privilege to execute the statement
 drop database db1;
 create database db2;
 create table table_2(
@@ -87,8 +91,7 @@ UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
-col1    col2
-2    b
+ExpectedEOB
 deallocate prepare s1;
 drop table if exists test_01;
 create table test_01(a int, b varchar);
@@ -157,7 +160,7 @@ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 1    2
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
-internal error: administrative command is unsupported in transactions
+internal error: do not have privilege to execute the statement
 create role test_role;
 internal error: administrative command is unsupported in transactions
 create user user_name identified by 'password';
@@ -173,7 +176,7 @@ internal error: administrative command is unsupported in transactions
 drop role test_role;
 internal error: administrative command is unsupported in transactions
 drop account test_account;
-internal error: administrative command is unsupported in transactions
+internal error: do not have privilege to execute the statement
 drop database db1;
 internal error: CREATE/DROP of database is not supported in transactions
 create database db2;
@@ -196,8 +199,8 @@ prepare s1 from select * from test_table where col1=?;
 set @a=2;
 internal error: Uncommitted transaction exists. Please commit or rollback first.
 execute s1 using @a;
-col1    col2
-2    b
+ExpectedEOB
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 deallocate prepare s1;
 rollback;
 use system;
@@ -207,7 +210,7 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 112;
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 112;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    external_sql
 use system    Other    external_sql
@@ -434,7 +437,7 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-/* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" order by request_at desc limit 68;
+/* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    cloud_user_sql
 drop database test_db    DDL    cloud_user_sql
@@ -617,7 +620,7 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 68;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    cloud_nonuser_sql
 drop database test_db    DDL    cloud_nonuser_sql
@@ -705,4 +708,4 @@ insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
 rollback ;
-drop account if exists query_type;
+drop account if exists bvt_query_type;

@@ -94,7 +94,7 @@ spec:
       - name: dockerhub
       env:
       - name: GOMEMLIMIT
-        value: "50000MiB"
+        value: "10000MiB"
     resources:
       requests:
         cpu: 6
