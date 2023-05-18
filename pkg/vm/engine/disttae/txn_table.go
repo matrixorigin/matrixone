@@ -890,15 +890,15 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 		if err != nil {
 			return nil, err
 		}
-		for i := range rds0 {
-			mrds[i].rds = append(mrds[i].rds, rds0[i])
+		for i, rd := range rds0 {
+			mrds[i].rds = append(mrds[i].rds, rd)
 		}
 		rds0, err = tbl.newBlockReader(ctx, num, expr, ranges[1:])
 		if err != nil {
 			return nil, err
 		}
-		for i := range rds0 {
-			mrds[i].rds = append(mrds[i].rds, rds0[i])
+		for i, rd := range rds0 {
+			mrds[i].rds = append(mrds[i].rds, rd)
 		}
 		for i := range rds {
 			rds[i] = &mrds[i]
