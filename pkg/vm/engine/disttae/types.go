@@ -155,6 +155,8 @@ type Transaction struct {
 	batchSelectList map[*batch.Batch][]int64
 
 	statementID int
+
+	statements []int
 }
 
 type Pos struct {
@@ -210,6 +212,7 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 }
 
 func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
+	txn.statements = append(txn.statements, len(txn.writes))
 	txn.statementID++
 	if txn.statementID > 1 && txn.meta.IsRCIsolation() {
 		if err := txn.op.UpdateSnapshot(
