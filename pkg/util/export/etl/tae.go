@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -233,11 +234,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 			}
 		case types.T_json:
 			// convert normal json-string to bytejson-bytes
-			byteJson, err := types.ParseStringToByteJson(field.String)
-			if err != nil {
-				return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
-			}
-			jsonBytes, err := types.EncodeJson(byteJson)
+			jsonBytes, err := bytejson.ParseJsonByteFromString(field.String)
 			if err != nil {
 				return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
 			}
