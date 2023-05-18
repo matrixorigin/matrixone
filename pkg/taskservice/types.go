@@ -152,9 +152,6 @@ type TaskService interface {
 	// Close close the task service
 	Close() error
 
-	// Bootstrap bootstrap task db
-	Bootstrap(context.Context) error
-
 	// Create Creates an asynchronous task that executes a single time, this method is idempotent, the
 	// same task is not created repeatedly based on multiple calls.
 	Create(context.Context, task.TaskMetadata) error
@@ -214,8 +211,6 @@ type TaskRunner interface {
 type TaskStorage interface {
 	// Close close the task storage
 	Close() error
-
-	Bootstrap(context.Context) error
 
 	// Add add tasks and returns number of successful added
 	Add(context.Context, ...task.Task) (int, error)

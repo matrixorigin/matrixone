@@ -750,17 +750,10 @@ var (
 		"mo_pubs":                     0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
-	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
-		table_id   bigint unsigned, 
-		col_name     varchar(770), 
-		col_index      int,
-		offset     bigint unsigned, 
-		step       bigint unsigned,  
-		primary key(table_id, col_name)
-	);`, catalog.AutoIncrTableName)
+	createAutoTableSql           = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
-	createMoIndexesSql = `create table if not exists mo_indexes(
+	createMoIndexesSql = `create table mo_indexes(
 				id 			bigint unsigned not null,
 				table_id 	bigint unsigned not null,
 				database_id bigint unsigned not null,
@@ -3537,7 +3530,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	//step 6 : drop table mo_role_privs
 	//step 7 : drop table mo_user_defined_function
 	//step 8 : drop table mo_mysql_compatibility_mode
-	//step 9 : drop table mo_increment_columns
+	//step 9 : drop table %!%mo_increment_columns
 	for _, sql = range getSqlForDropAccount() {
 		err = bh.Exec(deleteCtx, sql)
 		if err != nil {
@@ -6816,7 +6809,7 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant(ctx context.Context) error {
+func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) error {
 	var err error
 	var exists bool
 	pu := config.GetParameterUnit(ctx)
@@ -6841,7 +6834,7 @@ func InitSysTenant(ctx context.Context) error {
 	defer mpool.DeleteMPool(mp)
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	upstream := &Session{connectCtx: ctx}
+	upstream := &Session{connectCtx: ctx, autoIncrCacheManager: aicm}
 	bh := NewBackgroundHandler(ctx, upstream, mp, pu)
 	defer bh.Close()
 
