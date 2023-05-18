@@ -26,7 +26,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -310,24 +309,13 @@ type MysqlProtocolImpl struct {
 
 	SV *config.FrontendParameters
 
-	m sync.Mutex
-
 	ses *Session
-
-	//skip checking the password of the user
-	skipCheckUser bool
 }
 
 func (mp *MysqlProtocolImpl) GetSession() *Session {
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	return mp.ses
-}
-
-func (mp *MysqlProtocolImpl) SetSkipCheckUser(b bool) {
-	mp.m.Lock()
-	defer mp.m.Unlock()
-	mp.skipCheckUser = b
 }
 
 func (mp *MysqlProtocolImpl) GetCapability() uint32 {
@@ -338,12 +326,6 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
 	mp.sequenceId.Add(uint32(a))
-}
-
-func (mp *MysqlProtocolImpl) GetSkipCheckUser() bool {
-	mp.m.Lock()
-	defer mp.m.Unlock()
-	return mp.skipCheckUser
 }
 
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
@@ -1077,7 +1059,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	var tenant *TenantInfo
 
 	ses := mp.GetSession()
-	if !mp.GetSkipCheckUser() {
+	if !mp.SV.SkipCheckUser {
 		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 1")
 		psw, err = ses.AuthenticateUser(mp.GetUserName())
 		if err != nil {
@@ -2166,8 +2148,8 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt 
 		return nil
 	}
 
-	mp.GetLock().Lock()
-	defer mp.GetLock().Unlock()
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	var err error = nil
 
 	for i := uint64(0); i < cnt; i++ {
@@ -2184,8 +2166,8 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 	}
 
 	cmd := mp.GetSession().GetCmd()
-	mp.GetLock().Lock()
-	defer mp.GetLock().Unlock()
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	var err error = nil
 
 	binary := false
@@ -2435,8 +2417,8 @@ func (mp *MysqlProtocolImpl) appendDate(data []byte, value types.Date) []byte {
 // the server send every row of the result set as an independent packet
 // thread safe
 func (mp *MysqlProtocolImpl) SendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
-	mp.GetLock().Lock()
-	defer mp.GetLock().Unlock()
+	mp.m.Lock()
+	defer mp.m.Unlock()
 
 	return mp.sendResultSetTextRow(mrs, r)
 }
