@@ -778,14 +778,3 @@ func orSelectivity(s1, s2 float64) float64 {
 		return s
 	}
 }
-
-// sort group by columns by ndv, put the highest ndv column  on the first
-func rewriteGroupByWithStats(node *plan.Node, builder *QueryBuilder) {
-	if len(node.GroupBy) > 1 {
-		sort.Slice(node.GroupBy, func(i, j int) bool {
-			ndv1 := getExprNdv(node.GroupBy[i], nil, node.NodeId, builder)
-			ndv2 := getExprNdv(node.GroupBy[j], nil, node.NodeId, builder)
-			return ndv1 >= ndv2
-		})
-	}
-}
