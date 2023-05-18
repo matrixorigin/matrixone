@@ -849,7 +849,7 @@ type stream struct {
 	sequence             uint32
 	lastReceivedSequence uint32
 	mu                   struct {
-		sync.RWMutex
+		sync.Mutex
 		closed bool
 	}
 }
@@ -915,9 +915,9 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	f.ref()
 	defer f.Close()
 
-	s.mu.RLock()
+	s.mu.Lock()
 	if s.mu.closed {
-		s.mu.RUnlock()
+		s.mu.Unlock()
 		return moerr.NewStreamClosedNoCtx()
 	}
 
@@ -927,7 +927,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	// 2. backend read goroutine:   cancelActiveStream -> backend.Lock
 	// 3. backend read goroutine:   cancelActiveStream -> stream.Lock : deadlock here
 	// 4. current goroutine:        f.Close -> backend.Lock           : deadlock here
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	if err != nil {
 		return err
@@ -952,8 +952,8 @@ func (s *stream) doSendLocked(
 }
 
 func (s *stream) Receive() (chan Message, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.mu.closed {
 		return nil, moerr.NewStreamClosedNoCtx()
 	}
