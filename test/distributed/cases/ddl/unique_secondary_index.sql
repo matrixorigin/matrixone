@@ -147,7 +147,9 @@ insert into t_code_rule select * from index_temp;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 truncate table index_temp;
 load data infile  '$resources/load_data/unique_index_duplicate.csv' into table index_temp;
+-- @bvt:issue#9510
 insert into t_code_rule select * from index_temp;
+-- @bvt:issue
 
 --unique index more column
 create table index_table_04 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key m1(col2,col3),key num_id(col4));
