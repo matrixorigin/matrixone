@@ -74,75 +74,75 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedBinaryTemplateRecFixedReturnFixed[bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
+		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
 			return a == b
 		})
 	case types.T_int8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a == b
 		})
 	case types.T_int16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a == b
 		})
 	case types.T_int32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a == b
 		})
 	case types.T_int64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a == b
 		})
 	case types.T_uint8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a == b
 		})
 	case types.T_uint16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a == b
 		})
 	case types.T_uint32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a == b
 		})
 	case types.T_uint64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a == b
 		})
 	case types.T_uuid:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
+		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
 			return a == b
 		})
 	case types.T_float32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a == b
 		})
 	case types.T_float64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a == b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return optimizedBinaryTemplateRecStringReturnFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
+		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
 			return v1 == v2
 		})
 	case types.T_binary, types.T_varbinary:
-		return optimizedBinaryTemplateRecStringReturnFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
+		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(v1, v2 string) bool {
 			return v1 == v2
 		})
 	case types.T_date:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a == b
 		})
 	case types.T_datetime:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a == b
 		})
 	case types.T_time:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a == b
 		})
 	case types.T_timestamp:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a == b
 		})
 	case types.T_decimal64:
@@ -510,75 +510,75 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedBinaryTemplateRecFixedReturnFixed[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
+		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return x && !y
 		})
 	case types.T_int8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a > b
 		})
 	case types.T_int16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a > b
 		})
 	case types.T_int32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a > b
 		})
 	case types.T_int64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a > b
 		})
 	case types.T_uint8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a > b
 		})
 	case types.T_uint16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a > b
 		})
 	case types.T_uint32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a > b
 		})
 	case types.T_uint64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a > b
 		})
 	case types.T_uuid:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
+		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) > 0
 		})
 	case types.T_float32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a > b
 		})
 	case types.T_float64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a > b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		return optimizedBinaryTemplateRecBytesReturnFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) > 0
 		})
 	case types.T_binary, types.T_varbinary:
-		return optimizedBinaryTemplateRecBytesReturnFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) > 0
 		})
 	case types.T_date:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a > b
 		})
 	case types.T_datetime:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a > b
 		})
 	case types.T_time:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a > b
 		})
 	case types.T_timestamp:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a > b
 		})
 	case types.T_decimal64:
@@ -598,75 +598,75 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedBinaryTemplateRecFixedReturnFixed[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
+		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return x || !y
 		})
 	case types.T_int8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a >= b
 		})
 	case types.T_int16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a >= b
 		})
 	case types.T_int32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a >= b
 		})
 	case types.T_int64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a >= b
 		})
 	case types.T_uint8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a >= b
 		})
 	case types.T_uint16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a >= b
 		})
 	case types.T_uint32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a >= b
 		})
 	case types.T_uint64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a >= b
 		})
 	case types.T_uuid:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
+		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) >= 0
 		})
 	case types.T_float32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a >= b
 		})
 	case types.T_float64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a >= b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		return optimizedBinaryTemplateRecBytesReturnFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) >= 0
 		})
 	case types.T_binary, types.T_varbinary:
-		return optimizedBinaryTemplateRecBytesReturnFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) >= 0
 		})
 	case types.T_date:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a >= b
 		})
 	case types.T_datetime:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a >= b
 		})
 	case types.T_time:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a >= b
 		})
 	case types.T_timestamp:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a >= b
 		})
 	case types.T_decimal64:
@@ -686,75 +686,75 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedBinaryTemplateRecFixedReturnFixed[bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
+		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
 			return a != b
 		})
 	case types.T_int8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a != b
 		})
 	case types.T_int16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a != b
 		})
 	case types.T_int32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a != b
 		})
 	case types.T_int64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a != b
 		})
 	case types.T_uint8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a != b
 		})
 	case types.T_uint16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a != b
 		})
 	case types.T_uint32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a != b
 		})
 	case types.T_uint64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a != b
 		})
 	case types.T_uuid:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
+		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(a, b types.Uuid) bool {
 			return a != b
 		})
 	case types.T_float32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a != b
 		})
 	case types.T_float64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a != b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text:
-		return optimizedBinaryTemplateRecStringReturnFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
+		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
 			return a != b
 		})
 	case types.T_binary, types.T_varbinary:
-		return optimizedBinaryTemplateRecStringReturnFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
+		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
 			return a != b
 		})
 	case types.T_date:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a != b
 		})
 	case types.T_datetime:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a != b
 		})
 	case types.T_time:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a != b
 		})
 	case types.T_timestamp:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a != b
 		})
 	case types.T_decimal64:
@@ -774,75 +774,75 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedBinaryTemplateRecFixedReturnFixed[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
+		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return !x && y
 		})
 	case types.T_int8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a < b
 		})
 	case types.T_int16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a < b
 		})
 	case types.T_int32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a < b
 		})
 	case types.T_int64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a < b
 		})
 	case types.T_uint8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a < b
 		})
 	case types.T_uint16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a < b
 		})
 	case types.T_uint32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a < b
 		})
 	case types.T_uint64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a < b
 		})
 	case types.T_uuid:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
+		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) < 0
 		})
 	case types.T_float32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a < b
 		})
 	case types.T_float64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a < b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		return optimizedBinaryTemplateRecBytesReturnFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) < 0
 		})
 	case types.T_binary, types.T_varbinary:
-		return optimizedBinaryTemplateRecBytesReturnFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) < 0
 		})
 	case types.T_date:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a < b
 		})
 	case types.T_datetime:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a < b
 		})
 	case types.T_time:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a < b
 		})
 	case types.T_timestamp:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a < b
 		})
 	case types.T_decimal64:
@@ -862,75 +862,75 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[bool](result)
 	switch paramType.Oid {
 	case types.T_bool:
-		return optimizedBinaryTemplateRecFixedReturnFixed[bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
+		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
 			return !x || y
 		})
 	case types.T_int8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
+		return opBinaryFixedFixedToFixed[int8, int8, bool](parameters, rs, proc, length, func(a, b int8) bool {
 			return a <= b
 		})
 	case types.T_int16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
+		return opBinaryFixedFixedToFixed[int16, int16, bool](parameters, rs, proc, length, func(a, b int16) bool {
 			return a <= b
 		})
 	case types.T_int32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
+		return opBinaryFixedFixedToFixed[int32, int32, bool](parameters, rs, proc, length, func(a, b int32) bool {
 			return a <= b
 		})
 	case types.T_int64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
+		return opBinaryFixedFixedToFixed[int64, int64, bool](parameters, rs, proc, length, func(a, b int64) bool {
 			return a <= b
 		})
 	case types.T_uint8:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
+		return opBinaryFixedFixedToFixed[uint8, uint8, bool](parameters, rs, proc, length, func(a, b uint8) bool {
 			return a <= b
 		})
 	case types.T_uint16:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
+		return opBinaryFixedFixedToFixed[uint16, uint16, bool](parameters, rs, proc, length, func(a, b uint16) bool {
 			return a <= b
 		})
 	case types.T_uint32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
+		return opBinaryFixedFixedToFixed[uint32, uint32, bool](parameters, rs, proc, length, func(a, b uint32) bool {
 			return a <= b
 		})
 	case types.T_uint64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
+		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
 			return a <= b
 		})
 	case types.T_uuid:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
+		return opBinaryFixedFixedToFixed[types.Uuid, types.Uuid, bool](parameters, rs, proc, length, func(v1, v2 types.Uuid) bool {
 			return types.CompareUuid(v1, v2) <= 0
 		})
 	case types.T_float32:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
+		return opBinaryFixedFixedToFixed[float32, float32, bool](parameters, rs, proc, length, func(a, b float32) bool {
 			return a <= b
 		})
 	case types.T_float64:
-		return optimizedBinaryTemplateRecFixedReturnFixed[float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
+		return opBinaryFixedFixedToFixed[float64, float64, bool](parameters, rs, proc, length, func(a, b float64) bool {
 			return a <= b
 		})
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-		return optimizedBinaryTemplateRecBytesReturnFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) <= 0
 		})
 	case types.T_binary, types.T_varbinary:
-		return optimizedBinaryTemplateRecBytesReturnFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Compare(a, b) <= 0
 		})
 	case types.T_date:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
+		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
 			return a <= b
 		})
 	case types.T_datetime:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
+		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
 			return a <= b
 		})
 	case types.T_time:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
+		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
 			return a <= b
 		})
 	case types.T_timestamp:
-		return optimizedBinaryTemplateRecFixedReturnFixed[types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
+		return opBinaryFixedFixedToFixed[types.Timestamp, types.Timestamp, bool](parameters, rs, proc, length, func(a, b types.Timestamp) bool {
 			return a <= b
 		})
 	case types.T_decimal64:

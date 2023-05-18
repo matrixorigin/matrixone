@@ -598,18 +598,19 @@ func decimalArith2(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-// optimizedBinaryTemplateRecFixedReturnFixed for binary functions whose
+// opBinaryFixedFixedToFixed for binary functions whose
 // result of f(x, y) is null if any one of x, y is null value.
 // and if x, y were all normal value, result will not be an error.
-func optimizedBinaryTemplateRecFixedReturnFixed[
-	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
-	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v1, v2 T) T2) error {
-	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
-	rs := vector.MustFunctionResult[T2](result)
+func opBinaryFixedFixedToFixed[
+	T1 constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
+	T2 constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
+	Tr constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v1 T1, v2 T2) Tr) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T1](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T2](parameters[1])
+	rs := vector.MustFunctionResult[Tr](result)
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedCol[T2](rsVec)
+	rss := vector.MustFixedCol[Tr](rsVec)
 
 	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
 	if c1 && c2 {
@@ -697,7 +698,7 @@ func optimizedBinaryTemplateRecFixedReturnFixed[
 	return nil
 }
 
-func optimizedBinaryTemplateRecFixedReturnFixedWithErrorCheck[
+func opBinaryFixedFixedToFixedWithErrorCheck[
 	T1 constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
 	T2 constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
 	Tr constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
@@ -1055,7 +1056,7 @@ func specialTemplateForDivFunction[
 	return nil
 }
 
-func optimizedBinaryTemplateRecBytesReturnFixed[T2 bool](
+func opBinaryBytesBytesToFixed[T2 bool](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 []byte) T2) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1150,7 +1151,7 @@ func optimizedBinaryTemplateRecBytesReturnFixed[T2 bool](
 	return nil
 }
 
-func optimizedBinaryTemplateRecStringReturnFixed[T2 bool](
+func opBinaryStrStrToFixed[T2 bool](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 string) T2) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])

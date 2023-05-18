@@ -789,7 +789,7 @@ func DateAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
-	return optimizedBinaryTemplateRecFixedReturnFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
+	return opBinaryFixedFixedToFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
 		return doDateAdd(v1, v2, iTyp)
 	})
 }
@@ -1240,7 +1240,7 @@ func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
-	return optimizedBinaryTemplateRecFixedReturnFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
+	return opBinaryFixedFixedToFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
 		return doDateSub(v1, v2, iTyp)
 	})
 }
@@ -1255,7 +1255,7 @@ func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 
-	return optimizedBinaryTemplateRecFixedReturnFixedWithErrorCheck[types.Datetime, int64, types.Datetime](ivecs, result, proc, length, func(v1 types.Datetime, v2 int64) (types.Datetime, error) {
+	return opBinaryFixedFixedToFixedWithErrorCheck[types.Datetime, int64, types.Datetime](ivecs, result, proc, length, func(v1 types.Datetime, v2 int64) (types.Datetime, error) {
 		return doDatetimeSub(v1, v2, iTyp)
 	})
 }
@@ -1298,7 +1298,7 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	rs := vector.MustFunctionResult[types.Timestamp](result)
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	return optimizedBinaryTemplateRecFixedReturnFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
+	return opBinaryFixedFixedToFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
 		return doTimestampSub(proc.SessionInfo.TimeZone, v1, v2, iTyp)
 	})
 }
