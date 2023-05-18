@@ -228,7 +228,8 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 		return
 	}
 	if atomic.LoadInt64(&bat.Cnt) == 0 {
-		panic("batch is already cleaned")
+		// panic("batch is already cleaned")
+		return
 	}
 	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
 		return
