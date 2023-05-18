@@ -1,8 +1,8 @@
 -- prepare
-create account result_count admin_name 'result_count' identified by '111';
+create account result_count admin_name 'admin' identified by '111';
 
 -- testcase
--- @session:id=2&user=result_count:result_count&password=111
+-- @session:id=2&user=result_count:admin&password=111
 -- transaction sql
 begin;
 rollback;
@@ -106,7 +106,7 @@ use system;
 
 -- result check
 select sleep(16);
-select statement, result_count from statement_info where user="result_count" and statement not like '%mo_ctl%' order by request_at desc limit 76;
+select statement, result_count from statement_info where account="result_count" and statement not like '%mo_ctl%' order by request_at desc limit 76;
 
 -- cleanup
 drop account result_count;

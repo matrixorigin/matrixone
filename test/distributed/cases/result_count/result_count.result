@@ -1,4 +1,4 @@
-create account result_count admin_name 'test_account' identified by '111';
+create account result_count admin_name 'admin' identified by '111';
 begin;
 rollback;
 commit;
@@ -140,7 +140,7 @@ use system;
 select sleep(16);
 sleep(16)
 0
-select statement, result_count from statement_info where user="result_count" and statement not like '%mo_ctl%' order by request_at desc limit 76;
+select statement, result_count from statement_info where account="result_count" and statement not like '%mo_ctl%' order by request_at desc limit 76;
 statement    result_count
 create account test_tenant_1 admin_name 'test_account' identified by '******'    0
 use system    0
