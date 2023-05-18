@@ -434,6 +434,25 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 	return nil
 }
 
+func (fr *FunctionResult[T]) AppendMustValue(val T) {
+	fr.cols[fr.length] = val
+	fr.length++
+}
+
+func (fr *FunctionResult[T]) AppendMustNull() {
+	fr.vec.nsp.Add(fr.length)
+	fr.length++
+}
+
+func (fr *FunctionResult[T]) AppendMustBytesValue(val []byte) error {
+	return AppendBytes(fr.vec, val, false, fr.mp)
+}
+
+func (fr *FunctionResult[T]) AppendMustNullForBytesResult() error {
+	var v T
+	return appendOneFixed[T](fr.vec, v, true, fr.mp)
+}
+
 func (fr *FunctionResult[T]) GetType() types.Type {
 	return *fr.vec.GetType()
 }

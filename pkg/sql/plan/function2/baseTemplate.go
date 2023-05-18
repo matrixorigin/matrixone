@@ -697,6 +697,129 @@ func optimizedBinaryTemplateRecFixedReturnFixed[
 	return nil
 }
 
+func optimizedBinaryTemplateRecFixedReturnFixedWithErrorCheck[
+	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool,
+	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v1, v2 T) (T2, error)) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
+	rs := vector.MustFunctionResult[T2](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[T2](rsVec)
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 && c2 {
+		v1, null1 := p1.GetValue(0)
+		v2, null2 := p2.GetValue(0)
+		ifNull := null1 || null2
+		if ifNull {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := resultFn(v1, v2)
+			if err != nil {
+				return err
+			}
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	if c1 {
+		v1, null1 := p1.GetValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p2.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, null2 := p2.GetValue(i)
+					if null2 {
+						continue
+					}
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, _ := p2.GetValue(i)
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetValue(0)
+		if null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetValue(i)
+					if null1 {
+						continue
+					}
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, _ := p1.GetValue(i)
+					r, err := resultFn(v1, v2)
+					if err != nil {
+						return err
+					}
+					rss[i] = r
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			v2, null2 := p2.GetValue(i)
+			if null1 || null2 {
+				continue
+			}
+			r, err := resultFn(v1, v2)
+			if err != nil {
+				return err
+			}
+			rss[i] = r
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetValue(i)
+		v2, _ := p2.GetValue(i)
+		r, err := resultFn(v1, v2)
+		if err != nil {
+			return err
+		}
+		rss[i] = r
+	}
+	return nil
+}
+
 func specialTemplateForModFunction[
 	T constraints.Integer | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	modFn func(v1, v2 T) T) error {
@@ -1268,7 +1391,7 @@ func optimizedUnaryTemplateRecBytesReturnBytes(
 			r := resultFn(v1)
 
 			for i := uint64(0); i < uint64(length); i++ {
-				if err := rs.AppendBytes(r, false); err != nil {
+				if err := rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
 			}
@@ -1282,12 +1405,12 @@ func optimizedUnaryTemplateRecBytesReturnBytes(
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
-				if err := rs.AppendBytes(nil, true); err != nil {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
 					return err
 				}
 			} else {
 				r := resultFn(v1)
-				if err := rs.AppendBytes(r, false); err != nil {
+				if err := rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
 			}
@@ -1298,7 +1421,7 @@ func optimizedUnaryTemplateRecBytesReturnBytes(
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, _ := p1.GetStrValue(i)
 		r := resultFn(v1)
-		if err := rs.AppendBytes(r, false); err != nil {
+		if err := rs.AppendMustBytesValue(r); err != nil {
 			return err
 		}
 	}
@@ -1321,7 +1444,7 @@ func optimizedUnaryTemplateRecBytesReturnString(
 			r := resultFn(v1)
 
 			for i := uint64(0); i < uint64(length); i++ {
-				if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+				if err := rs.AppendMustBytesValue(function2Util.QuickStrToBytes(r)); err != nil {
 					return err
 				}
 			}
@@ -1335,12 +1458,12 @@ func optimizedUnaryTemplateRecBytesReturnString(
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
-				if err := rs.AppendBytes(nil, true); err != nil {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
 					return err
 				}
 			} else {
 				r := resultFn(v1)
-				if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+				if err := rs.AppendMustBytesValue(function2Util.QuickStrToBytes(r)); err != nil {
 					return err
 				}
 			}
@@ -1351,7 +1474,7 @@ func optimizedUnaryTemplateRecBytesReturnString(
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, _ := p1.GetStrValue(i)
 		r := resultFn(v1)
-		if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+		if err := rs.AppendMustBytesValue(function2Util.QuickStrToBytes(r)); err != nil {
 			return err
 		}
 	}
@@ -1374,7 +1497,7 @@ func optimizedUnaryTemplateRecStringReturnString(
 			r := resultFn(function2Util.QuickBytesToStr(v1))
 
 			for i := uint64(0); i < uint64(length); i++ {
-				if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+				if err := rs.AppendMustBytesValue(function2Util.QuickStrToBytes(r)); err != nil {
 					return err
 				}
 			}
@@ -1388,12 +1511,12 @@ func optimizedUnaryTemplateRecStringReturnString(
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
-				if err := rs.AppendBytes(nil, true); err != nil {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
 					return err
 				}
 			} else {
 				r := resultFn(function2Util.QuickBytesToStr(v1))
-				if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+				if err := rs.AppendMustBytesValue(function2Util.QuickStrToBytes(r)); err != nil {
 					return err
 				}
 			}
@@ -1404,7 +1527,7 @@ func optimizedUnaryTemplateRecStringReturnString(
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, _ := p1.GetStrValue(i)
 		r := resultFn(function2Util.QuickBytesToStr(v1))
-		if err := rs.AppendBytes(function2Util.QuickStrToBytes(r), false); err != nil {
+		if err := rs.AppendMustBytesValue(function2Util.QuickStrToBytes(r)); err != nil {
 			return err
 		}
 	}
@@ -1428,7 +1551,7 @@ func optimizedUnaryTemplateRecFixedReturnString[
 			r := function2Util.QuickStrToBytes(rb)
 
 			for i := uint64(0); i < uint64(length); i++ {
-				if err := rs.AppendBytes(r, false); err != nil {
+				if err := rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
 			}
@@ -1442,13 +1565,13 @@ func optimizedUnaryTemplateRecFixedReturnString[
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetValue(i)
 			if null1 {
-				if err := rs.AppendBytes(nil, true); err != nil {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
 					return err
 				}
 			} else {
 				rb := resultFn(v1)
 				r := function2Util.QuickStrToBytes(rb)
-				if err := rs.AppendBytes(r, false); err != nil {
+				if err := rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
 			}
@@ -1460,7 +1583,7 @@ func optimizedUnaryTemplateRecFixedReturnString[
 		v1, _ := p1.GetValue(i)
 		rb := resultFn(v1)
 		r := function2Util.QuickStrToBytes(rb)
-		if err := rs.AppendBytes(r, false); err != nil {
+		if err := rs.AppendMustBytesValue(r); err != nil {
 			return err
 		}
 	}
@@ -1487,7 +1610,7 @@ func optimizedUnaryTemplateRecFixedReturnStringWithErrorCheck[
 			r := function2Util.QuickStrToBytes(rb)
 
 			for i := uint64(0); i < uint64(length); i++ {
-				if err = rs.AppendBytes(r, false); err != nil {
+				if err = rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
 			}
@@ -1501,7 +1624,7 @@ func optimizedUnaryTemplateRecFixedReturnStringWithErrorCheck[
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetValue(i)
 			if null1 {
-				if err := rs.AppendBytes(nil, true); err != nil {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
 					return err
 				}
 			} else {
@@ -1510,7 +1633,7 @@ func optimizedUnaryTemplateRecFixedReturnStringWithErrorCheck[
 					return err
 				}
 				r := function2Util.QuickStrToBytes(rb)
-				if err = rs.AppendBytes(r, false); err != nil {
+				if err = rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
 			}
@@ -1525,7 +1648,7 @@ func optimizedUnaryTemplateRecFixedReturnStringWithErrorCheck[
 			return err
 		}
 		r := function2Util.QuickStrToBytes(rb)
-		if err = rs.AppendBytes(r, false); err != nil {
+		if err = rs.AppendMustBytesValue(r); err != nil {
 			return err
 		}
 	}
@@ -1551,7 +1674,7 @@ func optimizedUnaryTemplateRecStringReturnBytesWithErrorCheck(
 			}
 
 			for i := uint64(0); i < uint64(length); i++ {
-				if err = rs.AppendBytes(r, false); err != nil {
+				if err = rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
 			}
@@ -1565,7 +1688,7 @@ func optimizedUnaryTemplateRecStringReturnBytesWithErrorCheck(
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
-				if err := rs.AppendBytes(nil, true); err != nil {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
 					return err
 				}
 			} else {
@@ -1573,7 +1696,7 @@ func optimizedUnaryTemplateRecStringReturnBytesWithErrorCheck(
 				if err != nil {
 					return err
 				}
-				if err = rs.AppendBytes(r, false); err != nil {
+				if err = rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
 			}
@@ -1587,7 +1710,7 @@ func optimizedUnaryTemplateRecStringReturnBytesWithErrorCheck(
 		if err != nil {
 			return err
 		}
-		if err = rs.AppendBytes(r, false); err != nil {
+		if err = rs.AppendMustBytesValue(r); err != nil {
 			return err
 		}
 	}
@@ -1613,7 +1736,7 @@ func optimizedUnaryTemplateRecBytesReturnStringWithErrorCheck(
 			}
 			r := function2Util.QuickStrToBytes(rb)
 			for i := uint64(0); i < uint64(length); i++ {
-				if err = rs.AppendBytes(r, false); err != nil {
+				if err = rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
 			}
@@ -1627,7 +1750,7 @@ func optimizedUnaryTemplateRecBytesReturnStringWithErrorCheck(
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetStrValue(i)
 			if null1 {
-				if err := rs.AppendBytes(nil, true); err != nil {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
 					return err
 				}
 			} else {
@@ -1636,7 +1759,7 @@ func optimizedUnaryTemplateRecBytesReturnStringWithErrorCheck(
 					return err
 				}
 				r := function2Util.QuickStrToBytes(rb)
-				if err = rs.AppendBytes(r, false); err != nil {
+				if err = rs.AppendMustBytesValue(r); err != nil {
 					return err
 				}
 			}
@@ -1651,7 +1774,7 @@ func optimizedUnaryTemplateRecBytesReturnStringWithErrorCheck(
 			return err
 		}
 		r := function2Util.QuickStrToBytes(rb)
-		if err = rs.AppendBytes(r, false); err != nil {
+		if err = rs.AppendMustBytesValue(r); err != nil {
 			return err
 		}
 	}
@@ -1832,7 +1955,7 @@ func optimizedNoParamTemplateReturnBytes(
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := 0; i < length; i++ {
-		if err := rs.AppendBytes(resultFn(), false); err != nil {
+		if err := rs.AppendMustBytesValue(resultFn()); err != nil {
 			return err
 		}
 	}
@@ -1848,7 +1971,7 @@ func optimizedNoParamTemplateReturnBytesWithErrorCheck(
 		if err != nil {
 			return err
 		}
-		if err = rs.AppendBytes(r, false); err != nil {
+		if err = rs.AppendMustBytesValue(r); err != nil {
 			return err
 		}
 	}
