@@ -1,10 +1,10 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -382,17 +382,17 @@ func (mr *MockCompilerContext2MockRecorder) SetQueryingSubscription(meta interfa
 }
 
 // Stats mocks base method.
-func (m *MockCompilerContext2) Stats(obj *ObjectRef, e *Expr) *Stats {
+func (m *MockCompilerContext2) Stats(obj *ObjectRef) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", obj, e)
-	ret0, _ := ret[0].(*Stats)
+	ret := m.ctrl.Call(m, "Stats", obj)
+	ret0, _ := ret[0].(bool)
 	return ret0
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockCompilerContext2MockRecorder) Stats(obj, e interface{}) *gomock.Call {
+func (mr *MockCompilerContext2MockRecorder) Stats(obj interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockCompilerContext2)(nil).Stats), obj, e)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockCompilerContext2)(nil).Stats), obj)
 }
 
 // MockOptimizer2 is a mock of Optimizer interface.
@@ -433,10 +433,10 @@ func (mr *MockOptimizer2MockRecorder) CurrentContext() *gomock.Call {
 }
 
 // Optimize mocks base method.
-func (m *MockOptimizer2) Optimize(stmt tree.Statement) (Query, error) {
+func (m *MockOptimizer2) Optimize(stmt tree.Statement) (*Query, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Optimize", stmt)
-	ret0, _ := ret[0].(Query)
+	ret0, _ := ret[0].(*Query)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

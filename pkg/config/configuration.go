@@ -124,6 +124,9 @@ var (
 	// defaultMetricUpdateStorageUsageInterval default: 15 min.
 	defaultMetricUpdateStorageUsageInterval = 15 * time.Minute
 
+	// defaultMetricStorageUsageCheckNewInterval default: 1 min
+	defaultMetricStorageUsageCheckNewInterval = time.Minute
+
 	// defaultMergeCycle default: 4 hours
 	defaultMergeCycle = 4 * time.Hour
 
@@ -555,8 +558,11 @@ type ObservabilityParameters struct {
 	// MetricGatherInterval default is 15 sec.
 	MetricGatherInterval int `toml:"metricGatherInterval"`
 
-	// MetricUpdateStorageUsageInterval, default: 30 min
-	MetricUpdateStorageUsageInterval toml.Duration `toml:"metricUpdateStorageUsageInterval"`
+	// MetricStorageUsageUpdateInterval, default: 30 min
+	MetricStorageUsageUpdateInterval toml.Duration `toml:"metricStorageUsageUpdateInterval"`
+
+	// MetricStorageUsageCheckNewInterval, default: 1 min
+	MetricStorageUsageCheckNewInterval toml.Duration `toml:"metricStorageUsageCheckNewInterval"`
 
 	// MergeCycle default: 14400 sec (4 hours).
 	// PS: only used while MO init.
@@ -606,8 +612,12 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.MetricGatherInterval = defaultMetricGatherInterval
 	}
 
-	if op.MetricUpdateStorageUsageInterval.Duration <= 0 {
-		op.MetricUpdateStorageUsageInterval.Duration = defaultMetricUpdateStorageUsageInterval
+	if op.MetricStorageUsageUpdateInterval.Duration <= 0 {
+		op.MetricStorageUsageUpdateInterval.Duration = defaultMetricUpdateStorageUsageInterval
+	}
+
+	if op.MetricStorageUsageCheckNewInterval.Duration <= 0 {
+		op.MetricStorageUsageCheckNewInterval.Duration = defaultMetricStorageUsageCheckNewInterval
 	}
 
 	if op.MergeCycle.Duration <= 0 {

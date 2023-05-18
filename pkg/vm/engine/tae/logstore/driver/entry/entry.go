@@ -31,6 +31,9 @@ type Entry struct {
 	Ctx   any //for addr in batchstore
 	err   error
 	wg    *sync.WaitGroup
+
+	//for replay
+	isEnd bool
 }
 
 func NewEntry(e entry.Entry) *Entry {
@@ -49,17 +52,26 @@ func NewEmptyEntry() *Entry {
 	en.wg.Add(1)
 	return en
 }
+
+func NewEndEntry() *Entry {
+	return &Entry{
+		isEnd: true,
+	}
+}
+func (e *Entry) IsEnd() bool {
+	return e.isEnd
+}
 func (e *Entry) SetInfo() {
 	info := e.Entry.GetInfo()
 	if info != nil {
 		e.Info = info.(*entry.Info)
 	}
 }
-func (e *Entry) ReadFromWithAllocator(r io.Reader, allocator entry.Allocator) (n int64, err error) {
+func (e *Entry) ReadFrom(r io.Reader) (n int64, err error) {
 	if _, err = r.Read(types.EncodeUint64(&e.Lsn)); err != nil {
 		return
 	}
-	_, err = e.Entry.ReadFromWithAllocator(r, allocator)
+	_, err = e.Entry.ReadFrom(r)
 	if err != nil {
 		panic(err)
 	}
@@ -67,7 +79,19 @@ func (e *Entry) ReadFromWithAllocator(r io.Reader, allocator entry.Allocator) (n
 	return
 }
 
-func (e *Entry) ReadAt(r *os.File, offset int, allocator entry.Allocator) (int, error) {
+func (e *Entry) UnmarshalBinary(buf []byte) (n int64, err error) {
+	e.Lsn = types.DecodeUint64(buf[:8])
+	n += 8
+	n2, err := e.Entry.UnmarshalBinary(buf[n:])
+	if err != nil {
+		panic(err)
+	}
+	n += n2
+	e.Info = e.Entry.GetInfo().(*entry.Info)
+	return
+}
+
+func (e *Entry) ReadAt(r *os.File, offset int) (int, error) {
 	lsnbuf := make([]byte, 8)
 	n, err := r.ReadAt(lsnbuf, int64(offset))
 	if err != nil {
@@ -80,7 +104,7 @@ func (e *Entry) ReadAt(r *os.File, offset int, allocator entry.Allocator) (int, 
 		return n, err
 	}
 
-	n2, err := e.Entry.ReadAt(r, offset, allocator)
+	n2, err := e.Entry.ReadAt(r, offset)
 	return n2 + n, err
 }
 

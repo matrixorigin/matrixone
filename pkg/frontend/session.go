@@ -1454,17 +1454,6 @@ func changeVersion(ctx context.Context, ses *Session, db string) error {
 	return err
 }
 
-func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			fixColumnName(cols, arg)
-		}
-	case *plan.Expr_Col:
-		exprImpl.Col.Name = cols[exprImpl.Col.ColPos].Name
-	}
-}
-
 // fakeDataSetFetcher gets the result set from the pipeline and save it in the session.
 // It will not send the result to the client.
 func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {

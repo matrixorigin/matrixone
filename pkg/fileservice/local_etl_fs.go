@@ -113,7 +113,10 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
-	n, err := io.Copy(f, newIOEntriesReader(ctx, vector.Entries))
+	var buf []byte
+	put := ioBufferPool.Get(&buf)
+	defer put.Put()
+	n, err := io.CopyBuffer(f, newIOEntriesReader(ctx, vector.Entries), buf)
 	if err != nil {
 		return err
 	}
@@ -221,7 +224,10 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 
 			} else {
-				n, err := io.Copy(entry.WriterForRead, r)
+				var buf []byte
+				put := ioBufferPool.Get(&buf)
+				defer put.Put()
+				n, err := io.CopyBuffer(entry.WriterForRead, r, buf)
 				if err != nil {
 					return err
 				}
@@ -586,7 +592,10 @@ func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int64, entrie
 			if err != nil {
 				return err
 			}
-			n, err := io.Copy(l.osFile, entry.ReaderForWrite)
+			var buf []byte
+			put := ioBufferPool.Get(&buf)
+			defer put.Put()
+			n, err := io.CopyBuffer(l.osFile, entry.ReaderForWrite, buf)
 			if err != nil {
 				return err
 			}

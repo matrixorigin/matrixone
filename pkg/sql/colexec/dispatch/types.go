@@ -43,6 +43,9 @@ const (
 	SendToAnyLocalFunc
 	SendToAnyRemoteFunc
 	SendToAnyFunc
+
+	//shuffle to all reg functions
+	ShuffleToAllFunc
 )
 
 type WrapperClientSession struct {
@@ -68,6 +71,11 @@ type container struct {
 	aliveRegCnt   int
 	localRegsCnt  int
 	remoteRegsCnt int
+
+	// for shuffle reuse memory
+	sels            [][]int32
+	lenshuffledSels []int
+	remoteToIdx     map[uuid.UUID]int
 }
 
 type Argument struct {
@@ -79,6 +87,10 @@ type Argument struct {
 	LocalRegs []*process.WaitRegister
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
+	// for shuffle
+	ShuffleColIdx       int
+	ShuffleRegIdxLocal  []int
+	ShuffleRegIdxRemote []int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

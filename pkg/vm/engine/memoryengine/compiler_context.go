@@ -77,8 +77,8 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	return []uint32{catalog.System_Account}, nil
 }
 
-func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
-	return plan.DefaultStats()
+func (*CompilerContext) Stats(obj *plan.ObjectRef) bool {
+	return false
 }
 
 func (*CompilerContext) GetStatsCache() *plan.StatsCache {
