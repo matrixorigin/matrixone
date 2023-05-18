@@ -88,7 +88,6 @@ func MoTableRows(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec := vector.NewVec(types.T_int64.ToType())
 	count := vecs[0].Length()
-	//fmt.Printf("[motablesize] count = %d\n", count)
 	dbs := vector.MustStrCol(vecs[0])
 	tbls := vector.MustStrCol(vecs[1])
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
@@ -97,7 +96,6 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	txn := proc.TxnOperator
 	for i := 0; i < count; i++ {
-		//fmt.Printf("[motablesize] %d: db = %s, tb = %s\n", i, dbs[i], tbls[i])
 		var rel engine.Relation
 		if isClusterTable(dbs[i], tbls[i]) {
 			//if it is the cluster table in the general account, switch into the sys account
@@ -128,20 +126,6 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 			}
 		}
 		rel.Ranges(proc.Ctx, nil)
-		/*
-			rows, err := rel.Rows(proc.Ctx)
-			if err != nil {
-				return nil, err
-			}
-			attrs, err := rel.TableColumns(proc.Ctx)
-			if err != nil {
-				return nil, err
-			}
-			size := int64(0)
-			for _, attr := range attrs {
-				size += rows * int64(attr.Type.TypeSize())
-			}
-		*/
 		size, err := rel.Size(proc.Ctx, AllColumns)
 		if err != nil {
 			vec.Free(proc.Mp())
