@@ -3077,7 +3077,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 				}
 				if !isSubscriptionValid(allAccountStr == "true", accountList, tenantName) {
 					err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
-					goto handleFailed
+					return nil, err
 				}
 			}
 		} else {
