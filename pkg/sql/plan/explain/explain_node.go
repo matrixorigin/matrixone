@@ -446,9 +446,9 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/1000000)
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
 	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
-	fmt.Fprintf(buf, " inputSize=%dbytes", a.AnalyzeInfo.InputSize)
-	fmt.Fprintf(buf, " outputSize=%dbytes", a.AnalyzeInfo.OutputSize)
-	fmt.Fprintf(buf, " memorySize=%dbytes", a.AnalyzeInfo.MemorySize)
+	fmt.Fprintf(buf, " inputSize=%dmb", a.AnalyzeInfo.InputSize/(1024*1024))
+	fmt.Fprintf(buf, " outputSize=%dmb", a.AnalyzeInfo.OutputSize/(1024*1024))
+	fmt.Fprintf(buf, " memorySize=%dmb", a.AnalyzeInfo.MemorySize/(1024*1024))
 
 	return nil
 }
