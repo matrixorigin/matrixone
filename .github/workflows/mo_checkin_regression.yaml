@@ -402,7 +402,7 @@ jobs:
 
 
   clean_up_env:
-    if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' && github.event.pull_request.merged == true }} #
+    if: ${{ always() && !cancelled() && github.event.pull_request.merged == true }} #
     name: CLEAN UP ENV
     runs-on: arm64-runner
     needs: [docker_image_build,setup_mo_test_env,test]
