@@ -3058,6 +3058,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 			if tenantId, ok := value.(uint32); ok {
 				sql = getSqlForGetAccountName(tenantId)
 				bh.ClearExecResultSet()
+				newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 				err = bh.Exec(newCtx, sql)
 				if err != nil {
 					goto handleFailed
