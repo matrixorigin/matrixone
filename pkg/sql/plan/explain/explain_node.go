@@ -26,6 +26,9 @@ import (
 
 var _ NodeDescribe = &NodeDescribeImpl{}
 
+const MB = 1024 * 1024
+const GB = MB * 1024
+
 type NodeDescribeImpl struct {
 	Node *plan.Node
 }
@@ -446,9 +449,29 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/1000000)
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
 	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
-	fmt.Fprintf(buf, " inputSize=%dbytes", a.AnalyzeInfo.InputSize)
-	fmt.Fprintf(buf, " outputSize=%dbytes", a.AnalyzeInfo.OutputSize)
-	fmt.Fprintf(buf, " memorySize=%dbytes", a.AnalyzeInfo.MemorySize)
+	if a.AnalyzeInfo.InputSize < MB {
+		fmt.Fprintf(buf, " InputSize=%dbytes", a.AnalyzeInfo.InputSize)
+	} else if a.AnalyzeInfo.InputSize < 10*GB {
+		fmt.Fprintf(buf, " InputSize=%dmb", a.AnalyzeInfo.InputSize/MB)
+	} else {
+		fmt.Fprintf(buf, " InputSize=%dgb", a.AnalyzeInfo.InputSize/GB)
+	}
+
+	if a.AnalyzeInfo.OutputSize < MB {
+		fmt.Fprintf(buf, " OutputSize=%dbytes", a.AnalyzeInfo.OutputSize)
+	} else if a.AnalyzeInfo.OutputSize < 10*GB {
+		fmt.Fprintf(buf, " OutputSize=%dmb", a.AnalyzeInfo.OutputSize/MB)
+	} else {
+		fmt.Fprintf(buf, " OutputSize=%dgb", a.AnalyzeInfo.OutputSize/GB)
+	}
+
+	if a.AnalyzeInfo.MemorySize < MB {
+		fmt.Fprintf(buf, " MemorySize=%dbytes", a.AnalyzeInfo.MemorySize)
+	} else if a.AnalyzeInfo.MemorySize < 10*GB {
+		fmt.Fprintf(buf, " MemorySize=%dmb", a.AnalyzeInfo.MemorySize/MB)
+	} else {
+		fmt.Fprintf(buf, " MemorySize=%dgb", a.AnalyzeInfo.MemorySize/GB)
+	}
 
 	return nil
 }
