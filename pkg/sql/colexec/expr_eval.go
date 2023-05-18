@@ -17,7 +17,6 @@ package colexec
 import (
 	"context"
 	"fmt"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -458,39 +457,30 @@ func EvalFilterByZonemap(
 			break
 		}
 
-		if t.F.Func.ObjName == "in" {
-			var firstRun bool
-
-			rid := args[1].AuxId
-			if vecs[rid] == nil {
-				if vecs[args[1].AuxId], err = getConstVecInList(proc.Ctx, proc, args[1].GetList().List); err != nil {
-					zms[expr.AuxId].Reset()
-					vecs[args[1].AuxId] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
-					return zms[expr.AuxId]
-				}
-
-				firstRun = true
-			}
-
-			if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
-				zms[expr.AuxId].Reset()
-				return zms[expr.AuxId]
-			}
-
-			lhs := EvalFilterByZonemap(ctx, meta, args[0], zms, vecs, columnMap, proc)
-			if !lhs.IsInited() {
-				zms[expr.AuxId].Reset()
-				return zms[expr.AuxId]
-			}
-
-			if res, ok := lhs.AnyIn(vecs[rid], firstRun); !ok {
-				zms[expr.AuxId].Reset()
-			} else {
-				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
-			}
-
-			return zms[expr.AuxId]
-		}
+		//if t.F.Func.ObjName == "in" {
+		//	rid := args[1].AuxId
+		//	if vecs[rid] == nil {
+		//		if vecs[args[1].AuxId], err = getConstVecInList(proc.Ctx, proc, args[1].GetList().List); err != nil {
+		//			zms[expr.AuxId].Reset()
+		//			vecs[args[1].AuxId] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
+		//			return zms[expr.AuxId]
+		//		}
+		//	}
+		//
+		//	if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
+		//		zms[expr.AuxId].Reset()
+		//		return zms[expr.AuxId]
+		//	}
+		//
+		//	lhs := EvalFilterByZonemap(ctx, meta, args[0], zms, vecs, columnMap, proc)
+		//	if res, ok := lhs.AnyIn(vecs[rid]); !ok {
+		//		zms[expr.AuxId].Reset()
+		//	} else {
+		//		zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
+		//	}
+		//
+		//	return zms[expr.AuxId]
+		//}
 
 		for _, arg := range args {
 			zms[arg.AuxId] = EvalFilterByZonemap(ctx, meta, arg, zms, vecs, columnMap, proc)
