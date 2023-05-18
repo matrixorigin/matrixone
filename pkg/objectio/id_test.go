@@ -34,7 +34,7 @@ func TestIDAllocate(t *testing.T) {
 	require.Equal(t, unsafe.Pointer(&sidSlice[0]), unsafe.Pointer(&sid[0]))
 
 	// get block id from rowid without copy
-	bidUnsafe := rid.GetBlockidUnsafe()
+	bidUnsafe := rid.BorrowBlockID()
 	require.Equal(t, unsafe.Pointer(&bidUnsafe[0]), unsafe.Pointer(&rid[0]))
 	require.Zero(t, bid.Compare(*bidUnsafe))
 

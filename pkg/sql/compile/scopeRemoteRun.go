@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -93,6 +94,7 @@ func CnServerMessageHandler(
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
 	cli client.TxnClient,
+	aicm *defines.AutoIncrCacheManager,
 	messageAcquirer func() morpc.Message) error {
 
 	msg, ok := message.(*pipeline.Message)
@@ -102,7 +104,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, cli)
+		cs, messageAcquirer, storeEngine, fileService, lockService, cli, aicm)
 
 	// rebuild pipeline to run and send query result back.
 	err := cnMessageHandle(&receiver)
@@ -665,6 +667,16 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{FuncId: int32(t.FuncId)}
+		in.Dispatch.ShuffleColIdx = int32(t.ShuffleColIdx)
+		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
+		for i := range t.ShuffleRegIdxLocal {
+			in.Dispatch.ShuffleRegIdxLocal[i] = int32(t.ShuffleRegIdxLocal[i])
+		}
+		in.Dispatch.ShuffleRegIdxRemote = make([]int32, len(t.ShuffleRegIdxRemote))
+		for i := range t.ShuffleRegIdxRemote {
+			in.Dispatch.ShuffleRegIdxRemote[i] = int32(t.ShuffleRegIdxRemote[i])
+		}
+
 		in.Dispatch.LocalConnector = make([]*pipeline.Connector, len(t.LocalRegs))
 		for i := range t.LocalRegs {
 			idx, ctx0 := ctx.root.findRegister(t.LocalRegs[i])
@@ -1027,10 +1039,22 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				rrs = append(rrs, n)
 			}
 		}
+		shuffleRegIdxLocal := make([]int, len(t.ShuffleRegIdxLocal))
+		for i := range t.ShuffleRegIdxLocal {
+			shuffleRegIdxLocal[i] = int(t.ShuffleRegIdxLocal[i])
+		}
+		shuffleRegIdxRemote := make([]int, len(t.ShuffleRegIdxRemote))
+		for i := range t.ShuffleRegIdxRemote {
+			shuffleRegIdxRemote[i] = int(t.ShuffleRegIdxRemote[i])
+		}
+
 		v.Arg = &dispatch.Argument{
-			FuncId:     int(t.FuncId),
-			LocalRegs:  regs,
-			RemoteRegs: rrs,
+			FuncId:              int(t.FuncId),
+			LocalRegs:           regs,
+			RemoteRegs:          rrs,
+			ShuffleColIdx:       int(t.ShuffleColIdx),
+			ShuffleRegIdxLocal:  shuffleRegIdxLocal,
+			ShuffleRegIdxRemote: shuffleRegIdxRemote,
 		}
 	case vm.Group:
 		t := opr.GetAgg()

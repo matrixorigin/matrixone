@@ -17,10 +17,8 @@ package proxy
 import (
 	"fmt"
 	"io"
-	"net"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 )
 
@@ -192,30 +190,11 @@ func makeEvent(req *eventReq) (IEvent, bool) {
 			// This event should be sent to dst, so return false,
 			return makeSetVarEvent(stmt), false
 		case TypeSuspendAccount:
-			c, ok := req.dst.(net.Conn)
-			if !ok {
-				return nil, false
-			}
-			addr := c.RemoteAddr().String()
-			if strings.Index(addr, "sock") > 0 && !strings.Contains(addr, "unix") {
-				addr = "unix://" + addr
-			}
-			// Although the suspend statement could be handled directly, but
-			// we need to know if the result of this statement is ok. So it
-			// is handled in the event, and thus the second return value is true.
-			return makeSuspendAccountEvent(stmt,
-				addr, regexp.MustCompile(patternMap[typ])), true
+			// The suspend statement could be handled directly, and whatever its
+			// result is, trigger kill connection operation.
+			return makeSuspendAccountEvent(stmt, regexp.MustCompile(patternMap[typ])), false
 		case TypeDropAccount:
-			c, ok := req.dst.(net.Conn)
-			if !ok {
-				return nil, false
-			}
-			addr := c.RemoteAddr().String()
-			if strings.Index(addr, "sock") > 0 && !strings.Contains(addr, "unix") {
-				addr = "unix://" + addr
-			}
-			return makeDropAccountEvent(stmt,
-				addr, regexp.MustCompile(patternMap[typ])), true
+			return makeDropAccountEvent(stmt, regexp.MustCompile(patternMap[typ])), false
 		default:
 			return nil, true
 		}
@@ -291,13 +270,10 @@ type suspendAccountEvent struct {
 	stmt string
 	// account is the tenant text value.
 	account Tenant
-	// addr is the remote server's address, which is used
-	// to build connection to execute suspend statement.
-	addr string
 }
 
 // makeSuspendAccountEvent creates a event with TypeSuspendAccount type.
-func makeSuspendAccountEvent(stmt string, addr string, reg *regexp.Regexp) IEvent {
+func makeSuspendAccountEvent(stmt string, reg *regexp.Regexp) IEvent {
 	items := reg.FindStringSubmatch(stmt)
 	if len(items) != 5 {
 		return nil
@@ -305,7 +281,6 @@ func makeSuspendAccountEvent(stmt string, addr string, reg *regexp.Regexp) IEven
 	e := &suspendAccountEvent{
 		stmt:    stmt,
 		account: Tenant(items[3]),
-		addr:    addr,
 	}
 	e.typ = TypeSuspendAccount
 	return e
@@ -323,13 +298,10 @@ type dropAccountEvent struct {
 	stmt string
 	// account is the tenant text value.
 	account Tenant
-	// addr is the remote server's address, which is used
-	// to build connection to execute drop statement.
-	addr string
 }
 
 // makeDropAccountEvent creates a event with TypeDropAccount type.
-func makeDropAccountEvent(stmt string, addr string, reg *regexp.Regexp) IEvent {
+func makeDropAccountEvent(stmt string, reg *regexp.Regexp) IEvent {
 	items := reg.FindStringSubmatch(stmt)
 	if len(items) != 4 {
 		return nil
@@ -337,7 +309,6 @@ func makeDropAccountEvent(stmt string, addr string, reg *regexp.Regexp) IEvent {
 	e := &dropAccountEvent{
 		stmt:    stmt,
 		account: Tenant(items[3]),
-		addr:    addr,
 	}
 	e.typ = TypeDropAccount
 	return e

@@ -20,8 +20,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"go.uber.org/zap"
 )
 
 func (s *store) initTaskHolder() {
@@ -66,6 +68,14 @@ func (s *store) createTaskService(command *logservicepb.CreateTaskService) {
 		return
 	}
 
+	// Notify frontend to set up the special account used to task framework create and query async tasks.
+	// The account is always in the memory.
+	frontend.SetSpecialUser(command.User.Username, []byte(command.User.Password))
+	if err := s.task.serviceHolder.Create(*command); err != nil {
+		s.rt.Logger().Error("create task service failed",
+			zap.Error(err))
+		return
+	}
 	s.task.serviceCreated = true
 }
 
