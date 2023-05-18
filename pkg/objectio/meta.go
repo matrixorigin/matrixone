@@ -254,6 +254,10 @@ func (bh BlockHeader) IsEmpty() bool {
 
 type BloomFilter []byte
 
+func (bf BloomFilter) Size() int {
+	return len(bf)
+}
+
 func (bf BloomFilter) BlockCount() uint32 {
 	return types.DecodeUint32(bf[:blockCountLen])
 }

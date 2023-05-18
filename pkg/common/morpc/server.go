@@ -85,7 +85,7 @@ type server struct {
 	codec       Codec
 	application goetty.NetApplication
 	stopper     *stopper.Stopper
-	handler     func(ctx context.Context, request Message, sequence uint64, cs ClientSession) error
+	handler     func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
 	sessions    *sync.Map // session-id => *clientSession
 	options     struct {
 		goettyOptions            []goetty.Option
@@ -160,7 +160,11 @@ func (s *server) Close() error {
 	return err
 }
 
-func (s *server) RegisterRequestHandler(handler func(ctx context.Context, request Message, sequence uint64, cs ClientSession) error) {
+func (s *server) RegisterRequestHandler(handler func(
+	ctx context.Context,
+	request RPCMessage,
+	sequence uint64,
+	cs ClientSession) error) {
 	s.handler = handler
 }
 
@@ -196,8 +200,8 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 	// true. So we use the pessimistic wait for the context to time out automatically be canceled
 	// behavior here, which may cause some resources to be released more slowly.
 	// FIXME: Use the CancelFunc pass to let the handler decide to cancel itself
-	if !s.options.disableAutoCancelContext && request.cancel != nil {
-		defer request.cancel()
+	if !s.options.disableAutoCancelContext && request.Cancel != nil {
+		defer request.Cancel()
 	}
 	// get requestID here to avoid data race, because the request maybe released in handler
 	requestID := request.Message.GetID()
@@ -231,7 +235,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		}
 	}
 
-	if err := s.handler(request.Ctx, request.Message, sequence, cs); err != nil {
+	if err := s.handler(request.Ctx, request, sequence, cs); err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddress()),

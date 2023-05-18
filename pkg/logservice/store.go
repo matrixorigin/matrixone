@@ -771,3 +771,15 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	}
 	return m
 }
+
+// leaderID returns the leader ID of the specified shard.
+func (l *store) leaderID(shardID uint64) (uint64, error) {
+	leaderID, _, ok, err := l.nh.GetLeaderID(shardID)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, nil
+	}
+	return leaderID, nil
+}

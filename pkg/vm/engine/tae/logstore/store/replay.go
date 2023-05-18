@@ -16,16 +16,15 @@ package store
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
-func (w *StoreImpl) Replay(h ApplyHandle, allocator logstoreEntry.Allocator) error {
+func (w *StoreImpl) Replay(h ApplyHandle) error {
 	err := w.driver.Replay(func(e *entry.Entry) {
 		err := w.replayEntry(e, h)
 		if err != nil {
 			panic(err)
 		}
-	}, allocator)
+	})
 	if err != nil {
 		panic(err)
 	}
