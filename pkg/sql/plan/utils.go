@@ -18,6 +18,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/csv"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"path"
 	"strings"
@@ -1015,26 +1016,48 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
+func getSortOrder(tableDef *plan.TableDef, colName string) int {
+	if tableDef.Pkey != nil {
+		pkNames := tableDef.Pkey.Names
+		for i := range pkNames {
+			if pkNames[i] == colName {
+				return i
+			}
+		}
+	}
+	if tableDef.ClusterBy != nil {
+		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
+	}
+	return -1
+}
+
 // handle the filter list for Stats. rewrite and constFold
 func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
 	if proc == nil {
 		return nil
 	}
-	newExprList := make([]*plan.Expr, len(exprList))
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	for i, expr := range exprList {
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
-		if tmpexpr != nil {
-			expr = tmpexpr
-		}
-		newExprList[i] = expr
+	for i := range exprList {
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
+		exprList[i] = tmpexpr
 	}
-	return colexec.RewriteFilterExprList(newExprList)
+	return colexec.RewriteFilterExprList(exprList)
+}
+
+func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnName(tableDef, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
+	}
 }
 
 // this function will be deleted soon
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) ([]*plan.Expr, *plan.Expr) {
 	if proc == nil || proc.Ctx == nil {
 		return nil, nil
 	}
@@ -1052,7 +1075,7 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Exp
 			nonMonoExprList = append(nonMonoExprList, expr)
 		}
 	}
-	return colexec.RewriteFilterExprList(monoExprList), colexec.RewriteFilterExprList(nonMonoExprList)
+	return monoExprList, colexec.RewriteFilterExprList(nonMonoExprList)
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
@@ -1071,8 +1094,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc)
-		if err != nil {
+		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc); err != nil {
 			return nil, err
 		}
 	}
@@ -1083,8 +1105,8 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if err != nil {
 		return nil, err
 	}
+	defer vec.Free(proc.Mp())
 	c := rule.GetConstantValue(vec, false)
-	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil
 	}

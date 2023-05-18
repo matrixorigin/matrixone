@@ -25,33 +25,29 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -743,8 +739,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		if plan2.NeedShuffle(n) {
-			ss = c.compileBucketGroup(n, ss, ns)
+		if idx := plan2.GetShuffleIndexForGroupBy(n); idx >= 0 {
+			ss = c.compileBucketGroup(n, ss, ns, idx)
 			return c.compileSort(n, ss), nil
 		} else {
 			ss = c.compileMergeGroup(n, ss, ns)
@@ -1224,8 +1220,8 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	rs := c.newScopeList(1, int(n.Stats.BlockNum))
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
-	copy(gn.GroupBy, n.ProjectList)
 	for i := range gn.GroupBy {
+		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
 	idx := 0
@@ -1629,13 +1625,14 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, idxToShuffle int) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
 	dop := plan2.GetShuffleDop(n)
 	parent, children := c.newScopeListForGroup(validScopeCount(ss), dop)
 
 	j := 0
+	hashColumnIdx := plan2.GetHashColumnIdx(n.GroupBy[idxToShuffle])
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
 			isEnd := ss[i].IsEnd
@@ -1645,7 +1642,7 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node)
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, true, plan2.GetHashColumnIdx(n.GroupBy[0])),
+				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, true, hashColumnIdx),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -2152,8 +2149,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 	}
 
-	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
-	ranges, err = rel.Ranges(ctx, expr)
+	monoExprList, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
+	ranges, err = rel.Ranges(ctx, monoExprList...)
 	if err != nil {
 		return nil, err
 	}
@@ -2169,7 +2166,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			subranges, err := subrelation.Ranges(ctx, expr)
+			subranges, err := subrelation.Ranges(ctx, monoExprList...)
 			if err != nil {
 				return nil, err
 			}
@@ -2208,7 +2205,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if isPartitionTable {
 		rel = nil
 	}
-	// for multi cn in luanch mode, put all payloads in current CN
+	// for multi cn in launch mode, put all payloads in current CN
 	// maybe delete this in the future
 	if isLaunchMode(c.cnList) {
 		return putBlocksInCurrentCN(c, ranges, rel, n), nil

@@ -16,9 +16,9 @@ package logservice
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"math"
-	"math/rand"
 	"testing"
 	"time"
 

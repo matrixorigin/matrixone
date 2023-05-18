@@ -27,16 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func constructRowId(id *common.ID, rows uint32) (col containers.Vector, err error) {
-	prefix := id.BlockID[:]
-	return model.PreparePhyAddrData(
-		types.T_Rowid.ToType(),
-		prefix,
-		0,
-		rows,
-	)
-}
-
 func LoadPersistedColumnData(
 	fs *objectio.ObjectFS,
 	id *common.ID,
@@ -44,7 +34,7 @@ func LoadPersistedColumnData(
 	location objectio.Location,
 ) (vec containers.Vector, err error) {
 	if def.IsPhyAddr() {
-		return constructRowId(id, location.Rows())
+		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows())
 	}
 	bat, err := blockio.LoadColumns(context.Background(), []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, fs.Service, location, nil)
 	if err != nil {
@@ -58,15 +48,16 @@ func ReadPersistedBlockRow(location objectio.Location) int {
 }
 
 func LoadPersistedDeletes(
+	pkName string,
 	fs *objectio.ObjectFS,
 	location objectio.Location) (bat *containers.Batch, err error) {
-	movbat, err := blockio.LoadColumns(context.Background(), []uint16{0, 1, 2}, nil, fs.Service, location, nil)
+	movbat, err := blockio.LoadColumns(context.Background(), []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
 	if err != nil {
 		return
 	}
 	bat = containers.NewBatch()
-	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
-	for i := 0; i < 3; i++ {
+	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, pkName, catalog.AttrAborted}
+	for i := 0; i < 4; i++ {
 		bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
 	}
 	return

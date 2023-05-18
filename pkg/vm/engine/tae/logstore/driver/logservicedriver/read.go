@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 var ErrRecordNotFound = moerr.NewInternalErrorNoCtx("driver read cache: lsn not found")
@@ -44,7 +43,7 @@ func newReadCache() *readCache {
 	}
 }
 
-func (d *LogServiceDriver) Read(drlsn uint64, allocator logstoreEntry.Allocator) (*entry.Entry, error) {
+func (d *LogServiceDriver) Read(drlsn uint64) (*entry.Entry, error) {
 	lsn, err := d.tryGetLogServiceLsnByDriverLsn(drlsn)
 	if err != nil {
 		panic(err)
@@ -57,7 +56,7 @@ func (d *LogServiceDriver) Read(drlsn uint64, allocator logstoreEntry.Allocator)
 		r, err = d.readFromCache(lsn)
 		if err == nil {
 			d.readMu.Unlock()
-			return r.readEntry(drlsn, allocator), nil
+			return r.readEntry(drlsn), nil
 		}
 		d.readSmallBatchFromLogService(lsn)
 		r, err = d.readFromCache(lsn)
@@ -67,7 +66,7 @@ func (d *LogServiceDriver) Read(drlsn uint64, allocator logstoreEntry.Allocator)
 		}
 		d.readMu.Unlock()
 	}
-	return r.readEntry(drlsn, allocator), nil
+	return r.readEntry(drlsn), nil
 }
 
 func (d *LogServiceDriver) readFromCache(lsn uint64) (*recordEntry, error) {

@@ -19,11 +19,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"os"
-	"strconv"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"golang.org/x/sync/errgroup"
+	"io"
+	"os"
+	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
