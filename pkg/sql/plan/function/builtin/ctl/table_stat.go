@@ -122,21 +122,18 @@ func MoTableSize(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 			}
 		}
 		rel.Ranges(proc.Ctx, nil)
-		/*
-			rows, err := rel.Rows(proc.Ctx)
-			if err != nil {
-				return nil, err
-			}
-			attrs, err := rel.TableColumns(proc.Ctx)
-			if err != nil {
-				return nil, err
-			}
-			size := int64(0)
-			for _, attr := range attrs {
-				size += rows * int64(attr.Type.TypeSize())
-			}
-		*/
-		size, err := rel.Size(proc.Ctx, AllColumns)
+		rows, err := rel.Rows(proc.Ctx)
+		if err != nil {
+			return nil, err
+		}
+		attrs, err := rel.TableColumns(proc.Ctx)
+		if err != nil {
+			return nil, err
+		}
+		size := int64(0)
+		for _, attr := range attrs {
+			size += rows * int64(attr.Type.TypeSize())
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -106,20 +106,22 @@ var (
 				NotNullable: false,
 			},
 		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.MIN],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.MIN].Oid),
-				NotNullable: false,
+		/*
+			{
+				Name: catalog.MetadataScanInfoNames[catalog.MIN],
+				Typ: &plan.Type{
+					Id:          int32(catalog.MetadataScanInfoTypes[catalog.MIN].Oid),
+					NotNullable: false,
+				},
 			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.MAX],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.MAX].Oid),
-				NotNullable: false,
+			{
+				Name: catalog.MetadataScanInfoNames[catalog.MAX],
+				Typ: &plan.Type{
+					Id:          int32(catalog.MetadataScanInfoTypes[catalog.MAX].Oid),
+					NotNullable: false,
+				},
 			},
-		},
+		*/
 	}
 )
 

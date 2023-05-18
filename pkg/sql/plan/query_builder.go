@@ -2356,6 +2356,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	for _, v := range tbl.Func.Exprs {
 		curExpr, err := ctx.binder.BindExpr(v, 0, false)
 		if err != nil {
+			fmt.Printf("[buildTableFunction] err: %s\n", err)
 			return 0, err
 		}
 		exprs = append(exprs, curExpr)

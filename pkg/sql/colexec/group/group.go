@@ -67,6 +67,24 @@ func Prepare(_ *process.Process, arg any) error {
 	ap.ctr.mapAggType = make(map[int32]int)
 	ap.ctr.inserted = make([]uint8, hashmap.UnitLimit)
 	ap.ctr.zInserted = make([]uint8, hashmap.UnitLimit)
+
+	str := ""
+	for i, ag := range ap.Aggs {
+		if i > 0 {
+			str += " ,"
+		}
+		str += fmt.Sprintf("%v(%v)", agg.Names[ag.Op], ag.E)
+	}
+
+	exprstr := ""
+	for i, expr := range ap.Exprs {
+		if i > 0 {
+			exprstr += " ,"
+		}
+		exprstr += fmt.Sprintf("%v", expr)
+	}
+
+	fmt.Printf("[groupgroup] expr: [%s], a&e: [%s]\n", exprstr, str)
 	return nil
 }
 
@@ -118,6 +136,7 @@ func (ctr *container) getBatchAggs(ap *Argument) error {
 
 func (ctr *container) process(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	bat := proc.InputBatch()
+	fmt.Printf("[groupcall] bat size = %d\n", bat.Length())
 	if bat == nil {
 		// if the result vectors are empty, process again. because the result of Agg can't be empty but 0 or NULL.
 		if len(ctr.aggVecs) == 0 && len(ctr.multiVecs) == 0 {
@@ -195,6 +214,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	var err error
 	bat := proc.InputBatch()
+	fmt.Printf("[groupcall] bat size = %d\n", bat.Length())
 	if bat == nil {
 		if ctr.bat != nil {
 			if ap.NeedEval {
@@ -499,6 +519,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc *process.Process, analyze process.Analyze) error {
 	for i, ag := range aggs {
 		vec, err := colexec.EvalExpr(bat, proc, ag.E)
+		fmt.Printf("[evalAggVector] len of vec: %d\n", vec.Length())
 		if err != nil {
 			ctr.cleanAggVectors(proc.Mp())
 			return err

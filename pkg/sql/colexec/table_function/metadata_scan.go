@@ -15,13 +15,11 @@
 package table_function
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -29,27 +27,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type ColunmsInfo struct {
-	Name       []string
-	BlockID    []types.Blockid
-	EntryState []bool
-	Sorted     []bool
-	MetaLoc    []catalog.ObjectLocation
-	DeltaLoc   []catalog.ObjectLocation
-	CommitTs   []types.TS
-	SegmentID  []types.Uuid
-}
-
 func metadataScanPrepare(_ *process.Process, arg *Argument) error {
 	return nil
 }
+
 func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
 
-	tb, err := colexec.EvalExpr(bat, proc, arg.Args[0])
+	source, err := colexec.EvalExpr(bat, proc, arg.Args[0])
 	if err != nil {
 		return false, err
 	}
@@ -57,39 +45,26 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	fmt.Printf("[metadatascan] first: %s, second: %s\n", tb, col)
-	fmt.Printf("arg.Attrs = %s\n", arg.Attrs)
 
-	dbname, tablename, colname, err := handleDatasourceInfo(vector.MustStrCol(tb), vector.MustStrCol(col))
+	dbname, tablename, colname, err := handleDatasource(vector.MustStrCol(source), vector.MustStrCol(col))
 	if err != nil {
 		return false, err
 	}
-	fmt.Printf("[metadatascan] db: %s, table: %s, column: %s\n", dbname, tablename, colname)
+
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
 	db, err := e.Database(proc.Ctx, dbname, proc.TxnOperator)
 	if err != nil {
-		return false, err
+		return false, moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan: %v", err)
 	}
-	fmt.Printf("[metadatascan] get db %s success\n", dbname)
 
 	rel, err := db.Relation(proc.Ctx, tablename)
 	if err != nil {
 		return false, err
 	}
-	fmt.Printf("[metadatascan] get db table %s success\n", tablename)
-	if _, err := rel.Ranges(proc.Ctx, nil); err != nil {
-		return false, err
-	}
 
-	infobytes, err := rel.GetColumMetadataScanInfo(proc.Ctx, colname)
+	metaInfos, err := getMetadataScanInfos(rel, proc, colname)
 	if err != nil {
-		return false, nil
-	}
-	fmt.Printf("[metadatascan] get infobytes success\n")
-
-	metaInfos := make([]*catalog.MetadataScanInfo, 0, len(infobytes))
-	for i := range infobytes {
-		metaInfos = append(metaInfos, catalog.DecodeMetadataScanInfo(infobytes[i]))
+		return false, err
 	}
 
 	retb, err := genRetBatch(*proc, arg, metaInfos, colname, rel)
@@ -101,7 +76,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	return true, nil
 }
 
-func handleDatasourceInfo(first []string, second []string) (string, string, string, error) {
+func handleDatasource(first []string, second []string) (string, string, string, error) {
 	if len(first) != 1 || len(second) != 1 {
 		return "", "", "", moerr.NewInternalErrorNoCtx("wrong input len")
 	}
@@ -113,6 +88,24 @@ func handleDatasourceInfo(first []string, second []string) (string, string, stri
 	return strs[0], strs[1], second[0], nil
 }
 
+func getMetadataScanInfos(rel engine.Relation, proc *process.Process, colname string) ([]*catalog.MetadataScanInfo, error) {
+	if _, err := rel.Ranges(proc.Ctx, nil); err != nil {
+		return nil, err
+	}
+
+	infobytes, err := rel.GetColumMetadataScanInfo(proc.Ctx, colname)
+	if err != nil {
+		return nil, err
+	}
+
+	metaInfos := make([]*catalog.MetadataScanInfo, 0, len(infobytes))
+	for i := range infobytes {
+		metaInfos = append(metaInfos, catalog.DecodeMetadataScanInfo(infobytes[i]))
+	}
+
+	return metaInfos, nil
+}
+
 func genRetBatch(proc process.Process, arg *Argument, metaInfos []*catalog.MetadataScanInfo, colName string, rel engine.Relation) (*batch.Batch, error) {
 	retBat, err := genMetadataInfoBat(proc, arg)
 	if err != nil {
@@ -120,6 +113,10 @@ func genRetBatch(proc process.Process, arg *Argument, metaInfos []*catalog.Metad
 	}
 
 	for i := range metaInfos {
+		arg.rowsum += metaInfos[i].RowCnt
+		arg.nullsum += metaInfos[i].NullCnt
+		arg.compresssize += metaInfos[i].CompressSize
+		arg.originsize += metaInfos[i].OriginSize
 		fillMetadataInfoBat(retBat, proc, arg, metaInfos[i])
 	}
 

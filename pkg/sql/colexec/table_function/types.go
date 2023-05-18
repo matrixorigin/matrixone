@@ -15,6 +15,8 @@
 package table_function
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -27,10 +29,17 @@ type Argument struct {
 	Params    []byte
 	Name      string
 	retSchema []types.Type
+
+	// for test
+	rowsum       int64
+	nullsum      int64
+	compresssize int64
+	originsize   int64
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-
+	fmt.Printf("[metadatascan] rowsum = %d, nullsum = %d, compresssize = %d, originsize = %d\n",
+		arg.rowsum, arg.nullsum, arg.compresssize, arg.originsize)
 }
 
 type unnestParam struct {

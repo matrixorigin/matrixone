@@ -263,10 +263,11 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	}
 
 	if name == "__mo_rowid" {
-		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v")
+		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
 	}
 
 	infoList := make([]*catalog.MetadataScanInfo, 0, len(tbl.blockInfos))
+	var meta objectio.ObjectMeta
 	if name == "*" {
 		cols := tbl.getTableDef().GetCols()
 		for i := range cols { // remote the system columns
@@ -279,8 +280,15 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		for i := range tbl.blockInfos {
 			for j := range tbl.blockInfos[i] {
 				blk := tbl.blockInfos[i][j]
+				location := blk.MetaLocation()
+				if !objectio.IsSameObjectLocVsMeta(location, meta) {
+					var loadErr error
+					if meta, loadErr = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); loadErr != nil {
+						return nil, loadErr
+					}
+				}
 				for k := range cols {
-					get, err := tbl.genMetadataScanInfo(ctx, &blk, cols[k])
+					get, err := tbl.genMetadataScanInfo(ctx, &blk, location, &meta, cols[k])
 					if err != nil {
 						return nil, err
 					}
@@ -297,7 +305,15 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		for i := range tbl.blockInfos {
 			for j := range tbl.blockInfos[i] {
 				blk := tbl.blockInfos[i][j]
-				get, err := tbl.genMetadataScanInfo(ctx, &blk, col)
+				location := blk.MetaLocation()
+				if !objectio.IsSameObjectLocVsMeta(location, meta) {
+					var loadErr error
+					if meta, loadErr = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); loadErr != nil {
+						return nil, loadErr
+					}
+				}
+
+				get, err := tbl.genMetadataScanInfo(ctx, &blk, location, &meta, col)
 				if err != nil {
 					return nil, err
 				}
@@ -313,14 +329,13 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	return ret, nil
 }
 
-func (tbl *txnTable) genMetadataScanInfo(ctx context.Context, blk *catalog.BlockInfo, col *plan.ColDef) (*catalog.MetadataScanInfo, error) {
+func (tbl *txnTable) genMetadataScanInfo(ctx context.Context, blk *catalog.BlockInfo, location objectio.Location, meta *objectio.ObjectMeta, col *plan.ColDef) (*catalog.MetadataScanInfo, error) {
 	ret := &catalog.MetadataScanInfo{
 		ColName: col.Name,
 	}
 
 	ret.FillBlockInfo(blk)
-	location := blk.MetaLocation()
-	if err := tbl.fillMetadataScanWithCol(ctx, col, &location, ret); err != nil {
+	if err := tbl.fillMetadataScanWithCol(col, &location, meta, ret); err != nil {
 		return nil, err
 	}
 	return ret, nil
@@ -336,11 +351,7 @@ func (tbl *txnTable) getColByName(ctx context.Context, name string) (*plan.ColDe
 	return nil, moerr.NewInvalidInputNoCtx("bad input column name %v", name)
 }
 
-func (tbl *txnTable) fillMetadataScanWithCol(ctx context.Context, col *plan.ColDef, location *objectio.Location, info *catalog.MetadataScanInfo) error {
-	meta, err := objectio.FastLoadObjectMeta(ctx, location, tbl.db.txn.proc.FileService)
-	if err != nil {
-		return err
-	}
+func (tbl *txnTable) fillMetadataScanWithCol(col *plan.ColDef, location *objectio.Location, meta *objectio.ObjectMeta, info *catalog.MetadataScanInfo) error {
 	colmeta := meta.MustGetColumn(uint16(col.Seqnum))
 
 	// row cnt

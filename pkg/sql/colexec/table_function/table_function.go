@@ -42,6 +42,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		f, e = currentAccountCall(idx, proc, tblArg)
 	case "metadata_scan":
 		f, e = metadataScan(idx, proc, tblArg)
+		if e != nil {
+			fmt.Printf("[metadatascan] err = %s\n", e)
+		}
 	default:
 		return true, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
