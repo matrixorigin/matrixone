@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -182,9 +183,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		}
 		toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, newOffset)
 		toId := entry.createdBlks[toPos].AsCommonID()
-		prefix := toId.BlockID[:]
-		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
-		page.Train(toRow, rowid)
+		page.Train(toRow, *objectio.NewRowid(&toId.BlockID, uint32(i)))
 	}
 	_ = entry.scheduler.AddTransferPage(page)
 

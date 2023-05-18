@@ -15,14 +15,14 @@
 package inside
 
 import (
-	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -42,10 +42,24 @@ func InternalAutoIncrement(ivecs []*vector.Vector, proc *process.Process) (*vect
 	}
 
 	eng := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	// New returns a TxnOperator to handle read and write operation for a transaction.
+	var minSnapshotTS timestamp.Timestamp
+	if proc.TxnOperator != nil {
+		minSnapshotTS = proc.TxnOperator.Txn().SnapshotTS
+	}
+	txnOperator, err := proc.TxnClient.New(proc.Ctx, minSnapshotTS)
+	if err != nil {
+		return nil, err
+	}
+	defer txnOperator.Rollback(proc.Ctx)
+	if err := eng.New(proc.Ctx, txnOperator); err != nil {
+		return nil, err
+	}
+	defer eng.Rollback(proc.Ctx, txnOperator)
 	if isAllConst {
 		var rvec *vector.Vector
 		dbName := ivecs[0].GetStringAt(0)
-		database, err := eng.Database(proc.Ctx, dbName, proc.TxnOperator)
+		database, err := eng.Database(proc.Ctx, dbName, txnOperator)
 		if err != nil {
 			return nil, moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 		}
@@ -59,12 +73,10 @@ func InternalAutoIncrement(ivecs []*vector.Vector, proc *process.Process) (*vect
 		if err != nil {
 			return nil, err
 		}
-		autoIncrCol := getTableAutoIncrCol(engineDefs, tableName)
-		if autoIncrCol != "" {
-			autoIncrement, err := getCurrentValue(
-				proc.Ctx,
-				tableId,
-				autoIncrCol)
+		hasAntoIncr, autoIncrCol := getTableAutoIncrCol(engineDefs, tableName)
+		if hasAntoIncr {
+			colname := fmt.Sprintf("%d_%s", tableId, autoIncrCol.Name)
+			autoIncrement, err := getCurrentAutoIncrement(eng, proc, colname, dbName, tableName)
 			if err != nil {
 				return nil, err // or return 0, nil
 			}
@@ -83,7 +95,7 @@ func InternalAutoIncrement(ivecs []*vector.Vector, proc *process.Process) (*vect
 
 		for i := 0; i < rowCount; i++ {
 			dbName := ivecs[0].GetStringAt(i)
-			database, err := eng.Database(proc.Ctx, dbName, proc.TxnOperator)
+			database, err := eng.Database(proc.Ctx, dbName, txnOperator)
 			if err != nil {
 				return nil, moerr.NewInvalidInput(proc.Ctx, "Database '%s' does not exist", dbName)
 			}
@@ -98,12 +110,10 @@ func InternalAutoIncrement(ivecs []*vector.Vector, proc *process.Process) (*vect
 			if err != nil {
 				return nil, err
 			}
-			autoIncrCol := getTableAutoIncrCol(engineDefs, tableName)
-			if autoIncrCol != "" {
-				autoIncrement, err := getCurrentValue(
-					proc.Ctx,
-					tableId,
-					autoIncrCol)
+			hasAntoIncr, autoIncrCol := getTableAutoIncrCol(engineDefs, tableName)
+			if hasAntoIncr {
+				colname := fmt.Sprintf("%d_%s", tableId, autoIncrCol.Name)
+				autoIncrement, err := getCurrentAutoIncrement(eng, proc, colname, dbName, tableName)
 				if err != nil {
 					return nil, err // or return 0, nil
 				}
@@ -114,26 +124,4 @@ func InternalAutoIncrement(ivecs []*vector.Vector, proc *process.Process) (*vect
 		}
 		return rvec, nil
 	}
-}
-
-func getCurrentValue(
-	ctx context.Context,
-	tableID uint64,
-	col string) (uint64, error) {
-	return incrservice.GetAutoIncrementService().CurrentValue(
-		ctx,
-		tableID,
-		col)
-}
-
-func getTableAutoIncrCol(
-	engineDefs []engine.TableDef,
-	tableName string) string {
-	for _, def := range engineDefs {
-		// FIXME: more than one auto cols??
-		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement {
-			return attr.Attr.Name
-		}
-	}
-	return ""
 }
