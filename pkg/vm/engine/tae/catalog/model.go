@@ -19,10 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var (
-	PhyAddrColumnType types.Type
-)
-
 const (
 	PhyAddrColumnName    = catalog.Row_ID
 	PhyAddrColumnComment = "Physical address"
@@ -68,7 +64,6 @@ func init() {
 	SystemBlock_Columns_ID = types.Blockid{103}
 
 	var err error
-	PhyAddrColumnType = types.T_Rowid.ToType()
 
 	SystemDBSchema = NewEmptySchema(catalog.MO_DATABASE)
 	for i, colname := range catalog.MoDatabaseSchema {
