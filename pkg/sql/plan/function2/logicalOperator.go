@@ -41,7 +41,7 @@ var xorFn = generalFunctionTemplateFactor[bool, bool](
 )
 
 func notFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return optimizedUnaryTemplateRecFixedReturnFixed[bool, bool](parameters, result, proc, length, func(v bool) bool {
+	return opUnaryFixedToFixed[bool, bool](parameters, result, proc, length, func(v bool) bool {
 		return !v
 	})
 }

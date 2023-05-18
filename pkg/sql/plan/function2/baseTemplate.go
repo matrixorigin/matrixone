@@ -1248,9 +1248,9 @@ func opBinaryStrStrToFixed[T2 bool](
 	return nil
 }
 
-// optimizedUnaryTemplateRecFixedReturnFixed for unary functions whose result of f(x) is null if x is null.
+// opUnaryFixedToFixed for unary functions whose result of f(x) is null if x is null.
 // and if x was not null, result will be not null.
-func optimizedUnaryTemplateRecFixedReturnFixed[
+func opUnaryFixedToFixed[
 	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128,
 	T2 constraints.Integer | constraints.Float | bool | types.Timestamp | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) T2) error {
@@ -1293,7 +1293,7 @@ func optimizedUnaryTemplateRecFixedReturnFixed[
 	return nil
 }
 
-func optimizedUnaryTemplateRecBytesReturnFixed[
+func opUnaryBytesToFixed[
 	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) T2) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1335,7 +1335,7 @@ func optimizedUnaryTemplateRecBytesReturnFixed[
 	return nil
 }
 
-func optimizedUnaryTemplateRecStringReturnFixed[
+func opUnaryStrToFixed[
 	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) T2) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1377,7 +1377,7 @@ func optimizedUnaryTemplateRecStringReturnFixed[
 	return nil
 }
 
-func optimizedUnaryTemplateRecBytesReturnBytes(
+func opUnaryBytesToBytes(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) []byte) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1430,7 +1430,7 @@ func optimizedUnaryTemplateRecBytesReturnBytes(
 	return nil
 }
 
-func optimizedUnaryTemplateRecBytesReturnString(
+func opUnaryBytesToStr(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) string) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1483,7 +1483,7 @@ func optimizedUnaryTemplateRecBytesReturnString(
 	return nil
 }
 
-func optimizedUnaryTemplateRecStringReturnString(
+func opUnaryStrToStr(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) string) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1536,7 +1536,7 @@ func optimizedUnaryTemplateRecStringReturnString(
 	return nil
 }
 
-func optimizedUnaryTemplateRecFixedReturnString[
+func opUnaryFixedToStr[
 	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) string) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
@@ -1592,7 +1592,7 @@ func optimizedUnaryTemplateRecFixedReturnString[
 	return nil
 }
 
-func optimizedUnaryTemplateRecFixedReturnStringWithErrorCheck[
+func opUnaryFixedToStrWithErrorCheck[
 	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (string, error)) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
@@ -1657,7 +1657,7 @@ func optimizedUnaryTemplateRecFixedReturnStringWithErrorCheck[
 	return nil
 }
 
-func optimizedUnaryTemplateRecStringReturnBytesWithErrorCheck(
+func opUnaryStrToBytesWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) ([]byte, error)) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1719,7 +1719,7 @@ func optimizedUnaryTemplateRecStringReturnBytesWithErrorCheck(
 	return nil
 }
 
-func optimizedUnaryTemplateRecBytesReturnStringWithErrorCheck(
+func opUnaryBytesToStrWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) (string, error)) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1783,7 +1783,7 @@ func optimizedUnaryTemplateRecBytesReturnStringWithErrorCheck(
 	return nil
 }
 
-func optimizedUnaryTemplateRecFixedReturnFixedWithErrorCheck[
+func opUnaryFixedToFixedWithErrorCheck[
 	T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128,
 	T2 constraints.Integer | constraints.Float | bool | types.Timestamp | types.Decimal64 | types.Decimal128](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (T2, error)) error {
@@ -1836,7 +1836,7 @@ func optimizedUnaryTemplateRecFixedReturnFixedWithErrorCheck[
 	return nil
 }
 
-func optimizedUnaryTemplateRecBytesReturnFixedWithErrorCheck[
+func opUnaryBytesToFixedWithErrorCheck[
 	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) (T2, error)) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1888,7 +1888,7 @@ func optimizedUnaryTemplateRecBytesReturnFixedWithErrorCheck[
 	return nil
 }
 
-func optimizedUnaryTemplateRecStringReturnFixedWithErrorCheck[
+func opUnaryStrToFixedWithErrorCheck[
 	T2 constraints.Integer | constraints.Float | bool](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) (T2, error)) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
@@ -1940,7 +1940,7 @@ func optimizedUnaryTemplateRecStringReturnFixedWithErrorCheck[
 	return nil
 }
 
-func optimizedNoParamTemplateReturnFixed[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128](
+func opNoneParamToFixed[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | bool | types.Decimal64 | types.Decimal128](
 	result vector.FunctionResultWrapper, proc *process.Process, length int, resultFn func() T) error {
 	rs := vector.MustFunctionResult[T](result)
 	rsVec := rs.GetResultVector()
@@ -1952,7 +1952,7 @@ func optimizedNoParamTemplateReturnFixed[T constraints.Integer | constraints.Flo
 	return nil
 }
 
-func optimizedNoParamTemplateReturnBytes(
+func opNoneParamToBytes(
 	result vector.FunctionResultWrapper, proc *process.Process, length int, resultFn func() []byte) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -1964,7 +1964,7 @@ func optimizedNoParamTemplateReturnBytes(
 	return nil
 }
 
-func optimizedNoParamTemplateReturnBytesWithErrorCheck(
+func opNoneParamToBytesWithErrorCheck(
 	result vector.FunctionResultWrapper, proc *process.Process, length int, resultFn func() ([]byte, error)) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
