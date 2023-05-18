@@ -27,6 +27,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -52,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -2546,6 +2548,24 @@ func (s *Scope) affectedRows() uint64 {
 		}
 	}
 	return affectedRows
+}
+
+func (c *Compile) runSql(sql string, fill func(any, *batch.Batch) error) error {
+	stmts, err := parsers.Parse(c.ctx, dialect.MYSQL, sql, 1)
+	if err != nil {
+		return err
+	}
+	pn, err := plan2.BuildPlan(c.proc.SessionInfo.SqlHelper.GetCompilerContext(), stmts[0])
+	if err != nil {
+		return err
+	}
+	newC := New(c.addr, c.db, sql, c.tenant, c.uid, c.ctx, c.e,
+		c.proc, stmts[0], c.isInternal, c.cnLabel)
+	if err := newC.Compile(c.ctx, pn, nil, nil); err != nil {
+		return err
+	}
+	return newC.Run(0)
+
 }
 
 // compile and run a plan - not a good way,  just for remove the hack code
