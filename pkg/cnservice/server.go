@@ -242,9 +242,10 @@ func (s *service) releaseMessage(m *pipeline.Message) {
 
 func (s *service) handleRequest(
 	ctx context.Context,
-	req morpc.Message,
+	value morpc.RPCMessage,
 	_ uint64,
 	cs morpc.ClientSession) error {
+	req := value.Message
 	msg, ok := req.(*pipeline.Message)
 	if !ok {
 		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", req)
@@ -260,16 +261,20 @@ func (s *service) handleRequest(
 			}
 		}
 	}
-	go s.requestHandler(ctx,
-		s.cfg.ServiceAddress,
-		req,
-		cs,
-		s.storeEngine,
-		s.fileService,
-		s.lockService,
-		s._txnClient,
-		s.aicm,
-		s.acquireMessage)
+
+	go func() {
+		defer value.Cancel()
+		s.requestHandler(ctx,
+			s.cfg.ServiceAddress,
+			req,
+			cs,
+			s.storeEngine,
+			s.fileService,
+			s.lockService,
+			s._txnClient,
+			s.aicm,
+			s.acquireMessage)
+	}()
 	return nil
 }
 

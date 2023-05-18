@@ -192,7 +192,8 @@ func TestRPCPlugin(t *testing.T) {
 				}),
 			)
 			require.NoError(t, err)
-			s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+			s.RegisterRequestHandler(func(ctx context.Context, msg morpc.RPCMessage, sequence uint64, cs morpc.ClientSession) error {
+				request := msg.Message
 				r, ok := request.(*plugin.Request)
 				require.True(t, ok)
 				return cs.Write(ctx, &plugin.Response{
