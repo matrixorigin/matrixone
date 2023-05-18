@@ -16,6 +16,7 @@ package defines
 
 import (
 	"math"
+	"sync"
 )
 
 // information from: https://dev.mysql.com/doc/internals/en/com-query-response.html
@@ -179,5 +180,28 @@ type TemporaryDN struct{}
 // Determine if now is a bg sql.
 type BgKey struct{}
 
+// Sp variable scope
+type VarScopeKey struct{}
+
+// Determine if it is a stored procedure
+type InSp struct{}
+
 // PkCheckByDN whether DN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByDN struct{}
+
+/*
+The autoIncrCacheManager is initialized with a starting CN.
+The autoIncrCacheManager instance of each CN is stored in type service in package cnservice.
+The logic to manipulate the cache is in auto_incr.go
+*/
+type AutoIncrCacheManager struct {
+	Mu             *sync.Mutex
+	AutoIncrCaches map[string]AutoIncrCache
+	MaxSize        uint64
+}
+
+type AutoIncrCache struct {
+	CurNum uint64
+	MaxNum uint64
+	Step   uint64
+}

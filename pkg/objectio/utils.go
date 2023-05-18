@@ -16,8 +16,18 @@ package objectio
 import (
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+var (
+	RowidType types.Type
+)
+
+func init() {
+	RowidType = types.T_Rowid.ToType()
+}
 
 type CreateSegOpt struct {
 	Id *types.Uuid
@@ -173,4 +183,31 @@ func (s *Seqnums) InitWithColCnt(colcnt int) {
 	}
 	s.MaxSeq = uint16(colcnt) - 1
 	s.MetaColCnt = uint16(colcnt)
+}
+
+func ConstructRowidColumn(
+	id *Blockid, start, length uint32, mp *mpool.MPool,
+) (vec *vector.Vector, err error) {
+	vec = vector.NewVec(RowidType)
+	if err = ConstructRowidColumnTo(vec, id, start, length, mp); err != nil {
+		vec = nil
+	}
+	return
+}
+
+func ConstructRowidColumnTo(
+	vec *vector.Vector,
+	id *Blockid, start, length uint32, mp *mpool.MPool,
+) (err error) {
+	vec.PreExtend(int(length), mp)
+	for i := uint32(0); i < length; i++ {
+		rid := NewRowid(id, start+i)
+		if err = vector.AppendFixed(vec, *rid, false, mp); err != nil {
+			break
+		}
+	}
+	if err != nil {
+		vec.Free(mp)
+	}
+	return
 }

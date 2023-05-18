@@ -153,6 +153,13 @@ func (bat *Batch) Allocated() int {
 	return allocated
 }
 
+func (bat *Batch) WindowDeletes(offset, length int) *roaring.Bitmap {
+	if bat.Deletes != nil && offset+length != bat.Length() {
+		return common.BM32Window(bat.Deletes, offset, offset+length)
+	}
+	return bat.Deletes
+}
+
 func (bat *Batch) Window(offset, length int) *Batch {
 	win := new(Batch)
 	win.Attrs = bat.Attrs

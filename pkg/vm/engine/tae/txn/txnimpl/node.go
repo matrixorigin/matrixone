@@ -98,6 +98,11 @@ func (n *node) FillColumnView(*model.ColumnView) error {
 	panic("not implemented yet ")
 }
 
+func (n *node) WindowColumn(start, end uint32, pos int) (containers.Vector, error) {
+	//TODO::
+	panic("not implemented yet ")
+}
+
 func (n *node) Window(start, end uint32) (*containers.Batch, error) {
 	//TODO::
 	panic("not implemented yet ")

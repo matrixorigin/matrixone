@@ -15,15 +15,17 @@
 package db
 
 import (
-	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -33,27 +35,15 @@ import (
 )
 
 type Replayer struct {
-	DataFactory  *tables.DataFactory
-	db           *DB
-	maxTs        types.TS
-	staleIndexes []*wal.Index
-	once         sync.Once
-	ckpedTS      types.TS
-}
-
-type replayAllocator struct {
-	replayBuf bytes.Buffer
-}
-
-func newReplayAllocator() *replayAllocator {
-	return &replayAllocator{
-		replayBuf: bytes.Buffer{},
-	}
-}
-
-func (a *replayAllocator) Alloc(n int) ([]byte, error) {
-	a.replayBuf.Grow(n)
-	return a.replayBuf.Bytes(), nil
+	DataFactory   *tables.DataFactory
+	db            *DB
+	maxTs         types.TS
+	staleIndexes  []*wal.Index
+	once          sync.Once
+	ckpedTS       types.TS
+	wg            sync.WaitGroup
+	applyDuration time.Duration
+	txnCmdChan    chan *txnbase.TxnCmd
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS) *Replayer {
@@ -62,6 +52,8 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS) *Rep
 		db:           db,
 		staleIndexes: make([]*wal.Index, 0),
 		ckpedTS:      ckpedTS,
+		wg:           sync.WaitGroup{},
+		txnCmdChan:   make(chan *txnbase.TxnCmd, 100),
 	}
 }
 
@@ -90,10 +82,17 @@ func (replayer *Replayer) PreReplayWal() {
 }
 
 func (replayer *Replayer) Replay() {
-	allocator := newReplayAllocator()
-	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry, allocator); err != nil {
+	replayer.wg.Add(1)
+	go replayer.applyTxnCmds()
+	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry); err != nil {
 		panic(err)
 	}
+	replayer.txnCmdChan <- txnbase.NewLastTxnCmd()
+	close(replayer.txnCmdChan)
+	replayer.wg.Wait()
+	logutil.Info("open-tae", common.OperationField("replay"),
+		common.OperandField("wal"),
+		common.AnyField("apply logentries cost", replayer.applyDuration))
 	if _, err := replayer.db.Wal.Checkpoint(replayer.staleIndexes); err != nil {
 		panic(err)
 	}
@@ -113,16 +112,26 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(payload[4:])
 	txnCmd := entry.(*txnbase.TxnCmd)
+	txnCmd.Idx = idxCtx
 	if err != nil {
 		panic(err)
 	}
-	defer txnCmd.Close()
-	replayer.OnReplayTxn(txnCmd, idxCtx, lsn)
-	if err != nil {
-		panic(err)
+	replayer.txnCmdChan <- txnCmd
+}
+func (replayer *Replayer) applyTxnCmds() {
+	defer replayer.wg.Done()
+	for {
+		txnCmd := <-replayer.txnCmdChan
+		if txnCmd.IsLastCmd() {
+			break
+		}
+		t0 := time.Now()
+		replayer.OnReplayTxn(txnCmd, txnCmd.Idx, txnCmd.Idx.LSN)
+		txnCmd.Close()
+		replayer.applyDuration += time.Since(t0)
+
 	}
 }
-
 func (replayer *Replayer) GetMaxTS() types.TS {
 	return replayer.maxTs
 }
