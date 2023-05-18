@@ -1,3 +1,5 @@
+drop account if exists bvt_result_count;
+create account bvt_result_count admin_name 'admin' identified by '111';
 begin;
 rollback;
 commit;
@@ -61,9 +63,6 @@ drop view v1;
 drop table t1;
 drop view v2;
 drop database db1;
-create account test_tenant_1 admin_name 'test_account' identified by '111';
-drop account test_tenant_1;
-create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 create role test_role;
 create user user_name identified by 'password';
 create database if not exists db1;
@@ -71,7 +70,6 @@ grant create table,drop table on database *.* to test_role;
 revoke test_role from user_name;
 drop user user_name;
 drop role test_role;
-drop account test_account;
 drop database db1;
 create database db2;
 use db2;
@@ -136,13 +134,14 @@ select * from unnest('{"a":1}') as f;
 col    seq    key    path    index    value    this
 UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 use system;
-create account test_tenant_1 admin_name 'test_account' identified by '111';
+/* cloud_user */create account test_tenant_1 admin_name 'test_account' identified by '111';
+/* cloud_user */drop account test_tenant_1;
 select sleep(16);
 sleep(16)
 0
-select statement, result_count from statement_info where user="dump" and statement not like '%mo_ctl%' order by request_at desc limit 76;
+use system;
+select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' order by request_at desc limit 70;
 statement    result_count
-create account test_tenant_1 admin_name 'test_account' identified by '******'    0
 use system    0
 select * from unnest('{"a":1}') as f    1
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    1
@@ -174,7 +173,6 @@ create table t2(a int, b varchar)    0
 use db2    0
 create database db2    0
 drop database db1    0
-drop account test_account    0
 drop role test_role    0
 drop user user_name    0
 revoke test_role from user_name    0
@@ -182,9 +180,6 @@ grant create table,drop table on database *.* to test_role    0
 create database if not exists db1    0
 create user user_name identified by '******'    0
 create role test_role    0
-create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    0
-drop account test_tenant_1    0
-create account test_tenant_1 admin_name 'test_account' identified by '******'    0
 drop database db1    0
 drop view v2    0
 drop table t1    0
@@ -197,8 +192,6 @@ show tables    3
 show databases like 'mysql'    1
 deallocate prepare s2    0
 deallocate prepare s2    0
-execute s2 using @a    0
-execute s1 using @a    2
 prepare s2 from "select * from t1 where a=?"    0
 prepare s1 from "select * from t1 where a>?"    0
 set @a=1    0
@@ -218,4 +211,9 @@ commit    0
 start transaction    0
 commit    0
 rollback    0
-drop account test_tenant_1;
+begin    0
+select statement, result_count from statement_info where user="dump" and sql_source_type="cloud_user_sql" order by request_at desc limit 2;
+statement    result_count
+drop account test_tenant_1    0
+create account test_tenant_1 admin_name 'test_account' identified by '******'    0
+drop account if exists bvt_result_count;
