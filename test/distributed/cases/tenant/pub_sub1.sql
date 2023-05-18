@@ -5,6 +5,7 @@ set global syspublications = "pubname1,pubname2";
 create account test_tenant_2 admin_name 'test_account' identified by '111';
 -- @session:id=1&user=test_tenant_2:test_account&password=111
 show subscriptions;
+show databases;
 -- @session
 set global syspublications = default;
 drop account test_tenant_2;
