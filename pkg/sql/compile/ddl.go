@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,9 +39,11 @@ import (
 )
 
 var (
-	insertIntoIndexTableWithPKeyFormat    = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
-	insertIntoIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
-	createIndexTableForamt                = "create table %s.`%s` (%s);"
+	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  %s.`%s` select (%s), %s from %s.%s where (%s) is not null;"
+	insertIntoIndexTableWithPKeyFormat          = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
+	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
+	insertIntoIndexTableWithoutPKeyFormat       = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
+	createIndexTableForamt                      = "create table %s.`%s` (%s);"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -641,22 +642,106 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
-
+	tableDef := plan2.DeepCopyTableDef(qry.TableDef)
+	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
 	// build and create index table
 	if qry.TableExist {
+		//def := qry.GetIndex().GetIndexTables()[0]
+		//planCols := def.GetCols()
+		//exeCols := planColsToExeCols(planCols)
+		//exeDefs, err := planDefsToExeDefs(def)
+		//if err != nil {
+		//	return err
+		//}
+		//if _, err = d.Relation(c.ctx, def.Name); err == nil {
+		//	return moerr.NewTableAlreadyExists(c.ctx, def.Name)
+		//}
+		//if err = d.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+		//	return err
+		//}
+
+		//----------------------------------------------------------------------------------------
+		var sql string
 		def := qry.GetIndex().GetIndexTables()[0]
 		planCols := def.GetCols()
-		exeCols := planColsToExeCols(planCols)
-		exeDefs, err := planDefsToExeDefs(def)
+		for i, planCol := range planCols {
+			if i == 1 {
+				sql += ","
+			}
+			sql += planCol.Name + " "
+			typeId := types.T(planCol.Typ.Id)
+			switch typeId {
+			case types.T_char:
+				sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
+			case types.T_varchar:
+				sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
+			case types.T_binary:
+				sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
+			case types.T_varbinary:
+				sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
+			case types.T_decimal64:
+				sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+			case types.T_decimal128:
+				sql += fmt.Sprintf("DECIAML(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
+			default:
+				sql += typeId.String()
+			}
+			if i == 0 {
+				sql += " primary key"
+			}
+		}
+
+		createSQL := fmt.Sprintf(createIndexTableForamt, qry.Database, indexDef.IndexTableName, sql)
+		err = c.runSql(createSQL, nil)
 		if err != nil {
 			return err
 		}
-		if _, err := d.Relation(c.ctx, def.Name); err == nil {
-			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
+
+		// insert data into index table
+		var insertSQL string
+		var temp string
+		for i, part := range indexDef.Parts {
+			if i == 0 {
+				temp += part
+			} else {
+				temp += "," + part
+			}
 		}
-		if err := d.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+
+		if tableDef.Pkey == nil || len(tableDef.Pkey.PkeyColName) == 0 {
+			//insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, qry.Database, indexDef.IndexTableName, temp, qry.Database, qry.Table, temp)
+			if len(indexDef.Parts) == 1 {
+				insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, qry.Database, indexDef.IndexTableName, temp, qry.Database, qry.Table, temp)
+			} else {
+				insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, qry.Database, indexDef.IndexTableName, temp, qry.Database, qry.Table, temp)
+			}
+		} else {
+			pkeyName := tableDef.Pkey.PkeyColName
+			var pKeyMsg string
+			if pkeyName == catalog.CPrimaryKeyColName {
+				pKeyMsg = "serial("
+				for i, part := range tableDef.Pkey.Names {
+					if i == 0 {
+						pKeyMsg += part
+					} else {
+						pKeyMsg += "," + part
+					}
+				}
+				pKeyMsg += ")"
+			} else {
+				pKeyMsg = pkeyName
+			}
+			if len(indexDef.Parts) == 1 {
+				insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, qry.Database, indexDef.IndexTableName, temp, pKeyMsg, qry.Database, qry.Table, temp)
+			} else {
+				insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, qry.Database, indexDef.IndexTableName, temp, pKeyMsg, qry.Database, qry.Table, temp)
+			}
+		}
+		err = c.runSql(insertSQL, nil)
+		if err != nil {
 			return err
 		}
+		//----------------------------------------------------------------------------------------
 
 	}
 	// build and update constraint def
@@ -686,43 +771,43 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 
-	// TODO: implement by insert ... select ...
-	// insert data into index table
-	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
-	if indexDef.Unique {
-		targetAttrs := getIndexColsFromOriginTable(tblDefs, indexDef.Parts)
-		ret, err := r.Ranges(c.ctx, nil)
-		if err != nil {
-			return err
-		}
-		rds, err := r.NewReader(c.ctx, 1, nil, ret)
-		if err != nil {
-			return err
-		}
-		bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp(), nil)
-		if err != nil {
-			return err
-		}
-		err = rds[0].Close()
-		if err != nil {
-			return err
-		}
-
-		if bat != nil {
-			indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, indexDef.Parts, qry.OriginTablePrimaryKey, c.proc)
-			indexR, err := d.Relation(c.ctx, indexDef.IndexTableName)
-			if err != nil {
-				return err
-			}
-			if cnt != 0 {
-				if err := indexR.Write(c.ctx, indexBat); err != nil {
-					return err
-				}
-			}
-			indexBat.Clean(c.proc.Mp())
-		}
-		// other situation is not supported now and check in plan
-	}
+	//// TODO: implement by insert ... select ...
+	//// insert data into index table
+	//indexDef := qry.GetIndex().GetTableDef().Indexes[0]
+	//if indexDef.Unique {
+	//	targetAttrs := getIndexColsFromOriginTable(tblDefs, indexDef.Parts)
+	//	ret, err := r.Ranges(c.ctx, nil)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	rds, err := r.NewReader(c.ctx, 1, nil, ret)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp(), nil)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	err = rds[0].Close()
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	if bat != nil {
+	//		indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, indexDef.Parts, qry.OriginTablePrimaryKey, c.proc)
+	//		indexR, err := d.Relation(c.ctx, indexDef.IndexTableName)
+	//		if err != nil {
+	//			return err
+	//		}
+	//		if cnt != 0 {
+	//			if err := indexR.Write(c.ctx, indexBat); err != nil {
+	//				return err
+	//			}
+	//		}
+	//		indexBat.Clean(c.proc.Mp())
+	//	}
+	//	// other situation is not supported now and check in plan
+	//}
 
 	err = colexec.InsertOneIndexMetadata(c.e, c.ctx, d, c.proc, qry.Table, indexDef)
 	if err != nil {

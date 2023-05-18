@@ -1512,21 +1512,22 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 	createIndex.OriginTablePrimaryKey = oriPriKeyName
 
-	index := &plan.CreateTable{TableDef: &TableDef{}}
+	indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
 	if uIdx != nil {
-		if err := buildUniqueIndexTable(index, []*tree.UniqueIndex{uIdx}, colMap, oriPriKeyName, ctx); err != nil {
+		if err := buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{uIdx}, colMap, oriPriKeyName, ctx); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = true
 	}
 	if sIdx != nil {
-		if err := buildSecondaryIndexDef(index, []*tree.Index{sIdx}, colMap, ctx); err != nil {
+		if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, ctx); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = false
 	}
-	createIndex.Index = index
+	createIndex.Index = indexInfo
 	createIndex.Table = tableName
+	createIndex.TableDef = tableDef
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{

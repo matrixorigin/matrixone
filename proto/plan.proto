@@ -1009,13 +1009,13 @@ message DropSequence {
 message AlterSequence {
 }
 
-
 message CreateIndex {
 	string database = 1;
 	string table = 2;
-	string	origin_table_primary_key = 3;
-	CreateTable index = 4;
-	bool table_exist = 5;
+	TableDef table_def 		= 3;
+	string	origin_table_primary_key = 4;
+	CreateTable index = 5;
+	bool table_exist = 6;
 }
 
 message AlterIndex {
