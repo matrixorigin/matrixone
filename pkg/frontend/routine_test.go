@@ -152,6 +152,7 @@ func Test_ConnectionCount(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
+	pu.SV.SkipCheckUser = true
 
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)
@@ -188,7 +189,6 @@ func Test_ConnectionCount(t *testing.T) {
 	// A mock autoincrcache manager.
 	aicm := &defines.AutoIncrCacheManager{}
 	rm, _ := NewRoutineManager(ctx, pu, aicm)
-	rm.SetSkipCheckUser(true)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
