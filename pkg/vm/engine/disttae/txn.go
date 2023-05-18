@@ -366,11 +366,8 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 				}
 			}
 			if len(sels) != len(vs) {
-				e.bat.Shrink(sels)
-				rowIds := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
-				for i := range rowIds {
-					(&rowIds[i]).SetRowOffset(uint32(i))
-				}
+				txn.batchSelectList[e.bat] = append(txn.batchSelectList[e.bat], sels...)
+
 			}
 		}
 	}
@@ -409,6 +406,17 @@ func (txn *Transaction) genRowId() types.Rowid {
 		txn.rowId[5] = 0
 	}
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
+}
+
+func (txn *Transaction) mergeTxnWorkspace() {
+	txn.Lock()
+	defer txn.Unlock()
+	for _, e := range txn.writes {
+		if sels, ok := txn.batchSelectList[e.bat]; ok {
+			e.bat.Shrink(sels)
+			delete(txn.batchSelectList, e.bat)
+		}
+	}
 }
 
 func evalFilterExprWithZonemap(
