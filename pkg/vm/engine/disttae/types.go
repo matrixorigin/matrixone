@@ -146,6 +146,8 @@ type Transaction struct {
 	cnBlkId_Pos                     map[types.Blockid]Pos
 	blockId_raw_batch               map[types.Blockid]*batch.Batch
 	blockId_dn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
+
+	batchSelectList map[*batch.Batch][]int64
 }
 
 type Pos struct {

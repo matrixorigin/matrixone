@@ -370,6 +370,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		cnBlkId_Pos:                     map[types.Blockid]Pos{},
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
+		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
 	txn.readOnly.Store(true)
 	// TxnWorkSpace SegmentName
@@ -429,6 +430,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if txn.readOnly.Load() {
 		return nil
 	}
+	txn.mergeTxnWorkspace()
 	err := txn.DumpBatch(true, 0)
 	if err != nil {
 		return err
