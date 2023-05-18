@@ -54,7 +54,7 @@ func TestMoTableRowsAndTableSize(t *testing.T) {
 	table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-	table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(false).AnyTimes()
 
 	attrs := []*engine.Attribute{
 		{Name: "a", Type: types.T_int32.ToType()},

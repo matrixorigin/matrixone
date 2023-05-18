@@ -16,6 +16,7 @@ package tables
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -47,6 +48,7 @@ type NodeT interface {
 		keys containers.Vector,
 		skipFn func(row uint32) error,
 		zm []byte,
+		bf objectio.BloomFilter,
 	) (sels *roaring.Bitmap, err error)
 	ContainsKey(key any) (ok bool, err error)
 

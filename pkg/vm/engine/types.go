@@ -84,7 +84,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
-	Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error)
+	Stats(ctx context.Context, statsInfoMap any) bool
 	Rows(ctx context.Context) (int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
 }

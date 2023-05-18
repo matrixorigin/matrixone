@@ -307,7 +307,7 @@ func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 			assert.NoError(t, st.Close(false))
 		}()
 
-		st.sequence = 2
+		st.mu.sequence = 2
 		req := newTestMessage(st.ID())
 		assert.NoError(t, st.Send(ctx, req))
 

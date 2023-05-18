@@ -42,10 +42,6 @@ type Desc interface {
 	GetMetaBuf() []byte
 }
 
-type Allocator interface {
-	Alloc(int) ([]byte, error)
-}
-
 type Entry interface {
 	Desc
 	GetPayload() []byte
@@ -57,10 +53,11 @@ type Entry interface {
 	SetPayload([]byte) error
 	UnmarshalFromNode([]byte, bool) error
 
-	Unmarshal(buf []byte, allocator Allocator) error
+	Unmarshal(buf []byte) error
 	Marshal() (buf []byte, err error)
-	ReadFromWithAllocator(r io.Reader, allocator Allocator) (int64, error)
-	ReadAt(r *os.File, offset int, allocator Allocator) (int, error)
+	ReadFrom(io.Reader) (int64, error)
+	UnmarshalBinary(buf []byte) (n int64, err error)
+	ReadAt(r *os.File, offset int) (int, error)
 	WriteTo(io.Writer) (int64, error)
 	PrepareWrite()
 
