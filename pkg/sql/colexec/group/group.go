@@ -223,7 +223,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		return true, nil
 	}
 	if bat.Length() == 0 {
-		bat.Clean(proc.Mp())
+		bat.Clean(proc.GetMPool())
+		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
 	defer proc.PutBatch(bat)

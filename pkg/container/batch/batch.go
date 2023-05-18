@@ -178,9 +178,6 @@ func (bat *Batch) Size() int {
 	var size int
 
 	for _, vec := range bat.Vecs {
-		if vec == nil {
-			fmt.Print("ddd")
-		}
 		size += vec.Size()
 	}
 	return size
@@ -231,8 +228,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 		return
 	}
 	if atomic.LoadInt64(&bat.Cnt) == 0 {
-		// panic("batch is already cleaned")
-		return
+		panic("batch is already cleaned")
 	}
 	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
 		return

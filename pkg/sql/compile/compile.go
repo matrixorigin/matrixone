@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -251,7 +250,7 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) error {
 	var wg sync.WaitGroup
 	errC := make(chan error, len(c.scope))
-	// fmt.Printf("run sql %+v", DebugShowScopes(c.scope))
+	fmt.Printf("run sql %+v", DebugShowScopes(c.scope))
 	// reset early for multi steps
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
@@ -2100,7 +2099,8 @@ func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
 
 // Number of cpu's available on the current machine
 func (c *Compile) NumCPU() int {
-	return runtime.NumCPU()
+	return 1
+	// return runtime.NumCPU()
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {

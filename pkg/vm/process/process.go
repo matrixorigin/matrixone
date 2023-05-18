@@ -222,8 +222,8 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	}
 	if bat.Zs != nil {
 		proc.GetMPool().PutSels(bat.Zs)
-		bat.Zs = nil
 	}
+	bat.Zs = nil
 	bat.Vecs = nil
 	bat.Attrs = nil
 }
