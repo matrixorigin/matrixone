@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"math"
 	"strings"
 	"time"
 
@@ -290,6 +289,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	return nil
 }
 
+/* XXX This will cause Halloween problems, so skip it for now
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
 	mp := make(map[types.Rowid]uint8)
@@ -385,6 +385,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	txn.proc.Mp().PutSels(sels)
 	return bat
 }
+*/
 
 func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)

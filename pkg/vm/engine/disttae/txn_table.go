@@ -826,10 +826,6 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
 		return err
 	}
-	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
-	if bat.Length() == 0 {
-		return nil
-	}
 	return tbl.writeDnPartition(ctx, bat)
 }
 
