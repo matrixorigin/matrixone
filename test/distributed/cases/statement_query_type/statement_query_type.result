@@ -24,7 +24,7 @@ test_view    create view test_view as select * from test_table;
 show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show procedure status;
-1
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
 show config;
 1
 show events;
@@ -128,7 +128,7 @@ test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARC
 show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show procedure status;
-1
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
 show config;
 1
 show events;
@@ -344,7 +344,7 @@ test_view    /* cloud_user */ create view test_view as select * from test_table;
 /* cloud_user */ show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 /* cloud_user */ show procedure status;
-1
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
 /* cloud_user */ show config;
 1
 /* cloud_user */ show events;
@@ -527,7 +527,7 @@ test_view    /* cloud_nonuser */ create view test_view as select * from test_tab
 /* cloud_nonuser */ show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 /* cloud_nonuser */ show procedure status;
-1
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
 /* cloud_nonuser */ show config;
 1
 /* cloud_nonuser */ show events;
