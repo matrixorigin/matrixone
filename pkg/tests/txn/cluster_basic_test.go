@@ -248,6 +248,8 @@ func TestAggTable(t *testing.T) {
 			}
 			err = rows.Scan(&l.a, &l.b)
 			require.NoError(t, err)
+			err = rows.Err()
+			require.NoError(t, err)
 			if tblList[i] == "t1" {
 				require.Equal(t, 32768.5, l.b)
 			} else {

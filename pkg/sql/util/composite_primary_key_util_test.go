@@ -15,6 +15,7 @@
 package util
 
 import (
+	crand "crypto/rand"
 	"math"
 	"math/rand"
 	"reflect"
@@ -475,6 +476,6 @@ func randDecimal128() types.Decimal128 {
 
 func randStringType() []byte {
 	b := make([]byte, 1024)
-	rand.Read(b)
+	crand.Read(b)
 	return b
 }
