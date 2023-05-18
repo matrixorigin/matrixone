@@ -45,7 +45,3 @@ type = "distributed-tae"
 [cn.frontend]
 port = 16001
 proxy-enabled = true
-
-[cn.rpc]
-send-queue-size = 2
-busy-queue-size = 1

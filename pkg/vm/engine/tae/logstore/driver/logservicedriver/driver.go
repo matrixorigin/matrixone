@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
@@ -113,10 +112,10 @@ func (d *LogServiceDriver) Close() error {
 	return nil
 }
 
-func (d *LogServiceDriver) Replay(h driver.ApplyHandle, allocator logstoreEntry.Allocator) error {
+func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
 	d.PreReplay()
 	r := newReplayer(h, ReplayReadSize, d)
-	r.replay(allocator)
+	r.replay()
 	d.onReplay(r)
 	r.d.resetReadCache()
 	d.PostReplay()

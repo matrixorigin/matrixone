@@ -104,6 +104,6 @@ create account test_tenant_1 admin_name 'test_account' identified by '111';
 select sleep(16);
 -- @session
 
-select statement, result_count from statement_info where user="dump" order by request_at desc limit 76;
+select statement, result_count from statement_info where user="dump" and statement not like '%mo_ctl%' order by request_at desc limit 76;
 drop account test_tenant_1;
 

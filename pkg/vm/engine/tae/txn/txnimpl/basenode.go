@@ -21,6 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -47,6 +48,7 @@ type InsertNode interface {
 	FillBlockView(view *model.BlockView, colIdxes []int) (err error)
 	FillColumnView(*model.ColumnView) error
 	Window(start, end uint32) (*containers.Batch, error)
+	WindowColumn(start, end uint32, pos int) (containers.Vector, error)
 	GetSpace() uint32
 	Rows() uint32
 	GetValue(col int, row uint32) (any, bool, error)
@@ -166,13 +168,14 @@ func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 }
 
 func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	col, err := model.PreparePhyAddrData(catalog.PhyAddrColumnType, n.bnode.meta.MakeKey(), startRow, length)
-	if err != nil {
+	var col *vector.Vector
+	if col, err = objectio.ConstructRowidColumn(
+		&n.bnode.meta.ID, startRow, length, common.DefaultAllocator,
+	); err != nil {
 		return
 	}
-	defer col.Close()
-	vec := n.data.Vecs[n.bnode.table.GetLocalSchema().PhyAddrKey.Idx]
-	vec.Extend(col)
+	err = n.data.Vecs[n.bnode.table.GetLocalSchema().PhyAddrKey.Idx].ExtendVec(col)
+	col.Free(common.DefaultAllocator)
 	return
 }
 

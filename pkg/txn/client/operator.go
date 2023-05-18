@@ -31,11 +31,6 @@ import (
 )
 
 var (
-	_ EventableTxnOperator = (*txnOperator)(nil)
-	_ DebugableTxnOperator = (*txnOperator)(nil)
-)
-
-var (
 	readTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERead:      {},
 		moerr.ErrRpcError:     {},
@@ -89,6 +84,12 @@ func WithTxnCNCoordinator() TxnOption {
 	}
 }
 
+func WithTxnClose(client *txnClient) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.closeFunc = client.popTransaction
+	}
+}
+
 // WithTxnLockService set txn lock service
 func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	return func(tc *txnOperator) {
@@ -133,16 +134,26 @@ func WithTxnIsolation(value txn.TxnIsolation) TxnOption {
 	}
 }
 
+// WithUpdateLastCommitTSFunc we maintain a CN-based last commit timestamp to ensure that a
+// session with that CN can see previous writes.
+func WithUpdateLastCommitTSFunc(value func(timestamp.Timestamp)) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.updateLastCommitTSFunc = value
+	}
+}
+
 type txnOperator struct {
 	sender rpc.TxnSender
 	txnID  []byte
 
 	option struct {
-		readyOnly        bool
-		enableCacheWrite bool
-		disable1PCOpt    bool
-		coordinator      bool
-		lockService      lockservice.LockService
+		readyOnly              bool
+		enableCacheWrite       bool
+		disable1PCOpt          bool
+		coordinator            bool
+		lockService            lockservice.LockService
+		closeFunc              func(txn.TxnMeta)
+		updateLastCommitTSFunc func(timestamp.Timestamp)
 	}
 
 	mu struct {
@@ -151,7 +162,6 @@ type txnOperator struct {
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
-		callbacks    map[EventType][]func(txn.TxnMeta)
 	}
 	workspace Workspace
 }
@@ -326,9 +336,9 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 	util.LogTxnCommit(tc.getTxnMeta(false))
 
 	if tc.option.readyOnly {
-		tc.mu.Lock()
-		defer tc.mu.Unlock()
-		tc.closeLocked()
+		if tc.option.closeFunc != nil {
+			tc.option.closeFunc(tc.mu.txn)
+		}
 		return nil
 	}
 
@@ -347,8 +357,10 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 
 	tc.mu.Lock()
 	defer func() {
-		tc.mu.txn.Status = txn.TxnStatus_Aborted
-		tc.closeLocked()
+		tc.mu.closed = true
+		if tc.option.closeFunc != nil {
+			tc.option.closeFunc(tc.mu.txn)
+		}
 		tc.mu.Unlock()
 	}()
 
@@ -428,7 +440,13 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	if commit {
 		tc.mu.Lock()
 		defer func() {
-			tc.closeLocked()
+			tc.mu.closed = true
+			if tc.option.closeFunc != nil {
+				tc.option.closeFunc(tc.mu.txn)
+			}
+			if tc.option.updateLastCommitTSFunc != nil {
+				tc.option.updateLastCommitTSFunc(tc.mu.txn.CommitTS)
+			}
 			tc.mu.Unlock()
 		}()
 		if tc.needUnlockLocked() {
@@ -450,7 +468,6 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 
 	if commit {
 		if len(tc.mu.txn.DNShards) == 0 { // commit no write handled txn
-			tc.mu.txn.Status = txn.TxnStatus_Committed
 			return nil, nil
 		}
 		requests = tc.maybeInsertCachedWrites(ctx, requests, true)
@@ -607,7 +624,6 @@ func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, lo
 		defer tc.mu.Unlock()
 	}
 	tc.mu.txn.CommitTS = resp.Txn.CommitTS
-	tc.mu.txn.Status = resp.Txn.Status
 	return result, nil
 }
 
@@ -769,9 +785,4 @@ func (tc *txnOperator) needUnlockLocked() bool {
 		return false
 	}
 	return tc.option.lockService != nil
-}
-
-func (tc *txnOperator) closeLocked() {
-	tc.mu.closed = true
-	tc.triggerEventLocked(ClosedEvent)
 }

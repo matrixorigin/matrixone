@@ -32,14 +32,12 @@ func TestTransferPage(t *testing.T) {
 	dest := common.ID{
 		BlockID: *objectio.NewBlockid(sid, 2, 0),
 	}
-	prefix := dest.BlockID[:]
 
 	memo1 := NewTransferHashPage(&src, time.Now())
 	assert.Zero(t, memo1.RefCount())
 
 	for i := 0; i < 10; i++ {
-		rowID := EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
-		memo1.Train(uint32(i), rowID)
+		memo1.Train(uint32(i), *objectio.NewRowid(&dest.BlockID, uint32(i)))
 	}
 
 	pinned := memo1.Pin()
@@ -54,8 +52,7 @@ func TestTransferPage(t *testing.T) {
 	assert.Zero(t, memo2.RefCount())
 
 	for i := 0; i < 10; i++ {
-		rowID := EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
-		memo2.Train(uint32(i), rowID)
+		memo2.Train(uint32(i), *objectio.NewRowid(&dest.BlockID, uint32(i)))
 	}
 
 	assert.False(t, memo2.TTL(now.Add(ttl-time.Duration(1)), ttl))
@@ -64,7 +61,7 @@ func TestTransferPage(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		rowID, ok := memo2.Transfer(uint32(i))
 		assert.True(t, ok)
-		blockId, offset := DecodePhyAddrKey(&rowID)
+		blockId, offset := rowID.Decode()
 		assert.Equal(t, dest.BlockID, blockId)
 		assert.Equal(t, uint32(i), offset)
 	}
@@ -79,12 +76,10 @@ func TestTransferTable(t *testing.T) {
 	id1 := common.ID{BlockID: *objectio.NewBlockid(sid, 1, 0)}
 	id2 := common.ID{BlockID: *objectio.NewBlockid(sid, 2, 0)}
 
-	prefix := id2.BlockID[:]
-
 	now := time.Now()
 	page1 := NewTransferHashPage(&id1, now)
 	for i := 0; i < 10; i++ {
-		rowID := EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
+		rowID := *objectio.NewRowid(&id2.BlockID, uint32(i))
 		page1.Train(uint32(i), rowID)
 	}
 
