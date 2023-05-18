@@ -17,13 +17,13 @@ package tables
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
@@ -183,17 +183,17 @@ func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 }
 
 func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	col, err := model.PreparePhyAddrData(
-		catalog.PhyAddrColumnType,
-		node.prefix,
+	var col *vector.Vector
+	if col, err = objectio.ConstructRowidColumn(
+		&node.block.meta.ID,
 		startRow,
-		length)
-	if err != nil {
+		length,
+		common.DefaultAllocator,
+	); err != nil {
 		return
 	}
-	defer col.Close()
-	vec := node.data.Vecs[node.writeSchema.PhyAddrKey.Idx]
-	vec.Extend(col)
+	err = node.data.Vecs[node.writeSchema.PhyAddrKey.Idx].ExtendVec(col)
+	col.Free(common.DefaultAllocator)
 	return
 }
 

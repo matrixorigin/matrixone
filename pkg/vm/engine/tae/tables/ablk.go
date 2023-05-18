@@ -341,7 +341,8 @@ func (blk *ablock) GetByFilter(
 		panic("logic error")
 	}
 	if blk.meta.GetSchema().SortKey == nil {
-		_, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		rid := filter.Val.(types.Rowid)
+		offset = rid.GetRowOffset()
 		return
 	}
 

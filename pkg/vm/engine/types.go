@@ -515,7 +515,7 @@ func (def *IndexDef) ToPBVersion() ConstraintPB {
 type Relation interface {
 	Statistics
 
-	Ranges(context.Context, *plan.Expr) ([][]byte, error)
+	Ranges(context.Context, ...*plan.Expr) ([][]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 

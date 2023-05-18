@@ -19,6 +19,7 @@ import (
 	"io"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
@@ -102,23 +103,55 @@ type SegmentNode struct {
 }
 
 const (
-	SegmentNodeSize int64 = int64(unsafe.Sizeof(SegmentNode{}))
-	BlockNodeSize   int64 = int64(unsafe.Sizeof(BlockNode{}))
+	BlockNodeSize int64 = int64(unsafe.Sizeof(BlockNode{}))
 )
 
-func EncodeSegmentNode(node *SegmentNode) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(node)), SegmentNodeSize)
-}
-
+// not marshal nextObjectIdx
 func (node *SegmentNode) ReadFrom(r io.Reader) (n int64, err error) {
-	_, err = r.Read(EncodeSegmentNode(node))
-	n = SegmentNodeSize
+	_, err = r.Read(types.EncodeInt8((*int8)(&node.state)))
+	if err != nil {
+		return
+	}
+	n += 1
+	_, err = r.Read(types.EncodeBool(&node.IsLocal))
+	if err != nil {
+		return
+	}
+	n += 1
+	_, err = r.Read(types.EncodeUint64(&node.SortHint))
+	if err != nil {
+		return
+	}
+	n += 8
+	_, err = r.Read(types.EncodeBool(&node.sorted))
+	if err != nil {
+		return
+	}
+	n += 1
 	return
 }
 
 func (node *SegmentNode) WriteTo(w io.Writer) (n int64, err error) {
-	_, err = w.Write(EncodeSegmentNode(node))
-	n = SegmentNodeSize
+	_, err = w.Write(types.EncodeInt8((*int8)(&node.state)))
+	if err != nil {
+		return
+	}
+	n += 1
+	_, err = w.Write(types.EncodeBool(&node.IsLocal))
+	if err != nil {
+		return
+	}
+	n += 1
+	_, err = w.Write(types.EncodeUint64(&node.SortHint))
+	if err != nil {
+		return
+	}
+	n += 8
+	_, err = w.Write(types.EncodeBool(&node.sorted))
+	if err != nil {
+		return
+	}
+	n += 1
 	return
 }
 func (node *SegmentNode) String() string {

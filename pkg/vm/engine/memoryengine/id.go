@@ -17,10 +17,8 @@ package memoryengine
 import (
 	"bytes"
 	"context"
-	crand "crypto/rand"
 	"encoding/binary"
 	"math/bits"
-	"math/rand"
 	"sync/atomic"
 	"time"
 
@@ -62,12 +60,6 @@ type IDGenerator interface {
 type randomIDGenerator struct{}
 
 var _ IDGenerator = new(randomIDGenerator)
-
-func init() {
-	var seed int64
-	binary.Read(crand.Reader, binary.LittleEndian, &seed)
-	rand.Seed(seed)
-}
 
 var idCounter int64
 

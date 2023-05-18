@@ -2159,9 +2159,7 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 	if ses.pu.SV.SkipCheckPrivilege {
 		return nil
 	}
-	if ses.skipCheckPrivilege() {
-		return nil
-	}
+
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
@@ -2197,9 +2195,7 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 	if ses.pu.SV.SkipCheckPrivilege {
 		return nil
 	}
-	if ses.skipCheckPrivilege() {
-		return nil
-	}
+
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
