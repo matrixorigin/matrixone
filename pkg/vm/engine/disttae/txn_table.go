@@ -235,6 +235,9 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Different row may belong to the same batch so we have
+	// to record the batch which we have already handled
+	handled := make(map[*batch.Batch]struct{})
 	for _, part := range parts {
 		iter := part.NewRowsIter(ts, nil, false)
 		for iter.Next() {
@@ -242,7 +245,11 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			if _, ok := deletes[entry.RowID]; ok {
 				continue
 			}
+			if _, ok := handled[entry.Batch]; ok {
+				continue
+			}
 			originSize += int64(entry.Batch.Size())
+			handled[entry.Batch] = struct{}{}
 		}
 		iter.Close()
 	}
@@ -251,7 +258,6 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	//fmt.Printf("[tablesize] tmp size = %d, block size = %d, sum = %d\n", originSize, size, originSize+size)
 	originSize += size
 	return originSize, nil
 }
@@ -274,12 +280,10 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 				location := tbl.blockInfos[i][j].MetaLocation()
 				if !objectio.IsSameObjectLocVsMeta(location, meta) {
 					if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
-						//fmt.Printf("[tablesize] err = %s\n", err)
 						return 0, 0, err
 					}
 				}
 				for k := range cols {
-					//fmt.Printf("[tablesize] accumulate col %s 's size\n", cols[k].Name)
 					extend := meta.MustGetColumn(uint16(cols[k].Seqnum)).Location()
 					compressSize += int64(extend.Length())
 					originSize += int64(extend.OriginSize())
@@ -287,11 +291,22 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 			}
 		}
 	} else {
-		var col *plan.ColDef
 		found := false
-		for i := range cols {
+		for i, col := range cols {
 			if cols[i].Name == name {
-				col = cols[i]
+				for i := range tbl.blockInfos {
+					for j := range tbl.blockInfos[i] {
+						location := tbl.blockInfos[i][j].MetaLocation()
+						if !objectio.IsSameObjectLocVsMeta(location, meta) {
+							if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+								return 0, 0, err
+							}
+						}
+						extend := meta.MustGetColumn(uint16(col.Seqnum)).Location()
+						compressSize += int64(extend.Length())
+						originSize += int64(extend.OriginSize())
+					}
+				}
 				found = true
 				break
 			}
@@ -299,23 +314,8 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 		if !found {
 			return 0, 0, moerr.NewInternalError(ctx, "bad input col name %v", name)
 		}
-
-		for i := range tbl.blockInfos {
-			for j := range tbl.blockInfos[i] {
-				location := tbl.blockInfos[i][j].MetaLocation()
-				if !objectio.IsSameObjectLocVsMeta(location, meta) {
-					if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
-						return 0, 0, err
-					}
-				}
-				extend := meta.MustGetColumn(uint16(col.Seqnum)).Location()
-				compressSize += int64(extend.Length())
-				originSize += int64(extend.OriginSize())
-			}
-		}
 	}
 
-	//fmt.Printf("[tablesize] compress size = %d, origin size = %d\n", compressSize, originSize)
 	return compressSize, originSize, nil
 }
 
