@@ -721,16 +721,6 @@ func (tbl *txnTable) TableColumns(ctx context.Context) ([]*engine.Attribute, err
 	return attrs, nil
 }
 
-func (tbl *txnTable) GetColumnByName(ctx context.Context, colname string) ([]*engine.Attribute, error) {
-	var attrs []*engine.Attribute
-	for i := range tbl.defs {
-		if attr, ok := tbl.defs[i].(*engine.AttributeDef); ok {
-			attrs = append(attrs, &attr.Attr)
-		}
-	}
-	return attrs, nil
-}
-
 func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	attrs := make([]*engine.Attribute, 0, 1)
 	for _, def := range tbl.defs {
