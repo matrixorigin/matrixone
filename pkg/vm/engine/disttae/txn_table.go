@@ -44,9 +44,7 @@ import (
 var _ engine.Relation = new(txnTable)
 
 const (
-	AllColumns       = "*"
-	FakePrimeColumns = "__mo_fake_pk_col"
-	RowIdColumns     = "__mo_rowid"
+	AllColumns = "*"
 )
 
 func (tbl *txnTable) Stats(ctx context.Context, statsInfoMap any) bool {
@@ -206,8 +204,9 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	return tableVal, tableTypes, nil
 }
 
+// The Size() does not include the hidden column size
 func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
-	// get the size of no hidden column
+	// Get all neede column exclude the hidden size
 	neededColumnName := make(map[string]struct{})
 	attr, _ := tbl.TableColumns(ctx)
 	found := false
@@ -298,7 +297,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		iter.Close()
 	}
 
-	_, size, err := tbl.GetCompressAndOriginSize(ctx, name)
+	_, size, err := tbl.GetSizeFromBlocksMeta(ctx, name)
 	if err != nil {
 		return 0, err
 	}
@@ -306,7 +305,8 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	return originSize, nil
 }
 
-func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) (int64, int64, error) {
+// The GetSizeFromBlocksMeta() does not include the hidden column size
+func (tbl *txnTable) GetSizeFromBlocksMeta(ctx context.Context, name string) (int64, int64, error) {
 	if len(tbl.blockInfos) == 0 {
 		return 0, 0, moerr.NewInvalidInputNoCtx("table meta is nil")
 	}
@@ -317,6 +317,8 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 		compressSize int64
 		originSize   int64
 	)
+
+	// remote the hidden key from the travesal list
 	attr, _ := tbl.TableColumns(ctx)
 	for i := 0; i < len(attr); {
 		if attr[i].IsHidden {
@@ -326,16 +328,7 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 		i++
 	}
 
-	colstr := ""
-	for i := range attr {
-		if i != 0 {
-			colstr += " ,"
-		}
-		colstr += fmt.Sprintf("%s", attr[i].Name)
-	}
-	fmt.Printf("[GetCompressAndOriginSize] cols = [%s]\n", colstr)
-
-	if name == AllColumns { // get all columns size
+	if name == AllColumns {
 		for i := range tbl.blockInfos {
 			for j := range tbl.blockInfos[i] {
 				location := tbl.blockInfos[i][j].MetaLocation()
@@ -345,7 +338,6 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 					}
 				}
 				for k := range attr {
-					fmt.Printf("[tablesize] get col %s 's size\n", attr[k].Name)
 					extend := meta.MustGetColumn(uint16(attr[k].Seqnum)).Location()
 					compressSize += int64(extend.Length())
 					originSize += int64(extend.OriginSize())
