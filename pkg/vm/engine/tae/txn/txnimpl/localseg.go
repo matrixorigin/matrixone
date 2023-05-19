@@ -161,7 +161,7 @@ func (seg *localSegment) PrepareApply() (err error) {
 func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	if !node.IsPersisted() {
 		an := node.(*anode)
-		an.mnode.data.Compact()
+		an.data.Compact()
 		tableData := seg.table.entry.GetTableData()
 		if seg.tableHandle == nil {
 			seg.tableHandle = tableData.GetHandle()
@@ -239,8 +239,8 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				break
 			}
 		}
-		an.mnode.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx].Close()
-		an.mnode.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx] = vec
+		an.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx].Close()
+		an.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx] = vec
 		return
 	}
 	//handle persisted insertNode.

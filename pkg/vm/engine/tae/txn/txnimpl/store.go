@@ -391,7 +391,7 @@ func (store *txnStore) ObserveTxn(
 							Version:    schema.Version,
 							NextSeqnum: uint16(schema.Extra.NextColSeqnum),
 							Seqnums:    schema.AllSeqnums(),
-							Batch:      anode.mnode.data,
+							Batch:      anode.data,
 						}
 						visitAppend(bat)
 					}

@@ -15,6 +15,8 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -26,7 +28,9 @@ import (
 // which belongs to txn's workspace and can be appended data into.
 type anode struct {
 	*baseNode
-	mnode *memoryNode
+	data    *containers.Batch
+	rows    uint32
+	appends []*appendInfo
 }
 
 // NewANode creates a InsertNode with data in memory.
@@ -36,20 +40,19 @@ func NewANode(
 ) *anode {
 	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, meta)
-	impl.mnode = newMemoryNode(impl.baseNode)
-	impl.mnode.Ref()
+	impl.appends = make([]*appendInfo, 0)
 	return impl
 }
 
 func (n *anode) Rows() uint32 {
-	return n.mnode.rows
+	return n.rows
 }
 
 func (n *anode) GetAppends() []*appendInfo {
-	return n.mnode.appends
+	return n.appends
 }
 func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo {
-	seq := len(n.mnode.appends)
+	seq := len(n.appends)
 	info := &appendInfo{
 		dest:    *dest,
 		destOff: destOff,
@@ -58,7 +61,7 @@ func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *comm
 		srcLen:  srcLen,
 		seq:     uint32(seq),
 	}
-	n.mnode.appends = append(n.mnode.appends, info)
+	n.appends = append(n.appends, info)
 	return info
 }
 
@@ -67,77 +70,98 @@ func (n *anode) IsPersisted() bool {
 }
 
 func (n *anode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	if n.mnode.data == nil {
+	if n.data == nil {
 		return
 	}
-	composedCmd := NewAppendCmd(id, n, n.mnode.data)
+	composedCmd := NewAppendCmd(id, n, n.data)
 	return composedCmd, nil
 }
 
 func (n *anode) Close() (err error) {
-	if n.mnode.data != nil {
-		n.mnode.data.Close()
-		n.mnode.data = nil
+	if n.data != nil {
+		n.data.Close()
+		n.data = nil
 	}
 	return
 }
 
+func (n *anode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
+	left := uint32(data.Length()) - offset
+	nodeLeft := MaxNodeRows - n.rows
+	if left <= nodeLeft {
+		return left
+	}
+	return nodeLeft
+}
+
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.GetLocalSchema()
-	if n.mnode.data == nil {
+	if n.data == nil {
 		opts := containers.Options{}
 		opts.Capacity = data.Length() - int(offset)
 		if opts.Capacity > int(MaxNodeRows) {
 			opts.Capacity = int(MaxNodeRows)
 		}
-		n.mnode.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
+		n.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
 	}
 
-	from := uint32(n.mnode.data.Length())
-	an = n.mnode.PrepareAppend(data, offset)
+	from := uint32(n.data.Length())
+	an = n.PrepareAppend(data, offset)
 	for _, attr := range data.Attrs {
 		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
 		def := schema.ColDefs[schema.GetColIdx(attr)]
-		destVec := n.mnode.data.Vecs[def.Idx]
+		destVec := n.data.Vecs[def.Idx]
 		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())
 		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
 	}
-	n.mnode.rows = uint32(n.mnode.data.Length())
-	err = n.mnode.FillPhyAddrColumn(from, an)
+	n.rows = uint32(n.data.Length())
+	err = n.FillPhyAddrColumn(from, an)
+	return
+}
+
+func (n *anode) FillPhyAddrColumn(startRow, length uint32) (err error) {
+	var col *vector.Vector
+	if col, err = objectio.ConstructRowidColumn(
+		&n.meta.ID, startRow, length, common.DefaultAllocator,
+	); err != nil {
+		return
+	}
+	err = n.data.Vecs[n.table.GetLocalSchema().PhyAddrKey.Idx].ExtendVec(col)
+	col.Free(common.DefaultAllocator)
 	return
 }
 
 func (n *anode) FillBlockView(view *model.BlockView, colIdxes []int) (err error) {
 	for _, colIdx := range colIdxes {
-		orig := n.mnode.data.Vecs[colIdx]
+		orig := n.data.Vecs[colIdx]
 		view.SetData(colIdx, orig.CloneWindow(0, orig.Length()))
 	}
-	view.DeleteMask = n.mnode.data.Deletes
+	view.DeleteMask = n.data.Deletes
 	return
 }
 func (n *anode) FillColumnView(view *model.ColumnView) (err error) {
-	orig := n.mnode.data.Vecs[view.ColIdx]
+	orig := n.data.Vecs[view.ColIdx]
 	view.SetData(orig.CloneWindow(0, orig.Length()))
-	view.DeleteMask = n.mnode.data.Deletes
+	view.DeleteMask = n.data.Deletes
 	return
 }
 
 func (n *anode) GetSpace() uint32 {
-	return MaxNodeRows - n.mnode.rows
+	return MaxNodeRows - n.rows
 }
 
 func (n *anode) RowsWithoutDeletes() uint32 {
 	deletes := uint32(0)
-	if n.mnode.data != nil && n.mnode.data.Deletes != nil {
-		deletes = uint32(n.mnode.data.DeleteCnt())
+	if n.data != nil && n.data.Deletes != nil {
+		deletes = uint32(n.data.DeleteCnt())
 	}
-	return uint32(n.mnode.data.Length()) - deletes
+	return uint32(n.data.Length()) - deletes
 }
 
 func (n *anode) LengthWithDeletes(appended, toAppend uint32) uint32 {
-	if !n.mnode.data.HasDelete() {
+	if !n.data.HasDelete() {
 		return toAppend
 	}
 	appendedOffset := n.OffsetWithDeletes(appended)
@@ -147,12 +171,12 @@ func (n *anode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 }
 
 func (n *anode) OffsetWithDeletes(count uint32) uint32 {
-	if !n.mnode.data.HasDelete() {
+	if !n.data.HasDelete() {
 		return count
 	}
 	offset := count
-	for offset < n.mnode.rows {
-		deletes := n.mnode.data.Deletes.Rank(offset)
+	for offset < n.rows {
+		deletes := n.data.Deletes.Rank(offset)
 		if offset == count+uint32(deletes) {
 			break
 		}
@@ -162,28 +186,28 @@ func (n *anode) OffsetWithDeletes(count uint32) uint32 {
 }
 
 func (n *anode) GetValue(col int, row uint32) (any, bool, error) {
-	vec := n.mnode.data.Vecs[col]
+	vec := n.data.Vecs[col]
 	return vec.Get(int(row)), vec.IsNull(int(row)), nil
 }
 
 func (n *anode) RangeDelete(start, end uint32) error {
-	n.mnode.data.RangeDelete(int(start), int(end+1))
+	n.data.RangeDelete(int(start), int(end+1))
 	return nil
 }
 
 func (n *anode) IsRowDeleted(row uint32) bool {
-	return n.mnode.data.IsDeleted(int(row))
+	return n.data.IsDeleted(int(row))
 }
 
 func (n *anode) PrintDeletes() string {
-	if !n.mnode.data.HasDelete() {
+	if !n.data.HasDelete() {
 		return "NoDeletes"
 	}
-	return n.mnode.data.Deletes.String()
+	return n.data.Deletes.String()
 }
 
 func (n *anode) WindowColumn(start, end uint32, pos int) (vec containers.Vector, err error) {
-	data := n.mnode.data
+	data := n.data
 	deletes := data.WindowDeletes(int(start), int(end-start))
 	if deletes != nil {
 		vec = data.Vecs[pos].CloneWindow(int(start), int(end-start))
@@ -195,7 +219,7 @@ func (n *anode) WindowColumn(start, end uint32, pos int) (vec containers.Vector,
 }
 
 func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
-	data := n.mnode.data
+	data := n.data
 	if data.HasDelete() {
 		bat = data.CloneWindow(int(start), int(end-start))
 		bat.Compact()

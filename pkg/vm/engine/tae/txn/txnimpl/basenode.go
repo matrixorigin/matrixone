@@ -19,7 +19,6 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -104,74 +103,6 @@ func (info *appendInfo) WriteTo(w io.Writer) (n int64, err error) {
 func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	_, err = r.Read(EncodeAppendInfo(info))
 	n = AppendInfoSize
-	return
-}
-
-type memoryNode struct {
-	common.RefHelper
-	bnode *baseNode
-	//data resides in.
-	data    *containers.Batch
-	rows    uint32
-	appends []*appendInfo
-}
-
-func newMemoryNode(node *baseNode) *memoryNode {
-	return &memoryNode{
-		bnode:   node,
-		appends: make([]*appendInfo, 0),
-	}
-}
-
-func (n *memoryNode) GetSpace() uint32 {
-	return MaxNodeRows - n.rows
-}
-
-func (n *memoryNode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
-	left := uint32(data.Length()) - offset
-	nodeLeft := MaxNodeRows - n.rows
-	if left <= nodeLeft {
-		return left
-	}
-	return nodeLeft
-}
-
-func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
-	schema := n.bnode.table.GetLocalSchema()
-	if n.data == nil {
-		opts := containers.Options{}
-		opts.Capacity = data.Length() - int(offset)
-		if opts.Capacity > int(MaxNodeRows) {
-			opts.Capacity = int(MaxNodeRows)
-		}
-		n.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
-	}
-
-	from := uint32(n.data.Length())
-	an = n.PrepareAppend(data, offset)
-	for _, attr := range data.Attrs {
-		if attr == catalog.PhyAddrColumnName {
-			continue
-		}
-		def := schema.ColDefs[schema.GetColIdx(attr)]
-		destVec := n.data.Vecs[def.Idx]
-		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())
-		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
-	}
-	n.rows = uint32(n.data.Length())
-	err = n.FillPhyAddrColumn(from, an)
-	return
-}
-
-func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	var col *vector.Vector
-	if col, err = objectio.ConstructRowidColumn(
-		&n.bnode.meta.ID, startRow, length, common.DefaultAllocator,
-	); err != nil {
-		return
-	}
-	err = n.data.Vecs[n.bnode.table.GetLocalSchema().PhyAddrKey.Idx].ExtendVec(col)
-	col.Free(common.DefaultAllocator)
 	return
 }
 
