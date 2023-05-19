@@ -49,12 +49,14 @@ func AcquireMessage() *pipeline.Message {
 
 func IsCNClientReady() bool {
 	c := client.Load()
-	return c != nil && c.ready.Load()
+	return c != nil && c.ready
 }
 
 type CNClient struct {
+	sync.Mutex
+
 	localServiceAddress string
-	ready               atomic.Bool
+	ready               bool
 	config              *ClientConfig
 	client              morpc.RPCClient
 
@@ -63,6 +65,8 @@ type CNClient struct {
 }
 
 func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
+	c.Lock()
+	defer c.Unlock()
 	return c.client.Send(ctx, backend, request)
 }
 
@@ -80,11 +84,11 @@ func (c *CNClient) Close() error {
 	lock.Lock()
 	defer lock.Unlock()
 	cli := client.Load()
-	if cli == nil || !cli.ready.Load() {
+	if cli == nil || !cli.ready {
 		return nil
 	}
 
-	c.ready.Store(false)
+	c.ready = false
 	return c.client.Close()
 }
 
@@ -127,6 +131,8 @@ func NewCNClient(
 	var err error
 	cfg.Fill()
 	cli := &CNClient{config: cfg, localServiceAddress: localServiceAddress}
+	cli.Lock()
+	defer cli.Unlock()
 	client.Store(cli)
 	cli.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
@@ -151,7 +157,7 @@ func NewCNClient(
 		morpc.WithClientTag("cn-client"),
 		morpc.WithClientLogger(logger),
 	)
-	cli.ready.Store(true)
+	cli.ready = true
 	return err
 }
 
