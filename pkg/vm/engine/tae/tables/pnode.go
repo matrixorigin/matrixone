@@ -64,8 +64,8 @@ func (node *persistedNode) init() {
 		logutil.Infof("%s bad metaloc %q: %s", node.block.meta.ID.String(), metaloc, node.block.meta.String())
 	}
 	pkDef := schema.GetSingleSortKey()
-	index := indexwrapper.NewImmutableIndex()
-	if err := index.ReadFrom(
+	var err error
+	if node.pkIndex, err = indexwrapper.NewImmutableIndex(
 		node.block.indexCache,
 		node.block.fs,
 		metaloc,
@@ -73,7 +73,6 @@ func (node *persistedNode) init() {
 	); err != nil {
 		panic(err)
 	}
-	node.pkIndex = index
 }
 
 func (node *persistedNode) Rows() uint32 {
