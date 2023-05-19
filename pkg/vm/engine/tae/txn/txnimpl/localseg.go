@@ -82,7 +82,7 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 }
 
 // register a non-appendable insertNode.
-func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location, zm objectio.ZoneMap) {
+func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc objectio.Location) {
 	sid := metaLoc.Name().SegmentId()
 	meta := catalog.NewStandaloneBlockWithLoc(
 		nil,
@@ -92,9 +92,6 @@ func (seg *localSegment) registerNode(metaLoc objectio.Location, deltaLoc object
 		deltaLoc)
 	n := NewNode(
 		seg.table,
-		seg.table.store.dataFactory.Fs,
-		seg.table.store.indexCache,
-		seg.table.store.dataFactory.Scheduler,
 		meta,
 	)
 	seg.nodes = append(seg.nodes, n)
@@ -111,9 +108,6 @@ func (seg *localSegment) registerANode() {
 	entry.AddEntryLocked(meta)
 	n := NewANode(
 		seg.table,
-		seg.table.store.dataFactory.Fs,
-		seg.table.store.indexCache,
-		seg.table.store.dataFactory.Scheduler,
 		meta,
 	)
 	seg.appendable = n
@@ -342,7 +336,7 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 	metaLocs []objectio.Location,
 ) (err error) {
 	for i, metaLoc := range metaLocs {
-		seg.registerNode(metaLoc, nil, nil)
+		seg.registerNode(metaLoc, nil)
 		skip := seg.table.store.txn.GetPKDedupSkip()
 		//insert primary keys into seg.index
 		if pkVecs != nil && skip == txnif.PKDedupSkipNone {

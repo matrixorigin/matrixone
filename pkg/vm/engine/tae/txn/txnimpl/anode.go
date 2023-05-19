@@ -15,13 +15,11 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 // anode corresponds to an appendable standalone-uncommitted block
@@ -33,13 +31,10 @@ type anode struct {
 // NewANode creates a InsertNode with data in memory.
 func NewANode(
 	tbl *txnTable,
-	fs *objectio.ObjectFS,
-	indexCache model.LRUCache,
-	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
 ) *anode {
 	impl := new(anode)
-	impl.baseNode = newBaseNode(tbl, fs, indexCache, sched, meta)
+	impl.baseNode = newBaseNode(tbl, meta)
 	impl.mnode = newMemoryNode(impl.baseNode)
 	impl.mnode.Ref()
 	return impl

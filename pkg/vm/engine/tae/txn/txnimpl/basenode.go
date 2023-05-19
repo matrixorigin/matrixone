@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 const MaxNodeRows = 10000
@@ -178,11 +177,6 @@ func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 }
 
 type baseNode struct {
-	indexCache model.LRUCache
-	fs         *objectio.ObjectFS
-	//scheduler is used to flush insertNode into S3/FS.
-	scheduler tasks.TaskScheduler
-	//meta for this uncommitted standalone block.
 	meta  *catalog.BlockEntry
 	table *txnTable
 	mnode *memoryNode
@@ -190,17 +184,11 @@ type baseNode struct {
 
 func newBaseNode(
 	tbl *txnTable,
-	fs *objectio.ObjectFS,
-	indexCache model.LRUCache,
-	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
 ) *baseNode {
 	return &baseNode{
-		indexCache: indexCache,
-		fs:         fs,
-		scheduler:  sched,
-		meta:       meta,
-		table:      tbl,
+		meta:  meta,
+		table: tbl,
 	}
 }
 
@@ -232,7 +220,7 @@ func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, e
 	def := n.table.GetLocalSchema().ColDefs[colIdx]
 	location := n.meta.GetMetaLoc()
 	return tables.LoadPersistedColumnData(
-		n.fs,
+		n.table.store.dataFactory.Fs,
 		nil,
 		def,
 		location)
