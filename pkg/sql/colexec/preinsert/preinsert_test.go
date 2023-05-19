@@ -85,6 +85,7 @@ func TestPreInsertNormal(t *testing.T) {
 		IsUpdate:   false,
 		HasAutoCol: false,
 	}
+	checkResultBat, _ := batch1.Dup(proc.Mp())
 	proc.SetInputBatch(batch1)
 	_, err := Call(0, proc, &argument1, false, false)
 	require.NoError(t, err)
@@ -93,9 +94,9 @@ func TestPreInsertNormal(t *testing.T) {
 		// check attr names
 		require.Equal(t, []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"}, result.Attrs)
 		// check vector
-		require.Equal(t, len(batch1.Vecs), len(result.Vecs))
+		require.Equal(t, len(checkResultBat.Vecs), len(result.Vecs))
 		for i, vec := range result.Vecs {
-			require.Equal(t, len(batch1.Zs), vec.Length(), fmt.Sprintf("column number: %d", i))
+			require.Equal(t, len(checkResultBat.Zs), vec.Length(), fmt.Sprintf("column number: %d", i))
 		}
 	}
 }
@@ -128,7 +129,9 @@ func TestPreInsertNullCheck(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2, 0}, []uint64{2}),
 		},
-		Zs: []int64{1, 1, 1},
+		Zs:    []int64{1, 1, 1},
+		Attrs: []string{"int64_column_primary"},
+		Cnt:   1,
 	}
 	argument2 := Argument{
 		SchemaName: "testDb",
@@ -139,6 +142,9 @@ func TestPreInsertNullCheck(t *testing.T) {
 						NullAbility: false,
 					},
 				},
+			},
+			Pkey: &plan.PrimaryKeyDef{
+				PkeyColName: "int64_column_primary",
 			},
 		},
 	}
