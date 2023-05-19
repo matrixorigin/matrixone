@@ -374,8 +374,8 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 		if sel > 0.5 {
 			return 0.5
 		}
+		return sel
 	}
-
 	// do not know selectivity for this expr, default 0.5
 	return 0.5
 }
