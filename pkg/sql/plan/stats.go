@@ -267,7 +267,6 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, s *StatsIn
 	return 0.1
 }
 
-// estimate output lines for a filter
 func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 	if expr == nil {
 		return 1
@@ -295,6 +294,8 @@ func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], s)
 			sel2 := estimateExprSelectivity(exprImpl.F.Args[1], s)
 			return orSelectivity(sel1, sel2)
+		case "not":
+			return 1 - estimateExprSelectivity(exprImpl.F.Args[0], s)
 		case "like":
 			return 0.2
 		case "in":
@@ -346,6 +347,36 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 		}
 	}
 	return w
+}
+
+// harsh estimate of block selectivity, will improve it in the future
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *StatsInfoMap) float64 {
+	if !CheckExprIsMonotonic(ctx, expr) {
+		return 1
+	}
+	ret, col := CheckFilter(expr)
+
+	if ret && col != nil {
+		var sel float64
+		switch getSortOrder(tableDef, col.Name) {
+		case -1:
+			return 1
+		case 0:
+			sel = estimateExprSelectivity(expr, s)
+		case 1:
+			sel = estimateExprSelectivity(expr, s) * 3
+		case 2:
+			sel = estimateExprSelectivity(expr, s) * 10
+		default:
+			return 0.5
+		}
+		if sel > 0.5 {
+			return 0.5
+		}
+	}
+
+	// do not know selectivity for this expr, default 0.5
+	return 0.5
 }
 
 func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
@@ -464,9 +495,16 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 				Selectivity: selectivity_out,
 			}
 
-		case plan.Node_SEMI, plan.Node_ANTI:
+		case plan.Node_SEMI:
 			node.Stats = &plan.Stats{
 				Outcnt:      leftStats.Outcnt * selectivity,
+				Cost:        leftStats.Cost + rightStats.Cost,
+				HashmapSize: rightStats.Outcnt,
+				Selectivity: selectivity_out,
+			}
+		case plan.Node_ANTI:
+			node.Stats = &plan.Stats{
+				Outcnt:      leftStats.Outcnt * (1 - rightStats.Selectivity),
 				Cost:        leftStats.Cost + rightStats.Cost,
 				HashmapSize: rightStats.Outcnt,
 				Selectivity: selectivity_out,
@@ -486,7 +524,11 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			input := childStats.Outcnt
 			output := 1.0
 			for _, groupby := range node.GroupBy {
-				output *= getExprNdv(groupby, nil, node.NodeId, builder)
+				ndv := getExprNdv(groupby, nil, node.NodeId, builder)
+				if ndv > 1 {
+					groupby.Ndv = ndv
+					output *= ndv
+				}
 			}
 			if output > input {
 				output = math.Min(input, output*math.Pow(childStats.Selectivity, 0.8))
@@ -627,8 +669,13 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		stats.Selectivity = 1
 	}
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
-	stats.Cost = stats.TableCnt
-	stats.BlockNum = int32(stats.Outcnt/float64(options.DefaultBlockMaxRows) + 1)
+
+	var blockSel float64 = 1
+	for i := range node.FilterList {
+		blockSel = andSelectivity(blockSel, estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s))
+	}
+	stats.Cost = stats.TableCnt * blockSel
+	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 
 	return stats
 }

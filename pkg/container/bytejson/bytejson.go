@@ -601,3 +601,74 @@ func genUnnestResult(res UnnestResult, index, key, path []byte, value, this *Byt
 	}
 	return res
 }
+
+func ParseJsonByteFromString(s string) ([]byte, error) {
+	var decoder = json.NewDecoder(strings.NewReader(s))
+	decoder.UseNumber()
+	var in interface{}
+	err := decoder.Decode(&in)
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 1, len(s)+1)
+	switch x := in.(type) {
+	case nil:
+		buf[0] = byte(TpCodeLiteral)
+		buf = append(buf, LiteralNull)
+	case bool:
+		buf[0] = byte(TpCodeLiteral)
+		lit := LiteralFalse
+		if x {
+			lit = LiteralTrue
+		}
+		buf = append(buf, lit)
+	case int64:
+		buf[0] = byte(TpCodeInt64)
+		buf = addUint64(buf, uint64(x))
+	case uint64:
+		buf[0] = byte(TpCodeUint64)
+		buf = addUint64(buf, x)
+	case json.Number:
+		if strings.ContainsAny(string(x), "Ee.") {
+			val, err := x.Float64()
+			buf[0] = byte(TpCodeFloat64)
+			if err != nil {
+				return nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+			}
+			if err = checkFloat64(val); err != nil {
+				return nil, err
+			}
+			return addFloat64(buf, val), nil
+		}
+		if val, err := x.Int64(); err == nil {
+			buf[0] = byte(TpCodeInt64)
+			return addInt64(buf, val), nil
+		}
+		if val, err := strconv.ParseUint(string(x), 10, 64); err == nil {
+			buf[0] = byte(TpCodeUint64)
+			return addUint64(buf, val), nil
+		}
+		if val, err := x.Float64(); err == nil {
+			buf[0] = byte(TpCodeFloat64)
+			if err = checkFloat64(val); err != nil {
+				return nil, err
+			}
+			return addFloat64(buf, val), nil
+		}
+	case string:
+		buf[0] = byte(TpCodeString)
+		buf = addString(buf, x)
+	case ByteJson:
+		buf[0] = byte(x.Type)
+		buf = append(buf, x.Data...)
+	case []interface{}:
+		buf[0] = byte(TpCodeArray)
+		buf, err = addArray(buf, x)
+	case map[string]interface{}:
+		buf[0] = byte(TpCodeObject)
+		buf, err = addObject(buf, x)
+	default:
+		return nil, moerr.NewInvalidInputNoCtx("json element %v", in)
+	}
+	return buf, err
+}

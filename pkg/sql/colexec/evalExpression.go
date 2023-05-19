@@ -27,6 +27,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
+)
+
+var (
+	constBType          = types.T_bool.ToType()
+	constI8Type         = types.T_int8.ToType()
+	constI16Type        = types.T_int16.ToType()
+	constI32Type        = types.T_int32.ToType()
+	constI64Type        = types.T_int64.ToType()
+	constU8Type         = types.T_uint8.ToType()
+	constU16Type        = types.T_uint16.ToType()
+	constU32Type        = types.T_uint32.ToType()
+	constU64Type        = types.T_uint64.ToType()
+	constFType          = types.T_float32.ToType()
+	constDType          = types.T_float64.ToType()
+	constSType          = types.T_varchar.ToType()
+	constBinType        = types.T_blob.ToType()
+	constDateType       = types.T_date.ToType()
+	constTimeType       = types.T_time.ToType()
+	constDatetimeType   = types.T_datetime.ToType()
+	constTimestampTypes = []types.Type{
+		types.New(types.T_timestamp, 0, 0),
+		types.New(types.T_timestamp, 0, 1),
+		types.New(types.T_timestamp, 0, 2),
+		types.New(types.T_timestamp, 0, 3),
+		types.New(types.T_timestamp, 0, 4),
+		types.New(types.T_timestamp, 0, 5),
+		types.New(types.T_timestamp, 0, 6),
+	}
 )
 
 // ExpressionExecutor
@@ -779,6 +808,41 @@ func evaluateFilterByZoneMap(
 
 		} else {
 			args := t.F.Args
+			// `in` is special.
+			if t.F.Func.ObjName == "in" {
+				var firstRun bool
+
+				rid := args[1].AuxId
+				if vecs[rid] == nil {
+					if vecs[args[1].AuxId], err = EvalExpressionOnce(proc, args[1], nil); err != nil {
+						zms[expr.AuxId].Reset()
+						vecs[args[1].AuxId] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
+						return zms[expr.AuxId]
+					}
+
+					firstRun = true
+				}
+
+				if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				lhs := evaluateFilterByZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				if !lhs.IsInited() {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				if res, ok := lhs.AnyIn(vecs[rid], firstRun); !ok {
+					zms[expr.AuxId].Reset()
+				} else {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
+				}
+
+				return zms[expr.AuxId]
+			}
+
 			for _, arg := range args {
 				zms[arg.AuxId] = evaluateFilterByZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
 				if !zms[arg.AuxId].IsInited() {
@@ -878,4 +942,52 @@ func evaluateFilterByZoneMap(
 	}
 
 	return zms[expr.AuxId]
+}
+
+// RewriteFilterExprList will convert an expression list to be an AndExpr
+func RewriteFilterExprList(list []*plan.Expr) *plan.Expr {
+	l := len(list)
+	if l == 0 {
+		return nil
+	} else if l == 1 {
+		return list[0]
+	} else {
+		left := list[0]
+		right := RewriteFilterExprList(list[1:])
+		return &plan.Expr{
+			Typ:  left.Typ,
+			Expr: makeAndExpr(left, right),
+		}
+	}
+}
+
+func SplitAndExprs(list []*plan.Expr) []*plan.Expr {
+	exprs := make([]*plan.Expr, 0, len(list))
+	for i := range list {
+		exprs = append(exprs, splitAndExpr(list[i])...)
+	}
+	return exprs
+}
+
+func splitAndExpr(expr *plan.Expr) []*plan.Expr {
+	exprs := make([]*plan.Expr, 0, 1)
+	if e, ok := expr.Expr.(*plan.Expr_F); ok {
+		fid, _ := function2.DecodeOverloadID(e.F.Func.GetObj())
+		if fid == function2.AND {
+			exprs = append(exprs, splitAndExpr(e.F.Args[0])...)
+			exprs = append(exprs, splitAndExpr(e.F.Args[1])...)
+			return exprs
+		}
+	}
+	exprs = append(exprs, expr)
+	return exprs
+}
+
+func makeAndExpr(left, right *plan.Expr) *plan.Expr_F {
+	return &plan.Expr_F{
+		F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function2.AndFunctionEncodedID, ObjName: function2.AndFunctionName},
+			Args: []*plan.Expr{left, right},
+		},
+	}
 }

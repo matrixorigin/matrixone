@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 const (
@@ -86,6 +87,10 @@ type TxnCmd struct {
 	*ComposedCmd
 	*TxnCtx
 	Txn txnif.AsyncTxn
+
+	// for replay
+	isLast bool
+	Idx    *wal.Index
 }
 
 type TxnStateCmd struct {
@@ -220,6 +225,12 @@ func NewEmptyTxnCmd() *TxnCmd {
 		TxnCtx: NewEmptyTxnCtx(),
 	}
 }
+func NewLastTxnCmd() *TxnCmd {
+	return &TxnCmd{
+		isLast: true,
+	}
+}
+func (c *TxnCmd) IsLastCmd() bool { return c.isLast }
 func (c *TxnCmd) ApplyCommit() {
 	c.ComposedCmd.ApplyCommit()
 }

@@ -20,12 +20,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 type replayer struct {
@@ -46,7 +47,11 @@ type replayer struct {
 	d             *LogServiceDriver
 	appended      []uint64
 
+	recordChan chan *entry.Entry
+
 	applyDuration time.Duration
+
+	wg sync.WaitGroup
 }
 
 func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
@@ -61,26 +66,33 @@ func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *re
 		replayedLsn:               math.MaxUint64,
 		d:                         d,
 		appended:                  make([]uint64, 0),
+		recordChan:                make(chan *entry.Entry, 100),
+		wg:                        sync.WaitGroup{},
+		truncatedLogserviceLsn:    truncated,
 	}
 }
 
-func (r *replayer) replay(allocator logstoreEntry.Allocator) {
+func (r *replayer) replay() {
 	var err error
-	r.truncatedLogserviceLsn = r.d.getLogserviceTruncate()
+	r.wg.Add(1)
+	go r.replayRecords()
 	for !r.readRecords() {
 		for r.replayedLsn < r.safeLsn {
-			err := r.replayLogserviceEntry(r.replayedLsn+1, true, allocator)
+			err := r.replayLogserviceEntry(r.replayedLsn+1, true)
 			if err != nil {
 				panic(err)
 			}
 		}
 	}
-	err = r.replayLogserviceEntry(r.replayedLsn+1, false, allocator)
+	err = r.replayLogserviceEntry(r.replayedLsn+1, false)
 	for err != ErrAllRecordsRead {
-		err = r.replayLogserviceEntry(r.replayedLsn+1, false, allocator)
+		err = r.replayLogserviceEntry(r.replayedLsn+1, false)
 
 	}
 	r.d.lsns = make([]uint64, 0)
+	r.recordChan <- entry.NewEndEntry()
+	r.wg.Wait()
+	close(r.recordChan)
 }
 
 func (r *replayer) readRecords() (readEnd bool) {
@@ -117,7 +129,22 @@ func (r *replayer) removeEntries(skipMap map[uint64]uint64) {
 		delete(r.driverLsnLogserviceLsnMap, lsn)
 	}
 }
-func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool, allocator logstoreEntry.Allocator) error {
+
+func (r *replayer) replayRecords() {
+	defer r.wg.Done()
+	for {
+		e := <-r.recordChan
+		if e.IsEnd() {
+			break
+		}
+		t0 := time.Now()
+		r.replayHandle(e)
+		e.Entry.Free()
+		r.applyDuration += time.Since(t0)
+	}
+}
+
+func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool) error {
 	logserviceLsn, ok := r.driverLsnLogserviceLsnMap[lsn]
 	if !ok {
 		if safe {
@@ -140,9 +167,7 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool, allocator logsto
 	if err != nil {
 		panic(err)
 	}
-	t0 := time.Now()
-	intervals := record.replay(r.replayHandle, allocator)
-	r.applyDuration += time.Since(t0)
+	intervals := record.replay(r)
 	r.d.onReplayRecordEntry(logserviceLsn, intervals)
 	r.onReplayDriverLsn(intervals.GetMax())
 	r.onReplayDriverLsn(intervals.GetMin())
@@ -154,6 +179,7 @@ func (r *replayer) replayLogserviceEntry(lsn uint64, safe bool, allocator logsto
 }
 
 func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
+	logutil.Infof("skip %v", skipMap)
 	cmd := NewReplayCmd(skipMap)
 	recordEntry := newRecordEntry()
 	recordEntry.meta.metaType = TReplay

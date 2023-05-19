@@ -16,13 +16,10 @@ package main
 
 import (
 	"context"
-	crand "crypto/rand"
-	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -85,12 +82,6 @@ func main() {
 			http.ListenAndServe(*httpListenAddr, nil)
 		}()
 	}
-
-	var seed int64
-	if err := binary.Read(crand.Reader, binary.LittleEndian, &seed); err != nil {
-		panic(err)
-	}
-	rand.Seed(seed)
 
 	ctx := context.Background()
 
