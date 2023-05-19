@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -43,13 +42,10 @@ func NewNode(
 ) *node {
 	impl := new(node)
 	impl.baseNode = newBaseNode(tbl, fs, indexCache, sched, meta)
-	// impl.storage.pnode = newPersistedNode(impl.baseNode)
-	// impl.storage.pnode.Ref()
 	return impl
 }
 
 func (n *node) Close() error {
-	// n.storage.pnode.close()
 	return nil
 }
 
@@ -62,24 +58,15 @@ func (n *node) Append(data *containers.Batch, offset uint32) (appended uint32, e
 }
 
 func (n *node) RangeDelete(start uint32, end uint32) (err error) {
-	if n.storage.pnode.deletes == nil {
-		n.storage.pnode.deletes = roaring.New()
-	}
-	n.storage.pnode.deletes.AddRange(uint64(start), uint64(end))
-	return
+	panic("not supported")
 }
 
 func (n *node) IsRowDeleted(row uint32) bool {
-	return n.storage.pnode.deletes != nil &&
-		n.storage.pnode.deletes.ContainsInt(int(row))
+	panic("not supported")
 }
 
 func (n *node) PrintDeletes() string {
-	if n.storage.pnode.deletes == nil {
-		return "NoDeletes"
-	}
-	return n.storage.pnode.deletes.String()
-
+	panic("not supported")
 }
 
 func (n *node) GetSpace() uint32 {

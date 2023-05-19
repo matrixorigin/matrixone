@@ -40,16 +40,16 @@ func NewANode(
 ) *anode {
 	impl := new(anode)
 	impl.baseNode = newBaseNode(tbl, fs, indexCache, sched, meta)
-	impl.storage.mnode = newMemoryNode(impl.baseNode)
-	impl.storage.mnode.Ref()
+	impl.mnode = newMemoryNode(impl.baseNode)
+	impl.mnode.Ref()
 	return impl
 }
 
 func (n *anode) GetAppends() []*appendInfo {
-	return n.storage.mnode.appends
+	return n.mnode.appends
 }
 func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo {
-	seq := len(n.storage.mnode.appends)
+	seq := len(n.mnode.appends)
 	info := &appendInfo{
 		dest:    *dest,
 		destOff: destOff,
@@ -58,7 +58,7 @@ func (n *anode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *comm
 		srcLen:  srcLen,
 		seq:     uint32(seq),
 	}
-	n.storage.mnode.appends = append(n.storage.mnode.appends, info)
+	n.mnode.appends = append(n.mnode.appends, info)
 	return info
 }
 
@@ -70,76 +70,76 @@ func (n *anode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	if n.IsPersisted() {
 		return nil, nil
 	}
-	if n.storage.mnode.data == nil {
+	if n.mnode.data == nil {
 		return
 	}
-	composedCmd := NewAppendCmd(id, n, n.storage.mnode.data)
+	composedCmd := NewAppendCmd(id, n, n.mnode.data)
 	return composedCmd, nil
 }
 
 func (n *anode) Close() (err error) {
-	if n.storage.mnode.data != nil {
-		n.storage.mnode.data.Close()
+	if n.mnode.data != nil {
+		n.mnode.data.Close()
 	}
 	return
 }
 
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.GetLocalSchema()
-	if n.storage.mnode.data == nil {
+	if n.mnode.data == nil {
 		opts := containers.Options{}
 		opts.Capacity = data.Length() - int(offset)
 		if opts.Capacity > int(MaxNodeRows) {
 			opts.Capacity = int(MaxNodeRows)
 		}
-		n.storage.mnode.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
+		n.mnode.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
 	}
 
-	from := uint32(n.storage.mnode.data.Length())
-	an = n.storage.mnode.PrepareAppend(data, offset)
+	from := uint32(n.mnode.data.Length())
+	an = n.mnode.PrepareAppend(data, offset)
 	for _, attr := range data.Attrs {
 		if attr == catalog.PhyAddrColumnName {
 			continue
 		}
 		def := schema.ColDefs[schema.GetColIdx(attr)]
-		destVec := n.storage.mnode.data.Vecs[def.Idx]
+		destVec := n.mnode.data.Vecs[def.Idx]
 		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())
 		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
 	}
-	n.storage.mnode.rows = uint32(n.storage.mnode.data.Length())
-	err = n.storage.mnode.FillPhyAddrColumn(from, an)
+	n.mnode.rows = uint32(n.mnode.data.Length())
+	err = n.mnode.FillPhyAddrColumn(from, an)
 	return
 }
 
 func (n *anode) FillBlockView(view *model.BlockView, colIdxes []int) (err error) {
 	for _, colIdx := range colIdxes {
-		orig := n.storage.mnode.data.Vecs[colIdx]
+		orig := n.mnode.data.Vecs[colIdx]
 		view.SetData(colIdx, orig.CloneWindow(0, orig.Length()))
 	}
-	view.DeleteMask = n.storage.mnode.data.Deletes
+	view.DeleteMask = n.mnode.data.Deletes
 	return
 }
 func (n *anode) FillColumnView(view *model.ColumnView) (err error) {
-	orig := n.storage.mnode.data.Vecs[view.ColIdx]
+	orig := n.mnode.data.Vecs[view.ColIdx]
 	view.SetData(orig.CloneWindow(0, orig.Length()))
-	view.DeleteMask = n.storage.mnode.data.Deletes
+	view.DeleteMask = n.mnode.data.Deletes
 	return
 }
 
 func (n *anode) GetSpace() uint32 {
-	return MaxNodeRows - n.storage.mnode.rows
+	return MaxNodeRows - n.mnode.rows
 }
 
 func (n *anode) RowsWithoutDeletes() uint32 {
 	deletes := uint32(0)
-	if n.storage.mnode.data != nil && n.storage.mnode.data.Deletes != nil {
-		deletes = uint32(n.storage.mnode.data.DeleteCnt())
+	if n.mnode.data != nil && n.mnode.data.Deletes != nil {
+		deletes = uint32(n.mnode.data.DeleteCnt())
 	}
-	return uint32(n.storage.mnode.data.Length()) - deletes
+	return uint32(n.mnode.data.Length()) - deletes
 }
 
 func (n *anode) LengthWithDeletes(appended, toAppend uint32) uint32 {
-	if !n.storage.mnode.data.HasDelete() {
+	if !n.mnode.data.HasDelete() {
 		return toAppend
 	}
 	appendedOffset := n.OffsetWithDeletes(appended)
@@ -149,12 +149,12 @@ func (n *anode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 }
 
 func (n *anode) OffsetWithDeletes(count uint32) uint32 {
-	if !n.storage.mnode.data.HasDelete() {
+	if !n.mnode.data.HasDelete() {
 		return count
 	}
 	offset := count
-	for offset < n.storage.mnode.rows {
-		deletes := n.storage.mnode.data.Deletes.Rank(offset)
+	for offset < n.mnode.rows {
+		deletes := n.mnode.data.Deletes.Rank(offset)
 		if offset == count+uint32(deletes) {
 			break
 		}
@@ -165,7 +165,7 @@ func (n *anode) OffsetWithDeletes(count uint32) uint32 {
 
 func (n *anode) GetValue(col int, row uint32) (any, bool, error) {
 	if !n.IsPersisted() {
-		vec := n.storage.mnode.data.Vecs[col]
+		vec := n.mnode.data.Vecs[col]
 		return vec.Get(int(row)), vec.IsNull(int(row)), nil
 	}
 	//TODO:: get value from S3/FS
@@ -173,23 +173,23 @@ func (n *anode) GetValue(col int, row uint32) (any, bool, error) {
 }
 
 func (n *anode) RangeDelete(start, end uint32) error {
-	n.storage.mnode.data.RangeDelete(int(start), int(end+1))
+	n.mnode.data.RangeDelete(int(start), int(end+1))
 	return nil
 }
 
 func (n *anode) IsRowDeleted(row uint32) bool {
-	return n.storage.mnode.data.IsDeleted(int(row))
+	return n.mnode.data.IsDeleted(int(row))
 }
 
 func (n *anode) PrintDeletes() string {
-	if !n.storage.mnode.data.HasDelete() {
+	if !n.mnode.data.HasDelete() {
 		return "NoDeletes"
 	}
-	return n.storage.mnode.data.Deletes.String()
+	return n.mnode.data.Deletes.String()
 }
 
 func (n *anode) WindowColumn(start, end uint32, pos int) (vec containers.Vector, err error) {
-	data := n.storage.mnode.data
+	data := n.mnode.data
 	deletes := data.WindowDeletes(int(start), int(end-start))
 	if deletes != nil {
 		vec = data.Vecs[pos].CloneWindow(int(start), int(end-start))
@@ -201,7 +201,7 @@ func (n *anode) WindowColumn(start, end uint32, pos int) (vec containers.Vector,
 }
 
 func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
-	data := n.storage.mnode.data
+	data := n.mnode.data
 	if data.HasDelete() {
 		bat = data.CloneWindow(int(start), int(end-start))
 		bat.Compact()

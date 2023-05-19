@@ -19,7 +19,6 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -29,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -179,78 +177,15 @@ func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	return
 }
 
-type persistedNode struct {
-	common.RefHelper
-	bnode   *baseNode
-	rows    uint32
-	deletes *roaring.Bitmap
-	//ZM and BF index for primary key
-	pkIndex indexwrapper.Index
-	//ZM and BF index for all columns
-	indexes map[int]indexwrapper.Index
-}
-
-func newPersistedNode(bnode *baseNode) *persistedNode {
-	node := &persistedNode{
-		bnode: bnode,
-	}
-	node.OnZeroCB = node.close
-	if bnode.meta.HasPersistedData() {
-		node.init()
-	}
-	return node
-}
-
-func (n *persistedNode) close() {
-	for i, index := range n.indexes {
-		index.Close()
-		n.indexes[i] = nil
-	}
-	n.indexes = nil
-}
-
-func (n *persistedNode) init() {
-	n.indexes = make(map[int]indexwrapper.Index)
-	schema := n.bnode.meta.GetSchema()
-	pkIdx := -1
-	if schema.HasPK() {
-		pkIdx = schema.GetSingleSortKeyIdx()
-	}
-	for i := range schema.ColDefs {
-		index := indexwrapper.NewImmutableIndex()
-		if err := index.ReadFrom(
-			n.bnode.indexCache,
-			n.bnode.fs,
-			n.bnode.meta.GetMetaLoc(),
-			schema.ColDefs[i]); err != nil {
-			panic(err)
-		}
-		n.indexes[i] = index
-		if i == pkIdx {
-			n.pkIndex = index
-		}
-	}
-	location := n.bnode.meta.GetMetaLoc()
-	n.rows = uint32(tables.ReadPersistedBlockRow(location))
-
-}
-
-func (n *persistedNode) Rows() uint32 {
-	return n.rows
-}
-
 type baseNode struct {
 	indexCache model.LRUCache
 	fs         *objectio.ObjectFS
 	//scheduler is used to flush insertNode into S3/FS.
 	scheduler tasks.TaskScheduler
 	//meta for this uncommitted standalone block.
-	meta    *catalog.BlockEntry
-	table   *txnTable
-	storage struct {
-		mnode *memoryNode
-		pnode *persistedNode
-	}
+	meta  *catalog.BlockEntry
+	table *txnTable
+	mnode *memoryNode
 }
 
 func newBaseNode(
@@ -282,25 +217,15 @@ func (n *baseNode) GetPersistedLoc() (objectio.Location, objectio.Location) {
 }
 
 func (n *baseNode) Rows() uint32 {
-	if n.storage.mnode != nil {
-		return n.storage.mnode.rows
-	} else if n.storage.pnode != nil {
-		return n.storage.pnode.Rows()
+	if n.mnode != nil {
+		return n.mnode.rows
 	}
 	panic(moerr.NewInternalErrorNoCtx(
 		fmt.Sprintf("bad insertNode %s", n.meta.String())))
 }
 
 func (n *baseNode) TryUpgrade() (err error) {
-	//TODO::update metaloc and deltaloc
-	if n.storage.mnode != nil {
-		n.storage.mnode = nil
-	}
-	if n.storage.pnode == nil {
-		n.storage.pnode = newPersistedNode(n)
-		n.storage.pnode.Ref()
-	}
-	return
+	panic("not supported")
 }
 
 func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, err error) {

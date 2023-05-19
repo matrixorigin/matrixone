@@ -65,7 +65,7 @@ func (node *persistedNode) init() {
 	}
 	pkDef := schema.GetSingleSortKey()
 	var err error
-	if node.pkIndex, err = indexwrapper.NewImmutableIndex(
+	if node.pkIndex, err = indexwrapper.NewImmtableIndex(
 		node.block.indexCache,
 		node.block.fs,
 		metaloc,
