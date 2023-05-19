@@ -199,6 +199,8 @@ message Expr {
 	}
 
 	int32 aux_id = 13;
+	double ndv = 14;
+	double selectivity = 15;
 }
 
 enum CompressType {

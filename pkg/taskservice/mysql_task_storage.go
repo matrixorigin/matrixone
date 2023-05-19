@@ -827,6 +827,9 @@ func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
 		}
 		tables[table] = struct{}{}
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
 
 	for table, createSql := range createTables {
 		if _, ok := tables[table]; !ok {

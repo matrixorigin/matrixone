@@ -143,6 +143,9 @@ func (kop *sqlTxn) Read(key string) (string, error) {
 	if err := rows.Scan(&v); err != nil {
 		return "", multierr.Append(err, rows.Close())
 	}
+	if err := rows.Err(); err != nil {
+		return "", multierr.Append(err, rows.Close())
+	}
 	return v, multierr.Append(err, rows.Close())
 }
 

@@ -468,10 +468,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 					}
 				}
 			}
-			for i := range addIndex {
-				t.Indexes = append(t.Indexes, addIndex[i])
-			}
-
+			t.Indexes = append(t.Indexes, addIndex...)
 			if alterIndex != nil {
 				for i, idx := range t.Indexes {
 					if alterIndex.IndexName == idx.IndexName {
