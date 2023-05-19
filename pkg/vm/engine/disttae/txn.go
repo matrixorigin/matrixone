@@ -130,7 +130,7 @@ func (txn *Transaction) WriteBatch(
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var S3SizeThreshold = colexec.TagS3Size
 
-	if txn.proc.GetSessionInfo() != nil && txn.proc.GetSessionInfo().GetUser() == db.MOLoggerUser {
+	if txn.proc != nil && txn.proc.GetSessionInfo() != nil && txn.proc.GetSessionInfo().GetUser() == db.MOLoggerUser {
 		S3SizeThreshold = colexec.TagS3SizeForMOLogger
 	}
 
