@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"sync"
 
 	"go.uber.org/ratelimit"
 
@@ -37,6 +38,8 @@ func WithClientRequestPerSecond(rps int) ClientOption {
 type LogtailClient struct {
 	stream   morpc.Stream
 	recvChan chan morpc.Message
+	broken   chan struct{} // mark morpc stream as broken when necessary
+	once     sync.Once
 
 	options struct {
 		rps int
@@ -49,6 +52,7 @@ type LogtailClient struct {
 func NewLogtailClient(stream morpc.Stream, opts ...ClientOption) (*LogtailClient, error) {
 	client := &LogtailClient{
 		stream: stream,
+		broken: make(chan struct{}),
 	}
 
 	recvChan, err := stream.Receive()
@@ -75,6 +79,10 @@ func (c *LogtailClient) Close() error {
 func (c *LogtailClient) Subscribe(
 	ctx context.Context, table api.TableID,
 ) error {
+	if c.streamBroken() {
+		return moerr.NewStreamClosedNoCtx()
+	}
+
 	c.limiter.Take()
 
 	request := &LogtailRequest{}
@@ -91,6 +99,10 @@ func (c *LogtailClient) Subscribe(
 func (c *LogtailClient) Unsubscribe(
 	ctx context.Context, table api.TableID,
 ) error {
+	if c.streamBroken() {
+		return moerr.NewStreamClosedNoCtx()
+	}
+
 	c.limiter.Take()
 
 	request := &LogtailRequest{}
@@ -111,11 +123,18 @@ func (c *LogtailClient) Unsubscribe(
 // 3. response for incremental logtail: *LogtailResponse.GetUpdateResponse() != nil
 func (c *LogtailClient) Receive() (*LogtailResponse, error) {
 	recvFunc := func() (*LogtailResponseSegment, error) {
-		message, ok := <-c.recvChan
-		if !ok || message == nil {
+		select {
+		case <-c.broken:
 			return nil, moerr.NewStreamClosedNoCtx()
+
+		case message, ok := <-c.recvChan:
+			if !ok || message == nil {
+				// mark stream as broken
+				c.once.Do(func() { close(c.broken) })
+				return nil, moerr.NewStreamClosedNoCtx()
+			}
+			return message.(*LogtailResponseSegment), nil
 		}
-		return message.(*LogtailResponseSegment), nil
 	}
 
 	prev, err := recvFunc()
@@ -139,4 +158,14 @@ func (c *LogtailClient) Receive() (*LogtailResponse, error) {
 		return nil, err
 	}
 	return resp, nil
+}
+
+// streamBroken returns true if stream is borken.
+func (c *LogtailClient) streamBroken() bool {
+	select {
+	case <-c.broken:
+		return true
+	default:
+	}
+	return false
 }
