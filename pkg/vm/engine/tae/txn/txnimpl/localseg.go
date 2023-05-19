@@ -158,91 +158,91 @@ func (seg *localSegment) PrepareApply() (err error) {
 	return
 }
 
-func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
-	if !node.IsPersisted() {
-		an := node.(*anode)
-		an.data.Compact()
-		tableData := seg.table.entry.GetTableData()
-		if seg.tableHandle == nil {
-			seg.tableHandle = tableData.GetHandle()
-		}
-		appended := uint32(0)
-		vec := containers.MakeVector(objectio.RowidType)
-		for appended < node.RowsWithoutDeletes() {
-			appender, err := seg.tableHandle.GetAppender()
-			if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
-				segH, err := seg.table.CreateSegment(true)
-				if err != nil {
-					return err
-				}
-				blk, err := segH.CreateBlock(true)
-				segH.Close()
-				if err != nil {
-					return err
-				}
-				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
-				blk.Close()
-			} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
-				id := appender.GetID()
-				blk, err := seg.table.CreateBlock(id.SegmentID(), true)
-				if err != nil {
-					return err
-				}
-				appender = seg.tableHandle.SetAppender(blk.Fingerprint())
-				blk.Close()
-			}
-			if !appender.IsSameColumns(seg.table.GetLocalSchema()) {
-				return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
-			}
-			//PrepareAppend: It is very important that appending a AppendNode into
-			// block's MVCCHandle before applying data into block.
-			anode, created, toAppend, err := appender.PrepareAppend(
-				node.RowsWithoutDeletes()-appended,
-				seg.table.store.txn)
-			if err != nil {
-				return err
-			}
-			blockId := appender.GetMeta().(*catalog.BlockEntry).ID
-			col, err := objectio.ConstructRowidColumn(
-				&blockId,
-				anode.GetMaxRow()-toAppend,
-				toAppend,
-				common.DefaultAllocator)
-			if err != nil {
-				return err
-			}
-			defer col.Free(common.DefaultAllocator)
-			if err = vec.ExtendVec(col); err != nil {
-				return err
-			}
-			toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
-			ctx := &appendCtx{
-				driver: appender,
-				node:   node,
-				anode:  anode,
-				start:  node.OffsetWithDeletes(appended),
-				count:  toAppendWithDeletes,
-			}
-			if created {
-				seg.table.store.IncreateWriteCnt()
-				seg.table.txnEntries.Append(anode)
-			}
-			id := appender.GetID()
-			seg.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
-			seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID,
-				id.TableID, &id.BlockID)
-			seg.appends = append(seg.appends, ctx)
-			// logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
-			// 	id.String(), toAppend, appended, len(seg.appends))
-			appended += toAppend
-			if appended == node.Rows() {
-				break
-			}
-		}
-		an.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx].Close()
-		an.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx] = vec
-		return
+func (seg *localSegment) prepareApplyANode(node *anode) error {
+	node.data.Compact()
+	tableData := seg.table.entry.GetTableData()
+	if seg.tableHandle == nil {
+		seg.tableHandle = tableData.GetHandle()
 	}
+	appended := uint32(0)
+	vec := containers.MakeVector(objectio.RowidType)
+	for appended < node.RowsWithoutDeletes() {
+		appender, err := seg.tableHandle.GetAppender()
+		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
+			segH, err := seg.table.CreateSegment(true)
+			if err != nil {
+				return err
+			}
+			blk, err := segH.CreateBlock(true)
+			segH.Close()
+			if err != nil {
+				return err
+			}
+			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+			blk.Close()
+		} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
+			id := appender.GetID()
+			blk, err := seg.table.CreateBlock(id.SegmentID(), true)
+			if err != nil {
+				return err
+			}
+			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
+			blk.Close()
+		}
+		if !appender.IsSameColumns(seg.table.GetLocalSchema()) {
+			return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
+		}
+		//PrepareAppend: It is very important that appending a AppendNode into
+		// block's MVCCHandle before applying data into block.
+		anode, created, toAppend, err := appender.PrepareAppend(
+			node.RowsWithoutDeletes()-appended,
+			seg.table.store.txn)
+		if err != nil {
+			return err
+		}
+		blockId := appender.GetMeta().(*catalog.BlockEntry).ID
+		col, err := objectio.ConstructRowidColumn(
+			&blockId,
+			anode.GetMaxRow()-toAppend,
+			toAppend,
+			common.DefaultAllocator)
+		if err != nil {
+			return err
+		}
+		defer col.Free(common.DefaultAllocator)
+		if err = vec.ExtendVec(col); err != nil {
+			return err
+		}
+		toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
+		ctx := &appendCtx{
+			driver: appender,
+			node:   node,
+			anode:  anode,
+			start:  node.OffsetWithDeletes(appended),
+			count:  toAppendWithDeletes,
+		}
+		if created {
+			seg.table.store.IncreateWriteCnt()
+			seg.table.txnEntries.Append(anode)
+		}
+		id := appender.GetID()
+		seg.table.store.warChecker.Insert(appender.GetMeta().(*catalog.BlockEntry))
+		seg.table.store.txn.GetMemo().AddBlock(seg.table.entry.GetDB().ID,
+			id.TableID, &id.BlockID)
+		seg.appends = append(seg.appends, ctx)
+		// logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
+		// 	id.String(), toAppend, appended, len(seg.appends))
+		appended += toAppend
+		if appended == node.Rows() {
+			break
+		}
+	}
+	node.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx].Close()
+	node.data.Vecs[seg.table.GetLocalSchema().PhyAddrKey.Idx] = vec
+	return nil
+}
+
+func (seg *localSegment) prepareApplyPNode(node *pnode) (err error) {
 	//handle persisted insertNode.
 	metaloc, deltaloc := node.GetPersistedLoc()
 	blkn := metaloc.ID()
@@ -274,6 +274,13 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		return
 	}
 	return
+}
+
+func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
+	if !node.IsPersisted() {
+		return seg.prepareApplyANode(node.(*anode))
+	}
+	return seg.prepareApplyPNode(node.(*pnode))
 }
 
 // CloseAppends un-reference the appendable blocks
