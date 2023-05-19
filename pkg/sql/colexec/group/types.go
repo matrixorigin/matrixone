@@ -66,7 +66,7 @@ type container struct {
 
 	bat *batch.Batch
 
-	again bool
+	alreadyGetAgg bool
 }
 
 type Argument struct {
