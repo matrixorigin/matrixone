@@ -870,19 +870,6 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
-func containsParamRef(expr *plan.Expr) bool {
-	var ret bool
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			ret = ret || containsParamRef(arg)
-		}
-	case *plan.Expr_P:
-		return true
-	}
-	return ret
-}
-
 func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
 	if expr == nil {
 		return
