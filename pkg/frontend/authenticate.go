@@ -2819,6 +2819,7 @@ func doSetSecondaryRoleAll(ctx context.Context, ses *Session) error {
 	// step2 : switch the default role and role id;
 	account.SetDefaultRoleID(uint32(roleId))
 	account.SetDefaultRole(roleName)
+	logutil.Debugf("session role change to %s", roleName)
 
 	return err
 
@@ -2916,6 +2917,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 		account.SetDefaultRole(sr.Role.UserName)
 		//then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
+		logutil.Debugf("session role change to %s", sr.Role.UserName)
 
 		return err
 
@@ -8380,17 +8382,16 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	currentRole := tenantInfo.GetDefaultRole()
 
 	// 1.first change to moadmin/accountAdmin
-	var tenantCtx context.Context
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, uint32(rootID))
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+		ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(rootID))
+		ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 	} else {
-		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenantInfo.GetTenantID())
+		ctx = context.WithValue(ctx, defines.UserIDKey{}, tenantInfo.GetUserID())
+		ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege
@@ -8410,13 +8411,30 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 		sql = getSqlForGrantOwnershipOnTable(dbName, tableName, currentRole)
 	}
 
-	bh := ses.GetBackgroundExec(tenantCtx)
+	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
 
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
 	}
 
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
 	return err
 }
