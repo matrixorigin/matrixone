@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+const blockNDVThreshHold = 100
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
 
@@ -353,28 +354,23 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, ndvMap map[string]float64) float64 {
 	if !CheckExprIsMonotonic(ctx, expr) {
 		return 1
 	}
 	ret, col := CheckFilter(expr)
-
 	if ret && col != nil {
-		var sel float64
 		switch getSortOrder(tableDef, col.Name) {
 		case 0:
-			sel = expr.Selectivity
+			return math.Min(expr.Selectivity, 0.5)
 		case 1:
-			sel = expr.Selectivity * 3
+			return math.Min(expr.Selectivity*3, 0.5)
 		case 2:
-			sel = expr.Selectivity * 10
-		default:
-			return 0.5
+			return math.Min(expr.Selectivity*10, 0.5)
 		}
-		if sel > 0.5 {
-			return 0.5
-		}
-		return sel
+	}
+	if getExprNdv(expr, ndvMap, -1, nil) < blockNDVThreshHold {
+		return 1
 	}
 	// do not know selectivity for this expr, default 0.5
 	return 0.5
@@ -668,7 +664,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 			node.FilterList[i] = foldedExpr
 		}
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], s)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef)
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s.NdvMap)
 		if currentBlockSel < blockSelectivityThreshHold {
 			copyOfExpr := DeepCopyExpr(node.FilterList[i])
 			copyOfExpr.Selectivity = currentBlockSel
