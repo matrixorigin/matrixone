@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1248,7 +1247,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
 			if exprC, ok := args[1].Expr.(*plan.Expr_C); ok {
 				sval := exprC.C.Value.(*plan.Const_Sval)
-				tp, _ := binary.ExtractToDateReturnType(sval.Sval)
+				tp, _ := ExtractToDateReturnType(sval.Sval)
 				args = append(args, makePlan2DateConstNullExpr(tp))
 			} else {
 				return nil, moerr.NewInvalidArg(ctx, "to_date format", "not constant")
