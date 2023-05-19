@@ -409,7 +409,11 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	schema := tbl.GetVersionSchema(req.Schema.Version)
+	var version uint32
+	if req.Schema != nil {
+		version = req.Schema.Version
+	}
+	schema := tbl.GetVersionSchema(version)
 	pkIdx := schema.GetPrimaryKey().Idx
 	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
