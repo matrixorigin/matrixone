@@ -18,7 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"go/constant"
 	"strconv"
 	"strings"
@@ -883,9 +883,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 	funcName := funcRef.Parts[0]
 
-	if function2.GetFunctionIsAggregateByName(funcName) {
+	if function.GetFunctionIsAggregateByName(funcName) {
 		return b.impl.BindAggFunc(funcName, astExpr, depth, isRoot)
-	} else if function2.GetFunctionIsWinFunByName(funcName) {
+	} else if function.GetFunctionIsWinFunByName(funcName) {
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
@@ -1303,7 +1303,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	fGet, err := function2.GetFunctionByName(ctx, name, argsType)
+	fGet, err := function.GetFunctionByName(ctx, name, argsType)
 	if err != nil {
 		return nil, err
 	}
@@ -1311,7 +1311,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
 
-	if function2.GetFunctionIsAggregateByName(name) {
+	if function.GetFunctionIsAggregateByName(name) {
 		if constExpr, ok := args[0].Expr.(*plan.Expr_C); ok && constExpr.C.Isnull {
 			args[0].Typ = makePlan2Type(&returnType)
 		}
@@ -1330,7 +1330,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					tmpType := argsType[1] // cast const_expr as column_expr's type
 					argsCastType = []types.Type{tmpType, tmpType}
 					// need to update function id
-					fGet, err = function2.GetFunctionByName(ctx, name, argsCastType)
+					fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 					if err != nil {
 						return nil, err
 					}
@@ -1342,7 +1342,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				if checkNoNeedCast(argsType[1], argsType[0], rightExpr) {
 					tmpType := argsType[0] // cast const_expr as column_expr's type
 					argsCastType = []types.Type{tmpType, tmpType}
-					fGet, err = function2.GetFunctionByName(ctx, name, argsCastType)
+					fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 					if err != nil {
 						return nil, err
 					}
@@ -1435,7 +1435,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	// return new expr
 	Typ := makePlan2Type(&returnType)
-	Typ.NotNullable = function2.DeduceNotNullable(funcID, args)
+	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -1599,7 +1599,7 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType *Type, isBin .
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
 	}
-	fGet, err := function2.GetFunctionByName(ctx, "cast", argsType)
+	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
 	if err != nil {
 		return nil, err
 	}

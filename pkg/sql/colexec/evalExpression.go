@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
@@ -126,7 +126,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}, nil
 
 	case *plan.Expr_F:
-		overload, err := function2.GetFunctionById(proc.Ctx, t.F.GetFunc().GetObj())
+		overload, err := function.GetFunctionById(proc.Ctx, t.F.GetFunc().GetObj())
 		if err != nil {
 			return nil, err
 		}
@@ -803,7 +803,7 @@ func evaluateFilterByZoneMap(
 
 	case *plan.Expr_F:
 		id := t.F.GetFunc().GetObj()
-		if overload, errGetFunc := function2.GetFunctionById(ctx, id); errGetFunc != nil {
+		if overload, errGetFunc := function.GetFunctionById(ctx, id); errGetFunc != nil {
 			zms[expr.AuxId].Reset()
 
 		} else {
@@ -972,8 +972,8 @@ func SplitAndExprs(list []*plan.Expr) []*plan.Expr {
 func splitAndExpr(expr *plan.Expr) []*plan.Expr {
 	exprs := make([]*plan.Expr, 0, 1)
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
-		fid, _ := function2.DecodeOverloadID(e.F.Func.GetObj())
-		if fid == function2.AND {
+		fid, _ := function.DecodeOverloadID(e.F.Func.GetObj())
+		if fid == function.AND {
 			exprs = append(exprs, splitAndExpr(e.F.Args[0])...)
 			exprs = append(exprs, splitAndExpr(e.F.Args[1])...)
 			return exprs
@@ -986,7 +986,7 @@ func splitAndExpr(expr *plan.Expr) []*plan.Expr {
 func makeAndExpr(left, right *plan.Expr) *plan.Expr_F {
 	return &plan.Expr_F{
 		F: &plan.Function{
-			Func: &plan.ObjectRef{Obj: function2.AndFunctionEncodedID, ObjName: function2.AndFunctionName},
+			Func: &plan.ObjectRef{Obj: function.AndFunctionEncodedID, ObjName: function.AndFunctionName},
 			Args: []*plan.Expr{left, right},
 		},
 	}

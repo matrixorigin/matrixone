@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
@@ -121,7 +121,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
-			expr.GetF().Func.Obj = int64(int64(uint64(expr.GetF().Func.Obj) | function2.Distinct))
+			expr.GetF().Func.Obj = int64(int64(uint64(expr.GetF().Func.Obj) | function.Distinct))
 		}
 	}
 	b.insideAgg = false

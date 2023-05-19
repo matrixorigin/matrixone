@@ -15,7 +15,7 @@
 package util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"strconv"
 
 	"github.com/fagongzi/util/format"
@@ -103,7 +103,7 @@ func FillCompositeKeyBatch(bat *batch.Batch, ckeyName string, keyParts []string,
 		v := cCBVectorMap[elem]
 		vs = append(vs, v)
 	}
-	vec, err := function2.RunFunctionDirectly(proc, function2.SerialFunctionEncodeID, vs, bat.Length())
+	vec, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, vs, bat.Length())
 	if err != nil {
 		return err
 	}

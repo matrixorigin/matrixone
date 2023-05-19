@@ -17,7 +17,7 @@ package join
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -260,7 +260,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 3),
 	}
-	fr, _ := function2.GetFunctionByName(ctx, "=", ts)
+	fr, _ := function.GetFunctionByName(ctx, "=", ts)
 	fid := fr.GetEncodedOverloadID()
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{

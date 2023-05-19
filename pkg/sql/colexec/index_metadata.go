@@ -16,7 +16,7 @@ package colexec
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"strconv"
 	"time"
 
@@ -358,7 +358,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	}
 
 	// processing composite primary key
-	vec_prikey, err := function2.RunFunctionDirectly(proc, function2.SerialFunctionEncodeID, []*vector.Vector{vec_id, vec_column_name}, vec_id.Length())
+	vec_prikey, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, []*vector.Vector{vec_id, vec_column_name}, vec_id.Length())
 	if err != nil {
 		return nil, err
 	}

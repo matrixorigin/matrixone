@@ -73,7 +73,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -942,7 +942,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 	multiaggs := make([]group_concat.Argument, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
-			distinct := (uint64(f.F.Func.Obj) & function2.Distinct) != 0
+			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			if len(f.F.Args) > 1 {
 				executor, err := colexec.NewExpressionExecutor(proc, f.F.Args[len(f.F.Args)-1])
 				if err != nil {
@@ -964,8 +964,8 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 				lenMultiAggs++
 				continue
 			}
-			obj := int64(uint64(f.F.Func.Obj) & function2.DistinctMask)
-			fun, err := function2.GetFunctionById(ctx, obj)
+			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+			fun, err := function.GetFunctionById(ctx, obj)
 			if err != nil {
 				panic(err)
 			}

@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -83,7 +83,7 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		return e
 	}
 	overloadID := ef.F.Func.GetObj()
-	f, exists := function2.GetFunctionByIdWithoutError(overloadID)
+	f, exists := function.GetFunctionByIdWithoutError(overloadID)
 	if !exists {
 		return e
 	}
@@ -309,7 +309,7 @@ func IsConstant(e *plan.Expr) bool {
 		return true
 	case *plan.Expr_F:
 		overloadID := ef.F.Func.GetObj()
-		f, exists := function2.GetFunctionByIdWithoutError(overloadID)
+		f, exists := function.GetFunctionByIdWithoutError(overloadID)
 		if !exists {
 			return false
 		}

@@ -16,7 +16,7 @@ package util
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -86,7 +86,7 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 	}
 	for _, test := range tests {
 		if len(test.parts) >= 2 {
-			vec, _ := function2.RunFunctionDirectly(proc, function2.SerialFunctionEncodeID, test.vecs, test.vecs[0].Length())
+			vec, _ := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, test.vecs, test.vecs[0].Length())
 			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc)
 			require.Equal(t, vec.UnsafeGetRawData(), b.Vecs[0].UnsafeGetRawData())
 		} else {

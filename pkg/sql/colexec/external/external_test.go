@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"os"
 	"path/filepath"
 	"testing"
@@ -688,19 +688,19 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	fileList := toPathArr(files)
 	fileSize := toSizeArr(files)
 
-	e, err := function2.GetFunctionByName(context.Background(), "=", []types.Type{types.T_date.ToType(), types.T_date.ToType()})
+	e, err := function.GetFunctionByName(context.Background(), "=", []types.Type{types.T_date.ToType(), types.T_date.ToType()})
 	if err != nil {
 		panic(err)
 	}
 	equalDate2DateFid := e.GetEncodedOverloadID()
 
-	e, err = function2.GetFunctionByName(context.Background(), "<", []types.Type{types.T_date.ToType(), types.T_date.ToType()})
+	e, err = function.GetFunctionByName(context.Background(), "<", []types.Type{types.T_date.ToType(), types.T_date.ToType()})
 	if err != nil {
 		panic(err)
 	}
 	lessDate2DateFid := e.GetEncodedOverloadID()
 
-	e, err = function2.GetFunctionByName(context.Background(), "mo_log_date", []types.Type{types.T_varchar.ToType()})
+	e, err = function.GetFunctionByName(context.Background(), "mo_log_date", []types.Type{types.T_varchar.ToType()})
 	if err != nil {
 		panic(err)
 	}

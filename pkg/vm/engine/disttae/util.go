@@ -15,7 +15,7 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"math"
 	"sort"
 	"strings"
@@ -56,7 +56,7 @@ func evalNoColumnFilterExpr(
 func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
 	args := []*plan.Expr{constExpr}
 	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
-	fGet, err := function2.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
+	fGet, err := function.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
 	if err != nil {
 		panic(err)
 	}

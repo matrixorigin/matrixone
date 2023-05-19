@@ -18,7 +18,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/csv"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"path"
@@ -1011,7 +1011,7 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 			}
 		}
 
-		isMonotonic, _ := function2.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
+		isMonotonic, _ := function.GetFunctionIsMonotonicById(ctx, exprImpl.F.Func.GetObj())
 		if !isMonotonic {
 			return false
 		}
@@ -1092,7 +1092,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 		return e, nil
 	}
 	overloadID := ef.F.Func.GetObj()
-	f, err := function2.GetFunctionById(proc.Ctx, overloadID)
+	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
 		return nil, err
 	}

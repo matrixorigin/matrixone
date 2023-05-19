@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"strconv"
 	"strings"
 
@@ -127,13 +127,13 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 	funcName := funcExpr.F.GetFunc().GetObjName()
 	funcDef := funcExpr.F.GetFunc()
 
-	layout, err := function2.GetLayoutById(ctx, funcDef.Obj&function2.DistinctMask)
+	layout, err := function.GetLayoutById(ctx, funcDef.Obj&function.DistinctMask)
 	if err != nil {
 		return moerr.NewInvalidInput(ctx, "invalid function or opreator '%s'", funcName)
 	}
 
 	switch layout {
-	case function2.STANDARD_FUNCTION:
+	case function.STANDARD_FUNCTION:
 		buf.WriteString(funcExpr.F.Func.GetObjName() + "(")
 		if len(funcExpr.F.Args) > 0 {
 			var first = true
@@ -149,7 +149,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			}
 		}
 		buf.WriteString(")")
-	case function2.UNARY_ARITHMETIC_OPERATOR:
+	case function.UNARY_ARITHMETIC_OPERATOR:
 		var opertator string
 		if funcExpr.F.Func.GetObjName() == "UNARY_PLUS" {
 			opertator = "+"
@@ -162,7 +162,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			return err
 		}
 		buf.WriteString(")")
-	case function2.UNARY_LOGICAL_OPERATOR:
+	case function.UNARY_LOGICAL_OPERATOR:
 		buf.WriteString("(" + funcExpr.F.Func.GetObjName() + " ")
 		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
@@ -170,11 +170,11 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		}
 		buf.WriteString(")")
 		//result += "(" + funcExpr.F.Func.GetObjName() + " " + describeExpr + ")"
-	case function2.BINARY_ARITHMETIC_OPERATOR:
+	case function.BINARY_ARITHMETIC_OPERATOR:
 		fallthrough
-	case function2.BINARY_LOGICAL_OPERATOR:
+	case function.BINARY_LOGICAL_OPERATOR:
 		fallthrough
-	case function2.COMPARISON_OPERATOR:
+	case function.COMPARISON_OPERATOR:
 		buf.WriteString("(")
 		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
@@ -186,7 +186,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			return err
 		}
 		buf.WriteString(")")
-	case function2.CAST_EXPRESSION:
+	case function.CAST_EXPRESSION:
 		buf.WriteString("CAST(")
 		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
@@ -198,7 +198,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		} else {
 			fmt.Fprintf(buf, " AS %s)", tt.String())
 		}
-	case function2.CASE_WHEN_EXPRESSION:
+	case function.CASE_WHEN_EXPRESSION:
 		// TODO need rewrite to deal with case is nil
 		buf.WriteString("CASE")
 		// case when expression has two part(case when condition and else exression)
@@ -229,7 +229,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			}
 		}
 		buf.WriteString(" END")
-	case function2.IN_PREDICATE:
+	case function.IN_PREDICATE:
 		if len(funcExpr.F.Args) != 2 {
 			panic("Nested query predicate,such as in,exist,all,any parameter number error!")
 		}
@@ -243,36 +243,36 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			return err
 		}
 		buf.WriteString(")")
-	case function2.EXISTS_ANY_PREDICATE:
+	case function.EXISTS_ANY_PREDICATE:
 		buf.WriteString(funcExpr.F.Func.GetObjName() + "(")
 		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
 			return err
 		}
 		buf.WriteString(")")
-	case function2.IS_EXPRESSION:
+	case function.IS_EXPRESSION:
 		buf.WriteString("(")
 		err := describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
 			return err
 		}
 		buf.WriteString(fmt.Sprintf(" IS %s)", strings.ToUpper(funcExpr.F.Func.GetObjName()[2:])))
-	case function2.IS_NOT_EXPRESSION:
+	case function.IS_NOT_EXPRESSION:
 		buf.WriteString("(")
 		err := describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
 			return err
 		}
 		buf.WriteString(fmt.Sprintf(" IS NOT %s)", strings.ToUpper(funcExpr.F.Func.GetObjName()[5:])))
-	case function2.NOPARAMETER_FUNCTION:
+	case function.NOPARAMETER_FUNCTION:
 		buf.WriteString(funcExpr.F.Func.GetObjName())
-	case function2.DATE_INTERVAL_EXPRESSION:
+	case function.DATE_INTERVAL_EXPRESSION:
 		buf.WriteString(funcExpr.F.Func.GetObjName() + " ")
 		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
 			return err
 		}
-	case function2.EXTRACT_FUNCTION:
+	case function.EXTRACT_FUNCTION:
 		buf.WriteString(funcExpr.F.Func.GetObjName() + "(")
 		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
@@ -284,7 +284,7 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			return err
 		}
 		buf.WriteString(")")
-	case function2.UNKNOW_KIND_FUNCTION:
+	case function.UNKNOW_KIND_FUNCTION:
 		return moerr.NewInvalidInput(ctx, "explain contains UNKNOW_KIND_FUNCTION")
 	}
 	return nil
