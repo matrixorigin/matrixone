@@ -1037,10 +1037,7 @@ func isDefaultExpr(expr *Expr) bool {
 		return false
 	}
 	_, ok = c.C.Value.(*plan.Const_Defaultval)
-	if !ok {
-		return false
-	}
-	return true
+	return ok
 }
 
 func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, tableDef *TableDef, baseNodeId int32, rewriteIdx int) error {

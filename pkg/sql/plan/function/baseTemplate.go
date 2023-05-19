@@ -32,6 +32,10 @@ type templateTr1 interface {
 	bool
 }
 
+// For sca.
+var _ = opBinaryFixedStrToFixedWithErrorCheck[bool, bool]
+var _ = opNoneParamToBytesWithErrorCheck
+
 // I hope it can generate all functions according to some easy parameters.
 // not yet ok. and may change soon. plz use it carefully if you really need it.
 func generalFunctionTemplateFactor[T1 templateTp1, T2 templateTr1](

@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 	"unicode"
 )
 
@@ -228,22 +227,6 @@ func checkMysqlTime(cctx context.Context, t *GeneralTime, ctx map[string]int) er
 		}
 	}
 	return nil
-}
-
-// Extract the return value type of the str_to_date function according to the value of the fromat parameter
-func ExtractToDateReturnType(format string) (tp types.T, fsp int) {
-	isTime, isDate := getTimeFormatType(format)
-	if isTime && !isDate {
-		tp = types.T_time
-	} else if !isTime && isDate {
-		tp = types.T_date
-	} else {
-		tp = types.T_datetime
-	}
-	if strings.Contains(format, "%f") {
-		fsp = MaxFsp
-	}
-	return tp, MaxFsp
 }
 
 // getTimeFormatType checks the type(Time, Date or Datetime) of a format string.

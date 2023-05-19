@@ -31,11 +31,6 @@ const (
 	End
 )
 
-type evalVector struct {
-	needFree bool
-	vec      *vector.Vector
-}
-
 type container struct {
 	colexec.ReceiverOperator
 

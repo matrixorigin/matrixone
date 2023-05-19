@@ -1106,18 +1106,18 @@ func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Dat
 	}
 }
 
-func doTimeSub(start types.Time, diff int64, unit int64) (types.Time, error) {
-	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
-	if err != nil {
-		return 0, err
-	}
-	t, success := start.AddInterval(-diff, types.IntervalType(unit))
-	if success {
-		return t, nil
-	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("time", "")
-	}
-}
+//func doTimeSub(start types.Time, diff int64, unit int64) (types.Time, error) {
+//	err := types.JudgeIntervalNumOverflow(diff, types.IntervalType(unit))
+//	if err != nil {
+//		return 0, err
+//	}
+//	t, success := start.AddInterval(-diff, types.IntervalType(unit))
+//	if success {
+//		return t, nil
+//	} else {
+//		return 0, moerr.NewOutOfRangeNoCtx("time", "")
+//	}
+//}
 
 func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
@@ -1329,7 +1329,7 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 				continue
 			}
 
-			if strings.ToLower(string(v1)) == strings.ToLower(string(v2)) {
+			if strings.EqualFold(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)) {
 				nums[i] = uint64(j)
 			}
 
@@ -1450,7 +1450,7 @@ func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > max_unix_timestamp_int) {
+		if null || v > max_unix_timestamp_int {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
@@ -1536,7 +1536,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > max_unix_timestamp_int) || null1 {
+		if null1 || null || v > max_unix_timestamp_int {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -1674,43 +1674,6 @@ func getSliceOffsetLen(s string, offset int64, length int64) string {
 // From right to left, cut the slice with length from 1
 func getSliceFromRightWithLength(s string, offset int64, length int64) string {
 	return getSliceOffsetLen(s, -offset, length)
-}
-
-func castConstAsInt64[T number](ctx context.Context, typ types.Type, val T) (int64, error) {
-	var r int64
-	switch typ.Oid {
-	case types.T_uint8:
-		r = int64(val)
-	case types.T_uint16:
-		r = int64(val)
-	case types.T_uint32:
-		r = int64(val)
-	case types.T_uint64:
-		tmp := uint64(val)
-		if tmp > uint64(math.MaxInt64) {
-			return 0, moerr.NewInvalidArg(ctx, "function substring(str, start, lenth)", val)
-		}
-		r = int64(val)
-	case types.T_int8:
-		r = int64(val)
-	case types.T_int16:
-		r = int64(val)
-	case types.T_int32:
-		r = int64(val)
-	case types.T_int64:
-		r = int64(val)
-	case types.T_float32:
-		r = int64(val)
-	case types.T_float64:
-		tmp := float64(val)
-		if tmp > float64(math.MaxInt64) {
-			return 0, moerr.NewInvalidArg(ctx, "function substring(str, start, lenth)", val)
-		}
-		r = int64(val)
-	default:
-		panic("castConstAsInt64 failed, unknown type")
-	}
-	return r, nil
 }
 
 func SubStringWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {

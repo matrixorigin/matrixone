@@ -44,7 +44,7 @@ var supportedOperators = []FuncNew{
 					}
 				} else {
 					if equalAndNotEqualOperatorSupports(inputs[0], inputs[1]) {
-						if inputs[0].Oid.IsDecimal() && inputs[0].Scale != inputs[0].Scale {
+						if inputs[0].Oid.IsDecimal() && inputs[0].Scale != inputs[1].Scale {
 							t1, t2 := inputs[0], inputs[1]
 							if t1.Scale > t2.Scale {
 								t2.Scale = t1.Scale

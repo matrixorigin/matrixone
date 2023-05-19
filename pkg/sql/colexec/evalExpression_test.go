@@ -41,7 +41,7 @@ func TestFixedExpressionExecutor(t *testing.T) {
 		require.Equal(t, int64(218311), vector.MustFixedCol[int64](vec)[0])
 		require.Equal(t, false, vec.GetNulls().Contains(0))
 	}
-	vec, err = conExprExecutor.Eval(proc, []*batch.Batch{{Zs: make([]int64, 10)}})
+	_, err = conExprExecutor.Eval(proc, []*batch.Batch{{Zs: make([]int64, 10)}})
 	require.NoError(t, err)
 	require.Equal(t, curr1, proc.Mp().CurrNB()) // check memory reuse
 	conExprExecutor.Free()
@@ -211,7 +211,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		require.Equal(t, int64(101), vector.MustFixedCol[int64](vec)[0]) // 1+100
 		require.Equal(t, int64(102), vector.MustFixedCol[int64](vec)[1]) // 2+100
 	}
-	vec, err = fExprExecutor.Eval(proc, []*batch.Batch{bat})
+	_, err = fExprExecutor.Eval(proc, []*batch.Batch{bat})
 	require.NoError(t, err)
 	require.Equal(t, curr3, proc.Mp().CurrNB())
 	fExprExecutor.Free()

@@ -16,7 +16,6 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"strings"
 	"unicode"
 )
 
@@ -36,9 +35,9 @@ func ExtractToDateReturnType(format string) (tp types.T, fsp int) {
 	} else {
 		tp = types.T_datetime
 	}
-	if strings.Contains(format, "%f") {
-		fsp = MaxFsp
-	}
+	//if strings.Contains(format, "%f") {
+	//	fsp = MaxFsp
+	//}
 	return tp, MaxFsp
 }
 

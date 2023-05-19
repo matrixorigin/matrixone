@@ -39,20 +39,6 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func evalNoColumnFilterExpr(
-	ctx context.Context,
-	expr *plan.Expr,
-	proc *process.Process,
-) (selected bool) {
-	bat := batch.NewWithSize(0)
-	defer bat.Clean(proc.Mp())
-	var err error
-	if selected, err = plan2.EvalFilterExpr(ctx, expr, bat, proc); err != nil {
-		selected = true
-	}
-	return
-}
-
 func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
 	args := []*plan.Expr{constExpr}
 	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
