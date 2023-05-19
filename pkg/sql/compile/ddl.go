@@ -1227,39 +1227,6 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 	return exeCols
 }
 
-// Get the required columns of the index table from the original table
-func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []string) []string {
-	colNameMap := make(map[string]int)
-	for _, tbldef := range tblDefs {
-		if constraintDef, ok := tbldef.(*engine.ConstraintDef); ok {
-			for _, ct := range constraintDef.Cts {
-				if pk, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
-					if pk.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-						colNameMap[catalog.CPrimaryKeyColName] = 1
-					} else {
-						for _, name := range pk.Pkey.Names {
-							colNameMap[name] = 1
-						}
-					}
-					break
-				}
-			}
-		}
-	}
-
-	for _, column := range indexColumns {
-		colNameMap[column] = 1
-	}
-
-	j := 0
-	keys := make([]string, len(colNameMap))
-	for k := range colNameMap {
-		keys[j] = k
-		j++
-	}
-	return keys
-}
-
 func (s *Scope) CreateSequence(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateSequence()
 	// convert the plan's cols to the execution's cols

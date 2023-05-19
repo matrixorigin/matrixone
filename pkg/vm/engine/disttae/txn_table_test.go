@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -107,12 +106,13 @@ func TestPrimaryKeyCheck(t *testing.T) {
 	)
 	assert.Nil(t, err)
 
-	// insert duplicated
-	err = table.Write(
-		ctx,
-		makeBatchForTest(mp, 1),
-	)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	// // insert duplicated
+	// we check duplicated in pipeline runing now
+	// err = table.Write(
+	// 	ctx,
+	// 	makeBatchForTest(mp, 1),
+	// )
+	// assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 
 	// insert no duplicated
 	err = table.Write(
@@ -122,11 +122,12 @@ func TestPrimaryKeyCheck(t *testing.T) {
 	assert.Nil(t, err)
 
 	// duplicated in same batch
-	err = table.Write(
-		ctx,
-		makeBatchForTest(mp, 4, 4),
-	)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+	// we check duplicated in pipeline runing now
+	// err = table.Write(
+	// 	ctx,
+	// 	makeBatchForTest(mp, 4, 4),
+	// )
+	// assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 
 	table = newTxnTableForTest(mp)
 

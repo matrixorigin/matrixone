@@ -16,10 +16,11 @@ package mergeblock
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -55,7 +56,8 @@ func TestMergeBlock(t *testing.T) {
 			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil),
 			testutil.MakeTextVector([]string{loc1.String(), loc2.String(), loc3.String()}, nil),
 		},
-		Zs: []int64{1, 1, 1},
+		Zs:  []int64{1, 1, 1},
+		Cnt: 1,
 	}
 	argument1 := Argument{
 		Tbl: &mockRelation{},

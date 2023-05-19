@@ -195,7 +195,15 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 		//		continue
 		//	}
 		//}
-
+		if attr.Primary {
+			tableDef.Pkey = &plan.PrimaryKeyDef{
+				Cols:        []uint64{uint64(i)},
+				PkeyColId:   uint64(i),
+				PkeyColName: attr.Name,
+				Names:       []string{attr.Name},
+				CompPkeyCol: engineAttrToPlanColDef(i, attr),
+			}
+		}
 		tableDef.Cols = append(tableDef.Cols, engineAttrToPlanColDef(i, attr))
 	}
 

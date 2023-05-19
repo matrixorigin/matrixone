@@ -16,6 +16,9 @@ package preinsertunique
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestPreInsertUnique(t *testing.T) {
@@ -66,7 +67,8 @@ func TestPreInsertUnique(t *testing.T) {
 			testutil.MakeInt64Vector([]int64{11, 22, 33}, nil),
 			testutil.MakeInt64Vector([]int64{23, 23, 23}, nil),
 		},
-		Zs: []int64{1, 1, 1},
+		Zs:  []int64{1, 1, 1},
+		Cnt: 1,
 	}
 
 	argument := Argument{

@@ -80,7 +80,7 @@ func Call(
 	}
 
 	bat := proc.InputBatch()
-	if bat == nil {
+	if bat == nil || !proc.TxnOperator.Txn().IsPessimistic() {
 		// all lock added, reutrn retry errror if needed
 		return true, arg.err
 	}

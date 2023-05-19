@@ -67,7 +67,8 @@ func TestPreInsertNormal(t *testing.T) {
 			testutil.MakeScalarVarchar("d", 3),
 			testutil.MakeScalarNull(types.T_int64, 3),
 		},
-		Zs: []int64{1, 1, 1},
+		Zs:  []int64{1, 1, 1},
+		Cnt: 1,
 	}
 	argument1 := Argument{
 		SchemaName: "testDb",
