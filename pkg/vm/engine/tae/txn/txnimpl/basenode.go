@@ -19,7 +19,6 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -179,7 +178,6 @@ func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 type baseNode struct {
 	meta  *catalog.BlockEntry
 	table *txnTable
-	mnode *memoryNode
 }
 
 func newBaseNode(
@@ -201,24 +199,19 @@ func (n *baseNode) GetTxn() txnif.AsyncTxn {
 }
 
 func (n *baseNode) GetPersistedLoc() (objectio.Location, objectio.Location) {
-	return n.meta.GetMetaLoc(), n.meta.GetDeltaLoc()
+	return n.meta.FastGetMetaLoc(), n.meta.GetDeltaLoc()
 }
 
 func (n *baseNode) Rows() uint32 {
-	if n.mnode != nil {
-		return n.mnode.rows
-	}
-	panic(moerr.NewInternalErrorNoCtx(
-		fmt.Sprintf("bad insertNode %s", n.meta.String())))
-}
-
-func (n *baseNode) TryUpgrade() (err error) {
-	panic("not supported")
+	return n.meta.FastGetMetaLoc().Rows()
 }
 
 func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, err error) {
+	location := n.meta.FastGetMetaLoc()
+	if location.IsEmpty() {
+		panic("cannot load persisted column data from empty location")
+	}
 	def := n.table.GetLocalSchema().ColDefs[colIdx]
-	location := n.meta.GetMetaLoc()
 	return tables.LoadPersistedColumnData(
 		n.table.store.dataFactory.Fs,
 		nil,

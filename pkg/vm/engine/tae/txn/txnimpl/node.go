@@ -23,78 +23,78 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
-// node corresponds to an un-appendable standalone-uncommitted block
+// pnode corresponds to an un-appendable standalone-uncommitted block
 // which belongs to txn's workspace.
-type node struct {
+type pnode struct {
 	*baseNode
 }
 
-// NewNode creates a InsertNode object with data in S3/FS.
-func NewNode(
+// newPNode creates a InsertNode object with data in S3/FS.
+func newPNode(
 	tbl *txnTable,
 	meta *catalog.BlockEntry,
-) *node {
-	impl := new(node)
+) *pnode {
+	impl := new(pnode)
 	impl.baseNode = newBaseNode(tbl, meta)
 	return impl
 }
 
-func (n *node) Close() error {
+func (n *pnode) Close() error {
 	return nil
 }
 
-func (n *node) IsPersisted() bool {
+func (n *pnode) IsPersisted() bool {
 	return true
 }
 
-func (n *node) Append(data *containers.Batch, offset uint32) (appended uint32, err error) {
+func (n *pnode) Append(data *containers.Batch, offset uint32) (appended uint32, err error) {
 	panic("not supported")
 }
 
-func (n *node) RangeDelete(start uint32, end uint32) (err error) {
+func (n *pnode) RangeDelete(start uint32, end uint32) (err error) {
 	panic("not supported")
 }
 
-func (n *node) IsRowDeleted(row uint32) bool {
+func (n *pnode) IsRowDeleted(row uint32) bool {
 	panic("not supported")
 }
 
-func (n *node) PrintDeletes() string {
+func (n *pnode) PrintDeletes() string {
 	panic("not supported")
 }
 
-func (n *node) GetSpace() uint32 {
+func (n *pnode) GetSpace() uint32 {
 	panic("not supported ")
 }
 
-func (n *node) FillBlockView(
+func (n *pnode) FillBlockView(
 	view *model.BlockView,
 	colIdxes []int) (err error) {
 	//TODO::
 	panic("not implemented yet ")
 }
 
-func (n *node) FillColumnView(*model.ColumnView) error {
+func (n *pnode) FillColumnView(*model.ColumnView) error {
 	//TODO::
 	panic("not implemented yet ")
 }
 
-func (n *node) WindowColumn(start, end uint32, pos int) (containers.Vector, error) {
+func (n *pnode) WindowColumn(start, end uint32, pos int) (containers.Vector, error) {
 	//TODO::
 	panic("not implemented yet ")
 }
 
-func (n *node) Window(start, end uint32) (*containers.Batch, error) {
+func (n *pnode) Window(start, end uint32) (*containers.Batch, error) {
 	//TODO::
 	panic("not implemented yet ")
 }
 
-func (n *node) GetValue(col int, row uint32) (any, bool, error) {
+func (n *pnode) GetValue(col int, row uint32) (any, bool, error) {
 	//TODO::
 	panic("not implemented yet ")
 }
 
-func (n *node) AddApplyInfo(
+func (n *pnode) AddApplyInfo(
 	srcOff,
 	srcLen,
 	destOff,
@@ -103,32 +103,32 @@ func (n *node) AddApplyInfo(
 	panic("not supported ")
 }
 
-func (n *node) RowsWithoutDeletes() uint32 {
+func (n *pnode) RowsWithoutDeletes() uint32 {
 	panic("not implemented yet ")
 }
 
-func (n *node) LengthWithDeletes(appended, toAppend uint32) uint32 {
+func (n *pnode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 	panic("not supported ")
 }
 
-func (n *node) OffsetWithDeletes(count uint32) uint32 {
+func (n *pnode) OffsetWithDeletes(count uint32) uint32 {
 	panic("not supported ")
 }
 
-func (n *node) GetAppends() []*appendInfo {
+func (n *pnode) GetAppends() []*appendInfo {
 	panic("not supported ")
 }
 
-func (n *node) MakeCommand(_ uint32) (txnif.TxnCmd, error) {
+func (n *pnode) MakeCommand(_ uint32) (txnif.TxnCmd, error) {
 	return nil, nil
 }
 
-func (n *node) GetColumnDataByIds([]int) (*model.BlockView, error) {
+func (n *pnode) GetColumnDataByIds([]int) (*model.BlockView, error) {
 	//TODO::
 	panic("not implemented yet ")
 }
 
-func (n *node) GetColumnDataById(idx int) (view *model.ColumnView, err error) {
+func (n *pnode) GetColumnDataById(idx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(idx)
 	vec, err := n.LoadPersistedColumnData(idx)
 	if err != nil {
@@ -138,7 +138,7 @@ func (n *node) GetColumnDataById(idx int) (view *model.ColumnView, err error) {
 	return
 }
 
-func (n *node) Prefetch(idxes []uint16) error {
-	key := n.meta.GetMetaLoc()
+func (n *pnode) Prefetch(idxes []uint16) error {
+	key := n.meta.FastGetMetaLoc()
 	return blockio.Prefetch(idxes, []uint16{key.ID()}, n.table.store.dataFactory.Fs.Service, key)
 }

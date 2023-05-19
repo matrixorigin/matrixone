@@ -26,6 +26,7 @@ import (
 // which belongs to txn's workspace and can be appended data into.
 type anode struct {
 	*baseNode
+	mnode *memoryNode
 }
 
 // NewANode creates a InsertNode with data in memory.
@@ -38,6 +39,10 @@ func NewANode(
 	impl.mnode = newMemoryNode(impl.baseNode)
 	impl.mnode.Ref()
 	return impl
+}
+
+func (n *anode) Rows() uint32 {
+	return n.mnode.rows
 }
 
 func (n *anode) GetAppends() []*appendInfo {
@@ -62,9 +67,6 @@ func (n *anode) IsPersisted() bool {
 }
 
 func (n *anode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	if n.IsPersisted() {
-		return nil, nil
-	}
 	if n.mnode.data == nil {
 		return
 	}
@@ -75,6 +77,7 @@ func (n *anode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 func (n *anode) Close() (err error) {
 	if n.mnode.data != nil {
 		n.mnode.data.Close()
+		n.mnode.data = nil
 	}
 	return
 }
@@ -159,12 +162,8 @@ func (n *anode) OffsetWithDeletes(count uint32) uint32 {
 }
 
 func (n *anode) GetValue(col int, row uint32) (any, bool, error) {
-	if !n.IsPersisted() {
-		vec := n.mnode.data.Vecs[col]
-		return vec.Get(int(row)), vec.IsNull(int(row)), nil
-	}
-	//TODO:: get value from S3/FS
-	panic("not implemented yet :GetValue from FS/S3 ")
+	vec := n.mnode.data.Vecs[col]
+	return vec.Get(int(row)), vec.IsNull(int(row)), nil
 }
 
 func (n *anode) RangeDelete(start, end uint32) error {
@@ -209,21 +208,15 @@ func (n *anode) Window(start, end uint32) (bat *containers.Batch, err error) {
 func (n *anode) GetColumnDataByIds(
 	colIdxes []int,
 ) (view *model.BlockView, err error) {
-	if !n.IsPersisted() {
-		view = model.NewBlockView()
-		err = n.FillBlockView(view, colIdxes)
-		return
-	}
-	panic("Not Implemented yet : GetColumnDataByIds from S3/FS ")
+	view = model.NewBlockView()
+	err = n.FillBlockView(view, colIdxes)
+	return
 }
 
 func (n *anode) GetColumnDataById(colIdx int) (view *model.ColumnView, err error) {
-	if !n.IsPersisted() {
-		view = model.NewColumnView(colIdx)
-		err = n.FillColumnView(view)
-		return
-	}
-	panic("Not Implemented yet : GetColumnDataByIds from S3/FS ")
+	view = model.NewColumnView(colIdx)
+	err = n.FillColumnView(view)
+	return
 }
 
 func (n *anode) Prefetch(idxes []uint16) error {
