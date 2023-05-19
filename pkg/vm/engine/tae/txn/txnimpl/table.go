@@ -209,13 +209,13 @@ func (tbl *txnTable) recurTransferDelete(
 	page *model.TransferHashPage,
 	id *common.ID,
 	row uint32,
-	depth int) (err error) {
+	depth int) error {
 
 	var page2 *common.PinnedItem[*model.TransferHashPage]
 
 	rowID, ok := page.Transfer(row)
 	if !ok {
-		err = moerr.NewTxnWWConflictNoCtx()
+		err := moerr.NewTxnWWConflictNoCtx()
 		msg := fmt.Sprintf("table-%d blk-%d delete row-%d depth-%d",
 			id.TableID,
 			id.BlockID,
@@ -224,7 +224,7 @@ func (tbl *txnTable) recurTransferDelete(
 		logutil.Warnf("[ts=%s]TransferDelete: %v",
 			tbl.store.txn.GetStartTS().ToString(),
 			msg)
-		return
+		return err
 	}
 	blockID, offset := rowID.Decode()
 	newID := &common.ID{
@@ -232,9 +232,8 @@ func (tbl *txnTable) recurTransferDelete(
 		BlockID: blockID,
 	}
 	if page2, ok = memo[blockID]; !ok {
-		if page2, err = tbl.store.transferTable.Pin(*newID); err != nil {
-			err = nil
-		} else {
+		page2, err := tbl.store.transferTable.Pin(*newID)
+		if err == nil {
 			memo[blockID] = page2
 		}
 	}
@@ -246,8 +245,8 @@ func (tbl *txnTable) recurTransferDelete(
 			offset,
 			depth+1)
 	}
-	if err = tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
-		return
+	if err := tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
+		return err
 	}
 	common.DoIfInfoEnabled(func() {
 		logutil.Infof("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
@@ -257,7 +256,7 @@ func (tbl *txnTable) recurTransferDelete(
 			blockID.String(),
 			offset)
 	})
-	return
+	return nil
 }
 
 func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferred bool, err error) {

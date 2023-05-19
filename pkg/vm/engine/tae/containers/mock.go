@@ -19,7 +19,6 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -51,7 +50,6 @@ func (p *MockDataProvider) GetColumnProvider(colIdx int) Vector {
 }
 
 func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vector) {
-	rand.Seed(time.Now().UnixNano())
 	vec = MakeVector(t)
 	if provider != nil {
 		vec.Extend(provider)
