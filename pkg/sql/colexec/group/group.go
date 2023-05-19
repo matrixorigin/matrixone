@@ -170,7 +170,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		return true, nil
 	}
 	defer proc.PutBatch(bat)
-	if len(bat.Vecs) == 0 {
+	if bat.Length() == 0 {
 		return false, nil
 	}
 	anal.Input(bat, isFirst)
