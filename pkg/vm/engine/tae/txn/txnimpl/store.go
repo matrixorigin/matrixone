@@ -175,7 +175,6 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 
 func (store *txnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
-	zm []objectio.ZoneMap,
 	metaLoc []objectio.Location,
 ) error {
 	store.IncreateWriteCnt()
@@ -183,7 +182,7 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(tid, zm, metaLoc)
+	return db.AddBlksWithMetaLoc(tid, metaLoc)
 }
 
 func (store *txnStore) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {

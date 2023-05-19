@@ -332,7 +332,6 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 // AddBlksWithMetaLoc transfers blocks with meta location into non-appendable nodes
 func (seg *localSegment) AddBlksWithMetaLoc(
 	pkVecs []containers.Vector,
-	zm []objectio.ZoneMap,
 	metaLocs []objectio.Location,
 ) (err error) {
 	for i, metaLoc := range metaLocs {

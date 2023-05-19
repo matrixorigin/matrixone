@@ -35,7 +35,6 @@ func (store *NoopTxnStore) Close() error                                        
 func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error { return nil }
 func (store *NoopTxnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
-	zm []objectio.ZoneMap,
 	metaLocs []objectio.Location,
 ) error {
 	return nil
