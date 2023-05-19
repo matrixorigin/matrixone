@@ -1056,28 +1056,6 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 	}
 }
 
-// this function will be deleted soon
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) ([]*plan.Expr, *plan.Expr) {
-	if proc == nil || proc.Ctx == nil {
-		return nil, nil
-	}
-	var monoExprList, nonMonoExprList []*plan.Expr
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	for _, expr := range exprList {
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
-		if tmpexpr != nil {
-			expr = tmpexpr
-		}
-		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
-			monoExprList = append(monoExprList, expr)
-		} else {
-			nonMonoExprList = append(nonMonoExprList, expr)
-		}
-	}
-	return monoExprList, colexec.RewriteFilterExprList(nonMonoExprList)
-}
-
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
 	var err error
 

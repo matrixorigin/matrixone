@@ -29,6 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+const blockSelectivityThreshHold = 0.95
+const highNDVcolumnThreshHold = 0.95
+
 // stats cache is small, no need to use LRU for now
 type StatsCache struct {
 	cachePool map[uint64]*StatsInfoMap
@@ -155,7 +158,7 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 	for i := range cols {
 		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
 	}
-	return totalNDV > s.TableCnt*0.95
+	return totalNDV > s.TableCnt*highNDVcolumnThreshHold
 }
 
 func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
@@ -350,7 +353,7 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *StatsInfoMap) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef) float64 {
 	if !CheckExprIsMonotonic(ctx, expr) {
 		return 1
 	}
@@ -359,14 +362,12 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	if ret && col != nil {
 		var sel float64
 		switch getSortOrder(tableDef, col.Name) {
-		case -1:
-			return 1
 		case 0:
-			sel = estimateExprSelectivity(expr, s)
+			sel = expr.Selectivity
 		case 1:
-			sel = estimateExprSelectivity(expr, s) * 3
+			sel = expr.Selectivity * 3
 		case 2:
-			sel = estimateExprSelectivity(expr, s) * 10
+			sel = expr.Selectivity * 10
 		default:
 			return 0.5
 		}
@@ -379,34 +380,30 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	return 0.5
 }
 
-func SortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
+func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			SortFilterListByStats(ctx, child, builder)
+			rewriteFilterListByStats(ctx, child, builder)
 		}
 	}
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
-		if node.ObjRef != nil && len(node.FilterList) > 1 {
+		if node.ObjRef != nil && len(node.FilterList) >= 1 {
 			sc := builder.compCtx.GetStatsCache()
 			if sc == nil {
 				return
 			}
 			s := sc.GetStatsInfoMap(node.TableDef.TblId)
-
-			bat := batch.NewWithSize(0)
-			bat.Zs = []int64{1}
-			for i := range node.FilterList {
-				expr, _ := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
-				if expr != nil {
-					node.FilterList[i] = expr
-				}
-			}
 			sort.Slice(node.FilterList, func(i, j int) bool {
 				cost1 := estimateFilterWeight(node.FilterList[i], 0) * estimateExprSelectivity(node.FilterList[i], s)
 				cost2 := estimateFilterWeight(node.FilterList[j], 0) * estimateExprSelectivity(node.FilterList[j], s)
 				return cost1 <= cost2
+			})
+			sort.Slice(node.BlockFilterList, func(i, j int) bool {
+				blockSel1 := node.BlockFilterList[i].Selectivity
+				blockSel2 := node.BlockFilterList[j].Selectivity
+				return blockSel1 <= blockSel2
 			})
 		}
 	}
@@ -659,24 +656,32 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 
 	stats := new(plan.Stats)
 	stats.TableCnt = s.TableCnt
-	if len(node.FilterList) > 0 {
-		for i := range node.FilterList {
-			fixColumnName(node.TableDef, node.FilterList[i])
-		}
-		expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
-		stats.Selectivity = estimateExprSelectivity(expr, s)
-	} else {
-		stats.Selectivity = 1
-	}
-	stats.Outcnt = stats.Selectivity * stats.TableCnt
-
 	var blockSel float64 = 1
+
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
-		blockSel = andSelectivity(blockSel, estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s))
+		fixColumnName(node.TableDef, node.FilterList[i])
+		foldedExpr, _ := ConstantFold(bat, DeepCopyExpr(node.FilterList[i]), builder.compCtx.GetProcess())
+		if foldedExpr != nil {
+			node.FilterList[i] = foldedExpr
+		}
+		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], s)
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef)
+		if currentBlockSel < blockSelectivityThreshHold {
+			copyOfExpr := DeepCopyExpr(node.FilterList[i])
+			copyOfExpr.Selectivity = currentBlockSel
+			blockExprList = append(blockExprList, copyOfExpr)
+		}
+		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
+	node.BlockFilterList = blockExprList
+	expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
+	stats.Selectivity = estimateExprSelectivity(expr, s)
+	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
-
 	return stats
 }
 
