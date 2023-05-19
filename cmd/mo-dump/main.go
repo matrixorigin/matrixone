@@ -135,6 +135,15 @@ func main() {
 			return &bytes.Buffer{}
 		},
 	}
+	n := len(createTable)
+	for i := 0; i < n/2; i++ {
+		createTable[i], createTable[n-1-i] = createTable[n-1-i], createTable[i]
+		tables[i], tables[n-1-i] = tables[n-1-i], tables[i]
+	}
+	for _, create := range createTable {
+		fmt.Println("wangjian sql1 is", create)
+	}
+
 	left, right := 0, len(createTable)-1
 	for left < right {
 		for left < len(createTable) && tables[left].Kind != catalog.SystemViewRel {
@@ -148,6 +157,11 @@ func main() {
 		}
 		createTable[left], createTable[right] = createTable[right], createTable[left]
 		tables[left], tables[right] = tables[right], tables[left]
+	}
+	adjustViewOrder(createTable, tables, left)
+	fmt.Println("wangjian sql3 is", left)
+	for _, create := range createTable {
+		fmt.Println("wangjian sql2 is", create)
 	}
 	for i, create := range createTable {
 		tbl := tables[i]
@@ -171,6 +185,12 @@ func main() {
 			return
 		}
 	}
+}
+
+func adjustViewOrder(createTable []string, tables Tables, start int) {
+	viewName := make([]string, len(createTable) - start)
+	for 
+
 }
 
 func showCreateTable(createSql string, withNextLine bool) {
