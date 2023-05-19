@@ -3283,7 +3283,7 @@ var builtins = map[int]Functions{
 		},
 	},
 	NOT_IN_ROWS: {
-		Id:     ASSERT,
+		Id:     NOT_IN_ROWS,
 		Flag:   plan.Function_STRICT,
 		Layout: STANDARD_FUNCTION,
 		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {

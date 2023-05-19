@@ -424,18 +424,14 @@ func (txn *Transaction) mergeTxnWorkspace() {
 	}
 	start := txn.statements[txn.statementID-1]
 	writes := make([]Entry, 0, len(txn.writes[start:]))
+
 	for i := start; i < len(txn.writes); i++ {
-		if txn.writes[i].databaseId == catalog.MO_CATALOG_ID {
+		if txn.writes[i].typ == DELETE {
 			writes = append(writes, txn.writes[i])
 		}
 	}
 	for i := start; i < len(txn.writes); i++ {
-		if txn.writes[i].typ == DELETE && txn.writes[i].databaseId != catalog.MO_CATALOG_ID {
-			writes = append(writes, txn.writes[i])
-		}
-	}
-	for i := start; i < len(txn.writes); i++ {
-		if txn.writes[i].typ != DELETE && txn.writes[i].databaseId != catalog.MO_CATALOG_ID {
+		if txn.writes[i].typ != DELETE {
 			writes = append(writes, txn.writes[i])
 		}
 	}
