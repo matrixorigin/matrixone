@@ -8414,27 +8414,10 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin")
-	if err != nil {
-		goto handleFailed
-	}
-
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
 	}
 
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
-	return err
-
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return rbErr
-	}
 	return err
 }
