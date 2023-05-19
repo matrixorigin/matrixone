@@ -79,3 +79,24 @@ func trimWhiteSpace(input string) string {
 	}
 	return ""
 }
+
+func nextFormatToken(format string) (token string, remain string, success bool) {
+	if len(format) == 0 {
+		return "", "", true
+	}
+
+	// Just one character.
+	if len(format) == 1 {
+		if format[0] == '%' {
+			return "", "", false
+		}
+		return format, "", true
+	}
+
+	// More than one character.
+	if format[0] == '%' {
+		return format[:2], format[2:], true
+	}
+
+	return format[:1], format[1:], true
+}

@@ -18,6 +18,7 @@ var AndFunctionEncodedID = encodeOverloadID(AND, 0)
 var AndFunctionName = "and"
 var EqualFunctionName = "="
 var EqualFunctionEncodedID = encodeOverloadID(EQUAL, 0)
+var SerialFunctionEncodeID = encodeOverloadID(SERIAL, 0)
 
 func init() {
 	// init fixed type cast rule for binary operator like

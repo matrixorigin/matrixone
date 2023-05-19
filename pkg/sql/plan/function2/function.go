@@ -146,6 +146,45 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	return r, err
 }
 
+func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vector.Vector, length int) (*vector.Vector, error) {
+	f, err := GetFunctionById(proc.Ctx, overloadID)
+	if err != nil {
+		return nil, err
+	}
+
+	inputTypes := make([]types.Type, len(inputs))
+	for i := range inputTypes {
+		inputTypes[i] = *inputs[i].GetType()
+	}
+	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), proc.Mp())
+
+	fold := true
+	if !f.CannotFold() && !f.IsRealTimeRelated() {
+		for _, param := range inputs {
+			if !param.IsConst() {
+				fold = false
+			}
+		}
+		if fold {
+			length = 1
+		}
+	}
+
+	if err = result.PreExtendAndReset(length); err != nil {
+		return nil, err
+	}
+	exec := f.GetExecuteMethod()
+	if err = exec(inputs, result, proc, length); err != nil {
+		return nil, err
+	}
+
+	vec := result.GetResultVector()
+	if fold {
+		return vec.ToConst(0, 1, proc.Mp()), nil
+	}
+	return vec, nil
+}
+
 // DeduceNotNullable helps optimization sometimes.
 // deduce notNullable for function
 // for example, create table t1(c1 int not null, c2 int, c3 int not null ,c4 int);

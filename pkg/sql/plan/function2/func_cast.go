@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -2263,8 +2262,6 @@ func timestampToDatetime(
 	zone *time.Location) error {
 	var i uint64
 	l := uint64(length)
-	tempR := make([]types.Datetime, 1)
-	tempT := make([]types.Timestamp, 1)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2272,12 +2269,8 @@ func timestampToDatetime(
 				return err
 			}
 		} else {
-			tempT[0] = v
-			result, err := binary.TimestampToDatetime(ctx, zone, tempT, tempR)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result[0], false); err != nil {
+			result := v.ToDatetime(zone)
+			if err := to.Append(result, false); err != nil {
 				return err
 			}
 		}
@@ -2377,8 +2370,6 @@ func timestampToDate(
 	zone *time.Location) error {
 	var i uint64
 	l := uint64(length)
-	tempR := make([]types.Datetime, 1)
-	tempT := make([]types.Timestamp, 1)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -2386,14 +2377,10 @@ func timestampToDate(
 				return err
 			}
 		} else {
-			tempT[0] = v
 			// XXX I'm not sure if it's a good way to convert it to datetime first.
 			// but I just follow the old logic of old code.
-			result, err := binary.TimestampToDatetime(ctx, zone, tempT, tempR)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result[0].ToDate(), false); err != nil {
+			result := v.ToDatetime(zone)
+			if err := to.Append(result.ToDate(), false); err != nil {
 				return err
 			}
 		}
@@ -4243,69 +4230,6 @@ func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, ex
 		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.GetType(), typ)
 	}
 	return moerr.NewInternalError(ctx, errStr+" "+extraInfo)
-}
-
-// ----------------------------------------------------------------------------------------------------------------------
-// IsInteger return true if the types.T is integer type
-func IsInteger(t types.T) bool {
-	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 ||
-		t == types.T_uint8 || t == types.T_uint16 || t == types.T_uint32 || t == types.T_uint64 {
-		return true
-	}
-	return false
-}
-
-// isSignedInteger: return true if the types.T is Signed integer type
-func IsSignedInteger(t types.T) bool {
-	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 {
-		return true
-	}
-	return false
-}
-
-// isUnsignedInteger: return true if the types.T is UnSigned integer type
-func IsUnsignedInteger(t types.T) bool {
-	if t == types.T_uint8 || t == types.T_uint16 || t == types.T_uint32 || t == types.T_uint64 {
-		return true
-	}
-	return false
-}
-
-// IsFloat: return true if the types.T is floating Point Types
-func IsFloat(t types.T) bool {
-	if t == types.T_float32 || t == types.T_float64 {
-		return true
-	}
-	return false
-}
-
-// IsNumeric: return true if the types.T is numbric type
-func IsNumeric(t types.T) bool {
-	if IsInteger(t) || IsFloat(t) {
-		return true
-	}
-	return false
-}
-
-// isString: return true if the types.T is string type
-func IsString(t types.T) bool {
-	if t == types.T_char || t == types.T_varchar || t == types.T_binary || t == types.T_varbinary || t == types.T_blob || t == types.T_text {
-		return true
-	}
-	return false
-}
-
-// IsDecimal: return true if the types.T is decimal64 or decimal128
-func IsDecimal(t types.T) bool {
-	if t == types.T_decimal64 || t == types.T_decimal128 {
-		return true
-	}
-	return false
-}
-
-// IsBinary: return true if the types.T is binary or varbinary.
-func IsBinary(t types.T) bool {
-	return t == types.T_binary || t == types.T_varbinary
 }
 
 func explicitCastToBinary(toType types.Type, v []byte, null bool, to *vector.FunctionResult[types.Varlena]) error {
