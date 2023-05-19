@@ -120,6 +120,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
 	}
+	rbat.ExpandNulls()
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -199,6 +200,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		eligible = eligible[:0]
 	}
+	rbat.ExpandNulls()
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil

@@ -66,6 +66,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		}
 
 		anal.Input(bat, isFirst)
+		bat.ExpandNulls()
+
 		if err = mergeSort(proc, bat, ap, ctr, anal); err != nil {
 			break
 		}
@@ -82,6 +84,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			ctr.bat.Vecs[i].Free(proc.Mp())
 		}
 		ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
+		ctr.bat.ExpandNulls()
 	}
 	if err = ctr.bat.Shuffle(ctr.finalSelectList, proc.Mp()); err != nil {
 		ap.Free(proc, true)

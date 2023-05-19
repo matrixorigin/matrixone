@@ -166,6 +166,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 		eligible = eligible[:0]
 	}
+	rbat.ExpandNulls()
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil

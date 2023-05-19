@@ -72,6 +72,7 @@ func Call(idx int, proc *process.Process, arg interface{}, isFirst bool, isLast 
 					}
 				}
 				anal.Output(ctr.bat, isLast)
+				ctr.bat.ExpandNulls()
 			}
 			ctr.state = End
 		case End:

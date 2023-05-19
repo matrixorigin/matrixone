@@ -210,6 +210,7 @@ func (ctr *container) eval(limit int64, proc *process.Process) error {
 		ctr.bat.Vecs[i].Free(proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
+	ctr.bat.ExpandNulls()
 	proc.Reg.InputBatch = ctr.bat
 	ctr.bat = nil
 	return nil

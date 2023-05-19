@@ -121,6 +121,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
 		}
 	}
+	rbat.ExpandNulls()
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
