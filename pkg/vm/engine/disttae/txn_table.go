@@ -44,7 +44,9 @@ import (
 var _ engine.Relation = new(txnTable)
 
 const (
-	AllColumns = "*"
+	AllColumns       = "*"
+	FakePrimeColumns = "__mo_fake_pk_col"
+	RowIdColumns     = "__mo_rowid"
 )
 
 func (tbl *txnTable) Stats(ctx context.Context, statsInfoMap any) bool {
@@ -205,6 +207,23 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 }
 
 func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
+	// get the size of no hidden column
+	neededColumnName := make(map[string]struct{})
+	attr, _ := tbl.TableColumns(ctx)
+	found := false
+	for i := range attr {
+		if !attr[i].IsHidden {
+			if name == AllColumns || attr[i].Name == name {
+				found = true
+				neededColumnName[attr[i].Name] = struct{}{}
+			}
+		}
+	}
+
+	if !found {
+		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
+	}
+
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	tbl.db.txn.Lock()
 	for _, entry := range tbl.db.txn.writes {
@@ -222,7 +241,12 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
 		if entry.typ == INSERT {
-			originSize += int64(entry.bat.Size())
+			entry.bat.PrintBatchInfo()
+			for i, s := range entry.bat.Attrs {
+				if _, ok := neededColumnName[s]; ok {
+					originSize += int64(entry.bat.Vecs[i].Size())
+				}
+			}
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
 				/*
@@ -263,7 +287,12 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			if _, ok := handled[entry.Batch]; ok {
 				continue
 			}
-			originSize += int64(entry.Batch.Size())
+			entry.Batch.PrintBatchInfo()
+			for i, s := range entry.Batch.Attrs {
+				if _, ok := neededColumnName[s]; ok {
+					originSize += int64(entry.Batch.Vecs[i].Size())
+				}
+			}
 			handled[entry.Batch] = struct{}{}
 		}
 		iter.Close()
@@ -288,7 +317,24 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 		compressSize int64
 		originSize   int64
 	)
-	cols := tbl.getTableDef().GetCols()
+	attr, _ := tbl.TableColumns(ctx)
+	for i := 0; i < len(attr); {
+		if attr[i].IsHidden {
+			attr = append(attr[:i], attr[i+1:]...)
+			continue
+		}
+		i++
+	}
+
+	colstr := ""
+	for i := range attr {
+		if i != 0 {
+			colstr += " ,"
+		}
+		colstr += fmt.Sprintf("%s", attr[i].Name)
+	}
+	fmt.Printf("[GetCompressAndOriginSize] cols = [%s]\n", colstr)
+
 	if name == AllColumns { // get all columns size
 		for i := range tbl.blockInfos {
 			for j := range tbl.blockInfos[i] {
@@ -298,8 +344,9 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 						return 0, 0, err
 					}
 				}
-				for k := range cols {
-					extend := meta.MustGetColumn(uint16(cols[k].Seqnum)).Location()
+				for k := range attr {
+					fmt.Printf("[tablesize] get col %s 's size\n", attr[k].Name)
+					extend := meta.MustGetColumn(uint16(attr[k].Seqnum)).Location()
 					compressSize += int64(extend.Length())
 					originSize += int64(extend.OriginSize())
 				}
@@ -307,8 +354,8 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 		}
 	} else {
 		found := false
-		for i, col := range cols {
-			if cols[i].Name == name {
+		for _, a := range attr {
+			if a.Name == name {
 				for i := range tbl.blockInfos {
 					for j := range tbl.blockInfos[i] {
 						location := tbl.blockInfos[i][j].MetaLocation()
@@ -317,7 +364,7 @@ func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) 
 								return 0, 0, err
 							}
 						}
-						extend := meta.MustGetColumn(uint16(col.Seqnum)).Location()
+						extend := meta.MustGetColumn(uint16(a.Seqnum)).Location()
 						compressSize += int64(extend.Length())
 						originSize += int64(extend.OriginSize())
 					}
@@ -713,11 +760,19 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 
 func (tbl *txnTable) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
 	var attrs []*engine.Attribute
-	for _, def := range tbl.defs {
+	str := ""
+	i := 0
+	for j, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
+			if i != 0 {
+				str += " ,"
+			}
+			str += fmt.Sprintf("[%d->i: %d] name: %s, id: %d", j, i, attr.Attr.Name, attr.Attr.ID)
 			attrs = append(attrs, &attr.Attr)
+			i++
 		}
 	}
+	fmt.Printf("[TableColumns] attrs: [%s]\n", str)
 	return attrs, nil
 }
 

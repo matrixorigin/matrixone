@@ -346,3 +346,23 @@ func (bat *Batch) AntiShrink(sels []int64) {
 	}
 	bat.Zs = bat.Zs[:len(newSels)]
 }
+
+func (bat *Batch) PrintBatchInfo() {
+	attrs := ""
+	for i, s := range bat.Attrs {
+		if i != 0 {
+			attrs += " ,"
+		}
+		attrs += s
+	}
+
+	str := ""
+	for i, v := range bat.Vecs {
+		if i != 0 {
+			str += " ,"
+		}
+		str += fmt.Sprintf("[vec[%d]: type = %s, size = %d]", i, v.GetType().String(), v.Size())
+	}
+
+	fmt.Printf("[printbatch] batch %p attr = [%s] with vecs: %s\n", bat, attrs, str)
+}
