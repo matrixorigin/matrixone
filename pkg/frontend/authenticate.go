@@ -2820,6 +2820,8 @@ func doSetSecondaryRoleAll(ctx context.Context, ses *Session) error {
 	account.SetDefaultRoleID(uint32(roleId))
 	account.SetDefaultRole(roleName)
 
+	return err
+
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
