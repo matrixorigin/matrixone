@@ -345,8 +345,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		// For seq init values.
 		ses.seqCurValues = make(map[uint64]string)
 		ses.seqLastValue = ""
-		ses.sqlHelper = &SqlHelper{ses: ses}
 	}
+	ses.sqlHelper = &SqlHelper{ses: ses}
 	ses.flag = flag
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)

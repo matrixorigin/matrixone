@@ -588,8 +588,9 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_DropDatabase:
 		newDf.Definition = &plan.DataDefinition_DropDatabase{
 			DropDatabase: &plan.DropDatabase{
-				IfExists: df.DropDatabase.IfExists,
-				Database: df.DropDatabase.Database,
+				IfExists:   df.DropDatabase.IfExists,
+				Database:   df.DropDatabase.Database,
+				DatabaseId: df.DropDatabase.DatabaseId,
 			},
 		}
 
@@ -666,6 +667,7 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				ForeignTbl:          DeepCopyNumberList(df.DropTable.GetForeignTbl()),
 				PartitionTableNames: DeepCopyStringList(df.DropTable.GetPartitionTableNames()),
 				IsView:              df.DropTable.IsView,
+				TableDef:            DeepCopyTableDef(df.DropTable.GetTableDef()),
 			},
 		}
 

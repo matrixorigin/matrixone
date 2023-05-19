@@ -1232,7 +1232,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	var attachedPlan *plan.Plan
+	//var attachedPlan *plan.Plan
 	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 
 	if tableDef == nil {
@@ -1296,17 +1296,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			dropTable.PartitionTableNames = tableDef.GetPartition().GetPartitionTableNames()
 		}
 
-		// Check whether the table definition contains index constraints
-		if dropTable.Database != catalog.MO_CATALOG && dropTable.Table != catalog.MO_INDEXES {
-			if tableDef.Pkey != nil || len(tableDef.Indexes) > 0 {
-				var err error
-				sql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, tableDef.TblId)
-				attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
+		dropTable.TableDef = tableDef
 	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -1317,7 +1307,6 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		},
-		AttachedPlan: attachedPlan,
 	}, nil
 }
 
@@ -1429,17 +1418,13 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which is publishing", dropDB.Database)
 	}
 
-	var attachedPlan *Plan
+	//var attachedPlan *Plan
 	if ctx.DatabaseExists(string(stmt.Name)) {
 		databaseId, err := ctx.GetDatabaseId(string(stmt.Name))
 		if err != nil {
 			return nil, err
 		}
-		sql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, databaseId)
-		attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-		if err != nil {
-			return nil, err
-		}
+		dropDB.DatabaseId = databaseId
 	}
 
 	return &Plan{
@@ -1451,7 +1436,6 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 				},
 			},
 		},
-		AttachedPlan: attachedPlan,
 	}, nil
 }
 
@@ -1572,16 +1556,8 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		}
 	}
 
-	var attachedPlan *plan.Plan
 	if !found {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
-	} else {
-		var err error
-		sql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tableDef.TblId, dropIndex.IndexName)
-		attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	return &Plan{
@@ -1593,7 +1569,6 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 				},
 			},
 		},
-		AttachedPlan: attachedPlan,
 	}, nil
 }
 
@@ -1688,7 +1663,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if alterTable.IsClusterTable && ctx.GetAccountId() != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
-	var attachedPlan *plan.Plan
 
 	colMap := make(map[string]*ColDef)
 	for _, col := range tableDef.Cols {
@@ -1723,12 +1697,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 				for _, indexdef := range tableDef.Indexes {
 					if constraintName == indexdef.IndexName {
 						name_not_found = false
-						var err error
-						sql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tableDef.TblId, indexdef.IndexName)
-						attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-						if err != nil {
-							return nil, err
-						}
 						break
 					}
 				}
@@ -1866,17 +1834,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			for _, indexdef := range tableDef.Indexes {
 				if constraintName == indexdef.IndexName {
 					name_not_found = false
-					var err error
-					var sql string
-					if alterTableIndex.Visible {
-						sql = fmt.Sprintf(updateMoIndexesVisibleFormat, 1, tableDef.TblId, indexdef.IndexName)
-					} else {
-						sql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, tableDef.TblId, indexdef.IndexName)
-					}
-					attachedPlan, err = buildIndexMetadataPlan(sql, ctx)
-					if err != nil {
-						return nil, err
-					}
 					break
 				}
 			}
@@ -1900,7 +1857,6 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 				},
 			},
 		},
-		AttachedPlan: attachedPlan,
 	}, nil
 }
 

@@ -898,6 +898,7 @@ message AlterDatabase {
 message DropDatabase {
 	bool if_exists 		= 1;
 	string database 	= 2;
+	uint64 database_id	= 3;
 }
 
 message FkColName {
@@ -985,6 +986,7 @@ message DropTable {
 	repeated uint64 foreign_tbl = 7;
 	repeated string partition_table_names = 8;
 	bool isView = 9;
+	TableDef table_def 	= 10;
 }
 
 message AlterView {

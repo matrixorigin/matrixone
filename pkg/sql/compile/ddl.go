@@ -46,6 +46,13 @@ var (
 	createIndexTableForamt                      = "create table %s.`%s` (%s);"
 )
 
+var (
+	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
+	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
+	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
+	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
+)
+
 func (s *Scope) CreateDatabase(c *Compile) error {
 	var span trace.Span
 	c.ctx, span = trace.Start(c.ctx, "CreateDatabase")
@@ -79,11 +86,6 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
-	if s.Plan.AttachedPlan != nil {
-		if err := c.runPlan(s.Plan.AttachedPlan); err != nil {
-			return err
-		}
-	}
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
@@ -92,6 +94,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return moerr.NewErrDropNonExistsDB(c.ctx, dbName)
 	}
 	err := c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	// delete all index object under the database from mo_catalog.mo_indexes
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
+	err = c.runSql(deleteSql, nil)
 	if err != nil {
 		return err
 	}
@@ -142,11 +150,6 @@ func (s *Scope) AlterView(c *Compile) error {
 }
 
 func (s *Scope) AlterTable(c *Compile) error {
-	if s.Plan.AttachedPlan != nil {
-		if err := c.runPlan(s.Plan.AttachedPlan); err != nil {
-			return err
-		}
-	}
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := c.db
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
@@ -193,7 +196,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 					if indexdef.IndexName == constraintName {
 						dropIndex = indexdef
 						tableDef.Indexes = append(tableDef.Indexes[:i], tableDef.Indexes[i+1:]...)
-						// drop index table
+						//1. drop index table
 						if indexdef.TableExist {
 							if _, err = dbSource.Relation(c.ctx, indexdef.IndexTableName); err != nil {
 								return err
@@ -201,6 +204,12 @@ func (s *Scope) AlterTable(c *Compile) error {
 							if err = dbSource.Delete(c.ctx, indexdef.IndexTableName); err != nil {
 								return err
 							}
+						}
+						//2. delete index object from mo_catalog.mo_indexes
+						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tableDef.TblId, indexdef.IndexName)
+						err = c.runSql(deleteSql, nil)
+						if err != nil {
+							return err
 						}
 						break
 					}
@@ -212,79 +221,23 @@ func (s *Scope) AlterTable(c *Compile) error {
 		case *plan.AlterTable_Action_AddIndex:
 			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
 			addIndex = indexDef
-			// build and update constraint def
+			//1. build and update constraint def
 			err = colexec.InsertOneIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName, indexDef)
 			if err != nil {
 				return err
 			}
 			if act.AddIndex.IndexTableExist {
-				var sql string
 				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
-				planCols := def.GetCols()
-				for i, planCol := range planCols {
-					if i == 1 {
-						sql += ","
-					}
-					sql += planCol.Name + " "
-					typeId := types.T(planCol.Typ.Id)
-					switch typeId {
-					case types.T_char:
-						sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
-					case types.T_varchar:
-						sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
-					case types.T_binary:
-						sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
-					case types.T_varbinary:
-						sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
-					case types.T_decimal64:
-						sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-					case types.T_decimal128:
-						sql += fmt.Sprintf("DECIAML(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-					default:
-						sql += typeId.String()
-					}
-					if i == 0 {
-						sql += " primary key"
-					}
-				}
-
-				createSQL := fmt.Sprintf(createIndexTableForamt, dbName, indexDef.IndexTableName, sql)
-				_, err = c.proc.SessionInfo.SqlHelper.ExecSql(createSQL)
+				// 2. create index table from unique index object
+				createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
+				err = c.runSql(createSQL, nil)
 				if err != nil {
 					return err
 				}
-				var insetSQL string
-				var temp string
-				for i, part := range indexDef.Parts {
-					if i == 0 {
-						temp += part
-					} else {
-						temp += "," + part
-					}
-				}
 
-				if tableDef.Pkey == nil || len(tableDef.Pkey.PkeyColName) == 0 {
-					insetSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, dbName, indexDef.IndexTableName, temp, dbName, tblName, temp)
-				} else {
-					pkeyName := tableDef.Pkey.PkeyColName
-					var pKeyMsg string
-					if pkeyName == catalog.CPrimaryKeyColName {
-						pKeyMsg = "serial("
-						for i, part := range tableDef.Pkey.Names {
-							if i == 0 {
-								pKeyMsg += part
-							} else {
-								pKeyMsg += "," + part
-							}
-						}
-						pKeyMsg += ")"
-					} else {
-						pKeyMsg = pkeyName
-					}
-
-					insetSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, dbName, indexDef.IndexTableName, temp, pKeyMsg, dbName, tblName, temp)
-				}
-				_, err = c.proc.SessionInfo.SqlHelper.ExecSql(insetSQL)
+				// 3. insert data into index table for unique index object
+				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
+				err = c.runSql(insertSQL, nil)
 				if err != nil {
 					return err
 				}
@@ -297,6 +250,18 @@ func (s *Scope) AlterTable(c *Compile) error {
 					alterIndex = indexdef
 					alterIndex.Visible = tableAlterIndex.Visible
 					tableDef.Indexes[i].Visible = tableAlterIndex.Visible
+					// update the index visibility in mo_catalog.mo_indexes
+					var updateSql string
+					if alterIndex.Visible {
+						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 1, tableDef.TblId, indexdef.IndexName)
+					} else {
+						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, tableDef.TblId, indexdef.IndexName)
+					}
+					err = c.runSql(updateSql, nil)
+					if err != nil {
+						return err
+					}
+
 					break
 				}
 			}
@@ -646,103 +611,18 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
 	// build and create index table
 	if qry.TableExist {
-		//def := qry.GetIndex().GetIndexTables()[0]
-		//planCols := def.GetCols()
-		//exeCols := planColsToExeCols(planCols)
-		//exeDefs, err := planDefsToExeDefs(def)
-		//if err != nil {
-		//	return err
-		//}
-		//if _, err = d.Relation(c.ctx, def.Name); err == nil {
-		//	return moerr.NewTableAlreadyExists(c.ctx, def.Name)
-		//}
-		//if err = d.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
-		//	return err
-		//}
-
-		//----------------------------------------------------------------------------------------
-		var sql string
 		def := qry.GetIndex().GetIndexTables()[0]
-		planCols := def.GetCols()
-		for i, planCol := range planCols {
-			if i == 1 {
-				sql += ","
-			}
-			sql += planCol.Name + " "
-			typeId := types.T(planCol.Typ.Id)
-			switch typeId {
-			case types.T_char:
-				sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
-			case types.T_varchar:
-				sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
-			case types.T_binary:
-				sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
-			case types.T_varbinary:
-				sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
-			case types.T_decimal64:
-				sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-			case types.T_decimal128:
-				sql += fmt.Sprintf("DECIAML(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-			default:
-				sql += typeId.String()
-			}
-			if i == 0 {
-				sql += " primary key"
-			}
-		}
-
-		createSQL := fmt.Sprintf(createIndexTableForamt, qry.Database, indexDef.IndexTableName, sql)
+		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
 		err = c.runSql(createSQL, nil)
 		if err != nil {
 			return err
 		}
 
-		// insert data into index table
-		var insertSQL string
-		var temp string
-		for i, part := range indexDef.Parts {
-			if i == 0 {
-				temp += part
-			} else {
-				temp += "," + part
-			}
-		}
-
-		if tableDef.Pkey == nil || len(tableDef.Pkey.PkeyColName) == 0 {
-			//insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, qry.Database, indexDef.IndexTableName, temp, qry.Database, qry.Table, temp)
-			if len(indexDef.Parts) == 1 {
-				insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, qry.Database, indexDef.IndexTableName, temp, qry.Database, qry.Table, temp)
-			} else {
-				insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, qry.Database, indexDef.IndexTableName, temp, qry.Database, qry.Table, temp)
-			}
-		} else {
-			pkeyName := tableDef.Pkey.PkeyColName
-			var pKeyMsg string
-			if pkeyName == catalog.CPrimaryKeyColName {
-				pKeyMsg = "serial("
-				for i, part := range tableDef.Pkey.Names {
-					if i == 0 {
-						pKeyMsg += part
-					} else {
-						pKeyMsg += "," + part
-					}
-				}
-				pKeyMsg += ")"
-			} else {
-				pKeyMsg = pkeyName
-			}
-			if len(indexDef.Parts) == 1 {
-				insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, qry.Database, indexDef.IndexTableName, temp, pKeyMsg, qry.Database, qry.Table, temp)
-			} else {
-				insertSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, qry.Database, indexDef.IndexTableName, temp, pKeyMsg, qry.Database, qry.Table, temp)
-			}
-		}
+		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
 		err = c.runSql(insertSQL, nil)
 		if err != nil {
 			return err
 		}
-		//----------------------------------------------------------------------------------------
-
 	}
 	// build and update constraint def
 	defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef())
@@ -770,45 +650,6 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
-
-	//// TODO: implement by insert ... select ...
-	//// insert data into index table
-	//indexDef := qry.GetIndex().GetTableDef().Indexes[0]
-	//if indexDef.Unique {
-	//	targetAttrs := getIndexColsFromOriginTable(tblDefs, indexDef.Parts)
-	//	ret, err := r.Ranges(c.ctx, nil)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	rds, err := r.NewReader(c.ctx, 1, nil, ret)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp(), nil)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	err = rds[0].Close()
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	if bat != nil {
-	//		indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, indexDef.Parts, qry.OriginTablePrimaryKey, c.proc)
-	//		indexR, err := d.Relation(c.ctx, indexDef.IndexTableName)
-	//		if err != nil {
-	//			return err
-	//		}
-	//		if cnt != 0 {
-	//			if err := indexR.Write(c.ctx, indexBat); err != nil {
-	//				return err
-	//			}
-	//		}
-	//		indexBat.Clean(c.proc.Mp())
-	//	}
-	//	// other situation is not supported now and check in plan
-	//}
-
 	err = colexec.InsertOneIndexMetadata(c.e, c.ctx, d, c.proc, qry.Table, indexDef)
 	if err != nil {
 		return err
@@ -817,11 +658,6 @@ func (s *Scope) CreateIndex(c *Compile) error {
 }
 
 func (s *Scope) DropIndex(c *Compile) error {
-	if s.Plan.AttachedPlan != nil {
-		if err := c.runPlan(s.Plan.AttachedPlan); err != nil {
-			return err
-		}
-	}
 	qry := s.Plan.GetDdl().GetDropIndex()
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
@@ -832,7 +668,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
-	// build and update constraint def
+	//1. build and update constraint def
 	tblDefs, err := r.TableDefs(c.ctx)
 	if err != nil {
 		return err
@@ -853,7 +689,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
-	// drop index table
+	//2. drop index table
 	if qry.IndexTableName != "" {
 		if _, err = d.Relation(c.ctx, qry.IndexTableName); err != nil {
 			return err
@@ -861,6 +697,13 @@ func (s *Scope) DropIndex(c *Compile) error {
 		if err = d.Delete(c.ctx, qry.IndexTableName); err != nil {
 			return err
 		}
+	}
+
+	//3. delete index object from mo_catalog.mo_indexes
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.ctx), qry.IndexName)
+	err = c.runSql(deleteSql, nil)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -1164,11 +1007,6 @@ func (s *Scope) DropSequence(c *Compile) error {
 }
 
 func (s *Scope) DropTable(c *Compile) error {
-	if s.Plan.AttachedPlan != nil {
-		if err := c.runPlan(s.Plan.AttachedPlan); err != nil {
-			return err
-		}
-	}
 	qry := s.Plan.GetDdl().GetDropTable()
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
@@ -1220,6 +1058,17 @@ func (s *Scope) DropTable(c *Compile) error {
 		err := s.removeRefChildTbl(c, fkTblId, tblId)
 		if err != nil {
 			return err
+		}
+	}
+
+	// delete all index objects of the table in mo_catalog.mo_indexes
+	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
+		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
+			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
+			err = c.runSql(deleteSql, nil)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
