@@ -4,23 +4,26 @@ inputs:
   go-version:
     description: 'version of golang'
     required: false
-    default: "1.19"
+    default: "1.20"
 
 runs:
   using: "composite"
 
   steps:
     - name: Set up Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@v4
       with:
         go-version: ${{ inputs.go-version }} 
+        cache: true
 
-    - uses: actions/cache@v3
-      name: Restore go mod cache
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-mo-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-mo-
+
+    # setup build-in cache: https://github.com/actions/setup-go#caching-dependency-files-and-build-outputs
+    # - uses: actions/cache@v3
+    #   name: Restore go mod cache
+    #   with:
+    #     path: |
+    #       ~/.cache/go-build
+    #       ~/go/pkg/mod
+    #     key: ${{ runner.os }}-go-mo-${{ hashFiles('**/go.sum') }}
+    #     restore-keys: |
+    #       ${{ runner.os }}-go-mo-

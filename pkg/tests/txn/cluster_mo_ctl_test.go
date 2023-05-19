@@ -107,6 +107,7 @@ func mustGetSnapshot(t *testing.T, cli Client) string {
 	var result pb.CtlResult
 	value := ""
 	require.NoError(t, rows.Scan(&value))
+	require.NoError(t, rows.Err())
 	json.MustUnmarshal([]byte(value), &result)
 	return result.Data.(string)
 }
