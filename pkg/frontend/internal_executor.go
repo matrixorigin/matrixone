@@ -16,10 +16,9 @@ package frontend
 
 import (
 	"context"
-	"sync"
-
 	"github.com/fagongzi/goetty/v2"
 	"go.uber.org/zap"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"

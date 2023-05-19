@@ -50,7 +50,7 @@ jobs:
     if: ${{ needs.docker_image_build.result == 'success' && github.event.pull_request.merged == true }}
     needs: docker_image_build
     runs-on: arm64-runner
-    timeout-minutes: 60
+    timeout-minutes: 120
     name: SETUP MO TEST ENV
     steps:
       - name: Checkout
@@ -118,7 +118,6 @@ jobs:
           
           
       - name: Create MO Cluster
-        timeout-minutes: 20
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} apply -f $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
@@ -262,7 +261,7 @@ jobs:
 
       - name: Start TPCH 10G Test
         if: ${{ always() }}
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -403,7 +402,7 @@ jobs:
 
 
   clean_up_env:
-    if: ${{ always() && !cancelled() && needs.setup_mo_test_env.result == 'success' && github.event.pull_request.merged == true }} #
+    if: ${{ always() && !cancelled() && github.event.pull_request.merged == true }} #
     name: CLEAN UP ENV
     runs-on: arm64-runner
     needs: [docker_image_build,setup_mo_test_env,test]

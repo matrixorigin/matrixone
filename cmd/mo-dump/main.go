@@ -218,6 +218,9 @@ func getTables(db string, tables Tables) (Tables, error) {
 		}
 		tables = append(tables, Table{table, kind})
 	}
+	if err := r.Err(); err != nil {
+		return nil, err
+	}
 	return tables, nil
 }
 

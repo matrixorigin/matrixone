@@ -149,6 +149,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 	case pipeline.PipelineMessage:
 		c := receiver.newCompile()
+		defer c.proc.FreeVectors()
 
 		// decode and rewrite the scope.
 		// insert operator needs to fill the engine info.
