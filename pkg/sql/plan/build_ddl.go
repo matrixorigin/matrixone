@@ -21,8 +21,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1308,29 +1306,6 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			},
 		},
 	}, nil
-}
-
-var (
-	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
-	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
-	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
-	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
-)
-
-// Build a plan to modify index metadata
-func buildIndexMetadataPlan(sql string, ctx CompilerContext) (*Plan, error) {
-	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
-	if err != nil {
-		return nil, err
-	}
-	switch rstmt := stmt.(type) {
-	case *tree.Delete:
-		return buildDelete(rstmt, ctx)
-	case *tree.Update:
-		return buildTableUpdate(rstmt, ctx)
-	default:
-		return nil, moerr.NewInternalError(ctx.GetContext(), "The parser result is not the expected syntax tree")
-	}
 }
 
 func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {

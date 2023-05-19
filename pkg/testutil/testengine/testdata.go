@@ -776,16 +776,16 @@ func CreateCompressFileTable(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:     compress.Lz4,
-					Name:    "a",
-					Type:    types.T_int32.ToType(),
-					Primary: true,
+					Alg:  compress.Lz4,
+					Name: "a",
+					Type: types.T_int32.ToType(),
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "b",
-					Type: types.T_int32.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "b",
+					Type:    types.T_int32.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{

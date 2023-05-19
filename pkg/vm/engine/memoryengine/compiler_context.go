@@ -186,7 +186,6 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 	}
 
 	for i, attr := range attrs {
-
 		// return hidden columns for update or detete statement
 		//if attr.IsHidden {
 		//	switch e.stmt.(type) {
@@ -201,7 +200,6 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 				PkeyColId:   uint64(i),
 				PkeyColName: attr.Name,
 				Names:       []string{attr.Name},
-				CompPkeyCol: engineAttrToPlanColDef(i, attr),
 			}
 		}
 		tableDef.Cols = append(tableDef.Cols, engineAttrToPlanColDef(i, attr))

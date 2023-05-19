@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
@@ -49,24 +50,24 @@ var (
 
 func init() {
 	tcs = []compileTestCase{
-		// newTestCase("select 1", new(testing.T)),
-		// newTestCase("select * from R", new(testing.T)),
-		// newTestCase("select * from R where uid > 1", new(testing.T)),
-		// newTestCase("select * from R order by uid", new(testing.T)),
-		// newTestCase("select * from R order by uid limit 1", new(testing.T)),
-		// newTestCase("select * from R limit 1", new(testing.T)),
-		// newTestCase("select * from R limit 2, 1", new(testing.T)),
-		// newTestCase("select count(*) from R", new(testing.T)),
-		// newTestCase("select * from R join S on R.uid = S.uid", new(testing.T)),
-		// newTestCase("select * from R left join S on R.uid = S.uid", new(testing.T)),
-		// newTestCase("select * from R right join S on R.uid = S.uid", new(testing.T)),
-		// newTestCase("select * from R join S on R.uid > S.uid", new(testing.T)),
-		// newTestCase("select * from R limit 10", new(testing.T)),
-		// newTestCase("select count(*) from R group by uid", new(testing.T)),
-		// newTestCase("select count(distinct uid) from R", new(testing.T)),
+		newTestCase("select 1", new(testing.T)),
+		newTestCase("select * from R", new(testing.T)),
+		newTestCase("select * from R where uid > 1", new(testing.T)),
+		newTestCase("select * from R order by uid", new(testing.T)),
+		newTestCase("select * from R order by uid limit 1", new(testing.T)),
+		newTestCase("select * from R limit 1", new(testing.T)),
+		newTestCase("select * from R limit 2, 1", new(testing.T)),
+		newTestCase("select count(*) from R", new(testing.T)),
+		newTestCase("select * from R join S on R.uid = S.uid", new(testing.T)),
+		newTestCase("select * from R left join S on R.uid = S.uid", new(testing.T)),
+		newTestCase("select * from R right join S on R.uid = S.uid", new(testing.T)),
+		newTestCase("select * from R join S on R.uid > S.uid", new(testing.T)),
+		newTestCase("select * from R limit 10", new(testing.T)),
+		newTestCase("select count(*) from R group by uid", new(testing.T)),
+		newTestCase("select count(distinct uid) from R", new(testing.T)),
 		newTestCase("insert into R values('991', '992', '993')", new(testing.T)),
-		// newTestCase("insert into R select * from S", new(testing.T)),
-		// newTestCase(fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' parallel 'true';", GetFilePath()), new(testing.T)),
+		newTestCase("insert into R select * from S", new(testing.T)),
+		newTestCase(fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\n' parallel 'true';", GetFilePath()), new(testing.T)),
 	}
 }
 
