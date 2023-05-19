@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1023,6 +1024,9 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, uuids []uuid.UUID, c *Compile) {
 	arg := new(dispatch.Argument)
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
+	arg.ShuffleRegIdxLocal = make([]int, 0, 1)
+	arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, currentIdx)
+	arg.ShuffleRegIdxRemote = make([]int, 0, len(ss)-1)
 	// rs is used to get batch from dispatch operator (include
 	// local batch)
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
@@ -1030,6 +1034,7 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
 	rs[currentIdx].Proc = process.NewWithAnalyze(c.proc, c.ctx, len(ss), c.anal.analInfos)
 	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
+
 	// use arg.RemoteRegs to know the uuid,
 	// use this uuid to register Server.uuidCsChanMap (uuid,proc.DispatchNotifyCh),
 	// So how to use this?
@@ -1052,6 +1057,7 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 				Uuid:     uuids[i],
 				NodeAddr: ss[i].NodeInfo.Addr,
 			})
+			arg.ShuffleRegIdxRemote = append(arg.ShuffleRegIdxRemote, i)
 			// let remote scope knows it need to recieve bacth from
 			// remote CN, it will use this to send PrepareDoneNotifyMessage
 			// and then to recieve batches from remote CNs
@@ -1070,6 +1076,7 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 		arg.FuncId = dispatch.SendToAllFunc
 	}
 	arg.LocalRegs = append(arg.LocalRegs, rs[currentIdx].Proc.Reg.MergeReceivers[currentIdx])
+
 	ss[currentIdx].appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,
@@ -1079,36 +1086,6 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 		Op:  vm.Merge,
 		Arg: &merge.Argument{},
 	})
-	// // get cn plan Node for constructGroup
-	// cn := new(plan.Node)
-	// cn.ProjectList = []*plan.Expr{
-	// 	{
-	// 		Typ: &plan.Type{
-	// 			Id:    int32(types.T_Rowid),
-	// 			Width: types.T_Rowid.ToType().Width,
-	// 			Scale: types.T_Rowid.ToType().Scale,
-	// 		},
-	// 	},
-	// }
-	// // get n planNode for constructGroup, for now,
-	// // just support single table delete.
-	// n := new(plan.Node)
-	// n.GroupBy = []*plan.Expr{
-	// 	{
-	// 		Expr: &plan.Expr_Col{
-	// 			Col: &plan.ColRef{
-	// 				RelPos: 0,
-	// 				ColPos: 0,
-	// 			},
-	// 		},
-	// 	},
-	// }
-	// groupArg := constructGroup(rs[currentIdx].Proc.Ctx, n, cn, currentIdx, len(ss), false, rs[currentIdx].Proc)
-	// use group to do Bucket filter and RowId duplicate Filter
-	// rs[currentIdx].appendInstruction(vm.Instruction{
-	// 	Op:  vm.Group,
-	// 	Arg: groupArg,
-	// })
 }
 
 // This function do not setting funcId.
