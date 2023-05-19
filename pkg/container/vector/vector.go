@@ -1296,35 +1296,12 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
-			if err := extend(v, w.length, mp); err != nil {
-				return err
-			}
-			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
-				area, err := mp.Grow(v.area, sz)
-				if err != nil {
-					return err
-				}
-				v.area = area[:len(v.area)]
-			}
-			if w.nsp.Any() {
-				for i := 0; i < w.length; i++ {
-					if nulls.Contains(&w.nsp, uint64(i)) {
-						nulls.Add(&v.nsp, uint64(i+v.length))
-					}
+			for i := range ws {
+				if err := appendOneBytes(v, ws[i].GetByteSlice(w.area),
+					nulls.Contains(&w.nsp, uint64(i)), mp); err != nil {
+					return nil
 				}
 			}
-			sz := v.typ.TypeSize()
-			length := uint32(len(v.area))
-			v.area = append(v.area, w.area...)
-			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			vs := v.col.([]types.Varlena)
-			for i, j := v.length, v.length+w.length; i < j; i++ {
-				if vs[i][0] > types.VarlenaInlineSize {
-					s := vs[i].U32Slice()
-					s[1] += length
-				}
-			}
-			v.length += w.length
 			return nil
 		}
 	case types.T_Blockid:
