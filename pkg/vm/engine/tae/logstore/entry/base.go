@@ -223,7 +223,6 @@ func (info *Info) ToString() string {
 
 type Base struct {
 	*descriptor
-	node      []byte
 	payload   []byte
 	info      any
 	infobuf   []byte
@@ -256,9 +255,6 @@ func (b *Base) IsPrintTime() bool {
 }
 func (b *Base) reset() {
 	b.descriptor.reset()
-	if b.node != nil {
-		b.node = nil
-	}
 	b.payload = nil
 	b.info = nil
 	b.infobuf = nil
@@ -298,9 +294,6 @@ func (b *Base) Free() {
 }
 
 func (b *Base) GetPayload() []byte {
-	if b.node != nil {
-		return b.node[:b.GetPayloadSize()]
-	}
 	return b.payload
 }
 
@@ -313,12 +306,8 @@ func (b *Base) GetInfo() any {
 }
 
 func (b *Base) UnmarshalFromNode(n []byte, own bool) error {
-	if b.node != nil {
-		b.node = nil
-	}
 	if own {
-		b.node = n
-		b.payload = b.node
+		b.payload = n
 	} else {
 		copy(b.payload, n)
 	}
@@ -327,17 +316,14 @@ func (b *Base) UnmarshalFromNode(n []byte, own bool) error {
 }
 
 func (b *Base) SetPayload(buf []byte) error {
-	if b.node != nil {
-		b.node = nil
-	}
 	b.payload = buf
 	b.SetPayloadSize(len(buf))
 	return nil
 }
 
-func (b *Base) Unmarshal(buf []byte, allocator Allocator) error {
+func (b *Base) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
-	_, err := b.ReadFromWithAllocator(bbuf, allocator)
+	_, err := b.ReadFrom(bbuf)
 	return err
 }
 func (b *Base) GetLsn() (gid uint32, lsn uint64) {
@@ -359,24 +345,14 @@ func (b *Base) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (b *Base) ReadFromWithAllocator(r io.Reader, allocator Allocator) (int64, error) {
+func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 	metaBuf := b.GetMetaBuf()
 	_, err := r.Read(metaBuf)
 	if err != nil {
 		return 0, err
 	}
 
-	if b.node == nil {
-		if allocator != nil {
-			b.node, err = allocator.Alloc(b.GetPayloadSize())
-			if err != nil {
-				panic(err)
-			}
-		} else {
-			b.node = make([]byte, b.GetPayloadSize())
-		}
-		b.payload = b.node[:b.GetPayloadSize()]
-	}
+	b.payload = make([]byte, b.GetPayloadSize())
 	n1 := 0
 	if b.GetInfoSize() != 0 {
 		infoBuf := make([]byte, b.GetInfoSize())
@@ -401,23 +377,36 @@ func (b *Base) ReadFromWithAllocator(r io.Reader, allocator Allocator) (int64, e
 	return int64(n1 + n2), nil
 }
 
-func (b *Base) ReadAt(r *os.File, offset int, allocator Allocator) (int, error) {
+func (b *Base) UnmarshalBinary(buf []byte) (n int64, err error) {
+	copy(b.GetMetaBuf(), buf[:b.GetMetaSize()])
+	n += int64(b.GetMetaSize())
+
+	infoSize := b.GetInfoSize()
+	if infoSize != 0 {
+		head := objectio.DecodeIOEntryHeader(b.descBuf)
+		codec := objectio.GetIOEntryCodec(*head)
+		vinfo, err := codec.Decode(buf[n : n+int64(infoSize)])
+		info := vinfo.(*Info)
+		if err != nil {
+			return n, err
+		}
+		b.SetInfo(info)
+		n += int64(infoSize)
+	}
+
+	payloadSize := b.GetPayloadSize()
+	b.payload = buf[n : n+int64(payloadSize)]
+	n += int64(payloadSize)
+	return
+}
+
+func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	metaBuf := b.GetMetaBuf()
 	n, err := r.ReadAt(metaBuf, int64(offset))
 	if err != nil {
 		return n, err
 	}
-	if b.node == nil {
-		if allocator != nil {
-			b.node, err = allocator.Alloc(b.GetPayloadSize())
-			if err != nil {
-				panic(err)
-			}
-		} else {
-			b.node = make([]byte, b.GetPayloadSize())
-		}
-		b.payload = b.node[:b.GetPayloadSize()]
-	}
+	b.payload = make([]byte, b.GetPayloadSize())
 
 	offset += len(b.GetMetaBuf())
 	infoBuf := make([]byte, b.GetInfoSize())

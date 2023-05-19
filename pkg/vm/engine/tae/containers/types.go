@@ -61,6 +61,7 @@ type Vector interface {
 
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
+	ExtendVec(o *cnVector.Vector) error
 
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error

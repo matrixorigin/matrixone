@@ -119,7 +119,10 @@ func (blk *block) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
-	precommit bool) (err error) {
+	precommit bool,
+	zm []byte,
+	bf objectio.BloomFilter,
+) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
@@ -133,7 +136,10 @@ func (blk *block) BatchDedup(
 		precommit,
 		keys,
 		rowmask,
-		false)
+		false,
+		zm,
+		bf,
+	)
 }
 
 func (blk *block) GetValue(
@@ -191,7 +197,8 @@ func (blk *block) GetByFilter(
 		panic("logic error")
 	}
 	if blk.meta.GetSchema().SortKey == nil {
-		_, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		rid := filter.Val.(types.Rowid)
+		offset = rid.GetRowOffset()
 		return
 	}
 

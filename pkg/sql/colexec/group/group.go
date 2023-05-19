@@ -251,9 +251,10 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		ctr.groupVecs = make([]evalVector, len(ap.Exprs))
 	}
 
+	keyWidth := 0
 	groupVecsNullable := false
+
 	for i, expr := range ap.Exprs {
-		groupVecsNullable = groupVecsNullable || (!expr.Typ.NotNullable)
 		vec, err := colexec.EvalExpr(bat, proc, expr)
 		if err != nil {
 			ctr.cleanGroupVectors(proc.Mp())
@@ -272,26 +273,31 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			anal.Alloc(int64(vec.Size()))
 		}
 		ctr.vecs[i] = vec
+
+		groupVecsNullable = groupVecsNullable || (!expr.Typ.NotNullable)
+	}
+	for _, typ := range ap.Types {
+		width := typ.TypeSize()
+		if typ.IsVarlen() {
+			if typ.Width == 0 {
+				width = 128
+			} else {
+				width = int(typ.Width)
+			}
+		}
+		keyWidth += width
+		if groupVecsNullable {
+			keyWidth += 1
+		}
 	}
 
 	if ctr.bat == nil {
-		size := 0
 		ctr.bat = batch.NewWithSize(len(ap.Exprs))
 		ctr.bat.Zs = proc.Mp().GetSels()
 		for i := range ctr.groupVecs {
 			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = proc.GetVector(*vec.GetType())
-			ctr.bat.Vecs[i].GetType().SetNotNull(!groupVecsNullable)
-			currentSize := vec.GetType().TypeSize()
-			switch currentSize {
-			case 1, 2, 4, 8, 16:
-				size += currentSize
-				if groupVecsNullable {
-					size += 1
-				}
-			default:
-				size = 128
-			}
+			//ctr.bat.Vecs[i].GetType().SetNotNull(!groupVecsNullable)
 		}
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
 		if err = ctr.getBatchAggs(ap); err != nil {
@@ -300,7 +306,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		switch {
 		//case ctr.idx != nil:
 		//	ctr.typ = HIndex
-		case size <= 8:
+		case keyWidth <= 8:
 			ctr.typ = H8
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, ap.Ibucket, ap.Nbucket, proc.Mp()); err != nil {
 				return false, err

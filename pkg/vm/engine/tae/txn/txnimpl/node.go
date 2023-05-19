@@ -53,6 +53,10 @@ func (n *node) Close() error {
 	return nil
 }
 
+func (n *node) IsPersisted() bool {
+	return true
+}
+
 func (n *node) Append(data *containers.Batch, offset uint32) (appended uint32, err error) {
 	panic("not supported")
 }
@@ -90,6 +94,11 @@ func (n *node) FillBlockView(
 }
 
 func (n *node) FillColumnView(*model.ColumnView) error {
+	//TODO::
+	panic("not implemented yet ")
+}
+
+func (n *node) WindowColumn(start, end uint32, pos int) (containers.Vector, error) {
 	//TODO::
 	panic("not implemented yet ")
 }
