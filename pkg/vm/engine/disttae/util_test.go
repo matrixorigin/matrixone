@@ -80,7 +80,7 @@ func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
 	var info catalog.BlockInfo
 	info.SetMetaLocation(location)
-	data := catalog.EncodeBlockInfo(info)
+	data := catalog.EncodeBlockInfo(&info)
 	info2 := catalog.DecodeBlockInfo(data)
 	require.Equal(t, info, *info2)
 }

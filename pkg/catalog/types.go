@@ -323,8 +323,8 @@ func (b *BlockInfo) SetDeltaLocation(deltaLoc objectio.Location) {
 	b.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
 }
 
-func EncodeBlockInfo(info BlockInfo) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
+func EncodeBlockInfo(info *BlockInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(info)), BlockInfoSize)
 }
 
 func DecodeBlockInfo(buf []byte) *BlockInfo {
