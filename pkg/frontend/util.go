@@ -292,19 +292,14 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		// Here the evalExpr may execute some function that needs engine.Engine.
 		ses.txnCompileCtx.GetProcess().Ctx = context.WithValue(ses.txnCompileCtx.GetProcess().Ctx, defines.EngineKey{}, ses.storage)
 
-		executor, err := colexec.NewExpressionExecutor(ses.txnCompileCtx.GetProcess(), planExpr)
+		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{bat})
 		if err != nil {
-			return nil, err
-		}
-		vec, err := executor.Eval(ses.txnCompileCtx.GetProcess(), []*batch.Batch{bat})
-		if err != nil {
-			executor.Free()
 			return nil, err
 		}
 
 		value, err := getValueFromVector(vec, ses, planExpr)
-		executor.Free()
-		return value, nil
+		vec.Free(ses.txnCompileCtx.GetProcess().Mp())
+		return value, err
 	}
 }
 

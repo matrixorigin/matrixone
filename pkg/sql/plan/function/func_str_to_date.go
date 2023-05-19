@@ -23,11 +23,6 @@ import (
 	"unicode"
 )
 
-const (
-	// MaxFsp is the maximum digit of fractional seconds part.
-	MaxFsp = 6
-)
-
 func builtInStrToDate(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	if !parameters[1].IsConst() {
 		return moerr.NewInvalidArg(proc.Ctx, "to_date format", "not constant")
@@ -227,35 +222,6 @@ func checkMysqlTime(cctx context.Context, t *GeneralTime, ctx map[string]int) er
 		}
 	}
 	return nil
-}
-
-// getTimeFormatType checks the type(Time, Date or Datetime) of a format string.
-func getTimeFormatType(format string) (isTime, isDate bool) {
-	format = trimWhiteSpace(format)
-	var token string
-	var succ bool
-	for {
-		token, format, succ = nextFormatToken(format)
-		if len(token) == 0 {
-			break
-		}
-		if !succ {
-			isTime, isDate = false, false
-			break
-		}
-		if len(token) >= 2 && token[0] == '%' {
-			switch token[1] {
-			case 'h', 'H', 'i', 'I', 's', 'S', 'k', 'l', 'f', 'r', 'T':
-				isTime = true
-			case 'y', 'Y', 'm', 'M', 'c', 'b', 'D', 'd', 'e':
-				isDate = true
-			}
-		}
-		if isTime && isDate {
-			break
-		}
-	}
-	return
 }
 
 // trim spaces in strings

@@ -1578,7 +1578,7 @@ func initTimestampDiffTestCase() []tcTemp {
 		},
 	}
 
-	var testInputs []tcTemp
+	var testInputs = make([]tcTemp, 0, len(cases))
 	for _, c := range cases {
 
 		i1 := c.inputs[2]
@@ -1861,7 +1861,7 @@ func initInstrTestCase() []tcTemp {
 		//},
 	}
 
-	var testInputs []tcTemp
+	var testInputs = make([]tcTemp, 0, len(cases))
 	for _, c := range cases {
 
 		testInputs = append(testInputs, tcTemp{
@@ -2062,7 +2062,7 @@ func initLeftTestCase() []tcTemp {
 		},
 	}
 
-	var testInputs []tcTemp
+	var testInputs = make([]tcTemp, 0, len(cases))
 	for _, c := range cases {
 
 		testInputs = append(testInputs, tcTemp{
@@ -2119,7 +2119,7 @@ func initPowerTestCase() []tcTemp {
 		{5.5, 2, 30.25},
 	}
 
-	var testInputs []tcTemp
+	var testInputs = make([]tcTemp, 0, len(cases))
 	for _, c := range cases {
 
 		testInputs = append(testInputs, tcTemp{
@@ -2380,7 +2380,7 @@ func initReplaceTestCase() []tcTemp {
 		//},
 	}
 
-	var testInputs []tcTemp
+	var testInputs = make([]tcTemp, 0, len(cases))
 	for _, c := range cases {
 
 		testInputs = append(testInputs, tcTemp{
@@ -2494,7 +2494,7 @@ func initTrimTestCase() []tcTemp {
 		},
 	}
 
-	var testInputs []tcTemp
+	var testInputs = make([]tcTemp, 0, len(cases))
 	for _, c := range cases {
 
 		testInputs = append(testInputs, tcTemp{
@@ -2529,7 +2529,7 @@ func TestTrim(t *testing.T) {
 func initJsonExtractTestCase() []tcTemp {
 
 	var (
-		kases = []struct {
+		cases = []struct {
 			index        int
 			json         string
 			path         string
@@ -2617,8 +2617,8 @@ func initJsonExtractTestCase() []tcTemp {
 		}
 	)
 
-	var testInputs []tcTemp
-	for _, c := range kases {
+	var testInputs = make([]tcTemp, 0, len(cases))
+	for _, c := range cases {
 
 		want := make([]string, 1)
 		if c.want != "null" {

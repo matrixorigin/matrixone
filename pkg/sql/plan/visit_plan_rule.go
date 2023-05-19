@@ -354,10 +354,9 @@ func GetVarValue(
 	if c, ok := expr.Expr.(*plan.Expr_C); ok {
 		c.C.Src = e
 	} else if _, ok = expr.Expr.(*plan.Expr_F); ok {
-		executor, err := colexec.NewExpressionExecutor(proc, expr)
-		vec, err := executor.Eval(proc, []*batch.Batch{emptyBat})
-		if err != nil {
-			return nil, err
+		vec, err1 := colexec.EvalExpressionOnce(proc, expr, []*batch.Batch{emptyBat})
+		if err1 != nil {
+			return nil, err1
 		}
 		constValue := rule.GetConstantValue(vec, true)
 		constValue.Src = e
@@ -365,7 +364,7 @@ func GetVarValue(
 		expr.Expr = &plan.Expr_C{
 			C: constValue,
 		}
-		executor.Free()
+		vec.Free(proc.Mp())
 	}
 	return expr, err
 }
