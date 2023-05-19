@@ -80,7 +80,7 @@ func Call(
 	}
 
 	bat := proc.InputBatch()
-	if bat == nil || !proc.TxnOperator.Txn().IsPessimistic() {
+	if bat == nil {
 		// all lock added, reutrn retry errror if needed
 		return true, arg.err
 	}
@@ -89,9 +89,13 @@ func Call(
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
+	txnOp := proc.TxnOperator
+
+	if !txnOp.Txn().IsPessimistic() {
+		return false, nil
+	}
 
 	txnFeature := proc.TxnClient.(client.TxnClientWithFeature)
-	txnOp := proc.TxnOperator
 	needRetry := false
 	for idx, target := range arg.targets {
 		getLogger().Debug("lock",
