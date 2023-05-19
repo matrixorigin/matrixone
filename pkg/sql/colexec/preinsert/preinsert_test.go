@@ -135,6 +135,7 @@ func TestPreInsertNullCheck(t *testing.T) {
 	}
 	argument2 := Argument{
 		SchemaName: "testDb",
+		Attrs:      []string{"int64_column_primary"},
 		TableDef: &plan.TableDef{
 			Cols: []*plan.ColDef{
 				{Name: "int64_column_primary", Primary: true, Typ: i64typ,
