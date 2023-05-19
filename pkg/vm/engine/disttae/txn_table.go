@@ -752,19 +752,11 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 
 func (tbl *txnTable) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
 	var attrs []*engine.Attribute
-	str := ""
-	i := 0
-	for j, def := range tbl.defs {
+	for _, def := range tbl.defs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			if i != 0 {
-				str += " ,"
-			}
-			str += fmt.Sprintf("[%d->i: %d] name: %s, id: %d", j, i, attr.Attr.Name, attr.Attr.ID)
 			attrs = append(attrs, &attr.Attr)
-			i++
 		}
 	}
-	fmt.Printf("[TableColumns] attrs: [%s]\n", str)
 	return attrs, nil
 }
 
