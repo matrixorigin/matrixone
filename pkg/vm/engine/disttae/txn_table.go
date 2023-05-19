@@ -295,7 +295,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		iter.Close()
 	}
 
-	_, size, err := tbl.GetSizeFromBlocksMeta(ctx, name)
+	size, _, err := tbl.GetSizeFromBlocksMeta(ctx, name)
 	if err != nil {
 		return 0, err
 	}
