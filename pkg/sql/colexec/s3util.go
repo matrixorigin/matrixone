@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -74,7 +75,8 @@ const (
 	// trigger write s3
 	WriteS3Threshold uint64 = 64 * mpool.MB
 
-	TagS3Size uint64 = 10 * mpool.MB
+	TagS3Size            uint64 = 10 * mpool.MB
+	TagS3SizeForMOLogger        = 512 * mpool.KB
 )
 
 func (w *S3Writer) Free(proc *process.Process) {
@@ -212,7 +214,13 @@ func (w *S3Writer) WriteEnd(proc *process.Process) {
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
-	if w.Batsize >= TagS3Size {
+	var S3SizeThreshold = TagS3Size
+
+	if proc.GetSessionInfo() != nil && proc.GetSessionInfo().GetUser() == db.MOLoggerUser {
+		S3SizeThreshold = TagS3SizeForMOLogger
+	}
+
+	if w.Batsize >= S3SizeThreshold {
 		if err := w.SortAndFlush(proc); err != nil {
 			return err
 		}

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -127,9 +128,14 @@ func (txn *Transaction) WriteBatch(
 }
 
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
+	var S3SizeThreshold = colexec.TagS3Size
+
+	if txn.proc.GetSessionInfo() != nil && txn.proc.GetSessionInfo().GetUser() == db.MOLoggerUser {
+		S3SizeThreshold = colexec.TagS3SizeForMOLogger
+	}
 
 	if !(offset > 0 || txn.workspaceSize >= colexec.WriteS3Threshold ||
-		(force && txn.workspaceSize >= colexec.TagS3Size)) {
+		(force && txn.workspaceSize >= S3SizeThreshold)) {
 		return nil
 	}
 
