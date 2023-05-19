@@ -209,8 +209,6 @@ select version();
 drop database test;
 drop database test1;
 -- @session
--- @bvt:issue#9551
 alter account config sys set mysql_compatibility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select version();
 alter account config abc1 set mysql_compatibility_mode = '{"version_compatibility": "0.7"}';
--- @bvt:issue
