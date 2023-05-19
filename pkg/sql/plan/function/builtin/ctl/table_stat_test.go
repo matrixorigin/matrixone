@@ -65,7 +65,7 @@ func TestMoTableRowsAndTableSize(t *testing.T) {
 
 	table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 	table.EXPECT().Rows(gomock.Any()).Return(int64(10), nil).AnyTimes()
-	table.EXPECT().Size(gomock.Any(), gomock.Any()).Return(int64(0), nil).AnyTimes()
+	table.EXPECT().Size(gomock.Any(), gomock.Any()).Return(int64(120), nil).AnyTimes()
 	db.EXPECT().Relation(gomock.Any(), gomock.Any()).Return(table, nil).AnyTimes()
 
 	eng := mock_frontend.NewMockEngine(ctrl)
