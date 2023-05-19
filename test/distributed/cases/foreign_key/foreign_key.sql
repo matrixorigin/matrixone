@@ -168,7 +168,7 @@ select * from fk_01;
 select * from fk_02;
 truncate table fk_01;
 insert into fk_01(col2,col3) values ('zhi','gao'),('er','li');
-select * from fk_01;
+select * from fk_01 order by col1;
 select * from fk_02;
 drop table fk_01;
 drop table fk_02;
