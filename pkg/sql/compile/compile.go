@@ -745,12 +745,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		preInsertUkArg, err := constructPreInsertUk(n, c.proc)
-		if err != nil {
-			return nil, err
-		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
+			preInsertUkArg, err := constructPreInsertUk(n, c.proc)
+			if err != nil {
+				return nil, err
+			}
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.PreInsertUnique,
 				Idx:     c.anal.curr,
@@ -766,12 +766,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		preInsertArg, err := constructPreInsert(n, c.e, c.proc)
-		if err != nil {
-			return nil, err
-		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
+			preInsertArg, err := constructPreInsert(n, c.e, c.proc)
+			if err != nil {
+				return nil, err
+			}
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.PreInsert,
 				Idx:     c.anal.curr,
@@ -843,6 +843,10 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			ss = []*Scope{rs}
 		} else {
 			for i := range ss {
+				insertArg, err := constructInsert(n, c.e, c.proc)
+				if err != nil {
+					return nil, err
+				}
 				ss[i].appendInstruction(vm.Instruction{
 					Op:      vm.Insert,
 					Idx:     c.anal.curr,
@@ -859,12 +863,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-		lockOpArg, err := constructLockOp(n, c.proc)
-		if err != nil {
-			return nil, err
-		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
+			lockOpArg, err := constructLockOp(n, c.proc)
+			if err != nil {
+				return nil, err
+			}
 			ss[i].appendInstruction(vm.Instruction{
 				Op:      vm.LockOp,
 				Idx:     c.anal.curr,
