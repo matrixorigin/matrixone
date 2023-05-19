@@ -204,7 +204,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	return tableVal, tableTypes, nil
 }
 
-// The Size() does not include the hidden column size
+// The Size() does not include the hidden columns' size
 func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	// Get all neede column exclude the hidden size
 	neededColumnName := make(map[string]struct{})
@@ -240,7 +240,6 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
 		if entry.typ == INSERT {
-			entry.bat.PrintBatchInfo()
 			for i, s := range entry.bat.Attrs {
 				if _, ok := neededColumnName[s]; ok {
 					originSize += int64(entry.bat.Vecs[i].Size())
@@ -286,7 +285,6 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			if _, ok := handled[entry.Batch]; ok {
 				continue
 			}
-			entry.Batch.PrintBatchInfo()
 			for i, s := range entry.Batch.Attrs {
 				if _, ok := neededColumnName[s]; ok {
 					originSize += int64(entry.Batch.Vecs[i].Size())
@@ -301,11 +299,10 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	originSize += size
-	return originSize, nil
+	return originSize + size, nil
 }
 
-// The GetSizeFromBlocksMeta() does not include the hidden column size
+// The GetSizeFromBlocksMeta() does not include the hidden columns' size
 func (tbl *txnTable) GetSizeFromBlocksMeta(ctx context.Context, name string) (int64, int64, error) {
 	if len(tbl.blockInfos) == 0 {
 		return 0, 0, moerr.NewInvalidInputNoCtx("table meta is nil")
@@ -318,7 +315,7 @@ func (tbl *txnTable) GetSizeFromBlocksMeta(ctx context.Context, name string) (in
 		originSize   int64
 	)
 
-	// remote the hidden key from the travesal list
+	// remove the hidden key from the travesal list
 	attr, _ := tbl.TableColumns(ctx)
 	for i := 0; i < len(attr); {
 		if attr[i].IsHidden {
