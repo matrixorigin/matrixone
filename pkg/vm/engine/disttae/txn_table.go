@@ -313,37 +313,54 @@ func (tbl *txnTable) rangesOnePart(
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	deletes := make(map[types.Blockid][]int)
-	ids := make([]types.Blockid, len(blocks))
-	appendIds := make([]types.Blockid, 0, 1)
+	//ids := make([]types.Blockid, len(blocks))
+	//appendIds := make([]types.Blockid, 0, 1)
 
-	for i := range blocks {
-		// if cn can see a appendable block, this block must contain all updates
-		// in cache, no need to do merge read, BlockRead will filter out
-		// invisible and deleted rows with respect to the timestamp
-		if blocks[i].EntryState {
-			appendIds = append(appendIds, blocks[i].BlockID)
-		} else {
-			if blocks[i].CommitTs.ToTimestamp().Less(ts) { // hack
-				ids[i] = blocks[i].BlockID
-			}
-		}
-	}
+	//for i := range blocks {
+	//	// if cn can see a appendable block, this block must contain all updates
+	//	// in cache, no need to do merge read, BlockRead will filter out
+	//	// invisible and deleted rows with respect to the timestamp
+	//	if blocks[i].EntryState {
+	//		appendIds = append(appendIds, blocks[i].BlockID)
+	//	} else {
+	//		if blocks[i].CommitTs.ToTimestamp().Less(ts) { // hack
+	//			ids[i] = blocks[i].BlockID
+	//		}
+	//	}
+	//}
 
 	// non-append -> flush-deletes -- yes
 	// non-append -> raw-deletes  -- yes
 	// append     -> raw-deletes -- yes
 	// append     -> flush-deletes -- yes
-	for _, blockID := range ids {
-		ts := types.TimestampToTS(ts)
-		iter := state.NewRowsIter(ts, &blockID, true)
-		for iter.Next() {
-			entry := iter.Entry()
-			id, offset := entry.RowID.Decode()
-			deletes[id] = append(deletes[id], int(offset))
+	//for _, blockID := range ids {
+	//	ts := types.TimestampToTS(ts)
+	//	iter := state.NewRowsIter(ts, &blockID, true)
+	//	for iter.Next() {
+	//		entry := iter.Entry()
+	//		id, offset := entry.RowID.Decode()
+	//		deletes[id] = append(deletes[id], int(offset))
+	//	}
+	//	iter.Close()
+	//	// DN flush deletes rowids block
+	//	if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
+	//		return
+	//	}
+	//}
+
+	for _, blk := range blocks {
+		//for non-appendable block
+		if !blk.EntryState {
+			ts := types.TimestampToTS(ts)
+			iter := state.NewRowsIter(ts, &blk.BlockID, true)
+			for iter.Next() {
+				entry := iter.Entry()
+				id, offset := entry.RowID.Decode()
+				deletes[id] = append(deletes[id], int(offset))
+			}
+			iter.Close()
 		}
-		iter.Close()
-		// DN flush deletes rowids block
-		if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
+		if err = tbl.LoadDeletesForBlock(&blk.BlockID, deletes, nil); err != nil {
 			return
 		}
 	}
@@ -363,12 +380,12 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	// add append-block flush-deletes
-	for _, blockID := range appendIds {
-		// DN flush deletes rowids block
-		if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
-			return
-		}
-	}
+	//for _, blockID := range appendIds {
+	//	// DN flush deletes rowids block
+	//	if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
+	//		return
+	//	}
+	//}
 
 	var (
 		objMeta   objectio.ObjectMeta
