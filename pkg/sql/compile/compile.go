@@ -2321,12 +2321,12 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 		if len(nodes[i].Data) < minWorkLoad {
 			minWorkLoad = len(nodes[i].Data)
 		}
-		if minWorkLoad*2 < maxWorkLoad {
-			logutil.Warnf("workload among CNs not balanced, max %v, min %v", maxWorkLoad, minWorkLoad)
-		}
 		if len(nodes[i].Data) > 0 {
 			newNodes = append(newNodes, nodes[i])
 		}
+	}
+	if minWorkLoad*2 < maxWorkLoad {
+		logutil.Warnf("workload among CNs not balanced, max %v, min %v", maxWorkLoad, minWorkLoad)
 	}
 	return newNodes
 }
