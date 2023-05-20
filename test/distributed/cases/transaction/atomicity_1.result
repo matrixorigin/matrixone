@@ -41,19 +41,22 @@ a    b    c
 10    eeeeee    20.3
 start transaction ;
 insert into atomic_table_1 select 10,"eeeeee",20.3;
+Duplicate entry '(10,eeeeee)' for key '__mo_cpkey_col'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into atomic_table_1 select 11,"ffff",2.3;
 commit;
-Duplicate entry '3b150a460165656565656500' for key '__mo_cpkey_col'
 select * from atomic_table_1;
 a    b    c
 1    gooooooge    8092.9
 2    caaaaaate    92.09
 10    eeeeee    20.3
+11    ffff    2.3
 select * from atomic_view_1;
 a    b    c
 1    gooooooge    8092.9
 2    caaaaaate    92.09
 10    eeeeee    20.3
+11    ffff    2.3
 begin;
 create view atomic_view_2 as select * from atomic_table_2;
 rollback ;
