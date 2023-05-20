@@ -112,9 +112,9 @@ use system;
 select sleep(16);
 use system;
 -- check case 1
-select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' order by request_at desc limit 70;
+select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and status != 'Running' order by request_at desc limit 70;
 -- check case 2
-select statement, result_count from statement_info where user="dump" and sql_source_type="cloud_user_sql" order by request_at desc limit 2;
+select statement, result_count from statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != 'Running' order by request_at desc limit 2;
 
 -- cleanup
 drop account if exists bvt_result_count;
