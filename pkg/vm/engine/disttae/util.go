@@ -15,6 +15,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"math"
 	"sort"
 	"strings"
@@ -30,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -39,24 +39,14 @@ const (
 	MAX_RANGE_SIZE int64  = 200
 )
 
-func evalNoColumnFilterExpr(
-	ctx context.Context,
-	expr *plan.Expr,
-	proc *process.Process,
-) (selected bool) {
-	bat := batch.NewWithSize(0)
-	defer bat.Clean(proc.Mp())
-	var err error
-	if selected, err = plan2.EvalFilterExpr(ctx, expr, bat, proc); err != nil {
-		selected = true
-	}
-	return
-}
-
 func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *process.Process) (bool, uint64) {
 	args := []*plan.Expr{constExpr}
 	argTypes := []types.Type{types.T(constExpr.Typ.Id).ToType()}
-	funId, returnType, _, _ := function.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
+	fGet, err := function.GetFunctionByName(ctx, HASH_VALUE_FUN, argTypes)
+	if err != nil {
+		panic(err)
+	}
+	funId, returnType := fGet.GetEncodedOverloadID(), fGet.GetReturnType()
 	funExpr := &plan.Expr{
 		Typ: plan2.MakePlan2Type(&returnType),
 		Expr: &plan.Expr_F{
@@ -72,12 +62,15 @@ func getConstantExprHashValue(ctx context.Context, constExpr *plan.Expr, proc *p
 
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	ret, err := colexec.EvalExpr(bat, proc, funExpr)
+
+	ret, err := colexec.EvalExpressionOnce(proc, funExpr, []*batch.Batch{bat})
 	if err != nil {
 		return false, 0
 	}
-	list := vector.MustFixedCol[int64](ret)
-	return true, uint64(list[0])
+	value := vector.MustFixedCol[int64](ret)[0]
+	ret.Free(proc.Mp())
+
+	return true, uint64(value)
 }
 
 func compPkCol(colName string, pkName string) bool {

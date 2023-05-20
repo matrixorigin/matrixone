@@ -332,6 +332,8 @@ func TestHandler_HandleEventSetVar(t *testing.T) {
 			require.Equal(t, "cn_label", varName)
 			require.Equal(t, "acc1", varValue)
 		}
+		err = res.Err()
+		require.NoError(t, err)
 
 		require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 	})
@@ -374,6 +376,8 @@ func TestHandler_HandleEventSuspendAccount(t *testing.T) {
 			require.Equal(t, "yes", varValue)
 		}
 		require.Equal(t, 1, rows)
+		err = res.Err()
+		require.NoError(t, err)
 
 		require.Equal(t, int64(2), s.counterSet.connAccepted.Load())
 	})
@@ -416,6 +420,8 @@ func TestHandler_HandleEventDropAccount(t *testing.T) {
 			require.Equal(t, "yes", varValue)
 		}
 		require.Equal(t, 1, rows)
+		err = res.Err()
+		require.NoError(t, err)
 
 		require.Equal(t, int64(2), s.counterSet.connAccepted.Load())
 	})
