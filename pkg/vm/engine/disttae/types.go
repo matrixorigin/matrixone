@@ -226,6 +226,21 @@ func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
 	return nil
 }
 
+func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
+	if txn.statementID > 0 {
+		txn.statementID--
+		end := txn.statements[txn.statementID]
+		for i := end; i < len(txn.writes); i++ {
+			if txn.writes[i].bat == nil {
+				continue
+			}
+			txn.writes[i].bat.Clean(txn.engine.mp)
+		}
+		txn.writes = txn.writes[:end]
+	}
+	return nil
+}
+
 func (txn *Transaction) resetSnapshot() error {
 	txn.tableMap.Range(func(key, value interface{}) bool {
 		value.(*txnTable).resetSnapshot()
