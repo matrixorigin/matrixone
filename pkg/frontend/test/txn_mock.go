@@ -892,3 +892,17 @@ func (mr *MockWorkspaceMockRecorder) IncrStatemenetID(ctx interface{}) *gomock.C
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatemenetID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatemenetID), ctx)
 }
+
+// RollbackLastStatement mocks base method.
+func (m *MockWorkspace) RollbackLastStatement(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RollbackLastStatement", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RollbackLastStatement indicates an expected call of RollbackLastStatement.
+func (mr *MockWorkspaceMockRecorder) RollbackLastStatement(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RollbackLastStatement", reflect.TypeOf((*MockWorkspace)(nil).RollbackLastStatement), ctx)
+}

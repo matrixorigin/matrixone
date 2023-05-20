@@ -82,6 +82,10 @@ func (w *Ws) IncrStatemenetID(ctx context.Context) error {
 	return nil
 }
 
+func (w *Ws) RollbackLastStatement(ctx context.Context) error {
+	return nil
+}
+
 func TestCompile(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := context.TODO()
