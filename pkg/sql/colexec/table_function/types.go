@@ -17,10 +17,13 @@ package table_function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
+	ctr *container
+
 	Rets      []*plan.ColDef
 	Args      []*plan.Expr
 	Attrs     []string
@@ -29,8 +32,20 @@ type Argument struct {
 	retSchema []types.Type
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+type container struct {
+	executorsForArgs []colexec.ExpressionExecutor
+}
 
+func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if arg.ctr != nil {
+		arg.ctr.cleanExecutors()
+	}
+}
+
+func (ctr *container) cleanExecutors() {
+	for i := range ctr.executorsForArgs {
+		ctr.executorsForArgs[i].Free()
+	}
 }
 
 type unnestParam struct {
