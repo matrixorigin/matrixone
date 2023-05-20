@@ -573,8 +573,14 @@ null
 -7592057480241329.820555000000000000
 null
 select col2 / col1 from timestamp01;
-invalid input: Decimal128 Div overflow: 1578918059000000000000000000(Scale:18)/0(Scale:18)
+col2 / col1
+null
+-372.506712
+null
 select col2 % col1 from timestamp01;
-invalid input: Decimal128 Mod by Zero: 1578918059000000000000000000%0
+col2 % col1
+null
+2287568.976228000000000000
+null
 drop table timestamp01;
 drop database test;

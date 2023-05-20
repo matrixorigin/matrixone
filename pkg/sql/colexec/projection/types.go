@@ -16,12 +16,25 @@ package projection
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
-	Es []*plan.Expr
+	ctr *container
+	Es  []*plan.Expr
+}
+
+type container struct {
+	projExecutors []colexec.ExpressionExecutor
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if arg.ctr != nil {
+		for i := range arg.ctr.projExecutors {
+			if arg.ctr.projExecutors[i] != nil {
+				arg.ctr.projExecutors[i].Free()
+			}
+		}
+	}
 }

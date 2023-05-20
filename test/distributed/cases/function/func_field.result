@@ -6,7 +6,7 @@ field(Gg, Aa, Bb, Cc, Dd, Ff)
 0
 select field('aa', 'AA', 'BB','Aa', 'aA');
 field(aa, AA, BB, Aa, aA)
-0
+1
 select field(' ', 'a', ' ', '\t', '\n');
 field( , a,  , \t, \n)
 2
@@ -157,7 +157,7 @@ field(t1.str1, t2.str1)
 select field(t1.str2, t2.str2) from t1 join t2 on t1.str1 = t2.str1;
 field(t1.str2, t2.str2)
 0
-0
+1
 select field(t1.str1, t2.str1) from t1 left join t2 on t1.str1 = t2.str1;
 field(t1.str1, t2.str1)
 1
