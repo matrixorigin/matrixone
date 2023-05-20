@@ -1783,7 +1783,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		return err
 	}
 
-	if w.IsConstNull() {
+	if w.IsConst() {
 		oldLen := v.length
 		v.length += addCnt
 		if w.IsConstNull() {
