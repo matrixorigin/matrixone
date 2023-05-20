@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -35,8 +34,12 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(")")
 }
 
-func Prepare(_ *process.Process, _ any) error {
-	return nil
+func Prepare(proc *process.Process, arg any) (err error) {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	ap.ctr.projExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, ap.Es)
+
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -56,26 +59,23 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Input(bat, isFirst)
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
-	for i, e := range ap.Es {
-		vec, err := colexec.EvalExpr(bat, proc, e)
+
+	// do projection.
+	for i := range ap.ctr.projExecutors {
+		vec, err := ap.ctr.projExecutors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return false, err
 		}
-		needCopy := false
-		for i := range bat.Vecs {
-			if vec == bat.Vecs[i] {
-				needCopy = true
-			}
-		}
-		if needCopy {
-			rbat.Vecs[i] = proc.GetVector(*vec.GetType())
-			if err := vector.GetUnionAllFunction(*vec.GetType(), proc.Mp())(rbat.Vecs[i], vec); err != nil {
-				return false, err
-			}
-		} else {
-			rbat.Vecs[i] = vec
-		}
+		rbat.Vecs[i] = vec
 	}
+
+	newAlloc, err := colexec.FixProjectionResult(proc, ap.ctr.projExecutors, rbat, bat)
+	if err != nil {
+		bat.Clean(proc.Mp())
+		return false, err
+	}
+	anal.Alloc(int64(newAlloc))
+
 	rbat.Zs = bat.Zs
 	bat.Zs = nil
 	proc.PutBatch(bat)

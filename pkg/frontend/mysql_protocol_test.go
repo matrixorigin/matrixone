@@ -1652,6 +1652,12 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 		return
 	}
 	require.NoError(t, err)
+	defer func() {
+		err = rows.Close()
+		require.NoError(t, err)
+		err = rows.Err()
+		require.NoError(t, err)
+	}()
 
 	//column check
 	columns, err := rows.Columns()
@@ -1785,8 +1791,6 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 
 	require.True(t, rowIdx == mrs.GetRowCount())
 
-	err = rows.Err()
-	require.NoError(t, err)
 }
 
 func Test_writePackets(t *testing.T) {

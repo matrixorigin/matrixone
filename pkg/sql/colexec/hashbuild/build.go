@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -29,9 +28,7 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" hash build ")
 }
 
-func Prepare(proc *process.Process, arg any) error {
-	var err error
-
+func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
@@ -40,7 +37,15 @@ func Prepare(proc *process.Process, arg any) error {
 			return err
 		}
 		ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions))
-		ap.ctr.evecs = make([]evalVector, len(ap.Conditions))
+
+		ctr := ap.ctr
+		ctr.evecs = make([]evalVector, len(ap.Conditions))
+		for i := range ctr.evecs {
+			ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, ap.Conditions[i])
+			if err != nil {
+				return err
+			}
+		}
 	}
 	ap.ctr.bat = batch.NewWithSize(len(ap.Typs))
 	ap.ctr.bat.Zs = proc.Mp().GetSels()
@@ -110,8 +115,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	if ctr.bat == nil || ctr.bat.Length() == 0 || !ap.NeedHashMap {
 		return nil
 	}
-	ctr.cleanEvalVectors(proc.Mp())
-	if err = ctr.evalJoinCondition(ctr.bat, ap.Conditions, proc, anal); err != nil {
+
+	if err = ctr.evalJoinCondition(ctr.bat, proc); err != nil {
 		return err
 	}
 
@@ -146,25 +151,15 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
-	for i, cond := range conds {
-		vec, err := colexec.EvalExpr(bat, proc, cond)
+func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process) error {
+	for i := range ctr.evecs {
+		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			ctr.cleanEvalVectors(proc.Mp())
 			return err
 		}
 		ctr.vecs[i] = vec
 		ctr.evecs[i].vec = vec
-		ctr.evecs[i].needFree = true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				ctr.evecs[i].needFree = false
-				break
-			}
-		}
-		if ctr.evecs[i].needFree && vec != nil {
-			analyze.Alloc(int64(vec.Size()))
-		}
 	}
 	return nil
 }

@@ -14,8 +14,6 @@
 
 package function
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 const (
 	Distinct     = 0x8000000000000000
 	DistinctMask = 0x7FFFFFFFFFFFFFFF
@@ -182,7 +180,7 @@ const (
 	RTRIM      // RTRIM
 	SIGN       // SIGN
 	SIN        // SIN
-	SINH       // SINH
+	SINH       //SINH
 	SPACE
 	SPLIT         // SPLIT
 	SPLIT_PART    // SPLIT_PART
@@ -212,8 +210,8 @@ const (
 	ANY    // ANY
 
 	DATE      // DATE
-	TIME      // TIME
-	DAY       // DAY
+	TIME      //TIME
+	DAY       //DAY
 	DAYOFYEAR // DAYOFYEAR
 	INTERVAL  // INTERVAL
 	EXTRACT   // EXTRACT
@@ -322,55 +320,55 @@ const (
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	// operators
-	"=":            EQUAL,
-	">":            GREAT_THAN,
-	">=":           GREAT_EQUAL,
-	"<":            LESS_THAN,
-	"<=":           LESS_EQUAL,
-	"<>":           NOT_EQUAL,
-	"!=":           NOT_EQUAL,
-	"not":          NOT,
-	"and":          AND,
-	"or":           OR,
-	"xor":          XOR,
-	"like":         LIKE,
-	"between":      BETWEEN,
-	"in":           IN,
-	"not_in":       NOT_IN,
-	"exists":       EXISTS,
-	"+":            PLUS,
-	"-":            MINUS,
-	"*":            MULTI,
-	"/":            DIV,
-	"div":          INTEGER_DIV,
-	"%":            MOD,
-	"mod":          MOD,
-	"unary_plus":   UNARY_PLUS,
-	"unary_minus":  UNARY_MINUS,
-	"unary_tilde":  UNARY_TILDE,
-	"case":         CASE,
-	"coalesce":     COALESCE,
-	"cast":         CAST,
-	"is":           IS,
-	"is_not":       ISNOT,
-	"isnot":        ISNOT,
-	"is_null":      ISNULL,
-	"isnull":       ISNULL,
-	"ifnull":       ISNULL,
-	"ilike":        ILIKE,
-	"is_not_null":  ISNOTNULL,
-	"isnotnull":    ISNOTNULL,
-	"isunknown":    ISUNKNOWN,
-	"isnotunknown": ISNOTUNKNOWN,
-	"istrue":       ISTRUE,
-	"isnottrue":    ISNOTTRUE,
-	"isfalse":      ISFALSE,
-	"isnotfalse":   ISNOTFALSE,
-	"&":            OP_BIT_AND,
-	"|":            OP_BIT_OR,
-	"^":            OP_BIT_XOR,
-	"<<":           OP_BIT_SHIFT_LEFT,
-	">>":           OP_BIT_SHIFT_RIGHT,
+	"=":    EQUAL,
+	">":    GREAT_THAN,
+	">=":   GREAT_EQUAL,
+	"<":    LESS_THAN,
+	"<=":   LESS_EQUAL,
+	"<>":   NOT_EQUAL,
+	"!=":   NOT_EQUAL,
+	"not":  NOT,
+	"and":  AND,
+	"or":   OR,
+	"xor":  XOR,
+	"like": LIKE,
+	//"between":     BETWEEN,
+	"in":     IN,
+	"not_in": NOT_IN,
+	//"exists":      EXISTS,
+	"+":           PLUS,
+	"-":           MINUS,
+	"*":           MULTI,
+	"/":           DIV,
+	"div":         INTEGER_DIV,
+	"%":           MOD,
+	"mod":         MOD,
+	"unary_plus":  UNARY_PLUS,
+	"unary_minus": UNARY_MINUS,
+	"unary_tilde": UNARY_TILDE,
+	"case":        CASE,
+	"coalesce":    COALESCE,
+	"cast":        CAST,
+	"is":          IS,
+	"is_not":      ISNOT,
+	"isnot":       ISNOT,
+	"is_null":     ISNULL,
+	"isnull":      ISNULL,
+	"ifnull":      ISNULL,
+	"ilike":       ILIKE,
+	"is_not_null": ISNOTNULL,
+	"isnotnull":   ISNOTNULL,
+	//"isunknown":    ISUNKNOWN,
+	//"isnotunknown": ISNOTUNKNOWN,
+	"istrue":     ISTRUE,
+	"isnottrue":  ISNOTTRUE,
+	"isfalse":    ISFALSE,
+	"isnotfalse": ISNOTFALSE,
+	"&":          OP_BIT_AND,
+	"|":          OP_BIT_OR,
+	"^":          OP_BIT_XOR,
+	"<<":         OP_BIT_SHIFT_LEFT,
+	">>":         OP_BIT_SHIFT_RIGHT,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,
@@ -429,9 +427,9 @@ var functionIdRegister = map[string]int32{
 	"hour":                           HOUR,
 	"minute":                         MINUTE,
 	"second":                         SECOND,
-	"to_days":                        TO_DAYS,
 	"to_seconds":                     TO_SECONDS,
 	"day":                            DAY,
+	"to_days":                        TO_DAYS,
 	"dayofyear":                      DAYOFYEAR,
 	"exp":                            EXP,
 	"empty":                          EMPTY,
@@ -545,13 +543,4 @@ var functionIdRegister = map[string]int32{
 	"setval":                         SETVAL,
 	"currval":                        CURRVAL,
 	"lastval":                        LASTVAL,
-}
-
-func GetFunctionIsWinfunByName(name string) bool {
-	fid, exists := fromNameToFunctionIdWithoutError(name)
-	if !exists {
-		return false
-	}
-	fs := functionRegister[fid].Overloads
-	return len(fs) > 0 && fs[0].TestFlag(plan.Function_WIN)
 }
