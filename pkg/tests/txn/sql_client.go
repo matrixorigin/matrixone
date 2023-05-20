@@ -17,6 +17,7 @@ package txn
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -130,23 +131,27 @@ func (kop *sqlTxn) Rollback() error {
 	return kop.db.Close()
 }
 
-func (kop *sqlTxn) Read(key string) (string, error) {
+func (kop *sqlTxn) Read(key string) (_ string, err error) {
 	rows, err := kop.txn.Query(fmt.Sprintf("select kv_value from txn_test_kv where kv_key = '%s'", key))
 	if err != nil {
 		return "", err
 	}
-
+	defer func() {
+		if e := rows.Close(); e != nil {
+			err = errors.Join(err, e)
+		}
+		if e := rows.Err(); e != nil {
+			err = errors.Join(err, e)
+		}
+	}()
 	if !rows.Next() {
-		return "", rows.Close()
+		return "", nil
 	}
 	v := ""
 	if err := rows.Scan(&v); err != nil {
-		return "", multierr.Append(err, rows.Close())
+		return "", err
 	}
-	if err := rows.Err(); err != nil {
-		return "", multierr.Append(err, rows.Close())
-	}
-	return v, multierr.Append(err, rows.Close())
+	return v, nil
 }
 
 func (kop *sqlTxn) Write(key, value string) error {

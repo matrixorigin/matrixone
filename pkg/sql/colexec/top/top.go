@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -39,7 +39,7 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", ap.Limit))
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	if ap.Limit > 1024 {
@@ -48,6 +48,15 @@ func Prepare(_ *process.Process, arg any) error {
 		ap.ctr.sels = make([]int64, 0, ap.Limit)
 	}
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
+
+	ctr := ap.ctr
+	ctr.executorsForOrderColumn = make([]colexec.ExpressionExecutor, len(ap.Fs))
+	for i := range ctr.executorsForOrderColumn {
+		ctr.executorsForOrderColumn[i], err = colexec.NewExpressionExecutor(proc, ap.Fs[i].Expr)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -95,26 +104,27 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Process, analyze process.Analyze) error {
 	ctr.n = len(bat.Vecs)
 	ctr.poses = ctr.poses[:0]
-	for _, f := range ap.Fs {
-		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
+	for i := range ap.Fs {
+		vec, err := ctr.executorsForOrderColumn[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return err
 		}
-		flg := true
-		for i := range bat.Vecs {
-			if bat.Vecs[i] == vec {
-				flg = false
-				ctr.poses = append(ctr.poses, int32(i))
+		aNewOrderColumn := true
+		for j := range bat.Vecs {
+			if bat.Vecs[j] == vec {
+				aNewOrderColumn = false
+				ctr.poses = append(ctr.poses, int32(j))
 				break
 			}
 		}
-		if flg {
-			ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
-			bat.Vecs = append(bat.Vecs, vec)
-		} else {
-			if vec != nil {
-				analyze.Alloc(int64(vec.Size()))
+		if aNewOrderColumn {
+			nv, err := vec.Dup(proc.Mp())
+			if err != nil {
+				return err
 			}
+			ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
+			bat.Vecs = append(bat.Vecs, nv)
+			analyze.Alloc(int64(nv.Size()))
 		}
 	}
 	if ctr.bat == nil {

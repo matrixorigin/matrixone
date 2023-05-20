@@ -471,7 +471,9 @@ func TestTime(t *testing.T) {
 	e := makeTimeExpr(s, 0)
 	bat := batch.NewWithSize(1)
 	bat.InitZsOne(1)
-	r, err := colexec.EvalExpr(bat, testutil.NewProc(), e)
+	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
+	require.NoError(t, err)
+	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat})
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Length())
 }
@@ -481,7 +483,9 @@ func TestDatetime(t *testing.T) {
 	e := makeDatetimeExpr(s, 0)
 	bat := batch.NewWithSize(1)
 	bat.InitZsOne(1)
-	r, err := colexec.EvalExpr(bat, testutil.NewProc(), e)
+	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
+	require.NoError(t, err)
+	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat})
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Length())
 }
@@ -490,7 +494,9 @@ func TestTimestamp(t *testing.T) {
 	e := makeTimestampExpr(s, 0, time.Local)
 	bat := batch.NewWithSize(1)
 	bat.InitZsOne(1)
-	r, err := colexec.EvalExpr(bat, testutil.NewProc(), e)
+	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
+	require.NoError(t, err)
+	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat})
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Length())
 }
@@ -499,7 +505,9 @@ func TestDate(t *testing.T) {
 	e := makeDateExpr(s)
 	bat := batch.NewWithSize(1)
 	bat.InitZsOne(1)
-	r, err := colexec.EvalExpr(bat, testutil.NewProc(), e)
+	executor, err := colexec.NewExpressionExecutor(testutil.NewProc(), e)
+	require.NoError(t, err)
+	r, err := executor.Eval(testutil.NewProc(), []*batch.Batch{bat})
 	require.NoError(t, err)
 	require.Equal(t, 1, r.Length())
 }
