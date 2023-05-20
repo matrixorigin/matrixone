@@ -75,7 +75,7 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
 	}
 	retTxnCtx = trace.ContextWithSpan(retTxnCtx, trace.SpanFromContext(reqCtx))
-	if th.ses.tenant != nil && th.ses.tenant.User == db.MOLoggerUser {
+	if th.ses != nil && th.ses.tenant != nil && th.ses.tenant.User == db.MOLoggerUser {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.IsMoLogger{}, true)
 	}
 
