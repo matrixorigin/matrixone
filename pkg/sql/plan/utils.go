@@ -18,6 +18,7 @@ import (
 	"container/list"
 	"context"
 	"encoding/csv"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"path"
@@ -33,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -950,7 +950,13 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 		}
 		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 	} else {
-		vec, err := colexec.EvalExprByZonemapBat(ctx, bat, proc, expr)
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		if err != nil {
+			return false, err
+		}
+		defer executor.Free()
+
+		vec, err := executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return false, err
 		}
@@ -1086,11 +1092,11 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 		return e, nil
 	}
 	overloadID := ef.F.Func.GetObj()
-	f, err := function.GetFunctionByID(proc.Ctx, overloadID)
+	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
 		return nil, err
 	}
-	if f.Volatile { // function cannot be fold
+	if f.CannotFold() { // function cannot be fold
 		return e, nil
 	}
 	for i := range ef.F.Args {
@@ -1101,7 +1107,8 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if !rule.IsConstant(e) {
 		return e, nil
 	}
-	vec, err := colexec.EvalExpr(bat, proc, e)
+
+	vec, err := colexec.EvalExpressionOnce(proc, e, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
@@ -1424,8 +1431,8 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 			l.Remove(l.Front())
 		}
 	}
-	len := l.Len()
-	for j := 0; j < len; j++ {
+	length := l.Len()
+	for j := 0; j < length; j++ {
 		fileList = append(fileList, l.Front().Value.(string))
 		l.Remove(l.Front())
 		fileSize = append(fileSize, l2.Front().Value.(int64))

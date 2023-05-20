@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -29,14 +28,24 @@ func String(_ any, buf *bytes.Buffer) {
 	buf.WriteString(" inner join ")
 }
 
-func Prepare(proc *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
 	ap.ctr.inBuckets = make([]uint8, hashmap.UnitLimit)
-	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	ap.ctr.vecs = make([]*vector.Vector, len(ap.Conditions[0]))
-	return nil
+	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
+	for i := range ap.ctr.evecs {
+		ap.ctr.evecs[i].executor, err = colexec.NewExpressionExecutor(proc, ap.Conditions[0][i])
+		if err != nil {
+			return err
+		}
+	}
+
+	if ap.Cond != nil {
+		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	}
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -48,7 +57,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(ap, proc, anal); err != nil {
+			if err := ctr.build(proc, anal); err != nil {
 				return false, err
 			}
 			if ctr.mp == nil {
@@ -87,7 +96,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
@@ -114,12 +123,16 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 
-	idxFlg := false
-	if err := ctr.evalJoinCondition(bat, ap.Conditions[0], proc, &idxFlg, anal); err != nil {
+	if err := ctr.evalJoinCondition(bat, proc); err != nil {
 		rbat.Clean(proc.Mp())
 		return err
 	}
-	defer ctr.cleanEvalVectors(proc.Mp())
+	if ctr.joinBat1 == nil {
+		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
+	}
+	if ctr.joinBat2 == nil {
+		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
+	}
 
 	mSels := ctr.mp.Sels()
 
@@ -139,21 +152,26 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			sels := mSels[vals[k]-1]
 			if ap.Cond != nil {
 				for _, sel := range sels {
-					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
+					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+						1, ctr.cfs1); err != nil {
+						return err
+					}
+					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+						1, ctr.cfs2); err != nil {
+						return err
+					}
+					vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
 					if err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}
 					if vec.IsConstNull() || vec.GetNulls().Contains(0) {
-						vec.Free(proc.Mp())
 						continue
 					}
 					bs := vector.MustFixedCol[bool](vec)
 					if !bs[0] {
-						vec.Free(proc.Mp())
 						continue
 					}
-					vec.Free(proc.Mp())
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err := rbat.Vecs[j].UnionOne(bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
@@ -194,26 +212,15 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	return nil
 }
 
-func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, flg *bool, analyze process.Analyze) error {
-	for i, cond := range conds {
-		vec, err := colexec.EvalExpr(bat, proc, cond)
+func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process) error {
+	for i := range ctr.evecs {
+		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanEvalVectors(proc.Mp())
+			ctr.cleanEvalVectors()
 			return err
 		}
 		ctr.vecs[i] = vec
 		ctr.evecs[i].vec = vec
-		ctr.evecs[i].needFree = true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				ctr.evecs[i].needFree = false
-				break
-			}
-		}
-
-		if ctr.evecs[i].needFree && vec != nil {
-			analyze.Alloc(int64(vec.Size()))
-		}
 	}
 	return nil
 }
