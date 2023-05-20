@@ -970,8 +970,14 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	} else {
 		fileList = []string{param.Filepath}
 	}
+
 	if len(fileList) == 0 {
-		return nil, nil
+		ret := make([]*Scope, 1)
+		ret[0].Magic = Normal
+		ret[0].DataSource = nil
+		ret[0].Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+
+		return ret, nil
 	}
 
 	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
