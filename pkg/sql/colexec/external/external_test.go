@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
@@ -688,9 +688,23 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	fileList := toPathArr(files)
 	fileSize := toSizeArr(files)
 
-	equalDate2DateFid := function.EncodeOverloadID(function.EQUAL, 14)
-	lessDate2DateFid := function.EncodeOverloadID(function.LESS_THAN, 14)
-	mologdateFid := function.EncodeOverloadID(function.MO_LOG_DATE, 0)
+	e, err := function.GetFunctionByName(context.Background(), "=", []types.Type{types.T_date.ToType(), types.T_date.ToType()})
+	if err != nil {
+		panic(err)
+	}
+	equalDate2DateFid := e.GetEncodedOverloadID()
+
+	e, err = function.GetFunctionByName(context.Background(), "<", []types.Type{types.T_date.ToType(), types.T_date.ToType()})
+	if err != nil {
+		panic(err)
+	}
+	lessDate2DateFid := e.GetEncodedOverloadID()
+
+	e, err = function.GetFunctionByName(context.Background(), "mo_log_date", []types.Type{types.T_varchar.ToType()})
+	if err != nil {
+		panic(err)
+	}
+	mologdateFid := e.GetEncodedOverloadID()
 	tableName := "dummy_table"
 
 	mologdateConst := func(idx int) *plan.Expr {
@@ -711,14 +725,16 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	mologdateFunc := func() *plan.Expr {
 		return &plan.Expr{
 			Typ: &plan.Type{
-				Id: int32(types.T_bool),
+				Id: int32(types.T_date),
 			},
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
 					Func: &plan.ObjectRef{Obj: mologdateFid, ObjName: "mo_log_date"},
 					Args: []*plan.Expr{
 						{
-							Typ: nil,
+							Typ: &plan.Type{
+								Id: int32(types.T_varchar),
+							},
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: 0,

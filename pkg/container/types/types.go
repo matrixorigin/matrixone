@@ -314,7 +314,11 @@ type Decimal interface {
 
 // FixedSized types in our type system.   Esp, Varlena.
 type FixedSizeT interface {
-	bool | OrderedT | Decimal | TS | Rowid | Varlena | Uuid | Blockid
+	FixedSizeTExceptStrType | Varlena
+}
+
+type FixedSizeTExceptStrType interface {
+	bool | OrderedT | Decimal | TS | Rowid | Uuid | Blockid
 }
 
 type Number interface {

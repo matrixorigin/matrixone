@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -31,8 +33,13 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }
 
-func Prepare(_ *process.Process, _ any) error {
-	return nil
+func Prepare(proc *process.Process, arg any) (err error) {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+
+	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
+	ap.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filterList)
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -49,14 +56,19 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Start()
 	defer anal.Stop()
 	anal.Input(bat, isFirst)
-	filterList := colexec.SplitAndExprs([]*plan.Expr{ap.E})
-	for i := range filterList {
-		vec, err := colexec.EvalExpr(bat, proc, filterList[i])
+
+	var sels []int64
+	for i := range ap.ctr.executors {
+		if bat.Length() == 0 {
+			break
+		}
+
+		vec, err := ap.ctr.executors[i].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			bat.Clean(proc.Mp())
 			return false, err
 		}
-		defer vec.Free(proc.Mp())
+
 		if proc.OperatorOutofMemory(int64(vec.Size())) {
 			return false, moerr.NewOOM(proc.Ctx)
 		}
@@ -64,22 +76,42 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		if !vec.GetType().IsBoolean() {
 			return false, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
-		bs := vector.MustFixedCol[bool](vec)
+
+		bs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 		if vec.IsConst() {
-			if vec.IsConstNull() || !bs[0] {
+			v, null := bs.GetValue(0)
+			if null || !v {
 				bat.Shrink(nil)
 			}
 		} else {
-			sels := proc.Mp().GetSels()
-			for i, b := range bs {
-				if b && !vec.GetNulls().Contains(uint64(i)) {
-					sels = append(sels, int64(i))
+			if sels == nil {
+				sels = proc.Mp().GetSels()
+			}
+			sels = sels[:0]
+
+			l := uint64(vec.Length())
+			if bs.WithAnyNullValue() {
+				for j := uint64(0); j < l; j++ {
+					v, null := bs.GetValue(j)
+					if !null && v {
+						sels = append(sels, int64(j))
+					}
+				}
+			} else {
+				for j := uint64(0); j < l; j++ {
+					v, _ := bs.GetValue(j)
+					if v {
+						sels = append(sels, int64(j))
+					}
 				}
 			}
 			bat.Shrink(sels)
-			proc.Mp().PutSels(sels)
 		}
 	}
+	if sels != nil {
+		proc.Mp().PutSels(sels)
+	}
+
 	anal.Output(bat, isLast)
 	proc.SetInputBatch(bat)
 	return false, nil
