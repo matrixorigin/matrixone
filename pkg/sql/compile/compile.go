@@ -280,7 +280,7 @@ func (c *Compile) Run(_ uint64) error {
 	close(errC)
 	for e := range errC {
 		if e != nil {
-			c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.proc.Ctx)
+			// c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.proc.Ctx)
 			return e
 		}
 	}

@@ -240,7 +240,6 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	}
 	return nil
 }
-
 func (txn *Transaction) resetSnapshot() error {
 	txn.tableMap.Range(func(key, value interface{}) bool {
 		value.(*txnTable).resetSnapshot()

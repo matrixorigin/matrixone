@@ -3225,13 +3225,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
 		logError(ses.GetDebugString(), err.Error())
-		/*
-			txnErr = ses.TxnRollbackSingleStatement(stmt)
-			if txnErr != nil {
-				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
-				return txnErr
-			}
-		*/
+		txnErr = ses.TxnRollbackSingleStatement(stmt)
+		if txnErr != nil {
+			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			return txnErr
+		}
 		logStatementStatus(requestCtx, ses, stmt, fail, err)
 		return err
 	handleNext:
