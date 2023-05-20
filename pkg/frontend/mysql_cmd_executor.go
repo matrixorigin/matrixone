@@ -858,10 +858,16 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 			return err
 		}
 
-		vec, err := colexec.EvalExpr(bat, proc, planExpr)
+		executor, err := colexec.NewExpressionExecutor(proc, planExpr)
 		if err != nil {
 			return err
 		}
+		vec, err := executor.Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			executor.Free()
+			return err
+		}
+
 		bs := vector.MustFixedCol[bool](vec)
 		sels := proc.Mp().GetSels()
 		for i, b := range bs {
@@ -869,6 +875,8 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 				sels = append(sels, int64(i))
 			}
 		}
+		executor.Free()
+
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 		v0 := vector.MustStrCol(bat.Vecs[0])

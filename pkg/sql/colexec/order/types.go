@@ -18,12 +18,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type evalVector struct {
-	needFree bool
 	vec      *vector.Vector
+	executor colexec.ExpressionExecutor
 }
 
 type container struct {
@@ -47,9 +48,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 
 func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
 	for i := range ctr.vecs {
-		if ctr.vecs[i].needFree && ctr.vecs[i].vec != nil {
-			ctr.vecs[i].vec.Free(mp)
-			ctr.vecs[i].vec = nil
-		}
+		ctr.vecs[i].executor.Free()
 	}
 }
