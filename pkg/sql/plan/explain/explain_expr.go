@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions, buf *bytes.Buffer) error {
@@ -69,6 +70,11 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			buf.WriteString("'" + val.Sval + "'")
 		case *plan.Const_Bval:
 			fmt.Fprintf(buf, "%v", val.Bval)
+		case *plan.Const_Decimal64Val:
+			fmt.Fprintf(buf, "%s", types.Decimal64(val.Decimal64Val.A).Format(expr.Typ.GetScale()))
+		case *plan.Const_Decimal128Val:
+			fmt.Fprintf(buf, "%s",
+				types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}.Format(expr.Typ.GetScale()))
 		}
 
 	case *plan.Expr_F:
@@ -121,12 +127,12 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 	funcName := funcExpr.F.GetFunc().GetObjName()
 	funcDef := funcExpr.F.GetFunc()
 
-	funcProtoType, err := function.GetFunctionByID(ctx, funcDef.Obj&function.DistinctMask)
+	layout, err := function.GetLayoutById(ctx, funcDef.Obj&function.DistinctMask)
 	if err != nil {
 		return moerr.NewInvalidInput(ctx, "invalid function or opreator '%s'", funcName)
 	}
 
-	switch funcProtoType.GetLayout() {
+	switch layout {
 	case function.STANDARD_FUNCTION:
 		buf.WriteString(funcExpr.F.Func.GetObjName() + "(")
 		if len(funcExpr.F.Args) > 0 {
@@ -244,13 +250,20 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			return err
 		}
 		buf.WriteString(")")
-	case function.IS_NULL_EXPRESSION:
+	case function.IS_EXPRESSION:
 		buf.WriteString("(")
 		err := describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
 			return err
 		}
-		buf.WriteString(" IS NULL)")
+		buf.WriteString(fmt.Sprintf(" IS %s)", strings.ToUpper(funcExpr.F.Func.GetObjName()[2:])))
+	case function.IS_NOT_EXPRESSION:
+		buf.WriteString("(")
+		err := describeExpr(ctx, funcExpr.F.Args[0], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(fmt.Sprintf(" IS NOT %s)", strings.ToUpper(funcExpr.F.Func.GetObjName()[5:])))
 	case function.NOPARAMETER_FUNCTION:
 		buf.WriteString(funcExpr.F.Func.GetObjName())
 	case function.DATE_INTERVAL_EXPRESSION:

@@ -264,11 +264,17 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Proce
 	// try to calculate on update value, return err if fails
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	v, err := colexec.EvalExpr(bat, proc, onUpdateExpr)
+
+	executor, err := colexec.NewExpressionExecutor(proc, onUpdateExpr)
 	if err != nil {
 		return nil, err
 	}
-	v.Free(proc.Mp())
+	_, err = executor.Eval(proc, []*batch.Batch{bat})
+	if err != nil {
+		return nil, err
+	}
+	executor.Free()
+
 	ret := &plan.OnUpdate{
 		Expr:         onUpdateExpr,
 		OriginString: tree.String(expr, dialect.MYSQL),
