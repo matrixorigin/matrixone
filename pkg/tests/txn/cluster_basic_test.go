@@ -241,14 +241,16 @@ func TestAggTable(t *testing.T) {
 			defer wg.Done()
 			rows, err := txnList[i].ExecSQLQuery(fmt.Sprintf("SELECT DISTINCT a, AVG( b) FROM %s GROUP BY a HAVING AVG( b) > 50;", tblList[i]))
 			defer mustCloseRows(t, rows)
+			defer func() {
+				err := rows.Err()
+				require.NoError(t, err)
+			}()
 			require.NoError(t, err)
 			var l avgline
 			if !rows.Next() {
-				rows.Close()
+				return
 			}
 			err = rows.Scan(&l.a, &l.b)
-			require.NoError(t, err)
-			err = rows.Err()
 			require.NoError(t, err)
 			if tblList[i] == "t1" {
 				require.Equal(t, 32768.5, l.b)

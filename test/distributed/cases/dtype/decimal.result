@@ -725,7 +725,7 @@ a    a - b - b
 3    7459
 4    -24691357819753086424691357819753086482
 SELECT a, b DIV a FROM decimal07;
-invalid argument operator div, bad value [DECIMAL128 DECIMAL128]
+invalid argument operator div, bad value [DECIMAL128 INT]
 SELECT a, ABS(b) FROM decimal07;
 a    abs(b)
 1    3728193

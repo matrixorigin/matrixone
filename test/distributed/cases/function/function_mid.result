@@ -188,8 +188,8 @@ empty(mid(s, 1, 2))
 false
 true
 false
-true
-true
+null
+null
 false
 false
 SELECT LENGTH(mid(s, -1, 7281979 % 2)) FROM mid_02;
@@ -197,8 +197,8 @@ length(mid(s, -1, 7281979 % 2))
 1
 0
 1
-0
-0
+null
+null
 1
 1
 SELECT lengthutf8(mid(s, -1, 3)) FROM mid_02;
@@ -206,8 +206,8 @@ lengthutf8(mid(s, -1, 3))
 1
 0
 1
-0
-0
+null
+null
 1
 1
 SELECT LTRIM(mid(s, 1, 16 - 11)) FROM mid_02;
@@ -215,8 +215,8 @@ ltrim(mid(s, 1, 16 - 11))
 woshi
 
 3562
-
-
+null
+null
 ehwqk
 123
 SELECT RTRIM(mid(s, -3, 2)) FROM mid_02 WHERE id = 6;
@@ -227,8 +227,8 @@ lpad(mid(s, 1, 2), 20, *)
 ******************wo
 ********************
 ****************** 3
-********************
-********************
+null
+null
 ******************eh
 ******************12
 SELECT RPAD(mid(s, -8, 4), 5, '-') FROM mid_02 WHERE ABS(d1) = 0;
@@ -247,8 +247,8 @@ reverse(mid(s, -1, 2))
 9
 
 &
-
-
+null
+null
  
 3
 SELECT hex(mid(s, 1, 2)) FROM mid_02 WHERE id = 7;
