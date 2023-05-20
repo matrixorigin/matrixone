@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,9 +53,10 @@ const (
 	maxSubscribeRequestPerSecond = 10000
 
 	// once we send a table subscribe request, we check table subscribe status each periodToCheckTableSubscribeSucceed.
-	// If check time exceeds noticeTimeToCheckTableSubscribeSucceed, warning log will be printed.
-	periodToCheckTableSubscribeSucceed     = 1 * time.Millisecond
-	noticeTimeToCheckTableSubscribeSucceed = 10 * time.Second
+	// If check time exceeds maxTimeToCheckTableSubscribeSucceed, print debug log and return error.
+	periodToCheckTableSubscribeSucceed  = 1 * time.Millisecond
+	maxTimeToCheckTableSubscribeSucceed = 10 * time.Second
+	maxCheckRangeTableSubscribeSucceed  = int(maxTimeToCheckTableSubscribeSucceed / periodToCheckTableSubscribeSucceed)
 
 	// default deadline for context to send a rpc message.
 	defaultTimeOutToSubscribeTable = 2 * time.Minute
@@ -150,21 +153,19 @@ func (client *pushClient) TryToSubscribeTable(
 	ticker := time.NewTicker(periodToCheckTableSubscribeSucceed)
 	defer ticker.Stop()
 
-	noticeRange := int(noticeTimeToCheckTableSubscribeSucceed / periodToCheckTableSubscribeSucceed)
-	for j := 1; ; j++ {
-		for i := 0; i < noticeRange; i++ {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-ticker.C:
-				if client.subscribed.getTableSubscribe(dbId, tblId) {
-					return nil
-				}
+	for i := 0; i < maxCheckRangeTableSubscribeSucceed; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if client.subscribed.getTableSubscribe(dbId, tblId) {
+				return nil
 			}
 		}
-		logutil.Warnf("didn't receive tbl[db: %d, tbl: %d] subscribe response for a long time [%d * %s]",
-			dbId, tblId, j, noticeTimeToCheckTableSubscribeSucceed)
 	}
+	logutil.Debugf("didn't receive tbl[db: %d, tbl: %d] subscribe response within %s",
+		dbId, tblId, maxTimeToCheckTableSubscribeSucceed)
+	return moerr.NewInternalError(ctx, "an error has occurred about table subscription, please try again.")
 }
 
 func (client *pushClient) subscribeTable(
@@ -173,8 +174,9 @@ func (client *pushClient) subscribeTable(
 	case <-ctx.Done():
 		return ctx.Err()
 	case subscriber := <-client.subscriber.lockSubscriber:
+		err := subscriber(ctx, tblId)
 		client.subscriber.lockSubscriber <- subscriber
-		if err := subscriber(ctx, tblId); err != nil {
+		if err != nil {
 			return err
 		}
 		logutil.Infof("send subscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
@@ -188,8 +190,9 @@ func (client *pushClient) unsubscribeTable(
 	case <-ctx.Done():
 		return ctx.Err()
 	case unsubscriber := <-client.subscriber.lockUnSubscriber:
+		err := unsubscriber(ctx, tblId)
 		client.subscriber.lockUnSubscriber <- unsubscriber
-		if err := unsubscriber(ctx, tblId); err != nil {
+		if err != nil {
 			return err
 		}
 		logutil.Infof("send unsubscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
@@ -576,6 +579,11 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 // can't call this method directly.
 func (s *logTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
+	if ctx == nil {
+		println(fmt.Sprintf("subscribe table get a nil ctx, stack is \n%s", string(debug.Stack())))
+		panic("subscribe table get a nil ctx.")
+	}
+
 	// set a default deadline for ctx if it doesn't have.
 	if _, ok := ctx.Deadline(); !ok {
 		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
