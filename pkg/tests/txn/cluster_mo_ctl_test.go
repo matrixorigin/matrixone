@@ -100,6 +100,12 @@ func mustGetSnapshot(t *testing.T, cli Client) string {
 
 	rows, err := sqlTxn.ExecSQLQuery("select mo_ctl('cn', 'GetSnapshot', '')")
 	require.NoError(t, err)
+	defer func() {
+		err := rows.Close()
+		require.NoError(t, err)
+		err = rows.Err()
+		require.NoError(t, err)
+	}()
 
 	defer mustCloseRows(t, rows)
 	require.True(t, rows.Next())
@@ -107,7 +113,6 @@ func mustGetSnapshot(t *testing.T, cli Client) string {
 	var result pb.CtlResult
 	value := ""
 	require.NoError(t, rows.Scan(&value))
-	require.NoError(t, rows.Err())
 	json.MustUnmarshal([]byte(value), &result)
 	return result.Data.(string)
 }

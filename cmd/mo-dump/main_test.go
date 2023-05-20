@@ -17,9 +17,10 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestConvertValue(t *testing.T) {
@@ -106,4 +107,45 @@ func TestShowCreateTable(t *testing.T) {
 		require.Equal(t, v.res, buf.String())
 	}
 	os.Stdout = old
+}
+
+func TestViewOrder(t *testing.T) {
+	start := 1
+	createTable := []string{
+		"create table t1(a int);",
+		"create view t4 as select * from t2, t3;",
+		"create view t2 as select * from t1;",
+		"create view t3 as select * from t2;",
+		"create view t6 as select * from t4, t5;",
+		"create view t5 as select * from t4;",
+	}
+	tables := []Table{
+		{Name: "t1"},
+		{Name: "t4"},
+		{Name: "t2"},
+		{Name: "t3"},
+		{Name: "t6"},
+		{Name: "t5"},
+	}
+	createTarget := []string{
+		"create table t1(a int);",
+		"create view t2 as select * from t1;",
+		"create view t3 as select * from t2;",
+		"create view t4 as select * from t2, t3;",
+		"create view t5 as select * from t4;",
+		"create view t6 as select * from t4, t5;",
+	}
+	tableTarget := []Table{
+		{Name: "t1"},
+		{Name: "t2"},
+		{Name: "t3"},
+		{Name: "t4"},
+		{Name: "t5"},
+		{Name: "t6"},
+	}
+	adjustViewOrder(createTable, tables, start)
+	for i := 0; i < len(createTable); i++ {
+		require.Equal(t, createTable[i], createTarget[i])
+		require.Equal(t, tables[i], tableTarget[i])
+	}
 }

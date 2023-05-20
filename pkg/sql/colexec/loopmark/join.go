@@ -30,6 +30,8 @@ func String(_ any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	var err error
+
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
@@ -38,7 +40,11 @@ func Prepare(proc *process.Process, arg any) error {
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
-	return nil
+
+	if ap.Cond != nil {
+		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	}
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -132,26 +138,37 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		return moerr.NewInternalError(proc.Ctx, "MARK join must output mark column")
 	}
 	count := bat.Length()
+	if ctr.joinBat == nil {
+		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
+	}
 	for i := 0; i < count; i++ {
-		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
+		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
+			ctr.bat.Length(), ctr.cfs); err != nil {
+			rbat.Clean(proc.Mp())
+			return err
+		}
+		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
 		if err != nil {
 			rbat.Clean(proc.Mp())
 			return err
 		}
-		exprVals := vector.MustFixedCol[bool](vec)
+
+		rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
 		hasTrue := false
 		hasNull := false
 		if vec.IsConst() {
-			if vec.IsConstNull() {
+			v, null := rs.GetValue(0)
+			if null {
 				hasNull = true
 			} else {
-				hasTrue = exprVals[0]
+				hasTrue = v
 			}
 		} else {
-			for j := range exprVals {
-				if vec.GetNulls().Contains(uint64(j)) {
+			for j := uint64(0); j < uint64(vec.Length()); j++ {
+				val, null := rs.GetValue(j)
+				if null {
 					hasNull = true
-				} else if exprVals[j] {
+				} else if val {
 					hasTrue = true
 				}
 			}
@@ -163,7 +180,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		} else {
 			vector.AppendFixed(rbat.Vecs[markPos], false, false, proc.Mp())
 		}
-		vec.Free(proc.Mp())
 	}
 	for i, rp := range ap.Result {
 		if rp >= 0 {
