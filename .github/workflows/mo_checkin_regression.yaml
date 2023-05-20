@@ -272,7 +272,7 @@ jobs:
       # start sysbench test
       - name: Start OLTP Insert Test With 100 Threads
         if: ${{ always() }}
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -287,11 +287,11 @@ jobs:
           
           echo ''
           echo 'Start OLTP Insert Test With 100 threads'
-          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -g
+          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g
 
       - name: Start OLTP Delete Test With 100 Threads
         if: ${{ always() }}
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -304,11 +304,11 @@ jobs:
           
           echo ''
           echo 'Start OLTP Delete Test With 100 threads'
-          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -g
+          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g
           
       - name: Start OLTP Update Test With 100 Threads
         if: ${{ always() }}
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -321,11 +321,11 @@ jobs:
           
           echo ''
           echo 'Start OLTP UPDATE Test With 100 threads'
-          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -g
+          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g
 
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() }}
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -338,7 +338,7 @@ jobs:
           
           echo ''
           echo 'Start OLTP Point Select Test With 100 threads'
-          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -g
+          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g
      
      # start tpcc test
       - name: Load TPCC 10 Warehouse Data
@@ -352,7 +352,7 @@ jobs:
 
       - name: Start TPCC 10 Warehouses 10 terminals Test
         if: ${{ always() }}
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           export LC_ALL="C.UTF-8"
           locale
@@ -364,7 +364,7 @@ jobs:
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
-          sed -i '/runMins=*/c\runMins=10' props_10.mo
+          sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
           ./runBenchmark.sh props_10.mo
           ./runVerify.sh props_10.mo

@@ -16,13 +16,13 @@ package order
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,7 +38,7 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	{
@@ -54,6 +54,15 @@ func Prepare(_ *process.Process, arg any) error {
 			} else {
 				ap.ctr.nullsLast[i] = ap.ctr.desc[i]
 			}
+		}
+	}
+
+	ctr := ap.ctr
+	ctr.vecs = make([]evalVector, len(ap.Fs))
+	for i := range ctr.vecs {
+		ctr.vecs[i].executor, err = colexec.NewExpressionExecutor(proc, ap.Fs[i].Expr)
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -74,7 +83,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
-	end, err := ap.ctr.process(ap, bat, proc)
+	end, err := ap.ctr.process(bat, proc)
 	if err != nil {
 		ap.Free(proc, true)
 		return false, err
@@ -82,22 +91,28 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	return end, nil
 }
 
-func (ctr *container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
-	for i, f := range ap.Fs {
-		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
+func (ctr *container) process(bat *batch.Batch, proc *process.Process) (bool, error) {
+	for i := 0; i < bat.VectorCount(); i++ {
+		vec := bat.GetVector(int32(i))
+		if vec.NeedDup() {
+			oldVec := bat.Vecs[i]
+			nvec, err := oldVec.Dup(proc.Mp())
+			if err != nil {
+				return false, err
+			}
+			bat.ReplaceVector(oldVec, nvec)
+			oldVec.Free(proc.Mp())
+		}
+	}
+
+	for i := range ctr.vecs {
+		vec, err := ctr.vecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return false, err
 		}
 		ctr.vecs[i].vec = vec
-		ctr.vecs[i].needFree = true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				ctr.vecs[i].needFree = false
-				break
-			}
-		}
 	}
-	defer ctr.cleanEvalVectors(proc.Mp())
+
 	ovec := ctr.vecs[0].vec
 	var strCol []string
 

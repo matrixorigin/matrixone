@@ -32,6 +32,7 @@ func String(_ any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	var err error
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
@@ -46,7 +47,11 @@ func Prepare(proc *process.Process, arg any) error {
 
 	ap.ctr.buildEqVec = make([]*vector.Vector, len(ap.Conditions[1]))
 	ap.ctr.buildEqEvecs = make([]evalVector, len(ap.Conditions[1]))
-	return nil
+
+	if ap.Cond != nil {
+		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	}
+	return err
 }
 
 // Note: before mark join, right table has been used in hashbuild operator to build JoinMap, which only contains those tuples without null
@@ -132,7 +137,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if err != nil {
 			return err
 		}
-		if err = ctr.evalJoinBuildCondition(bat, ap.Conditions[1], proc); err != nil {
+		if err = ctr.evalJoinBuildCondition(bat, proc); err != nil {
 			return err
 		}
 		ctr.rewriteCond = colexec.RewriteFilterExprList(ap.OnList)
@@ -175,11 +180,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	ctr.markVals = vector.MustFixedCol[bool](markVec)
 	ctr.markNulls = nulls.NewWithSize(bat.Length())
-	if err = ctr.evalJoinProbeCondition(bat, ap.Conditions[0], proc, anal); err != nil {
+
+	if err = ctr.evalJoinProbeCondition(bat, proc); err != nil {
 		rbat.Clean(proc.Mp())
 		return err
 	}
-	defer ctr.cleanEvalVectors(proc.Mp())
 
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
@@ -260,46 +265,29 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 }
 
 // store the results of the calculation on the probe side of the equation condition
-func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process, analyze process.Analyze) error {
-	for i, cond := range conds {
-		vec, err := colexec.EvalExpr(bat, proc, cond)
+func (ctr *container) evalJoinProbeCondition(bat *batch.Batch, proc *process.Process) error {
+	for i := range ctr.evecs {
+		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanEvalVectors(proc.Mp())
+			ctr.cleanEvalVectors()
 			return err
 		}
 		ctr.vecs[i] = vec
 		ctr.evecs[i].vec = vec
-		ctr.evecs[i].needFree = true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				ctr.evecs[i].needFree = false
-				break
-			}
-		}
-		if ctr.evecs[i].needFree && vec != nil {
-			analyze.Alloc(int64(vec.Size()))
-		}
 	}
 	return nil
 }
 
 // store the results of the calculation on the build side of the equation condition
-func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
-	for i, cond := range conds {
-		vec, err := colexec.EvalExpr(bat, proc, cond)
+func (ctr *container) evalJoinBuildCondition(bat *batch.Batch, proc *process.Process) error {
+	for i := range ctr.buildEqEvecs {
+		vec, err := ctr.buildEqEvecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanEvalVectors(proc.Mp())
+			ctr.cleanEvalVectors()
 			return err
 		}
 		ctr.buildEqVec[i] = vec
 		ctr.buildEqEvecs[i].vec = vec
-		ctr.buildEqEvecs[i].needFree = true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				ctr.buildEqEvecs[i].needFree = false
-				break
-			}
-		}
 	}
 	return nil
 }
@@ -309,8 +297,22 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 	if ap.Cond != nil {
 		condState := condFalse
 		sels := mSels[vals[k]-1]
+		if ctr.joinBat1 == nil {
+			ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
+		}
+		if ctr.joinBat2 == nil {
+			ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
+		}
 		for _, sel := range sels {
-			vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
+			if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
+				1, ctr.cfs1); err != nil {
+				return condUnkown, err
+			}
+			if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+				1, ctr.cfs2); err != nil {
+				return condUnkown, err
+			}
+			vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2})
 			if err != nil {
 				return condUnkown, err
 			}
@@ -320,10 +322,8 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int32, vals []uint6
 			bs := vector.MustFixedCol[bool](vec)
 			if bs[0] {
 				condState = condTrue
-				vec.Free(proc.Mp())
 				break
 			}
-			vec.Free(proc.Mp())
 		}
 		return condState, nil
 	} else {
@@ -335,18 +335,30 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 	if cond == nil {
 		return condTrue, nil
 	}
-	vec, err := colexec.JoinFilterEvalExpr(pbat, bat, idx, proc, cond)
+	if ctr.joinBat == nil {
+		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(pbat, proc.Mp())
+	}
+	if err := colexec.SetJoinBatchValues(ctr.joinBat, pbat, int64(idx), ctr.bat.Length(), ctr.cfs); err != nil {
+		return condUnkown, err
+	}
+	vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
 	defer vec.Free(proc.Mp())
 	if err != nil {
 		return condUnkown, err
 	}
-	bs := vector.MustFixedCol[bool](vec)
-	for _, b := range bs {
-		if b {
+
+	bs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+	j := uint64(vec.Length())
+	hasNull := false
+	for i := uint64(0); i < j; i++ {
+		b, null := bs.GetValue(i)
+		if null {
+			hasNull = true
+		} else if b {
 			return condTrue, nil
 		}
 	}
-	if nulls.Any(vec.GetNulls()) {
+	if hasNull {
 		return condUnkown, nil
 	}
 	return condFalse, nil

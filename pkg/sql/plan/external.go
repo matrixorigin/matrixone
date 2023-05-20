@@ -88,10 +88,12 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	}
 	bat := makeFilepathBatch(node, proc, filterList, fileList)
 	filter := colexec.RewriteFilterExprList(filterList)
-	vec, err := colexec.EvalExpr(bat, proc, filter)
+
+	vec, err := colexec.EvalExpressionOnce(proc, filter, []*batch.Batch{bat})
 	if err != nil {
 		return nil, fileSize, err
 	}
+
 	fileListTmp := make([]string, 0)
 	fileSizeTmp := make([]int64, 0)
 	bs := vector.MustFixedCol[bool](vec)
@@ -101,6 +103,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 			fileSizeTmp = append(fileSizeTmp, fileSize[i])
 		}
 	}
+	vec.Free(proc.Mp())
 	node.FilterList = filterList2
 	return fileListTmp, fileSizeTmp, nil
 }
