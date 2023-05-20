@@ -1037,9 +1037,6 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, uuids []uuid.UUID, c *Compile) {
 	arg := new(dispatch.Argument)
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
-	arg.ShuffleRegIdxLocal = make([]int, 0, 1)
-	arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, currentIdx)
-	arg.ShuffleRegIdxRemote = make([]int, 0, len(ss)-1)
 	// rs is used to get batch from dispatch operator (include
 	// local batch)
 	rs[currentIdx].NodeInfo = ss[currentIdx].NodeInfo
@@ -1070,7 +1067,6 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 				Uuid:     uuids[i],
 				NodeAddr: ss[i].NodeInfo.Addr,
 			})
-			arg.ShuffleRegIdxRemote = append(arg.ShuffleRegIdxRemote, i)
 			// let remote scope knows it need to recieve bacth from
 			// remote CN, it will use this to send PrepareDoneNotifyMessage
 			// and then to recieve batches from remote CNs
