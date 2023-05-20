@@ -76,7 +76,7 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	}
 	retTxnCtx = trace.ContextWithSpan(retTxnCtx, trace.SpanFromContext(reqCtx))
 	if th.ses.tenant != nil && th.ses.tenant.User == db.MOLoggerUser {
-		retTxnCtx = context.WithValue(retTxnCtx, db.MOLoggerUser, true)
+		retTxnCtx = context.WithValue(retTxnCtx, defines.IsMoLogger{}, true)
 	}
 
 	if storage, ok := reqCtx.Value(defines.TemporaryDN{}).(*memorystorage.Storage); ok {

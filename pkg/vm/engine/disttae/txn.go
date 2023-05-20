@@ -24,10 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -129,8 +129,8 @@ func (txn *Transaction) WriteBatch(
 
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var S3SizeThreshold = colexec.TagS3Size
-	isMoLogger := txn.proc.Ctx.Value(db.MOLoggerUser).(bool)
-	if isMoLogger {
+	isMoLogger, ok := txn.proc.Ctx.Value(defines.IsMoLogger{}).(bool)
+	if ok && isMoLogger {
 		S3SizeThreshold = colexec.TagS3SizeForMOLogger
 	}
 
