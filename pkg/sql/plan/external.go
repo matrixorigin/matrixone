@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"io"
 	"strings"
@@ -87,10 +88,12 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	}
 	bat := makeFilepathBatch(node, proc, filterList, fileList)
 	filter := colexec.RewriteFilterExprList(filterList)
-	vec, err := colexec.EvalExpr(bat, proc, filter)
+
+	vec, err := colexec.EvalExpressionOnce(proc, filter, []*batch.Batch{bat})
 	if err != nil {
 		return nil, fileSize, err
 	}
+
 	fileListTmp := make([]string, 0)
 	fileSizeTmp := make([]int64, 0)
 	bs := vector.MustFixedCol[bool](vec)
@@ -100,6 +103,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 			fileSizeTmp = append(fileSizeTmp, fileSize[i])
 		}
 	}
+	vec.Free(proc.Mp())
 	node.FilterList = filterList2
 	return fileListTmp, fileSizeTmp, nil
 }
@@ -151,6 +155,17 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 	if err != nil || param.Local || param.ScanType == tree.S3 {
 		return DefaultHugeStats()
 	}
+
+	if param.ScanType == tree.S3 {
+		if err = InitS3Param(param); err != nil {
+			return DefaultHugeStats()
+		}
+	} else {
+		if err = InitInfileParam(param); err != nil {
+			return DefaultHugeStats()
+		}
+	}
+
 	param.FileService = builder.compCtx.GetProcess().FileService
 	param.Ctx = builder.compCtx.GetProcess().Ctx
 	_, spanReadDir := trace.Start(param.Ctx, "ReCalcNodeStats.ReadDir")
@@ -201,6 +216,6 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 		Cost:        cost,
 		Selectivity: 1,
 		TableCnt:    cost,
-		BlockNum:    int32(cost / 8192),
+		BlockNum:    int32(cost / float64(options.DefaultBlockMaxRows)),
 	}
 }

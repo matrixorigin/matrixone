@@ -42,6 +42,7 @@ type Txn2PC interface {
 	PrePrepare() error
 	PrepareCommit() error
 	PreApplyCommit() error
+	PrepareWAL() error
 	ApplyCommit() error
 }
 
@@ -288,7 +289,7 @@ type TxnStore interface {
 		visitMetadata func(block any),
 		visitSegment func(seg any),
 		visitAppend func(bat any),
-		visitDelete func(deletes []uint32, prefix []byte))
+		visitDelete func(deletes DeleteNode))
 	GetTransactionType() TxnType
 }
 

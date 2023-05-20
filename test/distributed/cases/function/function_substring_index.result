@@ -187,9 +187,9 @@ ehjwk
 .327h
 90990
 
-
-
-
+null
+null
+null
 SELECT REVERSE(substring_index(s1,delim,3)) FROM substring_index_01;
 reverse(substring_index(s1, delim, 3))
 nc.moc.cba
@@ -282,8 +282,8 @@ SELECT substring(substring_index(s1,delim,count2),0,10) FROM substring_index_02;
 substring(substring_index(s1, delim, count2), 0, 10)
 
 
-
-
+null
+null
 
 SELECT REVERSE(substring_index(s1,delim,3)) FROM substring_index_02;
 reverse(substring_index(s1, delim, 3))

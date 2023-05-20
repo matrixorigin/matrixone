@@ -16,7 +16,6 @@ package vector
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,14 +41,18 @@ type FunctionParameterWrapper[T types.FixedSizeT] interface {
 	// UnSafeGetAllValue return all the values.
 	// please use it carefully because we didn't check the null situation.
 	UnSafeGetAllValue() []T
+
+	WithAnyNullValue() bool
 }
 
 var _ FunctionParameterWrapper[int64] = &FunctionParameterNormal[int64]{}
 var _ FunctionParameterWrapper[int64] = &FunctionParameterWithoutNull[int64]{}
 var _ FunctionParameterWrapper[int64] = &FunctionParameterScalar[int64]{}
 var _ FunctionParameterWrapper[int64] = &FunctionParameterScalarNull[int64]{}
+var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterNormalSpecial1[types.Varlena]{}
+var _ FunctionParameterWrapper[types.Varlena] = &FunctionParameterWithoutNullSpecial1[types.Varlena]{}
 
-func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionParameterWrapper[T] {
+func GenerateFunctionFixedTypeParameter[T types.FixedSizeTExceptStrType](v *Vector) FunctionParameterWrapper[T] {
 	t := v.GetType()
 	if v.IsConstNull() {
 		return &FunctionParameterScalarNull[T]{
@@ -65,7 +68,7 @@ func GenerateFunctionFixedTypeParameter[T types.FixedSizeT](v *Vector) FunctionP
 			scalarValue:  cols[0],
 		}
 	}
-	if !v.nsp.EmptyByFlag() {
+	if !v.nsp.IsEmpty() {
 		return &FunctionParameterNormal[T]{
 			typ:          *t,
 			sourceVector: v,
@@ -97,13 +100,29 @@ func GenerateFunctionStrParameter(v *Vector) FunctionParameterWrapper[types.Varl
 			scalarStr:    cols[0].GetByteSlice(v.area),
 		}
 	}
+
 	if !v.GetNulls().EmptyByFlag() {
+		if v.typ.Width != 0 && v.typ.Width <= types.VarlenaInlineSize {
+			return &FunctionParameterNormalSpecial1[types.Varlena]{
+				typ:          *t,
+				sourceVector: v,
+				strValues:    cols,
+				nullMap:      v.GetNulls().GetBitmap(),
+			}
+		}
 		return &FunctionParameterNormal[types.Varlena]{
 			typ:          *t,
 			sourceVector: v,
 			strValues:    cols,
 			area:         v.area,
 			nullMap:      v.GetNulls().GetBitmap(),
+		}
+	}
+	if v.typ.Width != 0 && v.typ.Width <= types.VarlenaInlineSize {
+		return &FunctionParameterWithoutNullSpecial1[types.Varlena]{
+			typ:          *t,
+			sourceVector: v,
+			strValues:    cols,
 		}
 	}
 	return &FunctionParameterWithoutNull[types.Varlena]{
@@ -151,6 +170,46 @@ func (p *FunctionParameterNormal[T]) UnSafeGetAllValue() []T {
 	return p.values
 }
 
+func (p *FunctionParameterNormal[T]) WithAnyNullValue() bool {
+	return true
+}
+
+// FunctionParameterNormalSpecial1 is an optimized wrapper of string vector whose
+// string width <= types.VarlenaInlineSize
+type FunctionParameterNormalSpecial1[T types.FixedSizeT] struct {
+	typ          types.Type
+	sourceVector *Vector
+	strValues    []types.Varlena
+	nullMap      *bitmap.Bitmap
+}
+
+func (p *FunctionParameterNormalSpecial1[T]) GetType() types.Type {
+	return p.typ
+}
+
+func (p *FunctionParameterNormalSpecial1[T]) GetSourceVector() *Vector {
+	return p.sourceVector
+}
+
+func (p *FunctionParameterNormalSpecial1[T]) GetValue(_ uint64) (T, bool) {
+	panic("please use GetStrValue method.")
+}
+
+func (p *FunctionParameterNormalSpecial1[T]) GetStrValue(idx uint64) ([]byte, bool) {
+	if p.nullMap.Contains(idx) {
+		return nil, true
+	}
+	return p.strValues[idx].ByteSlice(), false
+}
+
+func (p *FunctionParameterNormalSpecial1[T]) UnSafeGetAllValue() []T {
+	panic("not implement")
+}
+
+func (p *FunctionParameterNormalSpecial1[T]) WithAnyNullValue() bool {
+	return true
+}
+
 // FunctionParameterWithoutNull is a wrapper of normal vector but
 // without null value.
 type FunctionParameterWithoutNull[T types.FixedSizeT] struct {
@@ -181,6 +240,42 @@ func (p *FunctionParameterWithoutNull[T]) UnSafeGetAllValue() []T {
 	return p.values
 }
 
+func (p *FunctionParameterWithoutNull[T]) WithAnyNullValue() bool {
+	return false
+}
+
+// FunctionParameterWithoutNullSpecial1 is an optimized wrapper of string vector without null value and
+// whose string width <= types.VarlenaInlineSize
+type FunctionParameterWithoutNullSpecial1[T types.FixedSizeT] struct {
+	typ          types.Type
+	sourceVector *Vector
+	strValues    []types.Varlena
+}
+
+func (p *FunctionParameterWithoutNullSpecial1[T]) GetType() types.Type {
+	return p.typ
+}
+
+func (p *FunctionParameterWithoutNullSpecial1[T]) GetSourceVector() *Vector {
+	return p.sourceVector
+}
+
+func (p *FunctionParameterWithoutNullSpecial1[T]) GetValue(_ uint64) (T, bool) {
+	panic("please use GetStrValue method.")
+}
+
+func (p *FunctionParameterWithoutNullSpecial1[T]) GetStrValue(idx uint64) ([]byte, bool) {
+	return p.strValues[idx].ByteSlice(), false
+}
+
+func (p *FunctionParameterWithoutNullSpecial1[T]) UnSafeGetAllValue() []T {
+	panic("not implement")
+}
+
+func (p *FunctionParameterWithoutNullSpecial1[T]) WithAnyNullValue() bool {
+	return false
+}
+
 // FunctionParameterScalar is a wrapper of scalar vector.
 type FunctionParameterScalar[T types.FixedSizeT] struct {
 	typ          types.Type
@@ -209,6 +304,10 @@ func (p *FunctionParameterScalar[T]) UnSafeGetAllValue() []T {
 	return []T{p.scalarValue}
 }
 
+func (p *FunctionParameterScalar[T]) WithAnyNullValue() bool {
+	return false
+}
+
 // FunctionParameterScalarNull is a wrapper of scalar null vector.
 type FunctionParameterScalarNull[T types.FixedSizeT] struct {
 	typ          types.Type
@@ -235,16 +334,27 @@ func (p *FunctionParameterScalarNull[T]) UnSafeGetAllValue() []T {
 	return nil
 }
 
+func (p *FunctionParameterScalarNull[T]) WithAnyNullValue() bool {
+	return true
+}
+
 type FunctionResultWrapper interface {
+	SetResultVector(vec *Vector)
 	GetResultVector() *Vector
 	Free()
+	PreExtendAndReset(size int) error
 }
 
 var _ FunctionResultWrapper = &FunctionResult[int64]{}
 
 type FunctionResult[T types.FixedSizeT] struct {
+	typ types.Type
 	vec *Vector
 	mp  *mpool.MPool
+
+	isVarlena bool
+	cols      []T
+	length    uint64
 }
 
 func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *FunctionResult[T] {
@@ -255,18 +365,63 @@ func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *Func
 }
 
 func newResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResult[T] {
-	return &FunctionResult[T]{
+	f := &FunctionResult[T]{
+		typ: *v.GetType(),
 		vec: v,
 		mp:  mp,
 	}
+
+	var tempT T
+	var s interface{} = &tempT
+	if _, ok := s.(*types.Varlena); ok {
+		f.isVarlena = true
+	}
+	return f
+}
+
+func (fr *FunctionResult[T]) PreExtendAndReset(size int) error {
+	if fr.vec == nil {
+		fr.vec = NewVec(fr.typ)
+	}
+
+	if fr.isVarlena {
+		if err := fr.vec.PreExtend(size, fr.mp); err != nil {
+			return err
+		}
+		fr.vec.Reset(fr.typ)
+		return nil
+	}
+
+	fr.length = 0
+	if fr.vec.Capacity() < size {
+		if err := fr.vec.PreExtend(size, fr.mp); err != nil {
+			return err
+		}
+		fr.vec.Reset(fr.typ)
+		fr.vec.SetLength(size)
+		fr.cols = MustFixedCol[T](fr.vec)
+		return nil
+	}
+
+	oldLength := fr.vec.Length()
+	fr.vec.Reset(fr.typ)
+	fr.vec.SetLength(size)
+	if len(fr.cols) > 0 && size > oldLength {
+		fr.cols = MustFixedCol[T](fr.vec)
+	}
+	return nil
 }
 
 func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
-	if !fr.vec.IsConst() {
-		return AppendFixed(fr.vec, val, isnull, fr.mp)
-	} else if !isnull {
-		return SetConstFixed(fr.vec, val, fr.vec.Length(), fr.mp)
+	if isnull {
+		// XXX LOW PERF
+		// if we can expand the nulls while appending null first times.
+		// or we can append from last to first. can reduce a lot of expansion.
+		fr.vec.nsp.Add(fr.length)
+	} else {
+		fr.cols[fr.length] = val
 	}
+	fr.length++
 	return nil
 }
 
@@ -279,24 +434,49 @@ func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {
 	return nil
 }
 
+func (fr *FunctionResult[T]) AppendMustValue(val T) {
+	fr.cols[fr.length] = val
+	fr.length++
+}
+
+func (fr *FunctionResult[T]) AppendMustNull() {
+	fr.vec.nsp.Add(fr.length)
+	fr.length++
+}
+
+func (fr *FunctionResult[T]) AppendMustBytesValue(val []byte) error {
+	return AppendBytes(fr.vec, val, false, fr.mp)
+}
+
+func (fr *FunctionResult[T]) AppendMustNullForBytesResult() error {
+	var v T
+	return appendOneFixed[T](fr.vec, v, true, fr.mp)
+}
+
 func (fr *FunctionResult[T]) GetType() types.Type {
 	return *fr.vec.GetType()
 }
 
-func (fr *FunctionResult[T]) SetFromParameter(fp FunctionParameterWrapper[T]) {
-	// clean the old memory
-	if fr.vec != fp.GetSourceVector() {
-		fr.Free()
+func (fr *FunctionResult[T]) TempSetType(t types.Type) {
+	fr.vec.SetType(t)
+}
+
+func (fr *FunctionResult[T]) DupFromParameter(fp FunctionParameterWrapper[T], length int) (err error) {
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := fp.GetValue(i)
+		if err = fr.Append(v, null); err != nil {
+			return err
+		}
 	}
-	fr.vec = fp.GetSourceVector()
+	return err
+}
+
+func (fr *FunctionResult[T]) SetResultVector(v *Vector) {
+	fr.vec = v
 }
 
 func (fr *FunctionResult[T]) GetResultVector() *Vector {
 	return fr.vec
-}
-
-func (fr *FunctionResult[T]) ConvertToParameter() FunctionParameterWrapper[T] {
-	return GenerateFunctionFixedTypeParameter[T](fr.vec)
 }
 
 func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameterWrapper[types.Varlena] {
@@ -304,17 +484,13 @@ func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameterWrapper[ty
 }
 
 func (fr *FunctionResult[T]) Free() {
-	fr.vec.Free(fr.mp)
+	if fr.vec != nil {
+		fr.vec.Free(fr.mp)
+	}
 }
 
-func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, length int) FunctionResultWrapper {
-	var v *Vector
-	if isConst {
-		v = NewConstNull(typ, length, mp)
-	} else {
-		v = NewVec(typ)
-		v.PreExtend(length, mp)
-	}
+func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
+	v := NewVec(typ)
 
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
@@ -324,10 +500,6 @@ func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool, isConst bool, len
 		return newResultFunc[types.Varlena](v, mp)
 	}
 
-	// Pre allocate the memory
-	// XXX PreAllocType has BUG. It only shrinks the cols.
-	//v = PreAllocType(typ, 0, length, mp)
-	//SetLength(v, 0)
 	switch typ.Oid {
 	case types.T_bool:
 		return newResultFunc[bool](v, mp)

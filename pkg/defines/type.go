@@ -177,8 +177,16 @@ var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 // TemporaryDN use TemporaryDN to get temporary storage from Context
 type TemporaryDN struct{}
 
+type IsMoLogger struct{}
+
 // Determine if now is a bg sql.
 type BgKey struct{}
+
+// Sp variable scope
+type VarScopeKey struct{}
+
+// Determine if it is a stored procedure
+type InSp struct{}
 
 // PkCheckByDN whether DN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByDN struct{}

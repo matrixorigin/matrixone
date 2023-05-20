@@ -16,13 +16,13 @@ package util
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
@@ -86,7 +86,7 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 	}
 	for _, test := range tests {
 		if len(test.parts) >= 2 {
-			vec, _ := multi.Serial(test.vecs, proc)
+			vec, _ := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, test.vecs, test.vecs[0].Length())
 			b, _ := BuildUniqueKeyBatch(test.vecs, test.attrs, test.parts, "", test.proc)
 			require.Equal(t, vec.UnsafeGetRawData(), b.Vecs[0].UnsafeGetRawData())
 		} else {

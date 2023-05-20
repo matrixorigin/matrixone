@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -63,6 +64,7 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 
 	reqCtx := th.ses.GetRequestContext()
 	retTxnCtx := th.txnCtx
+
 	if v := reqCtx.Value(defines.TenantIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.TenantIDKey{}, v)
 	}
@@ -73,6 +75,9 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
 	}
 	retTxnCtx = trace.ContextWithSpan(retTxnCtx, trace.SpanFromContext(reqCtx))
+	if th.ses != nil && th.ses.tenant != nil && th.ses.tenant.User == db.MOLoggerUser {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.IsMoLogger{}, true)
+	}
 
 	if storage, ok := reqCtx.Value(defines.TemporaryDN{}).(*memorystorage.Storage); ok {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryDN{}, storage)

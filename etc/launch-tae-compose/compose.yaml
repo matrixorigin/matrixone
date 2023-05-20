@@ -15,13 +15,6 @@ x-mo-common: &mo-common
       - ../../test:/test
     restart: on-failure
     tty: true
-    ulimits:
-      nofile:
-        soft: 200000
-        hard: 200000
-      nproc:
-        soft: 200000
-        hard: 200000
 
 services:
   cn-0:
@@ -42,10 +35,6 @@ services:
       - AWS_SECRET_ACCESS_KEY=minio123
     networks:
       monet:
-    deploy:
-      resources:
-        limits:
-          memory: 12g
 
   cn-1:
     container_name: cn-1
@@ -64,10 +53,6 @@ services:
       - AWS_SECRET_ACCESS_KEY=minio123
     networks:
       monet:
-    deploy:
-      resources:
-        limits:
-          memory: 12g
 
   dn:
     container_name: dn

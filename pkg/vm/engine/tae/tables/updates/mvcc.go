@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -281,7 +281,7 @@ func (n *MVCCHandle) CollectAppendLocked(
 	return
 }
 
-func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap *roaring.Bitmap) {
+func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap, deletes *roaring.Bitmap) {
 	n.RLock()
 	defer n.RUnlock()
 	if n.deletes.IsEmpty() {
@@ -295,7 +295,7 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 	commitTSVec = containers.MakeVector(types.T_TS.ToType())
 	abortVec = containers.MakeVector(types.T_bool.ToType())
 	abortedBitmap = roaring.NewBitmap()
-	prefix := n.meta.MakeKey()
+	id := n.meta.ID
 
 	n.deletes.LoopChain(
 		func(node *DeleteNode) bool {
@@ -313,7 +313,11 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 				}
 				for it.HasNext() {
 					row := it.Next()
-					rowIDVec.Append(model.EncodePhyAddrKeyWithPrefix(prefix, row), false)
+					if deletes == nil {
+						deletes = roaring.New()
+					}
+					deletes.Add(row)
+					rowIDVec.Append(*objectio.NewRowid(&id, row), false)
 					commitTSVec.Append(node.GetEnd(), false)
 					abortVec.Append(node.IsAborted(), false)
 				}

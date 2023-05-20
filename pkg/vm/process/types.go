@@ -214,6 +214,10 @@ func (proc *Process) SetLastInsertID(num uint64) {
 	}
 }
 
+func (proc *Process) GetSessionInfo() *SessionInfo {
+	return &proc.SessionInfo
+}
+
 func (proc *Process) GetLastInsertID() uint64 {
 	if proc.LastInsertID != nil {
 		return *proc.LastInsertID

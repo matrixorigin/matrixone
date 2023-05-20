@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -530,6 +531,19 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 }
 
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	ses := tcc.GetSession()
+	ctx := ses.GetRequestContext()
+
+	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
+		tmpScope := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+		for i := len(*tmpScope) - 1; i >= 0; i-- {
+			curScope := (*tmpScope)[i]
+			if val, ok := curScope[strings.ToLower(varName)]; ok {
+				return val, nil
+			}
+		}
+	}
+
 	if isSystemVar {
 		if isGlobalVar {
 			return tcc.GetSession().GetGlobalVar(varName)
@@ -643,7 +657,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 	return priDefs
 }
 
-func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats *plan2.Stats) {
+func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 
 	dbName := obj.GetSchemaName()
 	checkSub := true
@@ -652,7 +666,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 	}
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub)
 	if err != nil {
-		return
+		return false
 	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{
@@ -661,16 +675,8 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, e *plan2.Expr) (stats
 		}
 	}
 	tableName := obj.GetObjName()
-	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
-	if err != nil {
-		return
-	}
-	if e != nil {
-		cols, _ := table.TableColumns(ctx)
-		fixColumnName(cols, e)
-	}
-	stats, _ = table.Stats(ctx, e, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
-	return stats
+	ctx, table, _ := tcc.getRelation(dbName, tableName, sub)
+	return table.Stats(ctx, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {

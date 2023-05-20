@@ -45,7 +45,7 @@ func create_test_server() *MOServer {
 
 func Test_Closed(t *testing.T) {
 	mo := create_test_server()
-	mo.rm.SetSkipCheckUser(true)
+	mo.rm.pu.SV.SkipCheckUser = true
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	cf := &CloseFlag{}

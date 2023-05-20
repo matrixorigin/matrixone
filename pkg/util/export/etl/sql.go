@@ -82,7 +82,7 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 		sw.dumpBufferToCSV()
 	}
 	sw.buffer = sw.buffer[:0] // Clear the buffer
-	cnt, err = sw.csvWriter.FlushAndClose()
+	_, err = sw.csvWriter.FlushAndClose()
 	return cnt, err
 }
 

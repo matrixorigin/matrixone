@@ -63,12 +63,12 @@ type PayloadMessage interface {
 // So messages sent and received at the network level are RPCMessage.
 type RPCMessage struct {
 	// Ctx context
-	Ctx context.Context
+	Ctx    context.Context
+	Cancel context.CancelFunc
 	// Message raw rpc message
 	Message Message
 
 	internal       bool
-	cancel         context.CancelFunc
 	stream         bool
 	streamSequence uint32
 }
@@ -140,7 +140,7 @@ type RPCServer interface {
 	// read goroutine of the current client connection. Sequence is the sequence of message received
 	// by the current client connection. If error returned by handler, client connection will closed.
 	// Handler can use the ClientSession to write response, both synchronous and asynchronous.
-	RegisterRequestHandler(func(ctx context.Context, request Message, sequence uint64, cs ClientSession) error)
+	RegisterRequestHandler(func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error)
 }
 
 // Codec codec
