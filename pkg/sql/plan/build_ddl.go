@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -608,7 +607,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 				case *tree.AttributeAutoIncrement:
 					auto_incr = true
-					if !operator.IsInteger(types.T(colType.GetId())) {
+					if !types.T(colType.GetId()).IsInteger() {
 						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:

@@ -51,7 +51,10 @@ func init() {
 			},
 			arg: &Argument{
 				Es: []*plan.Expr{
-					{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+					{
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+						Typ:  &plan.Type{},
+					},
 				},
 			},
 		},

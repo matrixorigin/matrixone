@@ -34,14 +34,14 @@ func Format(numbers, scales, locales []string, rowCount int, constVectors []bool
 			scale := scales[0]
 			if constVectors[2] {
 				//scalar - scalar - scalar
-				results[0], err = getNumberFormat(number, scale, locales[0])
+				results[0], err = GetNumberFormat(number, scale, locales[0])
 				if err != nil {
 					return err
 				}
 			} else {
 				//scalar - scalar - vector
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(number, scale, locales[i])
+					results[i], err = GetNumberFormat(number, scale, locales[i])
 					if err != nil {
 						return err
 					}
@@ -52,7 +52,7 @@ func Format(numbers, scales, locales []string, rowCount int, constVectors []bool
 				locale := locales[0]
 				//scalar - vector - scalar
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(number, scales[i], locale)
+					results[i], err = GetNumberFormat(number, scales[i], locale)
 					if err != nil {
 						return err
 					}
@@ -60,7 +60,7 @@ func Format(numbers, scales, locales []string, rowCount int, constVectors []bool
 			} else {
 				//scalar - vector - vector
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(number, scales[i], locales[i])
+					results[i], err = GetNumberFormat(number, scales[i], locales[i])
 					if err != nil {
 						return err
 					}
@@ -74,7 +74,7 @@ func Format(numbers, scales, locales []string, rowCount int, constVectors []bool
 				locale := locales[0]
 				//vector - scalar - scalar
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(numbers[i], scale, locale)
+					results[i], err = GetNumberFormat(numbers[i], scale, locale)
 					if err != nil {
 						return err
 					}
@@ -82,7 +82,7 @@ func Format(numbers, scales, locales []string, rowCount int, constVectors []bool
 			} else {
 				//vaetor - scalar - vector
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(numbers[i], scale, locales[i])
+					results[i], err = GetNumberFormat(numbers[i], scale, locales[i])
 					if err != nil {
 						return err
 					}
@@ -93,7 +93,7 @@ func Format(numbers, scales, locales []string, rowCount int, constVectors []bool
 				locale := locales[0]
 				//vector - vector - scalar
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(numbers[i], scales[i], locale)
+					results[i], err = GetNumberFormat(numbers[i], scales[i], locale)
 					if err != nil {
 						return err
 					}
@@ -101,7 +101,7 @@ func Format(numbers, scales, locales []string, rowCount int, constVectors []bool
 			} else {
 				//vector - vector - vector
 				for i := 0; i < rowCount; i++ {
-					results[i], err = getNumberFormat(numbers[i], scales[i], locales[i])
+					results[i], err = GetNumberFormat(numbers[i], scales[i], locales[i])
 					if err != nil {
 						return err
 					}
@@ -112,7 +112,7 @@ func Format(numbers, scales, locales []string, rowCount int, constVectors []bool
 	return nil
 }
 
-func getNumberFormat(number, scale, locale string) (string, error) {
+func GetNumberFormat(number, scale, locale string) (string, error) {
 	return getFormatFunctionWithLocale(locale)(number, scale)
 }
 
