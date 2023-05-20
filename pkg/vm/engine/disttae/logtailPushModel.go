@@ -16,8 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -579,11 +577,6 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 // can't call this method directly.
 func (s *logTailSubscriber) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
-	if ctx == nil {
-		println(fmt.Sprintf("subscribe table get a nil ctx, stack is \n%s", string(debug.Stack())))
-		panic("subscribe table get a nil ctx.")
-	}
-
 	// set a default deadline for ctx if it doesn't have.
 	if _, ok := ctx.Deadline(); !ok {
 		newCtx, cancel := context.WithTimeout(ctx, defaultTimeOutToSubscribeTable)
