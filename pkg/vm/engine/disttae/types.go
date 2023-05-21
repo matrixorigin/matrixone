@@ -212,6 +212,23 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 }
 
 func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
+	txn.Lock()
+	defer txn.Unlock()
+	if txn.statementID > 0 {
+		start := txn.statements[txn.statementID-1]
+		writes := make([]Entry, 0, len(txn.writes[start:]))
+		for i := start; i < len(txn.writes); i++ {
+			if txn.writes[i].typ == DELETE {
+				writes = append(writes, txn.writes[i])
+			}
+		}
+		for i := start; i < len(txn.writes); i++ {
+			if txn.writes[i].typ != DELETE {
+				writes = append(writes, txn.writes[i])
+			}
+		}
+		txn.writes = append(txn.writes[:start], writes...)
+	}
 	txn.statements = append(txn.statements, len(txn.writes))
 	txn.statementID++
 	if txn.statementID > 1 && txn.meta.IsRCIsolation() {
@@ -237,6 +254,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			txn.writes[i].bat.Clean(txn.engine.mp)
 		}
 		txn.writes = txn.writes[:end]
+		txn.statements = txn.statements[:txn.statementID]
 	}
 	return nil
 }
