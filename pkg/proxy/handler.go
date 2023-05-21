@@ -120,7 +120,7 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}()
 
 	cc, err := newClientConn(
-		h.ctx, h.logger, h.counterSet, c, h.haKeeperClient, h.moCluster, h.router, t,
+		h.ctx, &h.config, h.logger, h.counterSet, c, h.haKeeperClient, h.moCluster, h.router, t,
 	)
 	if err != nil {
 		return err

@@ -574,20 +574,33 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 		return moerr.NewInternalError(rm.ctx, "init TLS config error : cert file or key file is empty")
 	}
 
-	var tlsCert tls.Certificate
-	var err error
-	tlsCert, err = tls.LoadX509KeyPair(SV.TlsCertFile, SV.TlsKeyFile)
+	cfg, err := ConstructTLSConfig(rm.ctx, SV.TlsCaFile, SV.TlsCertFile, SV.TlsKeyFile)
 	if err != nil {
-		return moerr.NewInternalError(rm.ctx, "init TLS config error :load x509 failed")
+		return moerr.NewInternalError(rm.ctx, "init TLS config error: %v", err)
+	}
+
+	rm.tlsConfig = cfg
+	logutil.Info("init TLS config finished")
+	return nil
+}
+
+// ConstructTLSConfig creates the TLS config.
+func ConstructTLSConfig(ctx context.Context, caFile, certFile, keyFile string) (*tls.Config, error) {
+	var err error
+	var tlsCert tls.Certificate
+
+	tlsCert, err = tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, moerr.NewInternalError(ctx, "construct TLS config error: load x509 failed")
 	}
 
 	clientAuthPolicy := tls.NoClientCert
 	var certPool *x509.CertPool
-	if len(SV.TlsCaFile) > 0 {
+	if len(caFile) > 0 {
 		var caCert []byte
-		caCert, err = os.ReadFile(SV.TlsCaFile)
+		caCert, err = os.ReadFile(caFile)
 		if err != nil {
-			return moerr.NewInternalError(rm.ctx, "init TLS config error :read TlsCaFile failed")
+			return nil, moerr.NewInternalError(ctx, "construct TLS config error: read TLS ca failed")
 		}
 		certPool = x509.NewCertPool()
 		if certPool.AppendCertsFromPEM(caCert) {
@@ -595,29 +608,9 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 		}
 	}
 
-	// This excludes ciphers listed in tls.InsecureCipherSuites() and can be used to filter out more
-	// var cipherSuites []uint16
-	// var cipherNames []string
-	// for _, sc := range tls.CipherSuites() {
-	// cipherSuites = append(cipherSuites, sc.ID)
-	// switch sc.ID {
-	// case tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
-	// 	tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305, tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305:
-	// logutil.Info("Disabling weak cipherSuite", zap.String("cipherSuite", sc.Name))
-	// default:
-	// cipherNames = append(cipherNames, sc.Name)
-	// cipherSuites = append(cipherSuites, sc.ID)
-	// }
-	// }
-	// logutil.Info("Enabled ciphersuites", zap.Strings("cipherNames", cipherNames))
-
-	rm.tlsConfig = &tls.Config{
+	return &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		ClientCAs:    certPool,
 		ClientAuth:   clientAuthPolicy,
-		// MinVersion:   tls.VersionTLS13,
-		// CipherSuites: cipherSuites,
-	}
-	logutil.Info("init TLS config finished")
-	return nil
+	}, nil
 }
