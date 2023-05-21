@@ -2595,6 +2595,9 @@ func (s *Scope) affectedRows() uint64 {
 }
 
 func (c *Compile) runSql(sql string, fill func(any, *batch.Batch) error) error {
+	if sql == "" {
+		return nil
+	}
 	stmts, err := parsers.Parse(c.ctx, dialect.MYSQL, sql, 1)
 	if err != nil {
 		return err

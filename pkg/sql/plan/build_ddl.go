@@ -1226,7 +1226,6 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	//var attachedPlan *plan.Plan
 	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 
 	if tableDef == nil {
@@ -1389,7 +1388,6 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which is publishing", dropDB.Database)
 	}
 
-	//var attachedPlan *Plan
 	if ctx.DatabaseExists(string(stmt.Name)) {
 		databaseId, err := ctx.GetDatabaseId(string(stmt.Name))
 		if err != nil {

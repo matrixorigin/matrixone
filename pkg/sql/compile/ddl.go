@@ -38,25 +38,6 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-var (
-	selectOriginTableConstraintFormat = "select serial(%s) from %s.%s group by serial(%s) having count(*) > 1 and serial(%s) is not null;"
-)
-
-var (
-	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  %s.`%s` select (%s), %s from %s.%s where (%s) is not null;"
-	insertIntoIndexTableWithPKeyFormat          = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
-	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
-	insertIntoIndexTableWithoutPKeyFormat       = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
-	createIndexTableForamt                      = "create table %s.`%s` (%s);"
-)
-
-var (
-	deleteMoIndexesWithDatabaseIdFormat          = `delete from mo_catalog.mo_indexes where database_id = %v;`
-	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
-	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
-	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
-)
-
 func (s *Scope) CreateDatabase(c *Compile) error {
 	var span trace.Span
 	c.ctx, span = trace.Start(c.ctx, "CreateDatabase")
@@ -160,6 +141,8 @@ func (s *Scope) AlterTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	databaseId := dbSource.GetDatabaseId(c.ctx)
+
 	tblName := qry.GetTableDef().GetName()
 	rel, err := dbSource.Relation(c.ctx, tblName)
 	if err != nil {
@@ -226,17 +209,21 @@ func (s *Scope) AlterTable(c *Compile) error {
 			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
 			addIndex = indexDef
 
-			// 0. check original data is not duplicated
-			err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tblName, partsToColsStr(indexDef.Parts))
-			if err != nil {
-				return err
+			if indexDef.Unique {
+				// 0. check original data is not duplicated
+				err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tblName, partsToColsStr(indexDef.Parts))
+				if err != nil {
+					return err
+				}
 			}
 
 			//1. build and update constraint def
-			err = colexec.InsertOneIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName, indexDef)
+			insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
+			err = c.runSql(insertSql, nil)
 			if err != nil {
 				return err
 			}
+			//---------------------------------------------------------
 			if act.AddIndex.IndexTableExist {
 				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
 				// 2. create index table from unique index object
@@ -520,12 +507,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if checkIndexInitializable(dbName, tblName) {
-		err = colexec.InsertIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName)
+		newRelation, err := dbSource.Relation(c.ctx, tblName)
+		if err != nil {
+			return err
+		}
+		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
+		err = c.runSql(insertSQL, nil)
 		if err != nil {
 			return err
 		}
 	}
-
 	return colexec.CreateAutoIncrCol(c.ctx, dbSource, c.proc, tableCols, tblName)
 }
 
@@ -614,20 +605,26 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	databaseId := d.GetDatabaseId(c.ctx)
+
 	r, err := d.Relation(c.ctx, qry.Table)
 	if err != nil {
 		return err
 	}
+	tableId := r.GetTableID(c.ctx)
+
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef)
 	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
 
-	// 0. check original data is not duplicated
-	err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tableDef.Name, partsToColsStr(indexDef.Parts))
-	if err != nil {
-		return err
+	if indexDef.Unique {
+		// 0. check original data is not duplicated
+		err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tableDef.Name, partsToColsStr(indexDef.Parts))
+		if err != nil {
+			return err
+		}
 	}
 
-	// build and create index table
+	// build and create index table for unique index
 	if qry.TableExist {
 		def := qry.GetIndex().GetIndexTables()[0]
 		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
@@ -668,7 +665,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	err = colexec.InsertOneIndexMetadata(c.e, c.ctx, d, c.proc, qry.Table, indexDef)
+
+	// generate insert into mo_indexes metadata
+	sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
+	if err != nil {
+		return err
+	}
+	err = c.runSql(sql, nil)
 	if err != nil {
 		return err
 	}
@@ -991,7 +994,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
-
+	// update index information in mo_catalog.mo_indexes
+	updateSql := fmt.Sprintf(updateMoIndexesTruncateTableFormat, newId, oldId)
+	err = c.runSql(updateSql, nil)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
