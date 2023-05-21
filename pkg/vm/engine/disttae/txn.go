@@ -129,9 +129,11 @@ func (txn *Transaction) WriteBatch(
 
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var S3SizeThreshold = colexec.TagS3Size
-	isMoLogger, ok := txn.proc.Ctx.Value(defines.IsMoLogger{}).(bool)
-	if ok && isMoLogger {
-		S3SizeThreshold = colexec.TagS3SizeForMOLogger
+	if txn.proc != nil && txn.proc.Ctx != nil {
+		isMoLogger, ok := txn.proc.Ctx.Value(defines.IsMoLogger{}).(bool)
+		if ok && isMoLogger {
+			S3SizeThreshold = colexec.TagS3SizeForMOLogger
+		}
 	}
 
 	if !(offset > 0 || txn.workspaceSize >= colexec.WriteS3Threshold ||
