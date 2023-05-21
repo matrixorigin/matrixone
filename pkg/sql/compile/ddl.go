@@ -39,6 +39,10 @@ import (
 )
 
 var (
+	selectOriginTableConstraintFormat = "select serial(%s) from %s.%s group by serial(%s) having count(*) > 1 and serial(%s) is not null;"
+)
+
+var (
 	insertIntoSingleIndexTableWithPKeyFormat    = "insert into  %s.`%s` select (%s), %s from %s.%s where (%s) is not null;"
 	insertIntoIndexTableWithPKeyFormat          = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
@@ -221,6 +225,13 @@ func (s *Scope) AlterTable(c *Compile) error {
 		case *plan.AlterTable_Action_AddIndex:
 			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
 			addIndex = indexDef
+
+			// 0. check original data is not duplicated
+			err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tblName, partsToColsStr(indexDef.Parts))
+			if err != nil {
+				return err
+			}
+
 			//1. build and update constraint def
 			err = colexec.InsertOneIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName, indexDef)
 			if err != nil {
@@ -609,6 +620,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 	tableDef := plan2.DeepCopyTableDef(qry.TableDef)
 	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
+
+	// 0. check original data is not duplicated
+	err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tableDef.Name, partsToColsStr(indexDef.Parts))
+	if err != nil {
+		return err
+	}
+
 	// build and create index table
 	if qry.TableExist {
 		def := qry.GetIndex().GetIndexTables()[0]

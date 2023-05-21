@@ -17,6 +17,8 @@ package compile
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -58,15 +60,7 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) string {
 	// insert data into index table
 	var insertSQL string
-	var temp string
-	for i, part := range indexDef.Parts {
-		if i == 0 {
-			temp += part
-		} else {
-			temp += "," + part
-		}
-	}
-
+	temp := partsToColsStr(indexDef.Parts)
 	if originTableDef.Pkey == nil || len(originTableDef.Pkey.PkeyColName) == 0 {
 		if len(indexDef.Parts) == 1 {
 			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
@@ -96,4 +90,32 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 		}
 	}
 	return insertSQL
+}
+
+func genNewUniqueIndexDuplicateCheck(c *Compile, database, table, cols string) error {
+	duplicateCheckSql := fmt.Sprintf(selectOriginTableConstraintFormat, cols, database, table, cols, cols)
+	fill := func(_ any, b *batch.Batch) error {
+		if b == nil || b.Length() == 0 {
+			return nil
+		}
+		t, err := types.Unpack(b.Vecs[0].GetBytesAt(0))
+		if err != nil {
+			return err
+		}
+		return moerr.NewDuplicateEntry(c.ctx, t.ErrString(), cols)
+	}
+
+	return c.runSql(duplicateCheckSql, fill)
+}
+
+func partsToColsStr(parts []string) string {
+	var temp string
+	for i, part := range parts {
+		if i == 0 {
+			temp += part
+		} else {
+			temp += "," + part
+		}
+	}
+	return temp
 }

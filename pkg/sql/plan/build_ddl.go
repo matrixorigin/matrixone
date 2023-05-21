@@ -934,10 +934,7 @@ func checkDuplicateConstraint(namesMap map[string]bool, name string, foreign boo
 // Set name for unqiue index constraint with an empty name
 func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueIndex) {
 	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
-		var colName string
-		if colName == "" {
-			colName = indexConstr.KeyParts[0].ColName.Parts[0]
-		}
+		colName := indexConstr.KeyParts[0].ColName.Parts[0]
 		constrName := colName
 		i := 2
 		if strings.EqualFold(constrName, "PRIMARY") {
@@ -1789,7 +1786,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 						},
 					},
 				}
-
+			default:
+				return nil, moerr.NewInternalError(ctx.GetContext(), "unsupported alter option: %T", def)
 			}
 
 		case *tree.AlterOptionAlterIndex:

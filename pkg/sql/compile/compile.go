@@ -2594,7 +2594,7 @@ func (c *Compile) runSql(sql string, fill func(any, *batch.Batch) error) error {
 	}
 	newC := New(c.addr, c.db, sql, c.tenant, c.uid, c.ctx, c.e,
 		c.proc, stmts[0], c.isInternal, c.cnLabel)
-	if err := newC.Compile(c.ctx, pn, nil, nil); err != nil {
+	if err := newC.Compile(c.ctx, pn, nil, fill); err != nil {
 		return err
 	}
 	return newC.Run(0)
