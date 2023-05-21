@@ -73,6 +73,14 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 	}, err
 }
 
+func isDefaultValExpr(e *Expr) bool {
+	if ce, ok := e.Expr.(*plan.Expr_C); ok {
+		_, isDefVal := ce.C.Value.(*plan.Const_Defaultval)
+		return isDefVal
+	}
+	return false
+}
+
 func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32) error {
 	var err error
 
@@ -86,7 +94,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 			if offset, ok := planCtx.updateColPosMap[col.Name]; ok {
 				pos := idx + offset
 				posExpr := lastNode.ProjectList[pos]
-				if posExpr.Typ == nil { // set col = default
+				if isDefaultValExpr(posExpr) { // set col = default
 					lastNode.ProjectList[pos], err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
 						return err

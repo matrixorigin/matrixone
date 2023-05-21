@@ -127,11 +127,11 @@ func (txn *Transaction) WriteBatch(
 }
 
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
-
+	var size uint64
 	txn.Lock()
+	defer txn.Unlock()
 	if !(offset > 0 || txn.workspaceSize >= colexec.WriteS3Threshold ||
 		(force && txn.workspaceSize >= colexec.TagS3Size)) {
-		txn.Unlock()
 		return nil
 	}
 	for i := offset; i < len(txn.writes); i++ {
@@ -143,8 +143,28 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 	}
 	if offset > 0 && size < txn.workspaceSize {
-		txn.Unlock()
 		return nil
+	}
+	mp := make(map[[2]string][]*batch.Batch)
+	for i := offset; i < len(txn.writes); i++ {
+		// TODO: after shrink, we should update workspace size
+		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
+			continue
+		}
+		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
+			bat := txn.writes[i].bat
+			// skip rowid
+			bat.Attrs = bat.Attrs[1:]
+			bat.Vecs = bat.Vecs[1:]
+			mp[key] = append(mp[key], bat)
+			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
+			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
+			// maybe this will cause that the log imcrements unlimitly
+			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
+			// i--
+			txn.writes[i].bat = nil
+		}
 	}
 
 	for key := range mp {
@@ -178,6 +198,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 	}
 	txn.workspaceSize -= size
+
 	return nil
 }
 

@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -174,9 +175,8 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		return true, nil
 	}
 
-	if len(bat.Vecs) == 0 {
-		bat.Clean(proc.GetMPool())
-		proc.SetInputBatch(batch.EmptyBatch)
+	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 
@@ -248,14 +248,16 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
+
 	if bat.Length() == 0 {
-		bat.Clean(proc.GetMPool())
-		proc.SetInputBatch(batch.EmptyBatch)
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
+
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
 	proc.SetInputBatch(batch.EmptyBatch)
+
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 	}

@@ -186,6 +186,9 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 			continue
 		}
 		j := vps[i] - 1
+		if len(a.vs) == 0 || len(vs) == 0 || len(zs) == 0 || len(a.es) == 0 {
+			fmt.Print("ddd")
+		}
 		a.vs[j], a.es[j] = a.fill(int64(j), vs[vi], a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 		vi += int64(inc)
 	}

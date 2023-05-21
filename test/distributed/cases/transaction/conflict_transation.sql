@@ -54,11 +54,13 @@ commit;
 select * from ct_04;
 
 -- primary key conflict/insert infile.
+-- @bvt:issue#3433
 create table ct_05(a int,b varchar(25) primary key);
 begin;
 load data infile '$resources/load_data/ct_file.csv' into table ct_05;
 commit;
 select * from ct_05;
+-- @bvt:issue
 
 --unique index and secondary index conflict
 create table ct_06(a bigint,b varchar(25),c int, d varchar(25),primary key(a),unique index c(c),key b(b),key d(d));

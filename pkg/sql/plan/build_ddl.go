@@ -603,7 +603,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				case *tree.AttributeAutoIncrement:
 					auto_incr = true
 					if !types.T(colType.GetId()).IsInteger() {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
+						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{

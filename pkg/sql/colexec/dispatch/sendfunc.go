@@ -16,12 +16,11 @@ package dispatch
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"

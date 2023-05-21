@@ -298,7 +298,9 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 
 func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBatch *batch.Batch,
 	checkExpr []*plan2.Expr, uniqueCols []map[string]int, colCount int) (int, string, error) {
-
+	if checkConflictBatch.Length() == 0 {
+		return -1, "", nil
+	}
 	for j := 0; j < colCount; j++ {
 		fromVec := newBatch.Vecs[j]
 		toVec := checkConflictBatch.Vecs[j+colCount]
@@ -317,7 +319,7 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBa
 			return 0, "", err
 		}
 
-		result, err := executor.Eval(proc, []*batch.Batch{insertBatch})
+		result, err := executor.Eval(proc, []*batch.Batch{checkConflictBatch})
 		if err != nil {
 			executor.Free()
 			return 0, "", err

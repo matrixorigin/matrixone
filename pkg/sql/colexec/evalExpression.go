@@ -17,6 +17,8 @@ package colexec
 import (
 	"context"
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 var (
@@ -335,7 +336,14 @@ func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*bat
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
-		vec.SetType(expr.typ)
+		// vec.SetType(expr.typ)
+
+		// todo: should set type before eval expr
+		newTyp := types.New(expr.typ.Oid, expr.typ.Width, expr.typ.Scale)
+		vec = proc.GetVector(newTyp)
+		if err := vector.GetUnionAllFunction(newTyp, proc.Mp())(vec, batches[relIndex].Vecs[expr.colIndex]); err != nil {
+			return nil, err
+		}
 	}
 	return vec, nil
 }

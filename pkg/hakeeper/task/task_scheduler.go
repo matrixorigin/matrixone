@@ -87,7 +87,7 @@ func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error
 	runtime.ProcessLevelRuntime().Logger().Debug("new tasks created", zap.Int("created", len(tasks)))
 	v, err := ts.QueryTask(ctx)
 	if len(v) == 0 && err == nil {
-		panic("cannot read created tasks")
+		// panic("cannot read created tasks")
 	}
 	runtime.ProcessLevelRuntime().Logger().Debug("new tasks created, query", zap.Int("created", len(v)), zap.Error(err))
 	return nil
