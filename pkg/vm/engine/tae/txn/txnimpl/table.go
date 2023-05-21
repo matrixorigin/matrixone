@@ -593,9 +593,7 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 	return tbl.localSegment.Append(data)
 }
 
-func (tbl *txnTable) AddBlksWithMetaLoc(
-	zm []objectio.ZoneMap,
-	metaLocs []objectio.Location) (err error) {
+func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error) {
 	var pkVecs []containers.Vector
 	defer func() {
 		for _, v := range pkVecs {
@@ -641,7 +639,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 	if tbl.localSegment == nil {
 		tbl.localSegment = newLocalSegment(tbl)
 	}
-	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, zm, metaLocs)
+	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, metaLocs)
 }
 
 func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
