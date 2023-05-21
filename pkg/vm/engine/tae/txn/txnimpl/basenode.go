@@ -19,9 +19,6 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -29,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 const MaxNodeRows = 10000
@@ -111,161 +106,18 @@ func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-type memoryNode struct {
-	common.RefHelper
-	bnode *baseNode
-	//data resides in.
-	data    *containers.Batch
-	rows    uint32
-	appends []*appendInfo
-}
-
-func newMemoryNode(node *baseNode) *memoryNode {
-	return &memoryNode{
-		bnode:   node,
-		appends: make([]*appendInfo, 0),
-	}
-}
-
-func (n *memoryNode) GetSpace() uint32 {
-	return MaxNodeRows - n.rows
-}
-
-func (n *memoryNode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
-	left := uint32(data.Length()) - offset
-	nodeLeft := MaxNodeRows - n.rows
-	if left <= nodeLeft {
-		return left
-	}
-	return nodeLeft
-}
-
-func (n *memoryNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
-	schema := n.bnode.table.GetLocalSchema()
-	if n.data == nil {
-		opts := containers.Options{}
-		opts.Capacity = data.Length() - int(offset)
-		if opts.Capacity > int(MaxNodeRows) {
-			opts.Capacity = int(MaxNodeRows)
-		}
-		n.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
-	}
-
-	from := uint32(n.data.Length())
-	an = n.PrepareAppend(data, offset)
-	for _, attr := range data.Attrs {
-		if attr == catalog.PhyAddrColumnName {
-			continue
-		}
-		def := schema.ColDefs[schema.GetColIdx(attr)]
-		destVec := n.data.Vecs[def.Idx]
-		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())
-		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
-	}
-	n.rows = uint32(n.data.Length())
-	err = n.FillPhyAddrColumn(from, an)
-	return
-}
-
-func (n *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	var col *vector.Vector
-	if col, err = objectio.ConstructRowidColumn(
-		&n.bnode.meta.ID, startRow, length, common.DefaultAllocator,
-	); err != nil {
-		return
-	}
-	err = n.data.Vecs[n.bnode.table.GetLocalSchema().PhyAddrKey.Idx].ExtendVec(col)
-	col.Free(common.DefaultAllocator)
-	return
-}
-
-type persistedNode struct {
-	common.RefHelper
-	bnode   *baseNode
-	rows    uint32
-	deletes *roaring.Bitmap
-	//ZM and BF index for primary key
-	pkIndex indexwrapper.Index
-	//ZM and BF index for all columns
-	indexes map[int]indexwrapper.Index
-}
-
-func newPersistedNode(bnode *baseNode) *persistedNode {
-	node := &persistedNode{
-		bnode: bnode,
-	}
-	node.OnZeroCB = node.close
-	if bnode.meta.HasPersistedData() {
-		node.init()
-	}
-	return node
-}
-
-func (n *persistedNode) close() {
-	for i, index := range n.indexes {
-		index.Close()
-		n.indexes[i] = nil
-	}
-	n.indexes = nil
-}
-
-func (n *persistedNode) init() {
-	n.indexes = make(map[int]indexwrapper.Index)
-	schema := n.bnode.meta.GetSchema()
-	pkIdx := -1
-	if schema.HasPK() {
-		pkIdx = schema.GetSingleSortKeyIdx()
-	}
-	for i := range schema.ColDefs {
-		index := indexwrapper.NewImmutableIndex()
-		if err := index.ReadFrom(
-			n.bnode.indexCache,
-			n.bnode.fs,
-			n.bnode.meta.GetMetaLoc(),
-			schema.ColDefs[i]); err != nil {
-			panic(err)
-		}
-		n.indexes[i] = index
-		if i == pkIdx {
-			n.pkIndex = index
-		}
-	}
-	location := n.bnode.meta.GetMetaLoc()
-	n.rows = uint32(tables.ReadPersistedBlockRow(location))
-
-}
-
-func (n *persistedNode) Rows() uint32 {
-	return n.rows
-}
-
 type baseNode struct {
-	indexCache model.LRUCache
-	fs         *objectio.ObjectFS
-	//scheduler is used to flush insertNode into S3/FS.
-	scheduler tasks.TaskScheduler
-	//meta for this uncommitted standalone block.
-	meta    *catalog.BlockEntry
-	table   *txnTable
-	storage struct {
-		mnode *memoryNode
-		pnode *persistedNode
-	}
+	meta  *catalog.BlockEntry
+	table *txnTable
 }
 
 func newBaseNode(
 	tbl *txnTable,
-	fs *objectio.ObjectFS,
-	indexCache model.LRUCache,
-	sched tasks.TaskScheduler,
 	meta *catalog.BlockEntry,
 ) *baseNode {
 	return &baseNode{
-		indexCache: indexCache,
-		fs:         fs,
-		scheduler:  sched,
-		meta:       meta,
-		table:      tbl,
+		meta:  meta,
+		table: tbl,
 	}
 }
 
@@ -278,36 +130,21 @@ func (n *baseNode) GetTxn() txnif.AsyncTxn {
 }
 
 func (n *baseNode) GetPersistedLoc() (objectio.Location, objectio.Location) {
-	return n.meta.GetMetaLoc(), n.meta.GetDeltaLoc()
+	return n.meta.FastGetMetaLoc(), n.meta.GetDeltaLoc()
 }
 
 func (n *baseNode) Rows() uint32 {
-	if n.storage.mnode != nil {
-		return n.storage.mnode.rows
-	} else if n.storage.pnode != nil {
-		return n.storage.pnode.Rows()
-	}
-	panic(moerr.NewInternalErrorNoCtx(
-		fmt.Sprintf("bad insertNode %s", n.meta.String())))
-}
-
-func (n *baseNode) TryUpgrade() (err error) {
-	//TODO::update metaloc and deltaloc
-	if n.storage.mnode != nil {
-		n.storage.mnode = nil
-	}
-	if n.storage.pnode == nil {
-		n.storage.pnode = newPersistedNode(n)
-		n.storage.pnode.Ref()
-	}
-	return
+	return n.meta.FastGetMetaLoc().Rows()
 }
 
 func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, err error) {
+	location := n.meta.FastGetMetaLoc()
+	if location.IsEmpty() {
+		panic("cannot load persisted column data from empty location")
+	}
 	def := n.table.GetLocalSchema().ColDefs[colIdx]
-	location := n.meta.GetMetaLoc()
 	return tables.LoadPersistedColumnData(
-		n.fs,
+		n.table.store.dataFactory.Fs,
 		nil,
 		def,
 		location)
