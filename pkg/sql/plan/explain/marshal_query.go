@@ -314,29 +314,6 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		} else {
 			return nil, moerr.NewInternalError(ctx, "Table Function definition not found when plan is serialized to json")
 		}
-
-		labels = append(labels, Label{
-			Name:  "Full table name",
-			Value: fullTableName,
-		})
-
-		// "name" : "Columns (2 / 28)",
-		columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
-
-		labels = append(labels, Label{
-			Name:  "Columns",
-			Value: columns,
-		})
-
-		labels = append(labels, Label{
-			Name:  "Total columns",
-			Value: len(tableDef.Name2ColIndex),
-		})
-
-		labels = append(labels, Label{
-			Name:  "Scan columns",
-			Value: len(tableDef.Cols),
-		})
 	case plan.Node_INSERT:
 		objRef := m.node.InsertCtx.Ref
 		var fullTableName string
