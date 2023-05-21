@@ -126,6 +126,10 @@ type connManager struct {
 	// Map from connection ID to CN server.
 	connIDServers map[uint32]*CNServer
 
+	// proxyToBackendConnID maps proxy connection ID to
+	// backend connection ID.
+	proxyToBackendConnID map[uint32]uint32
+
 	// Map from Tenant to *CNServer list.
 	tenantConns map[Tenant]map[*CNServer]struct{}
 }
@@ -133,9 +137,10 @@ type connManager struct {
 // newConnManager creates a new connManager.
 func newConnManager() *connManager {
 	m := &connManager{
-		conns:         make(map[LabelHash]*connInfo),
-		connIDServers: make(map[uint32]*CNServer),
-		tenantConns:   make(map[Tenant]map[*CNServer]struct{}),
+		conns:                make(map[LabelHash]*connInfo),
+		connIDServers:        make(map[uint32]*CNServer),
+		proxyToBackendConnID: make(map[uint32]uint32),
+		tenantConns:          make(map[Tenant]map[*CNServer]struct{}),
 	}
 	return m
 }
@@ -184,7 +189,8 @@ func (m *connManager) connect(cn *CNServer, t *tunnel) {
 		m.conns[cn.hash] = newConnInfo(cn.reqLabel)
 	}
 	m.conns[cn.hash].cnTunnels.add(cn.uuid, t)
-	m.connIDServers[cn.connID] = cn
+	m.connIDServers[cn.backendConnID] = cn
+	m.proxyToBackendConnID[cn.proxyConnID] = cn.backendConnID
 
 	tenant := cn.reqLabel.Tenant
 	if tenant != "" {
@@ -204,7 +210,8 @@ func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 		return
 	}
 	ci.cnTunnels.del(cn.uuid, t)
-	delete(m.connIDServers, cn.connID)
+	delete(m.connIDServers, cn.backendConnID)
+	delete(m.proxyToBackendConnID, cn.proxyConnID)
 
 	tenant := cn.reqLabel.Tenant
 	if tenant != "" && m.tenantConns[tenant] != nil {
@@ -262,6 +269,13 @@ func (m *connManager) getLabelInfo(hash LabelHash) labelInfo {
 func (m *connManager) getCNServerByConnID(connID uint32) *CNServer {
 	m.Lock()
 	defer m.Unlock()
+	// The proxy connection ID and backend connection ID are global unique.
+	// So we should check if the connID from parameter is proxy connection ID
+	// or backend connection ID.
+	backendConnID, ok := m.proxyToBackendConnID[connID]
+	if ok {
+		connID = backendConnID
+	}
 	cn, ok := m.connIDServers[connID]
 	if ok {
 		return cn

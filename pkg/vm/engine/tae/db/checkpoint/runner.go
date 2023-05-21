@@ -615,7 +615,7 @@ func (r *runner) tryScheduleCheckpoint() {
 
 func (r *runner) fillDefaults() {
 	if r.options.forceFlushTimeout <= 0 {
-		r.options.forceFlushTimeout = time.Second * 30
+		r.options.forceFlushTimeout = time.Second * 90
 	}
 	if r.options.forceFlushCheckInterval <= 0 {
 		r.options.forceFlushCheckInterval = time.Millisecond * 400

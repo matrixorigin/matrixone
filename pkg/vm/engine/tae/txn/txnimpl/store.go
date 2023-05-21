@@ -354,7 +354,7 @@ func (store *txnStore) ObserveTxn(
 	visitMetadata func(block any),
 	visitSegment func(seg any),
 	visitAppend func(bat any),
-	visitDelete func(deletes []uint32, prefix []byte)) {
+	visitDelete func(vnode txnif.DeleteNode)) {
 	for _, db := range store.dbs {
 		if db.createEntry != nil || db.dropEntry != nil {
 			visitDatabase(db.entry)
@@ -375,9 +375,7 @@ func (store *txnStore) ObserveTxn(
 				case *catalog.BlockEntry:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
-					deletes := txnEntry.DeletedRows()
-					prefix := txnEntry.GetPrefix()
-					visitDelete(deletes, prefix)
+					visitDelete(txnEntry)
 				case *catalog.TableEntry:
 					if tbl.createEntry != nil || tbl.dropEntry != nil {
 						continue
@@ -648,6 +646,12 @@ func (store *txnStore) PreApplyCommit() (err error) {
 			return
 		}
 	}
+	// logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	return
+}
+
+func (store *txnStore) PrepareWAL() (err error) {
+	// now := time.Now()
 	if err = store.CollectCmd(); err != nil {
 		return
 	}
@@ -668,7 +672,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 			return
 		}
 	}
-	// logutil.Debugf("Txn-%X PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	// logutil.Debugf("Txn-%X PrepareWAL Takes %s", store.txn.GetID(), time.Since(now))
 	return
 }
 

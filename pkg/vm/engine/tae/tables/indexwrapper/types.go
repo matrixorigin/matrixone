@@ -18,6 +18,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -47,8 +48,12 @@ type Index interface {
 	// If key is not found, return nil
 	Dedup(key any, skipfn func(row uint32) error) error
 
-	BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error), zm []byte) (keyselects *roaring.Bitmap, err error)
-	//DedupByIndex(index Index, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error)
+	BatchDedup(
+		keys containers.Vector,
+		skipfn func(row uint32) (err error),
+		zm []byte,
+		bf objectio.BloomFilter,
+	) (keyselects *roaring.Bitmap, err error)
 
 	// BatchUpsert batch insert the specific keys
 	// If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map

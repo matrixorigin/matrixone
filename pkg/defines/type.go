@@ -180,6 +180,12 @@ type TemporaryDN struct{}
 // Determine if now is a bg sql.
 type BgKey struct{}
 
+// Sp variable scope
+type VarScopeKey struct{}
+
+// Determine if it is a stored procedure
+type InSp struct{}
+
 // PkCheckByDN whether DN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByDN struct{}
 

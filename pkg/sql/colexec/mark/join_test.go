@@ -204,7 +204,8 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 3),
 	}
-	fid := function.EncodeOverloadID(function.EQUAL, 4)
+	fr, _ := function.GetFunctionByName(ctx, "=", ts)
+	fid := fr.GetEncodedOverloadID()
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{

@@ -15,6 +15,7 @@
 package util
 
 import (
+	crand "crypto/rand"
 	"math"
 	"math/rand"
 	"reflect"
@@ -210,6 +211,7 @@ func MakeBatch(columnSize int, rowCount int, mp *mpool.MPool) (*batch.Batch, *pl
 		PkeyColName: catalog.CPrimaryKeyColName,
 		Names:       keys,
 	}
+	bat.Zs = make([]int64, rowCount)
 	return bat, primaryKeyDef, valueCount
 }
 
@@ -475,6 +477,6 @@ func randDecimal128() types.Decimal128 {
 
 func randStringType() []byte {
 	b := make([]byte, 1024)
-	rand.Read(b)
+	crand.Read(b)
 	return b
 }

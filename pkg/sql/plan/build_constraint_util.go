@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -922,7 +922,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 	}
 
 	targetType.NotNullable = expr.Typ.NotNullable
-	id, _, _, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
@@ -937,7 +937,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: id, ObjName: "cast"},
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
 				Args: []*Expr{expr, t},
 			},
 		},
@@ -978,7 +978,7 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 			if _, ok := updateKeysMap[coldef.Name]; ok {
 				pos := newColPosMap[coldef.Name]
 				posExpr := lastNode.ProjectList[pos]
-				if posExpr.Typ == nil { // set col = default
+				if isDefaultExpr(posExpr) { // set col = default
 					lastNode.ProjectList[pos], err = getDefaultExpr(builder.GetContext(), coldef)
 					if err != nil {
 						return err
@@ -1029,6 +1029,15 @@ func initUpdateStmt(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelect
 	}
 	info.idx = int32(len(info.projectList))
 	return nil
+}
+
+func isDefaultExpr(expr *Expr) bool {
+	c, ok := expr.Expr.(*plan.Expr_C)
+	if !ok {
+		return false
+	}
+	_, ok = c.C.Value.(*plan.Const_Defaultval)
+	return ok
 }
 
 func rewriteDmlSelectInfo(builder *QueryBuilder, bindCtx *BindContext, info *dmlSelectInfo, tableDef *TableDef, baseNodeId int32, rewriteIdx int) error {
