@@ -377,7 +377,8 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 			p.blocks.Set(entry)
 
-			if entryStateVector[i] {
+			if entryStateVector[i] ||
+				(!entryStateVector[i] && len(entry.DeltaLoc) != 0) {
 				iter := p.rows.Copy().Iter()
 				pivot := RowEntry{
 					BlockID: blockID,
@@ -400,7 +401,6 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				}
 				iter.Release()
 			}
-
 		})
 	}
 

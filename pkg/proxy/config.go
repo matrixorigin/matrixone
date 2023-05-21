@@ -49,6 +49,20 @@ type Config struct {
 	// other CN servers. This value should be less than 1.
 	RebalanceToerance float64 `toml:"rebalance-tolerance"`
 
+	// Default is false. With true. Server will support tls.
+	// This value should be ths same with all CN servers, and the name
+	// of this parameter is enableTls.
+	TLSEnabled bool `toml:"tls-enabled"`
+	// TSLCAFile is the file path of file that contains list of trusted
+	// SSL CAs for client.
+	TLSCAFile string `toml:"tls-ca-file"`
+	// TLSCertFile is the file path of file that contains X509 certificate
+	// in PEM format for client.
+	TLSCertFile string `toml:"tls-cert-file"`
+	// TLSKeyFile is the file path of file that contains X509 key in PEM
+	// format for client.
+	TLSKeyFile string `toml:"tls-key-file"`
+
 	// HAKeeper is the configuration of HAKeeper.
 	HAKeeper struct {
 		// ClientConfig is HAKeeper client configuration.
@@ -81,6 +95,34 @@ type Option func(*Server)
 func WithRuntime(runtime runtime.Runtime) Option {
 	return func(s *Server) {
 		s.runtime = runtime
+	}
+}
+
+// WithTLSEnabled enable the TLS.
+func WithTLSEnabled() Option {
+	return func(s *Server) {
+		s.config.TLSEnabled = true
+	}
+}
+
+// WithTLSCAFile sets the CA file.
+func WithTLSCAFile(f string) Option {
+	return func(s *Server) {
+		s.config.TLSCAFile = f
+	}
+}
+
+// WithTLSCertFile sets the cert file.
+func WithTLSCertFile(f string) Option {
+	return func(s *Server) {
+		s.config.TLSCertFile = f
+	}
+}
+
+// WithTLSKeyFile sets the key file.
+func WithTLSKeyFile(f string) Option {
+	return func(s *Server) {
+		s.config.TLSKeyFile = f
 	}
 }
 

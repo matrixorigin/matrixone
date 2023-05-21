@@ -1260,6 +1260,10 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 							"account": {Labels: []string{"t2"}},
 						},
 					},
+					{
+						ServiceID:  "s3",
+						SQLAddress: "addr3",
+					},
 				},
 				nil,
 			),
