@@ -47,7 +47,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 			Children:    []int32{node.Children[0]},
 			GroupBy:     append(oldGroupBy, toCount),
 			BindingTags: []int32{newGroupTag, newAggregateTag},
-		}, nil)
+		}, builder.ctxByNode[node.Children[0]])
 
 		node.Children[0] = aggNodeID
 		node.GroupBy = make([]*plan.Expr, oldGroupLen)

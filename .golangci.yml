@@ -18,22 +18,22 @@ linters:
   # Enable specific linter
   # https://golangci-lint.run/usage/linters/#enabled-by-default-linters
   enable:
-    - deadcode
     - depguard
     - exportloopref
+    - gocheckcompilerdirectives
+    - gofmt
     - gosimple
     - govet
-    - gofmt
     - ineffassign
     - prealloc
+    - reassign
     - rowserrcheck
+    - sqlclosecheck
     - staticcheck
     - stylecheck
-    - structcheck
+    - tenv
     - typecheck
     - unused
-    - varcheck
-
 
 linters-settings:
   stylecheck:

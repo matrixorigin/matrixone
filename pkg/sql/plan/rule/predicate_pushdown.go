@@ -72,11 +72,11 @@ func (r *PredicatePushdown) newExpr(relPos int32, expr *plan.Expr, n *plan.Node,
 		return relPos, expr
 	case *plan.Expr_F:
 		overloadID := e.F.Func.GetObj()
-		f, exists := function.GetFunctionByIDWithoutError(overloadID)
+		f, exists := function.GetFunctionByIdWithoutError(overloadID)
 		if !exists {
 			return relPos, nil
 		}
-		if f.TestFlag(plan.Function_AGG) {
+		if f.IsAgg() {
 			return relPos, nil
 		}
 		args := make([]*plan.Expr, len(e.F.Args))

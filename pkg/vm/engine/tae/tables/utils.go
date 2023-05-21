@@ -27,16 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func constructRowId(id *common.ID, rows uint32) (col containers.Vector, err error) {
-	prefix := id.BlockID[:]
-	return model.PreparePhyAddrData(
-		types.T_Rowid.ToType(),
-		prefix,
-		0,
-		rows,
-	)
-}
-
 func LoadPersistedColumnData(
 	fs *objectio.ObjectFS,
 	id *common.ID,
@@ -44,7 +34,7 @@ func LoadPersistedColumnData(
 	location objectio.Location,
 ) (vec containers.Vector, err error) {
 	if def.IsPhyAddr() {
-		return constructRowId(id, location.Rows())
+		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows())
 	}
 	bat, err := blockio.LoadColumns(context.Background(), []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, fs.Service, location, nil)
 	if err != nil {
