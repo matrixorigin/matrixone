@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -199,36 +198,4 @@ type RemoteReceivRegInfo struct {
 	Idx      int
 	Uuid     uuid.UUID
 	FromAddr string
-}
-
-// SQLExecutor is used to execute internal sql. All internal requirements for writing
-// data should be done using the internal sql executor, otherwise pessimistic transactions
-// may not work.
-type SQLExecutor interface {
-	// Exec exec a sql in a exists txn.
-	Exec(ctx context.Context, sql string, opts Options) (Result, error)
-	// ExecTxn executor sqls in a txn. execFunc can use TxnExecutor to exec multiple sqls
-	// in a transaction.
-	ExecTxn(ctx context.Context, execFunc func(TxnExecutor) error, opts Options) error
-}
-
-// TxnExecutor exec all sqls in a transaction.
-type TxnExecutor interface {
-	Exec(sql string) (Result, error)
-}
-
-// Options execute options.
-type Options struct {
-	txnOp          client.TxnOperator
-	database       string
-	accoundID      uint32
-	minCommittedTS timestamp.Timestamp
-	innerTxn       bool
-}
-
-// Result exec sql result
-type Result struct {
-	affectedRows uint64
-	batches      []*batch.Batch
-	mp           *mpool.MPool
 }

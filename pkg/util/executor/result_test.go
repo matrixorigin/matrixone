@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compile
+package executor
 
 import (
 	"testing"
@@ -35,12 +35,12 @@ func TestReadRows(t *testing.T) {
 	bat := newBatch(2)
 	appendCols(t, bat, 0, types.New(types.T_int32, 0, 0), []int32{1, 2, 3, 4}, mp)
 	appendBytesCols(t, bat, 1, types.New(types.T_varchar, 2, 0), [][]byte{[]byte("s1"), []byte("s2"), []byte("s3"), []byte("s4")}, mp)
-	res.batches = append(res.batches, bat)
+	res.Batches = append(res.Batches, bat)
 
 	bat = newBatch(2)
 	appendCols(t, bat, 0, types.New(types.T_int32, 0, 0), []int32{5, 6, 7, 8}, mp)
 	appendBytesCols(t, bat, 1, types.New(types.T_varchar, 2, 0), [][]byte{[]byte("s5"), []byte("s6"), []byte("s7"), []byte("s8")}, mp)
-	res.batches = append(res.batches, bat)
+	res.Batches = append(res.Batches, bat)
 
 	defer res.Close()
 

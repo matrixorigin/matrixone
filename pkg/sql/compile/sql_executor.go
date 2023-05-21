@@ -20,45 +20,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/multierr"
 )
-
-// WithTxn exec sql in a exists txn
-func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
-	opts.txnOp = txnOp
-	return opts
-}
-
-// WithDatabase exec sql in database
-func (opts Options) WithDatabase(database string) Options {
-	opts.database = database
-	return opts
-}
-
-// WithAccountID execute sql in account
-func (opts Options) WithAccountID(accoundID uint32) Options {
-	opts.accoundID = accoundID
-	return opts
-}
-
-// WithMinCommittedTS use minCommittedTS to exec sql. It will set txn's snapshot to
-// minCommittedTS+1, so the txn can see the data which committed at minCommittedTS.
-// It's not work if txn operator is set.
-func (opts Options) WithMinCommittedTS(ts timestamp.Timestamp) Options {
-	opts.minCommittedTS = ts
-	return opts
-}
 
 type sqlExecutor struct {
 	addr      string
@@ -77,7 +50,7 @@ func NewSQLExecutor(
 	mp *mpool.MPool,
 	txnClient client.TxnClient,
 	fs fileservice.FileService,
-	aicm *defines.AutoIncrCacheManager) SQLExecutor {
+	aicm *defines.AutoIncrCacheManager) executor.SQLExecutor {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.LockService)
 	if !ok {
 		panic("missing lock service")
@@ -96,26 +69,26 @@ func NewSQLExecutor(
 func (s *sqlExecutor) Exec(
 	ctx context.Context,
 	sql string,
-	opts Options) (Result, error) {
-	var res Result
+	opts executor.Options) (executor.Result, error) {
+	var res executor.Result
 	err := s.ExecTxn(
 		ctx,
-		func(exec TxnExecutor) error {
+		func(exec executor.TxnExecutor) error {
 			v, err := exec.Exec(sql)
 			res = v
 			return err
 		},
 		opts)
 	if err != nil {
-		return Result{}, err
+		return executor.Result{}, err
 	}
 	return res, nil
 }
 
 func (s *sqlExecutor) ExecTxn(
 	ctx context.Context,
-	execFunc func(TxnExecutor) error,
-	opts Options) error {
+	execFunc func(executor.TxnExecutor) error,
+	opts executor.Options) error {
 	exec, err := newTxnExecutor(ctx, s, opts)
 	if err != nil {
 		return err
@@ -130,31 +103,30 @@ func (s *sqlExecutor) ExecTxn(
 func (s *sqlExecutor) getCompileContext(
 	ctx context.Context,
 	proc *process.Process,
-	opts Options) *compilerContext {
+	opts executor.Options) *compilerContext {
 	return newCompilerContext(
 		ctx,
-		opts.database,
+		opts.Database(),
 		s.eng,
 		proc)
 }
 
 func (s *sqlExecutor) adjustOptions(
 	ctx context.Context,
-	opts Options) (context.Context, Options, error) {
-	if opts.accoundID > 0 {
+	opts executor.Options) (context.Context, executor.Options, error) {
+	if opts.HasAccoundID() {
 		ctx = context.WithValue(
 			ctx,
 			defines.TenantIDKey{},
-			opts.accoundID)
+			opts.AccoundID())
 	}
 
-	if opts.txnOp == nil {
-		txnOp, err := s.txnClient.New(ctx, opts.minCommittedTS)
+	if !opts.HasExistsTxn() {
+		txnOp, err := s.txnClient.New(ctx, opts.MinCommittedTS())
 		if err != nil {
-			return nil, Options{}, err
+			return nil, executor.Options{}, err
 		}
-		opts.txnOp = txnOp
-		opts.innerTxn = true
+		opts = opts.SetupNewTxn(txnOp)
 	}
 	return ctx, opts, nil
 }
@@ -162,36 +134,36 @@ func (s *sqlExecutor) adjustOptions(
 type txnExecutor struct {
 	s    *sqlExecutor
 	ctx  context.Context
-	opts Options
+	opts executor.Options
 }
 
 func newTxnExecutor(
 	ctx context.Context,
 	s *sqlExecutor,
-	opts Options) (*txnExecutor, error) {
+	opts executor.Options) (*txnExecutor, error) {
 	ctx, opts, err := s.adjustOptions(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	if opts.innerTxn {
-		if err := s.eng.New(ctx, opts.txnOp); err != nil {
+	if !opts.ExistsTxn() {
+		if err := s.eng.New(ctx, opts.Txn()); err != nil {
 			return nil, err
 		}
 	}
 	return &txnExecutor{s: s, ctx: ctx, opts: opts}, nil
 }
 
-func (exec *txnExecutor) Exec(sql string) (Result, error) {
+func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
 	if err != nil {
-		return Result{}, err
+		return executor.Result{}, err
 	}
 
 	proc := process.New(
 		exec.ctx,
 		exec.s.mp,
 		exec.s.txnClient,
-		exec.opts.txnOp,
+		exec.opts.Txn(),
 		exec.s.fs,
 		exec.s.ls,
 		exec.s.aicm,
@@ -201,12 +173,12 @@ func (exec *txnExecutor) Exec(sql string) (Result, error) {
 		exec.s.getCompileContext(exec.ctx, proc, exec.opts),
 		stmts[0])
 	if err != nil {
-		return Result{}, err
+		return executor.Result{}, err
 	}
 
 	c := New(
 		exec.s.addr,
-		exec.opts.database,
+		exec.opts.Database(),
 		sql,
 		"",
 		"",
@@ -217,7 +189,7 @@ func (exec *txnExecutor) Exec(sql string) (Result, error) {
 		false,
 		nil)
 
-	var result Result
+	result := executor.NewResult(exec.s.mp)
 	var batches []*batch.Batch
 	err = c.Compile(
 		exec.ctx,
@@ -237,84 +209,36 @@ func (exec *txnExecutor) Exec(sql string) (Result, error) {
 			return nil
 		})
 	if err != nil {
-		return Result{}, err
+		return executor.Result{}, err
 	}
 	if err := c.Run(0); err != nil {
-		return Result{}, err
+		return executor.Result{}, err
 	}
 
-	result.batches = batches
-	result.affectedRows = c.GetAffectedRows()
+	result.Batches = batches
+	result.AffectedRows = c.GetAffectedRows()
 	return result, nil
 }
 
 func (exec *txnExecutor) commit() error {
-	if !exec.opts.innerTxn {
+	if exec.opts.ExistsTxn() {
 		return nil
 	}
 	if err := exec.s.eng.Commit(
 		exec.ctx,
-		exec.opts.txnOp); err != nil {
+		exec.opts.Txn()); err != nil {
 		return err
 	}
-	return exec.opts.txnOp.Commit(exec.ctx)
+	return exec.opts.Txn().Commit(exec.ctx)
 }
 
 func (exec *txnExecutor) rollback() error {
-	if !exec.opts.innerTxn {
+	if exec.opts.ExistsTxn() {
 		return nil
 	}
 	err := exec.s.eng.Rollback(
 		exec.ctx,
-		exec.opts.txnOp)
+		exec.opts.Txn())
 	return multierr.Append(err,
-		exec.opts.txnOp.Rollback(exec.ctx))
-}
-
-func (res Result) GetAffectedRows() uint64 {
-	return res.affectedRows
-}
-
-func (res Result) Close() {
-	for _, rows := range res.batches {
-		rows.Clean(res.mp)
-	}
-}
-
-// ReadRows read all rows, apply is used to read cols data in a row. If apply return false, stop
-// reading. If the query has a lot of data, apply will be called multiple times, giving a batch of
-// rows for each call.
-func (res Result) ReadRows(apply func(cols []*vector.Vector) bool) {
-	for _, rows := range res.batches {
-		if !apply(rows.Vecs) {
-			return
-		}
-	}
-}
-
-// GetFixedRows get fixed rows, int, float, etc.
-func GetFixedRows[T any](vec *vector.Vector) []T {
-	return vector.MustFixedCol[T](vec)
-}
-
-// GetBytesRows get bytes rows, varchar, varbinary, text, json, etc.
-func GetBytesRows(vec *vector.Vector) [][]byte {
-	n := vec.Length()
-	data, area := vector.MustVarlenaRawData(vec)
-	rows := make([][]byte, 0, n)
-	for idx := range data {
-		rows = append(rows, data[idx].GetByteSlice(area))
-	}
-	return rows
-}
-
-// GetStringRows get bytes rows, varchar, varbinary, text, json, etc.
-func GetStringRows(vec *vector.Vector) []string {
-	n := vec.Length()
-	data, area := vector.MustVarlenaRawData(vec)
-	rows := make([]string, 0, n)
-	for idx := range data {
-		rows = append(rows, string(data[idx].GetByteSlice(area)))
-	}
-	return rows
+		exec.opts.Txn().Rollback(exec.ctx))
 }

@@ -24,9 +24,9 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -174,12 +174,12 @@ func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
 			if !ok {
 				panic("missing internal sql executor")
 			}
-			exec := v.(compile.SQLExecutor)
+			exec := v.(executor.SQLExecutor)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			exec.ExecTxn(
 				ctx,
-				func(te compile.TxnExecutor) error {
+				func(te executor.TxnExecutor) error {
 					res, err := te.Exec("create database zx")
 					require.NoError(t, err)
 					res.Close()
@@ -190,7 +190,7 @@ func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
 
 					res, err = te.Exec("insert into t1 values (1, 'a'),(2, 'b'),(3, 'c')")
 					require.NoError(t, err)
-					require.Equal(t, uint64(3), res.GetAffectedRows())
+					require.Equal(t, uint64(3), res.AffectedRows)
 					res.Close()
 
 					res, err = te.Exec("select id,name from t1 order by id")
@@ -198,8 +198,8 @@ func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
 					var ids []int32
 					var names []string
 					res.ReadRows(func(cols []*vector.Vector) bool {
-						ids = append(ids, compile.GetFixedRows[int32](cols[0])...)
-						names = append(names, compile.GetStringRows(cols[1])...)
+						ids = append(ids, executor.GetFixedRows[int32](cols[0])...)
+						names = append(names, executor.GetStringRows(cols[1])...)
 						return true
 					})
 					require.Equal(t, []int32{1, 2, 3}, ids)
@@ -207,7 +207,7 @@ func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
 					res.Close()
 					return nil
 				},
-				compile.Options{}.WithDatabase("zx"))
+				executor.Options{}.WithDatabase("zx"))
 		})
 	}
 }
