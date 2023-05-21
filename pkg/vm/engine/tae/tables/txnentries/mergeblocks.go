@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -251,12 +250,6 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 			return err
 		}
 		blks[i] = blk
-	}
-
-	for i, dels := range entry.deletes {
-		if dels != nil {
-			logutil.Infof("%d deletes=%v", i, dels.ToArray())
-		}
 	}
 
 	skippedCnt := 0
