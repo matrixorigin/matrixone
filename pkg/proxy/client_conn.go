@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
@@ -117,6 +118,8 @@ type clientConn struct {
 	// setVarStmts keeps all set user variable statements. When connection
 	// is transferred, set all these variables first.
 	setVarStmts []string
+	// tlsConfig is the config of TLS.
+	tlsConfig *tls.Config
 	// testHelper is used for testing.
 	testHelper struct {
 		connectToBackend func() (ServerConn, error)
@@ -128,6 +131,7 @@ var _ ClientConn = (*clientConn)(nil)
 // newClientConn creates a new client connection.
 func newClientConn(
 	ctx context.Context,
+	cfg *Config,
 	logger *log.MOLogger,
 	cs *counterSet,
 	conn goetty.IOSession,
@@ -158,9 +162,19 @@ func newClientConn(
 	if err != nil {
 		return nil, err
 	}
-	fp := config.FrontendParameters{}
+	fp := config.FrontendParameters{
+		EnableTls: cfg.TLSEnabled,
+	}
 	fp.SetDefaultValues()
 	c.mysqlProto = frontend.NewMysqlClientProtocol(c.connID, c.conn, 0, &fp)
+	if cfg.TLSEnabled {
+		tlsConfig, err := frontend.ConstructTLSConfig(
+			ctx, cfg.TLSCAFile, cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return nil, err
+		}
+		c.tlsConfig = tlsConfig
+	}
 	return c, nil
 }
 
@@ -244,10 +258,26 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 	return nil
 }
 
-func (c *clientConn) sendErr(errMsg string, resp chan<- []byte) {
-	fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+func (c *clientConn) sendErr(err error, resp chan<- []byte) {
+	var errCode uint16
+	var sqlState, errMsg string
+	switch myErr := err.(type) {
+	case *moerr.Error:
+		if myErr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
+			errCode = myErr.MySQLCode()
+		} else {
+			errCode = myErr.ErrorCode()
+		}
+		errMsg = myErr.Error()
+		sqlState = myErr.SqlState()
+	default:
+		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+		errCode = fail.ErrorCode
+		sqlState = fail.SqlStates[0]
+		errMsg = err.Error()
+	}
 	payload := c.mysqlProto.MakeErrPayload(
-		fail.ErrorCode, fail.SqlStates[0], errMsg)
+		errCode, sqlState, errMsg)
 	r := &frontend.Packet{
 		Length:     0,
 		SequenceID: 1,
@@ -261,7 +291,7 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 	if err != nil {
 		c.log.Error("failed to connect to backend server", zap.Error(err))
 		if resp != nil {
-			c.sendErr(err.Error(), resp)
+			c.sendErr(err, resp)
 		}
 		return err
 	}
@@ -293,7 +323,7 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	cn, err := c.router.SelectByConnID(e.connID)
 	if err != nil {
 		c.log.Error("failed to select CN server", zap.Error(err))
-		c.sendErr(err.Error(), resp)
+		c.sendErr(err, resp)
 		return err
 	}
 	// Before connect to backend server, update the salt.
@@ -392,8 +422,10 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	}
 
 	// Set the label session variable.
-	if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
-		return nil, err
+	if len(c.clientInfo.allLabels()) > 0 {
+		if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
+			return nil, err
+		}
 	}
 	// Set the use defined variables, including session variables and user variables.
 	for _, stmt := range c.setVarStmts {
