@@ -165,14 +165,15 @@ func (client *txnClient) New(
 
 	options = append(options,
 		WithTxnCNCoordinator(),
-		WithTxnClose(client),
-		WithUpdateLastCommitTSFunc(client.updateLastCommitTS),
 		WithTxnLockService(client.lockService))
 	op := newTxnOperator(
 		client.sender,
 		txnMeta,
 		options...)
 	op.timestampWaiter = client.timestampWaiter
+	op.AppendEventCallback(ClosedEvent,
+		client.updateLastCommitTS,
+		client.popTransaction)
 	return op, nil
 }
 
@@ -209,11 +210,11 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 	return txn.TxnMode_Pessimistic
 }
 
-func (client *txnClient) updateLastCommitTS(ts timestamp.Timestamp) {
+func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if client.mu.latestCommitTS.Less(ts) {
-		client.mu.latestCommitTS = ts
+	if client.mu.latestCommitTS.Less(txn.CommitTS) {
+		client.mu.latestCommitTS = txn.CommitTS
 	}
 }
 
@@ -260,7 +261,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 }
 
 func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
-	client.updateLastCommitTS(ts)
+	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
 }
 
 func (client *txnClient) popTransaction(txn txn.TxnMeta) {
