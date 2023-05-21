@@ -738,9 +738,10 @@ func (tbl *txnTable) compaction() error {
 	if err != nil {
 		return err
 	}
-
 	var deletedIDs []*types.Blockid
-	defer tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
+	defer func() {
+		tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
+	}()
 	tbl.db.txn.deletedBlocks.iter(func(id *types.Blockid, deleteOffsets []int64) bool {
 		pos := tbl.db.txn.cnBlkId_Pos[*id]
 		// just do compaction for current txnTable
