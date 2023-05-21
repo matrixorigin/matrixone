@@ -46,10 +46,10 @@ func (s *Service) initSqlWriterFactory() {
 		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
 	}
 
-	db.SetSQLWriterDBAddressFunc(addressFunc)
+	db_holder.SetSQLWriterDBAddressFunc(addressFunc)
 }
 func (s *Service) createSQLLogger(command *logservicepb.CreateTaskService) {
-	db.SetSQLWriterDBUser(db.MOLoggerUser, command.User.Password)
+	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
 }
 
 func (s *Service) initTaskHolder() {

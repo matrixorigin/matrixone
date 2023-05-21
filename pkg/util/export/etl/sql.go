@@ -173,7 +173,7 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 
 	var err error
 	var cnt int
-	dbConn, err := db.InitOrRefreshDBConn(false)
+	dbConn, err := db_holder.InitOrRefreshDBConn(false)
 	if err != nil {
 		logutil.Error("sqlWriter db init failed", zap.Error(err))
 		return 0, err

@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -216,7 +216,7 @@ func (w *S3Writer) WriteEnd(proc *process.Process) {
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 	var S3SizeThreshold = TagS3Size
 
-	if proc.GetSessionInfo() != nil && proc.GetSessionInfo().GetUser() == db.MOLoggerUser {
+	if proc.GetSessionInfo() != nil && proc.GetSessionInfo().GetUser() == db_holder.MOLoggerUser {
 		S3SizeThreshold = TagS3SizeForMOLogger
 	}
 

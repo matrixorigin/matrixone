@@ -406,7 +406,7 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 }
 
 func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.tenant != nil && ses.tenant.User == db.MOLoggerUser {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
@@ -419,7 +419,7 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 //}
 
 func logError(ses *Session, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.tenant != nil && ses.tenant.User == db.MOLoggerUser {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
 		return
 	}
 	fields = append(fields, zap.String("session_info", info))
