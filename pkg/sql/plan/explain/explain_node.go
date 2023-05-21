@@ -113,7 +113,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 	case plan.Node_MINUS_ALL:
 		pname = "Minus All"
 	case plan.Node_FUNCTION_SCAN:
-		pname = ndesc.Node.TableDef.TblFunc.Name
+		pname = "Table Function"
 	default:
 		panic("error node type")
 	}
@@ -124,12 +124,17 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
+			}
+		case plan.Node_FUNCTION_SCAN:
+			buf.WriteString(" on ")
+			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
+				buf.WriteString(ndesc.Node.TableDef.TblFunc.Name)
 			}
 		case plan.Node_UPDATE:
 			buf.WriteString(" on ")
