@@ -288,7 +288,6 @@ insert into t(b) select * from generate_series(1,200000) g;
 select count(*) from t;
 select a from t where a > 199990;
 drop table t;
--- @bvt:issue#9434
 # 6.all load goes through s3
 drop table if exists t1;
 create table t1(
@@ -308,20 +307,22 @@ create database ssb;use ssb;
 create table t2(c1 int) cluster by c1;
 insert into t2 values(3),(5),(1),(4),(2);
 select * from t2;
+-- @separator:table
 select mo_ctl('dn', 'flush', 'ssb.t2');
 select * from t2;
 drop table t2;
 create table t2(c1 int) cluster by c1;
 load data infile '$resources/load_data/integer.csv' into table t2;
 select * from t2;
+-- @separator:table
 select mo_ctl('dn', 'flush', 'ssb.t2');
 select * from t2;
 drop table t2;
 create table t2(c1 int,c2 int) cluster by (c1,c2);
 load data infile '$resources/load_data/integer2.csv' into table t2;
 select * from t2;
+-- @separator:table
 select mo_ctl('dn', 'flush', 'ssb.t2');
 select * from t2;
 drop table t2;
 drop database ssb;
--- @bvt:issue
