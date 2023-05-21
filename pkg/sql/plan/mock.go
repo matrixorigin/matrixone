@@ -549,6 +549,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"deptno", types.T_uint32, true, 32, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0}, // primary key "deptno"
 		idxs: []index{
 			{
 				indexName: "",
