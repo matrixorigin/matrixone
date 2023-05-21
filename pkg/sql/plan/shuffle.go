@@ -78,8 +78,9 @@ func GetShuffleIndexForGroupBy(n *plan.Node) int {
 	if GetHashColumnIdx(n.GroupBy[idx]) == -1 {
 		return -1
 	}
-	//for now ,only support integer type
-	if n.GroupBy[idx].Typ.Id == int32(types.T_int64) || n.GroupBy[idx].Typ.Id == int32(types.T_int32) {
+	//for now ,only support integer and string type
+	switch types.T(n.GroupBy[idx].Typ.Id) {
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		return idx
 	}
 	return -1
