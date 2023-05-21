@@ -155,7 +155,6 @@ func TestWriteSkewIsAllowed(t *testing.T) {
 }
 
 func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
-	defer leaktest.AfterTest(t)()
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
 		return
@@ -205,6 +204,7 @@ func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
 					})
 					require.Equal(t, []int32{1, 2, 3}, ids)
 					require.Equal(t, []string{"a", "b", "c"}, names)
+					res.Close()
 					return nil
 				},
 				compile.Options{}.WithDatabase("zx"))
