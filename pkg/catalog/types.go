@@ -42,8 +42,10 @@ const (
 	IndexTablePrimaryColName = "__mo_index_pri_col"
 	ExternalFilePath         = "__mo_filepath"
 	IndexTableNamePrefix     = "__mo_index_unique__"
-	AutoIncrTableName        = "mo_increment_columns"
+	AutoIncrTableName        = "%!%mo_increment_columns"
 )
+
+var AutoIncrColumnNames = []string{Row_ID, "name", "offset", "step"}
 
 func ContainExternalHidenCol(col string) bool {
 	return col == ExternalFilePath

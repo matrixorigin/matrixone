@@ -48,6 +48,9 @@ message Dispatch {
   int32 func_id = 1;
   repeated Connector local_connector = 2;
   repeated WrapNode remote_connector = 3;
+  int32 ShuffleColIdx=4;
+  repeated int32 ShuffleRegIdxLocal=5;
+  repeated int32 ShuffleRegIdxRemote=6;
 }
 
 message MultiArguemnt{

@@ -149,12 +149,12 @@ func (s *handler[REQ, RESP]) Handle(
 
 func (s *handler[REQ, RESP]) onMessage(
 	ctx context.Context,
-	request Message,
+	request RPCMessage,
 	sequence uint64,
 	cs ClientSession) error {
 	ctx, span := trace.Debug(ctx, "lockservice.server.handle")
 	defer span.End()
-	req, ok := request.(REQ)
+	req, ok := request.Message.(REQ)
 	if !ok {
 		getLogger().Fatal("received invalid message",
 			zap.Any("message", request))
@@ -167,7 +167,14 @@ func (s *handler[REQ, RESP]) onMessage(
 		return cs.Write(ctx, resp)
 	}
 
-	fn := func(req REQ) error {
+	fn := func(request RPCMessage) error {
+		defer request.Cancel()
+		req, ok := request.Message.(REQ)
+		if !ok {
+			getLogger().Fatal("received invalid message",
+				zap.Any("message", request))
+		}
+
 		defer s.pool.ReleaseRequest(req)
 		handlerCtx.call(ctx, req, resp)
 		return cs.Write(ctx, resp)
@@ -175,10 +182,10 @@ func (s *handler[REQ, RESP]) onMessage(
 
 	if handlerCtx.async {
 		// TODO: make a goroutine pool
-		go fn(req)
+		go fn(request)
 		return nil
 	}
-	return fn(req)
+	return fn(request)
 }
 
 func (s *handler[REQ, RESP]) getHandler(

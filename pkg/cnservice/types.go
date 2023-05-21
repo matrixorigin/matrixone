@@ -27,9 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/ctlservice"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -183,9 +183,6 @@ type Config struct {
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
 	Ctl ctlservice.Config `toml:"ctl"`
-
-	// AutoIncrement auto increment config
-	AutoIncrement incrservice.Config `toml:"auto-increment"`
 }
 
 func (c *Config) Validate() error {
@@ -284,6 +281,7 @@ type service struct {
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
 		cli client.TxnClient,
+		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
@@ -304,6 +302,7 @@ type service struct {
 	ctlservice             ctlservice.CtlService
 
 	stopper *stopper.Stopper
+	aicm    *defines.AutoIncrCacheManager
 
 	task struct {
 		sync.RWMutex

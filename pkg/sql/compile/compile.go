@@ -25,33 +25,29 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -682,6 +678,7 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	colsData := node.RowsetData.Cols
 	rowCount := len(colsData[0].Data)
 	bat := batch.NewWithSize(colCount)
+
 	for i := 0; i < colCount; i++ {
 		vec, err := rowsetDataToVector(ctx, proc, colsData[i].Data)
 		if err != nil {
@@ -745,8 +742,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		if plan2.NeedShuffle(n) {
-			ss = c.compileBucketGroup(n, ss, ns)
+		if idx := plan2.GetShuffleIndexForGroupBy(n); idx >= 0 {
+			ss = c.compileBucketGroup(n, ss, ns, idx)
 			return c.compileSort(n, ss), nil
 		} else {
 			ss = c.compileMergeGroup(n, ss, ns)
@@ -1226,8 +1223,8 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	rs := c.newScopeList(1, int(n.Stats.BlockNum))
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
-	copy(gn.GroupBy, n.ProjectList)
 	for i := range gn.GroupBy {
+		gn.GroupBy[i] = plan2.DeepCopyExpr(n.ProjectList[i])
 		gn.GroupBy[i].Typ.NotNullable = false
 	}
 	idx := 0
@@ -1464,25 +1461,31 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
-		vec, err := colexec.EvalExpr(constBat, c.proc, n.Limit)
+		vec, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
 		if err != nil {
 			panic(err)
 		}
 		defer vec.Free(c.proc.Mp())
 		return c.compileTop(n, vector.MustFixedCol[int64](vec)[0], ss)
+
 	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileOrder(n, ss)
+
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0:
-		vec1, err := colexec.EvalExpr(constBat, c.proc, n.Limit)
+		// get limit
+		vec1, err := colexec.EvalExpressionOnce(c.proc, n.Limit, []*batch.Batch{constBat})
 		if err != nil {
 			panic(err)
 		}
 		defer vec1.Free(c.proc.Mp())
-		vec2, err := colexec.EvalExpr(constBat, c.proc, n.Offset)
+
+		// get offset
+		vec2, err := colexec.EvalExpressionOnce(c.proc, n.Offset, []*batch.Batch{constBat})
 		if err != nil {
 			panic(err)
 		}
 		defer vec2.Free(c.proc.Mp())
+
 		limit, offset := vector.MustFixedCol[int64](vec1)[0], vector.MustFixedCol[int64](vec2)[0]
 		topN := limit + offset
 		if topN <= 8192*2 {
@@ -1490,14 +1493,19 @@ func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 			return c.compileOffset(n, c.compileTop(n, topN, ss))
 		}
 		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
+
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
 		return c.compileOffset(n, c.compileOrder(n, ss))
+
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) == 0: // limit
 		return c.compileLimit(n, ss)
+
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) == 0: // offset
 		return c.compileOffset(n, ss)
+
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) == 0: // limit and offset
 		return c.compileLimit(n, c.compileOffset(n, ss))
+
 	default:
 		return ss
 	}
@@ -1631,13 +1639,14 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
+func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, idxToShuffle int) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
 	dop := plan2.GetShuffleDop(n)
 	parent, children := c.newScopeListForGroup(validScopeCount(ss), dop)
 
 	j := 0
+	hashColumnIdx := plan2.GetHashColumnIdx(n.GroupBy[idxToShuffle])
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
 			isEnd := ss[i].IsEnd
@@ -1647,7 +1656,7 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node)
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, true, plan2.GetHashColumnIdx(n.GroupBy[0])),
+				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, true, hashColumnIdx),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -2162,8 +2171,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 	}
 
-	expr, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
-	ranges, err = rel.Ranges(ctx, expr)
+	monoExprList, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
+	ranges, err = rel.Ranges(ctx, monoExprList...)
 	if err != nil {
 		return nil, err
 	}
@@ -2179,7 +2188,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			subranges, err := subrelation.Ranges(ctx, expr)
+			subranges, err := subrelation.Ranges(ctx, monoExprList...)
 			if err != nil {
 				return nil, err
 			}
@@ -2218,7 +2227,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if isPartitionTable {
 		rel = nil
 	}
-	// for multi cn in luanch mode, put all payloads in current CN
+	// for multi cn in launch mode, put all payloads in current CN
 	// maybe delete this in the future
 	if isLaunchMode(c.cnList) {
 		return putBlocksInCurrentCN(c, ranges, rel, n), nil
@@ -2438,14 +2447,23 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 	bat.Zs = []int64{1}
 	defer bat.Clean(proc.Mp())
 
-	for _, e := range exprs {
-		tmp, err := colexec.EvalExpr(bat, proc, e)
+	executors, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, exprs)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		for _, e := range executors {
+			e.Free()
+		}
+	}()
+
+	for i, executor := range executors {
+		tmp, err := executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return nil, err
 		}
-		if tmp.IsConstNull() {
+		if tmp.IsConstNull() || tmp.GetNulls().Contains(0) {
 			vector.AppendFixed(vec, 0, true, proc.Mp())
-			tmp.Free(proc.Mp())
 			continue
 		}
 		switch typ.Oid {
@@ -2488,9 +2506,8 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 		case types.T_uuid:
 			vector.AppendFixed(vec, vector.MustFixedCol[types.Uuid](tmp)[0], false, proc.Mp())
 		default:
-			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", e))
+			return nil, moerr.NewNYI(ctx, fmt.Sprintf("expression %v can not eval to constant and append to rowsetData", exprs[i]))
 		}
-		tmp.Free(proc.Mp())
 	}
 	return vec, nil
 }

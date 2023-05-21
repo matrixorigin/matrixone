@@ -15,35 +15,19 @@
 package model
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func PreparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32) (col containers.Vector, err error) {
-	col = containers.MakeVector(typ)
-	col.PreExtend(int(length))
+func PreparePhyAddrData(id *objectio.Blockid, startRow, length uint32) (col containers.Vector, err error) {
+	col = containers.MakeVector(objectio.RowidType)
 	vec := col.GetDownstreamVector()
 	m := col.GetAllocator()
-	for i := uint32(0); i < length; i++ {
-		rowid := EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
-		if err = vector.AppendFixed[types.Rowid](vec, rowid, false, m); err != nil {
-			break
-		}
-	}
-	if err != nil {
+	if err = objectio.ConstructRowidColumnTo(
+		vec, id, startRow, length, m,
+	); err != nil {
 		col.Close()
 		col = nil
-	}
-	return
-}
-
-func PreparePhyAddrDataWithPool(typ types.Type, prefix []byte, startRow, length uint32, pool *mpool.MPool) (col containers.Vector, err error) {
-	col = containers.MakeVector(typ, containers.Options{Allocator: pool})
-	for i := uint32(0); i < length; i++ {
-		rowid := EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
-		col.Append(rowid, false)
 	}
 	return
 }

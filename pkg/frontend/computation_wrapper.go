@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,8 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -282,10 +281,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		//check privilege
 		/* prepare not need check privilege
-		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
-		if err != nil {
-			return nil, err
-		}
+		   err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
+		   if err != nil {
+		   	return nil, err
+		   }
 		*/
 	} else {
 		var vp *plan2.VisitPlan
@@ -350,19 +349,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// temporary storage is passed through Ctx
 		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 
-		v, ok := runtime.ProcessLevelRuntime().
-			GetGlobalVariables(runtime.HAKeeperClient)
-		if !ok {
-			panic("missing hakeeper client")
-		}
-
 		// 1. init memory-non-dist engine
 		tempEngine := memoryengine.New(
 			requestCtx,
 			memoryengine.NewDefaultShardPolicy(
 				mpool.MustNewZeroNoFixed(),
 			),
-			memoryengine.NewHakeeperIDGenerator(v.(logservice.CNHAKeeperClient)),
+			memoryengine.RandomIDGenerator,
 			clusterservice.NewMOCluster(
 				nil,
 				0,
@@ -380,6 +373,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		// 3. init temp-db to store temporary relations
 		err = tempEngine.Create(requestCtx, defines.TEMPORARY_DBNAME, cwft.ses.txnHandler.txnOperator)
+		if err != nil {
+			return nil, err
+		}
+
+		// 4. add auto_IncrementTable fortemp-db
+		err = colexec.CreateAutoIncrTable(cwft.ses.GetStorage(), requestCtx, cwft.proc, defines.TEMPORARY_DBNAME)
 		if err != nil {
 			return nil, err
 		}

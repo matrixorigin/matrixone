@@ -28,8 +28,8 @@ type ProcedureArgType struct {
 
 type ProcedureArg interface {
 	NodeFormatter
-	// GetName(ctx *FmtCtx) string
-	// GetType(ctx *FmtCtx) string
+	GetName(ctx *FmtCtx) string
+	GetType() int
 }
 
 type ProcedureArgImpl struct {
@@ -41,6 +41,12 @@ type ProcedureArgs []ProcedureArg
 
 type ProcedureArgDecl struct {
 	ProcedureArgImpl
+	Name      *UnresolvedName
+	Type      ResolvableTypeReference
+	InOutType InOutArgType
+}
+
+type ProcedureArgForMarshal struct {
 	Name      *UnresolvedName
 	Type      ResolvableTypeReference
 	InOutType InOutArgType
@@ -82,6 +88,15 @@ func (node *ProcedureArgDecl) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	node.Type.(*T).InternalType.Format(ctx)
+}
+
+func (node *ProcedureArgDecl) GetName(ctx *FmtCtx) string {
+	node.Name.Format(ctx)
+	return ctx.String()
+}
+
+func (node *ProcedureArgDecl) GetType() int {
+	return int(node.InOutType)
 }
 
 func (node *ProcedureName) Format(ctx *FmtCtx) {

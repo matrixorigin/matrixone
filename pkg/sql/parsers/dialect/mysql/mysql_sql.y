@@ -6934,9 +6934,15 @@ when_clause:
 mo_cast_type:
     column_type
 {
-   t := $$ 
-   if strings.ToLower(t.InternalType.FamilyString) == "binary" {
+   t := $$
+   str := strings.ToLower(t.InternalType.FamilyString)
+   if str == "binary" {
         t.InternalType.Scale = -1
+   } else if str == "char" {
+   	if t.InternalType.DisplayWith == -1 {
+   		t.InternalType.FamilyString = "varchar"
+   		t.InternalType.Oid = uint32(defines.MYSQL_TYPE_VARCHAR)
+   	}
    }
 }
 |   SIGNED integer_opt

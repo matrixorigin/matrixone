@@ -17,9 +17,8 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"testing"
-
 	"github.com/stretchr/testify/require"
+	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -56,14 +55,19 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 		argTypes[i] = plan2.MakeTypeByPlan2Expr(arg)
 	}
 
-	funId, returnType, _, _ := function.GetFunctionByName(context.TODO(), name, argTypes)
+	finfo, err := function.GetFunctionByName(context.TODO(), name, argTypes)
+	if err != nil {
+		panic(err)
+	}
+
+	retTyp := finfo.GetReturnType()
 
 	return &plan.Expr{
-		Typ: plan2.MakePlan2Type(&returnType),
+		Typ: plan2.MakePlan2Type(&retTyp),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj:     funId,
+					Obj:     finfo.GetEncodedOverloadID(),
 					ObjName: name,
 				},
 				Args: args,

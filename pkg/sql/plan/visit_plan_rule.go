@@ -57,16 +57,14 @@ func NewGetParamRule() *GetParamRule {
 func (rule *GetParamRule) MatchNode(node *Node) bool {
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		rule.schemas = append(rule.schemas, &plan.ObjectRef{
-			Server:           node.ObjRef.Server,
-			Db:               node.ObjRef.Db,
-			Schema:           node.ObjRef.Schema,
-			Obj:              node.ObjRef.Obj,
-			ServerName:       node.ObjRef.ServerName,
-			DbName:           node.ObjRef.DbName,
-			SchemaName:       node.ObjRef.SchemaName,
-			ObjName:          node.ObjRef.ObjName,
-			PubAccountId:     node.ObjRef.PubAccountId,
-			SubscriptionName: node.ObjRef.SubscriptionName,
+			Server:     node.ObjRef.Server,
+			Db:         node.ObjRef.Db,
+			Schema:     node.ObjRef.Schema,
+			Obj:        node.ObjRef.Obj,
+			ServerName: node.ObjRef.ServerName,
+			DbName:     node.ObjRef.DbName,
+			SchemaName: node.ObjRef.SchemaName,
+			ObjName:    node.ObjRef.ObjName,
 		})
 	}
 	return false
@@ -281,7 +279,7 @@ func GetVarValue(
 	ctx context.Context,
 	compCtx CompilerContext,
 	proc *process.Process,
-	emtpyBat *batch.Batch,
+	emptyBat *batch.Batch,
 	e *Expr,
 ) (*plan.Expr, error) {
 	exprImpl := e.Expr.(*plan.Expr_V)
@@ -356,9 +354,9 @@ func GetVarValue(
 	if c, ok := expr.Expr.(*plan.Expr_C); ok {
 		c.C.Src = e
 	} else if _, ok = expr.Expr.(*plan.Expr_F); ok {
-		vec, err := colexec.EvalExpr(emtpyBat, proc, expr)
-		if err != nil {
-			return nil, err
+		vec, err1 := colexec.EvalExpressionOnce(proc, expr, []*batch.Batch{emptyBat})
+		if err1 != nil {
+			return nil, err1
 		}
 		constValue := rule.GetConstantValue(vec, true)
 		constValue.Src = e
@@ -366,6 +364,7 @@ func GetVarValue(
 		expr.Expr = &plan.Expr_C{
 			C: constValue,
 		}
+		vec.Free(proc.Mp())
 	}
 	return expr, err
 }
@@ -436,7 +435,11 @@ func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, 
 	case *plan.Expr_C:
 		if exprImpl.C.Src != nil {
 			if _, ok := exprImpl.C.Src.Expr.(*plan.Expr_F); ok {
-				vec, err := colexec.EvalExpr(r.bat, r.proc, exprImpl.C.Src)
+				executor, err := colexec.NewExpressionExecutor(r.proc, exprImpl.C.Src)
+				if err != nil {
+					return nil, err
+				}
+				vec, err := executor.Eval(r.proc, []*batch.Batch{r.bat})
 				if err != nil {
 					return nil, err
 				}

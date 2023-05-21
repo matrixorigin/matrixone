@@ -19,12 +19,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -85,31 +83,11 @@ func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 	// The account is always in the memory.
 	frontend.SetSpecialUser(command.User.Username, []byte(command.User.Password))
 
-	// FIXME: create auto increment here is bad.
-	s.createIncrementService(command.User.Username, command.User.Password)
-
 	if err := s.task.holder.Create(*command); err != nil {
 		s.logger.Error("create task service failed", zap.Error(err))
 		return
 	}
 	s.startTaskRunner()
-}
-
-func (s *service) createIncrementService(
-	user,
-	passwd string) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s",
-		user, passwd, s.cfg.SQLAddress, catalog.MO_CATALOG)
-	store, err := incrservice.NewSQLStore(dsn)
-	if err != nil {
-		panic(err)
-	}
-	incrService := incrservice.NewIncrService(
-		store,
-		s.cfg.AutoIncrement)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(
-		runtime.AutoIncrmentService,
-		incrService)
 }
 
 func (s *service) startTaskRunner() {
@@ -236,7 +214,7 @@ func (s *service) registerExecutorsLocked() {
 	pu.LockService = s.lockService
 	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu)
+		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
 	}
 
 	ts, ok := s.task.holder.Get()
@@ -245,7 +223,7 @@ func (s *service) registerExecutorsLocked() {
 	}
 	s.task.runner.RegisterExecutor(task.TaskCode_SystemInit,
 		func(ctx context.Context, t task.Task) error {
-			if err := frontend.InitSysTenant(moServerCtx); err != nil {
+			if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCacheManager()); err != nil {
 				return err
 			}
 			if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
