@@ -131,6 +131,19 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	}
 
 	updatePlanCtxs := make([]*dmlPlanCtx, len(aliasList))
+	checkInsertPkDup := true
+	if len(aliasList) == 1 && stmt.Where != nil {
+		tableDef := tableInfo.tableDefs[0]
+		if comp, ok := stmt.Where.Expr.(*tree.ComparisonExpr); ok {
+			if comp.Op == tree.EQUAL {
+				if name, ok := comp.Left.(*tree.UnresolvedName); ok {
+					if name.NumParts == 1 && name.Parts[0] == tableDef.Pkey.PkeyColName {
+						checkInsertPkDup = false
+					}
+				}
+			}
+		}
+	}
 
 	for i, alias := range aliasList {
 		tableDef := tableInfo.tableDefs[i]
@@ -160,13 +173,14 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		}
 		// append  table.* to project list
 		upPlanCtx := &dmlPlanCtx{
-			objRef:          tableInfo.objRef[i],
-			tableDef:        tableDef,
-			updateColLength: len(updateKeys),
-			isMulti:         tableInfo.isMulti,
-			rowIdPos:        rowIdPos,
-			updateColPosMap: updateColPosMap,
-			allDelTableIDs:  map[uint64]struct{}{},
+			objRef:           tableInfo.objRef[i],
+			tableDef:         tableDef,
+			updateColLength:  len(updateKeys),
+			isMulti:          tableInfo.isMulti,
+			rowIdPos:         rowIdPos,
+			updateColPosMap:  updateColPosMap,
+			allDelTableIDs:   map[uint64]struct{}{},
+			checkInsertPkDup: checkInsertPkDup,
 		}
 		for idx, col := range tableDef.Cols {
 			// row_id、compPrimaryKey、clusterByKey will not inserted from old data

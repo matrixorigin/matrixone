@@ -50,7 +50,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
-	err = initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	checkInsertPkDup, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -139,15 +139,16 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		// append plans like update
 		updateBindCtx := NewBindContext(builder, nil)
 		upPlanCtx := &dmlPlanCtx{
-			objRef:          objRef,
-			tableDef:        tableDef,
-			beginIdx:        0,
-			sourceStep:      sourceStep,
-			isMulti:         false,
-			updateColLength: updateColLength,
-			rowIdPos:        rowIdPos,
-			insertColPos:    insertColPos,
-			updateColPosMap: updateColPosMap,
+			objRef:           objRef,
+			tableDef:         tableDef,
+			beginIdx:         0,
+			sourceStep:       sourceStep,
+			isMulti:          false,
+			updateColLength:  updateColLength,
+			rowIdPos:         rowIdPos,
+			insertColPos:     insertColPos,
+			updateColPosMap:  updateColPosMap,
+			checkInsertPkDup: checkInsertPkDup,
 		}
 		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
 		if err != nil {
@@ -156,7 +157,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId)
+		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup)
 		if err != nil {
 			return nil, err
 		}

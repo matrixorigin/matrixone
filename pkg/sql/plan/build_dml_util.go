@@ -35,12 +35,13 @@ type dmlPlanCtx struct {
 	allDelTableIDs    map[uint64]struct{}
 	isFkRecursionCall bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
 	lockTable         bool //we need lock table in stmt: delete from tbl
+	checkInsertPkDup  bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
 }
 
 // buildInsertPlans  build insert plan.
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
-	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32) error {
+	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, checkInsertPkDup bool) error {
 
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
@@ -49,7 +50,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup)
 	return err
 }
 
@@ -122,7 +123,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
-	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength, sourceStep, false, updatePlanCtx.isFkRecursionCall)
+	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength, sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup)
 
 	return err
 }
@@ -225,7 +226,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols[:j], insertUniqueTableDef.Cols[j+1:]...)
 							}
 						}
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false)
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, true)
 						if err != nil {
 							return err
 						}
@@ -625,6 +626,7 @@ func makeInsertPlan(
 	sourceStep int32,
 	addAffectedRows bool,
 	isFkRecursionCall bool,
+	checkInsertPkDup bool,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -697,7 +699,7 @@ func makeInsertPlan(
 					return err
 				}
 
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false)
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup)
 				if err != nil {
 					return err
 				}
@@ -754,8 +756,8 @@ func makeInsertPlan(
 		builder.appendStep(lastNodeId)
 	}
 
-	// todo: make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
-	{
+	// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
+	if checkInsertPkDup {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			pkColExpr := &plan.Expr{
@@ -811,7 +813,7 @@ func makeInsertPlan(
 		}
 	}
 
-	// todo: make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
+	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 	{
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)

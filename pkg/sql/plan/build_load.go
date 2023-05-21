@@ -106,7 +106,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef)
-	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId)
+	checkInsertPkDup := false
+	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId, checkInsertPkDup)
 	if err != nil {
 		return nil, err
 	}
