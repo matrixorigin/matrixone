@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -235,6 +236,7 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 	if err != nil {
 		return 0, err
 	}
+	defer stmt.Close()
 	exec, err := stmt.ExecContext(ctx, vals...)
 	if err != nil {
 		dup, err := removeDuplicateTasks(err, tasks)
@@ -315,6 +317,7 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 			if err != nil {
 				return err
 			}
+			defer prepare.Close()
 
 			exec, err := prepare.ExecContext(ctx,
 				t.Metadata.Executor,
@@ -542,6 +545,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 	if err != nil {
 		return 0, err
 	}
+	defer stmt.Close()
 	exec, err := stmt.Exec(vals...)
 	if err != nil {
 		dup, err := removeDuplicateCronTasks(err, cronTask)
@@ -561,7 +565,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 	return int(affected), nil
 }
 
-func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
+func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) (tasks []task.CronTask, err error) {
 	if taskFrameworkDisabled() {
 		return nil, nil
 	}
@@ -592,8 +596,16 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if e := rows.Close(); e != nil {
+			err = errors.Join(err, e)
+		}
+		if e := rows.Err(); e != nil {
+			err = errors.Join(err, e)
+		}
+	}()
 
-	tasks := make([]task.CronTask, 0)
+	tasks = make([]task.CronTask, 0)
 
 	for rows.Next() {
 		var t task.CronTask
@@ -618,9 +630,6 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 		}
 
 		tasks = append(tasks, t)
-	}
-	if err := rows.Err(); err != nil {
-		return tasks, err
 	}
 
 	return tasks, nil
@@ -668,6 +677,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 	if err != nil {
 		return 0, err
 	}
+	defer stmt.Close()
 
 	j, err := json.Marshal(t.Metadata.Options)
 	if err != nil {
@@ -801,7 +811,7 @@ func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 	return db, func() error { return db.Close() }, nil
 }
 
-func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
+func (m *mysqlTaskStorage) useDB(db *sql.DB) (err error) {
 	if err := db.Ping(); err != nil {
 		return errNotReady
 	}
@@ -818,6 +828,14 @@ func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if e := rows.Close(); e != nil {
+			err = errors.Join(err, e)
+		}
+		if e := rows.Err(); e != nil {
+			err = errors.Join(err, e)
+		}
+	}()
 
 	tables := make(map[string]struct{}, len(createTables))
 	for rows.Next() {
@@ -826,9 +844,6 @@ func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
 			return err
 		}
 		tables[table] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 
 	for table, createSql := range createTables {
