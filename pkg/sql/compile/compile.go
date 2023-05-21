@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
 	"sort"
@@ -2316,16 +2317,28 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 	lenCN := len(c.cnList)
 	for i, blk := range ranges {
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
-		objName := unmarshalledBlockInfo.MetaLocation().Name()
-		index := plan2.SimpleHashToRange(objName, lenCN)
+		// get timestamp in objName to make sure it is random enough
+		objTimeStamp := unmarshalledBlockInfo.MetaLocation().Name()[:7]
+		index := plan2.SimpleHashToRange(objTimeStamp, lenCN)
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
+	minWorkLoad := math.MaxInt32
+	maxWorkLoad := 0
 	//remove empty node from nodes
 	var newNodes engine.Nodes
 	for i := range nodes {
+		if len(nodes[i].Data) > maxWorkLoad {
+			maxWorkLoad = len(nodes[i].Data)
+		}
+		if len(nodes[i].Data) < minWorkLoad {
+			minWorkLoad = len(nodes[i].Data)
+		}
 		if len(nodes[i].Data) > 0 {
 			newNodes = append(newNodes, nodes[i])
 		}
+	}
+	if minWorkLoad*2 < maxWorkLoad {
+		logutil.Warnf("workload among CNs not balanced, max %v, min %v", maxWorkLoad, minWorkLoad)
 	}
 	return newNodes
 }
