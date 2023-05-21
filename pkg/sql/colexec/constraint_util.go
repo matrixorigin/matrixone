@@ -369,7 +369,6 @@ func GetUpdateBatch(proc *process.Process, bat *batch.Batch, idxList []int32, ba
 		} else {
 			toVec = proc.GetVector(*fromVec.GetType())
 			if rowSkip == nil {
-				// XXX should we free the fromVec here ?
 				if err = vector.GetUnionAllFunction(*fromVec.GetType(), proc.Mp())(toVec, fromVec); err != nil {
 					return nil, err
 				}

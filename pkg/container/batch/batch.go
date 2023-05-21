@@ -313,6 +313,10 @@ func (bat *Batch) SubCnt(cnt int) {
 	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
 }
 
+func (bat *Batch) GetCnt() int64 {
+	return atomic.LoadInt64(&bat.Cnt)
+}
+
 func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 	for i, vec := range bat.Vecs {
 		if vec == oldVec {

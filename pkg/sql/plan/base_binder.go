@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"go/constant"
 	"strconv"
 	"strings"
@@ -26,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
@@ -187,6 +186,10 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	case *tree.DefaultVal:
 		return &Expr{
+			Typ: &plan.Type{
+				Id:          int32(types.T_bool),
+				NotNullable: true,
+			},
 			Expr: &plan.Expr_C{
 				C: &Const{
 					Isnull: false,
@@ -882,7 +885,7 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 
 	if function.GetFunctionIsAggregateByName(funcName) {
 		return b.impl.BindAggFunc(funcName, astExpr, depth, isRoot)
-	} else if function.GetFunctionIsWinfunByName(funcName) {
+	} else if function.GetFunctionIsWinFunByName(funcName) {
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
@@ -1244,7 +1247,7 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
 			if exprC, ok := args[1].Expr.(*plan.Expr_C); ok {
 				sval := exprC.C.Value.(*plan.Const_Sval)
-				tp, _ := binary.ExtractToDateReturnType(sval.Sval)
+				tp, _ := ExtractToDateReturnType(sval.Sval)
 				args = append(args, makePlan2DateConstNullExpr(tp))
 			} else {
 				return nil, moerr.NewInvalidArg(ctx, "to_date format", "not constant")
@@ -1300,10 +1303,14 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	funcID, returnType, argsCastType, err = function.GetFunctionByName(ctx, name, argsType)
+	fGet, err := function.GetFunctionByName(ctx, name, argsType)
 	if err != nil {
 		return nil, err
 	}
+	funcID = fGet.GetEncodedOverloadID()
+	returnType = fGet.GetReturnType()
+	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+
 	if function.GetFunctionIsAggregateByName(name) {
 		if constExpr, ok := args[0].Expr.(*plan.Expr_C); ok && constExpr.C.Isnull {
 			args[0].Typ = makePlan2Type(&returnType)
@@ -1323,10 +1330,11 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					tmpType := argsType[1] // cast const_expr as column_expr's type
 					argsCastType = []types.Type{tmpType, tmpType}
 					// need to update function id
-					funcID, _, _, err = function.GetFunctionByName(ctx, name, argsCastType)
+					fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 					if err != nil {
 						return nil, err
 					}
+					funcID = fGet.GetEncodedOverloadID()
 				}
 			}
 		case *plan.Expr_Col:
@@ -1334,10 +1342,11 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				if checkNoNeedCast(argsType[1], argsType[0], rightExpr) {
 					tmpType := argsType[0] // cast const_expr as column_expr's type
 					argsCastType = []types.Type{tmpType, tmpType}
-					funcID, _, _, err = function.GetFunctionByName(ctx, name, argsCastType)
+					fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 					if err != nil {
 						return nil, err
 					}
+					funcID = fGet.GetEncodedOverloadID()
 				}
 			}
 		}
@@ -1405,6 +1414,12 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, moerr.NewInvalidArg(ctx, "cast types length not match args length", "")
 		}
 		for idx, castType := range argsCastType {
+			if _, ok := args[idx].Expr.(*plan.Expr_P); ok {
+				continue
+			}
+			if _, ok := args[idx].Expr.(*plan.Expr_V); ok {
+				continue
+			}
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
 					continue
@@ -1416,11 +1431,6 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 			}
 		}
-	}
-
-	if function.GetFunctionAppendHideArgByID(funcID) {
-		// Append a hidden parameter to the function. The default value is constant null
-		args = append(args, makePlan2NullConstExprWithType())
 	}
 
 	// return new expr
@@ -1584,15 +1594,12 @@ func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 // --- util functions ----
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType *Type, isBin ...bool) (*Expr, error) {
-	if expr.Typ.Id == int32(types.T_any) {
-		return expr, nil
-	}
 	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
 	}
-	funcID, _, _, err := function.GetFunctionByName(ctx, "cast", argsType)
+	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
 	if err != nil {
 		return nil, err
 	}
@@ -1604,7 +1611,7 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType *Type, isBin .
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: getFunctionObjRef(funcID, "cast"),
+				Func: getFunctionObjRef(fGet.GetEncodedOverloadID(), "cast"),
 				Args: []*Expr{expr,
 					{
 						Typ: &typ,
