@@ -185,11 +185,13 @@ func (s *server) RegisterMethodHandler(m pb.Method, h RequestHandleFunc) {
 
 func (s *server) onMessage(
 	ctx context.Context,
-	request morpc.Message,
+	msg morpc.RPCMessage,
 	sequence uint64,
 	cs morpc.ClientSession) error {
 	ctx, span := trace.Debug(ctx, "lockservice.server.handle")
 	defer span.End()
+
+	request := msg.Message
 	req, ok := request.(*pb.Request)
 	if !ok {
 		getLogger().Fatal("received invalid message",

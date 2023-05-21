@@ -11,7 +11,7 @@ select * from atomic_table_10;
 select * from atomic_table_10;
 commit;
 select * from atomic_table_10;
--- @bvt:issue#8848
+
 drop table if exists atomic_table_10;
 create table atomic_table_10(c1 int,c2 varchar(25));
 insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
@@ -23,31 +23,35 @@ select * from atomic_table_10;
 select * from atomic_table_10;
 rollback;
 select * from atomic_table_10;
--- @bvt:issue
+
 drop table if exists atomic_table_10;
 create table atomic_table_10(c1 int,c2 varchar(25));
 insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
 begin ;
 truncate table atomic_table_10;
+-- @bvt:issue#8848
 -- @session:id=2&user=sys:dump&password=111
 insert into atomic_table_10 values (6,"a"),(7,"b"),(8,"c");
 select * from atomic_table_10;
 -- @session
+-- @bvt:issue
 select * from atomic_table_10;
 commit;
 select * from atomic_table_10;
 
 -- drop table
--- @bvt:issue#9429
+
 drop table if exists atomic_table_11;
 create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
+-- @bvt:issue#9429
 -- @session:id=2&user=sys:dump&password=111
 insert into atomic_table_11 values (6,"a");
 select * from atomic_table_11;
 -- @session
+-- @bvt:issue
 commit;
 select * from atomic_table_11;
 
@@ -56,6 +60,7 @@ create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
+-- @bvt:issue#9429
 -- @session:id=2&user=sys:dump&password=111
 insert into atomic_table_11 values (6,"a");
 select * from atomic_table_11;
@@ -166,7 +171,6 @@ commit;
 show index from atomic_table_12_5;
 
 -- w-w conflict
--- @bvt:issue#9429
 drop table if exists atomic_table_14;
 create table atomic_table_14(c1 int,c2 varchar(25));
 insert into atomic_table_14 values (3,"a"),(4,"b"),(5,"c");
@@ -175,11 +179,13 @@ alter table atomic_table_14 add  index key1(c1);
 -- @session:id=2&user=sys:dump&password=111
 drop table atomic_table_14;
 -- @session
+-- @bvt:issue#9429
 insert into atomic_table_14 values (6,"a"),(7,"b");
 select * from atomic_table_14;
+-- @bvt:issue
 commit;
 select * from atomic_table_14;
--- @bvt:issue
+
 drop table if exists atomic_table_15;
 create table atomic_table_15(c1 int,c2 varchar(25));
 begin;
@@ -264,7 +270,7 @@ drop table atomic_table_18;
 select * from atomic_table_18;
 commit;
 select * from atomic_table_18;
--- @bvt:issue#9429
+
 create table atomic_table_18(c1 int,c2 varchar(25));
 insert into atomic_table_18 values (6,"a"),(7,"b");
 drop table atomic_table_18;
@@ -274,4 +280,3 @@ drop table atomic_table_18;
 select * from atomic_table_18;
 commit;
 select * from atomic_table_18;
--- @bvt:issue

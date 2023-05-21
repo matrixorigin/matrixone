@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -52,7 +53,6 @@ func NewCompactBlockEntry(
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
 	if to != nil {
 		toId := to.Fingerprint()
-		prefix := toId.BlockID[:]
 		offsetMapping := compute.GetOffsetMapBeforeApplyDeletes(deletes)
 		if deletes != nil && !deletes.IsEmpty() {
 			delCnt := deletes.GetCardinality()
@@ -65,8 +65,8 @@ func NewCompactBlockEntry(
 			}
 		}
 		for i, idx := range sortIdx {
-			rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
-			page.Train(idx, rowid)
+			rowid := objectio.NewRowid(&toId.BlockID, uint32(i))
+			page.Train(idx, *rowid)
 		}
 		_ = scheduler.AddTransferPage(page)
 	}

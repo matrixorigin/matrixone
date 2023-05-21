@@ -38,12 +38,14 @@ insert into atomic_table_10 values (3,"a"),(4,"b"),(5,"c");
 begin ;
 truncate table atomic_table_10;
 insert into atomic_table_10 values (6,"a"),(7,"b"),(8,"c");
-internal error: the tableID can not find, maybe modify
 select * from atomic_table_10;
 c1    c2
 3    a
 4    b
 5    c
+6    a
+7    b
+8    c
 select * from atomic_table_10;
 c1    c2
 commit;
@@ -55,12 +57,12 @@ insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
 insert into atomic_table_11 values (6,"a");
-internal error: the tableID can not find, maybe modify
 select * from atomic_table_11;
 c1    c2
 3    a
 4    b
 5    c
+6    a
 commit;
 select * from atomic_table_11;
 SQL parser error: table "atomic_table_11" does not exist
@@ -70,18 +72,19 @@ insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
 begin;
 drop table atomic_table_11;
 insert into atomic_table_11 values (6,"a");
-internal error: the tableID can not find, maybe modify
 select * from atomic_table_11;
 c1    c2
 3    a
 4    b
 5    c
+6    a
 rollback ;
 select * from atomic_table_11;
 c1    c2
 3    a
 4    b
 5    c
+6    a
 drop table if exists atomic_table_11;
 create table atomic_table_11(c1 int,c2 varchar(25));
 insert into atomic_table_11 values (3,"a"),(4,"b"),(5,"c");
@@ -213,11 +216,9 @@ start transaction ;
 alter table atomic_table_14 add  index key1(c1);
 drop table atomic_table_14;
 insert into atomic_table_14 values (6,"a"),(7,"b");
-internal error: the tableID can not find, maybe modify
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from atomic_table_14;
-SQL parser error: table "atomic_table_14" does not exist
 commit;
+w-w conflict
 select * from atomic_table_14;
 SQL parser error: table "atomic_table_14" does not exist
 drop table if exists atomic_table_15;
@@ -229,7 +230,7 @@ drop table atomic_table_15;
 select * from atomic_table_15;
 c1    c2
 commit;
-internal error: w-w conflict: truncate 273134 error
+internal error: w-w conflict: truncate error
 select * from atomic_table_15;
 SQL parser error: table "atomic_table_15" does not exist
 drop table if exists atomic_table_16;
@@ -302,7 +303,7 @@ drop table atomic_table_18;
 select * from atomic_table_18;
 c1    c2
 commit;
-internal error: w-w conflict: truncate 273187 error
+internal error: w-w conflict: truncate error
 select * from atomic_table_18;
 SQL parser error: table "atomic_table_18" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted

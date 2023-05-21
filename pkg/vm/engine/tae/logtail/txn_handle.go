@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
@@ -162,7 +161,6 @@ func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
 	meta := node.GetMeta()
 	pkDef := meta.GetSchema().GetPrimaryKey()
 	deletes := node.GetRowMaskRefLocked()
-	prefix := node.GetPrefix()
 
 	batch := b.batches[dataDelBatch]
 	rowIDVec := batch.GetVectorByName(catalog.AttrRowID)
@@ -178,8 +176,8 @@ func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
 	it := deletes.Iterator()
 	for it.HasNext() {
 		del := it.Next()
-		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, del)
-		rowIDVec.Append(rowid, false)
+		rowid := objectio.NewRowid(&meta.ID, del)
+		rowIDVec.Append(*rowid, false)
 		commitTSVec.Append(b.txn.GetPrepareTS(), false)
 	}
 	_ = meta.GetBlockData().Foreach(

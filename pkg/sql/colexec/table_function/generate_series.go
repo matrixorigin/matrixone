@@ -33,8 +33,10 @@ func generateSeriesString(arg any, buf *bytes.Buffer) {
 	buf.WriteString("generate_series")
 }
 
-func generateSeriesPrepare(_ *process.Process, arg *Argument) error {
-	return nil
+func generateSeriesPrepare(proc *process.Process, arg *Argument) (err error) {
+	arg.ctr = new(container)
+	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+	return err
 }
 
 func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
@@ -67,11 +69,12 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 	if bat == nil {
 		return true, nil
 	}
-	startVec, err = colexec.EvalExpr(bat, proc, arg.Args[0])
+
+	startVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
 	if err != nil {
 		return false, err
 	}
-	endVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
+	endVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
 	if err != nil {
 		return false, err
 	}
@@ -81,7 +84,7 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 		rbat.Vecs[i] = vector.NewVec(arg.retSchema[i])
 	}
 	if len(arg.Args) == 3 {
-		stepVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
+		stepVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return false, err
 		}

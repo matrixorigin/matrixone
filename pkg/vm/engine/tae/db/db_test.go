@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -3217,7 +3216,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	_, err = meta.GetBlockData().GetByFilter(txn, filter)
 	assert.NoError(t, err)
 
-	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false, []byte{})
+	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false, []byte{}, objectio.BloomFilter{})
 	assert.Error(t, err)
 }
 
@@ -3755,8 +3754,8 @@ func TestLogtailBasic(t *testing.T) {
 			tbl, _ := db.GetRelationByName("test")
 			blkIt := tbl.MakeBlockIt()
 			for ; blkIt.Valid(); blkIt.Next() {
-				prefix := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).MakeKey()
-				deleteRowIDs = append(deleteRowIDs, model.EncodePhyAddrKeyWithPrefix(prefix, 5))
+				id := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).ID
+				deleteRowIDs = append(deleteRowIDs, *objectio.NewRowid(&id, 5))
 			}
 			require.NoError(t, txn.Commit())
 		}

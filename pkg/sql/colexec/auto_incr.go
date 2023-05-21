@@ -17,6 +17,7 @@ package colexec
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -405,8 +406,8 @@ func getRangeExpr(colName string) *plan.Expr {
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj:     10,
-					ObjName: "=",
+					Obj:     function.EqualFunctionEncodedID,
+					ObjName: function.EqualFunctionName,
 				},
 				Args: []*plan.Expr{
 					{
@@ -587,8 +588,8 @@ func GetDeleteBatch(rel engine.Relation, ctx context.Context, colName string, mp
 			if str == colName {
 				currentNum := vector.MustFixedCol[uint64](bat.Vecs[2])[rowIndex : rowIndex+1]
 				/* XXX dangerous operation
-				retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
-				retbat.Vecs[0].Col = vector.MustFixedCol[types.Rowid](retbat.Vecs[0])[rowIndex : rowIndex+1]
+				   retbat.Vecs = append(retbat.Vecs, bat.Vecs[0])
+				   retbat.Vecs[0].Col = vector.MustFixedCol[types.Rowid](retbat.Vecs[0])[rowIndex : rowIndex+1]
 				*/
 				vec := vector.NewVec(*bat.GetVector(0).GetType())
 				rowid := vector.MustFixedCol[types.Rowid](bat.GetVector(0))[rowIndex]

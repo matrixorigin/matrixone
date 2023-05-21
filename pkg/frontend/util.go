@@ -291,11 +291,15 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		bat.Zs = []int64{1}
 		// Here the evalExpr may execute some function that needs engine.Engine.
 		ses.txnCompileCtx.GetProcess().Ctx = context.WithValue(ses.txnCompileCtx.GetProcess().Ctx, defines.EngineKey{}, ses.storage)
-		vec, err := colexec.EvalExpr(bat, ses.txnCompileCtx.GetProcess(), planExpr)
+
+		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{bat})
 		if err != nil {
 			return nil, err
 		}
-		return getValueFromVector(vec, ses, planExpr)
+
+		value, err := getValueFromVector(vec, ses, planExpr)
+		vec.Free(ses.txnCompileCtx.GetProcess().Mp())
+		return value, err
 	}
 }
 
@@ -538,13 +542,13 @@ func rowsetDataToVector(
 	proc *process.Process,
 	compileCtx plan2.CompilerContext,
 	exprs []*plan.Expr,
-	targeVec *vector.Vector,
+	tarVec *vector.Vector,
 	emptyBatch *batch.Batch,
 	params []*plan.Expr,
 	uf func(*vector.Vector, *vector.Vector, int64) error,
 ) error {
 	var exprImpl *plan.Expr
-	var typ = plan2.MakePlan2Type(targeVec.GetType())
+	var typ = plan2.MakePlan2Type(tarVec.GetType())
 	var err error
 
 	for _, e := range exprs {
@@ -582,13 +586,17 @@ func rowsetDataToVector(
 			return err
 		}
 
-		vec, err := colexec.EvalExpr(emptyBatch, proc, exprImpl)
+		var vec *vector.Vector
+		vec, err = colexec.EvalExpressionOnce(proc, exprImpl, []*batch.Batch{emptyBatch})
 		if err != nil {
 			return err
 		}
-		if err = uf(targeVec, vec, 1); err != nil {
+
+		if err = uf(tarVec, vec, 0); err != nil {
+			vec.Free(proc.Mp())
 			return err
 		}
+		vec.Free(proc.Mp())
 	}
 
 	return nil
