@@ -62,17 +62,7 @@ func (tbl *txnTable) Stats(ctx context.Context, statsInfoMap any) bool {
 
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	tbl.db.txn.Lock()
-	for _, entry := range tbl.db.txn.writes {
-		if entry.databaseId != tbl.db.databaseId {
-			continue
-		}
-		if entry.tableId != tbl.tableId {
-			continue
-		}
-		writes = append(writes, entry)
-	}
-	tbl.db.txn.Unlock()
+	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
 
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
@@ -265,21 +255,13 @@ func (tbl *txnTable) resetSnapshot() {
 }
 
 // return all unmodified blocks
-func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]byte, err error) {
+func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges [][]byte, err error) {
 	tbl.db.txn.mergeTxnWorkspace()
 	tbl.db.txn.DumpBatch(false, 0)
-	tbl.db.txn.Lock()
 	tbl.writes = tbl.writes[:0]
 	tbl.writesOffset = len(tbl.db.txn.writes)
 
-	// get all writes for this table from the current transaction
-	for i, entry := range tbl.db.txn.writes {
-		if entry.databaseId != tbl.db.databaseId || entry.tableId != tbl.tableId {
-			continue
-		}
-		tbl.writes = append(tbl.writes, tbl.db.txn.writes[i])
-	}
-	tbl.db.txn.Unlock()
+	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
 
 	// make sure we have the block infos snapshot
 	if err = tbl.updateBlockInfos(ctx); err != nil {
@@ -310,7 +292,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, expr *plan.Expr) (ranges [][]by
 			tbl.db.txn.meta.SnapshotTS,
 			parts[i],
 			tbl.getTableDef(),
-			expr,
+			exprs,
 			blocks,
 			&ranges,
 			&tbl.modifiedBlocks[i],
@@ -329,7 +311,7 @@ func (tbl *txnTable) rangesOnePart(
 	ts timestamp.Timestamp, // snapshot timestamp
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
-	expr *plan.Expr, // filter expression
+	exprs []*plan.Expr, // filter expression
 	blocks []catalog.BlockInfo, // whole block list
 	ranges *[][]byte, // output marshaled block list after filtering
 	modifies *[]ModifyBlockMeta, // output modified blocks after filtering
@@ -394,12 +376,13 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var (
-		isMonoExpr     bool
-		meta           objectio.ObjectMeta
-		zms            []objectio.ZoneMap
-		vecs           []*vector.Vector
-		columnMap      map[int]int
-		skipThisObject bool
+		objMeta   objectio.ObjectMeta
+		zms       []objectio.ZoneMap
+		vecs      []*vector.Vector
+		columnMap map[int]int
+		skipObj   bool
+		cnt       int32
+		anyMono   bool
 	)
 
 	defer func() {
@@ -411,21 +394,31 @@ func (tbl *txnTable) rangesOnePart(
 	}()
 
 	hasDeletes := len(deletes) > 0
+	isMono := make([]bool, len(exprs))
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
-	if isMonoExpr = plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
-		cnt := plan2.AssignAuxIdForExpr(expr, 0)
+	for i, expr := range exprs {
+		if plan2.CheckExprIsMonotonic(proc.Ctx, expr) {
+			anyMono = true
+			isMono[i] = true
+			cnt += plan2.AssignAuxIdForExpr(expr, cnt)
+		}
+	}
+
+	if anyMono {
+		columnMap = make(map[int]int)
 		zms = make([]objectio.ZoneMap, cnt)
 		vecs = make([]*vector.Vector, cnt)
-		columnMap, _, _, _ = plan2.GetColumnsByExpr(expr, tableDef)
+		plan2.GetColumnMapByExpr(colexec.RewriteFilterExprList(exprs), tableDef, &columnMap)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
+
 	for _, blk := range blocks {
-		need := true
+		var skipBlk bool
 
 		// if expr is monotonic, we need evaluating expr for each block
-		if isMonoExpr {
+		if anyMono {
 			location := blk.MetaLocation()
 
 			// check whether the block belongs to a new object
@@ -437,21 +430,39 @@ func (tbl *txnTable) rangesOnePart(
 			//     1. check whether the object is skipped
 			//     2. if skipped, skip this block
 			//     3. if not skipped, eval expr on the block
-			if !objectio.IsSameObjectLocVsMeta(location, meta) {
-				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
+			if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
+				if objMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
 					return
 				}
-				if skipThisObject = !evalFilterExprWithZonemap(errCtx, meta, expr, zms, vecs, columnMap, proc); skipThisObject {
-					continue
+
+				skipObj = false
+				// here we only eval expr on the object meta if it has more than 2 blocks
+				if objMeta.BlockCount() > 2 {
+					for i, expr := range exprs {
+						if isMono[i] && !evalFilterExprWithZonemap(errCtx, objMeta, expr, zms, vecs, columnMap, proc) {
+							skipObj = true
+							break
+						}
+					}
 				}
 			}
 
+			if skipObj {
+				continue
+			}
+
 			// eval filter expr on the block
-			need = evalFilterExprWithZonemap(errCtx, meta.GetBlockMeta(uint32(location.ID())), expr, zms, vecs, columnMap, proc)
+			blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+			for i, expr := range exprs {
+				if isMono[i] && !evalFilterExprWithZonemap(errCtx, blkMeta, expr, zms, vecs, columnMap, proc) {
+					skipBlk = true
+					break
+				}
+			}
 		}
 
 		// if the block is not needed, skip it
-		if !need {
+		if skipBlk {
 			continue
 		}
 
@@ -885,15 +896,15 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 		if err != nil {
 			return nil, err
 		}
-		for i := range rds0 {
-			mrds[i].rds = append(mrds[i].rds, rds0[i])
+		for i, rd := range rds0 {
+			mrds[i].rds = append(mrds[i].rds, rd)
 		}
 		rds0, err = tbl.newBlockReader(ctx, num, expr, ranges[1:])
 		if err != nil {
 			return nil, err
 		}
-		for i := range rds0 {
-			mrds[i].rds = append(mrds[i].rds, rds0[i])
+		for i, rd := range rds0 {
+			mrds[i].rds = append(mrds[i].rds, rd)
 		}
 		for i := range rds {
 			rds[i] = &mrds[i]
@@ -1047,8 +1058,8 @@ func (tbl *txnTable) newReader(
 				if len(vs) == 0 {
 					continue
 				}
-				blkId := vs[0].GetBlockid()
-				if !meta_blocks[*blkId] {
+				blkId := vs[0].CloneBlockID()
+				if !meta_blocks[blkId] {
 					for _, v := range vs {
 						deletes[v] = 0
 					}

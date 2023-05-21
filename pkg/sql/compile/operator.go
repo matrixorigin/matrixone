@@ -812,11 +812,16 @@ func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 */
 
 func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
+	executor, err := colexec.NewExpressionExecutor(proc, n.Limit)
 	if err != nil {
 		panic(err)
 	}
-	defer vec.Free(proc.Mp())
+	defer executor.Free()
+	vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+	if err != nil {
+		panic(err)
+	}
+
 	return &limit.Argument{
 		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
@@ -832,8 +837,15 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			if len(f.F.Args) > 1 {
+				executor, err := colexec.NewExpressionExecutor(proc, f.F.Args[len(f.F.Args)-1])
+				if err != nil {
+					panic(err)
+				}
 				// vec is separator
-				vec, _ := colexec.EvalExpr(constBat, proc, f.F.Args[len(f.F.Args)-1])
+				vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+				if err != nil {
+					panic(err)
+				}
 				sepa := vec.GetStringAt(0)
 				multiaggs[lenMultiAggs] = group_concat.Argument{
 					Dist:      distinct,
@@ -841,18 +853,19 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 					Separator: sepa,
 					OrderId:   int32(i),
 				}
+				executor.Free()
 				lenMultiAggs++
 				continue
 			}
 			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
-			fun, err := function.GetFunctionByID(ctx, obj)
+			fun, err := function.GetFunctionById(ctx, obj)
 			if err != nil {
 				panic(err)
 			}
 			aggs[lenAggs] = agg.Aggregate{
 				E:    f.F.Args[0],
 				Dist: distinct,
-				Op:   fun.AggregateInfo,
+				Op:   fun.GetSpecialId(),
 			}
 			lenAggs++
 		}
@@ -993,18 +1006,19 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 	scopeLen := len(ss)
 	arg.LocalRegs = make([]*process.WaitRegister, 0, scopeLen)
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, scopeLen)
-
+	arg.ShuffleRegIdxLocal = make([]int, 0, len(ss))
+	arg.ShuffleRegIdxRemote = make([]int, 0, len(ss))
 	hasRemote := false
-	for _, s := range ss {
+	for i, s := range ss {
 		if s.IsEnd {
 			continue
 		}
-
 		if len(s.NodeInfo.Addr) == 0 || len(currentCNAddr) == 0 ||
 			isSameCN(s.NodeInfo.Addr, currentCNAddr) {
 			// Local reg.
 			// Put them into arg.LocalRegs
 			arg.LocalRegs = append(arg.LocalRegs, s.Proc.Reg.MergeReceivers[idx])
+			arg.ShuffleRegIdxLocal = append(arg.ShuffleRegIdxLocal, i)
 		} else {
 			// Remote reg.
 			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
@@ -1015,7 +1029,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 				Uuid:     newUuid,
 				NodeAddr: s.NodeInfo.Addr,
 			})
-
+			arg.ShuffleRegIdxRemote = append(arg.ShuffleRegIdxRemote, i)
 			s.RemoteReceivRegInfos = append(s.RemoteReceivRegInfos, RemoteReceivRegInfo{
 				Idx:      idx,
 				Uuid:     newUuid,
@@ -1030,22 +1044,16 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 // and it will send same batch to all register
 func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, shuffle bool, shuffleColIdx int) *dispatch.Argument {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
-	if hasRemote {
-		if shuffle {
-			arg.FuncId = dispatch.ShuffleToAllFunc
-			arg.ShuffleColIdx = shuffleColIdx
-		} else {
-			arg.FuncId = dispatch.SendToAllFunc
-		}
-	} else {
-		if shuffle {
-			arg.FuncId = dispatch.ShuffleToAllLocalFunc
-			arg.ShuffleColIdx = shuffleColIdx
-		} else {
-			arg.FuncId = dispatch.SendToAllLocalFunc
-		}
+	if shuffle {
+		arg.FuncId = dispatch.ShuffleToAllFunc
+		arg.ShuffleColIdx = shuffleColIdx
+		return arg
 	}
-
+	if hasRemote {
+		arg.FuncId = dispatch.SendToAllFunc
+	} else {
+		arg.FuncId = dispatch.SendToAllLocalFunc
+	}
 	return arg
 }
 
@@ -1063,22 +1071,32 @@ func constructMergeTop(n *plan.Node, topN int64) *mergetop.Argument {
 }
 
 func constructMergeOffset(n *plan.Node, proc *process.Process) *mergeoffset.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Offset)
+	executor, err := colexec.NewExpressionExecutor(proc, n.Offset)
 	if err != nil {
 		panic(err)
 	}
-	defer vec.Free(proc.Mp())
+	defer executor.Free()
+	vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+	if err != nil {
+		panic(err)
+	}
+
 	return &mergeoffset.Argument{
 		Offset: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
 }
 
 func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argument {
-	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
+	executor, err := colexec.NewExpressionExecutor(proc, n.Limit)
 	if err != nil {
 		panic(err)
 	}
-	defer vec.Free(proc.Mp())
+	defer executor.Free()
+	vec, err := executor.Eval(proc, []*batch.Batch{constBat})
+	if err != nil {
+		panic(err)
+	}
+
 	return &mergelimit.Argument{
 		Limit: uint64(vector.MustFixedCol[int64](vec)[0]),
 	}
@@ -1177,6 +1195,9 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 }
 
 func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Argument {
+	// XXX BUG
+	// relation index of arg.Conditions should be rewritten to 0 here.
+
 	switch in.Op {
 	case vm.Anti:
 		arg := in.Arg.(*anti.Argument)

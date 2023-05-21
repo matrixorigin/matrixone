@@ -217,6 +217,9 @@ func (client *txnClient) updateLastCommitTS(ts timestamp.Timestamp) {
 	}
 }
 
+// determineTxnSnapshot assuming we determine the timestamp to be ts, the final timestamp
+// returned will be ts+1. This is because we need to see the submitted data for ts, and the
+// timestamp for all things is ts+1.
 func (client *txnClient) determineTxnSnapshot(
 	ctx context.Context,
 	minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
@@ -225,7 +228,7 @@ func (client *txnClient) determineTxnSnapshot(
 		// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 		// conflicts due to clock uncertainty.
 		now, _ := client.clock.Now()
-		return now, nil
+		return now.Next(), nil
 	}
 
 	if client.enableCNBasedConsistency {

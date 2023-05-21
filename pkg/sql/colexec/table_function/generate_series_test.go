@@ -426,7 +426,7 @@ func TestGenerateSeriesString(t *testing.T) {
 }
 
 func TestGenerateSeriesPrepare(t *testing.T) {
-	err := generateSeriesPrepare(nil, nil)
+	err := generateSeriesPrepare(nil, &Argument{})
 	require.Nil(t, err)
 }
 func TestGenStep(t *testing.T) {

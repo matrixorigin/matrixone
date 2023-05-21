@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -530,6 +531,19 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 }
 
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	ses := tcc.GetSession()
+	ctx := ses.GetRequestContext()
+
+	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
+		tmpScope := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+		for i := len(*tmpScope) - 1; i >= 0; i-- {
+			curScope := (*tmpScope)[i]
+			if val, ok := curScope[strings.ToLower(varName)]; ok {
+				return val, nil
+			}
+		}
+	}
+
 	if isSystemVar {
 		if isGlobalVar {
 			return tcc.GetSession().GetGlobalVar(varName)

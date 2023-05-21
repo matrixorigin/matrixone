@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -882,14 +883,14 @@ func containsParamRef(expr *plan.Expr) bool {
 	return ret
 }
 
-func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
 	if expr == nil {
 		return
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			getColumnMapByExpr(arg, tableDef, columnMap)
+			GetColumnMapByExpr(arg, tableDef, columnMap)
 		}
 
 	case *plan.Expr_Col:
@@ -912,7 +913,7 @@ func GetColumnsByExpr(
 ) (columnMap map[int]int, defColumns, exprColumns []int, maxCol int) {
 	columnMap = make(map[int]int)
 	// key = expr's ColPos,  value = tableDef's ColPos
-	getColumnMapByExpr(expr, tableDef, &columnMap)
+	GetColumnMapByExpr(expr, tableDef, &columnMap)
 
 	if len(columnMap) == 0 {
 		return
@@ -949,7 +950,13 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 		}
 		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 	} else {
-		vec, err := colexec.EvalExprByZonemapBat(ctx, bat, proc, expr)
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		if err != nil {
+			return false, err
+		}
+		defer executor.Free()
+
+		vec, err := executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return false, err
 		}
@@ -1015,19 +1022,33 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
+func getSortOrder(tableDef *plan.TableDef, colName string) int {
+	if tableDef.Pkey != nil {
+		pkNames := tableDef.Pkey.Names
+		for i := range pkNames {
+			if pkNames[i] == colName {
+				return i
+			}
+		}
+	}
+	if tableDef.ClusterBy != nil {
+		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
+	}
+	return -1
+}
+
 // handle the filter list for Stats. rewrite and constFold
 func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
 	if proc == nil {
 		return nil
 	}
-	newExprList := make([]*plan.Expr, len(exprList))
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	for i, expr := range exprList {
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
-		newExprList[i] = tmpexpr
+	for i := range exprList {
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
+		exprList[i] = tmpexpr
 	}
-	return colexec.RewriteFilterExprList(newExprList)
+	return colexec.RewriteFilterExprList(exprList)
 }
 
 func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
@@ -1042,7 +1063,7 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 }
 
 // this function will be deleted soon
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
+func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) ([]*plan.Expr, *plan.Expr) {
 	if proc == nil || proc.Ctx == nil {
 		return nil, nil
 	}
@@ -1060,7 +1081,7 @@ func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Exp
 			nonMonoExprList = append(nonMonoExprList, expr)
 		}
 	}
-	return colexec.RewriteFilterExprList(monoExprList), colexec.RewriteFilterExprList(nonMonoExprList)
+	return monoExprList, colexec.RewriteFilterExprList(nonMonoExprList)
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
@@ -1087,28 +1108,28 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	}
 
 	overloadID := ef.F.Func.GetObj()
-	f, err := function.GetFunctionByID(proc.Ctx, overloadID)
+	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
 		return nil, err
 	}
-	if f.Volatile { // function cannot be fold
+	if f.CannotFold() { // function cannot be fold
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc)
-		if err != nil {
+		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc); err != nil {
 			return nil, err
 		}
 	}
 	if !rule.IsConstant(e) {
 		return e, nil
 	}
-	vec, err := colexec.EvalExpr(bat, proc, e)
+
+	vec, err := colexec.EvalExpressionOnce(proc, e, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
+	defer vec.Free(proc.Mp())
 	c := rule.GetConstantValue(vec, false)
-	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil
 	}
@@ -1426,8 +1447,8 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 			l.Remove(l.Front())
 		}
 	}
-	len := l.Len()
-	for j := 0; j < len; j++ {
+	length := l.Len()
+	for j := 0; j < length; j++ {
 		fileList = append(fileList, l.Front().Value.(string))
 		l.Remove(l.Front())
 		fileSize = append(fileSize, l2.Front().Value.(int64))

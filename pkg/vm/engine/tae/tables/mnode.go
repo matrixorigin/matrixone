@@ -17,12 +17,13 @@ package tables
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
@@ -37,8 +38,6 @@ type memoryNode struct {
 
 	//index for primary key : Art tree + ZoneMap.
 	pkIndex indexwrapper.Index
-	//index for non-primary key : ZoneMap.
-	indexes map[uint16]indexwrapper.Index
 }
 
 func newMemoryNode(block *baseBlock) *memoryNode {
@@ -52,36 +51,27 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 	opts := containers.Options{}
 	opts.Allocator = common.MutMemAllocator
 	impl.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
-	impl.initIndexes(schema)
+	impl.initPKIndex(schema)
 	impl.OnZeroCB = impl.close
 	return impl
 }
 
-func (node *memoryNode) initIndexes(schema *catalog.Schema) {
-	node.indexes = make(map[uint16]indexwrapper.Index)
-	for _, def := range schema.ColDefs {
-		if def.IsPhyAddr() {
-			continue
-		}
-		if def.IsRealPrimary() {
-			node.pkIndex = indexwrapper.NewPkMutableIndex(def.Type)
-			node.indexes[def.SeqNum] = node.pkIndex
-		} else {
-			node.indexes[def.SeqNum] = indexwrapper.NewMutableIndex(def.Type)
-		}
+func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
+	if !schema.HasPK() {
+		return
 	}
+	pkDef := schema.GetSingleSortKey()
+	node.pkIndex = indexwrapper.NewPkMutableIndex(pkDef.Type)
 }
 
 func (node *memoryNode) close() {
 	logutil.Infof("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
 	node.data.Close()
 	node.data = nil
-	for i, index := range node.indexes {
-		index.Close()
-		node.indexes[i] = nil
+	if node.pkIndex != nil {
+		node.pkIndex.Close()
+		node.pkIndex = nil
 	}
-	node.indexes = nil
-	node.pkIndex = nil
 	node.block = nil
 }
 
@@ -91,8 +81,9 @@ func (node *memoryNode) BatchDedup(
 	keys containers.Vector,
 	skipFn func(row uint32) error,
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn, zm)
+	return node.pkIndex.BatchDedup(keys, skipFn, zm, bf)
 }
 
 func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {
@@ -192,17 +183,17 @@ func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 }
 
 func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
-	col, err := model.PreparePhyAddrData(
-		catalog.PhyAddrColumnType,
-		node.prefix,
+	var col *vector.Vector
+	if col, err = objectio.ConstructRowidColumn(
+		&node.block.meta.ID,
 		startRow,
-		length)
-	if err != nil {
+		length,
+		common.DefaultAllocator,
+	); err != nil {
 		return
 	}
-	defer col.Close()
-	vec := node.data.Vecs[node.writeSchema.PhyAddrKey.Idx]
-	vec.Extend(col)
+	err = node.data.Vecs[node.writeSchema.PhyAddrKey.Idx].ExtendVec(col)
+	col.Free(common.DefaultAllocator)
 	return
 }
 

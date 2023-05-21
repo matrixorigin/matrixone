@@ -33,7 +33,7 @@ const (
 )
 
 type evalVector struct {
-	needFree bool
+	executor colexec.ExpressionExecutor
 	vec      *vector.Vector
 }
 
@@ -45,6 +45,14 @@ type container struct {
 	inBuckets []uint8
 
 	bat *batch.Batch
+
+	expr colexec.ExpressionExecutor
+
+	joinBat1 *batch.Batch
+	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
+
+	joinBat2 *batch.Batch
+	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
 	evecs []evalVector
 	vecs  []*vector.Vector
@@ -75,7 +83,14 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
+		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+	}
+}
+
+func (ctr *container) cleanExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.Free()
 	}
 }
 
@@ -83,6 +98,14 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+	if ctr.joinBat1 != nil {
+		ctr.joinBat1.Clean(mp)
+		ctr.joinBat1 = nil
+	}
+	if ctr.joinBat2 != nil {
+		ctr.joinBat2.Clean(mp)
+		ctr.joinBat2 = nil
 	}
 }
 
@@ -95,9 +118,8 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
 	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
-			ctr.evecs[i].vec.Free(mp)
-			ctr.evecs[i].vec = nil
+		if ctr.evecs[i].executor != nil {
+			ctr.evecs[i].executor.Free()
 		}
 	}
 }

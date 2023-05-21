@@ -263,7 +263,7 @@ func updateOldBatch(evalBatch *batch.Batch, updateExpr map[string]*plan.Expr, pr
 			if expr, exists := updateExpr[attr]; exists {
 				runExpr := plan2.DeepCopyExpr(expr)
 				resetColPos(runExpr, columnCount)
-				newVec, err := colexec.EvalExpr(evalBatch, proc, runExpr)
+				newVec, err := colexec.EvalExpressionOnce(proc, runExpr, []*batch.Batch{evalBatch})
 				if err != nil {
 					newBatch.Clean(proc.Mp())
 					return nil, err
@@ -312,8 +312,14 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBa
 
 	// build the check expr
 	for i, e := range checkExpr {
-		result, err := colexec.EvalExpr(checkConflictBatch, proc, e)
+		executor, err := colexec.NewExpressionExecutor(proc, e)
 		if err != nil {
+			return 0, "", err
+		}
+
+		result, err := executor.Eval(proc, []*batch.Batch{insertBatch})
+		if err != nil {
+			executor.Free()
 			return 0, "", err
 		}
 
@@ -326,9 +332,11 @@ func checkConflict(proc *process.Process, newBatch *batch.Batch, checkConflictBa
 					keys = append(keys, k)
 				}
 				conflictMsg := fmt.Sprintf("Duplicate entry for key '%s'", strings.Join(keys, ","))
+				executor.Free()
 				return i, conflictMsg, nil
 			}
 		}
+		executor.Free()
 	}
 
 	return -1, "", nil

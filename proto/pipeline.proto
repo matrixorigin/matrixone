@@ -45,10 +45,13 @@ message Connector {
 }
 
 message Dispatch {
-  bool  is_sink = 1;
-  int32 func_id = 2;
-  repeated Connector local_connector = 3;
-  repeated WrapNode remote_connector = 4;
+  int32 func_id = 1;
+  repeated Connector local_connector = 2;
+  repeated WrapNode remote_connector = 3;
+  int32 ShuffleColIdx=4;
+  repeated int32 ShuffleRegIdxLocal=5;
+  repeated int32 ShuffleRegIdxRemote=6;
+  bool  is_sink = 7;
 }
 
 message MultiArguemnt{

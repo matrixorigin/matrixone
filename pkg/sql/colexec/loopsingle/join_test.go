@@ -64,13 +64,6 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
-		err := Prepare(tc.proc, tc.arg)
-		require.NoError(t, err)
-	}
-}
-
 func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
 		bat := hashBuild(t, tc)
@@ -114,6 +107,7 @@ func TestJoin(t *testing.T) {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.arg.Free(tc.proc, false)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 
@@ -159,7 +153,8 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) joinTestC
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 10),
 	}
-	fid := function.EncodeOverloadID(function.EQUAL, 4)
+	fr, _ := function.GetFunctionByName(ctx, "=", ts)
+	fid := fr.GetEncodedOverloadID()
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{

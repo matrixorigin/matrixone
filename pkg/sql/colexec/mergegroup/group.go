@@ -106,28 +106,32 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 	var err error
 
 	if ctr.bat == nil {
-		size := 0
+		keyWidth := 0
 		groupVecsNullable := false
+
 		for _, vec := range bat.Vecs {
 			groupVecsNullable = groupVecsNullable || (!vec.GetType().GetNotNull())
 		}
 
 		for _, vec := range bat.Vecs {
-			currentSize := vec.GetType().TypeSize()
-			switch currentSize {
-			case 1, 2, 4, 8, 16:
-				size += currentSize
-				if groupVecsNullable {
-					size += 1
+			width := vec.GetType().TypeSize()
+			if vec.GetType().IsVarlen() {
+				if vec.GetType().Width == 0 {
+					width = 128
+				} else {
+					width = int(vec.GetType().Width)
 				}
-			default:
-				size = 128
+			}
+			keyWidth += width
+			if groupVecsNullable {
+				keyWidth += 1
 			}
 		}
+
 		switch {
-		case size == 0:
+		case keyWidth == 0:
 			ctr.typ = H0
-		case size <= 8:
+		case keyWidth <= 8:
 			ctr.typ = H8
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(groupVecsNullable, 0, 0, proc.Mp()); err != nil {
 				return err
