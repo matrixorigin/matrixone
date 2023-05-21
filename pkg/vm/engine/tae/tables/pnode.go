@@ -34,8 +34,6 @@ type persistedNode struct {
 	block *baseBlock
 	//ZM and BF index for primary key column.
 	pkIndex indexwrapper.Index
-	//ZM and BF index for all columns.
-	indexes map[int]indexwrapper.Index
 }
 
 func newPersistedNode(block *baseBlock) *persistedNode {
@@ -50,37 +48,30 @@ func newPersistedNode(block *baseBlock) *persistedNode {
 }
 
 func (node *persistedNode) close() {
-	for i, index := range node.indexes {
-		index.Close()
-		node.indexes[i] = nil
+	if node.pkIndex != nil {
+		node.pkIndex.Close()
+		node.pkIndex = nil
 	}
-	node.indexes = nil
 }
 
 func (node *persistedNode) init() {
-	node.indexes = make(map[int]indexwrapper.Index)
 	schema := node.block.meta.GetSchema()
-	pkIdx := -1
-	if schema.HasPK() {
-		pkIdx = schema.GetSingleSortKeyIdx()
+	if !schema.HasPK() {
+		return
 	}
 	metaloc := node.block.meta.GetMetaLoc()
 	if len(metaloc) != objectio.LocationLen {
 		logutil.Infof("%s bad metaloc %q: %s", node.block.meta.ID.String(), metaloc, node.block.meta.String())
 	}
-	for i := range schema.ColDefs {
-		index := indexwrapper.NewImmutableIndex()
-		if err := index.ReadFrom(
-			node.block.indexCache,
-			node.block.fs,
-			metaloc,
-			schema.ColDefs[i]); err != nil {
-			panic(err)
-		}
-		node.indexes[i] = index
-		if i == pkIdx {
-			node.pkIndex = index
-		}
+	pkDef := schema.GetSingleSortKey()
+	var err error
+	if node.pkIndex, err = indexwrapper.NewImmtableIndex(
+		node.block.indexCache,
+		node.block.fs,
+		metaloc,
+		pkDef,
+	); err != nil {
+		panic(err)
 	}
 }
 

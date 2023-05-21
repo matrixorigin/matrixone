@@ -17,6 +17,7 @@ package explain
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -240,7 +241,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		if err != nil {
 			return "", err
 		}
-	//todo
 	case plan.Node_PRE_INSERT:
 		return "preinsert", nil
 	case plan.Node_PRE_INSERT_UK:
@@ -255,6 +255,13 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "on_duplicate_key", nil
 	case plan.Node_LOCK_OP:
 		return "lock_op", nil
+	case plan.Node_FUNCTION_SCAN:
+		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
+		if m.node.TableDef != nil && m.node.TableDef.TblFunc != nil {
+			fmt.Fprintf(buf, "Table Function[%s]", m.node.TableDef.TblFunc.Name)
+		} else {
+			return "", moerr.NewInvalidInput(ctx, "Table definition not found when plan is serialized to json")
+		}
 	default:
 		return "", moerr.NewInternalError(ctx, "Unsupported node type when plan is serialized to json")
 	}
@@ -265,8 +272,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	labels := make([]Label, 0)
 
 	switch m.node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_SCAN,
-		plan.Node_MATERIAL_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
 		tableDef := m.node.TableDef
 		objRef := m.node.ObjRef
 		var fullTableName string
@@ -300,7 +306,37 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  "Scan columns",
 			Value: len(tableDef.Cols),
 		})
+	case plan.Node_FUNCTION_SCAN:
+		tableDef := m.node.TableDef
+		var fullTableName string
+		if tableDef != nil && tableDef.TblFunc != nil {
+			fullTableName += tableDef.TblFunc.GetName()
+		} else {
+			return nil, moerr.NewInternalError(ctx, "Table Function definition not found when plan is serialized to json")
+		}
 
+		labels = append(labels, Label{
+			Name:  "Full table name",
+			Value: fullTableName,
+		})
+
+		// "name" : "Columns (2 / 28)",
+		columns := GetTableColsLableValue(ctx, tableDef.Cols, options)
+
+		labels = append(labels, Label{
+			Name:  "Columns",
+			Value: columns,
+		})
+
+		labels = append(labels, Label{
+			Name:  "Total columns",
+			Value: len(tableDef.Name2ColIndex),
+		})
+
+		labels = append(labels, Label{
+			Name:  "Scan columns",
+			Value: len(tableDef.Cols),
+		})
 	case plan.Node_INSERT:
 		objRef := m.node.InsertCtx.Ref
 		var fullTableName string

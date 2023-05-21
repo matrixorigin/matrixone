@@ -181,7 +181,10 @@ alter database test set mysql_compatibility_mode = '{"version_compatibility": "8
 select `configuration` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
 drop database test;
 
+
 drop database if exists test;
+
+-- @bvt:issue#9551
 create database test;
 use test;
 select version();
@@ -212,3 +215,4 @@ drop database test1;
 alter account config sys set mysql_compatibility_mode = '{"version_compatibility": "8.0.30-MatrixOne-v0.7.0"}';
 select version();
 alter account config abc1 set mysql_compatibility_mode = '{"version_compatibility": "0.7"}';
+-- @bvt:issue

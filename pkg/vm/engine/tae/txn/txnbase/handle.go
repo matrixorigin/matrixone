@@ -73,7 +73,7 @@ func (rel *TxnRelation) MakeSegmentItOnSnap() handle.SegmentIt  { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt            { return nil }
 func (rel *TxnRelation) BatchDedup(col containers.Vector) error { return nil }
 func (rel *TxnRelation) Append(data *containers.Batch) error    { return nil }
-func (rel *TxnRelation) AddBlksWithMetaLoc([]objectio.ZoneMap, []objectio.Location) error {
+func (rel *TxnRelation) AddBlksWithMetaLoc([]objectio.Location) error {
 	return nil
 }
 func (rel *TxnRelation) GetMeta() any                                                        { return nil }
