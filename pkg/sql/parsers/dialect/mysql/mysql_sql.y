@@ -500,7 +500,7 @@ import (
 %type <procArgType> proc_arg_in_out_type
 
 %type <tableDefs> table_elem_list_opt table_elem_list
-%type <tableDef> table_elem constaint_def constraint_elem index_def
+%type <tableDef> table_elem constaint_def constraint_elem index_def table_elem_2
 %type <tableName> table_name table_name_opt_wild
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
@@ -2499,7 +2499,7 @@ alter_option
     }
 
 alter_option:
-ADD table_elem
+ADD table_elem_2
     {
         opt := &tree.AlterOptionAdd{
             Def:  $2,
@@ -2521,6 +2521,15 @@ ADD table_elem
 | RENAME TO alter_table_rename
     {
         $$ = tree.AlterTableOption($3)
+    }
+| ADD column_def pos_info
+    {
+        $$ = tree.AlterTableOption(
+            &tree.AlterAddCol{
+                Column: $2,
+                Pos: $3,
+            },
+        )
     }
 | ADD COLUMN column_def pos_info
     {
@@ -6316,11 +6325,21 @@ table_elem_list:
     }
 
 table_elem:
-    column_def
+column_def
     {
         $$ = tree.TableDef($1)
     }
 |   constaint_def
+    {
+        $$ = $1
+    }
+|   index_def
+    {
+        $$ = $1
+    }
+
+table_elem_2:
+    constaint_def
     {
         $$ = $1
     }

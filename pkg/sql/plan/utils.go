@@ -18,8 +18,6 @@ import (
 	"container/list"
 	"context"
 	"encoding/csv"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"path"
 	"strings"
@@ -34,7 +32,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -870,27 +870,14 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
-func containsParamRef(expr *plan.Expr) bool {
-	var ret bool
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			ret = ret || containsParamRef(arg)
-		}
-	case *plan.Expr_P:
-		return true
-	}
-	return ret
-}
-
-func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
 	if expr == nil {
 		return
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			getColumnMapByExpr(arg, tableDef, columnMap)
+			GetColumnMapByExpr(arg, tableDef, columnMap)
 		}
 
 	case *plan.Expr_Col:
@@ -913,7 +900,7 @@ func GetColumnsByExpr(
 ) (columnMap map[int]int, defColumns, exprColumns []int, maxCol int) {
 	columnMap = make(map[int]int)
 	// key = expr's ColPos,  value = tableDef's ColPos
-	getColumnMapByExpr(expr, tableDef, &columnMap)
+	GetColumnMapByExpr(expr, tableDef, &columnMap)
 
 	if len(columnMap) == 0 {
 		return
@@ -1060,28 +1047,6 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 	case *plan.Expr_Col:
 		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
 	}
-}
-
-// this function will be deleted soon
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) ([]*plan.Expr, *plan.Expr) {
-	if proc == nil || proc.Ctx == nil {
-		return nil, nil
-	}
-	var monoExprList, nonMonoExprList []*plan.Expr
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
-	for _, expr := range exprList {
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
-		if tmpexpr != nil {
-			expr = tmpexpr
-		}
-		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
-			monoExprList = append(monoExprList, expr)
-		} else {
-			nonMonoExprList = append(nonMonoExprList, expr)
-		}
-	}
-	return monoExprList, colexec.RewriteFilterExprList(nonMonoExprList)
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
