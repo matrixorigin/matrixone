@@ -728,7 +728,7 @@ func InitMerge(ctx context.Context, SV *config.ObservabilityParameters) error {
 	mergeCycle := SV.MergeCycle.Duration
 	filesize := SV.MergeMaxFileSize
 	if mergeCycle > 0 {
-		err = InitCronExpr(ctx, 5*time.Minute)
+		err = InitCronExpr(ctx, mergeCycle)
 		if err != nil {
 			return err
 		}
