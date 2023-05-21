@@ -858,10 +858,16 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 			return err
 		}
 
-		vec, err := colexec.EvalExpr(bat, proc, planExpr)
+		executor, err := colexec.NewExpressionExecutor(proc, planExpr)
 		if err != nil {
 			return err
 		}
+		vec, err := executor.Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			executor.Free()
+			return err
+		}
+
 		bs := vector.MustFixedCol[bool](vec)
 		sels := proc.Mp().GetSels()
 		for i, b := range bs {
@@ -869,6 +875,8 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 				sels = append(sels, int64(i))
 			}
 		}
+		executor.Free()
+
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 		v0 := vector.MustStrCol(bat.Vecs[0])
@@ -1380,25 +1388,38 @@ func doShowBackendServers(ses *Session) error {
 
 	tenant := ses.GetTenantInfo().GetTenant()
 	var se clusterservice.Selector
-	if tenant != sysAccountName {
+	if !isSysTenant(tenant) {
 		labels := ses.GetMysqlProtocol().GetConnectAttrs()
 		labels["account"] = tenant
 		se = clusterservice.NewSelector().SelectByLabel(
 			filterLabels(labels), clusterservice.EQ)
 	}
 	cluster := clusterservice.GetMOCluster()
+	var notEmpty, empty bool
+	var rows [][]interface{}
 	cluster.GetCNService(se, func(s metadata.CNService) bool {
 		row := make([]interface{}, 3)
 		row[0] = s.ServiceID
 		row[1] = s.SQLAddress
 		var labelStr string
+		if len(s.Labels) > 0 {
+			notEmpty = true
+		} else {
+			empty = true
+		}
 		for key, value := range s.Labels {
 			labelStr += fmt.Sprintf("%s:%s;", key, strings.Join(value.Labels, ","))
 		}
 		row[2] = labelStr
-		mrs.AddRow(row)
+		rows = append(rows, row)
 		return true
 	})
+	for _, row := range rows {
+		if row[2] == "" && empty && notEmpty {
+			continue
+		}
+		mrs.AddRow(row)
+	}
 	return nil
 }
 

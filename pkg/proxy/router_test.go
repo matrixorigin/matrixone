@@ -47,7 +47,7 @@ func TestCNServer(t *testing.T) {
 		defer cancel()
 		addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 		require.NoError(t, os.RemoveAll(addr))
-		stopFn := startTestCNServer(t, ctx, addr)
+		stopFn := startTestCNServer(t, ctx, addr, nil)
 		defer func() {
 			require.NoError(t, stopFn())
 		}()
@@ -163,6 +163,52 @@ func TestRouter_Route(t *testing.T) {
 	require.NotNil(t, cn)
 }
 
+func TestRouter_RouteForSys(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	defer mc.Close()
+	re := testRebalancer(t, st, logger, mc)
+	ru := newRouter(mc, re, true)
+	li1 := labelInfo{
+		Tenant: "sys",
+	}
+
+	hc.updateCN("cn1", "", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	mc.ForceRefresh()
+	time.Sleep(time.Millisecond * 200)
+	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1})
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	require.Equal(t, "cn1", cn.uuid)
+
+	hc.updateCN("cn2", "", map[string]metadata.LabelList{})
+	mc.ForceRefresh()
+	time.Sleep(time.Millisecond * 200)
+	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li1})
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	require.Equal(t, "cn2", cn.uuid)
+
+	hc.updateCN("cn3", "", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"sys"}},
+	})
+	mc.ForceRefresh()
+	time.Sleep(time.Millisecond * 200)
+	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li1})
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	require.Equal(t, "cn3", cn.uuid)
+}
+
 func TestRouter_SelectByConnID(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
@@ -178,7 +224,7 @@ func TestRouter_SelectByConnID(t *testing.T) {
 	temp := os.TempDir()
 	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr1))
-	stopFn1 := startTestCNServer(t, ctx, addr1)
+	stopFn1 := startTestCNServer(t, ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
@@ -219,7 +265,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn1 := startTestCNServer(t, ctx, addr1)
+	stopFn1 := startTestCNServer(t, ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
@@ -231,7 +277,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn2 := startTestCNServer(t, ctx, addr2)
+	stopFn2 := startTestCNServer(t, ctx, addr2, nil)
 	defer func() {
 		require.NoError(t, stopFn2())
 	}()
@@ -243,7 +289,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn3 := startTestCNServer(t, ctx, addr3)
+	stopFn3 := startTestCNServer(t, ctx, addr3, nil)
 	defer func() {
 		require.NoError(t, stopFn3())
 	}()
@@ -325,7 +371,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn1 := startTestCNServer(t, ctx, addr1)
+	stopFn1 := startTestCNServer(t, ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
@@ -336,7 +382,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 		tenantLabelKey: {Labels: []string{"t1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn2 := startTestCNServer(t, ctx, addr2)
+	stopFn2 := startTestCNServer(t, ctx, addr2, nil)
 	defer func() {
 		require.NoError(t, stopFn2())
 	}()
@@ -347,7 +393,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 		tenantLabelKey: {Labels: []string{"t1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn3 := startTestCNServer(t, ctx, addr3)
+	stopFn3 := startTestCNServer(t, ctx, addr3, nil)
 	defer func() {
 		require.NoError(t, stopFn3())
 	}()

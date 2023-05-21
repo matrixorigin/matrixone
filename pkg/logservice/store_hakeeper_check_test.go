@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -826,17 +825,17 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 }
 
 func TestGetTaskTableUserFromEnv(t *testing.T) {
-	os.Setenv(moAdminUser, "root")
+	t.Setenv(moAdminUser, "root")
 	user, ok := getTaskTableUserFromEnv()
 	require.False(t, ok)
 	require.Equal(t, pb.TaskTableUser{}, user)
 
-	os.Setenv(moAdminPassword, "")
+	t.Setenv(moAdminPassword, "")
 	user, ok = getTaskTableUserFromEnv()
 	require.False(t, ok)
 	require.Equal(t, pb.TaskTableUser{}, user)
 
-	os.Setenv(moAdminPassword, "root")
+	t.Setenv(moAdminPassword, "root")
 	user, ok = getTaskTableUserFromEnv()
 	require.True(t, ok)
 	require.Equal(t, pb.TaskTableUser{Username: "root", Password: "root"}, user)
