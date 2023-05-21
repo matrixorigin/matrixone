@@ -41,6 +41,7 @@ type Txn2PC interface {
 	PrePrepare() error
 	PrepareCommit() error
 	PreApplyCommit() error
+	PrepareWAL() error
 	ApplyCommit() error
 }
 

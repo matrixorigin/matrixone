@@ -24,7 +24,6 @@ import (
 	"math"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -42,7 +41,6 @@ type RoutineManager struct {
 	ctx            context.Context
 	clients        map[goetty.IOSession]*Routine
 	pu             *config.ParameterUnit
-	skipCheckUser  atomic.Bool
 	tlsConfig      *tls.Config
 	aicm           *defines.AutoIncrCacheManager
 	accountRoutine *AccountRoutineManager
@@ -135,14 +133,6 @@ func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManage
 	return rm.aicm
 }
 
-func (rm *RoutineManager) SetSkipCheckUser(b bool) {
-	rm.skipCheckUser.Store(b)
-}
-
-func (rm *RoutineManager) GetSkipCheckUser() bool {
-	return rm.skipCheckUser.Load()
-}
-
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
 	return rm.pu
 }
@@ -161,6 +151,18 @@ func (rm *RoutineManager) getRoutine(rs goetty.IOSession) *Routine {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return rm.clients[rs]
+}
+
+func (rm *RoutineManager) deleteRoutine(rs goetty.IOSession) *Routine {
+	var rt *Routine
+	var ok bool
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rt, ok = rm.clients[rs]
+	if ok {
+		delete(rm.clients, rs)
+	}
+	return rt
 }
 
 func (rm *RoutineManager) getTlsConfig() *tls.Config {
@@ -191,7 +193,6 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		return
 	}
 	pro := NewMysqlClientProtocol(connID, rs, int(pu.SV.MaxBytesInOutbufToFlush), pu.SV)
-	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
 	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
@@ -205,7 +206,6 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetConnectContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
-	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
 
@@ -242,15 +242,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	defer func() {
 		logutil.Debugf("resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 	}()
-	var rt *Routine
-	var ok bool
-
-	rm.mu.Lock()
-	rt, ok = rm.clients[rs]
-	if ok {
-		delete(rm.clients, rs)
-	}
-	rm.mu.Unlock()
+	rt := rm.deleteRoutine(rs)
 
 	if rt != nil {
 		ses := rt.getSession()
@@ -270,21 +262,26 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 }
 
-/*
-kill a connection or query.
-if killConnection is true, the query will be canceled first, then the network will be closed.
-if killConnection is false, only the query will be canceled. the connection keeps intact.
-*/
-func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
+func (rm *RoutineManager) getRoutineById(id uint64) *Routine {
 	var rt *Routine = nil
 	rm.mu.RLock()
+	defer rm.mu.RUnlock()
 	for _, value := range rm.clients {
 		if uint64(value.getConnectionID()) == id {
 			rt = value
 			break
 		}
 	}
-	rm.mu.RUnlock()
+	return rt
+}
+
+/*
+kill a connection or query.
+if killConnection is true, the query will be canceled first, then the network will be closed.
+if killConnection is false, only the query will be canceled. the connection keeps intact.
+*/
+func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
+	rt := rm.getRoutineById(id)
 
 	killMyself := idThatKill == id
 	if rt != nil {
@@ -442,19 +439,20 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 func (rm *RoutineManager) clientCount() int {
 	var count int
 	rm.mu.RLock()
+	defer rm.mu.RUnlock()
 	count = len(rm.clients)
-	rm.mu.RUnlock()
 	return count
 }
 
-func (rm *RoutineManager) printDebug() {
-	type info struct {
-		id    uint32
-		peer  string
-		count []uint64
-	}
-	infos := list.New()
+type info struct {
+	id    uint32
+	peer  string
+	count []uint64
+}
+
+func (rm *RoutineManager) collectClientInfo(infos *list.List) {
 	rm.mu.RLock()
+	defer rm.mu.RUnlock()
 	for _, routine := range rm.clients {
 		proto := routine.getProtocol()
 		infos.PushBack(&info{
@@ -463,7 +461,11 @@ func (rm *RoutineManager) printDebug() {
 			proto.resetDebugCount(),
 		})
 	}
-	rm.mu.RUnlock()
+}
+
+func (rm *RoutineManager) printDebug() {
+	infos := list.New()
+	rm.collectClientInfo(infos)
 
 	bb := bytes.Buffer{}
 	bb.WriteString("Clients:")
@@ -480,6 +482,17 @@ func (rm *RoutineManager) printDebug() {
 		bb.WriteByte('\n')
 	}
 	logutil.Info(bb.String())
+}
+
+func (rm *RoutineManager) cleanKillQueue() {
+	ar := rm.accountRoutine
+	ar.killQueueMu.Lock()
+	defer ar.killQueueMu.Unlock()
+	for toKillAccount, killRecord := range ar.killIdQueue {
+		if time.Since(killRecord.killTime) > time.Duration(rm.pu.SV.CleanKillQueueInterval)*time.Minute {
+			delete(ar.killIdQueue, toKillAccount)
+		}
+	}
 }
 
 func (rm *RoutineManager) KillRoutineConnections() {
@@ -499,13 +512,7 @@ func (rm *RoutineManager) KillRoutineConnections() {
 		}
 	}
 
-	ar.killQueueMu.Lock()
-	for toKillAccount, killRecord := range ar.killIdQueue {
-		if time.Since(killRecord.killTime) > time.Duration(rm.pu.SV.CleanKillQueueInterval)*time.Minute {
-			delete(ar.killIdQueue, toKillAccount)
-		}
-	}
-	ar.killQueueMu.Unlock()
+	rm.cleanKillQueue()
 }
 
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) (*RoutineManager, error) {

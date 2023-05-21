@@ -139,8 +139,6 @@ type Session struct {
 	flag         bool
 	lastInsertID uint64
 
-	skipAuth bool
-
 	sqlSourceType []string
 
 	InitTempEngine bool
@@ -505,18 +503,6 @@ func (ses *Session) cleanCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.clean()
-}
-
-func (ses *Session) setSkipCheckPrivilege(b bool) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.skipAuth = b
-}
-
-func (ses *Session) skipCheckPrivilege() bool {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.skipAuth
 }
 
 func (ses *Session) UpdateDebugString() {

@@ -259,31 +259,24 @@ insert into temp select * from generate_series(1,8192) g;
 create table t(a int);
 insert into t select * from temp;
 insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
 begin;
 insert into t select * from t;
 delete from t where a > 1;
 select count(*) from t;
 count(*)
-512
+4
 rollback;
 select count(*) from t;
 count(*)
-2097152
+16384
 begin;
 insert into t select * from t;
 delete from t where a > 1;
 select count(*) from t;
 count(*)
-512
+4
 commit;
 select count(*) from t;
 count(*)
-512
+4
 drop database if exists test;

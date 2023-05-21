@@ -22,6 +22,7 @@ import (
 const (
 	HashMapSizeForBucket = 250000
 	MAXShuffleDOP        = 16
+	ShuffleThreshHold    = 50000
 )
 
 func SimpleHashToRange(bytes []byte, upperLimit int) int {
@@ -45,25 +46,43 @@ func GetHashColumnIdx(expr *plan.Expr) int {
 	return -1
 }
 
-func NeedShuffle(n *plan.Node) bool {
+// to judge if groupby need to go shuffle
+// if true, return index of which column to shuffle
+// else, return -1
+func GetShuffleIndexForGroupBy(n *plan.Node) int {
 	if n.NodeType != plan.Node_AGG {
-		return false
+		return -1
 	}
-	if len(n.GroupBy) != 1 {
-		return false
+	if len(n.GroupBy) == 0 {
+		return -1
 	}
 	if n.Stats.HashmapSize < HashMapSizeForBucket {
-		return false
+		return -1
 	}
 	if n.Stats.Outcnt/n.Stats.Cost < 0.1 {
-		return false
+		return -1
+	}
+	//find the highest ndv
+	highestNDV := n.GroupBy[0].Ndv
+	idx := 0
+	for i := range n.GroupBy {
+		if n.GroupBy[i].Ndv > highestNDV {
+			highestNDV = n.GroupBy[i].Ndv
+			idx = i
+		}
+	}
+	if highestNDV < ShuffleThreshHold {
+		return -1
 	}
 
-	if GetHashColumnIdx(n.GroupBy[0]) == -1 {
-		return false
+	if GetHashColumnIdx(n.GroupBy[idx]) == -1 {
+		return -1
 	}
 	//for now ,only support integer type
-	return n.GroupBy[0].Typ.Id == int32(types.T_int64) || n.GroupBy[0].Typ.Id == int32(types.T_int32)
+	if n.GroupBy[idx].Typ.Id == int32(types.T_int64) || n.GroupBy[idx].Typ.Id == int32(types.T_int32) {
+		return idx
+	}
+	return -1
 }
 
 func GetShuffleDop(n *plan.Node) (dop int) {
