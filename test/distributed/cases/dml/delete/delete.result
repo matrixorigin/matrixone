@@ -272,6 +272,7 @@ count(*)
 begin;
 insert into t select * from t;
 delete from t where a > 1;
+delete from t where a = 1;
 select count(*) from t;
 count(*)
 0
