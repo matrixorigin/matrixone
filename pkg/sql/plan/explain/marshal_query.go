@@ -275,7 +275,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN:
 		tableDef := m.node.TableDef
 		objRef := m.node.ObjRef
-		var fullTableName string
+		fullTableName := ""
 		if objRef != nil {
 			fullTableName += objRef.GetSchemaName() + "." + objRef.GetObjName()
 		} else if tableDef != nil {
@@ -308,7 +308,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		})
 	case plan.Node_FUNCTION_SCAN:
 		tableDef := m.node.TableDef
-		var fullTableName string
+		fullTableName := ""
 		if tableDef != nil && tableDef.TblFunc != nil {
 			fullTableName += tableDef.TblFunc.GetName()
 		} else {
@@ -316,7 +316,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		}
 	case plan.Node_INSERT:
 		objRef := m.node.InsertCtx.Ref
-		var fullTableName string
+		fullTableName := ""
 		if objRef != nil {
 			fullTableName += objRef.GetSchemaName() + "." + objRef.GetObjName()
 		} else {
@@ -327,24 +327,6 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  "Full table name",
 			Value: fullTableName,
 		})
-
-		// "name" : "Columns (2 / 28)",
-		// columns := GetTableColsLabelValue(ctx, tableDef.Cols, options)
-
-		// labels = append(labels, Label{
-		// 	Name:  "Columns",
-		// 	Value: columns,
-		// })
-
-		// labels = append(labels, Label{
-		// 	Name:  "Total columns",
-		// 	Value: len(tableDef.Cols),
-		// })
-
-		// labels = append(labels, Label{
-		// 	Name:  "Scan columns",
-		// 	Value: len(tableDef.Cols),
-		// })
 	case plan.Node_DELETE:
 		if m.node.DeleteCtx != nil {
 			deleteTableNames := GetDeleteTableLabelValue(m.node.DeleteCtx)
