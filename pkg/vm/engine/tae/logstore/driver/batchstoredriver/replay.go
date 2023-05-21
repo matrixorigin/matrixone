@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 // wal ckping
@@ -78,14 +77,14 @@ func (r *replayer) onReplayEntry(e *entry.Entry) error {
 	return nil
 }
 
-func (r *replayer) replayHandler(vfile *vFile, allocator logstoreEntry.Allocator) error {
+func (r *replayer) replayHandler(vfile *vFile) error {
 	if vfile.version != r.version {
 		r.pos = 0
 		r.version = vfile.version
 	}
 	e := entry.NewEmptyEntry()
 	t0 := time.Now()
-	_, err := e.ReadAt(vfile.File, r.pos, allocator)
+	_, err := e.ReadAt(vfile.File, r.pos)
 	r.readDuration += time.Since(t0)
 	if err != nil {
 		return err

@@ -341,7 +341,8 @@ func (blk *ablock) GetByFilter(
 		panic("logic error")
 	}
 	if blk.meta.GetSchema().SortKey == nil {
-		_, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		rid := filter.Val.(types.Rowid)
+		offset = rid.GetRowOffset()
 		return
 	}
 
@@ -557,6 +558,7 @@ func (blk *ablock) inMemoryBatchDedup(
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (err error) {
 	var dupRow uint32
 	blk.RLock()
@@ -564,7 +566,8 @@ func (blk *ablock) inMemoryBatchDedup(
 	_, err = mnode.BatchDedup(
 		keys,
 		blk.checkConflictAndDupClosure(txn, isCommitting, &dupRow, rowmask),
-		zm)
+		zm,
+		bf)
 
 	// definitely no duplicate
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
@@ -582,6 +585,7 @@ func (blk *ablock) BatchDedup(
 	rowmask *roaring.Bitmap,
 	precommit bool,
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
@@ -591,7 +595,7 @@ func (blk *ablock) BatchDedup(
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask, zm)
+		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask, zm, bf)
 	} else {
 		return blk.PersistedBatchDedup(
 			node.MustPNode(),
@@ -601,6 +605,7 @@ func (blk *ablock) BatchDedup(
 			rowmask,
 			true,
 			zm,
+			bf,
 		)
 	}
 }

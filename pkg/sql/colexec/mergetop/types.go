@@ -32,6 +32,8 @@ type container struct {
 	cmps  []compare.Compare // compare structure used to do sort work
 
 	bat *batch.Batch // bat stores the final result of merge-top
+
+	executorsForOrderList []colexec.ExpressionExecutor
 }
 
 type Argument struct {
@@ -45,6 +47,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
+		ctr.cleanExecutors()
 		ctr.FreeMergeTypeOperator(pipelineFailed)
 	}
 }
@@ -53,6 +56,12 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+}
+
+func (ctr *container) cleanExecutors() {
+	for i := range ctr.executorsForOrderList {
+		ctr.executorsForOrderList[i].Free()
 	}
 }
 

@@ -81,9 +81,10 @@ func startServer() error {
 	if err != nil {
 		return err
 	}
-	s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, _ uint64, cs morpc.ClientSession) error {
+	s.RegisterRequestHandler(func(ctx context.Context, msg morpc.RPCMessage, _ uint64, cs morpc.ClientSession) error {
 		// send more message back
 		go func() {
+			request := msg.Message
 			for i := 0; i < 10; i++ {
 				if err := cs.Write(ctx, &message.ExampleMessage{MsgID: request.GetID(), Content: fmt.Sprintf("stream-%d", i)}); err != nil {
 					panic(err)
