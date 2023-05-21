@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -178,47 +179,6 @@ func (m *mysqlTaskStorage) Close() error {
 	return m.db.Close()
 }
 
-func (m *mysqlTaskStorage) Bootstrap(ctx context.Context) error {
-	db, release, err := m.getDB(false)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = release()
-	}()
-
-	if _, err = db.Exec(fmt.Sprintf(createDatabase, m.dbname)); err != nil {
-		return multierr.Append(err, db.Close())
-	}
-
-	if err := m.useDB(db); err != nil {
-		return err
-	}
-
-	rows, err := db.Query("show tables")
-	if err != nil {
-		return err
-	}
-
-	tables := make(map[string]struct{}, len(createTables))
-	for rows.Next() {
-		var table string
-		if err := rows.Scan(&table); err != nil {
-			return err
-		}
-		tables[table] = struct{}{}
-	}
-
-	for table, createSql := range createTables {
-		if _, ok := tables[table]; !ok {
-			if _, err = db.Exec(fmt.Sprintf(createSql, m.dbname)); err != nil {
-				return multierr.Append(err, db.Close())
-			}
-		}
-	}
-	return nil
-}
-
 func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
@@ -228,7 +188,7 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 		return 0, nil
 	}
 
-	db, release, err := m.getDB(true)
+	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
 	}
@@ -276,6 +236,7 @@ func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, er
 	if err != nil {
 		return 0, err
 	}
+	defer stmt.Close()
 	exec, err := stmt.ExecContext(ctx, vals...)
 	if err != nil {
 		dup, err := removeDuplicateTasks(err, tasks)
@@ -305,7 +266,7 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 		return 0, nil
 	}
 
-	db, release, err := m.getDB(true)
+	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
 	}
@@ -356,6 +317,7 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 			if err != nil {
 				return err
 			}
+			defer prepare.Close()
 
 			exec, err := prepare.ExecContext(ctx,
 				t.Metadata.Executor,
@@ -400,7 +362,7 @@ func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (
 		return 0, nil
 	}
 
-	db, release, err := m.getDB(true)
+	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
 	}
@@ -438,7 +400,7 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 		return nil, nil
 	}
 
-	db, release, err := m.getDB(true)
+	db, release, err := m.getDB()
 	if err != nil {
 		return nil, err
 	}
@@ -537,7 +499,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 		return 0, nil
 	}
 
-	db, release, err := m.getDB(true)
+	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
 	}
@@ -583,6 +545,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 	if err != nil {
 		return 0, err
 	}
+	defer stmt.Close()
 	exec, err := stmt.Exec(vals...)
 	if err != nil {
 		dup, err := removeDuplicateCronTasks(err, cronTask)
@@ -602,12 +565,12 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 	return int(affected), nil
 }
 
-func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
+func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) (tasks []task.CronTask, err error) {
 	if taskFrameworkDisabled() {
 		return nil, nil
 	}
 
-	db, release, err := m.getDB(true)
+	db, release, err := m.getDB()
 	if err != nil {
 		return nil, err
 	}
@@ -633,8 +596,16 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if e := rows.Close(); e != nil {
+			err = errors.Join(err, e)
+		}
+		if e := rows.Err(); e != nil {
+			err = errors.Join(err, e)
+		}
+	}()
 
-	tasks := make([]task.CronTask, 0)
+	tasks = make([]task.CronTask, 0)
 
 	for rows.Next() {
 		var t task.CronTask
@@ -660,9 +631,6 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, 
 
 		tasks = append(tasks, t)
 	}
-	if err := rows.Err(); err != nil {
-		return tasks, err
-	}
 
 	return tasks, nil
 }
@@ -672,7 +640,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		return 0, nil
 	}
 
-	db, release, err := m.getDB(true)
+	db, release, err := m.getDB()
 	if err != nil {
 		return 0, err
 	}
@@ -709,6 +677,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 	if err != nil {
 		return 0, err
 	}
+	defer stmt.Close()
 
 	j, err := json.Marshal(t.Metadata.Options)
 	if err != nil {
@@ -822,14 +791,12 @@ func buildWhereClause(c conditions) string {
 	return clause
 }
 
-func (m *mysqlTaskStorage) getDB(use bool) (*sql.DB, func() error, error) {
+func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 	if !m.forceNewConn {
-		if use {
-			if err := m.useDB(m.db); err != nil {
-				return nil, nil, err
-			}
-			return m.db, func() error { return nil }, nil
+		if err := m.useDB(m.db); err != nil {
+			return nil, nil, err
 		}
+		return m.db, func() error { return nil }, nil
 	}
 
 	db, err := sql.Open("mysql", m.dsn)
@@ -837,15 +804,14 @@ func (m *mysqlTaskStorage) getDB(use bool) (*sql.DB, func() error, error) {
 		return nil, nil, err
 	}
 
-	if use {
-		if err = m.useDB(db); err != nil {
-			return nil, nil, multierr.Append(err, db.Close())
-		}
+	if err = m.useDB(db); err != nil {
+		return nil, nil, multierr.Append(err, db.Close())
 	}
+
 	return db, func() error { return db.Close() }, nil
 }
 
-func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
+func (m *mysqlTaskStorage) useDB(db *sql.DB) (err error) {
 	if err := db.Ping(); err != nil {
 		return errNotReady
 	}
@@ -853,6 +819,38 @@ func (m *mysqlTaskStorage) useDB(db *sql.DB) error {
 		me, ok := err.(*mysql.MySQLError)
 		if !ok || me.Number != moerr.ER_BAD_DB_ERROR {
 			return err
+		}
+		if _, err = db.Exec(fmt.Sprintf(createDatabase, m.dbname)); err != nil {
+			return multierr.Append(err, db.Close())
+		}
+	}
+	rows, err := db.Query("show tables")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if e := rows.Close(); e != nil {
+			err = errors.Join(err, e)
+		}
+		if e := rows.Err(); e != nil {
+			err = errors.Join(err, e)
+		}
+	}()
+
+	tables := make(map[string]struct{}, len(createTables))
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			return err
+		}
+		tables[table] = struct{}{}
+	}
+
+	for table, createSql := range createTables {
+		if _, ok := tables[table]; !ok {
+			if _, err = db.Exec(fmt.Sprintf(createSql, m.dbname)); err != nil {
+				return multierr.Append(err, db.Close())
+			}
 		}
 	}
 	return nil

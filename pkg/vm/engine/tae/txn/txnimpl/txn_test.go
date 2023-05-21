@@ -16,7 +16,6 @@ package txnimpl
 
 import (
 	"fmt"
-	"math/rand"
 	"path"
 	"sync"
 	"testing"
@@ -46,10 +45,6 @@ const (
 // 2. 10000 node
 // 3. 512K buffer
 // 4. 1K(30%), 4K(25%), 8K(%20), 16K(%15), 32K(%10)
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
 
 //func getNodes() int {
 //	v := rand.Intn(100)

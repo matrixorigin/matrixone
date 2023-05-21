@@ -115,7 +115,7 @@ func TestHandleMessage(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
-		assert.NoError(t, s.onMessage(ctx, &txn.TxnRequest{RequestID: 1}, 0, cs))
+		assert.NoError(t, s.onMessage(ctx, newMessage(&txn.TxnRequest{RequestID: 1}), 0, cs))
 		v := <-c
 		assert.Equal(t, uint64(1), v.GetID())
 	})
@@ -131,7 +131,7 @@ func TestHandleMessageWithFilter(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
-		assert.NoError(t, s.onMessage(ctx, &txn.TxnRequest{RequestID: 1},
+		assert.NoError(t, s.onMessage(ctx, newMessage(&txn.TxnRequest{RequestID: 1}),
 			0, nil))
 		assert.Equal(t, 0, n)
 	}, WithServerMessageFilter(func(tr *txn.TxnRequest) bool {
@@ -149,7 +149,7 @@ func TestHandleInvalidMessageWillPanic(t *testing.T) {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
-		assert.NoError(t, s.onMessage(ctx, &txn.TxnResponse{}, 0, nil))
+		assert.NoError(t, s.onMessage(ctx, newMessage(&txn.TxnResponse{}), 0, nil))
 	})
 }
 
@@ -161,7 +161,7 @@ func TestHandleNotRegisterWillPanic(t *testing.T) {
 			}
 			assert.Fail(t, "must panic")
 		}()
-		assert.NoError(t, s.onMessage(context.Background(), &txn.TxnRequest{}, 0, nil))
+		assert.NoError(t, s.onMessage(context.Background(), newMessage(&txn.TxnRequest{}), 0, nil))
 	})
 }
 
@@ -177,13 +177,16 @@ func TestTimeoutRequestCannotHandled(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1)
 		cancel()
 		req := &txn.TxnRequest{Method: txn.TxnMethod_Read}
-		assert.NoError(t, s.onMessage(ctx, req, 0, nil))
+		assert.NoError(t, s.onMessage(ctx, newMessage(req), 0, nil))
 		assert.Equal(t, 0, n)
 	})
 }
 
 func runTestTxnServer(t *testing.T, addr string, testFunc func(s *server), opts ...ServerOption) {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
+	opts = append(opts,
+		WithServerQueueBufferSize(100),
+		WithServerQueueWorkers(2))
 	s, err := NewTxnServer(addr,
 		newTestRuntime(clock.NewHLCClock(func() int64 { return 0 }, 0), logutil.GetPanicLogger()),
 		opts...)
@@ -239,4 +242,13 @@ func newTestClock() clock.Clock {
 
 func newTestRuntime(clock clock.Clock, logger *zap.Logger) runtime.Runtime {
 	return runtime.NewRuntime(metadata.ServiceType_CN, "", logutil.Adjust(logger), runtime.WithClock(clock))
+}
+
+func newMessage(req morpc.Message) morpc.RPCMessage {
+	ctx, cancel := context.WithCancel(context.Background())
+	return morpc.RPCMessage{
+		Ctx:     ctx,
+		Cancel:  cancel,
+		Message: req,
+	}
 }

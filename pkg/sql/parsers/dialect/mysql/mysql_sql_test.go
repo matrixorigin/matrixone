@@ -498,7 +498,7 @@ var (
 		output: "create table t1 (a varchar)",
 	}, {
 		input:  "SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));",
-		output: "select (cast(0x7fffffffffffffff as char))",
+		output: "select (cast(0x7fffffffffffffff as varchar))",
 	}, {
 		input:  "select cast(-19999999999999999999 as signed);",
 		output: "select cast(-19999999999999999999 as signed)",
@@ -864,7 +864,7 @@ var (
 			input:  "SELECT t.a,u.a,t.b * u.b FROM sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b",
 			output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b",
 		}, {
-			input: "select avg(u.a), count(u.b), cast(u.c as char) from u",
+			input: "select avg(u.a), count(u.b), cast(u.c as varchar) from u",
 		}, {
 			input: "select avg(u.a), count(*) from u",
 		}, {

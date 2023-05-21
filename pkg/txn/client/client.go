@@ -159,15 +159,13 @@ func (client *txnClient) New(
 
 	options = append(options,
 		WithTxnCNCoordinator(),
+		WithTxnClose(client),
+		WithUpdateLastCommitTSFunc(client.updateLastCommitTS),
 		WithTxnLockService(client.lockService))
-	op := newTxnOperator(
+	return newTxnOperator(
 		client.sender,
 		txnMeta,
-		options...)
-	op.AppendEventCallback(ClosedEvent,
-		client.updateLastCommitTS,
-		client.popTransaction)
-	return op, nil
+		options...), nil
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
@@ -198,14 +196,17 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 	return txn.TxnMode_Pessimistic
 }
 
-func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
+func (client *txnClient) updateLastCommitTS(ts timestamp.Timestamp) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if client.mu.latestCommitTS.Less(txn.CommitTS) {
-		client.mu.latestCommitTS = txn.CommitTS
+	if client.mu.latestCommitTS.Less(ts) {
+		client.mu.latestCommitTS = ts
 	}
 }
 
+// determineTxnSnapshot assuming we determine the timestamp to be ts, the final timestamp
+// returned will be ts+1. This is because we need to see the submitted data for ts, and the
+// timestamp for all things is ts+1.
 func (client *txnClient) determineTxnSnapshot(
 	ctx context.Context,
 	minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
@@ -214,7 +215,7 @@ func (client *txnClient) determineTxnSnapshot(
 		// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 		// conflicts due to clock uncertainty.
 		now, _ := client.clock.Now()
-		return now, nil
+		return now.Next(), nil
 	}
 
 	if client.enableCNBasedConsistency {
@@ -246,7 +247,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 }
 
 func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
-	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
+	client.updateLastCommitTS(ts)
 }
 
 func (client *txnClient) popTransaction(txn txn.TxnMeta) {

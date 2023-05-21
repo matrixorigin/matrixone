@@ -18,6 +18,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -104,6 +105,7 @@ func (idx *mutableIndex) BatchDedup(
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
 	zm []byte,
+	_ objectio.BloomFilter,
 ) (keyselects *roaring.Bitmap, err error) {
 	inputZM := index.ZM(zm)
 	if inputZM.Valid() {
@@ -150,55 +152,4 @@ func (idx *mutableIndex) Close() error {
 	idx.art = nil
 	idx.zonemap = nil
 	return nil
-}
-
-var _ Index = (*nonPkMutIndex)(nil)
-
-type nonPkMutIndex struct {
-	zonemap index.ZM
-}
-
-func NewMutableIndex(typ types.Type) *nonPkMutIndex {
-	return &nonPkMutIndex{
-		zonemap: index.NewZM(typ.Oid, typ.Scale),
-	}
-}
-
-func (idx *nonPkMutIndex) Destroy() error {
-	idx.zonemap = nil
-	return nil
-}
-
-func (idx *nonPkMutIndex) Close() error {
-	idx.zonemap = nil
-	return nil
-}
-func (idx *nonPkMutIndex) GetActiveRow(any) ([]uint32, error) { panic("not support") }
-func (idx *nonPkMutIndex) String() string                     { return "nonpk" }
-func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
-	return TranslateError(index.BatchUpdateZM(idx.zonemap, keysCtx.Keys))
-}
-
-func (idx *nonPkMutIndex) Dedup(key any, _ func(uint32) error) (err error) {
-	exist := idx.zonemap.Contains(key)
-	// 1. if not in [min, max], key is definitely not found
-	if !exist {
-		return
-	}
-	err = moerr.GetOkExpectedPossibleDup()
-	return
-}
-
-func (idx *nonPkMutIndex) BatchDedup(
-	keys containers.Vector,
-	skipfn func(row uint32) (err error),
-	_ []byte,
-) (keyselects *roaring.Bitmap, err error) {
-	keyselects, exist := idx.zonemap.ContainsAny(keys)
-	// 1. all keys are definitely not existed
-	if !exist {
-		return
-	}
-	err = moerr.GetOkExpectedPossibleDup()
-	return
 }

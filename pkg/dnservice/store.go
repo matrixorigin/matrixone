@@ -347,6 +347,8 @@ func (s *store) initTxnServer() error {
 	server, err := rpc.NewTxnServer(
 		s.cfg.ListenAddress,
 		s.rt,
+		rpc.WithServerQueueBufferSize(s.cfg.RPC.ServerBufferQueueSize),
+		rpc.WithServerQueueWorkers(s.cfg.RPC.ServerWorkers),
 		rpc.WithServerMaxMessageSize(int(s.cfg.RPC.MaxMessageSize)),
 		rpc.WithServerEnableCompress(s.cfg.RPC.EnableCompress))
 	if err != nil {

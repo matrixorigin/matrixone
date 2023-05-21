@@ -240,7 +240,7 @@ func (blk *baseBlock) FillPersistedDeletes(
 			continue
 		}
 		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
-		_, row := model.DecodePhyAddrKey(&rowid)
+		row := rowid.GetRowOffset()
 		if view.DeleteMask == nil {
 			view.DeleteMask = roaring.NewBitmap()
 		}
@@ -348,11 +348,13 @@ func (blk *baseBlock) PersistedBatchDedup(
 	rowmask *roaring.Bitmap,
 	isAblk bool,
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (err error) {
 	sels, err := pnode.BatchDedup(
 		keys,
 		nil,
 		zm,
+		bf,
 	)
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return

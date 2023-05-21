@@ -150,22 +150,6 @@ func newRefreshableTaskStorage(
 	return s
 }
 
-func (s *refreshableTaskStorage) Bootstrap(ctx context.Context) error {
-	var err error
-	s.mu.RLock()
-	lastAddress := s.mu.lastAddress
-	if s.mu.store == nil {
-		err = errNotReady
-	} else {
-		err = s.mu.store.Bootstrap(ctx)
-	}
-	s.mu.RUnlock()
-	if err != nil {
-		s.maybeRefresh(lastAddress)
-	}
-	return err
-}
-
 func (s *refreshableTaskStorage) Close() error {
 	defer s.rt.Logger().LogAction("close refreshable-storage",
 		log.DefaultLogOptions().WithLevel(zap.DebugLevel))()

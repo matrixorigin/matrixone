@@ -81,7 +81,7 @@ func (s *Service) createInitTasks(ctx context.Context) error {
 	if err := s.store.taskScheduler.Create(ctx, []task.TaskMetadata{{
 		ID:       task.TaskCode_SystemInit.String(),
 		Executor: task.TaskCode_SystemInit,
-	}}, true); err != nil {
+	}}); err != nil {
 		s.runtime.SubLogger(runtime.SystemInit).Error("failed to create init tasks", zap.Error(err))
 		return err
 	}

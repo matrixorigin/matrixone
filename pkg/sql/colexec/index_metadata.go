@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"strconv"
 	"time"
 
@@ -25,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -359,7 +358,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	}
 
 	// processing composite primary key
-	vec_prikey, err := multi.SerialWithSomeCols([]*vector.Vector{vec_id, vec_column_name}, proc)
+	vec_prikey, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, []*vector.Vector{vec_id, vec_column_name}, vec_id.Length())
 	if err != nil {
 		return nil, err
 	}
@@ -367,16 +366,4 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 
 	bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	return bat, nil
-}
-
-func GetNewRelation(eg engine.Engine, dbName, tbleName string, txn client.TxnOperator, ctx context.Context) (engine.Relation, error) {
-	dbHandler, err := eg.Database(ctx, dbName, txn)
-	if err != nil {
-		return nil, err
-	}
-	tableHandler, err := dbHandler.Relation(ctx, tbleName)
-	if err != nil {
-		return nil, err
-	}
-	return tableHandler, nil
 }

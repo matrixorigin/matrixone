@@ -25,9 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 type MetaType uint8
@@ -282,15 +280,18 @@ func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
 		mashalMu: sync.RWMutex{}}
 }
 
-func (r *recordEntry) replay(h driver.ApplyHandle, allocator logstoreEntry.Allocator) (addr *common.ClosedIntervals) {
-	bbuf := bytes.NewBuffer(r.baseEntry.payload)
+func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) {
 	lsns := make([]uint64, 0)
+	offset := int64(0)
 	for lsn := range r.meta.addr {
 		lsns = append(lsns, lsn)
 		e := entry.NewEmptyEntry()
-		e.ReadFromWithAllocator(bbuf, allocator)
-		h(e)
-		e.Entry.Free()
+		n, err := e.UnmarshalBinary(r.baseEntry.payload[offset:])
+		if err != nil {
+			panic(err)
+		}
+		offset += n
+		replayer.recordChan <- e
 	}
 	intervals := common.NewClosedIntervalsBySlice(lsns)
 	return intervals
@@ -330,12 +331,12 @@ func (r *recordEntry) unmarshal() {
 	r.unmarshaled.Store(1)
 }
 
-func (r *recordEntry) readEntry(lsn uint64, allocator logstoreEntry.Allocator) *entry.Entry {
+func (r *recordEntry) readEntry(lsn uint64) *entry.Entry {
 	r.unmarshal()
 	offset := r.meta.addr[lsn]
 	bbuf := bytes.NewBuffer(r.baseEntry.payload[offset:])
 	e := entry.NewEmptyEntry()
-	e.ReadFromWithAllocator(bbuf, allocator)
+	e.ReadFrom(bbuf)
 	e.Lsn = lsn
 	return e
 }

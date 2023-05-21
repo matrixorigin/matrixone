@@ -45,7 +45,7 @@ type evalVector struct {
 	// when it comes to be accepted by the operator,will firstly calculate the a+1, so it's up to
 	// the eval implementor whether he store the a+1 result in the old col a vector or create a
 	// new vector to store it.
-	needFree bool
+	executor colexec.ExpressionExecutor
 	vec      *vector.Vector
 }
 
@@ -68,7 +68,17 @@ type container struct {
 	inBuckets []uint8
 
 	// store the all batch from the build table
-	bat *batch.Batch
+	bat     *batch.Batch
+	joinBat *batch.Batch
+	expr    colexec.ExpressionExecutor
+	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
+
+	joinBat1 *batch.Batch
+	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
+
+	joinBat2 *batch.Batch
+	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
+
 	// records the eval result of the batch from the probe table
 	evecs []evalVector
 	// vecs is same as the evecs.vec's union, we need this because
@@ -149,8 +159,18 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
+		ctr.cleanEvalVectors()
+		ctr.cleanEqVectors()
 		ctr.cleanHashMap()
+		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+		arg.ctr = nil
+	}
+}
+
+func (ctr *container) cleanExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.Free()
 	}
 }
 
@@ -158,6 +178,18 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+	if ctr.joinBat != nil {
+		ctr.joinBat.Clean(mp)
+		ctr.joinBat = nil
+	}
+	if ctr.joinBat1 != nil {
+		ctr.joinBat1.Clean(mp)
+		ctr.joinBat1 = nil
+	}
+	if ctr.joinBat2 != nil {
+		ctr.joinBat2.Clean(mp)
+		ctr.joinBat2 = nil
 	}
 }
 
@@ -168,11 +200,18 @@ func (ctr *container) cleanHashMap() {
 	}
 }
 
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
-			ctr.evecs[i].vec.Free(mp)
-			ctr.evecs[i].vec = nil
+		if ctr.evecs[i].executor != nil {
+			ctr.evecs[i].executor.Free()
+		}
+	}
+}
+
+func (ctr *container) cleanEqVectors() {
+	for i := range ctr.buildEqEvecs {
+		if ctr.buildEqEvecs[i].executor != nil {
+			ctr.buildEqEvecs[i].executor.Free()
 		}
 	}
 }

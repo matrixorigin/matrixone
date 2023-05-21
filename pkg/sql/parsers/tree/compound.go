@@ -25,18 +25,18 @@ type EndCompound struct {
 
 type CompoundStmt struct {
 	statementImpl
-	stmts []Statement
+	Stmts []Statement
 }
 
 func NewCompoundStmt(s []Statement) *CompoundStmt {
 	return &CompoundStmt{
-		stmts: s,
+		Stmts: s,
 	}
 }
 
 func (node *CompoundStmt) Format(ctx *FmtCtx) {
 	ctx.WriteString("begin ")
-	for _, s := range node.stmts {
+	for _, s := range node.Stmts {
 		if s != nil {
 			s.Format(ctx)
 			ctx.WriteString("; ")

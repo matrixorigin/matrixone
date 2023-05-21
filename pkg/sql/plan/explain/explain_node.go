@@ -26,6 +26,9 @@ import (
 
 var _ NodeDescribe = &NodeDescribeImpl{}
 
+const MB = 1024 * 1024
+const GB = MB * 1024
+
 type NodeDescribeImpl struct {
 	Node *plan.Node
 }
@@ -110,7 +113,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 	case plan.Node_MINUS_ALL:
 		pname = "Minus All"
 	case plan.Node_FUNCTION_SCAN:
-		pname = ndesc.Node.TableDef.TblFunc.Name
+		pname = "Table Function"
 	default:
 		panic("error node type")
 	}
@@ -121,12 +124,17 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
+			}
+		case plan.Node_FUNCTION_SCAN:
+			buf.WriteString(" on ")
+			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
+				buf.WriteString(ndesc.Node.TableDef.TblFunc.Name)
 			}
 		case plan.Node_UPDATE:
 			buf.WriteString(" on ")
@@ -372,8 +380,13 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 
-	if plan2.NeedShuffle(ndesc.Node) {
-		buf.WriteString(" shuffle: true ")
+	idx := plan2.GetShuffleIndexForGroupBy(ndesc.Node)
+	if idx >= 0 {
+		buf.WriteString(" shuffle: ")
+		err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+		if err != nil {
+			return "", err
+		}
 	}
 	return buf.String(), nil
 }
@@ -441,9 +454,29 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/1000000)
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
 	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
-	fmt.Fprintf(buf, " inputSize=%dbytes", a.AnalyzeInfo.InputSize)
-	fmt.Fprintf(buf, " outputSize=%dbytes", a.AnalyzeInfo.OutputSize)
-	fmt.Fprintf(buf, " memorySize=%dbytes", a.AnalyzeInfo.MemorySize)
+	if a.AnalyzeInfo.InputSize < MB {
+		fmt.Fprintf(buf, " InputSize=%dbytes", a.AnalyzeInfo.InputSize)
+	} else if a.AnalyzeInfo.InputSize < 10*GB {
+		fmt.Fprintf(buf, " InputSize=%dmb", a.AnalyzeInfo.InputSize/MB)
+	} else {
+		fmt.Fprintf(buf, " InputSize=%dgb", a.AnalyzeInfo.InputSize/GB)
+	}
+
+	if a.AnalyzeInfo.OutputSize < MB {
+		fmt.Fprintf(buf, " OutputSize=%dbytes", a.AnalyzeInfo.OutputSize)
+	} else if a.AnalyzeInfo.OutputSize < 10*GB {
+		fmt.Fprintf(buf, " OutputSize=%dmb", a.AnalyzeInfo.OutputSize/MB)
+	} else {
+		fmt.Fprintf(buf, " OutputSize=%dgb", a.AnalyzeInfo.OutputSize/GB)
+	}
+
+	if a.AnalyzeInfo.MemorySize < MB {
+		fmt.Fprintf(buf, " MemorySize=%dbytes", a.AnalyzeInfo.MemorySize)
+	} else if a.AnalyzeInfo.MemorySize < 10*GB {
+		fmt.Fprintf(buf, " MemorySize=%dmb", a.AnalyzeInfo.MemorySize/MB)
+	} else {
+		fmt.Fprintf(buf, " MemorySize=%dgb", a.AnalyzeInfo.MemorySize/GB)
+	}
 
 	return nil
 }

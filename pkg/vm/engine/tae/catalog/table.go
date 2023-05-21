@@ -352,39 +352,39 @@ func (entry *TableEntry) AsCommonID() *common.ID {
 }
 
 func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
+	defer func() {
+		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+			err = nil
+		}
+	}()
 	segIt := entry.MakeSegmentIt(true)
 	for segIt.Valid() {
 		segment := segIt.Get().GetPayload()
-		if err = processor.OnSegment(segment); err != nil {
+		if err := processor.OnSegment(segment); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				err = nil
 				segIt.Next()
 				continue
 			}
-			break
+			return err
 		}
 		blkIt := segment.MakeBlockIt(true)
 		for blkIt.Valid() {
 			block := blkIt.Get().GetPayload()
-			if err = processor.OnBlock(block); err != nil {
+			if err := processor.OnBlock(block); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-					err = nil
 					blkIt.Next()
 					continue
 				}
-				break
+				return err
 			}
 			blkIt.Next()
 		}
-		if err = processor.OnPostSegment(segment); err != nil {
-			break
+		if err := processor.OnPostSegment(segment); err != nil {
+			return err
 		}
 		segIt.Next()
 	}
-	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-		err = nil
-	}
-	return err
+	return
 }
 
 func (entry *TableEntry) DropSegmentEntry(id *types.Segmentid, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {

@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/fagongzi/util/format"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -863,10 +862,16 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 			return err
 		}
 
-		vec, err := colexec.EvalExpr(bat, proc, planExpr)
+		executor, err := colexec.NewExpressionExecutor(proc, planExpr)
 		if err != nil {
 			return err
 		}
+		vec, err := executor.Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			executor.Free()
+			return err
+		}
+
 		bs := vector.MustFixedCol[bool](vec)
 		sels := proc.Mp().GetSels()
 		for i, b := range bs {
@@ -874,6 +879,8 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 				sels = append(sels, int64(i))
 			}
 		}
+		executor.Free()
+
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 		v0 := vector.MustStrCol(bat.Vecs[0])
@@ -1201,8 +1208,30 @@ func (mce *MysqlCmdExecutor) handleDropProcedure(ctx context.Context, dp *tree.D
 	return doDropProcedure(ctx, mce.GetSession(), dp)
 }
 
-func (mce *MysqlCmdExecutor) handleCallProcedure(ctx context.Context, call *tree.CallStmt) error {
-	return doInterpretCall(ctx, mce.GetSession(), call)
+func (mce *MysqlCmdExecutor) handleCallProcedure(ctx context.Context, call *tree.CallStmt, proc *process.Process, cwIndex, cwsLen int) error {
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	results, err := doInterpretCall(ctx, mce.GetSession(), call)
+	if err != nil {
+		return err
+	}
+
+	resp := NewGeneralOkResponse(COM_QUERY)
+
+	if len(results) == 0 {
+		if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
+			return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+		}
+	} else {
+		for i, result := range results {
+			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
+			resp = SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i, len(results))
+			if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
+				return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+			}
+		}
+	}
+	return nil
 }
 
 // handleGrantRole grants the role
@@ -2142,9 +2171,7 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 	if ses.pu.SV.SkipCheckPrivilege {
 		return nil
 	}
-	if ses.skipCheckPrivilege() {
-		return nil
-	}
+
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
@@ -2180,9 +2207,7 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 	if ses.pu.SV.SkipCheckPrivilege {
 		return nil
 	}
-	if ses.skipCheckPrivilege() {
-		return nil
-	}
+
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
@@ -2351,24 +2376,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proto := ses.GetMysqlProtocol()
 	ses.SetSql(sql)
 	ses.GetExportParam().Outfile = false
-
-	v, err := ses.GetSessionVar("default_account")
-	if err != nil {
-		return err
-	}
-	var tid uint32
-	if id, ok := v.(string); ok && id != "" {
-		tid = format.MustParseStringUint32(id)
-		requestCtx = context.WithValue(
-			requestCtx,
-			defines.TenantIDKey{},
-			tid)
-		ses.SetRequestContext(requestCtx)
-		if ses.GetTenantInfo() != nil {
-			ses.GetTenantInfo().SetTenantID(tid)
-		}
-	}
-
 	pu := ses.GetParameterUnit()
 	proc := process.New(
 		requestCtx,
@@ -2376,7 +2383,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.GetTxnHandler().GetTxnClient(),
 		nil,
 		pu.FileService,
-		pu.LockService)
+		pu.LockService,
+		ses.GetAutoIncrCacheManager())
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -2768,7 +2776,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.CallStmt:
 			selfHandle = true
-			if err = mce.handleCallProcedure(requestCtx, st); err != nil {
+			if err = mce.handleCallProcedure(requestCtx, st, proc, i, len(cws)); err != nil {
 				goto handleFailed
 			}
 		case *tree.Grant:
@@ -3151,7 +3159,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateSequence, *tree.DropSequence,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
 			*tree.CreateFunction, *tree.DropFunction,
-			*tree.CreateProcedure, *tree.DropProcedure, *tree.CallStmt,
+			*tree.CreateProcedure, *tree.DropProcedure,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
@@ -3308,7 +3316,8 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		pu.TxnClient,
 		nil,
 		pu.FileService,
-		pu.LockService)
+		pu.LockService,
+		ses.GetAutoIncrCacheManager())
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows

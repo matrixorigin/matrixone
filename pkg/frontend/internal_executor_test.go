@@ -57,7 +57,10 @@ func TestIe(t *testing.T) {
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 
-	executor := newIe(pu, &miniExec{})
+	// Mock autoIncrCaches
+	aicm := &defines.AutoIncrCacheManager{}
+
+	executor := newIe(pu, &miniExec{}, aicm)
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
 	assert.Equal(t, "dump", sess.GetMysqlProtocol().GetUserName())
@@ -72,7 +75,10 @@ func TestIe(t *testing.T) {
 func TestIeProto(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 
-	executor := NewInternalExecutor(pu)
+	// Mock autoIncrCaches
+	aicm := &defines.AutoIncrCacheManager{}
+
+	executor := NewInternalExecutor(pu, aicm)
 	p := executor.proto
 	assert.True(t, p.IsEstablished())
 	p.SetEstablished()

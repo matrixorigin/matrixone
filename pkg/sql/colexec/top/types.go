@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,6 +34,8 @@ type container struct {
 	sels  []int64
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
+
+	executorsForOrderColumn []colexec.ExpressionExecutor
 
 	bat *batch.Batch
 }
