@@ -420,6 +420,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	if err != nil {
 		return nil, err
 	}
+	if plan2.IsTpQuery(qry, int32(len(c.cnList))) {
+		c.info.Typ = plan2.ExecTypeTP
+	}
 	if c.info.Typ == plan2.ExecTypeAP {
 		client := cnclient.GetRPCClient()
 		if client != nil {
