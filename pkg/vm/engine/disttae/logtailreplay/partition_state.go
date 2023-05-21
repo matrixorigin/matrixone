@@ -377,30 +377,8 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 
 			p.blocks.Set(entry)
 
-			if entryStateVector[i] {
-				iter := p.rows.Copy().Iter()
-				pivot := RowEntry{
-					BlockID: blockID,
-				}
-				for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-					entry := iter.Item()
-					if entry.BlockID != blockID {
-						break
-					}
-					// delete row entry
-					p.rows.Delete(entry)
-					numDeleted++
-					// delete primary index entry
-					if len(entry.PrimaryIndexBytes) > 0 {
-						p.primaryIndex.Delete(&PrimaryIndexEntry{
-							Bytes:      entry.PrimaryIndexBytes,
-							RowEntryID: entry.ID,
-						})
-					}
-				}
-				iter.Release()
-			}
-			if !entryStateVector[i] && len(entry.DeltaLoc) != 0 {
+			if entryStateVector[i] ||
+				(!entryStateVector[i] && len(entry.DeltaLoc) != 0) {
 				iter := p.rows.Copy().Iter()
 				pivot := RowEntry{
 					BlockID: blockID,
