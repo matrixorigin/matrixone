@@ -62,13 +62,14 @@ func (s *service) initDistributedTAE(
 	blockio.Start()
 
 	// engine
-	pu.StorageEngine = disttae.New(
+	s.storeEngine = disttae.New(
 		ctx,
 		mp,
 		fs,
 		client,
 		hakeeper,
 	)
+	pu.StorageEngine = s.storeEngine
 
 	// log tail client to subscribe table and receive table log.
 	usePushModel := s.cfg.TurnOnPushModel
@@ -84,5 +85,6 @@ func (s *service) initDistributedTAE(
 		}
 	}
 
+	s.initInternalSQlExecutor(mp)
 	return nil
 }
