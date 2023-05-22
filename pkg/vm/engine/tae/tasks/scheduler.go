@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 var (
@@ -44,7 +43,6 @@ type TaskScheduler interface {
 	ScheduleMultiScopedFn(ctx *Context, taskType TaskType, scopes []common.ID, fn FuncT) (Task, error)
 	ScheduleFn(ctx *Context, taskType TaskType, fn func() error) (Task, error)
 	ScheduleScopedFn(ctx *Context, taskType TaskType, scope *common.ID, fn func() error) (Task, error)
-	Checkpoint(indexes []*wal.Index) error
 
 	AddTransferPage(*model.TransferHashPage) error
 	DeleteTransferPage(id *common.ID) error
