@@ -54,6 +54,8 @@ drop table if exists table_15;
 drop table if exists table_16;
 drop table if exists ex_table_yccs;
 drop table if exists ex_table_null;
+drop table if exists ex_empty_table;
+drop table if exists join_table;
 create external table ex_table_1(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double,num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from  ex_table_1;
 num_col1    num_col2    num_col3    num_col4    num_col5    num_col6    num_col7    num_col8    num_col9    num_col10    num_col11
@@ -304,7 +306,6 @@ update ex_table_yccs set char_1="cat123";
 invalid input: cannot insert/update/delete from external table
 delete from ex_table_yccs;
 invalid input: cannot insert/update/delete from external table
-
 create table table_16(a int);
 insert into table_16 values(99);
 select * from table_16, ex_table_gzip;
@@ -328,6 +329,11 @@ create external table ex_table_null( col1 int, col2 float, col3 varchar, col4 bl
 select max(col3), min(col3) from ex_table_null;
 max(col3)    min(col3)
 你好    你
+create external table ex_empty_table(a int, b int)infile{"filepath"='noexistfile.csv'} fields terminated by ',' enclosed by '"' lines terminated by '\n';
+create table join_table(a int, b int);
+insert into join_table values(1,1), (2,2);
+select * from ex_empty_table join join_table on ex_empty_table.a = join_table.a;
+a    b    a    b
 drop table if exists ex_table_1;
 drop table if exists ex_table_2_1;
 drop table if exists ex_table_2_2;
@@ -385,3 +391,5 @@ drop table if exists ex_table_yccs;
 drop table if exists ex_table_space;
 drop table if exists t1;
 drop table if exists ex_table_null;
+drop table if exists ex_empty_table;
+drop table if exists join_table;
