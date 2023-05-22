@@ -24,7 +24,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -374,24 +373,6 @@ func (blk *baseBlock) dedupWithLoad(
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
 	return
-}
-
-func makeBFLoader(
-	bf objectio.BloomFilter,
-	meta *catalog.BlockEntry,
-	cache model.LRUCache,
-	fs fileservice.FileService,
-) func(context.Context) ([]byte, error) {
-	return func(ctx context.Context) ([]byte, error) {
-		location := meta.GetMetaLoc()
-		var err error
-		if len(bf) == 0 {
-			if bf, err = blockio.LoadBF(ctx, location, cache, fs, false); err != nil {
-				return nil, err
-			}
-		}
-		return bf.GetBloomFilter(uint32(location.ID())), nil
-	}
 }
 
 func (blk *baseBlock) PersistedBatchDedup(
