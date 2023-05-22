@@ -156,7 +156,7 @@ func (sender *messageSenderOnClient) close() {
 		sender.ctxCancel()
 	}
 	// XXX not a good way to deal it if close failed.
-	_ = sender.streamSender.Close(false)
+	_ = sender.streamSender.Close(true)
 }
 
 // messageReceiverOnServer is a structure
