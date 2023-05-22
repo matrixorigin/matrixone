@@ -303,7 +303,7 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 	if err = node.PrepareRollback(); err != nil {
 		panic(err)
 	}
-	if err = node.ApplyRollback(nil); err != nil {
+	if err = node.ApplyRollback(); err != nil {
 		panic(err)
 	}
 
@@ -593,9 +593,7 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 	return tbl.localSegment.Append(data)
 }
 
-func (tbl *txnTable) AddBlksWithMetaLoc(
-	zm []objectio.ZoneMap,
-	metaLocs []objectio.Location) (err error) {
+func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error) {
 	var pkVecs []containers.Vector
 	defer func() {
 		for _, v := range pkVecs {
@@ -641,7 +639,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 	if tbl.localSegment == nil {
 		tbl.localSegment = newLocalSegment(tbl)
 	}
-	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, zm, metaLocs)
+	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, metaLocs)
 }
 
 func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
@@ -1332,7 +1330,7 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 		if node.Is1PC() {
 			continue
 		}
-		if err = node.ApplyCommit(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
+		if err = node.ApplyCommit(); err != nil {
 			break
 		}
 		csn++
@@ -1348,7 +1346,7 @@ func (tbl *txnTable) Apply1PCCommit() (err error) {
 		if !node.Is1PC() {
 			continue
 		}
-		if err = node.ApplyCommit(tbl.store.cmdMgr.MakeLogIndex(tbl.csnStart)); err != nil {
+		if err = node.ApplyCommit(); err != nil {
 			break
 		}
 		tbl.csnStart++
@@ -1364,7 +1362,7 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 		if node.Is1PC() {
 			continue
 		}
-		if err = node.ApplyRollback(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
+		if err = node.ApplyRollback(); err != nil {
 			break
 		}
 		csn++

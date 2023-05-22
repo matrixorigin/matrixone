@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
@@ -141,6 +142,6 @@ mkdirRetry:
 
 // WriteString implement io.StringWriter
 func (w *FSWriter) WriteString(s string) (n int, err error) {
-	var b = table.String2Bytes(s)
+	var b = util.UnsafeStringToBytes(s)
 	return w.Write(b)
 }

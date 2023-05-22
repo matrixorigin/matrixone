@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 func (bj ByteJson) String() string {
@@ -339,7 +340,7 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 					cur = bj.getObjectVal(i).query(cur, &nPath)
 				}
 			} else {
-				tmp := bj.queryValByKey(string2Slice(sub.key))
+				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
 				cur = tmp.query(cur, &nPath)
 			}
 		}
@@ -451,7 +452,7 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 					keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
 				}
 			} else {
-				tmp := bj.queryValByKey(string2Slice(sub.key))
+				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
 				newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
 				keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
@@ -500,7 +501,7 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 	if !bj.canUnnest() {
 		index, key := genIndexOrKey(pathStr)
 		tmp := UnnestResult{}
-		genUnnestResult(tmp, index, key, string2Slice(pathStr), &bj, this, filterMap)
+		genUnnestResult(tmp, index, key, util.UnsafeStringToBytes(pathStr), &bj, this, filterMap)
 		out = append(out, tmp)
 		return out
 	}
@@ -511,7 +512,7 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			val := bj.getObjectVal(i)
 			newPathStr := fmt.Sprintf("%s.%s", pathStr, key)
 			tmp := UnnestResult{}
-			genUnnestResult(tmp, nil, key, string2Slice(newPathStr), &val, this, filterMap)
+			genUnnestResult(tmp, nil, key, util.UnsafeStringToBytes(newPathStr), &val, this, filterMap)
 			out = append(out, tmp)
 			if val.canUnnest() && recursive {
 				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filterMap)
@@ -524,7 +525,7 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			val := bj.getArrayElem(i)
 			newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
 			tmp := UnnestResult{}
-			genUnnestResult(tmp, string2Slice(strconv.Itoa(i)), nil, string2Slice(newPathStr), &val, this, filterMap)
+			genUnnestResult(tmp, util.UnsafeStringToBytes(strconv.Itoa(i)), nil, util.UnsafeStringToBytes(newPathStr), &val, this, filterMap)
 			out = append(out, tmp)
 			if val.canUnnest() && recursive {
 				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filterMap)
@@ -554,7 +555,7 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 		}
 		if _, ok := filterMap["path"]; ok {
 			for i := 0; i < len(keys); i++ {
-				out[i]["path"] = string2Slice(keys[i])
+				out[i]["path"] = util.UnsafeStringToBytes(keys[i])
 			}
 		}
 		if _, ok := filterMap["this"]; ok {

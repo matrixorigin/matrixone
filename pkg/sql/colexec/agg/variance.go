@@ -16,8 +16,6 @@ package agg
 
 import (
 	"math"
-	"reflect"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -77,14 +75,6 @@ func VarianceReturnType(typs []types.Type) types.Type {
 	default:
 		return types.New(types.T_float64, 0, 0)
 	}
-}
-
-func String(b []byte) (s string) {
-	pbytes := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-	pstring := (*reflect.StringHeader)(unsafe.Pointer(&s))
-	pstring.Data = pbytes.Data
-	pstring.Len = pbytes.Len
-	return
 }
 
 // NewVariance is used to create a Variance which supports float,int,uint
