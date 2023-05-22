@@ -235,7 +235,7 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
-		bat, err := decodeBatch(c.proc.Mp(), dataBuffer)
+		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
 		if err != nil {
 			return err
 		}
