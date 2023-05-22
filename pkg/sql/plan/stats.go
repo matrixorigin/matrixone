@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"sort"
 	"strings"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 const blockNDVThreshHold = 100
@@ -778,4 +778,16 @@ func orSelectivity(s1, s2 float64) float64 {
 	} else {
 		return s
 	}
+}
+
+const blockThresholdForTpQuery = 16
+
+func IsTpQuery(qry *plan.Query) bool {
+	for _, node := range qry.GetNodes() {
+		stats := node.Stats
+		if stats == nil || stats.BlockNum > blockThresholdForTpQuery {
+			return false
+		}
+	}
+	return true
 }

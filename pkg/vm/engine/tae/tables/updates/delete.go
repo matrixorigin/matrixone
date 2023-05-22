@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type NodeType int8
@@ -44,13 +43,12 @@ func (node *DeleteNode) Less(b *DeleteNode) int {
 type DeleteNode struct {
 	*common.GenericDLNode[*DeleteNode]
 	*txnbase.TxnMVCCNode
-	chain      *DeleteChain
-	logIndexes []*wal.Index
-	mask       *roaring.Bitmap
-	nt         NodeType
-	id         *common.ID
-	dt         handle.DeleteType
-	viewNodes  map[uint32]*common.GenericDLNode[*DeleteNode]
+	chain     *DeleteChain
+	mask      *roaring.Bitmap
+	nt        NodeType
+	id        *common.ID
+	dt        handle.DeleteType
+	viewNodes map[uint32]*common.GenericDLNode[*DeleteNode]
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
@@ -58,7 +56,6 @@ func NewMergedNode(commitTs types.TS) *DeleteNode {
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(commitTs),
 		mask:        roaring.New(),
 		nt:          NT_Merge,
-		logIndexes:  make([]*wal.Index, 0),
 		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
 	}
 	return n
@@ -101,16 +98,9 @@ func (node *DeleteNode) GetMeta() *catalog.BlockEntry { return node.chain.mvcc.m
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }
-func (node *DeleteNode) AddLogIndexesLocked(indexes []*wal.Index) {
-	node.logIndexes = append(node.logIndexes, indexes...)
-}
 
 func (node *DeleteNode) SetDeletes(mask *roaring.Bitmap) {
 	node.mask = mask
-}
-
-func (node *DeleteNode) AddLogIndexLocked(index *wal.Index) {
-	node.logIndexes = append(node.logIndexes, index)
 }
 
 func (node *DeleteNode) IsMerged() bool { return node.nt == NT_Merge }
@@ -137,19 +127,11 @@ func (node *DeleteNode) HasOverlapLocked(start, end uint32) bool {
 	return yes
 }
 
-func (node *DeleteNode) MergeLocked(o *DeleteNode, collectIndex bool) {
+func (node *DeleteNode) MergeLocked(o *DeleteNode) {
 	if node.mask == nil {
 		node.mask = roaring.New()
 	}
 	node.mask.Or(o.mask)
-	if collectIndex {
-		if o.GetLogIndex() != nil {
-			node.AddLogIndexLocked(o.GetLogIndex())
-		}
-		if o.logIndexes != nil {
-			node.AddLogIndexesLocked(o.logIndexes)
-		}
-	}
 }
 func (node *DeleteNode) GetCommitTSLocked() types.TS { return node.TxnMVCCNode.GetEnd() }
 func (node *DeleteNode) GetStartTS() types.TS        { return node.TxnMVCCNode.GetStart() }
@@ -188,10 +170,10 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 	return
 }
 
-func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
+func (node *DeleteNode) ApplyCommit() (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
-	_, err = node.TxnMVCCNode.ApplyCommit(index)
+	_, err = node.TxnMVCCNode.ApplyCommit()
 	if err != nil {
 		return
 	}
@@ -200,10 +182,10 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	return node.OnApply()
 }
 
-func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
+func (node *DeleteNode) ApplyRollback() (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
-	_, err = node.TxnMVCCNode.ApplyRollback(index)
+	_, err = node.TxnMVCCNode.ApplyRollback()
 	return
 }
 
@@ -281,9 +263,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	n += sn2
 	return
 }
-func (node *DeleteNode) SetLogIndex(idx *wal.Index) {
-	node.TxnMVCCNode.SetLogIndex(idx)
-}
+
 func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewDeleteCmd(id, node)
 	return
