@@ -222,7 +222,6 @@ func initCtrBatchForProcessWithOutGroup(ap *Argument, proc *process.Process, ctr
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	var err error
 	bat := proc.InputBatch()
-	fmt.Printf("[groupcall] bat size = %d\n", bat.Length())
 	if bat == nil {
 		if ctr.bat != nil {
 			if ap.NeedEval {
