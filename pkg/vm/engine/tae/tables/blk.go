@@ -105,11 +105,8 @@ func (blk *block) GetColumnDataById(
 	readSchema any,
 	col int,
 ) (view *model.ColumnView, err error) {
-	node := blk.PinNode()
-	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnData(
-		node.MustPNode(),
 		txn,
 		schema,
 		col,

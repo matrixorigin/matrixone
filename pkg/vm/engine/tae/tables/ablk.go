@@ -184,7 +184,6 @@ func (blk *ablock) resolveColumnData(
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnData(
-			node.MustPNode(),
 			txn,
 			readSchema,
 			col,

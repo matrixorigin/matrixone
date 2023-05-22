@@ -305,7 +305,6 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 }
 
 func (blk *baseBlock) ResolvePersistedColumnData(
-	pnode *persistedNode,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdx int,
@@ -363,7 +362,6 @@ func (blk *baseBlock) PersistedBatchDedup(
 	schema := blk.meta.GetSchema()
 	def := schema.GetSingleSortKey()
 	view, err := blk.ResolvePersistedColumnData(
-		pnode,
 		txn,
 		schema,
 		def.Idx,
@@ -411,7 +409,7 @@ func (blk *baseBlock) getPersistedValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view2, err := blk.ResolvePersistedColumnData(pnode, txn, schema, col, true)
+	view2, err := blk.ResolvePersistedColumnData(txn, schema, col, true)
 	if err != nil {
 		return
 	}
