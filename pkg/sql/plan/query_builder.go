@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"go/constant"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -2358,7 +2359,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	for _, v := range tbl.Func.Exprs {
 		curExpr, err := ctx.binder.BindExpr(v, 0, false)
 		if err != nil {
-			fmt.Printf("[buildTableFunction] err: %s\n", err)
 			return 0, err
 		}
 		exprs = append(exprs, curExpr)

@@ -42,9 +42,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		f, e = currentAccountCall(idx, proc, tblArg)
 	case "metadata_scan":
 		f, e = metadataScan(idx, proc, tblArg)
-		if e != nil {
-			fmt.Printf("[metadatascan] err = %s\n", e)
-		}
 	default:
 		return true, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
@@ -55,7 +52,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return f, e
 	}
 	if proc.InputBatch().VectorCount() != len(tblArg.retSchema) {
-		fmt.Printf("[tablefunction] v count = %d, retSchema = %d\n", proc.InputBatch().VectorCount(), len(tblArg.retSchema))
 		return true, moerr.NewInternalError(proc.Ctx, "table function %s return length mismatch", tblArg.Name)
 	}
 	for i := range tblArg.retSchema {
