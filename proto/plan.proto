@@ -785,9 +785,7 @@ message Plan {
 		DataDefinition ddl 		= 3;
 		DataControl	dcl			= 4;
 	}
-	// AttachedPlan for the ddl statements, Attached Plan is used to modify related metadata
-	Plan AttachedPlan = 5;
-	int32 try_run_times = 6;
+	int32 try_run_times = 5;
 }
 
 message column{
