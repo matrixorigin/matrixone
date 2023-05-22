@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -65,11 +64,7 @@ func TestGetActiveRow(t *testing.T) {
 	vec.Append(int8(1), false)
 	vec.Append(int8(1), false)
 	idx := indexwrapper.NewMutIndex(types.T_int8.ToType())
-	keysCtx := &index.KeysCtx{
-		Keys: vec,
-	}
-	keysCtx.SelectAll()
-	err := idx.BatchUpsert(keysCtx, 0)
+	err := idx.BatchUpsert(vec, 0)
 	assert.NoError(t, err)
 	blk.node.Load().MustMNode().pkIndex = idx
 

@@ -38,16 +38,18 @@ func NewMutIndex(typ types.Type) *MutIndex {
 // BatchUpsert batch insert the specific keys
 // If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map
 // If any other unknown error hanppens, return error
-func (idx *MutIndex) BatchUpsert(keysCtx *index.KeysCtx,
-	offset int) (err error) {
+func (idx *MutIndex) BatchUpsert(
+	keys containers.Vector,
+	offset int,
+) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
-	if err = index.BatchUpdateZM(idx.zonemap, keysCtx.Keys); err != nil {
+	if err = index.BatchUpdateZM(idx.zonemap, keys); err != nil {
 		return
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
-	err = idx.art.BatchInsert(keysCtx, uint32(offset))
+	err = idx.art.BatchInsert(keys, 0, keys.Length(), uint32(offset))
 	// logutil.Infof("Post: %s", idx.art.String())
 	return
 }

@@ -47,7 +47,7 @@ type BatchResp struct {
 
 type SecondaryIndex interface {
 	Insert(key []byte, offset uint32) (err error)
-	BatchInsert(keys *KeysCtx, startRow uint32) (err error)
+	BatchInsert(keys containers.Vector, offset, length int, startRow uint32) (err error)
 	Delete(key any) (old uint32, err error)
 	Search(key []byte) ([]uint32, error)
 	String() string
