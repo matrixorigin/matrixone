@@ -47,7 +47,6 @@ uuid = "dd1dccb8-4d3c-41f9-b482-5251dc7a41bf"
 listen-address = "0.0.0.0:6002"
 service-address = "cn-0:6002"
 sql-address = "cn-0:6001"
-turn-on-push-model = false
 
 [cn.ctl.address]
 listen-address = "0.0.0.0:19958"

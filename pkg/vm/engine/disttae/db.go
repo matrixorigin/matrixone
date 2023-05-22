@@ -324,6 +324,9 @@ func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, t
 	return e.pClient.TryToSubscribeTable(ctx, databaseId, tableId)
 }
 
+// skip SCA check for unused function.
+var _ = (&Engine{}).UpdateOfPull
+
 func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTable, op client.TxnOperator,
 	primarySeqnum int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	logDebugf(op.Txn(), "UpdateOfPull")

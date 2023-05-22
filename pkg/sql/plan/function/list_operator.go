@@ -405,7 +405,7 @@ var supportedOperators = []FuncNew{
 	// operator `in`
 	{
 		functionId: IN,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
 		layout:     IN_PREDICATE,
 		checkFn:    fixedDirectlyTypeMatch,
 
