@@ -60,7 +60,8 @@ func (node *persistedNode) BatchDedup(
 }
 
 func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
-	zm, err := node.block.meta.GetPKZoneMap(context.TODO(), node.block.fs.Service)
+	ctx := context.TODO()
+	zm, err := node.block.meta.GetPKZoneMap(ctx, node.block.fs.Service)
 	if err != nil {
 		return
 	}
@@ -68,7 +69,7 @@ func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
 		*zm,
 		makeBFLoader(nil, node.block.meta, node.block.indexCache, node.block.fs.Service),
 	)
-	if err = pkIndex.Dedup(key); err == nil {
+	if err = pkIndex.Dedup(ctx, key); err == nil {
 		return
 	}
 	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {

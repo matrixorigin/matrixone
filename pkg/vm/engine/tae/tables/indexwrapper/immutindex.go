@@ -30,12 +30,12 @@ import (
 
 type ImmutIndex struct {
 	zm       index.ZM
-	bfLoader func() ([]byte, error)
+	bfLoader func(context.Context) ([]byte, error)
 }
 
 func NewImmutIndex(
 	zm index.ZM,
-	bfLoader func() ([]byte, error),
+	bfLoader func(context.Context) ([]byte, error),
 ) ImmutIndex {
 	return ImmutIndex{
 		zm:       zm,
@@ -44,6 +44,7 @@ func NewImmutIndex(
 }
 
 func (idx ImmutIndex) BatchDedup(
+	ctx context.Context,
 	keys containers.Vector,
 	keysZM index.ZM,
 ) (sels *roaring.Bitmap, err error) {
@@ -65,7 +66,7 @@ func (idx ImmutIndex) BatchDedup(
 	var buf []byte
 	if idx.bfLoader != nil {
 		// load bloomfilter
-		if buf, err = idx.bfLoader(); err != nil {
+		if buf, err = idx.bfLoader(ctx); err != nil {
 			return
 		}
 	} else {
@@ -92,7 +93,7 @@ func (idx ImmutIndex) BatchDedup(
 	return
 }
 
-func (idx ImmutIndex) Dedup(key any) (err error) {
+func (idx ImmutIndex) Dedup(ctx context.Context, key any) (err error) {
 	exist := idx.zm.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
 	if !exist {
@@ -103,7 +104,7 @@ func (idx ImmutIndex) Dedup(key any) (err error) {
 		return
 	}
 
-	buf, err := idx.bfLoader()
+	buf, err := idx.bfLoader(ctx)
 	if err != nil {
 		return
 	}

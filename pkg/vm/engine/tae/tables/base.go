@@ -382,12 +382,12 @@ func makeBFLoader(
 	meta *catalog.BlockEntry,
 	cache model.LRUCache,
 	fs fileservice.FileService,
-) func() ([]byte, error) {
-	return func() ([]byte, error) {
+) func(context.Context) ([]byte, error) {
+	return func(ctx context.Context) ([]byte, error) {
 		location := meta.GetMetaLoc()
 		var err error
 		if len(bf) == 0 {
-			if bf, err = indexwrapper.LoadBF(context.TODO(), location, cache, fs, false); err != nil {
+			if bf, err = indexwrapper.LoadBF(ctx, location, cache, fs, false); err != nil {
 				return nil, err
 			}
 		}
@@ -404,7 +404,8 @@ func (blk *baseBlock) PersistedBatchDedup(
 	keysZM index.ZM,
 	bf objectio.BloomFilter,
 ) (err error) {
-	pkZM, err := blk.meta.GetPKZoneMap(context.TODO(), blk.fs.Service)
+	ctx := context.TODO()
+	pkZM, err := blk.meta.GetPKZoneMap(ctx, blk.fs.Service)
 	if err != nil {
 		return
 	}
@@ -414,6 +415,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	)
 
 	sels, err := pkIndex.BatchDedup(
+		ctx,
 		keys,
 		keysZM,
 	)
