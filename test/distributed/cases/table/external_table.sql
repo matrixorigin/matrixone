@@ -243,7 +243,7 @@ create external table ex_table_null( col1 int, col2 float, col3 varchar, col4 bl
 select max(col3), min(col3) from ex_table_null;
 
 --empty table for join
-create external table ex_empty_table(a int, b int)infile{"filepath"='noexistfile.csv'} fields terminated by ',' enclosed by '"' lines terminated by '\n' set col3=nullif(col3,'null'); 
+create external table ex_empty_table(a int, b int)infile{"filepath"='noexistfile.csv'} fields terminated by ',' enclosed by '"' lines terminated by '\n';
 create table join_table(a int, b int);
 insert into join_table values(1,1), (2,2);
 select * from ex_empty_table join join_table on ex_empty_table.a = join_table.a; 
