@@ -317,7 +317,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 			if alterIndex != nil {
 				for i, idx := range t.Indexes {
 					if alterIndex.IndexName == idx.IndexName {
-						t.Indexes[i].TableExist = alterIndex.Visible
+						t.Indexes[i].Visible = alterIndex.Visible
 					}
 				}
 			}
