@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type NodeT interface {
@@ -47,7 +48,7 @@ type NodeT interface {
 	BatchDedup(
 		keys containers.Vector,
 		skipFn func(row uint32) error,
-		zm []byte,
+		zm index.ZM,
 		bf objectio.BloomFilter,
 	) (sels *roaring.Bitmap, err error)
 	ContainsKey(key any) (ok bool, err error)

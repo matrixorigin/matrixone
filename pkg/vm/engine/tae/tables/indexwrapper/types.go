@@ -51,7 +51,7 @@ type Index interface {
 	BatchDedup(
 		keys containers.Vector,
 		skipfn func(row uint32) (err error),
-		zm []byte,
+		zm index.ZM,
 		bf objectio.BloomFilter,
 	) (keyselects *roaring.Bitmap, err error)
 

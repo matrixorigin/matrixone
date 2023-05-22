@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -347,7 +348,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
 	isAblk bool,
-	zm []byte,
+	zm index.ZM,
 	bf objectio.BloomFilter,
 ) (err error) {
 	sels, err := pnode.BatchDedup(

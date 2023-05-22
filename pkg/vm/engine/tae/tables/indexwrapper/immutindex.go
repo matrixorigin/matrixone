@@ -85,13 +85,12 @@ func (index *immutableIndex) Dedup(key any, _ func(row uint32) error) (err error
 func (index *immutableIndex) BatchDedup(
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
-	zm []byte,
+	zm idxpkg.ZM,
 	bf objectio.BloomFilter,
 ) (keyselects *roaring.Bitmap, err error) {
 	var exist bool
-	inputZM := idxpkg.ZM(zm)
-	if inputZM.Valid() {
-		if exist = index.zmReader.Intersect(inputZM); !exist {
+	if zm.Valid() {
+		if exist = index.zmReader.Intersect(zm); !exist {
 			return
 		}
 	} else {

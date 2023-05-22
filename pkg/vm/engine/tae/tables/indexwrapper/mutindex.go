@@ -104,12 +104,11 @@ func (idx *mutableIndex) Dedup(key any, skipfn func(row uint32) (err error)) (er
 func (idx *mutableIndex) BatchDedup(
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
-	zm []byte,
+	zm index.ZM,
 	_ objectio.BloomFilter,
 ) (keyselects *roaring.Bitmap, err error) {
-	inputZM := index.ZM(zm)
-	if inputZM.Valid() {
-		if exist := idx.zonemap.FastIntersect(inputZM); !exist {
+	if zm.Valid() {
+		if exist := idx.zonemap.FastIntersect(zm); !exist {
 			return
 		}
 	} else {

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -557,7 +558,7 @@ func (blk *ablock) inMemoryBatchDedup(
 	isCommitting bool,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
-	zm []byte,
+	zm index.ZM,
 	bf objectio.BloomFilter,
 ) (err error) {
 	var dupRow uint32
@@ -584,7 +585,7 @@ func (blk *ablock) BatchDedup(
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
 	precommit bool,
-	zm []byte,
+	zm index.ZM,
 	bf objectio.BloomFilter,
 ) (err error) {
 	defer func() {
