@@ -914,12 +914,36 @@ func (tbl *txnTable) updateDedupedBlockID(id *types.Blockid) {
 	}
 }
 
+func (tbl *txnTable) tryGetCurrentObjectBF(
+	ctx context.Context,
+	currLocation objectio.Location,
+	prevBF objectio.BloomFilter,
+	prevObjName *objectio.ObjectNameShort,
+) (currBf objectio.BloomFilter, err error) {
+	if len(currLocation) == 0 {
+		return
+	}
+	if objectio.IsSameObjectLocVsShort(currLocation, prevObjName) {
+		currBf = prevBF
+		return
+	}
+	currBf, err = blockio.LoadBF(
+		ctx,
+		currLocation,
+		tbl.store.indexCache,
+		tbl.store.dataFactory.Fs.Service,
+		false,
+	)
+	return
+}
+
 // DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
 func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	r := trace.StartRegion(context.Background(), "DedupSnapByPK")
 	defer r.End()
+	ctx := context.TODO()
 	h := newRelation(tbl)
 	it := newRelationBlockItOnSnap(h)
 	maxSegmentHint := uint64(0)
@@ -958,19 +982,13 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 			}
 		}
 		location := blk.FastGetMetaLoc()
-		if len(location) == 0 {
-			bf = objectio.BloomFilter{}
-		} else if !objectio.IsSameObjectLocVsShort(location, &name) {
-			if bf, err = blockio.LoadBF(
-				context.Background(),
-				location,
-				tbl.store.indexCache,
-				tbl.store.dataFactory.Fs.Service,
-				false,
-			); err != nil {
-				return
-			}
-			// TODO: do object first
+		if bf, err = tbl.tryGetCurrentObjectBF(
+			ctx,
+			location,
+			bf,
+			&name,
+		); err != nil {
+			return
 		}
 		name = *objectio.ToObjectNameShort(&blk.ID)
 
