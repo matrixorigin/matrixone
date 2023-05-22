@@ -1387,7 +1387,7 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 			tbl.db.txn.dnStores[:1],
 			tbl,
 			tbl.db.txn.op,
-			tbl.primaryIdx,
+			tbl.primarySeqnum,
 			tbl.db.databaseId,
 			tableId,
 			tbl.db.txn.meta.SnapshotTS,
