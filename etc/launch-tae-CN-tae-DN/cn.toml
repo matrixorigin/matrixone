@@ -40,7 +40,6 @@ disableMetric = true
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
-turn-on-push-model = false
 
 [cn.Engine]
 type = "distributed-tae"
