@@ -219,6 +219,9 @@ func (s *Scope) AlterTable(c *Compile) error {
 
 			//1. build and update constraint def
 			insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
+			if err != nil {
+				return err
+			}
 			err = c.runSql(insertSql, nil)
 			if err != nil {
 				return err
@@ -512,6 +515,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
+		if err != nil {
+			return err
+		}
 		err = c.runSql(insertSQL, nil)
 		if err != nil {
 			return err
