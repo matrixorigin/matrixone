@@ -258,10 +258,17 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	}
 	bat := makeFilepathBatch(node, proc, filterList, fileList)
 	filter := colexec.RewriteFilterExprList(filterList)
-	vec, err := colexec.EvalExpr(bat, proc, filter)
+
+	executor, err := colexec.NewExpressionExecutor(proc, filter)
 	if err != nil {
-		return nil, fileSize, err
+		return nil, nil, err
 	}
+	vec, err := executor.Eval(proc, []*batch.Batch{bat})
+	if err != nil {
+		executor.Free()
+		return nil, nil, err
+	}
+
 	fileListTmp := make([]string, 0)
 	fileSizeTmp := make([]int64, 0)
 	bs := vector.MustFixedCol[bool](vec)
@@ -271,6 +278,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 			fileSizeTmp = append(fileSizeTmp, fileSize[i])
 		}
 	}
+	executor.Free()
 	node.FilterList = filterList2
 	return fileListTmp, fileSizeTmp, nil
 }
@@ -697,65 +705,32 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 func needRead(ctx context.Context, param *ExternalParam, proc *process.Process, objectReader *blockio.BlockReader) bool {
 	_, span := trace.Start(ctx, "needRead")
 	defer span.End()
-	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
+
+	expr := param.Filter.FilterExpr
+	if expr == nil {
 		return true
 	}
-	// external read, columns won't change, there is no need to use seqnum
-	indexes, err := objectReader.LoadZoneMap(context.Background(), param.Filter.columns,
-		param.Zoneparam.bs[param.Zoneparam.offset], proc.GetMPool())
-	if err != nil {
+	if param.Zoneparam.offset >= len(param.Zoneparam.bs) {
 		return true
 	}
 
 	notReportErrCtx := errutil.ContextWithNoReport(proc.Ctx, true)
-	// if expr match no columns, just eval expr
-	if len(param.Filter.columns) == 0 {
-		bat := batch.NewWithSize(0)
-		defer bat.Clean(proc.Mp())
-		ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, param.Filter.FilterExpr, bat, proc)
-		if err != nil {
-			return true
-		}
-		return ifNeed
+
+	meta := param.Zoneparam.bs[param.Zoneparam.offset]
+	columnMap := param.Filter.columnMap
+	var (
+		zms  []objectio.ZoneMap
+		vecs []*vector.Vector
+	)
+
+	if isMonoExpr := plan2.CheckExprIsMonotonic(proc.Ctx, expr); isMonoExpr {
+		cnt := plan2.AssignAuxIdForExpr(expr, 0)
+		zms = make([]objectio.ZoneMap, cnt)
+		vecs = make([]*vector.Vector, cnt)
 	}
 
-	dataLength := len(param.Filter.columns)
-	datas := make([][2]any, dataLength)
-	dataTypes := make([]uint8, dataLength)
-	for i := 0; i < dataLength; i++ {
-		idx := param.Filter.defColumns[i]
-		dataTypes[i] = uint8(param.Cols[idx].Typ.Id)
-
-		zm := indexes[i]
-		if err != nil {
-			return true
-		}
-		min := zm.GetMin()
-		max := zm.GetMax()
-		if min == nil || max == nil {
-			return true
-		}
-		datas[i] = [2]any{min, max}
-	}
-	// use all min/max data to build []vectors.
-	buildVectors := plan2.BuildVectorsByData(datas, dataTypes, proc.Mp())
-	bat := batch.NewWithSize(param.Filter.maxCol + 1)
-	defer bat.Clean(proc.Mp())
-	for k, v := range param.Filter.columnMap {
-		for i, realIdx := range param.Filter.defColumns {
-			if int(realIdx) == v {
-				bat.SetVector(int32(k), buildVectors[i])
-				break
-			}
-		}
-	}
-	bat.SetZs(buildVectors[0].Length(), proc.Mp())
-
-	ifNeed, err := plan2.EvalFilterExpr(notReportErrCtx, param.Filter.FilterExpr, bat, proc)
-	if err != nil {
-		return true
-	}
-	return ifNeed
+	return colexec.EvaluateFilterByZoneMap(
+		notReportErrCtx, proc, expr, meta, columnMap, zms, vecs)
 }
 
 func getZonemapBatch(ctx context.Context, param *ExternalParam, proc *process.Process, size int64, objectReader *blockio.BlockReader) (*batch.Batch, error) {

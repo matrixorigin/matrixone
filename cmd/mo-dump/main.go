@@ -149,6 +149,7 @@ func main() {
 		createTable[left], createTable[right] = createTable[right], createTable[left]
 		tables[left], tables[right] = tables[right], tables[left]
 	}
+	adjustViewOrder(createTable, tables, left)
 	for i, create := range createTable {
 		tbl := tables[i]
 		switch tbl.Kind {
@@ -171,6 +172,52 @@ func main() {
 			return
 		}
 	}
+}
+
+func adjustViewOrder(createTable []string, tables Tables, start int) {
+	viewName := make([]string, 0)
+	viewPos := make(map[string]int)
+	cnt := len(tables)
+	for i := start; i < cnt; i++ {
+		viewPos[tables[i].Name] = i - start
+		viewName = append(viewName, tables[i].Name)
+	}
+	viewCount := make([]int, len(viewName))
+	viewRef := make([][]int, len(viewName))
+	for i := start; i < cnt; i++ {
+		for j := start; j < cnt; j++ {
+			if i == j {
+				continue
+			}
+			if strings.Count(createTable[i], tables[j].Name) > 0 {
+				viewCount[viewPos[tables[i].Name]]++
+				viewRef[viewPos[tables[j].Name]] = append(viewRef[viewPos[tables[j].Name]], viewPos[tables[i].Name])
+			}
+		}
+	}
+	order := 0
+	orderArr := make([]int, 0)
+	visit := make([]bool, len(viewName))
+	for order < len(viewName) {
+		for i := 0; i < len(viewName); i++ {
+			if viewCount[i] == 0 && !visit[i] {
+				visit[i] = true
+				order++
+				orderArr = append(orderArr, i)
+				for j := 0; j < len(viewRef[i]); j++ {
+					viewCount[viewRef[i][j]]--
+				}
+			}
+		}
+	}
+	newCreate := make([]string, cnt)
+	newTables := make([]Table, cnt)
+	for i := 0; i < len(orderArr); i++ {
+		newCreate[i] = createTable[orderArr[i]+start]
+		newTables[i] = tables[orderArr[i]+start]
+	}
+	_ = copy(createTable[start:], newCreate)
+	_ = copy(tables[start:], newTables)
 }
 
 func showCreateTable(createSql string, withNextLine bool) {

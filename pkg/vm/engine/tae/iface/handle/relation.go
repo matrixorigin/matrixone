@@ -53,7 +53,7 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(data *containers.Batch) error
-	AddBlksWithMetaLoc(zm []objectio.ZoneMap, metaLcos []objectio.Location) error
+	AddBlksWithMetaLoc(metaLcos []objectio.Location) error
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)

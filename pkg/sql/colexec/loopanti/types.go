@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,10 +31,12 @@ const (
 )
 
 type container struct {
+	state   int
+	bat     *batch.Batch
+	joinBat *batch.Batch
+	expr    colexec.ExpressionExecutor
+	cfs     []func(*vector.Vector, *vector.Vector, int64, int) error
 	colexec.ReceiverOperator
-
-	state int
-	bat   *batch.Batch
 }
 
 type Argument struct {
@@ -43,11 +46,12 @@ type Argument struct {
 	Typs   []types.Type
 }
 
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
+func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
+	if ctr := ap.ctr; ctr != nil {
 		ctr.cleanBatch(proc.Mp())
+		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+		ap.ctr = nil
 	}
 }
 
@@ -55,5 +59,16 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 		ctr.bat = nil
+	}
+	if ctr.joinBat != nil {
+		ctr.joinBat.Clean(mp)
+		ctr.joinBat = nil
+	}
+
+}
+
+func (ctr *container) cleanExprExecutor() {
+	if ctr.expr != nil {
+		ctr.expr.Free()
 	}
 }

@@ -1021,6 +1021,8 @@ const (
 	//privilege verification
 	checkTenantFormat = `select account_id,account_name,status,version,suspended_time from mo_catalog.mo_account where account_name = "%s";`
 
+	getTenantNameForMat = `select account_name from mo_catalog.mo_account where account_id = %d;`
+
 	updateCommentsOfAccountFormat = `update mo_catalog.mo_account set comments = "%s" where account_name = "%s";`
 
 	updateStatusOfAccountFormat = `update mo_catalog.mo_account set status = "%s",suspended_time = "%s" where account_name = "%s";`
@@ -1246,7 +1248,7 @@ const (
 				where role.role_id = mg.role_id 
 					and role.role_id != %d  
 					and mg.user_id = %d 
-					order by role.role_id;`
+					order by role.created_time asc limit 1;`
 
 	checkUdfArgs = `select args,function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`
 
@@ -1406,6 +1408,10 @@ func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(checkTenantFormat, tenant), nil
+}
+
+func getSqlForGetAccountName(tenantId uint32) string {
+	return fmt.Sprintf(getTenantNameForMat, tenantId)
 }
 
 func getSqlForUpdateCommentsOfAccount(ctx context.Context, comment, account string) (string, error) {
@@ -2820,6 +2826,8 @@ func doSetSecondaryRoleAll(ctx context.Context, ses *Session) error {
 	account.SetDefaultRoleID(uint32(roleId))
 	account.SetDefaultRole(roleName)
 
+	return err
+
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
@@ -3045,7 +3053,40 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	if err != nil {
 		goto handleFailed
 	}
-	if tenantInfo != nil && !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
+
+	if tenantInfo == nil {
+		if ctx.Value(defines.TenantIDKey{}) != nil {
+			value := ctx.Value(defines.TenantIDKey{})
+			if tenantId, ok := value.(uint32); ok {
+				sql = getSqlForGetAccountName(tenantId)
+				bh.ClearExecResultSet()
+				newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+				err = bh.Exec(newCtx, sql)
+				if err != nil {
+					goto handleFailed
+				}
+				if erArray, err = getResultSet(newCtx, bh); err != nil {
+					goto handleFailed
+				}
+				if !execResultArrayHasData(erArray) {
+					err = moerr.NewInternalError(newCtx, "there is no account, account id %d ", tenantId)
+					goto handleFailed
+				}
+
+				tenantName, err := erArray[0].GetString(newCtx, 0, 0)
+				if err != nil {
+					goto handleFailed
+				}
+				if !isSubscriptionValid(allAccountStr == "true", accountList, tenantName) {
+					err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
+					return nil, err
+				}
+			}
+		} else {
+			err = moerr.NewInternalError(newCtx, "the subscribe %s is not valid", pubName)
+			goto handleFailed
+		}
+	} else if !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
 		err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 		goto handleFailed
 	}
@@ -8411,7 +8452,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	bh := ses.GetBackgroundExec(tenantCtx)
 	defer bh.Close()
 
-	err = bh.Exec(ctx, sql)
+	err = bh.Exec(tenantCtx, sql)
 	if err != nil {
 		return err
 	}

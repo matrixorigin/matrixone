@@ -211,6 +211,7 @@ func MakeBatch(columnSize int, rowCount int, mp *mpool.MPool) (*batch.Batch, *pl
 		PkeyColName: catalog.CPrimaryKeyColName,
 		Names:       keys,
 	}
+	bat.Zs = make([]int64, rowCount)
 	return bat, primaryKeyDef, valueCount
 }
 
