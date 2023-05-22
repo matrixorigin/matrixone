@@ -99,8 +99,8 @@ func (idx *MutIndex) Dedup(key any, skipfn func(row uint32) (err error)) (err er
 
 func (idx *MutIndex) BatchDedup(
 	keys containers.Vector,
-	skipfn func(row uint32) (err error),
 	keysZM index.ZM,
+	skipfn func(row uint32) (err error),
 	_ objectio.BloomFilter,
 ) (keyselects *roaring.Bitmap, err error) {
 	if keysZM.Valid() {

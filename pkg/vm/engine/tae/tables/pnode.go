@@ -52,8 +52,8 @@ func (node *persistedNode) Rows() uint32 {
 
 func (node *persistedNode) BatchDedup(
 	keys containers.Vector,
+	keysZM index.ZM,
 	skipFn func(row uint32) error,
-	zm index.ZM,
 	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
 	panic("should not be called")

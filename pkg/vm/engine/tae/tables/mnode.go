@@ -80,11 +80,11 @@ func (node *memoryNode) IsPersisted() bool { return false }
 
 func (node *memoryNode) BatchDedup(
 	keys containers.Vector,
+	keysZM index.ZM,
 	skipFn func(row uint32) error,
-	zm index.ZM,
 	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn, zm, bf)
+	return node.pkIndex.BatchDedup(keys, keysZM, skipFn, bf)
 }
 
 func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {

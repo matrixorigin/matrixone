@@ -88,9 +88,9 @@ type Block interface {
 
 	BatchDedup(txn txnif.AsyncTxn,
 		pks containers.Vector,
+		pksZM index.ZM,
 		rowmask *roaring.Bitmap,
 		precommit bool,
-		zm index.ZM,
 		bf objectio.BloomFilter) error
 	//TODO::
 	//BatchDedupByMetaLoc(txn txnif.AsyncTxn, fs *objectio.ObjectFS,

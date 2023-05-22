@@ -399,9 +399,9 @@ func (blk *baseBlock) PersistedBatchDedup(
 	txn txnif.TxnReader,
 	isCommitting bool,
 	keys containers.Vector,
+	keysZM index.ZM,
 	rowmask *roaring.Bitmap,
 	isAblk bool,
-	keysZM index.ZM,
 	bf objectio.BloomFilter,
 ) (err error) {
 	ctx := context.TODO()

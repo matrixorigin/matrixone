@@ -113,9 +113,9 @@ func (blk *block) GetColumnDataById(
 func (blk *block) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
+	keysZM index.ZM,
 	rowmask *roaring.Bitmap,
 	precommit bool,
-	zm index.ZM,
 	bf objectio.BloomFilter,
 ) (err error) {
 	defer func() {
@@ -127,9 +127,9 @@ func (blk *block) BatchDedup(
 		txn,
 		precommit,
 		keys,
+		keysZM,
 		rowmask,
 		false,
-		zm,
 		bf,
 	)
 }

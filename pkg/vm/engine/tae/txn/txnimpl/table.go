@@ -925,8 +925,8 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 	it := newRelationBlockItOnSnap(h)
 	maxSegmentHint := uint64(0)
 	pkType := keys.GetType()
-	inputZM := index.NewZM(pkType.Oid, pkType.Scale)
-	if err = index.BatchUpdateZM(inputZM, keys); err != nil {
+	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
+	if err = index.BatchUpdateZM(keysZM, keys); err != nil {
 		return
 	}
 	var (
@@ -977,9 +977,10 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 
 		if err = blkData.BatchDedup(
 			tbl.store.txn,
-			keys, rowmask,
+			keys,
+			keysZM,
+			rowmask,
 			false,
-			inputZM,
 			bf,
 		); err != nil {
 			// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
@@ -1035,9 +1036,9 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 			if err = blkData.BatchDedup(
 				tbl.store.txn,
 				loaded[i],
+				nil,
 				rowmask,
 				false,
-				[]byte{},
 				objectio.BloomFilter{},
 			); err != nil {
 				// logutil.Infof("%s, %s, %v", blk.String(), rowmask, err)
@@ -1058,7 +1059,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 //  2. it is called when txn dequeues from preparing queue.
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
-func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, zm index.ZM) (err error) {
+func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM) (err error) {
 	trace.WithRegion(context.Background(), "DoPrecommitDedupByPK", func() {
 		segIt := tbl.entry.MakeSegmentIt(false)
 		for segIt.Valid() {
@@ -1125,9 +1126,9 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, zm index.ZM) (e
 				if err = blkData.BatchDedup(
 					tbl.store.txn,
 					pks,
+					pksZM,
 					rowmask,
 					true,
-					zm,
 					objectio.BloomFilter{},
 				); err != nil {
 					return
@@ -1211,9 +1212,9 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 			if err = blkData.BatchDedup(
 				tbl.store.txn,
 				pks,
+				nil,
 				rowmask,
 				true,
-				[]byte{},
 				objectio.BloomFilter{},
 			); err != nil {
 				return err
