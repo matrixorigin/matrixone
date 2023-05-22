@@ -168,23 +168,40 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		length uint32
 		view   *model.BlockView
 	)
-	if fromPos-skippedCnt+1 == len(entry.fromAddr) {
-		length = uint32(len(entry.mapping)) - entry.fromAddr[fromPos-skippedCnt]
+
+	posInFromAddr := fromPos - skippedCnt
+	if posInFromAddr+1 == len(entry.fromAddr) {
+		length = uint32(len(entry.mapping)) - entry.fromAddr[posInFromAddr]
 	} else {
-		length = entry.fromAddr[fromPos-skippedCnt+1] - entry.fromAddr[fromPos-skippedCnt]
+		length = entry.fromAddr[posInFromAddr+1] - entry.fromAddr[posInFromAddr]
 	}
-	for i := uint32(0); i < length; i++ {
-		if entry.deletes[fromPos] != nil && entry.deletes[fromPos].Contains(i) {
+
+	var (
+		offsetInDropped              uint32
+		offsetInOldBlkBeforeApplyDel uint32
+	)
+	deleteMap := entry.deletes[fromPos]
+	delCnt := uint32(0)
+	if deleteMap != nil {
+		delCnt = uint32(deleteMap.GetCardinality())
+	}
+	for ; offsetInOldBlkBeforeApplyDel < delCnt+length; offsetInOldBlkBeforeApplyDel++ {
+		if deleteMap != nil && deleteMap.Contains(offsetInOldBlkBeforeApplyDel) {
 			continue
 		}
-		newOffset := i
-		if entry.deletes[fromPos] != nil {
-			newOffset = i - uint32(entry.deletes[fromPos].Rank(i))
-		}
-		toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, newOffset)
-		toId := entry.createdBlks[toPos].AsCommonID()
-		page.Train(toRow, *objectio.NewRowid(&toId.BlockID, uint32(i)))
+		// add a record
+		toPos, toRow := entry.resolveAddr(posInFromAddr, offsetInDropped)
+		rowid := objectio.NewRowid(&entry.createdBlks[toPos].ID, toRow)
+		// offset in oldblk -> new rowid
+		page.Train(offsetInOldBlkBeforeApplyDel, *rowid)
+
+		// bump
+		offsetInDropped++
 	}
+	if offsetInDropped != length {
+		panic("tranfer logic error")
+	}
+
 	_ = entry.scheduler.AddTransferPage(page)
 
 	dataBlock := dropped.GetBlockData()
