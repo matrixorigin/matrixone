@@ -606,11 +606,6 @@ func (s *logTailSubscriber) receiveResponse() logTailSubscriberResponse {
 	}
 }
 
-func (e *Engine) UsePushModelOrNot() bool {
-	//return e.usePushModel
-	return true
-}
-
 func (e *Engine) InitLogTailPushModel(
 	ctx context.Context,
 	timestampWaiter client.TimestampWaiter) error {
