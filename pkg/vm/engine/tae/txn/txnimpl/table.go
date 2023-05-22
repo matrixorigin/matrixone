@@ -914,6 +914,19 @@ func (tbl *txnTable) updateDedupedBlockID(id *types.Blockid) {
 	}
 }
 
+func (tbl *txnTable) quickSkipThisBlock(
+	ctx context.Context,
+	keysZM index.ZM,
+	meta *catalog.BlockEntry,
+) (ok bool, err error) {
+	zm, err := meta.GetPKZoneMap(ctx, tbl.store.dataFactory.Fs.Service)
+	if err != nil {
+		return
+	}
+	ok = !zm.FastIntersect(keysZM)
+	return
+}
+
 func (tbl *txnTable) tryGetCurrentObjectBF(
 	ctx context.Context,
 	currLocation objectio.Location,
@@ -982,6 +995,15 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 			}
 		}
 		location := blk.FastGetMetaLoc()
+		if len(location) > 0 {
+			var skip bool
+			if skip, err = tbl.quickSkipThisBlock(ctx, keysZM, blk); err != nil {
+				return
+			} else if skip {
+				it.Next()
+				continue
+			}
+		}
 		if bf, err = tbl.tryGetCurrentObjectBF(
 			ctx,
 			location,
