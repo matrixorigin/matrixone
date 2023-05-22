@@ -126,10 +126,7 @@ func (blk *block) BatchDedup(
 			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
 		}
 	}()
-	node := blk.PinNode()
-	defer node.Unref()
 	return blk.PersistedBatchDedup(
-		node.MustPNode(),
 		txn,
 		precommit,
 		keys,

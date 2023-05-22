@@ -24,6 +24,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -375,21 +377,45 @@ func (blk *baseBlock) dedupWithLoad(
 	return
 }
 
+func makeBFLoader(
+	bf objectio.BloomFilter,
+	meta *catalog.BlockEntry,
+	cache model.LRUCache,
+	fs fileservice.FileService,
+) func() ([]byte, error) {
+	return func() ([]byte, error) {
+		location := meta.GetMetaLoc()
+		var err error
+		if len(bf) == 0 {
+			if bf, err = indexwrapper.LoadBF(context.TODO(), location, cache, fs, false); err != nil {
+				return nil, err
+			}
+		}
+		return bf.GetBloomFilter(uint32(location.ID())), nil
+	}
+}
+
 func (blk *baseBlock) PersistedBatchDedup(
-	pnode *persistedNode,
 	txn txnif.TxnReader,
 	isCommitting bool,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
 	isAblk bool,
-	zm index.ZM,
+	keysZM index.ZM,
 	bf objectio.BloomFilter,
 ) (err error) {
-	sels, err := pnode.BatchDedup(
+	pkZM, err := blk.meta.GetPKZoneMap(context.TODO(), blk.fs.Service)
+	if err != nil {
+		return
+	}
+	pkIndex := indexwrapper.NewPersistedIndex(
+		*pkZM,
+		makeBFLoader(bf, blk.meta, blk.indexCache, blk.fs.Service),
+	)
+
+	sels, err := pkIndex.BatchDedup(
 		keys,
-		nil,
-		zm,
-		bf,
+		keysZM,
 	)
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return

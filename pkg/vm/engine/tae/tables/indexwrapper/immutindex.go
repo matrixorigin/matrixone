@@ -138,18 +138,15 @@ func (index *immutableIndex) Destroy() (err error) {
 
 type PersistedIndex struct {
 	zm       idxpkg.ZM
-	bf       idxpkg.StaticFilter
-	bfLoader func() (idxpkg.StaticFilter, error)
+	bfLoader func() ([]byte, error)
 }
 
 func NewPersistedIndex(
 	zm idxpkg.ZM,
-	bf idxpkg.StaticFilter,
-	bfLoader func() (idxpkg.StaticFilter, error),
+	bfLoader func() ([]byte, error),
 ) PersistedIndex {
 	return PersistedIndex{
 		zm:       zm,
-		bf:       bf,
 		bfLoader: bfLoader,
 	}
 }
@@ -173,12 +170,10 @@ func (index PersistedIndex) BatchDedup(
 
 	// some keys are in [min, max]. check bloomfilter for those keys
 
-	var bf idxpkg.StaticFilter
-	if index.bf != nil {
-		bf = index.bf
-	} else if index.bf == nil && index.bfLoader != nil {
+	var buf []byte
+	if index.bfLoader != nil {
 		// load bloomfilter
-		if bf, err = index.bfLoader(); err != nil {
+		if buf, err = index.bfLoader(); err != nil {
 			return
 		}
 	} else {
@@ -187,7 +182,12 @@ func (index PersistedIndex) BatchDedup(
 		return
 	}
 
-	if exist, sels, err = bf.MayContainsAnyKeys(keys); err != nil {
+	bfIndex := idxpkg.NewEmptyBinaryFuseFilter()
+	if err = idxpkg.DecodeBloomFilter(bfIndex, buf); err != nil {
+		return
+	}
+
+	if exist, sels, err = bfIndex.MayContainsAnyKeys(keys); err != nil {
 		// check bloomfilter has some unknown error. return err
 		err = TranslateError(err)
 		return

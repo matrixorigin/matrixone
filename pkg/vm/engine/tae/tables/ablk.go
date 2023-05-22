@@ -598,7 +598,6 @@ func (blk *ablock) BatchDedup(
 		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask, zm, bf)
 	} else {
 		return blk.PersistedBatchDedup(
-			node.MustPNode(),
 			txn,
 			precommit,
 			keys,
