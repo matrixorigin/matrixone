@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"path"
 	"sync/atomic"
 	"time"
@@ -64,6 +65,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			common.AnyField("cost", time.Since(totalTime)),
 			common.AnyField("err", err))
 	}()
+	prefCounterSet := opts.Ctx.Value(perfcounter.CtxKeyCounters).(*perfcounter.CounterSet)
 
 	opts = opts.FillDefaults(dirname)
 
@@ -115,6 +117,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TxnMgr.Start()
 	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
+		prefCounterSet,
 		db.Fs,
 		db.Catalog,
 		db.Scheduler,
@@ -158,7 +161,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	db.DiskCleaner = gc2.NewDiskCleaner(db.Fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner = gc2.NewDiskCleaner(prefCounterSet, db.Fs, db.BGCheckpointRunner, db.Catalog)
 	db.DiskCleaner.Start()
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {

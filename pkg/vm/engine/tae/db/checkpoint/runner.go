@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -178,6 +179,8 @@ type runner struct {
 		checkpointQueueSize int
 	}
 
+	preCounter *perfcounter.CounterSet
+
 	// logtail sourcer
 	source    logtail.Collector
 	catalog   *catalog.Catalog
@@ -214,6 +217,7 @@ type runner struct {
 }
 
 func NewRunner(
+	counter *perfcounter.CounterSet,
 	fs *objectio.ObjectFS,
 	catalog *catalog.Catalog,
 	scheduler tasks.TaskScheduler,
@@ -221,12 +225,13 @@ func NewRunner(
 	wal wal.Driver,
 	opts ...Option) *runner {
 	r := &runner{
-		catalog:   catalog,
-		scheduler: scheduler,
-		source:    source,
-		fs:        fs,
-		observers: new(observers),
-		wal:       wal,
+		preCounter: counter,
+		catalog:    catalog,
+		scheduler:  scheduler,
+		source:     source,
+		fs:         fs,
+		observers:  new(observers),
+		wal:        wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.end.Less(b.end)

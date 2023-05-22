@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"sync"
 	"sync/atomic"
 
@@ -43,7 +44,8 @@ const MinMergeCount = 20
 // and provides "JobFactory" to let tae notify itself
 // to perform a gc
 type DiskCleaner struct {
-	fs *objectio.ObjectFS
+	fs          *objectio.ObjectFS
+	prefCounter *perfcounter.CounterSet
 
 	// ckpClient is used to get the instance of the specified checkpoint
 	ckpClient checkpoint.RunnerReader
@@ -96,14 +98,16 @@ type DiskCleaner struct {
 }
 
 func NewDiskCleaner(
+	prefCounter *perfcounter.CounterSet,
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.RunnerReader,
 	catalog *catalog.Catalog,
 ) *DiskCleaner {
 	cleaner := &DiskCleaner{
-		fs:        fs,
-		ckpClient: ckpClient,
-		catalog:   catalog,
+		prefCounter: prefCounter,
+		fs:          fs,
+		ckpClient:   ckpClient,
+		catalog:     catalog,
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
