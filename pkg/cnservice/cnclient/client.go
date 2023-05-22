@@ -74,6 +74,8 @@ func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Messa
 }
 
 func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
+	c.Lock()
+	defer c.Unlock()
 	if backend == c.localServiceAddress {
 		runtime.ProcessLevelRuntime().Logger().
 			Fatal("remote run pipeline in local",
@@ -132,7 +134,7 @@ func NewCNClient(
 	cli.Lock()
 	defer cli.Unlock()
 	cli.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
-
+	client = cli
 	codec := morpc.NewMessageCodec(cli.acquireMessage,
 		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
