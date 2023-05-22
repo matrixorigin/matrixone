@@ -114,7 +114,6 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 
 func (db *txnDB) AddBlksWithMetaLoc(
 	tid uint64,
-	zm []objectio.ZoneMap,
 	metaLocs []objectio.Location) error {
 	table, err := db.getOrSetTable(tid)
 	if err != nil {
@@ -123,7 +122,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.AddBlksWithMetaLoc(zm, metaLocs)
+	return table.AddBlksWithMetaLoc(metaLocs)
 }
 
 // func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {

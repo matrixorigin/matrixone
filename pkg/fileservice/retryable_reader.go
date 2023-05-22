@@ -15,28 +15,30 @@
 package fileservice
 
 import (
-	"errors"
 	"io"
 )
 
 type retryableReader struct {
-	current   io.ReadCloser
-	offset    int64
-	newReader func(offset int64) (io.ReadCloser, error)
+	current     io.ReadCloser
+	offset      int64
+	newReader   func(offset int64) (io.ReadCloser, error)
+	shouldRetry func(error) bool
 }
 
 func newRetryableReader(
 	newReader func(offset int64) (io.ReadCloser, error),
 	initOffset int64,
+	shouldRetry func(error) bool,
 ) (*retryableReader, error) {
 	r, err := newReader(initOffset)
 	if err != nil {
 		return nil, err
 	}
 	return &retryableReader{
-		current:   r,
-		offset:    initOffset,
-		newReader: newReader,
+		current:     r,
+		offset:      initOffset,
+		newReader:   newReader,
+		shouldRetry: shouldRetry,
 	}, nil
 }
 
@@ -46,7 +48,7 @@ func (r *retryableReader) Read(buf []byte) (int, error) {
 	for {
 		n, err := r.current.Read(buf)
 		if err != nil {
-			if errors.Is(err, io.ErrUnexpectedEOF) {
+			if r.shouldRetry(err) {
 				// retry
 				newReader, err := r.newReader(r.offset)
 				if err != nil {

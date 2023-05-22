@@ -181,7 +181,7 @@ func TestDoRebalance(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn11 := startTestCNServer(t, tp.ctx, addr1)
+	stopFn11 := startTestCNServer(t, tp.ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn11())
 	}()
@@ -201,7 +201,7 @@ func TestDoRebalance(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn12 := startTestCNServer(t, tp.ctx, addr2)
+	stopFn12 := startTestCNServer(t, tp.ctx, addr2, nil)
 	defer func() {
 		require.NoError(t, stopFn12())
 	}()
