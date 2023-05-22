@@ -107,9 +107,11 @@ func (appender *blockAppender) ApplyAppend(
 		if colDef.IsPhyAddr() {
 			continue
 		}
-		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		if err = node.indexes[colDef.SeqNum].BatchUpsert(keysCtx, from); err != nil {
-			panic(err)
+		if colDef.IsRealPrimary() {
+			keysCtx.Keys = bat.Vecs[colDef.Idx]
+			if err = node.pkIndex.BatchUpsert(keysCtx, from); err != nil {
+				panic(err)
+			}
 		}
 	}
 	return

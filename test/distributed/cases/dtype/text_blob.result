@@ -180,7 +180,7 @@ select substring(b3,5),substr(b2,-3,2) from blob_01;
 substring(b3, 5)    substr(b2, -3, 2)
 3432234234     
 -01-01    co
-null    
+null    null
 select count(b1) from blob_01;
 count(b1)
 3

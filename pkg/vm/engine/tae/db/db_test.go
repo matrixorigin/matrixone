@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -676,12 +675,12 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		schema.Name = "tb-1"
 		txn, _, rel := createRelationNoCommit(t, db, "db", schema, false)
 		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
-		err := rel.AddBlksWithMetaLoc(nil, []objectio.Location{metaLoc1})
+		err := rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc1})
 		assert.Nil(t, err)
 		err = rel.Append(bats[0])
 		assert.Nil(t, err)
 
-		err = rel.AddBlksWithMetaLoc(nil, []objectio.Location{metaLoc2})
+		err = rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc2})
 		assert.Nil(t, err)
 		err = rel.Append(bats[1])
 		assert.Nil(t, err)
@@ -702,7 +701,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		err = rel.Append(bats[1])
 		assert.NotNil(t, err)
 
-		err = rel.AddBlksWithMetaLoc(nil, []objectio.Location{metaLoc1, metaLoc2})
+		err = rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc1, metaLoc2})
 		assert.NotNil(t, err)
 
 		//check blk count.
@@ -3217,7 +3216,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	_, err = meta.GetBlockData().GetByFilter(txn, filter)
 	assert.NoError(t, err)
 
-	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false, []byte{})
+	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false, []byte{}, objectio.BloomFilter{})
 	assert.Error(t, err)
 }
 
@@ -3755,8 +3754,8 @@ func TestLogtailBasic(t *testing.T) {
 			tbl, _ := db.GetRelationByName("test")
 			blkIt := tbl.MakeBlockIt()
 			for ; blkIt.Valid(); blkIt.Next() {
-				prefix := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).MakeKey()
-				deleteRowIDs = append(deleteRowIDs, model.EncodePhyAddrKeyWithPrefix(prefix, 5))
+				id := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).ID
+				deleteRowIDs = append(deleteRowIDs, *objectio.NewRowid(&id, 5))
 			}
 			require.NoError(t, txn.Commit())
 		}
@@ -5037,7 +5036,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	assert.NoError(t, err)
 	tbl, err := db.CreateRelation(schema)
 	assert.NoError(t, err)
-	assert.NoError(t, tbl.AddBlksWithMetaLoc(nil, metalocs))
+	assert.NoError(t, tbl.AddBlksWithMetaLoc(metalocs))
 	assert.NoError(t, txn.Commit())
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -6699,12 +6698,12 @@ func TestCommitS3Blocks(t *testing.T) {
 
 	for _, meta := range blkMetas {
 		txn, rel := tae.getRelation()
-		rel.AddBlksWithMetaLoc(nil, []objectio.Location{meta})
+		rel.AddBlksWithMetaLoc([]objectio.Location{meta})
 		assert.NoError(t, txn.Commit())
 	}
 	for _, meta := range blkMetas {
 		txn, rel := tae.getRelation()
-		err := rel.AddBlksWithMetaLoc(nil, []objectio.Location{meta})
+		err := rel.AddBlksWithMetaLoc([]objectio.Location{meta})
 		assert.Error(t, err)
 		assert.NoError(t, txn.Commit())
 	}

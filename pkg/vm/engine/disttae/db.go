@@ -327,41 +327,52 @@ func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, t
 func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTable, op client.TxnOperator,
 	primarySeqnum int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	logDebugf(op.Txn(), "UpdateOfPull")
+
+	parts := e.ensureTableParts(databaseId, tableId)
+
+	for _, dn := range dnList {
+		part := parts[e.dnMap[dn.ServiceID]]
+
+		if err := func() error {
+			select {
+			case <-part.Lock():
+				defer part.Unlock()
+				if part.TS.Greater(ts) || part.TS.Equal(ts) {
+					return nil
+				}
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+			if err := updatePartitionOfPull(
+				primarySeqnum, tbl, ctx, op, e, part, dn,
+				genSyncLogTailReq(part.TS, ts, databaseId, tableId),
+			); err != nil {
+				return err
+			}
+
+			part.TS = ts
+
+			return nil
+		}(); err != nil {
+			return err
+		}
+
+	}
+
+	return nil
+}
+
+func (e *Engine) ensureTableParts(databaseId uint64, tableId uint64) logtailreplay.Partitions {
 	e.Lock()
+	defer e.Unlock()
 	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
-	if !ok { // create a new table
+	if !ok {
 		parts = make(logtailreplay.Partitions, len(e.dnMap))
 		for i := range parts {
 			parts[i] = logtailreplay.NewPartition()
 		}
 		e.partitions[[2]uint64{databaseId, tableId}] = parts
 	}
-	e.Unlock()
-
-	for _, dn := range dnList {
-		part := parts[e.dnMap[dn.ServiceID]]
-
-		select {
-		case <-part.Lock():
-			if part.TS.Greater(ts) || part.TS.Equal(ts) {
-				part.Unlock()
-				return nil
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-		if err := updatePartitionOfPull(
-			primarySeqnum, tbl, ctx, op, e, part, dn,
-			genSyncLogTailReq(part.TS, ts, databaseId, tableId),
-		); err != nil {
-			part.Unlock()
-			return err
-		}
-
-		part.TS = ts
-		part.Unlock()
-	}
-
-	return nil
+	return parts
 }

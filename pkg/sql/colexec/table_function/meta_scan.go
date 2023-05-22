@@ -25,8 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func metaScanPrepare(_ *process.Process, arg *Argument) error {
-	return nil
+func metaScanPrepare(proc *process.Process, arg *Argument) (err error) {
+	arg.ctr = new(container)
+	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+	return err
 }
 
 func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
@@ -43,7 +45,8 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if bat == nil {
 		return true, nil
 	}
-	v, err := colexec.EvalExpr(bat, proc, arg.Args[0])
+
+	v, err := arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
 	if err != nil {
 		return false, err
 	}

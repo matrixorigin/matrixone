@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
@@ -268,10 +267,10 @@ func (bs *baseStore) Append(e *entry.Entry) error {
 	return nil
 }
 
-func (bs *baseStore) Replay(h driver.ApplyHandle, allocator logstoreEntry.Allocator) error {
+func (bs *baseStore) Replay(h driver.ApplyHandle) error {
 	r := newReplayer(h)
 	bs.addrs = r.addrs
-	err := bs.file.Replay(r, allocator)
+	err := bs.file.Replay(r)
 	if err != nil {
 		return err
 	}
@@ -284,7 +283,7 @@ func (bs *baseStore) Replay(h driver.ApplyHandle, allocator logstoreEntry.Alloca
 	return nil
 }
 
-func (bs *baseStore) Read(lsn uint64, allocator logstoreEntry.Allocator) (*entry.Entry, error) {
+func (bs *baseStore) Read(lsn uint64) (*entry.Entry, error) {
 	ver, err := bs.retryGetVersionByGLSN(lsn)
 	if err != nil {
 		return nil, err
@@ -293,7 +292,7 @@ func (bs *baseStore) Read(lsn uint64, allocator logstoreEntry.Allocator) (*entry
 	if err != nil {
 		return nil, err
 	}
-	e, err := vf.Load(lsn, allocator)
+	e, err := vf.Load(lsn)
 	return e, err
 }
 

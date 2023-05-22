@@ -495,7 +495,7 @@ SELECT substring(format(d1,3),3,5) from format_02;
 substring(format(d1, 3), 3, 5)
 200
 ,283.
-
+null
 000
 3,232
 3.000

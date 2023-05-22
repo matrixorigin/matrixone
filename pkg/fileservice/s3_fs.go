@@ -638,7 +638,10 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 					return err
 				}
 				defer reader.Close()
-				_, err = io.Copy(w, reader)
+				var buf []byte
+				put := ioBufferPool.Get(&buf)
+				defer put.Put()
+				_, err = io.CopyBuffer(w, reader, buf)
 				err = s.mapError(err, key)
 				if err != nil {
 					return err
@@ -1086,6 +1089,7 @@ func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3
 			return output.Body, nil
 		},
 		min,
+		isRetryableError,
 	)
 	if err != nil {
 		return nil, err

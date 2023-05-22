@@ -61,39 +61,35 @@ func (c *BoundTableOperator) Run() error {
 }
 
 // For normal user table, pick out all dirty blocks and call OnBlock
-func (c *BoundTableOperator) processTableData() (err error) {
-	var (
-		db  *catalog.DBEntry
-		tbl *catalog.TableEntry
-		seg *catalog.SegmentEntry
-		blk *catalog.BlockEntry
-	)
-	if db, err = c.catalog.GetDatabaseByID(c.dbID); err != nil {
-		return
+func (c *BoundTableOperator) processTableData() error {
+	db, err := c.catalog.GetDatabaseByID(c.dbID)
+	if err != nil {
+		return err
 	}
-	if tbl, err = db.GetTableEntryByID(c.tableID); err != nil {
-		return
+	tbl, err := db.GetTableEntryByID(c.tableID)
+	if err != nil {
+		return err
 	}
 	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
 	for _, dirtySeg := range dirty.Segs {
-		if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
+		seg, err := tbl.GetSegmentByID(dirtySeg.ID)
+		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-				err = nil
 				continue
 			}
-			return
+			return err
 		}
 		if err = c.visitor.OnSegment(seg); err != nil {
 			return err
 		}
 		for id := range dirtySeg.Blks {
 			bid := objectio.NewBlockid(dirtySeg.ID, id.Num, id.Seq)
-			if blk, err = seg.GetBlockEntryByID(bid); err != nil {
+			blk, err := seg.GetBlockEntryByID(bid)
+			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					err = nil
 					continue
 				}
-				return
+				return err
 			}
 			if err = c.visitor.OnBlock(blk); err != nil {
 				return err
