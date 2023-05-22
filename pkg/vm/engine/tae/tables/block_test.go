@@ -64,7 +64,7 @@ func TestGetActiveRow(t *testing.T) {
 	vec := containers.MakeVector(types.T_int8.ToType())
 	vec.Append(int8(1), false)
 	vec.Append(int8(1), false)
-	idx := indexwrapper.NewPkMutableIndex(types.T_int8.ToType())
+	idx := indexwrapper.NewMutIndex(types.T_int8.ToType())
 	keysCtx := &index.KeysCtx{
 		Keys: vec,
 	}

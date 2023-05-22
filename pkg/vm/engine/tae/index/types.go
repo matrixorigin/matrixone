@@ -30,9 +30,6 @@ var (
 type KeysCtx struct {
 	Keys containers.Vector
 
-	// Select the key where this bitmap indicates.
-	// Nil to select all
-	Selects *roaring.Bitmap
 	// Select a continuous interval [Start, Start+Count) from keys
 	Start, Count int
 	// Whether need to verify Keys

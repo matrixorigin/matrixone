@@ -15,13 +15,8 @@
 package indexwrapper
 
 import (
-	"io"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -36,31 +31,4 @@ func TranslateError(err error) error {
 		return moerr.NewNotFoundNoCtx()
 	}
 	return err
-}
-
-type Index interface {
-	io.Closer
-	Destroy() error
-
-	// Dedup returns wether the specified key is existed
-	// If key is existed, return ErrDuplicate
-	// If any other unknown error happens, return error
-	// If key is not found, return nil
-	Dedup(key any, skipfn func(row uint32) error) error
-
-	BatchDedup(
-		keys containers.Vector,
-		skipfn func(row uint32) (err error),
-		zm index.ZM,
-		bf objectio.BloomFilter,
-	) (keyselects *roaring.Bitmap, err error)
-
-	// BatchUpsert batch insert the specific keys
-	// If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map
-	// If any other unknown error hanppens, return error
-	BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error)
-
-	GetActiveRow(key any) (row []uint32, err error)
-
-	String() string
 }

@@ -38,7 +38,7 @@ type memoryNode struct {
 	prefix      []byte
 
 	//index for primary key : Art tree + ZoneMap.
-	pkIndex indexwrapper.Index
+	pkIndex *indexwrapper.MutIndex
 }
 
 func newMemoryNode(block *baseBlock) *memoryNode {
@@ -62,7 +62,7 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 		return
 	}
 	pkDef := schema.GetSingleSortKey()
-	node.pkIndex = indexwrapper.NewPkMutableIndex(pkDef.Type)
+	node.pkIndex = indexwrapper.NewMutIndex(pkDef.Type)
 }
 
 func (node *memoryNode) close() {

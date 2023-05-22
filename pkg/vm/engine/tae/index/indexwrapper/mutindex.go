@@ -23,21 +23,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-var _ Index = (*mutableIndex)(nil)
-
-type mutableIndex struct {
+type MutIndex struct {
 	art     index.SecondaryIndex
 	zonemap index.ZM
 }
 
-func NewPkMutableIndex(typ types.Type) *mutableIndex {
-	return &mutableIndex{
+func NewMutIndex(typ types.Type) *MutIndex {
+	return &MutIndex{
 		art:     index.NewSimpleARTMap(),
 		zonemap: index.NewZM(typ.Oid, typ.Scale),
 	}
 }
 
-func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
+// BatchUpsert batch insert the specific keys
+// If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map
+// If any other unknown error hanppens, return error
+func (idx *MutIndex) BatchUpsert(keysCtx *index.KeysCtx,
 	offset int) (err error) {
 	defer func() {
 		err = TranslateError(err)
@@ -51,17 +52,7 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
 	return
 }
 
-func (idx *mutableIndex) Delete(key any) (err error) {
-	defer func() {
-		err = TranslateError(err)
-	}()
-	if _, err = idx.art.Delete(key); err != nil {
-		return
-	}
-	return
-}
-
-func (idx *mutableIndex) GetActiveRow(key any) (row []uint32, err error) {
+func (idx *MutIndex) GetActiveRow(key any) (row []uint32, err error) {
 	defer func() {
 		err = TranslateError(err)
 		// logutil.Infof("[Trace][GetActiveRow] key=%v: err=%v", key, err)
@@ -79,10 +70,15 @@ func (idx *mutableIndex) GetActiveRow(key any) (row []uint32, err error) {
 	return
 }
 
-func (idx *mutableIndex) String() string {
+func (idx *MutIndex) String() string {
 	return idx.art.String()
 }
-func (idx *mutableIndex) Dedup(key any, skipfn func(row uint32) (err error)) (err error) {
+
+// Dedup returns wether the specified key is existed
+// If key is existed, return ErrDuplicate
+// If any other unknown error happens, return error
+// If key is not found, return nil
+func (idx *MutIndex) Dedup(key any, skipfn func(row uint32) (err error)) (err error) {
 	exist := idx.zonemap.Contains(key)
 	if !exist {
 		return
@@ -101,14 +97,14 @@ func (idx *mutableIndex) Dedup(key any, skipfn func(row uint32) (err error)) (er
 	return
 }
 
-func (idx *mutableIndex) BatchDedup(
+func (idx *MutIndex) BatchDedup(
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
-	zm index.ZM,
+	keysZM index.ZM,
 	_ objectio.BloomFilter,
 ) (keyselects *roaring.Bitmap, err error) {
-	if zm.Valid() {
-		if exist := idx.zonemap.FastIntersect(zm); !exist {
+	if keysZM.Valid() {
+		if exist := idx.zonemap.FastIntersect(keysZM); !exist {
 			return
 		}
 	} else {
@@ -143,11 +139,7 @@ func (idx *mutableIndex) BatchDedup(
 	return
 }
 
-func (idx *mutableIndex) Destroy() error {
-	return idx.Close()
-}
-
-func (idx *mutableIndex) Close() error {
+func (idx *MutIndex) Close() error {
 	idx.art = nil
 	idx.zonemap = nil
 	return nil
