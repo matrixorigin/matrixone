@@ -15,10 +15,12 @@
 package table
 
 import (
-	"github.com/prashantv/gostub"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/prashantv/gostub"
 
 	"github.com/stretchr/testify/require"
 )
@@ -150,7 +152,7 @@ func TestString2Bytes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if gotRet := String2Bytes(tt.args.s); !reflect.DeepEqual(gotRet, tt.wantRet) {
+			if gotRet := util.UnsafeStringToBytes(tt.args.s); !reflect.DeepEqual(gotRet, tt.wantRet) {
 				t.Errorf("String2Bytes() = %v, want %v", gotRet, tt.wantRet)
 			}
 		})
