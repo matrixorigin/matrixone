@@ -50,7 +50,7 @@ func (hc *deadlineContextCodec) Decode(msg *RPCMessage, data []byte) (int, error
 		msg.Ctx = context.Background()
 	}
 
-	msg.Ctx, msg.cancel = context.WithTimeout(msg.Ctx, time.Duration(buf.Byte2Int64(data)))
+	msg.Ctx, msg.Cancel = context.WithTimeout(msg.Ctx, time.Duration(buf.Byte2Int64(data)))
 	return 8, nil
 }
 

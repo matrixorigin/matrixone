@@ -16,10 +16,12 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -27,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"go.uber.org/zap"
 )
 
@@ -103,6 +106,8 @@ type clientConn struct {
 	connID uint32
 	// clientInfo is the information of the client.
 	clientInfo clientInfo
+	// haKeeperClient is the client of HAKeeper.
+	haKeeperClient logservice.ClusterHAKeeperClient
 	// moCluster is the CN server cache, which used to filter CN servers
 	// by CN labels.
 	moCluster clusterservice.MOCluster
@@ -113,6 +118,8 @@ type clientConn struct {
 	// setVarStmts keeps all set user variable statements. When connection
 	// is transferred, set all these variables first.
 	setVarStmts []string
+	// tlsConfig is the config of TLS.
+	tlsConfig *tls.Config
 	// testHelper is used for testing.
 	testHelper struct {
 		connectToBackend func() (ServerConn, error)
@@ -124,9 +131,11 @@ var _ ClientConn = (*clientConn)(nil)
 // newClientConn creates a new client connection.
 func newClientConn(
 	ctx context.Context,
+	cfg *Config,
 	logger *log.MOLogger,
 	cs *counterSet,
 	conn goetty.IOSession,
+	haKeeperClient logservice.ClusterHAKeeperClient,
 	mc clusterservice.MOCluster,
 	router Router,
 	tun *tunnel,
@@ -137,21 +146,35 @@ func newClientConn(
 		originIP = net.ParseIP(host)
 	}
 	c := &clientConn{
-		ctx:        ctx,
-		log:        logger,
-		counterSet: cs,
-		conn:       conn,
-		connID:     nextClientConnID(),
-		moCluster:  mc,
-		router:     router,
-		tun:        tun,
+		ctx:            ctx,
+		log:            logger,
+		counterSet:     cs,
+		conn:           conn,
+		haKeeperClient: haKeeperClient,
+		moCluster:      mc,
+		router:         router,
+		tun:            tun,
 		clientInfo: clientInfo{
 			originIP: originIP,
 		},
 	}
-	fp := config.FrontendParameters{}
+	c.connID, err = c.genConnID()
+	if err != nil {
+		return nil, err
+	}
+	fp := config.FrontendParameters{
+		EnableTls: cfg.TLSEnabled,
+	}
 	fp.SetDefaultValues()
 	c.mysqlProto = frontend.NewMysqlClientProtocol(c.connID, c.conn, 0, &fp)
+	if cfg.TLSEnabled {
+		tlsConfig, err := frontend.ConstructTLSConfig(
+			ctx, cfg.TLSCAFile, cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return nil, err
+		}
+		c.tlsConfig = tlsConfig
+	}
 	return c, nil
 }
 
@@ -227,18 +250,34 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 	case *setVarEvent:
 		return c.handleSetVar(ev)
 	case *suspendAccountEvent:
-		return c.handleSuspendAccount(ev, resp)
+		return c.handleSuspendAccount(ev)
 	case *dropAccountEvent:
-		return c.handleDropAccount(ev, resp)
+		return c.handleDropAccount(ev)
 	default:
 	}
 	return nil
 }
 
-func (c *clientConn) sendErr(errMsg string, resp chan<- []byte) {
-	fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+func (c *clientConn) sendErr(err error, resp chan<- []byte) {
+	var errCode uint16
+	var sqlState, errMsg string
+	switch myErr := err.(type) {
+	case *moerr.Error:
+		if myErr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
+			errCode = myErr.MySQLCode()
+		} else {
+			errCode = myErr.ErrorCode()
+		}
+		errMsg = myErr.Error()
+		sqlState = myErr.SqlState()
+	default:
+		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+		errCode = fail.ErrorCode
+		sqlState = fail.SqlStates[0]
+		errMsg = err.Error()
+	}
 	payload := c.mysqlProto.MakeErrPayload(
-		fail.ErrorCode, fail.SqlStates[0], errMsg)
+		errCode, sqlState, errMsg)
 	r := &frontend.Packet{
 		Length:     0,
 		SequenceID: 1,
@@ -252,7 +291,7 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 	if err != nil {
 		c.log.Error("failed to connect to backend server", zap.Error(err))
 		if resp != nil {
-			c.sendErr(err.Error(), resp)
+			c.sendErr(err, resp)
 		}
 		return err
 	}
@@ -284,13 +323,13 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	cn, err := c.router.SelectByConnID(e.connID)
 	if err != nil {
 		c.log.Error("failed to select CN server", zap.Error(err))
-		c.sendErr(err.Error(), resp)
+		c.sendErr(err, resp)
 		return err
 	}
 	// Before connect to backend server, update the salt.
 	cn.salt = c.mysqlProto.GetSalt()
 
-	return c.connAndExec(cn, e.stmt, resp)
+	return c.connAndExec(cn, fmt.Sprintf("KILL QUERY %d", cn.backendConnID), resp)
 }
 
 // handleSetVar handles the set variable event.
@@ -300,23 +339,7 @@ func (c *clientConn) handleSetVar(e *setVarEvent) error {
 }
 
 // handleSuspendAccountEvent handles the suspend account event.
-func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent, resp chan<- []byte) error {
-	// a temp cn server.
-	cn := &CNServer{
-		addr: e.addr,
-		salt: c.mysqlProto.GetSalt(),
-	}
-	csp, _ := c.tun.getPipes()
-	if csp.inTxn() {
-		// TODO(volgariver6): this is for the compatibility with the case that we are
-		// now in a transaction. suspend or drop operation can not be activated within a
-		// transaction.
-		c.sendErr(moerr.NewInternalErrorNoCtx("administrative command is unsupported in transactions").Error(), resp)
-	}
-	if err := c.connAndExec(cn, e.stmt, resp); err != nil {
-		return err
-	}
-
+func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent) error {
 	// handle kill connection.
 	cns, err := c.router.SelectByTenant(e.account)
 	if err != nil {
@@ -330,7 +353,7 @@ func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent, resp chan<- []
 		cn.salt = c.mysqlProto.GetSalt()
 
 		go func(s *CNServer) {
-			query := fmt.Sprintf("kill connection %d", s.connID)
+			query := fmt.Sprintf("kill connection %d", s.backendConnID)
 			// No client to receive the result, so pass nil as the third
 			// parameter to ignore the result.
 			if err := c.connAndExec(s, query, nil); err != nil {
@@ -346,14 +369,13 @@ func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent, resp chan<- []
 }
 
 // handleDropAccountEvent handles the drop account event.
-func (c *clientConn) handleDropAccount(e *dropAccountEvent, resp chan<- []byte) error {
+func (c *clientConn) handleDropAccount(e *dropAccountEvent) error {
 	se := &suspendAccountEvent{
 		baseEvent: e.baseEvent,
 		stmt:      e.stmt,
 		account:   e.account,
-		addr:      e.addr,
 	}
-	return c.handleSuspendAccount(se, resp)
+	return c.handleSuspendAccount(se)
 }
 
 // Close implements the ClientConn interface.
@@ -379,6 +401,9 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	// We have to set proxy connection ID after cn is returned.
+	cn.proxyConnID = c.connID
+
 	// Set the salt value of cn server.
 	cn.salt = c.mysqlProto.GetSalt()
 	sc, r, err := c.router.Connect(cn, c.handshakePack, c.tun)
@@ -397,8 +422,10 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 	}
 
 	// Set the label session variable.
-	if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
-		return nil, err
+	if len(c.clientInfo.allLabels()) > 0 {
+		if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
+			return nil, err
+		}
 	}
 	// Set the use defined variables, including session variables and user variables.
 	for _, stmt := range c.setVarStmts {
@@ -432,4 +459,21 @@ func (c *clientConn) readPacket() (*frontend.Packet, error) {
 // nextClientConnID increases baseConnID by 1 and returns the result.
 func nextClientConnID() uint32 {
 	return atomic.AddUint32(&clientBaseConnID, 1)
+}
+
+// genConnID is used to generate globally unique connection ID.
+func (c *clientConn) genConnID() (uint32, error) {
+	if c.haKeeperClient == nil {
+		return nextClientConnID(), nil
+	}
+	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
+	defer cancel()
+	// Use the same key with frontend module to make sure the connection ID
+	// is unique globally.
+	connID, err := c.haKeeperClient.AllocateIDByKey(ctx, frontend.ConnIDAllocKey)
+	if err != nil {
+		return 0, err
+	}
+	// Convert uint64 to uint32 to adapt MySQL protocol.
+	return uint32(connID), nil
 }

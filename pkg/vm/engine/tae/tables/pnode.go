@@ -34,8 +34,6 @@ type persistedNode struct {
 	block *baseBlock
 	//ZM and BF index for primary key column.
 	pkIndex indexwrapper.Index
-	//ZM and BF index for all columns.
-	indexes map[int]indexwrapper.Index
 }
 
 func newPersistedNode(block *baseBlock) *persistedNode {
@@ -50,37 +48,30 @@ func newPersistedNode(block *baseBlock) *persistedNode {
 }
 
 func (node *persistedNode) close() {
-	for i, index := range node.indexes {
-		index.Close()
-		node.indexes[i] = nil
+	if node.pkIndex != nil {
+		node.pkIndex.Close()
+		node.pkIndex = nil
 	}
-	node.indexes = nil
 }
 
 func (node *persistedNode) init() {
-	node.indexes = make(map[int]indexwrapper.Index)
 	schema := node.block.meta.GetSchema()
-	pkIdx := -1
-	if schema.HasPK() {
-		pkIdx = schema.GetSingleSortKeyIdx()
+	if !schema.HasPK() {
+		return
 	}
 	metaloc := node.block.meta.GetMetaLoc()
 	if len(metaloc) != objectio.LocationLen {
 		logutil.Infof("%s bad metaloc %q: %s", node.block.meta.ID.String(), metaloc, node.block.meta.String())
 	}
-	for i := range schema.ColDefs {
-		index := indexwrapper.NewImmutableIndex()
-		if err := index.ReadFrom(
-			node.block.indexCache,
-			node.block.fs,
-			metaloc,
-			schema.ColDefs[i]); err != nil {
-			panic(err)
-		}
-		node.indexes[i] = index
-		if i == pkIdx {
-			node.pkIndex = index
-		}
+	pkDef := schema.GetSingleSortKey()
+	var err error
+	if node.pkIndex, err = indexwrapper.NewImmtableIndex(
+		node.block.indexCache,
+		node.block.fs,
+		metaloc,
+		pkDef,
+	); err != nil {
+		panic(err)
 	}
 }
 
@@ -93,8 +84,9 @@ func (node *persistedNode) BatchDedup(
 	keys containers.Vector,
 	skipFn func(row uint32) error,
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn, zm)
+	return node.pkIndex.BatchDedup(keys, skipFn, zm, bf)
 }
 
 func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
@@ -126,6 +118,19 @@ func (node *persistedNode) GetColumnDataWindow(
 		data.Close()
 	}
 	return
+}
+
+func (node *persistedNode) Foreach(
+	readSchema *catalog.Schema,
+	colIdx int, op func(v any, isNull bool, row int) error, sel *roaring.Bitmap) (err error) {
+	var data containers.Vector
+	if data, err = node.block.LoadPersistedColumnData(
+		readSchema,
+		colIdx,
+	); err != nil {
+		return
+	}
+	return data.Foreach(op, sel)
 }
 
 func (node *persistedNode) GetDataWindow(

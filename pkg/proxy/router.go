@@ -54,9 +54,11 @@ type Router interface {
 // CNServer represents the backend CN server, including salt, tenant, uuid and address.
 // When there is a new client connection, a new CNServer will be created.
 type CNServer struct {
-	// connID is the backend CN server's connection ID, which is global unique
+	// backendConnID is the backend CN server's connection ID, which is global unique
 	// and is tracked in connManager.
-	connID uint32
+	backendConnID uint32
+	// clientConnID is the connection ID in proxy side.
+	proxyConnID uint32
 	// salt is generated in proxy module and will be sent to backend
 	// server when build connection.
 	salt []byte
@@ -127,9 +129,10 @@ func (r *router) SelectByConnID(connID uint32) (*CNServer, error) {
 	}
 	// Return a new CNServer instance for temporary connection.
 	return &CNServer{
-		salt: cn.salt,
-		uuid: cn.uuid,
-		addr: cn.addr,
+		backendConnID: cn.backendConnID,
+		salt:          cn.salt,
+		uuid:          cn.uuid,
+		addr:          cn.addr,
 	}, nil
 }
 
@@ -142,11 +145,8 @@ func (r *router) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
 func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
 	var cns []*CNServer
 	var cnEmpty, cnNotEmpty bool
-	selector := c.labelInfo.genSelector()
-	if c.labelInfo.isSuperTenant() {
-		selector = clusterservice.NewSelector()
-	}
-	r.moCluster.GetCNService(selector, func(s metadata.CNService) bool {
+	noCNErrMsg := "no available CN server"
+	r.moCluster.GetCNService(c.labelInfo.genSelector(), func(s metadata.CNService) bool {
 		cns = append(cns, &CNServer{
 			reqLabel: c.labelInfo,
 			cnLabel:  s.Labels,
@@ -161,8 +161,28 @@ func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
 		return true
 	})
 	if len(cns) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("no available CN server.")
-	} else if len(cns) == 1 {
+		// If there is no available CN server for sys account, select from other
+		// accounts to make sure sys user could log in.
+		if c.labelInfo.isSuperTenant() {
+			r.moCluster.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
+				cns = append(cns, &CNServer{
+					reqLabel: c.labelInfo,
+					cnLabel:  s.Labels,
+					uuid:     s.ServiceID,
+					addr:     s.SQLAddress,
+				})
+				return true
+			})
+			if len(cns) == 0 {
+				return nil, moerr.NewInternalErrorNoCtx(noCNErrMsg)
+			}
+		} else {
+			return nil, moerr.NewInternalErrorNoCtx(noCNErrMsg)
+		}
+	}
+
+	// If there is only one CN server, just return it.
+	if len(cns) == 1 {
 		return cns[0], nil
 	}
 
@@ -211,7 +231,7 @@ func (r *router) Connect(
 		return nil, nil, err
 	}
 	// After handshake with backend CN server, set the connID of serverConn.
-	cn.connID = sc.ConnID()
+	cn.backendConnID = sc.ConnID()
 
 	// After connect succeed, track the connection.
 	r.rebalancer.connManager.connect(cn, t)

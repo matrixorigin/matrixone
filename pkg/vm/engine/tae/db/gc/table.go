@@ -137,7 +137,7 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 
 		id := common.ID{
 			TableID: tid,
-			BlockID: *blkID.GetBlockid(),
+			BlockID: blkID.CloneBlockID(),
 			DbID:    dbid,
 		}
 		t.deleteBlock(id, metaLoc.Name().String())

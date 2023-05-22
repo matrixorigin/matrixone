@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,7 +39,7 @@ const (
 )
 
 type evalVector struct {
-	needFree bool
+	executor colexec.ExpressionExecutor
 	vec      *vector.Vector
 }
 
@@ -64,6 +65,8 @@ type container struct {
 	mapAggType map[int32]int
 
 	bat *batch.Batch
+
+	alreadyGetAgg bool
 }
 
 type Argument struct {
@@ -83,6 +86,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
+		ctr.cleanAggVectors()
+		ctr.cleanGroupVectors()
+		ctr.cleanMultiAggVecs()
 	}
 }
 
@@ -107,32 +113,32 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) cleanAggVectors(mp *mpool.MPool) {
+func (ctr *container) cleanAggVectors() {
 	for i := range ctr.aggVecs {
-		if ctr.aggVecs[i].needFree && ctr.aggVecs[i].vec != nil {
-			ctr.aggVecs[i].vec.Free(mp)
-			ctr.aggVecs[i].vec = nil
+		if ctr.aggVecs[i].executor != nil {
+			ctr.aggVecs[i].executor.Free()
 		}
+		ctr.aggVecs[i].vec = nil
 	}
 }
 
-func (ctr *container) cleanMultiAggVecs(mp *mpool.MPool) {
+func (ctr *container) cleanMultiAggVecs() {
 	for i := range ctr.multiVecs {
 		for j := range ctr.multiVecs[i] {
-			if ctr.multiVecs[i][j].needFree && ctr.multiVecs[i][j].vec != nil {
-				ctr.multiVecs[i][j].vec.Free(mp)
-				ctr.multiVecs[i][j].vec = nil
+			if ctr.multiVecs[i][j].executor != nil {
+				ctr.multiVecs[i][j].executor.Free()
 			}
+			ctr.multiVecs[i][j].vec = nil
 		}
 	}
 }
 
-func (ctr *container) cleanGroupVectors(mp *mpool.MPool) {
+func (ctr *container) cleanGroupVectors() {
 	for i := range ctr.groupVecs {
-		if ctr.groupVecs[i].needFree && ctr.groupVecs[i].vec != nil {
-			ctr.groupVecs[i].vec.Free(mp)
-			ctr.groupVecs[i].vec = nil
+		if ctr.groupVecs[i].executor != nil {
+			ctr.groupVecs[i].executor.Free()
 		}
+		ctr.groupVecs[i].vec = nil
 	}
 }
 

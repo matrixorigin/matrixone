@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -175,13 +174,10 @@ func (h *txnRelation) Append(data *containers.Batch) error {
 	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
-func (h *txnRelation) AddBlksWithMetaLoc(
-	zm []objectio.ZoneMap,
-	metaLocs []objectio.Location) error {
+func (h *txnRelation) AddBlksWithMetaLoc(metaLocs []objectio.Location) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
-		zm,
 		metaLocs,
 	)
 }
@@ -280,15 +276,17 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 	err = containers.ForeachVectorWindow(
 		keys, 0, keys.Length(),
 		func(rid types.Rowid, _ bool, _ int) (err error) {
-			id.BlockID, row = model.DecodePhyAddrKey(&rid)
+			id.BlockID, row = rid.Decode()
 			err = h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
 			return
 		}, nil, nil)
 	return
 }
 
+// Only used by test.
 func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
-	bid, row := model.DecodePhyAddrKeyFromValue(key)
+	rid := key.(types.Rowid)
+	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
 	id.BlockID = bid
 	return h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
@@ -298,8 +296,10 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.De
 	return h.Txn.GetStore().RangeDelete(id, start, end, dt)
 }
 
+// Only used by test.
 func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, bool, error) {
-	bid, row := model.DecodePhyAddrKeyFromValue(key)
+	rid := key.(types.Rowid)
+	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
 	id.BlockID = bid
 	return h.Txn.GetStore().GetValue(id, row, uint16(col))

@@ -299,8 +299,6 @@ func (pi *ProtocolImpl) ConnectionID() uint32 {
 // before calling NewMysqlClientProtocol, tcpConn.Connected() must be true
 // please check goetty/application.go::doStart() and goetty/application.go::NewIOSession(...) for details
 func (pi *ProtocolImpl) Quit() {
-	pi.m.Lock()
-	defer pi.m.Unlock()
 	//if it was quit, do nothing
 	if pi.setQuit(true) {
 		return
@@ -316,13 +314,7 @@ func (pi *ProtocolImpl) Quit() {
 	}
 }
 
-func (pi *ProtocolImpl) GetLock() sync.Locker {
-	return &pi.m
-}
-
 func (pi *ProtocolImpl) GetTcpConnection() goetty.IOSession {
-	pi.m.Lock()
-	defer pi.m.Unlock()
 	return pi.tcpConn
 }
 
@@ -354,8 +346,14 @@ func (mp *MysqlProtocolImpl) getAbortTransactionErrorInfo() string {
 }
 
 func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) error {
-	mp.GetLock().Lock()
-	defer mp.GetLock().Unlock()
+	//move here to prohibit potential recursive lock
+	var attachAbort string
+	if resp.GetCategory() == ErrorResponse {
+		attachAbort = mp.getAbortTransactionErrorInfo()
+	}
+
+	mp.m.Lock()
+	defer mp.m.Unlock()
 
 	switch resp.category {
 	case OkResponse:
@@ -371,7 +369,6 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		if err == nil {
 			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
-		attachAbort := mp.getAbortTransactionErrorInfo()
 		switch myerr := err.(type) {
 		case *moerr.Error:
 			var code uint16

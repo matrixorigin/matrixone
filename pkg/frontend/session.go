@@ -139,8 +139,6 @@ type Session struct {
 	flag         bool
 	lastInsertID uint64
 
-	skipAuth bool
-
 	sqlSourceType []string
 
 	InitTempEngine bool
@@ -505,18 +503,6 @@ func (ses *Session) cleanCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.clean()
-}
-
-func (ses *Session) setSkipCheckPrivilege(b bool) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.skipAuth = b
-}
-
-func (ses *Session) skipCheckPrivilege() bool {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	return ses.skipAuth
 }
 
 func (ses *Session) UpdateDebugString() {
@@ -1571,17 +1557,6 @@ func changeVersion(ctx context.Context, ses *Session, db string) error {
 		ses.GetTenantInfo().SetVersion(version)
 	}
 	return err
-}
-
-func fixColumnName(cols []*engine.Attribute, expr *plan.Expr) {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			fixColumnName(cols, arg)
-		}
-	case *plan.Expr_Col:
-		exprImpl.Col.Name = cols[exprImpl.Col.ColPos].Name
-	}
 }
 
 // fakeDataSetFetcher gets the result set from the pipeline and save it in the session.

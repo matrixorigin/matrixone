@@ -29,8 +29,8 @@ import (
 // RelationName counter for the new connection
 var initConnectionID uint32 = 1000
 
-// connIDAllocKey is used get connection ID from HAKeeper.
-var connIDAllocKey = "____server_conn_id"
+// ConnIDAllocKey is used get connection ID from HAKeeper.
+var ConnIDAllocKey = "____server_conn_id"
 
 // MOServer MatrixOne Server
 type MOServer struct {

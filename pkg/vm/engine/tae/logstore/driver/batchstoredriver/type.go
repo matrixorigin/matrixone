@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 type RotateChecker interface {
@@ -37,11 +36,11 @@ type VFile interface {
 	Name() string
 	String() string
 
-	Replay(*replayer, logstoreEntry.Allocator) error
+	Replay(*replayer) error
 	OnReplayCommitted()
 
-	Load(lsn uint64, allocator logstoreEntry.Allocator) (*entry.Entry, error)
-	LoadByOffset(offset int, allocator logstoreEntry.Allocator) (*entry.Entry, error)
+	Load(lsn uint64) (*entry.Entry, error)
+	LoadByOffset(offset int) (*entry.Entry, error)
 }
 
 type FileAppender interface {
@@ -79,9 +78,9 @@ type File interface {
 	GetEntryByVersion(version int) (VFile, error)
 	Sync() error
 	GetAppender() FileAppender
-	Replay(*replayer, logstoreEntry.Allocator) error
+	Replay(*replayer) error
 	GetHistory() History
-	Load(ver int, groupId uint32, lsn uint64, allocator logstoreEntry.Allocator) (*entry.Entry, error)
+	Load(ver int, groupId uint32, lsn uint64) (*entry.Entry, error)
 }
 
 type Store interface {
@@ -89,7 +88,7 @@ type Store interface {
 	Append(*entry.Entry) error
 	Truncate(lsn uint64) error
 	GetTruncated() (lsn uint64, err error)
-	Read(lsn uint64, allocator logstoreEntry.Allocator) (*entry.Entry, error)
+	Read(lsn uint64) (*entry.Entry, error)
 	Close() error
 	Replay(driver.ApplyHandle) error
 	GetSynced(uint32) uint64

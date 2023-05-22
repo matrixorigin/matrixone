@@ -31,9 +31,29 @@ type immutableIndex struct {
 	bfReader *BfReader
 }
 
-func NewImmutableIndex() *immutableIndex {
-	return new(immutableIndex)
+func NewImmtableIndex(
+	indexCache model.LRUCache,
+	fs *objectio.ObjectFS,
+	location objectio.Location,
+	colDef *catalog.ColDef,
+) (index *immutableIndex, err error) {
+	index = new(immutableIndex)
+	index.zmReader = NewZmReader(
+		fs,
+		uint16(colDef.Idx),
+		location)
+
+	if colDef.IsRealPrimary() {
+		index.bfReader = NewBfReader(
+			colDef.Type.Oid,
+			location,
+			indexCache,
+			fs,
+		)
+	}
+	return
 }
+
 func (index *immutableIndex) BatchUpsert(keysCtx *idxpkg.KeysCtx, offset int) (err error) {
 	panic("not support")
 }
@@ -66,6 +86,7 @@ func (index *immutableIndex) BatchDedup(
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
 	zm []byte,
+	bf objectio.BloomFilter,
 ) (keyselects *roaring.Bitmap, err error) {
 	var exist bool
 	inputZM := idxpkg.ZM(zm)
@@ -84,7 +105,7 @@ func (index *immutableIndex) BatchDedup(
 		}
 	}
 	if index.bfReader != nil {
-		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys)
+		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, bf)
 		// 2. check bloomfilter has some unknown error. return err
 		if err != nil {
 			err = TranslateError(err)
@@ -112,28 +133,6 @@ func (index *immutableIndex) Destroy() (err error) {
 	}
 	if index.bfReader != nil {
 		err = index.bfReader.Destroy()
-	}
-	return
-}
-
-func (index *immutableIndex) ReadFrom(
-	indexCache model.LRUCache,
-	fs *objectio.ObjectFS,
-	location objectio.Location,
-	colDef *catalog.ColDef,
-) (err error) {
-	index.zmReader = NewZmReader(
-		fs,
-		uint16(colDef.Idx),
-		location)
-
-	if colDef.IsRealPrimary() {
-		index.bfReader = NewBfReader(
-			colDef.Type.Oid,
-			location,
-			indexCache,
-			fs,
-		)
 	}
 	return
 }

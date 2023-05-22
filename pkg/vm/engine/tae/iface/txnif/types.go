@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 var (
@@ -42,6 +41,7 @@ type Txn2PC interface {
 	PrePrepare() error
 	PrepareCommit() error
 	PreApplyCommit() error
+	PrepareWAL() error
 	ApplyCommit() error
 }
 
@@ -161,7 +161,7 @@ type DeleteChain interface {
 
 	PrepareRangeDelete(start, end uint32, ts types.TS) error
 	DepthLocked() int
-	CollectDeletesLocked(txn TxnReader, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
+	CollectDeletesLocked(txn TxnReader, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
 type BaseNode[T any] interface {
 	Update(o T)
@@ -197,11 +197,9 @@ type BaseMVCCNode interface {
 	GetStart() types.TS
 	GetPrepare() types.TS
 	GetTxn() TxnReader
-	SetLogIndex(idx *wal.Index)
-	GetLogIndex() *wal.Index
 
-	ApplyCommit(index *wal.Index) (err error)
-	ApplyRollback(index *wal.Index) (err error)
+	ApplyCommit() (err error)
+	ApplyRollback() (err error)
 	PrepareCommit() (err error)
 	PrepareRollback() (err error)
 
@@ -239,8 +237,7 @@ type TxnStore interface {
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
 	Append(dbId, id uint64, data *containers.Batch) error
-	AddBlksWithMetaLoc(dbId, id uint64,
-		zm []objectio.ZoneMap, metaLocs []objectio.Location) error
+	AddBlksWithMetaLoc(dbId, id uint64, metaLocs []objectio.Location) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
@@ -288,7 +285,7 @@ type TxnStore interface {
 		visitMetadata func(block any),
 		visitSegment func(seg any),
 		visitAppend func(bat any),
-		visitDelete func(deletes []uint32, prefix []byte))
+		visitDelete func(deletes DeleteNode))
 	GetTransactionType() TxnType
 }
 
@@ -304,8 +301,8 @@ type TxnEntryType int16
 type TxnEntry interface {
 	PrepareCommit() error
 	PrepareRollback() error
-	ApplyCommit(index *wal.Index) error
-	ApplyRollback(index *wal.Index) error
+	ApplyCommit() error
+	ApplyRollback() error
 	MakeCommand(uint32) (TxnCmd, error)
 	Is1PC() bool
 	Set1PC()
