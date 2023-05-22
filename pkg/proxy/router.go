@@ -145,11 +145,8 @@ func (r *router) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
 func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
 	var cns []*CNServer
 	var cnEmpty, cnNotEmpty bool
-	selector := c.labelInfo.genSelector()
-	if c.labelInfo.isSuperTenant() {
-		selector = clusterservice.NewSelector()
-	}
-	r.moCluster.GetCNService(selector, func(s metadata.CNService) bool {
+	noCNErrMsg := "no available CN server"
+	r.moCluster.GetCNService(c.labelInfo.genSelector(), func(s metadata.CNService) bool {
 		cns = append(cns, &CNServer{
 			reqLabel: c.labelInfo,
 			cnLabel:  s.Labels,
@@ -164,8 +161,28 @@ func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
 		return true
 	})
 	if len(cns) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("no available CN server.")
-	} else if len(cns) == 1 {
+		// If there is no available CN server for sys account, select from other
+		// accounts to make sure sys user could log in.
+		if c.labelInfo.isSuperTenant() {
+			r.moCluster.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
+				cns = append(cns, &CNServer{
+					reqLabel: c.labelInfo,
+					cnLabel:  s.Labels,
+					uuid:     s.ServiceID,
+					addr:     s.SQLAddress,
+				})
+				return true
+			})
+			if len(cns) == 0 {
+				return nil, moerr.NewInternalErrorNoCtx(noCNErrMsg)
+			}
+		} else {
+			return nil, moerr.NewInternalErrorNoCtx(noCNErrMsg)
+		}
+	}
+
+	// If there is only one CN server, just return it.
+	if len(cns) == 1 {
 		return cns[0], nil
 	}
 
