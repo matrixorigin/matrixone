@@ -20,7 +20,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -61,7 +60,7 @@ func (node *persistedNode) BatchDedup(
 
 func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
 	ctx := context.TODO()
-	pkIndex, err := blockio.MakeImmuIndex(ctx, node.block.meta, nil, node.block.indexCache, node.block.fs.Service)
+	pkIndex, err := MakeImmuIndex(ctx, node.block.meta, nil, node.block.indexCache, node.block.fs.Service)
 	if err != nil {
 		return
 	}

@@ -20,24 +20,35 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
-
-type Loader = func(context.Context) ([]byte, error)
 
 type ImmutIndex struct {
 	zm       index.ZM
-	bfLoader Loader
+	bf       objectio.BloomFilter
+	location objectio.Location
+	cache    model.LRUCache
+	fs       fileservice.FileService
 }
 
 func NewImmutIndex(
 	zm index.ZM,
-	bfLoader Loader,
+	bf objectio.BloomFilter,
+	location objectio.Location,
+	cache model.LRUCache,
+	fs fileservice.FileService,
 ) ImmutIndex {
 	return ImmutIndex{
 		zm:       zm,
-		bfLoader: bfLoader,
+		bf:       bf,
+		location: location,
+		cache:    cache,
+		fs:       fs,
 	}
 }
 
@@ -62,15 +73,20 @@ func (idx ImmutIndex) BatchDedup(
 	// some keys are in [min, max]. check bloomfilter for those keys
 
 	var buf []byte
-	if idx.bfLoader != nil {
-		// load bloomfilter
-		if buf, err = idx.bfLoader(ctx); err != nil {
+	if len(idx.bf) > 0 {
+		buf = idx.bf.GetBloomFilter(uint32(idx.location.ID()))
+	} else {
+		var bf objectio.BloomFilter
+		if bf, err = blockio.LoadBF(
+			ctx,
+			idx.location,
+			idx.cache,
+			idx.fs,
+			false,
+		); err != nil {
 			return
 		}
-	} else {
-		// no bloomfilter. it is possible duplicate
-		err = moerr.GetOkExpectedPossibleDup()
-		return
+		buf = bf.GetBloomFilter(uint32(idx.location.ID()))
 	}
 
 	bfIndex := index.NewEmptyBinaryFuseFilter()
@@ -97,14 +113,21 @@ func (idx ImmutIndex) Dedup(ctx context.Context, key any) (err error) {
 	if !exist {
 		return
 	}
-	if idx.bfLoader == nil {
-		err = moerr.GetOkExpectedPossibleDup()
-		return
-	}
-
-	buf, err := idx.bfLoader(ctx)
-	if err != nil {
-		return
+	var buf []byte
+	if len(idx.bf) > 0 {
+		buf = idx.bf.GetBloomFilter(uint32(idx.location.ID()))
+	} else {
+		var bf objectio.BloomFilter
+		if bf, err = blockio.LoadBF(
+			ctx,
+			idx.location,
+			idx.cache,
+			idx.fs,
+			false,
+		); err != nil {
+			return
+		}
+		buf = bf.GetBloomFilter(uint32(idx.location.ID()))
 	}
 
 	bfIndex := index.NewEmptyBinaryFuseFilter()

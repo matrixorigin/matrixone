@@ -385,7 +385,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	bf objectio.BloomFilter,
 ) (err error) {
 	ctx := context.TODO()
-	pkIndex, err := blockio.MakeImmuIndex(
+	pkIndex, err := MakeImmuIndex(
 		ctx,
 		blk.meta,
 		bf,

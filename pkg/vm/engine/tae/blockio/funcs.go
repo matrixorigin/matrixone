@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
@@ -77,41 +75,5 @@ func LoadBF(
 	}
 	cache.Set(*loc.ShortName(), v, int64(size))
 	bf = objectio.BloomFilter(v)
-	return
-}
-
-func MakeBFLoader(
-	meta *catalog.BlockEntry,
-	bf objectio.BloomFilter,
-	cache model.LRUCache,
-	fs fileservice.FileService,
-) indexwrapper.Loader {
-	return func(ctx context.Context) ([]byte, error) {
-		location := meta.GetMetaLoc()
-		var err error
-		if len(bf) == 0 {
-			if bf, err = LoadBF(ctx, location, cache, fs, false); err != nil {
-				return nil, err
-			}
-		}
-		return bf.GetBloomFilter(uint32(location.ID())), nil
-	}
-}
-
-func MakeImmuIndex(
-	ctx context.Context,
-	meta *catalog.BlockEntry,
-	bf objectio.BloomFilter,
-	cache model.LRUCache,
-	fs fileservice.FileService,
-) (idx indexwrapper.ImmutIndex, err error) {
-	pkZM, err := meta.GetPKZoneMap(ctx, fs)
-	if err != nil {
-		return
-	}
-	idx = indexwrapper.NewImmutIndex(
-		*pkZM,
-		MakeBFLoader(meta, bf, cache, fs),
-	)
 	return
 }
