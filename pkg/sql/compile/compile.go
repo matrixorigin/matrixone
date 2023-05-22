@@ -2169,8 +2169,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 	}
 
-	monoExprList, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
-	ranges, err = rel.Ranges(ctx, monoExprList...)
+	ranges, err = rel.Ranges(ctx, n.BlockFilterList...)
 	if err != nil {
 		return nil, err
 	}
@@ -2186,7 +2185,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			subranges, err := subrelation.Ranges(ctx, monoExprList...)
+			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList...)
 			if err != nil {
 				return nil, err
 			}
