@@ -368,44 +368,9 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
-	if e.UsePushModelOrNot() {
-		if err := e.pClient.checkTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
-			e.delTransaction(txn)
-			return err
-		}
-	} else {
-		// update catalog's cache
-		table := &txnTable{
-			db: &txnDatabase{
-				txn: &Transaction{
-					engine: e,
-				},
-				databaseId: catalog.MO_CATALOG_ID,
-			},
-		}
-		table.tableId = catalog.MO_DATABASE_ID
-		table.tableName = catalog.MO_DATABASE
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_DATABASE_DAT_ID_IDX,
-			catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
-			e.delTransaction(txn)
-			return err
-		}
-
-		table.tableId = catalog.MO_TABLES_ID
-		table.tableName = catalog.MO_TABLES
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
-			catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
-			e.delTransaction(txn)
-			return err
-		}
-
-		table.tableId = catalog.MO_COLUMNS_ID
-		table.tableName = catalog.MO_COLUMNS
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
-			catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
-			e.delTransaction(txn)
-			return err
-		}
+	if err := e.pClient.checkTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
+		return err
 	}
 
 	return nil
