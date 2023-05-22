@@ -1374,26 +1374,11 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 		tableId = tbl.oldTableId
 	}
 
-	if tbl.db.txn.engine.UsePushModelOrNot() {
-		if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-			return err
-		}
-		if err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
-			return
-		}
-	} else {
-		if err = tbl.db.txn.engine.UpdateOfPull(
-			ctx,
-			tbl.db.txn.dnStores[:1],
-			tbl,
-			tbl.db.txn.op,
-			tbl.primaryIdx,
-			tbl.db.databaseId,
-			tableId,
-			tbl.db.txn.meta.SnapshotTS,
-		); err != nil {
-			return
-		}
+	if err = tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+		return
+	}
+	if err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
+		return
 	}
 
 	tbl.logtailUpdated = true

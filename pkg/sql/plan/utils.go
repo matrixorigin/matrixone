@@ -1052,6 +1052,15 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
 	var err error
 
+	if elist, ok := e.Expr.(*plan.Expr_List); ok {
+		for i, expr := range elist.List.List {
+			if elist.List.List[i], err = ConstantFold(bat, expr, proc); err != nil {
+				return nil, err
+			}
+		}
+		return e, nil
+	}
+
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok || proc == nil {
 		return e, nil
