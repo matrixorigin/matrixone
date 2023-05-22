@@ -17,6 +17,7 @@ package right
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -67,7 +68,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 			if ctr.mp == nil {
-				// for inner ,right and semi join, if hashmap is empty, we can finish this pipeline
 				ctr.state = End
 			} else {
 				ctr.state = Probe
@@ -89,7 +89,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				continue
 			}
 
@@ -98,22 +98,19 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 			}
 
 			return false, nil
+
 		case SendLast:
-			if ctr.bat == nil || ctr.bat.Length() == 0 {
-				ctr.state = End
-			} else {
-				setNil, err := ctr.sendLast(ap, proc, analyze, isFirst, isLast)
-
-				if err != nil {
-					return false, err
-				}
-				ctr.state = End
-				if setNil {
-					continue
-				}
-
-				return false, nil
+			setNil, err := ctr.sendLast(ap, proc, analyze, isFirst, isLast)
+			if err != nil {
+				return false, err
 			}
+
+			ctr.state = End
+			if setNil {
+				continue
+			}
+
+			return false, nil
 
 		default:
 			proc.SetInputBatch(nil)
@@ -131,7 +128,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 	if bat != nil {
 		ctr.bat = bat
 		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
-		ctr.matched = make([]uint8, bat.Length())
+		ctr.matched = &bitmap.Bitmap{}
+		ctr.matched.InitWithSize(bat.Length())
 		analyze.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
@@ -139,17 +137,14 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	if !ap.IsMerger {
-		ap.Channel <- &ctr.matched
-		//goto ctr.end directly
+		ap.Channel <- ctr.matched
 		return true, nil
 	}
 
 	if ap.NumCPU > 1 {
 		cnt := 1
 		for v := range ap.Channel {
-			for i, val := range *v {
-				ctr.matched[i] |= val
-			}
+			ctr.matched.Or(v)
 			cnt++
 			if cnt == int(ap.NumCPU) {
 				close(ap.Channel)
@@ -158,15 +153,13 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		}
 	}
 
-	count := ctr.bat.Length()
-	unmatched := 0
-	for i := 0; i < count; i++ {
-		ctr.matched[i] = 1 - ctr.matched[i]
-		unmatched += int(ctr.matched[i])
-	}
-
-	if unmatched == 0 {
-		return true, nil
+	ctr.matched.Negate()
+	count := ctr.bat.Length() - ctr.matched.Count()
+	sels := make([]int32, 0, count)
+	itr := ctr.matched.Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		sels = append(sels, int32(r))
 	}
 
 	rbat := batch.NewWithSize(len(ap.Result))
@@ -182,23 +175,22 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 
 	for j, rp := range ap.Result {
 		if rp.Rel == 0 {
-			if err := vector.AppendMultiFixed(rbat.Vecs[j], 0, true, unmatched, proc.Mp()); err != nil {
+			if err := vector.AppendMultiFixed(rbat.Vecs[j], 0, true, count, proc.Mp()); err != nil {
 				rbat.Clean(proc.Mp())
 				return false, err
 			}
 		} else {
-			if err := rbat.Vecs[j].UnionBatch(ctr.bat.Vecs[rp.Pos], 0, count, ctr.matched, proc.Mp()); err != nil {
+			if err := rbat.Vecs[j].Union(ctr.bat.Vecs[rp.Pos], sels, proc.Mp()); err != nil {
 				rbat.Clean(proc.Mp())
 				return false, err
 			}
 		}
 
 	}
-	for i := 0; i < count; i++ {
-		if ctr.matched[i] == 1 {
-			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[i])
-		}
+	for _, sel := range sels {
+		rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 	}
+
 	analyze.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return false, nil
@@ -275,7 +267,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 							}
 						}
 					}
-					ctr.matched[sel] = 1
+					ctr.matched.Add(uint64(sel))
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 				}
 			} else {
@@ -293,7 +285,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 				}
 				for _, sel := range sels {
-					ctr.matched[sel] = 1
+					ctr.matched.Add(uint64(sel))
 					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 				}
 			}
