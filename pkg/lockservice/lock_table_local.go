@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -516,7 +517,7 @@ func (c *mergeContext) mergeWaiter(serviceID string, from, to *waiter) {
 
 func (c *mergeContext) mergeLocks(locks [][]byte) {
 	for _, v := range locks {
-		c.mergedLocks[unsafeByteSliceToString(v)] = struct{}{}
+		c.mergedLocks[util.UnsafeBytesToString(v)] = struct{}{}
 	}
 }
 
@@ -525,7 +526,7 @@ func (c *mergeContext) commit(
 	txn *activeTxn,
 	s LockStorage) {
 	for k := range c.mergedLocks {
-		s.Delete(unsafeStringToByteSlice(k))
+		s.Delete(util.UnsafeStringToBytes(k))
 	}
 	txn.lockRemoved(
 		bind.ServiceID,
