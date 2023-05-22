@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -1496,23 +1497,26 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 }
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
-func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
+func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
-	bat.Cnt = 1
-	//mp := proc.Mp()
 	err := types.Decode(data, bat)
-	// allocated memory of vec from mPool.
-	for i := range bat.Vecs {
-		oldVec := bat.Vecs[i]
-		vec, err1 := oldVec.Dup(mp)
-		if err1 != nil {
-			for j := 0; j < i; j++ {
-				bat.Vecs[j].Free(mp)
-			}
-			return nil, err1
-		}
-		bat.ReplaceVector(oldVec, vec)
+	if err != nil {
+		return nil, err
 	}
+	// allocated memory of vec from mPool.
+	for i, vec := range bat.Vecs {
+		typ := *vec.GetType()
+		rvec := vector.NewVec(typ)
+		if vp != nil {
+			rvec = vp.GetVector(typ)
+		}
+		if err := vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
+			bat.Clean(mp)
+			return nil, err
+		}
+		bat.Vecs[i] = rvec
+	}
+	bat.Cnt = 1
 	// allocated memory of aggVec from mPool.
 	for i, ag := range bat.Aggs {
 		err = ag.WildAggReAlloc(mp)
