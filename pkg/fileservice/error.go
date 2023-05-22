@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package wal
+package fileservice
 
-func (driver *walDriver) RangeCheckpoint(start, end uint64) (e LogEntry, err error) {
-	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end)
-	return
+import (
+	"errors"
+	"io"
+)
+
+func isRetryableError(err error) bool {
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	switch err.Error() {
+	case "connection reset by peer",
+		"connection timed out":
+		return true
+	}
+	return false
 }

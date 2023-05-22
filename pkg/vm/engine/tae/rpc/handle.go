@@ -825,9 +825,7 @@ func (h *Handle) HandleWrite(
 				}
 				locations = append(locations, location)
 			}
-			err = tb.AddBlksWithMetaLoc(
-				nil,
-				locations)
+			err = tb.AddBlksWithMetaLoc(locations)
 			return
 		}
 		//check the input batch passed by cn is valid.

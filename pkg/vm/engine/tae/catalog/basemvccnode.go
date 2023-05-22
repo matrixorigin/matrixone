@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 const (
@@ -176,9 +175,9 @@ func (e *MVCCNode[T]) Update(un *MVCCNode[T]) {
 	e.BaseNode.Update(un.BaseNode)
 }
 
-func (e *MVCCNode[T]) ApplyCommit(index *wal.Index) (err error) {
+func (e *MVCCNode[T]) ApplyCommit() (err error) {
 	var commitTS types.TS
-	commitTS, err = e.TxnMVCCNode.ApplyCommit(index)
+	commitTS, err = e.TxnMVCCNode.ApplyCommit()
 	if err != nil {
 		return
 	}
@@ -188,9 +187,9 @@ func (e *MVCCNode[T]) ApplyCommit(index *wal.Index) (err error) {
 func (e *MVCCNode[T]) PrepareRollback() (err error) {
 	return e.TxnMVCCNode.PrepareRollback()
 }
-func (e *MVCCNode[T]) ApplyRollback(index *wal.Index) (err error) {
+func (e *MVCCNode[T]) ApplyRollback() (err error) {
 	var commitTS types.TS
-	commitTS, err = e.TxnMVCCNode.ApplyRollback(index)
+	commitTS, err = e.TxnMVCCNode.ApplyRollback()
 	if err != nil {
 		return
 	}
