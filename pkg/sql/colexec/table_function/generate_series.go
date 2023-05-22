@@ -17,7 +17,6 @@ package table_function
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -79,7 +78,6 @@ func generateSeriesCall(_ int, proc *process.Process, arg *Argument) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	fmt.Printf("starVec: %s\nendVec: %s\n", startVec, endVec)
 	rbat = batch.New(false, arg.Attrs)
 	rbat.Cnt = 1
 	for i := range arg.Attrs {

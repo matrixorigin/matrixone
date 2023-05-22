@@ -366,6 +366,6 @@ func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) 
 	return nil, nil, nil
 }
 
-func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([][]byte, error) {
+func (t *Table) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
 	return nil, nil
 }

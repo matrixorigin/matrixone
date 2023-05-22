@@ -27,21 +27,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func metadataScanPrepare(_ *process.Process, arg *Argument) error {
-	return nil
+func metadataScanPrepare(proc *process.Process, arg *Argument) (err error) {
+	arg.ctr = new(container)
+	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+	return err
 }
 
 func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
+	var (
+		err         error
+		source, col *vector.Vector
+		rbat        *batch.Batch
+	)
+	defer func() {
+		if err != nil && rbat != nil {
+			rbat.Clean(proc.Mp())
+		}
+		if source != nil {
+			source.Free(proc.Mp())
+		}
+		if col != nil {
+			col.Free(proc.Mp())
+		}
+	}()
+
 	bat := proc.InputBatch()
 	if bat == nil {
 		return true, nil
 	}
 
-	source, err := colexec.EvalExpr(bat, proc, arg.Args[0])
+	source, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
 	if err != nil {
 		return false, err
 	}
-	col, err := colexec.EvalExpr(bat, proc, arg.Args[1])
+	col, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
 	if err != nil {
 		return false, err
 	}
@@ -67,13 +86,13 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		return false, err
 	}
 
-	retb, err := genRetBatch(*proc, arg, metaInfos, colname, rel)
+	rbat, err = genRetBatch(*proc, arg, metaInfos, colname, rel)
 	if err != nil {
 		return false, err
 	}
 
-	proc.SetInputBatch(retb)
-	return true, nil
+	proc.SetInputBatch(rbat)
+	return false, nil
 }
 
 func handleDatasource(first []string, second []string) (string, string, string, error) {
@@ -93,7 +112,7 @@ func getMetadataScanInfos(rel engine.Relation, proc *process.Process, colname st
 		return nil, err
 	}
 
-	infobytes, err := rel.GetColumMetadataScanInfo(proc.Ctx, colname)
+	infobytes, err := rel.GetMetadataScanInfoBytes(proc.Ctx, colname)
 	if err != nil {
 		return nil, err
 	}
@@ -113,10 +132,6 @@ func genRetBatch(proc process.Process, arg *Argument, metaInfos []*catalog.Metad
 	}
 
 	for i := range metaInfos {
-		arg.rowsum += metaInfos[i].RowCnt
-		arg.nullsum += metaInfos[i].NullCnt
-		arg.compresssize += metaInfos[i].CompressSize
-		arg.originsize += metaInfos[i].OriginSize
 		fillMetadataInfoBat(retBat, proc, arg, metaInfos[i])
 	}
 
@@ -125,6 +140,7 @@ func genRetBatch(proc process.Process, arg *Argument, metaInfos []*catalog.Metad
 
 func genMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, error) {
 	retBat := batch.New(false, arg.Attrs)
+	retBat.Cnt = 1
 	for i, a := range arg.Attrs {
 		switch a {
 		case catalog.MetadataScanInfoNames[catalog.COL_NAME]:
@@ -151,8 +167,8 @@ func genMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, erro
 		case catalog.MetadataScanInfoNames[catalog.SEG_ID]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.SEG_ID])
 
-		case catalog.MetadataScanInfoNames[catalog.ROW_CNT]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.ROW_CNT])
+		case catalog.MetadataScanInfoNames[catalog.ROWS_CNT]:
+			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.ROWS_CNT])
 
 		case catalog.MetadataScanInfoNames[catalog.NULL_CNT]:
 			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.NULL_CNT])
@@ -206,7 +222,7 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 		case catalog.MetadataScanInfoNames[catalog.SEG_ID]:
 			vector.AppendAny(opBat.Vecs[i], info.SegId, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.ROW_CNT]:
+		case catalog.MetadataScanInfoNames[catalog.ROWS_CNT]:
 			vector.AppendFixed(opBat.Vecs[i], info.RowCnt, false, mp)
 
 		case catalog.MetadataScanInfoNames[catalog.NULL_CNT]:
@@ -218,10 +234,10 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 		case catalog.MetadataScanInfoNames[catalog.ORIGIN_SIZE]:
 			vector.AppendFixed(opBat.Vecs[i], info.OriginSize, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.MIN]:
+		case catalog.MetadataScanInfoNames[catalog.MIN]: // TODO: find a way to show this info
 			vector.AppendBytes(opBat.Vecs[i], []byte("min"), false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.MAX]:
+		case catalog.MetadataScanInfoNames[catalog.MAX]: // TODO: find a way to show this info
 			vector.AppendBytes(opBat.Vecs[i], []byte("max"), false, mp)
 
 		default:

@@ -156,7 +156,6 @@ func (ctr *container) getBatchAggs(ap *Argument) error {
 
 func (ctr *container) process(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (bool, error) {
 	bat := proc.InputBatch()
-	fmt.Printf("[groupcall] bat size = %d\n", bat.Length())
 	if bat == nil {
 		// the result of Agg can't be empty but 0 or NULL.
 		if !ctr.alreadyGetAgg {

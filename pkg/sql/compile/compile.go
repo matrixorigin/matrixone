@@ -251,7 +251,6 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) error {
-	fmt.Printf("[ccompile] %s\n", DebugShowScopes(c.scope))
 	var wg sync.WaitGroup
 	errC := make(chan error, len(c.scope))
 	for _, s := range c.scope {

@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"fmt"
 	"hash/crc32"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -69,7 +68,6 @@ func (s *Scope) Run(c *Compile) (err error) {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
 	if s.DataSource.Bat != nil {
-		fmt.Printf("this is a const run\n")
 		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
 			return err
 		}

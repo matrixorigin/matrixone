@@ -79,9 +79,9 @@ var (
 			},
 		},
 		{
-			Name: catalog.MetadataScanInfoNames[catalog.ROW_CNT],
+			Name: catalog.MetadataScanInfoNames[catalog.ROWS_CNT],
 			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ROW_CNT].Oid),
+				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ROWS_CNT].Oid),
 				NotNullable: false,
 			},
 		},

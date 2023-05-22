@@ -30,6 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	AllColumns = "*"
+)
+
 // XXX Porting mo functions to function2.
 // Mo function unit tests are not ported, because it is too heavy and does not test enough cases.
 // Mo functions are better tested with bvt.

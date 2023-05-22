@@ -654,7 +654,7 @@ var (
 		"delta_loc",
 		"commit_ts",
 		"meta_seg",
-		"row_count",
+		"rows_count",
 		"null_count",
 		"compress_size",
 		"origin_size",
@@ -674,7 +674,7 @@ const (
 	DELTA_LOC     = 5
 	COMMIT_TS     = 6
 	SEG_ID        = 7
-	ROW_CNT       = 8
+	ROWS_CNT      = 8
 	NULL_CNT      = 9
 	COMPRESS_SIZE = 10
 	ORIGIN_SIZE   = 11

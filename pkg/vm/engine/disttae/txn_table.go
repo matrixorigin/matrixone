@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -39,6 +40,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+const (
+	AllColumns = "*"
 )
 
 var _ engine.Relation = new(txnTable)
@@ -200,123 +205,166 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	return tableVal, tableTypes, nil
 }
 
+// Get all neede column exclude the hidden size
 func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
-	size, _, err := tbl.GetCompressAndOriginSize(ctx, name)
-	return int64(size), err
-}
+	ret := int64(0)
+	neededColumnName := make(map[string]string)
+	attr, _ := tbl.TableColumns(ctx)
+	found := false
+	for i := range attr {
+		if !attr[i].IsHidden {
+			if name == AllColumns || attr[i].Name == name {
+				neededColumnName[attr[i].Name] = attr[i].Name
+				found = true
+			}
+		}
+	}
 
-func (tbl *txnTable) GetCompressAndOriginSize(ctx context.Context, name string) (uint64, uint64, error) {
-	compressedSize := uint64(0)
-	originSize := uint64(0)
+	if !found {
+		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
+	}
 
-	cols := tbl.getTableDef().GetCols()
-	var (
-		err  error
-		meta objectio.ObjectMeta
-	)
-	for _, blks := range tbl.blockInfos {
-		for _, blk := range blks {
-			location := blk.MetaLocation()
-			if objectio.IsSameObjectLocVsMeta(location, meta) {
-				continue
-			} else {
-				if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
-					return compressedSize, originSize, err
+	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
+
+	deletes := make(map[types.Rowid]struct{})
+	for _, entry := range writes {
+		if entry.typ == INSERT {
+			for i, s := range entry.bat.Attrs {
+				if _, ok := neededColumnName[s]; ok {
+					ret += int64(entry.bat.Vecs[i].Size())
+				}
+			}
+		} else {
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				/*
+					CASE:
+					create table t1(a int);
+					begin;
+					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					show tables; // t1 must be shown
+				*/
+				if entry.databaseId == catalog.MO_CATALOG_ID &&
+					entry.tableId == catalog.MO_TABLES_ID &&
+					entry.truncate {
+					continue
+				}
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = struct{}{}
 				}
 			}
 		}
 	}
 
-	if name == "*" {
-		// calculate all columns
-		for i := range cols {
-			colmeta := meta.MustGetColumn(uint16(cols[i].Seqnum)).Location()
-			compressedSize += uint64(colmeta.Length())
-			originSize += uint64(colmeta.OriginSize())
+	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
+	parts, err := tbl.getParts(ctx)
+	if err != nil {
+		return 0, err
+	}
+	// Different rows may belong to same batch. So we have
+	// to record the batch which we have already handled to avoid
+	// repetitive computation
+	handled := make(map[*batch.Batch]struct{})
+	for _, part := range parts {
+		iter := part.NewRowsIter(ts, nil, false)
+		for iter.Next() {
+			entry := iter.Entry()
+			if _, ok := deletes[entry.RowID]; ok {
+			}
+			if _, ok := handled[entry.Batch]; ok {
+			}
+			for i, s := range entry.Batch.Attrs {
+				if _, ok := neededColumnName[s]; ok {
+					// TODO: It might includ some deleted row size
+					ret += int64(entry.Batch.Vecs[i].Size())
+				}
+			}
+			handled[entry.Batch] = struct{}{}
 		}
-	} else {
-		for i := range cols {
-			if cols[i].Name == name {
-				colmeta := meta.MustGetColumn(uint16(cols[i].Seqnum)).Location()
-				compressedSize += uint64(colmeta.Length())
-				originSize += uint64(colmeta.OriginSize())
+		iter.Close()
+	}
+
+	if len(tbl.blockInfos) > 0 {
+		for _, s := range neededColumnName {
+			list, err := tbl.GetColumMetadataScanInfo(ctx, s)
+			if err != nil {
+				return 0, err
+			}
+			for _, info := range list {
+				ret += info.CompressSize
 			}
 		}
 	}
 
-	return compressedSize, originSize, nil
+	return ret, nil
 }
 
-func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([][]byte, error) {
-	if len(tbl.blockInfos) == 0 {
-		return nil, moerr.NewInvalidInputNoCtx("table meta is nil")
+func (tbl *txnTable) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
+	attr, _ := tbl.TableColumns(ctx)
+	found := false
+	for i := 0; i < len(attr); {
+		if !attr[i].IsHidden && (name == AllColumns || attr[i].Name == name) {
+			found = true
+			i++
+			continue
+		}
+		attr = append(attr[:i], attr[i+1:]...)
 	}
-
-	if name == "__mo_rowid" {
+	if !found {
 		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
 	}
 
-	infoList := make([]*catalog.MetadataScanInfo, 0, len(tbl.blockInfos))
-	var meta objectio.ObjectMeta
-	if name == "*" {
-		cols := tbl.getTableDef().GetCols()
-		for i := range cols { // remote the system columns
-			if cols[i].Name == "__mo_rowid" {
-				cols = append(cols[:i], cols[i+1:]...)
-				break
-			}
-		}
-
-		for i := range tbl.blockInfos {
-			for j := range tbl.blockInfos[i] {
-				blk := tbl.blockInfos[i][j]
-				location := blk.MetaLocation()
-				if !objectio.IsSameObjectLocVsMeta(location, meta) {
-					var loadErr error
-					if meta, loadErr = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); loadErr != nil {
-						return nil, loadErr
-					}
-				}
-				for k := range cols {
-					get, err := tbl.genMetadataScanInfo(ctx, &blk, location, &meta, cols[k])
-					if err != nil {
-						return nil, err
-					}
-					infoList = append(infoList, get)
-				}
-			}
-		}
-	} else {
-		col, err := tbl.getColByName(ctx, name)
+	ret := make([][]byte, 0, len(attr))
+	for i := range attr {
+		infoList, err := tbl.GetColumMetadataScanInfo(ctx, attr[i].Name)
 		if err != nil {
 			return nil, err
 		}
 
-		for i := range tbl.blockInfos {
-			for j := range tbl.blockInfos[i] {
-				blk := tbl.blockInfos[i][j]
-				location := blk.MetaLocation()
-				if !objectio.IsSameObjectLocVsMeta(location, meta) {
-					var loadErr error
-					if meta, loadErr = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); loadErr != nil {
-						return nil, loadErr
-					}
-				}
-
-				get, err := tbl.genMetadataScanInfo(ctx, &blk, location, &meta, col)
-				if err != nil {
-					return nil, err
-				}
-				infoList = append(infoList, get)
-			}
+		for j := range infoList {
+			ret = append(ret, catalog.EncodeMetadataScanInfo(infoList[j]))
 		}
 	}
 
-	ret := make([][]byte, 0, len(infoList))
-	for i := range infoList {
-		ret = append(ret, catalog.EncodeMetadataScanInfo(infoList[i]))
-	}
 	return ret, nil
+}
+
+func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*catalog.MetadataScanInfo, error) {
+	if len(tbl.blockInfos) == 0 {
+		logutil.Infof("meta info is nil")
+		return nil, nil
+	}
+
+	infoList := make([]*catalog.MetadataScanInfo, 0, len(tbl.blockInfos))
+	var (
+		meta    objectio.ObjectMeta
+		loadErr error
+	)
+	col, err := tbl.getColByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range tbl.blockInfos {
+		for j := range tbl.blockInfos[i] {
+			blk := tbl.blockInfos[i][j]
+			location := blk.MetaLocation()
+			if !objectio.IsSameObjectLocVsMeta(location, meta) {
+				if meta, loadErr = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); loadErr != nil {
+					return nil, loadErr
+				}
+			}
+
+			get, err := tbl.genMetadataScanInfo(ctx, &blk, location, &meta, col)
+			if err != nil {
+				return nil, err
+			}
+			infoList = append(infoList, get)
+		}
+	}
+
+	return infoList, nil
 }
 
 func (tbl *txnTable) genMetadataScanInfo(ctx context.Context, blk *catalog.BlockInfo, location objectio.Location, meta *objectio.ObjectMeta, col *plan.ColDef) (*catalog.MetadataScanInfo, error) {

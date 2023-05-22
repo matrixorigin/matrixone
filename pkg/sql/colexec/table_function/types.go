@@ -30,12 +30,6 @@ type Argument struct {
 	Params    []byte
 	Name      string
 	retSchema []types.Type
-
-	// for test
-	rowsum       int64
-	nullsum      int64
-	compresssize int64
-	originsize   int64
 }
 
 type container struct {
