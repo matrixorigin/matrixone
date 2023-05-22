@@ -20,12 +20,12 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 )
 
 var _ NodeT = (*persistedNode)(nil)
@@ -61,14 +61,10 @@ func (node *persistedNode) BatchDedup(
 
 func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
 	ctx := context.TODO()
-	zm, err := node.block.meta.GetPKZoneMap(ctx, node.block.fs.Service)
+	pkIndex, err := blockio.MakeImmuIndex(ctx, node.block.meta, nil, node.block.indexCache, node.block.fs.Service)
 	if err != nil {
 		return
 	}
-	pkIndex := indexwrapper.NewImmutIndex(
-		*zm,
-		makeBFLoader(nil, node.block.meta, node.block.indexCache, node.block.fs.Service),
-	)
 	if err = pkIndex.Dedup(ctx, key); err == nil {
 		return
 	}

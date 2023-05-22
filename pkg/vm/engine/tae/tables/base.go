@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -387,7 +386,7 @@ func makeBFLoader(
 		location := meta.GetMetaLoc()
 		var err error
 		if len(bf) == 0 {
-			if bf, err = indexwrapper.LoadBF(ctx, location, cache, fs, false); err != nil {
+			if bf, err = blockio.LoadBF(ctx, location, cache, fs, false); err != nil {
 				return nil, err
 			}
 		}
@@ -405,15 +404,16 @@ func (blk *baseBlock) PersistedBatchDedup(
 	bf objectio.BloomFilter,
 ) (err error) {
 	ctx := context.TODO()
-	pkZM, err := blk.meta.GetPKZoneMap(ctx, blk.fs.Service)
+	pkIndex, err := blockio.MakeImmuIndex(
+		ctx,
+		blk.meta,
+		bf,
+		blk.indexCache,
+		blk.fs.Service,
+	)
 	if err != nil {
 		return
 	}
-	pkIndex := indexwrapper.NewImmutIndex(
-		*pkZM,
-		makeBFLoader(bf, blk.meta, blk.indexCache, blk.fs.Service),
-	)
-
 	sels, err := pkIndex.BatchDedup(
 		ctx,
 		keys,

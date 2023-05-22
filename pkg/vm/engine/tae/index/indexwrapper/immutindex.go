@@ -20,22 +20,20 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
+
+type Loader = func(context.Context) ([]byte, error)
 
 type ImmutIndex struct {
 	zm       index.ZM
-	bfLoader func(context.Context) ([]byte, error)
+	bfLoader Loader
 }
 
 func NewImmutIndex(
 	zm index.ZM,
-	bfLoader func(context.Context) ([]byte, error),
+	bfLoader Loader,
 ) ImmutIndex {
 	return ImmutIndex{
 		zm:       zm,
@@ -126,30 +124,5 @@ func (idx ImmutIndex) Dedup(ctx context.Context, key any) (err error) {
 		return
 	}
 	err = moerr.GetOkExpectedPossibleDup()
-	return
-}
-
-func LoadBF(
-	ctx context.Context,
-	loc objectio.Location,
-	cache model.LRUCache,
-	fs fileservice.FileService,
-	noLoad bool,
-) (bf objectio.BloomFilter, err error) {
-	v, ok := cache.Get(*loc.ShortName())
-	if ok {
-		bf = objectio.BloomFilter(v)
-		return
-	}
-	if noLoad {
-		return
-	}
-	r, _ := blockio.NewObjectReader(fs, loc)
-	v, size, err := r.LoadAllBF(ctx)
-	if err != nil {
-		return
-	}
-	cache.Set(*loc.ShortName(), v, int64(size))
-	bf = objectio.BloomFilter(v)
 	return
 }

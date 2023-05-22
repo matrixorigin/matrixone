@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -962,7 +961,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 		if len(location) == 0 {
 			bf = objectio.BloomFilter{}
 		} else if !objectio.IsSameObjectLocVsShort(location, &name) {
-			if bf, err = indexwrapper.LoadBF(
+			if bf, err = blockio.LoadBF(
 				context.Background(),
 				location,
 				tbl.store.indexCache,
