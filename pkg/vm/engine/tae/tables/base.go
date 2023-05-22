@@ -340,25 +340,13 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	return
 }
 
-func (blk *baseBlock) PersistedBatchDedup(
-	pnode *persistedNode,
+func (blk *baseBlock) dedupWithLoad(
 	txn txnif.TxnReader,
-	isCommitting bool,
 	keys containers.Vector,
+	sels *roaring.Bitmap,
 	rowmask *roaring.Bitmap,
 	isAblk bool,
-	zm index.ZM,
-	bf objectio.BloomFilter,
 ) (err error) {
-	sels, err := pnode.BatchDedup(
-		keys,
-		nil,
-		zm,
-		bf,
-	)
-	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
-		return
-	}
 	schema := blk.meta.GetSchema()
 	def := schema.GetSingleSortKey()
 	view, err := blk.ResolvePersistedColumnData(
@@ -385,6 +373,28 @@ func (blk *baseBlock) PersistedBatchDedup(
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
 	return
+}
+
+func (blk *baseBlock) PersistedBatchDedup(
+	pnode *persistedNode,
+	txn txnif.TxnReader,
+	isCommitting bool,
+	keys containers.Vector,
+	rowmask *roaring.Bitmap,
+	isAblk bool,
+	zm index.ZM,
+	bf objectio.BloomFilter,
+) (err error) {
+	sels, err := pnode.BatchDedup(
+		keys,
+		nil,
+		zm,
+		bf,
+	)
+	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+		return
+	}
+	return blk.dedupWithLoad(txn, keys, sels, rowmask, isAblk)
 }
 
 func (blk *baseBlock) getPersistedValue(
