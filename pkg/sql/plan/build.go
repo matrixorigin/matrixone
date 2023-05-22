@@ -176,6 +176,9 @@ func GetExecTypeFromPlan(pn *Plan) ExecInfo {
 		WithBigMem: false,
 		CnNumbers:  2,
 	}
+	if IsTpQuery(pn.GetQuery()) {
+		defInfo.Typ = ExecTypeTP
+	}
 	return defInfo
 }
 
