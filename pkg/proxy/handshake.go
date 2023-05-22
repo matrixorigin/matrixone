@@ -16,7 +16,10 @@ package proxy
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/binary"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -46,10 +49,15 @@ func (c *clientConn) handleHandshakeResp() error {
 	//
 	// TODO(volgariver6): currently, only connectionAttributes in JDBC URI
 	// is supported.
-	// SSL is not supported for now.
-	_, err = c.mysqlProto.HandleHandshake(c.ctx, pack.Payload)
+	ssl, err := c.mysqlProto.HandleHandshake(c.ctx, pack.Payload)
 	if err != nil {
 		return err
+	}
+	if ssl {
+		if err = c.upgradeToTLS(); err != nil {
+			return err
+		}
+		return c.handleHandshakeResp()
 	}
 
 	// parse tenant information from client login request.
@@ -58,6 +66,21 @@ func (c *clientConn) handleHandshakeResp() error {
 	}
 
 	c.clientInfo.labelInfo = newLabelInfo(c.clientInfo.Tenant, c.mysqlProto.GetConnectAttrs())
+	return nil
+}
+
+// upgradeToTLS upgrades the connection to TLS connection.
+func (c *clientConn) upgradeToTLS() error {
+	if c.tlsConfig == nil {
+		return moerr.NewInternalErrorNoCtx("TLS config is invalid")
+	}
+	tlsConn := tls.Server(c.conn.RawConn(), c.tlsConfig)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		return moerr.NewInternalError(ctx, "TSL handshake error: %v", err)
+	}
+	c.conn.UseConn(tlsConn)
 	return nil
 }
 
