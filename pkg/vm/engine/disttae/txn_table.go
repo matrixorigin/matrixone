@@ -731,6 +731,9 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 
 // CN Block Compaction
 func (tbl *txnTable) compaction() error {
+	if tbl.db.txn.deletedBlocks == nil {
+		return nil
+	}
 	mp := make(map[int][]int64)
 	s3writer := &colexec.S3Writer{}
 	batchNums := 0
