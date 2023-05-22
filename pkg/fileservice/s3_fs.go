@@ -1089,6 +1089,7 @@ func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3
 			return output.Body, nil
 		},
 		min,
+		isRetryableError,
 	)
 	if err != nil {
 		return nil, err

@@ -25,7 +25,6 @@ const (
 
 type Store interface {
 	Append(gid uint32, entry entry.Entry) (lsn uint64, err error)
-	FuzzyCheckpoint(gid uint32, idxes []*Index) (ckpEntry entry.Entry, err error)
 	RangeCheckpoint(gid uint32, start, end uint64) (ckpEntry entry.Entry, err error)
 	Load(gid uint32, lsn uint64) (entry.Entry, error)
 

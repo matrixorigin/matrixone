@@ -779,3 +779,15 @@ func orSelectivity(s1, s2 float64) float64 {
 		return s
 	}
 }
+
+const blockThresholdForTpQuery = 16
+
+func IsTpQuery(qry *plan.Query) bool {
+	for _, node := range qry.GetNodes() {
+		stats := node.Stats
+		if stats == nil || stats.BlockNum > blockThresholdForTpQuery {
+			return false
+		}
+	}
+	return true
+}
