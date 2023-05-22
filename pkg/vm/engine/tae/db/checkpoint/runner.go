@@ -179,7 +179,7 @@ type runner struct {
 		checkpointQueueSize int
 	}
 
-	preCounter *perfcounter.CounterSet
+	prefCounter *perfcounter.CounterSet
 
 	// logtail sourcer
 	source    logtail.Collector
@@ -225,13 +225,13 @@ func NewRunner(
 	wal wal.Driver,
 	opts ...Option) *runner {
 	r := &runner{
-		preCounter: counter,
-		catalog:    catalog,
-		scheduler:  scheduler,
-		source:     source,
-		fs:         fs,
-		observers:  new(observers),
-		wal:        wal,
+		prefCounter: counter,
+		catalog:     catalog,
+		scheduler:   scheduler,
+		source:      source,
+		fs:          fs,
+		observers:   new(observers),
+		wal:         wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
 		return a.end.Less(b.end)

@@ -65,8 +65,11 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			common.AnyField("cost", time.Since(totalTime)),
 			common.AnyField("err", err))
 	}()
-	prefCounterSet := opts.Ctx.Value(perfcounter.CtxKeyCounters).(*perfcounter.CounterSet)
-
+	prefCounterSets := opts.Ctx.Value(perfcounter.CtxKeyCounters).(perfcounter.CounterSets)
+	var prefCounterSet *perfcounter.CounterSet
+	for set := range prefCounterSets {
+		prefCounterSet = set
+	}
 	opts = opts.FillDefaults(dirname)
 
 	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
