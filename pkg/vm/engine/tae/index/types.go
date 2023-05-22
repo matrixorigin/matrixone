@@ -15,10 +15,7 @@
 package index
 
 import (
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
-	// "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -26,24 +23,6 @@ var (
 	ErrNotFound  = moerr.NewInternalErrorNoCtx("tae index: key not found")
 	ErrDuplicate = moerr.NewInternalErrorNoCtx("tae index: key duplicate")
 )
-
-type KeysCtx struct {
-	Keys containers.Vector
-
-	// Select a continuous interval [Start, Start+Count) from keys
-	Start, Count int
-	// Whether need to verify Keys
-	NeedVerify bool
-}
-
-func (ctx *KeysCtx) SelectAll() {
-	ctx.Count = ctx.Keys.Length()
-}
-
-type BatchResp struct {
-	UpdatedKeys *roaring.Bitmap
-	UpdatedRows *roaring.Bitmap
-}
 
 type SecondaryIndex interface {
 	Insert(key []byte, offset uint32) (err error)
