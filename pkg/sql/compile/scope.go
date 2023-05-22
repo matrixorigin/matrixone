@@ -66,16 +66,25 @@ func DebugPrintScope(prefix []byte, ss []*Scope) {
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(c *Compile) (err error) {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
-	p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
-	if s.DataSource.Bat != nil {
-		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
+	// DataSource == nil specify the empty scan
+	if s.DataSource == nil {
+		p := pipeline.New(nil, s.Instructions, s.Reg)
+		if _, err = p.ConstRun(nil, s.Proc); err != nil {
 			return err
 		}
 	} else {
-		if _, err = p.Run(s.DataSource.R, s.Proc); err != nil {
-			return err
+		p := pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
+		if s.DataSource.Bat != nil {
+			if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
+				return err
+			}
+		} else {
+			if _, err = p.Run(s.DataSource.R, s.Proc); err != nil {
+				return err
+			}
 		}
 	}
+
 	return nil
 }
 
