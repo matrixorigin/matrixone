@@ -41,12 +41,12 @@ func (s *store) initSqlWriterFactory() {
 		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
 	}
 
-	db.SetSQLWriterDBAddressFunc(addressFunc)
+	db_holder.SetSQLWriterDBAddressFunc(addressFunc)
 }
 func (s *store) createSQLLogger(command *logservicepb.CreateTaskService) {
 	// convert username to "mo_logger"
-	frontend.SetSpecialUser(db.MOLoggerUser, []byte(command.User.Password))
-	db.SetSQLWriterDBUser(db.MOLoggerUser, command.User.Password)
+	frontend.SetSpecialUser(db_holder.MOLoggerUser, []byte(command.User.Password))
+	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
 }
 
 func (s *store) initTaskHolder() {

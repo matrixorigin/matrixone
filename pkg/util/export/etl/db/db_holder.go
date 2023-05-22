@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package db_holder
 
 import (
 	"context"
@@ -71,6 +71,9 @@ func SetSQLWriterDBAddressFunc(f func(context.Context) (string, error)) {
 func GetSQLWriterDBAddressFunc() func(context.Context) (string, error) {
 	return dbAddressFunc.Load().(func(context.Context) (string, error))
 }
+func SetDBConn(conn *sql.DB) {
+	db.Store(conn)
+}
 
 func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 
@@ -104,7 +107,7 @@ func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 		}
 		newDBConn.SetMaxOpenConns(1)
 		newDBConn.SetMaxIdleConns(1)
-		db.Store(newDBConn)
+		SetDBConn(newDBConn)
 		return nil
 	}
 

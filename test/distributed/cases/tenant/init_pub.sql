@@ -8,6 +8,7 @@ create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 -- @session:id=1&user=acc_idx:root&password=123456
 show subscriptions;
 -- @session
+set global syspublications = default;
 drop account acc_idx;
 drop publication sys_pub_1;
 drop database sys_db_1;

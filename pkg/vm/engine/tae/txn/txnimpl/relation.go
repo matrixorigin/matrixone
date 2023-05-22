@@ -174,13 +174,10 @@ func (h *txnRelation) Append(data *containers.Batch) error {
 	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
-func (h *txnRelation) AddBlksWithMetaLoc(
-	zm []objectio.ZoneMap,
-	metaLocs []objectio.Location) error {
+func (h *txnRelation) AddBlksWithMetaLoc(metaLocs []objectio.Location) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
-		zm,
 		metaLocs,
 	)
 }
