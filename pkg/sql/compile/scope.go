@@ -682,6 +682,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	for i := range s.RemoteReceivRegInfos {
 		op := &s.RemoteReceivRegInfos[i]
 		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
+
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
 				close(reg.Ch)
@@ -690,7 +691,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			}
 			defer func(streamSender morpc.Stream) {
 				close(reg.Ch)
-				_ = streamSender.Close(false)
+				_ = streamSender.Close(true)
 			}(streamSender)
 
 			message := cnclient.AcquireMessage()
@@ -728,6 +729,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 	var val morpc.Message
 	var dataBuffer []byte
 	var ok bool
+	var m *pbpipeline.Message
 	for {
 		select {
 		case <-proc.Ctx.Done():
@@ -739,7 +741,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			}
 		}
 
-		m, ok := val.(*pbpipeline.Message)
+		m, ok = val.(*pbpipeline.Message)
 		if !ok {
 			panic("unexpected message type for cn-server")
 		}
