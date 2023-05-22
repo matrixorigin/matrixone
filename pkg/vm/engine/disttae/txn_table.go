@@ -300,6 +300,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges []
 	return
 }
 
+// XXX: See comment in EncodeBlockInfo
+// Mauybe ranges should be []BlockInfo, not *[][]byte
+//
 // this function is to filter out the blocks to be read and marshal them into a byte array
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
@@ -484,11 +487,11 @@ func (tbl *txnTable) rangesOnePart(
 			if rows, ok := deletes[blk.BlockID]; ok {
 				*modifies = append(*modifies, ModifyBlockMeta{blk, rows})
 			} else {
-				*ranges = append(*ranges, catalog.EncodeBlockInfo(&blk))
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 			}
 		} else {
 			// store the block in ranges
-			*ranges = append(*ranges, catalog.EncodeBlockInfo(&blk))
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 		}
 	}
 	return

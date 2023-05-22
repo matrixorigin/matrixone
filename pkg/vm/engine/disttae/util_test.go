@@ -17,8 +17,9 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -80,7 +81,7 @@ func TestBlockMetaMarshal(t *testing.T) {
 	location := []byte("test")
 	var info catalog.BlockInfo
 	info.SetMetaLocation(location)
-	data := catalog.EncodeBlockInfo(&info)
+	data := catalog.EncodeBlockInfo(info)
 	info2 := catalog.DecodeBlockInfo(data)
 	require.Equal(t, info, *info2)
 }
