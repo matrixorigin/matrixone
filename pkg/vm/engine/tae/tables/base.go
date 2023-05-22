@@ -408,7 +408,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	if err != nil {
 		return
 	}
-	pkIndex := indexwrapper.NewPersistedIndex(
+	pkIndex := indexwrapper.NewImmutIndex(
 		*pkZM,
 		makeBFLoader(bf, blk.meta, blk.indexCache, blk.fs.Service),
 	)

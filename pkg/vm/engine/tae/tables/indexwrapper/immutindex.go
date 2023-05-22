@@ -15,154 +15,46 @@
 package indexwrapper
 
 import (
+	"context"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	idxpkg "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
-var _ Index = (*immutableIndex)(nil)
-
-type immutableIndex struct {
-	zmReader *ZmReader
-	bfReader *BfReader
-}
-
-func NewImmtableIndex(
-	indexCache model.LRUCache,
-	fs *objectio.ObjectFS,
-	location objectio.Location,
-	colDef *catalog.ColDef,
-) (index *immutableIndex, err error) {
-	index = new(immutableIndex)
-	index.zmReader = NewZmReader(
-		fs,
-		uint16(colDef.Idx),
-		location)
-
-	if colDef.IsRealPrimary() {
-		index.bfReader = NewBfReader(
-			colDef.Type.Oid,
-			location,
-			indexCache,
-			fs,
-		)
-	}
-	return
-}
-
-func (index *immutableIndex) BatchUpsert(keysCtx *idxpkg.KeysCtx, offset int) (err error) {
-	panic("not support")
-}
-func (index *immutableIndex) GetActiveRow(key any) ([]uint32, error) { panic("not support") }
-func (index *immutableIndex) String() string                         { return "immutable" }
-func (index *immutableIndex) Dedup(key any, _ func(row uint32) error) (err error) {
-	exist := index.zmReader.Contains(key)
-	// 1. if not in [min, max], key is definitely not found
-	if !exist {
-		return
-	}
-	if index.bfReader != nil {
-		exist, err = index.bfReader.MayContainsKey(key)
-		// 2. check bloomfilter has some error. return err
-		if err != nil {
-			err = TranslateError(err)
-			return
-		}
-		// 3. all keys were checked. definitely not
-		if !exist {
-			return
-		}
-	}
-
-	err = moerr.GetOkExpectedPossibleDup()
-	return
-}
-
-func (index *immutableIndex) BatchDedup(
-	keys containers.Vector,
-	skipfn func(row uint32) (err error),
-	zm idxpkg.ZM,
-	bf objectio.BloomFilter,
-) (sels *roaring.Bitmap, err error) {
-	var exist bool
-	if zm.Valid() {
-		if exist = index.zmReader.Intersect(zm); !exist {
-			return
-		}
-	} else {
-		if keys.Length() == 1 {
-			err = index.Dedup(keys.ShallowGet(0), skipfn)
-			return
-		}
-		// 1. all keys are not in [min, max]. definitely not
-		if exist = index.zmReader.FastContainsAny(keys); !exist {
-			return
-		}
-	}
-	if index.bfReader != nil {
-		exist, sels, err = index.bfReader.MayContainsAnyKeys(keys, bf)
-		// 2. check bloomfilter has some unknown error. return err
-		if err != nil {
-			err = TranslateError(err)
-			return
-		}
-		// 3. all keys were checked. definitely not
-		if !exist {
-			return
-		}
-	}
-	err = moerr.GetOkExpectedPossibleDup()
-	return
-}
-
-func (index *immutableIndex) Close() (err error) {
-	// TODO
-	return
-}
-
-func (index *immutableIndex) Destroy() (err error) {
-	if index.zmReader != nil {
-		if err = index.zmReader.Destroy(); err != nil {
-			return
-		}
-	}
-	if index.bfReader != nil {
-		err = index.bfReader.Destroy()
-	}
-	return
-}
-
-type PersistedIndex struct {
-	zm       idxpkg.ZM
+type ImmutIndex struct {
+	zm       index.ZM
 	bfLoader func() ([]byte, error)
 }
 
-func NewPersistedIndex(
-	zm idxpkg.ZM,
+func NewImmutIndex(
+	zm index.ZM,
 	bfLoader func() ([]byte, error),
-) PersistedIndex {
-	return PersistedIndex{
+) ImmutIndex {
+	return ImmutIndex{
 		zm:       zm,
 		bfLoader: bfLoader,
 	}
 }
 
-func (index PersistedIndex) BatchDedup(
+func (idx ImmutIndex) BatchDedup(
 	keys containers.Vector,
-	keysZM idxpkg.ZM,
+	keysZM index.ZM,
 ) (sels *roaring.Bitmap, err error) {
 	var exist bool
 	if keysZM.Valid() {
-		if exist = index.zm.FastIntersect(keysZM); !exist {
+		if exist = idx.zm.FastIntersect(keysZM); !exist {
 			// all keys are not in [min, max]. definitely not
 			return
 		}
 	} else {
-		if exist = index.zm.FastContainsAny(keys); !exist {
+		if exist = idx.zm.FastContainsAny(keys); !exist {
 			// all keys are not in [min, max]. definitely not
 			return
 		}
@@ -171,9 +63,9 @@ func (index PersistedIndex) BatchDedup(
 	// some keys are in [min, max]. check bloomfilter for those keys
 
 	var buf []byte
-	if index.bfLoader != nil {
+	if idx.bfLoader != nil {
 		// load bloomfilter
-		if buf, err = index.bfLoader(); err != nil {
+		if buf, err = idx.bfLoader(); err != nil {
 			return
 		}
 	} else {
@@ -182,8 +74,8 @@ func (index PersistedIndex) BatchDedup(
 		return
 	}
 
-	bfIndex := idxpkg.NewEmptyBinaryFuseFilter()
-	if err = idxpkg.DecodeBloomFilter(bfIndex, buf); err != nil {
+	bfIndex := index.NewEmptyBinaryFuseFilter()
+	if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
 		return
 	}
 
@@ -197,5 +89,66 @@ func (index PersistedIndex) BatchDedup(
 	}
 
 	err = moerr.GetOkExpectedPossibleDup()
+	return
+}
+
+func (idx ImmutIndex) Dedup(key any) (err error) {
+	exist := idx.zm.Contains(key)
+	// 1. if not in [min, max], key is definitely not found
+	if !exist {
+		return
+	}
+	if idx.bfLoader == nil {
+		err = moerr.GetOkExpectedPossibleDup()
+		return
+	}
+
+	buf, err := idx.bfLoader()
+	if err != nil {
+		return
+	}
+
+	bfIndex := index.NewEmptyBinaryFuseFilter()
+	if err = index.DecodeBloomFilter(bfIndex, buf); err != nil {
+		return
+	}
+
+	v := types.EncodeValue(key, idx.zm.GetType())
+	exist, err = bfIndex.MayContainsKey(v)
+	// 2. check bloomfilter has some error. return err
+	if err != nil {
+		err = TranslateError(err)
+		return
+	}
+	// 3. all keys were checked. definitely not
+	if !exist {
+		return
+	}
+	err = moerr.GetOkExpectedPossibleDup()
+	return
+}
+
+func LoadBF(
+	ctx context.Context,
+	loc objectio.Location,
+	cache model.LRUCache,
+	fs fileservice.FileService,
+	noLoad bool,
+) (bf objectio.BloomFilter, err error) {
+	v, ok := cache.Get(*loc.ShortName())
+	if ok {
+		bf = objectio.BloomFilter(v)
+		return
+	}
+	if noLoad {
+		return
+	}
+	r, _ := blockio.NewObjectReader(fs, loc)
+	v, size, err := r.LoadAllBF(ctx)
+	if err != nil {
+		return
+	}
+	cache.Set(*loc.ShortName(), v, int64(size))
+	bf = objectio.BloomFilter(v)
 	return
 }

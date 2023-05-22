@@ -54,9 +54,6 @@ func newBlock(
 }
 
 func (blk *block) Init() (err error) {
-	node := blk.PinNode()
-	defer node.Unref()
-	node.MustPNode().init()
 	return
 }
 
