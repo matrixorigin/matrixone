@@ -87,7 +87,7 @@ func (index *immutableIndex) BatchDedup(
 	skipfn func(row uint32) (err error),
 	zm idxpkg.ZM,
 	bf objectio.BloomFilter,
-) (keyselects *roaring.Bitmap, err error) {
+) (sels *roaring.Bitmap, err error) {
 	var exist bool
 	if zm.Valid() {
 		if exist = index.zmReader.Intersect(zm); !exist {
@@ -104,7 +104,7 @@ func (index *immutableIndex) BatchDedup(
 		}
 	}
 	if index.bfReader != nil {
-		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, bf)
+		exist, sels, err = index.bfReader.MayContainsAnyKeys(keys, bf)
 		// 2. check bloomfilter has some unknown error. return err
 		if err != nil {
 			err = TranslateError(err)
@@ -133,5 +133,69 @@ func (index *immutableIndex) Destroy() (err error) {
 	if index.bfReader != nil {
 		err = index.bfReader.Destroy()
 	}
+	return
+}
+
+type PersistedIndex struct {
+	zm       idxpkg.ZM
+	bf       idxpkg.StaticFilter
+	bfLoader func() (idxpkg.StaticFilter, error)
+}
+
+func NewPersistedIndex(
+	zm idxpkg.ZM,
+	bf idxpkg.StaticFilter,
+	bfLoader func() (idxpkg.StaticFilter, error),
+) PersistedIndex {
+	return PersistedIndex{
+		zm:       zm,
+		bf:       bf,
+		bfLoader: bfLoader,
+	}
+}
+
+func (index PersistedIndex) BatchDedup(
+	keys containers.Vector,
+	keysZM idxpkg.ZM,
+) (sels *roaring.Bitmap, err error) {
+	var exist bool
+	if keysZM.Valid() {
+		if exist = index.zm.FastIntersect(keysZM); !exist {
+			// all keys are not in [min, max]. definitely not
+			return
+		}
+	} else {
+		if exist = index.zm.FastContainsAny(keys); !exist {
+			// all keys are not in [min, max]. definitely not
+			return
+		}
+	}
+
+	// some keys are in [min, max]. check bloomfilter for those keys
+
+	var bf idxpkg.StaticFilter
+	if index.bf != nil {
+		bf = index.bf
+	} else if index.bf == nil && index.bfLoader != nil {
+		// load bloomfilter
+		if bf, err = index.bfLoader(); err != nil {
+			return
+		}
+	} else {
+		// no bloomfilter. it is possible duplicate
+		err = moerr.GetOkExpectedPossibleDup()
+		return
+	}
+
+	if exist, sels, err = bf.MayContainsAnyKeys(keys); err != nil {
+		// check bloomfilter has some unknown error. return err
+		err = TranslateError(err)
+		return
+	} else if !exist {
+		// all keys were checked. definitely not
+		return
+	}
+
+	err = moerr.GetOkExpectedPossibleDup()
 	return
 }
