@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type mergeBlocksEntry struct {
@@ -75,12 +74,12 @@ func (entry *mergeBlocksEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
 	return
 }
-func (entry *mergeBlocksEntry) ApplyRollback(index *wal.Index) (err error) {
+func (entry *mergeBlocksEntry) ApplyRollback() (err error) {
 	//TODO::?
 	return
 }
 
-func (entry *mergeBlocksEntry) ApplyCommit(index *wal.Index) (err error) {
+func (entry *mergeBlocksEntry) ApplyCommit() (err error) {
 	return
 }
 

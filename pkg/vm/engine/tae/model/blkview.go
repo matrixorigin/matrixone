@@ -17,7 +17,6 @@ package model
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type BaseView struct {
@@ -26,8 +25,7 @@ type BaseView struct {
 
 type BlockView struct {
 	*BaseView
-	Columns          map[int]*ColumnView
-	DeleteLogIndexes []*wal.Index
+	Columns map[int]*ColumnView
 }
 
 func NewBlockView() *BlockView {
@@ -70,15 +68,6 @@ func (view *BlockView) SetUpdates(i int, mask *roaring.Bitmap, vals map[uint32]a
 	}
 	col.UpdateMask = mask
 	col.UpdateVals = vals
-}
-
-func (view *BlockView) SetLogIndexes(i int, indexes []*wal.Index) {
-	col := view.Columns[i]
-	if col == nil {
-		col = NewColumnView(i)
-		view.Columns[i] = col
-	}
-	col.LogIndexes = indexes
 }
 
 func (view *BlockView) Eval(clear bool) (err error) {
