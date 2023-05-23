@@ -16,7 +16,6 @@ package proxy
 
 import (
 	"context"
-	"net"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -28,7 +27,15 @@ import (
 
 const (
 	tenantLabelKey        = "account"
+	superTenant           = "sys"
+	superUserRoot         = "root"
+	superUserDump         = "dump"
 	defaultConnectTimeout = 3 * time.Second
+)
+
+var (
+	// noCNServerErr indicates that there are no available CN servers.
+	noCNServerErr = moerr.NewInternalErrorNoCtx("no available CN server")
 )
 
 // Router is an interface to select CN server and connects to it.
@@ -37,7 +44,10 @@ type Router interface {
 	// This is the only method that allocate *CNServer, and other
 	// SelectXXX method in this interface select CNServer from the
 	// ones it allocated.
-	Route(ctx context.Context, client clientInfo) (*CNServer, error)
+	// filter is a function which is used to do more checks whether the
+	// CN server is a proper one. If it returns true, means that CN
+	// server is not a valid one.
+	Route(ctx context.Context, client clientInfo, filter func(string) bool) (*CNServer, error)
 
 	// SelectByConnID selects the CN server which has the connection ID.
 	SelectByConnID(connID uint32) (*CNServer, error)
@@ -72,22 +82,14 @@ type CNServer struct {
 	uuid string
 	// addr is the net address of CN server.
 	addr string
-	// conn for test.
-	conn net.Conn
 }
 
 // Connect connects to backend server and returns IOSession.
 func (s *CNServer) Connect() (goetty.IOSession, error) {
-	if s.conn != nil { // for test.
-		return goetty.NewIOSession(
-			goetty.WithSessionCodec(frontend.NewSqlCodec()),
-			goetty.WithSessionConn(0, s.conn),
-		), nil
-	}
 	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
 	err := c.Connect(s.addr, defaultConnectTimeout)
 	if err != nil {
-		return nil, err
+		return nil, newConnectErr(err)
 	}
 	// When build connection with backend server, proxy send its salt
 	// to make sure the backend server uses the same salt to do authentication.
@@ -141,12 +143,87 @@ func (r *router) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
 	return r.rebalancer.connManager.getCNServersByTenant(tenant), nil
 }
 
-// Route implements the Router interface.
-func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
-	var cns []*CNServer
-	var cnEmpty, cnNotEmpty bool
-	noCNErrMsg := "no available CN server"
+// selectForSuperTenant is used to select CN servers for sys tenant.
+// For sys tenant, there are some special strategies to select CN servers.
+// The following strategies are listed in order of priority：
+//  1. The CN servers which are configured as sys account.
+//  2. The CN servers which are configured as some labels whose key is not account.
+//  3. The CN servers which are configured as no labels.
+//  4. At last, if no CN servers are selected,
+//     4.1 If the username is dump or root, we just select one randomly.
+//     4.2 Else, no servers are selected.
+func (r *router) selectForSuperTenant(c clientInfo, filter func(string) bool) []*CNServer {
+	var cns, emptyCNs, allCNs []*CNServer
+
+	// S1: Select servers that configured as sys account.
 	r.moCluster.GetCNService(c.labelInfo.genSelector(), func(s metadata.CNService) bool {
+		if filter != nil && filter(s.ServiceID) {
+			return true
+		}
+		cn := &CNServer{
+			reqLabel: c.labelInfo,
+			cnLabel:  s.Labels,
+			uuid:     s.ServiceID,
+			addr:     s.SQLAddress,
+		}
+		// At this phase, only append non-empty servers.
+		if len(s.Labels) == 0 {
+			emptyCNs = append(emptyCNs, cn)
+		} else {
+			cns = append(cns, cn)
+		}
+		return true
+	})
+	if len(cns) > 0 {
+		return cns
+	}
+
+	// S2: If there are no servers that are configured as sys account.
+	// There may be some performance issues, but we need to do this still.
+	// Select all CN servers and select ones which are not configured as
+	// label with key "account".
+	r.moCluster.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
+		if filter != nil && filter(s.ServiceID) {
+			return true
+		}
+		cn := &CNServer{
+			reqLabel: c.labelInfo,
+			cnLabel:  s.Labels,
+			uuid:     s.ServiceID,
+			addr:     s.SQLAddress,
+		}
+		// Append CN servers that are not configured as label with key "account".
+		if _, ok := s.Labels[tenantLabelKey]; len(s.Labels) > 0 && !ok {
+			cns = append(cns, cn)
+		}
+		allCNs = append(allCNs, cn)
+		return true
+	})
+	if len(cns) > 0 {
+		return cns
+	}
+
+	// S3: Select CN servers which has no labels.
+	if len(emptyCNs) > 0 {
+		return emptyCNs
+	}
+
+	// S4.1: If the root is super, return all servers.
+	if c.isSuperUser() {
+		return allCNs
+	}
+
+	// S4.2: No servers are returned.
+	return nil
+}
+
+func (r *router) selectForCommonTenant(c clientInfo, filter func(string) bool) []*CNServer {
+	var cns []*CNServer
+	var cnNotEmpty, cnEmpty bool
+	r.moCluster.GetCNService(c.labelInfo.genSelector(), func(s metadata.CNService) bool {
+		if filter != nil && filter(s.ServiceID) {
+			return true
+		}
 		cns = append(cns, &CNServer{
 			reqLabel: c.labelInfo,
 			cnLabel:  s.Labels,
@@ -160,29 +237,34 @@ func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
 		}
 		return true
 	})
-	if len(cns) == 0 {
-		// If there is no available CN server for sys account, select from other
-		// accounts to make sure sys user could log in.
-		if c.labelInfo.isSuperTenant() {
-			r.moCluster.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
-				cns = append(cns, &CNServer{
-					reqLabel: c.labelInfo,
-					cnLabel:  s.Labels,
-					uuid:     s.ServiceID,
-					addr:     s.SQLAddress,
-				})
-				return true
-			})
-			if len(cns) == 0 {
-				return nil, moerr.NewInternalErrorNoCtx(noCNErrMsg)
+
+	// The result may contain some CN servers whose label is empty.
+	// If there are empty and non-empty ones, we should exclude the empty ones.
+	if cnNotEmpty && cnEmpty {
+		i := 0
+		for _, cn := range cns {
+			if len(cn.cnLabel) != 0 {
+				cns[i] = cn
+				i++
 			}
-		} else {
-			return nil, moerr.NewInternalErrorNoCtx(noCNErrMsg)
 		}
+		return cns[:i]
+	}
+	return cns
+}
+
+// Route implements the Router interface.
+func (r *router) Route(ctx context.Context, c clientInfo, filter func(string) bool) (*CNServer, error) {
+	var cns []*CNServer
+	if c.isSuperTenant() {
+		cns = r.selectForSuperTenant(c, filter)
+	} else {
+		cns = r.selectForCommonTenant(c, filter)
 	}
 
-	// If there is only one CN server, just return it.
-	if len(cns) == 1 {
+	if len(cns) == 0 {
+		return nil, noCNServerErr
+	} else if len(cns) == 1 {
 		return cns[0], nil
 	}
 
@@ -192,7 +274,7 @@ func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
 		return nil, err
 	}
 
-	s := r.rebalancer.connManager.selectOne(hash, cns, cnEmpty && cnNotEmpty)
+	s := r.rebalancer.connManager.selectOne(hash, cns)
 	if s == nil {
 		return nil, ErrNoAvailableCNServers
 	}
