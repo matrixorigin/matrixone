@@ -45,6 +45,12 @@ type clientInfo struct {
 	originIP net.IP
 }
 
+// isSuperUser returns true if the username is root or dump.
+func (c *clientInfo) isSuperUser() bool {
+	u := strings.ToLower(c.username)
+	return u == superUserRoot || u == superUserDump
+}
+
 // sessionVarName is the session variable name which defines the label info.
 var sesssionVarName = "cn_label"
 
@@ -101,7 +107,7 @@ func (l *labelInfo) tenantLabel() map[string]string {
 
 // isSuperTenant returns true if the tenant is sys or empty.
 func (l *labelInfo) isSuperTenant() bool {
-	if l.Tenant == "" || l.Tenant == "sys" {
+	if l.Tenant == "" || strings.ToLower(string(l.Tenant)) == superTenant {
 		return true
 	}
 	return false
