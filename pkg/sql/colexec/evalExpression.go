@@ -338,7 +338,8 @@ func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*bat
 	if vec.IsConstNull() {
 		// vec.SetType(expr.typ)
 
-		// we need a copy, because sometimes batches may clean after expr eval
+		// todo: fixme, if do not copy null vec. we will panic in many bvt case
+		// newTyp := types.New(expr.typ.Oid, expr.typ.Width, expr.typ.Scale)
 		vec = proc.GetVector(expr.typ)
 		if err := vector.GetUnionAllFunction(expr.typ, proc.Mp())(vec, batches[relIndex].Vecs[expr.colIndex]); err != nil {
 			return nil, err

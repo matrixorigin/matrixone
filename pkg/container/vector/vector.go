@@ -111,7 +111,7 @@ func (v *Vector) GetNulls() *nulls.Nulls {
 
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 	if nsp != nil {
-		v.nsp = *nsp
+		v.nsp.InitWith(nsp)
 	} else {
 		v.nsp.Reset()
 	}

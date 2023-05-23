@@ -59,7 +59,7 @@ var rightmost_one_pos_8 = [256]uint8{
 
 func (n *Bitmap) InitWith(other *Bitmap) {
 	n.len = other.len
-	n.emptyFlag = other.emptyFlag
+	n.emptyFlag.Store(other.emptyFlag.Load())
 	n.data = append([]uint64(nil), other.data...)
 }
 
