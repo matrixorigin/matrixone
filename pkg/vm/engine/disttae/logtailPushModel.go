@@ -606,18 +606,9 @@ func (s *logTailSubscriber) receiveResponse() logTailSubscriberResponse {
 	}
 }
 
-func (e *Engine) SetPushModelFlag(turnOn bool) {
-	e.usePushModel = turnOn
-}
-
-func (e *Engine) UsePushModelOrNot() bool {
-	return e.usePushModel
-}
-
 func (e *Engine) InitLogTailPushModel(
 	ctx context.Context,
 	timestampWaiter client.TimestampWaiter) error {
-	e.SetPushModelFlag(true)
 
 	// get log tail service address.
 	dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress

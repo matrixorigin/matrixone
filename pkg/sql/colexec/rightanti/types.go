@@ -15,6 +15,7 @@
 package rightanti
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -59,7 +60,7 @@ type container struct {
 
 	mp *hashmap.JoinMap
 
-	matched []uint8
+	matched *bitmap.Bitmap
 }
 
 type Argument struct {
@@ -72,7 +73,7 @@ type Argument struct {
 	Conditions [][]*plan.Expr
 
 	IsMerger bool
-	Channel  chan *[]uint8
+	Channel  chan *bitmap.Bitmap
 	NumCPU   uint64
 }
 

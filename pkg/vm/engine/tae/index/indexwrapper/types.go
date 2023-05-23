@@ -1,10 +1,10 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,9 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package wal
+package indexwrapper
 
-func (driver *walDriver) RangeCheckpoint(start, end uint64) (e LogEntry, err error) {
-	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end)
-	return
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+)
+
+func TranslateError(err error) error {
+	if err == nil {
+		return err
+	}
+	if err == index.ErrDuplicate {
+		return moerr.GetOkExpectedDup()
+	}
+	if err == index.ErrNotFound {
+		return moerr.NewNotFoundNoCtx()
+	}
+	return err
 }

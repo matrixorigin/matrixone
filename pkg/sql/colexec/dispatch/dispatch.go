@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+
 	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -138,7 +139,9 @@ func (arg *Argument) prepareRemote(proc *process.Process) {
 	arg.ctr.remoteReceivers = make([]*WrapperClientSession, 0, arg.ctr.remoteRegsCnt)
 	arg.ctr.remoteToIdx = make(map[uuid.UUID]int)
 	for i, rr := range arg.RemoteRegs {
-		arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
+		if arg.FuncId == ShuffleToAllFunc {
+			arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
+		}
 		colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc)
 	}
 }

@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type MVCCSlice[T txnif.MVCCNode[T]] struct {
@@ -248,21 +247,20 @@ func (be *MVCCSlice[T]) IsCommitted() bool {
 	return un.IsCommitted()
 }
 
-func (be *MVCCSlice[T]) LoopInRange(start, end types.TS, fn func(T) bool) (indexes []*wal.Index) {
+func (be *MVCCSlice[T]) LoopInRange(start, end types.TS, fn func(T) bool) {
 	startOffset, node := be.GetNodeToReadByPrepareTS(start)
 	if node.IsNil() && node.GetPrepare().Less(start) {
 		startOffset++
 	}
 	endOffset, node := be.GetNodeToReadByPrepareTS(end)
 	if node.IsNil() {
-		return nil
+		return
 	}
 	for i := endOffset; i >= startOffset; i-- {
 		if !fn(be.MVCC[i]) {
 			break
 		}
 	}
-	return
 }
 
 func (be *MVCCSlice[T]) LoopOffsetRange(start, end int, fn func(T) bool) {

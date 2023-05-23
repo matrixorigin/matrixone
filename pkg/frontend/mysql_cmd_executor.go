@@ -643,6 +643,10 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 				if err != nil {
 					return err
 				}
+				err = doSetGlobalSystemVariable(ctx, ses, name, value)
+				if err != nil {
+					return err
+				}
 			} else {
 				err = ses.SetSessionVar(name, value)
 				if err != nil {
@@ -812,9 +816,9 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 
 	var sysVars map[string]interface{}
 	if sv.Global {
-		sysVars = make(map[string]interface{})
-		for k, v := range gSysVarsDefs {
-			sysVars[k] = v.Default
+		sysVars, err = doGetGlobalSystemVariable(ses.GetRequestContext(), ses)
+		if err != nil {
+			return err
 		}
 	} else {
 		sysVars = ses.CopyAllSessionVars()
@@ -1392,25 +1396,38 @@ func doShowBackendServers(ses *Session) error {
 
 	tenant := ses.GetTenantInfo().GetTenant()
 	var se clusterservice.Selector
-	if tenant != sysAccountName {
+	if !isSysTenant(tenant) {
 		labels := ses.GetMysqlProtocol().GetConnectAttrs()
 		labels["account"] = tenant
 		se = clusterservice.NewSelector().SelectByLabel(
 			filterLabels(labels), clusterservice.EQ)
 	}
 	cluster := clusterservice.GetMOCluster()
+	var notEmpty, empty bool
+	var rows [][]interface{}
 	cluster.GetCNService(se, func(s metadata.CNService) bool {
 		row := make([]interface{}, 3)
 		row[0] = s.ServiceID
 		row[1] = s.SQLAddress
 		var labelStr string
+		if len(s.Labels) > 0 {
+			notEmpty = true
+		} else {
+			empty = true
+		}
 		for key, value := range s.Labels {
 			labelStr += fmt.Sprintf("%s:%s;", key, strings.Join(value.Labels, ","))
 		}
 		row[2] = labelStr
-		mrs.AddRow(row)
+		rows = append(rows, row)
 		return true
 	})
+	for _, row := range rows {
+		if row[2] == "" && empty && notEmpty {
+			continue
+		}
+		mrs.AddRow(row)
+	}
 	return nil
 }
 
