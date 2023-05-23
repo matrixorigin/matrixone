@@ -26,84 +26,84 @@ var (
 			Name: catalog.MetadataScanInfoNames[catalog.COL_NAME],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.COL_NAME].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.BLOCK_ID],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.BLOCK_ID].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.ENTRY_STATE],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ENTRY_STATE].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.SORTED],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.SORTED].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.META_LOC],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.META_LOC].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.DELTA_LOC],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.DELTA_LOC].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.COMMIT_TS],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.COMMIT_TS].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.SEG_ID],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.SEG_ID].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.ROWS_CNT],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ROWS_CNT].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.NULL_CNT],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.NULL_CNT].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.COMPRESS_SIZE],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.COMPRESS_SIZE].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		{
 			Name: catalog.MetadataScanInfoNames[catalog.ORIGIN_SIZE],
 			Typ: &plan.Type{
 				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ORIGIN_SIZE].Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		},
 		/*
