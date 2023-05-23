@@ -6826,13 +6826,8 @@ func TestDedupSnapshot1(t *testing.T) {
 
 	txn, rel := tae.getRelation()
 	txn.SetSnapshotTS(txn.GetStartTS().Next())
-<<<<<<< HEAD
 	txn.SetDedupType(txnif.IncrementalDedup)
-	err := rel.Append(bat)
-=======
-	txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
 	err := rel.Append(context.Background(), bat)
->>>>>>> main
 	assert.NoError(t, err)
 	_ = txn.Commit()
 }
