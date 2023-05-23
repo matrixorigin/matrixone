@@ -60,6 +60,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 		if err != nil {
 			return nil, err
 		}
+		putDmlPlanCtx(upPlanCtx)
 	}
 	if err != nil {
 		return nil, err
@@ -180,16 +181,16 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			offset++
 		}
 		// append  table.* to project list
-		upPlanCtx := &dmlPlanCtx{
-			objRef:           tableInfo.objRef[i],
-			tableDef:         tableDef,
-			updateColLength:  len(updateKeys),
-			isMulti:          tableInfo.isMulti,
-			rowIdPos:         rowIdPos,
-			updateColPosMap:  updateColPosMap,
-			allDelTableIDs:   map[uint64]struct{}{},
-			checkInsertPkDup: checkInsertPkDup,
-		}
+		upPlanCtx := getDmlPlanCtx()
+		upPlanCtx.objRef = tableInfo.objRef[i]
+		upPlanCtx.tableDef = tableDef
+		upPlanCtx.updateColLength = len(updateKeys)
+		upPlanCtx.isMulti = tableInfo.isMulti
+		upPlanCtx.rowIdPos = rowIdPos
+		upPlanCtx.updateColPosMap = updateColPosMap
+		upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+		upPlanCtx.checkInsertPkDup = checkInsertPkDup
+
 		for idx, col := range tableDef.Cols {
 			// row_id、compPrimaryKey、clusterByKey will not inserted from old data
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {

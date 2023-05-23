@@ -138,22 +138,23 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 
 		// append plans like update
 		updateBindCtx := NewBindContext(builder, nil)
-		upPlanCtx := &dmlPlanCtx{
-			objRef:           objRef,
-			tableDef:         tableDef,
-			beginIdx:         0,
-			sourceStep:       sourceStep,
-			isMulti:          false,
-			updateColLength:  updateColLength,
-			rowIdPos:         rowIdPos,
-			insertColPos:     insertColPos,
-			updateColPosMap:  updateColPosMap,
-			checkInsertPkDup: checkInsertPkDup,
-		}
+		upPlanCtx := getDmlPlanCtx()
+		upPlanCtx.objRef = objRef
+		upPlanCtx.tableDef = tableDef
+		upPlanCtx.beginIdx = 0
+		upPlanCtx.sourceStep = sourceStep
+		upPlanCtx.isMulti = false
+		upPlanCtx.updateColLength = updateColLength
+		upPlanCtx.rowIdPos = rowIdPos
+		upPlanCtx.insertColPos = insertColPos
+		upPlanCtx.updateColPosMap = updateColPosMap
+		upPlanCtx.checkInsertPkDup = checkInsertPkDup
+
 		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
 		if err != nil {
 			return nil, err
 		}
+		putDmlPlanCtx(upPlanCtx)
 
 		query.StmtType = plan.Query_UPDATE
 	} else {

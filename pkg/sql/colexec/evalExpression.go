@@ -336,12 +336,11 @@ func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*bat
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
-		// vec.SetType(expr.typ)
+		vec.SetType(expr.typ)
 
-		// todo: should set type before eval expr
-		newTyp := types.New(expr.typ.Oid, expr.typ.Width, expr.typ.Scale)
-		vec = proc.GetVector(newTyp)
-		if err := vector.GetUnionAllFunction(newTyp, proc.Mp())(vec, batches[relIndex].Vecs[expr.colIndex]); err != nil {
+		// we need a copy, because sometimes batches may clean after expr eval
+		vec = proc.GetVector(expr.typ)
+		if err := vector.GetUnionAllFunction(expr.typ, proc.Mp())(vec, batches[relIndex].Vecs[expr.colIndex]); err != nil {
 			return nil, err
 		}
 	}

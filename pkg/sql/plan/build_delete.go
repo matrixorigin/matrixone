@@ -61,17 +61,16 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	needLockTable := false
 	for i, tableDef := range tblInfo.tableDefs {
 		deleteBindCtx := NewBindContext(builder, nil)
-		delPlanCtx := &dmlPlanCtx{
-			objRef:          tblInfo.objRef[i],
-			tableDef:        tableDef,
-			beginIdx:        beginIdx,
-			sourceStep:      sourceStep,
-			isMulti:         tblInfo.isMulti,
-			updateColLength: 0,
-			rowIdPos:        getRowIdPos(tableDef),
-			allDelTableIDs:  allDelTableIDs,
-			lockTable:       needLockTable,
-		}
+		delPlanCtx := getDmlPlanCtx()
+		delPlanCtx.objRef = tblInfo.objRef[i]
+		delPlanCtx.tableDef = tableDef
+		delPlanCtx.beginIdx = beginIdx
+		delPlanCtx.sourceStep = sourceStep
+		delPlanCtx.isMulti = tblInfo.isMulti
+		delPlanCtx.updateColLength = 0
+		delPlanCtx.rowIdPos = getRowIdPos(tableDef)
+		delPlanCtx.allDelTableIDs = allDelTableIDs
+		delPlanCtx.lockTable = needLockTable
 
 		nextSourceStep, err := makePreUpdateDeletePlan(ctx, builder, deleteBindCtx, delPlanCtx)
 		if err != nil {
@@ -84,6 +83,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 			return nil, err
 		}
 		beginIdx = beginIdx + len(tableDef.Cols)
+		putDmlPlanCtx(delPlanCtx)
 	}
 
 	query.StmtType = plan.Query_DELETE

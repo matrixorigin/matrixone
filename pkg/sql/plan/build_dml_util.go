@@ -15,12 +15,66 @@
 package plan
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
+
+var dmlPlanCtxPool = sync.Pool{
+	New: func() any {
+		return &dmlPlanCtx{}
+	},
+}
+var deleteNodeInfoPool = sync.Pool{
+	New: func() any {
+		return &deleteNodeInfo{}
+	},
+}
+
+func getDmlPlanCtx() *dmlPlanCtx {
+	ctx := dmlPlanCtxPool.Get().(*dmlPlanCtx)
+	ctx.objRef = nil
+	ctx.tableDef = nil
+	ctx.beginIdx = 0
+	ctx.sourceStep = 0
+	ctx.isMulti = false
+	ctx.updateColLength = 0
+	ctx.rowIdPos = 0
+	ctx.insertColPos = ctx.insertColPos[:0]
+	ctx.updateColPosMap = nil
+	ctx.allDelTableIDs = nil
+	ctx.isFkRecursionCall = false
+	ctx.lockTable = false
+	ctx.checkInsertPkDup = false
+	return ctx
+}
+
+func putDmlPlanCtx(ctx *dmlPlanCtx) {
+	dmlPlanCtxPool.Put(ctx)
+}
+
+func getDeleteNodeInfo() *deleteNodeInfo {
+	info := deleteNodeInfoPool.Get().(*deleteNodeInfo)
+	info.objRef = nil
+	info.tableDef = nil
+	info.IsClusterTable = false
+	info.deleteIndex = 0
+	info.partTableIDs = info.partTableIDs[:0]
+	info.partitionIdx = 0
+	info.addAffectedRows = false
+	info.pkPos = 0
+	info.pkTyp = nil
+	info.lockTable = false
+	return info
+}
+
+func putDeleteNodeInfo(info *deleteNodeInfo) {
+	deleteNodeInfoPool.Put(info)
+}
 
 type dmlPlanCtx struct {
 	objRef            *ObjectRef
@@ -36,6 +90,20 @@ type dmlPlanCtx struct {
 	isFkRecursionCall bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
 	lockTable         bool //we need lock table in stmt: delete from tbl
 	checkInsertPkDup  bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
+}
+
+// information of deleteNode, which is about the deleted table
+type deleteNodeInfo struct {
+	objRef          *ObjectRef
+	tableDef        *TableDef
+	IsClusterTable  bool
+	deleteIndex     int      // The array index position of the rowid column
+	partTableIDs    []uint64 // Align array index with the partition number
+	partitionIdx    int      // The array index position of the partition expression column
+	addAffectedRows bool
+	pkPos           int
+	pkTyp           *plan.Type
+	lockTable       bool
 }
 
 // buildInsertPlans  build insert plan.
@@ -187,6 +255,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
 						delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
 						lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
+						putDeleteNodeInfo(delNodeInfo)
 						if err != nil {
 							return err
 						}
@@ -235,6 +304,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					// it's more simple for delete hidden unique table .so we append nodes after the plan. not recursive call buildDeletePlans
 					delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, -1, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
 					lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
+					putDeleteNodeInfo(delNodeInfo)
 					if err != nil {
 						return err
 					}
@@ -254,6 +324,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
 	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, partExprIdx, true, pkPos, pkTyp, delCtx.lockTable)
 	lastNodeId, err := makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo)
+	putDeleteNodeInfo(delNodeInfo)
 	if err != nil {
 		return err
 	}
@@ -503,20 +574,21 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 
 						newSourceStep := builder.appendStep(lastNodeId)
-						upPlanCtx := &dmlPlanCtx{
-							objRef:            childObjRef,
-							tableDef:          childTableDef,
-							updateColLength:   len(rightConds),
-							isMulti:           false,
-							rowIdPos:          childRowIdPos,
-							sourceStep:        newSourceStep,
-							beginIdx:          0,
-							updateColPosMap:   updateChildColPosMap,
-							allDelTableIDs:    map[uint64]struct{}{},
-							insertColPos:      insertColPos,
-							isFkRecursionCall: true,
-						}
+						upPlanCtx := getDmlPlanCtx()
+						upPlanCtx.objRef = childObjRef
+						upPlanCtx.tableDef = childTableDef
+						upPlanCtx.updateColLength = len(rightConds)
+						upPlanCtx.isMulti = false
+						upPlanCtx.rowIdPos = childRowIdPos
+						upPlanCtx.sourceStep = newSourceStep
+						upPlanCtx.beginIdx = 0
+						upPlanCtx.updateColPosMap = updateChildColPosMap
+						upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+						upPlanCtx.insertColPos = insertColPos
+						upPlanCtx.isFkRecursionCall = true
+
 						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx)
+						putDmlPlanCtx(upPlanCtx)
 						if err != nil {
 							return err
 						}
@@ -544,20 +616,21 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 							newSourceStep := builder.appendStep(lastNodeId)
 
-							upPlanCtx := &dmlPlanCtx{
-								objRef:            childObjRef,
-								tableDef:          DeepCopyTableDef(childTableDef),
-								updateColLength:   len(rightConds),
-								isMulti:           false,
-								rowIdPos:          childRowIdPos,
-								sourceStep:        newSourceStep,
-								beginIdx:          0,
-								updateColPosMap:   updateChildColPosMap,
-								insertColPos:      insertColPos,
-								allDelTableIDs:    map[uint64]struct{}{},
-								isFkRecursionCall: true,
-							}
+							upPlanCtx := getDmlPlanCtx()
+							upPlanCtx.objRef = childObjRef
+							upPlanCtx.tableDef = DeepCopyTableDef(childTableDef)
+							upPlanCtx.updateColLength = len(rightConds)
+							upPlanCtx.isMulti = false
+							upPlanCtx.rowIdPos = childRowIdPos
+							upPlanCtx.sourceStep = newSourceStep
+							upPlanCtx.beginIdx = 0
+							upPlanCtx.updateColPosMap = updateChildColPosMap
+							upPlanCtx.insertColPos = insertColPos
+							upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+							upPlanCtx.isFkRecursionCall = true
+
 							err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx)
+							putDmlPlanCtx(upPlanCtx)
 							if err != nil {
 								return err
 							}
@@ -576,17 +649,18 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							//make deletePlans
 							allDelTableIDs := make(map[uint64]struct{})
 							allDelTableIDs[childTableDef.TblId] = struct{}{}
-							upPlanCtx := &dmlPlanCtx{
-								objRef:          childObjRef,
-								tableDef:        childTableDef,
-								updateColLength: 0,
-								isMulti:         false,
-								rowIdPos:        childRowIdPos,
-								sourceStep:      newSourceStep,
-								beginIdx:        0,
-								allDelTableIDs:  allDelTableIDs,
-							}
+							upPlanCtx := getDmlPlanCtx()
+							upPlanCtx.objRef = childObjRef
+							upPlanCtx.tableDef = childTableDef
+							upPlanCtx.updateColLength = 0
+							upPlanCtx.isMulti = false
+							upPlanCtx.rowIdPos = childRowIdPos
+							upPlanCtx.sourceStep = newSourceStep
+							upPlanCtx.beginIdx = 0
+							upPlanCtx.allDelTableIDs = allDelTableIDs
+
 							err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
+							putDmlPlanCtx(upPlanCtx)
 							if err != nil {
 								return err
 							}
@@ -1150,17 +1224,16 @@ func haveUniqueKey(tableDef *TableDef) bool {
 // makeDeleteNodeInfo Get `DeleteNode` based on TableDef
 func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef,
 	deleteIdx int, partitionIdx int, addAffectedRows bool, pkPos int, pkTyp *Type, lockTable bool) *deleteNodeInfo {
-	delNodeInfo := &deleteNodeInfo{
-		objRef:          objRef,
-		tableDef:        tableDef,
-		deleteIndex:     deleteIdx,
-		partitionIdx:    partitionIdx,
-		addAffectedRows: addAffectedRows,
-		IsClusterTable:  tableDef.TableType == catalog.SystemClusterRel,
-		pkPos:           pkPos,
-		pkTyp:           pkTyp,
-		lockTable:       lockTable,
-	}
+	delNodeInfo := getDeleteNodeInfo()
+	delNodeInfo.objRef = objRef
+	delNodeInfo.tableDef = tableDef
+	delNodeInfo.deleteIndex = deleteIdx
+	delNodeInfo.partitionIdx = partitionIdx
+	delNodeInfo.addAffectedRows = addAffectedRows
+	delNodeInfo.IsClusterTable = tableDef.TableType == catalog.SystemClusterRel
+	delNodeInfo.pkPos = pkPos
+	delNodeInfo.pkTyp = pkTyp
+	delNodeInfo.lockTable = lockTable
 
 	if tableDef.Partition != nil {
 		partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
@@ -1171,20 +1244,6 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 		delNodeInfo.partTableIDs = partTableIds
 	}
 	return delNodeInfo
-}
-
-// information of deleteNode, which is about the deleted table
-type deleteNodeInfo struct {
-	objRef          *ObjectRef
-	tableDef        *TableDef
-	IsClusterTable  bool
-	deleteIndex     int      // The array index position of the rowid column
-	partTableIDs    []uint64 // Align array index with the partition number
-	partitionIdx    int      // The array index position of the partition expression column
-	addAffectedRows bool
-	pkPos           int
-	pkTyp           *plan.Type
-	lockTable       bool
 }
 
 // Calculate the offset index of partition expression, and the sub tableIds of the partition table
