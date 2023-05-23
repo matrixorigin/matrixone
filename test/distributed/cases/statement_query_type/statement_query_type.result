@@ -92,7 +92,7 @@ prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
 col1    col2
-2   b
+2    b
 deallocate prepare s1;
 drop table if exists test_01;
 create table test_01(a int, b varchar);
@@ -201,7 +201,7 @@ set @a=2;
 internal error: Uncommitted transaction exists. Please commit or rollback first.
 execute s1 using @a;
 col1    col2
-2   b
+2    b
 deallocate prepare s1;
 rollback;
 use system;
