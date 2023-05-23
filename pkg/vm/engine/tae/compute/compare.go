@@ -112,21 +112,21 @@ func CompareGeneric(a, b any, t types.T) int64 {
 	case types.T_bool:
 		return CompareBool(a.(bool), b.(bool))
 	case types.T_int8:
-		return CompareOrdered[int8](a.(int8), b.(int8))
+		return CompareOrdered(a.(int8), b.(int8))
 	case types.T_int16:
-		return CompareOrdered[int16](a.(int16), b.(int16))
+		return CompareOrdered(a.(int16), b.(int16))
 	case types.T_int32:
-		return CompareOrdered[int32](a.(int32), b.(int32))
+		return CompareOrdered(a.(int32), b.(int32))
 	case types.T_int64:
-		return CompareOrdered[int64](a.(int64), b.(int64))
+		return CompareOrdered(a.(int64), b.(int64))
 	case types.T_uint8:
-		return CompareOrdered[uint8](a.(uint8), b.(uint8))
+		return CompareOrdered(a.(uint8), b.(uint8))
 	case types.T_uint16:
-		return CompareOrdered[uint16](a.(uint16), b.(uint16))
+		return CompareOrdered(a.(uint16), b.(uint16))
 	case types.T_uint32:
-		return CompareOrdered[uint32](a.(uint32), b.(uint32))
+		return CompareOrdered(a.(uint32), b.(uint32))
 	case types.T_uint64:
-		return CompareOrdered[uint64](a.(uint64), b.(uint64))
+		return CompareOrdered(a.(uint64), b.(uint64))
 	case types.T_decimal64:
 		return int64(a.(types.Decimal64).Compare(b.(types.Decimal64)))
 	case types.T_decimal128:
@@ -134,17 +134,17 @@ func CompareGeneric(a, b any, t types.T) int64 {
 	case types.T_decimal256:
 		return int64(a.(types.Decimal256).Compare(b.(types.Decimal256)))
 	case types.T_float32:
-		return CompareOrdered[float32](a.(float32), b.(float32))
+		return CompareOrdered(a.(float32), b.(float32))
 	case types.T_float64:
-		return CompareOrdered[float64](a.(float64), b.(float64))
+		return CompareOrdered(a.(float64), b.(float64))
 	case types.T_timestamp:
-		return CompareOrdered[types.Timestamp](a.(types.Timestamp), b.(types.Timestamp))
+		return CompareOrdered(a.(types.Timestamp), b.(types.Timestamp))
 	case types.T_date:
-		return CompareOrdered[types.Date](a.(types.Date), b.(types.Date))
+		return CompareOrdered(a.(types.Date), b.(types.Date))
 	case types.T_time:
-		return CompareOrdered[types.Time](a.(types.Time), b.(types.Time))
+		return CompareOrdered(a.(types.Time), b.(types.Time))
 	case types.T_datetime:
-		return CompareOrdered[types.Datetime](a.(types.Datetime), b.(types.Datetime))
+		return CompareOrdered(a.(types.Datetime), b.(types.Datetime))
 	case types.T_TS:
 		return int64(a.(types.TS).Compare(b.(types.TS)))
 	case types.T_Rowid:

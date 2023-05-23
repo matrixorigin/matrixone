@@ -323,6 +323,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 		bat.Vecs = append(bat.Vecs, vec)
 		n += tmpn
 	}
+	// XXX Fix the following read, it is a very twisted way of reading uint32.
 	// Read Deletes
 	buf = make([]byte, int(unsafe.Sizeof(uint32(0))))
 	if _, err = r.Read(buf); err != nil {
