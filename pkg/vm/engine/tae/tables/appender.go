@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type blockAppender struct {
@@ -101,15 +100,12 @@ func (appender *blockAppender) ApplyAppend(
 	from, err = node.ApplyAppend(bat, txn)
 
 	schema := node.writeSchema
-	keysCtx := new(index.KeysCtx)
-	keysCtx.Count = bat.Length()
 	for _, colDef := range schema.ColDefs {
 		if colDef.IsPhyAddr() {
 			continue
 		}
 		if colDef.IsRealPrimary() {
-			keysCtx.Keys = bat.Vecs[colDef.Idx]
-			if err = node.pkIndex.BatchUpsert(keysCtx, from); err != nil {
+			if err = node.pkIndex.BatchUpsert(bat.Vecs[colDef.Idx], from); err != nil {
 				panic(err)
 			}
 		}
