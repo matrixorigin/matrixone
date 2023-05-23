@@ -214,6 +214,9 @@ func (s *server) onMessage(
 		handler: handler,
 		s:       s,
 	}
+	s.rt.Logger().Info(">>> txn request queue size",
+		zap.Int("max", s.options.maxChannelBufferSize),
+		zap.Int("count", len(s.queue)))
 	return nil
 }
 
@@ -263,6 +266,9 @@ type executor struct {
 }
 
 func (r executor) exec() ([]byte, error) {
+	defer r.s.rt.Logger().InfoAction(">>> handle txn request",
+		zap.String("method", r.req.Method.String()),
+		zap.String("txn-id", hex.EncodeToString(r.req.Txn.ID)))
 	defer r.cancel()
 	defer r.s.releaseRequest(r.req)
 	resp := r.s.acquireResponse()
