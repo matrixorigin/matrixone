@@ -83,7 +83,7 @@ type Source struct {
 	Expr                   *plan.Expr
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
-	AccountId              int32
+	AccountId              *plan.PubInfo
 }
 
 // Col is the information of attribute

@@ -1979,7 +1979,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 				}
 				defaultDatabase := viewData.DefaultDatabase
-				if obj.PubAccountId != -1 {
+				if obj.PubInfo != nil {
 					defaultDatabase = obj.SubscriptionName
 				}
 				ctx.cteByName[string(viewName)] = &CTERef{

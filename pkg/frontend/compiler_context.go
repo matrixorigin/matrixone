@@ -392,13 +392,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var primarykey *plan2.PrimaryKeyDef
 	var indexes []*plan2.IndexDef
 	var refChildTbls []uint64
-	var subscriptionName string
-	var pubAccountId int32 = -1
-	if sub != nil {
-		subscriptionName = sub.SubName
-		pubAccountId = sub.AccountId
-		dbName = sub.DbName
-	}
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -503,11 +496,23 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	}
 
 	//convert
+	var subscriptionName string
+	var pubAccountId int32 = -1
+	if sub != nil {
+		subscriptionName = sub.SubName
+		pubAccountId = sub.AccountId
+		dbName = sub.DbName
+	}
+
 	obj := &plan2.ObjectRef{
 		SchemaName:       dbName,
 		ObjName:          tableName,
 		SubscriptionName: subscriptionName,
-		PubAccountId:     pubAccountId,
+	}
+	if pubAccountId != -1 {
+		obj.PubInfo = &plan.PubInfo{
+			TenantId: pubAccountId,
+		}
 	}
 
 	tableDef := &plan2.TableDef{
@@ -661,7 +666,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 
 	dbName := obj.GetSchemaName()
 	checkSub := true
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		checkSub = false
 	}
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub)
@@ -670,7 +675,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{
-			AccountId: obj.PubAccountId,
+			AccountId: obj.PubInfo.TenantId,
 			DbName:    dbName,
 		}
 	}

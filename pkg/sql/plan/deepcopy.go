@@ -54,6 +54,7 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 		DbName:     ref.DbName,
 		SchemaName: ref.SchemaName,
 		ObjName:    ref.ObjName,
+		PubInfo:    ref.PubInfo,
 	}
 }
 
