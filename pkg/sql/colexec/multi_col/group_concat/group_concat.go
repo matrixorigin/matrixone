@@ -248,7 +248,9 @@ func (gc *GroupConcat) Fill(groupIndex int64, rowIndex int64, rowCount int64, ve
 		res_row += s
 		// prefix length + data
 		length := uint16(len(s))
-		insert_row += string(unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)) + s
+		// WTF is the following crap?
+		// insert_row += string(unsafe.Slice((*byte)(unsafe.Pointer(&length)), 2)) + s
+		insert_row += unsafe.String((*byte)(unsafe.Pointer(&length)), 2) + s
 	}
 	if gc.arg.Dist {
 		if flag, err = gc.maps[groupIndex].InsertValue(insert_row); err != nil {

@@ -83,8 +83,6 @@ spec:
       [cn.rpc]
       send-queue-size = 2
       busy-queue-size = 1
-      [cn]
-      turn-on-push-model = true
       [cn.txn]
       enable-sacrificing-freshness = true
       enable-cn-based-consistency = true

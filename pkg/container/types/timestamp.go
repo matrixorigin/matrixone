@@ -175,7 +175,6 @@ type unsafeLoc struct {
 func TimestampToDatetime(loc *time.Location, xs []Timestamp, rs []Datetime) ([]Datetime, error) {
 	xsInInt64 := *(*[]int64)(unsafe.Pointer(&xs))
 	rsInInt64 := *(*[]int64)(unsafe.Pointer(&rs))
-
 	locPtr := (*unsafeLoc)(unsafe.Pointer(loc))
 	if len(locPtr.zone) == 1 {
 		offset := int64(locPtr.zone[0].offset) * microSecsPerSec
