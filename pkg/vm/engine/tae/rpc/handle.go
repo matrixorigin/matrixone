@@ -802,11 +802,15 @@ func (h *Handle) HandleWrite(
 		return
 	}
 	switch req.PkCheck {
-	case db.PKDedupSkipNone:
+	case db.SkipNone:
 		txn.SetPKDedupSkip(txnif.PKDedupSkipNone)
-	case db.PKDedupSkipSnapshot:
-		txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
-	case db.PKDedupSkipWorkSpace:
+	case db.SkipSnapshot:
+		if h.db.Opts.EnablePKDedupSkipSnapshot {
+			txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+		} else {
+			txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+		}
+	case db.SkipWorkSpace:
 		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
 	}
 	common.DoIfDebugEnabled(func() {

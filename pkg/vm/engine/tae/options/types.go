@@ -73,6 +73,8 @@ type Options struct {
 
 	TransferTableTTL time.Duration
 
+	EnablePKDedupSkipSnapshot bool
+
 	Clock     clock.Clock
 	Fs        fileservice.FileService
 	Lc        logservicedriver.LogServiceClientFactory
