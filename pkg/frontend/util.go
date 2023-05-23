@@ -463,15 +463,6 @@ func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, 
 	}
 }
 
-func getAccountId(ctx context.Context) uint32 {
-	var accountId uint32
-
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		accountId = v.(uint32)
-	}
-	return accountId
-}
-
 //func getAccount(ctx context.Context) (uint32, uint32, uint32) {
 //	var accountId, userId, roleId uint32
 //
