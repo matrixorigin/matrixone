@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package functionUtil
+package util
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"unsafe"
 )
 
-func ConvertD64ToD128(v types.Decimal64) types.Decimal128 {
-	x := types.Decimal128{B0_63: uint64(v), B64_127: 0}
-	if v>>63 != 0 {
-		x.B64_127 = ^x.B64_127
+func UnsafeBytesToString(b []byte) string {
+	if len(b) == 0 {
+		return ""
 	}
-	return x
+	return unsafe.String(&b[0], len(b))
 }
 
-func QuickStrToBytes(s string) []byte {
-	return util.UnsafeStringToBytes(s)
-}
-
-func QuickBytesToStr(data []byte) string {
-	return util.UnsafeBytesToString(data)
+func UnsafeStringToBytes(s string) []byte {
+	if len(s) == 0 {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(s), len(s))
 }

@@ -323,6 +323,11 @@ func (b *BlockInfo) SetDeltaLocation(deltaLoc objectio.Location) {
 	b.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
 }
 
+// XXX info is passed in by value.   The use of unsafe here will cost
+// an allocation and copy.  BlockInfo is not small therefore this is
+// not exactly cheap.   However, caller of this function will keep a
+// reference to the buffer.  See txnTable.rangesOnePart.
+// ranges is *[][]byte.
 func EncodeBlockInfo(info BlockInfo) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
 }
