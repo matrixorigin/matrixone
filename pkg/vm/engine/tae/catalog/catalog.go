@@ -687,7 +687,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 			blkun.Update(un)
 		} else {
 			blk.Insert(un)
-			blk.Location = un.BaseNode.MetaLoc
+			blk.location = un.BaseNode.MetaLoc
 		}
 		return
 	}
@@ -695,7 +695,7 @@ func (catalog *Catalog) onReplayUpdateBlock(
 	blk.ID = cmd.ID.BlockID
 	blk.BlockNode = cmd.node
 	blk.BaseEntryImpl.Insert(un)
-	blk.Location = un.BaseNode.MetaLoc
+	blk.location = un.BaseNode.MetaLoc
 	blk.segment = seg
 	blk.blkData = dataFactory.MakeBlockFactory()(blk)
 	if observer != nil {
@@ -794,7 +794,7 @@ func (catalog *Catalog) onReplayCreateBlock(
 		}
 	}
 	blk.Insert(un)
-	blk.Location = un.BaseNode.MetaLoc
+	blk.location = un.BaseNode.MetaLoc
 }
 func (catalog *Catalog) onReplayDeleteBlock(
 	dbid, tid uint64,
@@ -845,7 +845,7 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		},
 	}
 	blk.Insert(un)
-	blk.Location = un.BaseNode.MetaLoc
+	blk.location = un.BaseNode.MetaLoc
 }
 func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)
