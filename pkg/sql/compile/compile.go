@@ -972,8 +972,15 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	} else {
 		fileList = []string{param.Filepath}
 	}
+
 	if len(fileList) == 0 {
-		return nil, nil
+		ret := &Scope{
+			Magic:      Normal,
+			DataSource: nil,
+			Proc:       process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
+		}
+
+		return []*Scope{ret}, nil
 	}
 
 	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
@@ -2162,7 +2169,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 	}
 
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList...)
+	monoExprList, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
+	ranges, err = rel.Ranges(ctx, monoExprList...)
 	if err != nil {
 		return nil, err
 	}
@@ -2178,7 +2186,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList...)
+			subranges, err := subrelation.Ranges(ctx, monoExprList...)
 			if err != nil {
 				return nil, err
 			}

@@ -4842,6 +4842,101 @@ func TestTransfer2(t *testing.T) {
 	_ = txn2.Commit()
 }
 
+func TestMergeBlocks3(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 5
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 100)
+	defer bat.Close()
+	tae.createRelAndAppend(bat, true)
+	filter5 := handle.NewEQFilter(bat.Vecs[3].Get(15))
+	filter9 := handle.NewEQFilter(bat.Vecs[3].Get(19))
+	filter8 := handle.NewEQFilter(bat.Vecs[3].Get(18))
+	filter7 := handle.NewEQFilter(bat.Vecs[3].Get(17))
+	// delete all rows in first blk in seg1 and the 5th,9th rows in blk2
+	{
+		txn, rel := tae.getRelation()
+		segit := rel.MakeSegmentIt()
+		seg1 := segit.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segHandle, err := rel.GetSegment(&seg1.ID)
+		require.NoError(t, err)
+
+		blk1it := segHandle.MakeBlockIt()
+		blk11Handle := blk1it.GetBlock()
+		view, err := blk11Handle.GetColumnDataByName(catalog.PhyAddrColumnName)
+		view.GetData()
+		require.NoError(t, err)
+		err = rel.DeleteByPhyAddrKeys(view.GetData())
+		require.NoError(t, err)
+
+		require.NoError(t, rel.DeleteByFilter(filter5))
+		require.NoError(t, rel.DeleteByFilter(filter9))
+		require.NoError(t, txn.Commit())
+	}
+
+	// 1. merge first segment
+	// 2. delete 7th row in blk2 during executing merge task
+	// 3. delete 8th row in blk2 and commit that after merging, test transfer
+	{
+		del8txn, rel8 := tae.getRelation()
+		valrow8, null, err := rel8.GetValueByFilter(filter8, schema.GetColIdx(catalog.PhyAddrColumnName))
+		require.NoError(t, err)
+		require.False(t, null)
+
+		del7txn, rel7 := tae.getRelation()
+		mergetxn, relm := tae.getRelation()
+
+		// merge first segment
+		segit := relm.MakeSegmentIt()
+		seg1 := segit.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segHandle, err := relm.GetSegment(&seg1.ID)
+		require.NoError(t, err)
+		metas := make([]*catalog.BlockEntry, 0, 10)
+		it := segHandle.MakeBlockIt()
+		for ; it.Valid(); it.Next() {
+			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			metas = append(metas, meta)
+		}
+		segsToMerge := []*catalog.SegmentEntry{seg1}
+		task, err := jobs.NewMergeBlocksTask(nil, mergetxn, metas, segsToMerge, nil, tae.Scheduler)
+		require.NoError(t, err)
+		require.NoError(t, task.OnExec())
+
+		// delete del7 after starting merge txn
+		require.NoError(t, rel7.DeleteByFilter(filter7))
+		require.NoError(t, del7txn.Commit())
+
+		// commit merge, and it will carry del7 to the new block
+		require.NoError(t, mergetxn.Commit())
+
+		// delete 8 row and it is expected to be transfered correctly
+		rel8.DeleteByPhyAddrKey(valrow8)
+		require.NoError(t, del8txn.Commit())
+	}
+
+	// consistency check
+	{
+		var err error
+		txn, rel := tae.getRelation()
+		_, _, err = rel.GetValueByFilter(filter5, 3)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+		_, _, err = rel.GetValueByFilter(filter7, 3)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+		_, _, err = rel.GetValueByFilter(filter8, 3)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+		_, _, err = rel.GetValueByFilter(filter9, 3)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+
+		checkAllColRowsByScan(t, rel, 86, true)
+		require.NoError(t, txn.Commit())
+	}
+
+}
+
 func TestCompactEmptyBlock(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)

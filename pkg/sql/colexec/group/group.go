@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -285,9 +286,10 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		// XXX I removed the old anal.alloc codes here.  should fix next day.
 		groupVecsNullable = groupVecsNullable || (!expr.Typ.NotNullable)
 	}
-	for _, typ := range ap.Types {
-		width := typ.TypeSize()
-		if typ.IsVarlen() {
+	for _, expr := range ap.Exprs {
+		typ := expr.Typ
+		width := types.T(typ.Id).TypeLen()
+		if types.T(typ.Id).FixedLength() < 0 {
 			if typ.Width == 0 {
 				width = 128
 			} else {
