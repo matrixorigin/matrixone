@@ -271,8 +271,10 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		for iter.Next() {
 			entry := iter.Entry()
 			if _, ok := deletes[entry.RowID]; ok {
+				continue
 			}
 			if _, ok := handled[entry.Batch]; ok {
+				continue
 			}
 			for i, s := range entry.Batch.Attrs {
 				if _, ok := neededColumnName[s]; ok {
