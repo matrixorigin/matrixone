@@ -997,6 +997,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector, dedupAfterSnapshotTS 
 			continue
 		}
 		if dedupAfterSnapshotTS && blkData.DataCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
+			it.Next()
 			continue
 		}
 		var rowmask *roaring.Bitmap
@@ -1066,6 +1067,10 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location, dedupAfte
 			}
 			blkData := blk.GetBlockData()
 			if blkData == nil {
+				it.Next()
+				continue
+			}
+			if dedupAfterSnapshotTS && blkData.DataCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
 				it.Next()
 				continue
 			}
