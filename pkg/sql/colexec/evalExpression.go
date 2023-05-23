@@ -336,7 +336,7 @@ func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*bat
 
 	vec := batches[relIndex].Vecs[expr.colIndex]
 	if vec.IsConstNull() {
-		vec.SetType(expr.typ)
+		// vec.SetType(expr.typ)
 
 		// we need a copy, because sometimes batches may clean after expr eval
 		vec = proc.GetVector(expr.typ)
