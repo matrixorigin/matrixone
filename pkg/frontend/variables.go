@@ -30,14 +30,21 @@ import (
 )
 
 var (
-	errorConvertToBoolFailed   = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
-	errorConvertToIntFailed    = moerr.NewInternalError(context.Background(), "convert to the system variable int type failed")
-	errorConvertToUintFailed   = moerr.NewInternalError(context.Background(), "convert to the system variable uint type failed")
-	errorConvertToDoubleFailed = moerr.NewInternalError(context.Background(), "convert to the system variable double type failed")
-	errorConvertToEnumFailed   = moerr.NewInternalError(context.Background(), "convert to the system variable enum type failed")
-	errorConvertToSetFailed    = moerr.NewInternalError(context.Background(), "convert to the system variable set type failed")
-	errorConvertToStringFailed = moerr.NewInternalError(context.Background(), "convert to the system variable string type failed")
-	errorConvertToNullFailed   = moerr.NewInternalError(context.Background(), "convert to the system variable null type failed")
+	errorConvertToBoolFailed             = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
+	errorConvertToIntFailed              = moerr.NewInternalError(context.Background(), "convert to the system variable int type failed")
+	errorConvertToUintFailed             = moerr.NewInternalError(context.Background(), "convert to the system variable uint type failed")
+	errorConvertToDoubleFailed           = moerr.NewInternalError(context.Background(), "convert to the system variable double type failed")
+	errorConvertToEnumFailed             = moerr.NewInternalError(context.Background(), "convert to the system variable enum type failed")
+	errorConvertToSetFailed              = moerr.NewInternalError(context.Background(), "convert to the system variable set type failed")
+	errorConvertToStringFailed           = moerr.NewInternalError(context.Background(), "convert to the system variable string type failed")
+	errorConvertToNullFailed             = moerr.NewInternalError(context.Background(), "convert to the system variable null type failed")
+	errorConvertFromStringToBoolFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable bool type failed")
+	errorConvertFromStringToIntFailed    = moerr.NewInternalError(context.Background(), "convert from string to the system variable int type failed")
+	errorConvertFromStringToUintFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable uint type failed")
+	errorConvertFromStringToDoubleFailed = moerr.NewInternalError(context.Background(), "convert from string to the system variable double type failed")
+	errorConvertFromStringToEnumFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable enum type failed")
+	errorConvertFromStringToSetFailed    = moerr.NewInternalError(context.Background(), "convert from string to the system variable set type failed")
+	errorConvertFromStringToNullFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable null type failed")
 )
 
 func errorSystemVariableDoesNotExist() string { return "the system variable does not exist" }
@@ -92,6 +99,9 @@ type SystemVariableType interface {
 
 	// Zero gets the zero value for the type
 	Zero() interface{}
+
+	// Convert the value from string to another value of the type
+	ConvertFromString(value string) (interface{}, error)
 }
 
 var _ SystemVariableType = SystemVariableBoolType{}
@@ -127,6 +137,13 @@ func (svnt SystemVariableNullType) MysqlType() defines.MysqlType {
 
 func (svnt SystemVariableNullType) Zero() interface{} {
 	return nil
+}
+
+func (svnt SystemVariableNullType) ConvertFromString(value string) (interface{}, error) {
+	if len(value) != 0 {
+		return nil, errorConvertFromStringToNullFailed
+	}
+	return nil, nil
 }
 
 type SystemVariableBoolType struct {
@@ -225,6 +242,17 @@ func (svbt SystemVariableBoolType) Zero() interface{} {
 	return int8(0)
 }
 
+func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{}, error) {
+	convertVal, err := strconv.ParseInt(value, 10, 8)
+	if err != nil {
+		return nil, errorConvertFromStringToBoolFailed
+	}
+	if convertVal != 1 && convertVal != 0 {
+		return nil, errorConvertFromStringToBoolFailed
+	}
+	return int8(convertVal), nil
+}
+
 type SystemVariableIntType struct {
 	name    string
 	minimum int64
@@ -305,6 +333,14 @@ func (svit SystemVariableIntType) Zero() interface{} {
 	return int64(0)
 }
 
+func (svit SystemVariableIntType) ConvertFromString(value string) (interface{}, error) {
+	convertVal, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return nil, errorConvertFromStringToIntFailed
+	}
+	return convertVal, nil
+}
+
 type SystemVariableUintType struct {
 	name    string
 	minimum uint64
@@ -380,6 +416,14 @@ func (svut SystemVariableUintType) Zero() interface{} {
 	return uint64(0)
 }
 
+func (svut SystemVariableUintType) ConvertFromString(value string) (interface{}, error) {
+	convertVal, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return nil, errorConvertFromStringToUintFailed
+	}
+	return convertVal, nil
+}
+
 type SystemVariableDoubleType struct {
 	// Unused
 	// name    string
@@ -438,6 +482,14 @@ func (svdt SystemVariableDoubleType) MysqlType() defines.MysqlType {
 
 func (svdt SystemVariableDoubleType) Zero() interface{} {
 	return float64(0)
+}
+
+func (svdt SystemVariableDoubleType) ConvertFromString(value string) (interface{}, error) {
+	convertVal, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return nil, errorConvertFromStringToDoubleFailed
+	}
+	return convertVal, nil
 }
 
 var (
@@ -532,6 +584,15 @@ func (svet SystemVariableEnumType) MysqlType() defines.MysqlType {
 
 func (svet SystemVariableEnumType) Zero() interface{} {
 	return ""
+}
+
+func (svet SystemVariableEnumType) ConvertFromString(value string) (interface{}, error) {
+	lowerName := strings.ToLower(value)
+	if val, ok := svet.tagName2Id[lowerName]; !ok {
+		return nil, errorConvertFromStringToEnumFailed
+	} else {
+		return val, nil
+	}
 }
 
 const (
@@ -694,6 +755,14 @@ func (svst SystemVariableSetType) Zero() interface{} {
 	return ""
 }
 
+func (svst SystemVariableSetType) ConvertFromString(value string) (interface{}, error) {
+	bits, err := svst.string2bits(value)
+	if err != nil {
+		return nil, errorConvertFromStringToSetFailed
+	}
+	return svst.bits2string(bits)
+}
+
 func InitSystemVariableSetType(name string, values ...string) SystemVariableSetType {
 	if len(values) == 0 {
 		panic(errorValuesOfSetIsEmpty)
@@ -760,6 +829,10 @@ func (svst SystemVariableStringType) MysqlType() defines.MysqlType {
 
 func (svst SystemVariableStringType) Zero() interface{} {
 	return ""
+}
+
+func (svst SystemVariableStringType) ConvertFromString(value string) (interface{}, error) {
+	return value, nil
 }
 
 type SystemVariable struct {
@@ -1281,7 +1354,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("net_buffer_length", 1024, 1048576, false),
-		Default:           16384,
+		Default:           int64(16384),
 	},
 }
 

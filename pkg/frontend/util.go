@@ -434,12 +434,6 @@ func logErrorf(info string, msg string, fields ...interface{}) {
 	logutil.Errorf(msg+" %s", fields...)
 }
 
-func isInvalidConfigInput(config string) bool {
-	// first verify if the input string can parse as a josn type data
-	_, err := types.ParseStringToByteJson(config)
-	return err != nil
-}
-
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
 func isCmdFieldListSql(sql string) bool {
 	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
@@ -600,4 +594,19 @@ func rowsetDataToVector(
 	}
 
 	return nil
+}
+
+func getVariableValue(varDefault interface{}) string {
+	switch val := varDefault.(type) {
+	case int64:
+		return fmt.Sprintf("%d", val)
+	case uint64:
+		return fmt.Sprintf("%d", val)
+	case int8:
+		return fmt.Sprintf("%d", val)
+	case string:
+		return val
+	default:
+		return ""
+	}
 }
