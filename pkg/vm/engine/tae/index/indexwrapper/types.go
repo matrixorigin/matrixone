@@ -12,23 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package index
+package indexwrapper
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-var (
-	ErrNotFound  = moerr.NewInternalErrorNoCtx("tae index: key not found")
-	ErrDuplicate = moerr.NewInternalErrorNoCtx("tae index: key duplicate")
-)
-
-type SecondaryIndex interface {
-	Insert(key []byte, offset uint32) (err error)
-	BatchInsert(keys containers.Vector, offset, length int, startRow uint32) (err error)
-	Delete(key any) (old uint32, err error)
-	Search(key []byte) ([]uint32, error)
-	String() string
-	Size() int
+func TranslateError(err error) error {
+	if err == nil {
+		return err
+	}
+	if err == index.ErrDuplicate {
+		return moerr.GetOkExpectedDup()
+	}
+	if err == index.ErrNotFound {
+		return moerr.NewNotFoundNoCtx()
+	}
+	return err
 }
