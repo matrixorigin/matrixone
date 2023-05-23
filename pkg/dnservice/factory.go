@@ -160,6 +160,6 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		logtailServerAddr,
 		logtailServerCfg,
 		options.LogstoreType(s.cfg.Txn.Storage.LogBackend),
-		s.cfg.Txn.EnablePKDedupSkipSnapshot,
+		s.cfg.Txn.IncrementalDedup,
 	)
 }

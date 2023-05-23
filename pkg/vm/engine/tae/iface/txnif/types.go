@@ -50,7 +50,7 @@ type TxnReader interface {
 	RUnlock()
 	IsReplay() bool
 	Is2PC() bool
-	GetPKDedupSkip() PKDedupSkipScope
+	GetDedupType() DedupType
 	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
@@ -108,7 +108,7 @@ type TxnChanger interface {
 	Commit() error
 	Rollback() error
 	SetCommitTS(cts types.TS) error
-	SetPKDedupSkip(skip PKDedupSkipScope)
+	SetDedupType(skip DedupType)
 	SetParticipants(ids []uint64) error
 	SetError(error)
 

@@ -802,16 +802,16 @@ func (h *Handle) HandleWrite(
 		return
 	}
 	switch req.PkCheck {
-	case db.SkipNone:
-		txn.SetPKDedupSkip(txnif.PKDedupSkipNone)
-	case db.SkipSnapshot:
-		if h.db.Opts.EnablePKDedupSkipSnapshot {
-			txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+	case db.FullDedup:
+		txn.SetDedupType(txnif.FullDedup)
+	case db.IncrementalDedup:
+		if h.db.Opts.IncrementalDedup {
+			txn.SetDedupType(txnif.IncrementalDedup)
 		} else {
-			txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+			txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 		}
-	case db.SkipWorkSpace:
-		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+	case db.FullSkipWorkspaceDedup:
+		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",

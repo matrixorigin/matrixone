@@ -178,11 +178,11 @@ const (
 type PKCheckType int32
 
 const (
-	//SkipSnapshot do not check uniqueness of PK before txn's snapshot TS.
-	SkipSnapshot PKCheckType = 0
-	//SkipWorkSpace do not check uniqueness of PK against txn's workspace.
-	SkipWorkSpace PKCheckType = 1
-	SkipNone      PKCheckType = 2
+	//IncrementalDedup do not check uniqueness of PK before txn's snapshot TS.
+	IncrementalDedup PKCheckType = 0
+	//FullSkipWorkspaceDedup do not check uniqueness of PK against txn's workspace.
+	FullSkipWorkspaceDedup PKCheckType = 1
+	FullDedup              PKCheckType = 2
 )
 
 type LocationKey struct{}
@@ -196,9 +196,10 @@ type WriteReq struct {
 	TableName    string
 	Schema       *catalog2.Schema
 	Batch        *batch.Batch
-	//[SkipSnapshot|SkipWorkSpace|SkipNone], default is SkipSnapshot
-	//SkipSnapshot do not check uniqueness of PK before txn's snapshot TS.
-	//SkipWorkSpace do not check uniqueness of PK against txn's workspace.
+	//[IncrementalDedup|FullSkipWorkspaceDedup|FullDedup], default is IncrementalDedup.
+	//If incremental-dedup in dn.toml is false, IncrementalDedup will be treated as FullSkipWorkspaceDedup.
+	//IncrementalDedup do not check uniqueness of PK before txn's snapshot TS.
+	//FullSkipWorkspaceDedup do not check uniqueness of PK against txn's workspace.
 	PkCheck PKCheckType
 	//S3 object file name
 	FileName string

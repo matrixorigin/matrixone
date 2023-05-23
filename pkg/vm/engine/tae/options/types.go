@@ -73,7 +73,7 @@ type Options struct {
 
 	TransferTableTTL time.Duration
 
-	EnablePKDedupSkipSnapshot bool
+	IncrementalDedup bool
 
 	Clock     clock.Clock
 	Fs        fileservice.FileService

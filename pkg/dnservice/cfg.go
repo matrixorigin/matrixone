@@ -120,10 +120,10 @@ type Config struct {
 		// roll back the transaction.
 		ZombieTimeout toml.Duration `toml:"zombie-timeout"`
 
-		// If EnablePKDedupSkipSnapshot is true, it will enable the PK dedup skip snapshot feature.
+		// If IncrementalDedup is true, it will enable the incremental dedup feature.
 		// If PK dedup skip snapshot feature is disable,
-		// SkipSnapshot will be treated as SkipWorkSpace.
-		EnablePKDedupSkipSnapshot bool `toml:"enable-PK-dedup-skip-snapshot"`
+		// IncrementalDedup will be treated as FullSkipWorkspaceDedup.
+		IncrementalDedup bool `toml:"incremental-dedup"`
 
 		// Storage txn storage config
 		Storage struct {
