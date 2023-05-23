@@ -178,9 +178,11 @@ const (
 type PKCheckType int32
 
 const (
-	//PKCheckDisable do not check uniqueness of PK against txn's workspace.
-	PKCheckDisable PKCheckType = 0
-	PKCheckEnable  PKCheckType = 1
+	//PKDedupSkipSnapshot do not check uniqueness of PK before txn's snapshot TS.
+	PKDedupSkipSnapshot PKCheckType = 0
+	//PKDedupSkipWorkSpace do not check uniqueness of PK against txn's workspace.
+	PKDedupSkipWorkSpace PKCheckType = 1
+	PKDedupSkipNone      PKCheckType = 2
 )
 
 type LocationKey struct{}

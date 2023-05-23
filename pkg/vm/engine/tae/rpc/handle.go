@@ -801,7 +801,12 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return
 	}
-	if req.PkCheck == db.PKCheckDisable {
+	switch req.PkCheck {
+	case db.PKDedupSkipNone:
+		txn.SetPKDedupSkip(txnif.PKDedupSkipNone)
+	case db.PKDedupSkipSnapshot:
+		txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+	case db.PKDedupSkipWorkSpace:
 		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
 	}
 	common.DoIfDebugEnabled(func() {
