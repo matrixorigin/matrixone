@@ -65,11 +65,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 			common.AnyField("cost", time.Since(totalTime)),
 			common.AnyField("err", err))
 	}()
-	prefCounterSets := opts.Ctx.Value(perfcounter.CtxKeyCounters).(perfcounter.CounterSets)
-	var prefCounterSet *perfcounter.CounterSet
-	for set := range prefCounterSets {
-		prefCounterSet = set
-	}
+
 	opts = opts.FillDefaults(dirname)
 
 	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
@@ -120,7 +116,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TxnMgr.Start()
 	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
-		prefCounterSet,
+		opts.Ctx,
 		db.Fs,
 		db.Catalog,
 		db.Scheduler,
@@ -164,7 +160,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	db.DiskCleaner = gc2.NewDiskCleaner(prefCounterSet, db.Fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, db.Fs, db.BGCheckpointRunner, db.Catalog)
 	db.DiskCleaner.Start()
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {

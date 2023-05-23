@@ -44,8 +44,8 @@ const MinMergeCount = 20
 // and provides "JobFactory" to let tae notify itself
 // to perform a gc
 type DiskCleaner struct {
-	fs          *objectio.ObjectFS
-	prefCounter *perfcounter.CounterSet
+	fs  *objectio.ObjectFS
+	ctx context.Context
 
 	// ckpClient is used to get the instance of the specified checkpoint
 	ckpClient checkpoint.RunnerReader
@@ -98,16 +98,16 @@ type DiskCleaner struct {
 }
 
 func NewDiskCleaner(
-	prefCounter *perfcounter.CounterSet,
+	ctx context.Context,
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.RunnerReader,
 	catalog *catalog.Catalog,
 ) *DiskCleaner {
 	cleaner := &DiskCleaner{
-		prefCounter: prefCounter,
-		fs:          fs,
-		ckpClient:   ckpClient,
-		catalog:     catalog,
+		ctx:       ctx,
+		fs:        fs,
+		ckpClient: ckpClient,
+		catalog:   catalog,
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
