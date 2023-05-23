@@ -17,14 +17,15 @@ package function
 import (
 	"bytes"
 	"fmt"
+	"regexp"
+	"unicode/utf8"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"regexp"
-	"unicode/utf8"
-	"unsafe"
 )
 
 const (
@@ -724,7 +725,7 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, 
 		return string(r[:w])
 	}
 	convert := func(expr []byte) string {
-		return fmt.Sprintf("^(?s:%s)$", replace(*(*string)(unsafe.Pointer(&expr))))
+		return fmt.Sprintf("^(?s:%s)$", replace(util.UnsafeBytesToString(expr)))
 	}
 
 	realPat := convert(pat)

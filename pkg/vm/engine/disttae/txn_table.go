@@ -305,6 +305,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges []
 	return
 }
 
+// XXX: See comment in EncodeBlockInfo
+// Mauybe ranges should be []BlockInfo, not *[][]byte
+//
 // this function is to filter out the blocks to be read and marshal them into a byte array
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
@@ -736,9 +739,10 @@ func (tbl *txnTable) compaction() error {
 	if err != nil {
 		return err
 	}
-
 	var deletedIDs []*types.Blockid
-	defer tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
+	defer func() {
+		tbl.db.txn.deletedBlocks.removeBlockDeletedInfos(deletedIDs)
+	}()
 	tbl.db.txn.deletedBlocks.iter(func(id *types.Blockid, deleteOffsets []int64) bool {
 		pos := tbl.db.txn.cnBlkId_Pos[*id]
 		// just do compaction for current txnTable
@@ -1377,26 +1381,11 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 		tableId = tbl.oldTableId
 	}
 
-	if tbl.db.txn.engine.UsePushModelOrNot() {
-		if err := tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
-			return err
-		}
-		if err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
-			return
-		}
-	} else {
-		if err = tbl.db.txn.engine.UpdateOfPull(
-			ctx,
-			tbl.db.txn.dnStores[:1],
-			tbl,
-			tbl.db.txn.op,
-			tbl.primaryIdx,
-			tbl.db.databaseId,
-			tableId,
-			tbl.db.txn.meta.SnapshotTS,
-		); err != nil {
-			return
-		}
+	if err = tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+		return
+	}
+	if err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
+		return
 	}
 
 	tbl.logtailUpdated = true

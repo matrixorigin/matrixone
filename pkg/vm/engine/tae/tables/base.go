@@ -140,7 +140,7 @@ func (blk *baseBlock) FillInMemoryDeletesLocked(
 	view *model.BaseView,
 	rwlocker *sync.RWMutex) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
-	n, err := chain.CollectDeletesLocked(txn, false, rwlocker)
+	n, err := chain.CollectDeletesLocked(txn, rwlocker)
 	if err != nil {
 		return
 	}
@@ -464,7 +464,7 @@ func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 	blk.RLock()
 	defer blk.RUnlock()
 	deleteChain := blk.mvcc.GetDeleteChain()
-	view.DeleteMask, view.DeleteLogIndexes, err =
+	view.DeleteMask, err =
 		deleteChain.CollectDeletesInRange(startTs, endTs, blk.RWMutex)
 	return
 }

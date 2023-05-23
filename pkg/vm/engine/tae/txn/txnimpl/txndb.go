@@ -399,7 +399,7 @@ func (db *txnDB) NeedRollback() bool {
 }
 func (db *txnDB) ApplyRollback() (err error) {
 	if db.createEntry != nil {
-		if err = db.createEntry.ApplyRollback(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.createEntry.ApplyRollback(); err != nil {
 			return
 		}
 	}
@@ -409,7 +409,7 @@ func (db *txnDB) ApplyRollback() (err error) {
 		}
 	}
 	if db.dropEntry != nil {
-		if err = db.dropEntry.ApplyRollback(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.dropEntry.ApplyRollback(); err != nil {
 			return
 		}
 	}
@@ -424,7 +424,7 @@ func (db *txnDB) WaitPrepared() (err error) {
 }
 func (db *txnDB) Apply1PCCommit() (err error) {
 	if db.createEntry != nil && db.createEntry.Is1PC() {
-		if err = db.createEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.createEntry.ApplyCommit(); err != nil {
 			return
 		}
 	}
@@ -434,7 +434,7 @@ func (db *txnDB) Apply1PCCommit() (err error) {
 		}
 	}
 	if db.dropEntry != nil && db.dropEntry.Is1PC() {
-		if err = db.dropEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.dropEntry.ApplyCommit(); err != nil {
 			return
 		}
 	}
@@ -443,7 +443,7 @@ func (db *txnDB) Apply1PCCommit() (err error) {
 func (db *txnDB) ApplyCommit() (err error) {
 	now := time.Now()
 	if db.createEntry != nil && !db.createEntry.Is1PC() {
-		if err = db.createEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.createEntry.ApplyCommit(); err != nil {
 			return
 		}
 	}
@@ -453,7 +453,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 		}
 	}
 	if db.dropEntry != nil && !db.dropEntry.Is1PC() {
-		if err = db.dropEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.dropEntry.ApplyCommit(); err != nil {
 			return
 		}
 	}

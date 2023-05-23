@@ -70,18 +70,14 @@ func (s *service) initDistributedTAE(
 		hakeeper,
 	)
 
-	// log tail client to subscribe table and receive table log.
-	usePushModel := s.cfg.TurnOnPushModel
+	// set up log tail client to subscribe table and receive table log.
 	cnEngine := pu.StorageEngine.(*disttae.Engine)
-	cnEngine.SetPushModelFlag(usePushModel)
-	if usePushModel {
-		logutil.Info("cn turn push model on.")
-		err = cnEngine.InitLogTailPushModel(
-			ctx,
-			s.timestampWaiter)
-		if err != nil {
-			return err
-		}
+	logutil.Info("CN node running on push model.")
+	err = cnEngine.InitLogTailPushModel(
+		ctx,
+		s.timestampWaiter)
+	if err != nil {
+		return err
 	}
 
 	return nil

@@ -151,6 +151,16 @@ func BenchmarkGroup(b *testing.B) {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Aggregate) groupTestCase {
+	for _, expr := range exprs {
+		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
+			idx := col.Col.ColPos
+			expr.Typ = &plan.Type{
+				Id:    int32(ts[idx].Oid),
+				Width: ts[idx].Width,
+				Scale: ts[idx].Scale,
+			}
+		}
+	}
 	return groupTestCase{
 		flgs: flgs,
 		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),

@@ -942,6 +942,7 @@ func constructDeleteDispatchAndLocal(
 	rs[currentIdx].PreScopes = append(rs[currentIdx].PreScopes, ss[currentIdx])
 	rs[currentIdx].Proc = process.NewWithAnalyze(c.proc, c.ctx, len(ss), c.anal.analInfos)
 	rs[currentIdx].RemoteReceivRegInfos = make([]RemoteReceivRegInfo, 0, len(ss)-1)
+
 	// use arg.RemoteRegs to know the uuid,
 	// use this uuid to register Server.uuidCsChanMap (uuid,proc.DispatchNotifyCh),
 	// So how to use this?
@@ -985,9 +986,11 @@ func constructDeleteDispatchAndLocal(
 	} else {
 		arg.FuncId = dispatch.SendToAllFunc
 	}
+
 	arg.LocalRegs = append(
 		arg.LocalRegs,
 		rs[currentIdx].Proc.Reg.MergeReceivers[currentIdx])
+
 	ss[currentIdx].appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
 		Arg: arg,
