@@ -356,9 +356,10 @@ message ProcessInfo {
   string id = 1;
   ProcessLimitation lim = 2;
   int64 unix_time = 3;
-  string snapshot = 4;
-  SessionInfo session_info = 5;
-  repeated int32 analysis_node_list = 6;
+  uint32 account_id = 4;
+  string snapshot = 5;
+  SessionInfo session_info = 6;
+  repeated int32 analysis_node_list = 7;
 }
 
 message SessionInfo {
