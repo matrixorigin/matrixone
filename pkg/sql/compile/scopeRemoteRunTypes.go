@@ -61,6 +61,7 @@ type processHelper struct {
 	id               string
 	lim              process.Limitation
 	unixTime         int64
+	accountId        uint32
 	txnOperator      client.TxnOperator
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
@@ -283,7 +284,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		addr: receiver.cnInformation.cnAddr,
 	}
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
-	c.ctx = c.proc.Ctx
+	c.ctx = context.WithValue(c.proc.Ctx, defines.TenantIDKey{}, pHelper.accountId)
 
 	c.fill = func(_ any, b *batch.Batch) error {
 		return receiver.sendBatch(b)
@@ -395,6 +396,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		id:               procInfo.Id,
 		lim:              convertToProcessLimitation(procInfo.Lim),
 		unixTime:         procInfo.UnixTime,
+		accountId:        procInfo.AccountId,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
 	}
