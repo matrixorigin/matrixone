@@ -32,7 +32,7 @@ func TestPublisher(t *testing.T) {
 		for i := 1; i <= eventNum; i++ {
 			from, to := mockTimestamp(int64(i-1), 0), mockTimestamp(int64(i), 0)
 			table := mockTable(uint64(i), uint64(i), uint64(i))
-			err := event.NotifyLogtail(from, to, mockLogtail(table, to))
+			err := event.NotifyLogtail(from, to, nil, mockLogtail(table, to))
 			require.NoError(t, err)
 		}
 	}()

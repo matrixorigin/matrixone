@@ -141,7 +141,7 @@ func (m *logtailer) RangeLogtail(
 	return tails, nil
 }
 
-func (m *logtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error) {
+func (m *logtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error) {
 }
 
 func (m *logtailer) TableLogtail(
@@ -220,7 +220,7 @@ func startLogtailServer(
 				tails = append(tails, mockLogtail(table, now))
 			}
 
-			err := logtailServer.NotifyLogtail(from, now, tails...)
+			err := logtailServer.NotifyLogtail(from, now, nil, tails...)
 			if err != nil {
 				return
 			}

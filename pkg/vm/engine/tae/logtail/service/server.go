@@ -499,7 +499,7 @@ func (s *LogtailServer) Start() error {
 
 // NotifyLogtail provides incremental logtail for server.
 func (s *LogtailServer) NotifyLogtail(
-	from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
+	from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail,
 ) error {
-	return s.event.NotifyLogtail(from, to, tails...)
+	return s.event.NotifyLogtail(from, to, closeCB, tails...)
 }

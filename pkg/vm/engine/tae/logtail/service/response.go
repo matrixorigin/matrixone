@@ -26,6 +26,7 @@ import (
 // LogtailResponse wraps logtail.LogtailResponse.
 type LogtailResponse struct {
 	logtail.LogtailResponse
+	closeCB func()
 }
 
 var _ morpc.Message = (*LogtailResponse)(nil)
@@ -37,6 +38,14 @@ func (r *LogtailResponse) SetID(id uint64) {
 func (r *LogtailResponse) GetID() uint64 {
 	return r.ResponseId
 }
+
+func (r *LogtailResponse) Reset() {
+	r.LogtailResponse.Reset()
+	if r.closeCB != nil {
+		r.closeCB()
+	}
+}
+
 func (r *LogtailResponse) DebugString() string {
 	return ""
 }
