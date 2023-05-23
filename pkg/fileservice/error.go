@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,25 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package functionUtil
+package fileservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/util"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"errors"
+	"io"
 )
 
-func ConvertD64ToD128(v types.Decimal64) types.Decimal128 {
-	x := types.Decimal128{B0_63: uint64(v), B64_127: 0}
-	if v>>63 != 0 {
-		x.B64_127 = ^x.B64_127
+func isRetryableError(err error) bool {
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
 	}
-	return x
-}
-
-func QuickStrToBytes(s string) []byte {
-	return util.UnsafeStringToBytes(s)
-}
-
-func QuickBytesToStr(data []byte) string {
-	return util.UnsafeBytesToString(data)
+	switch err.Error() {
+	case "connection reset by peer",
+		"connection timed out":
+		return true
+	}
+	return false
 }

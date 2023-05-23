@@ -265,13 +265,14 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 
 	// merge sort the sort key
-	node, err := common.DefaultAllocator.Alloc(length * 4)
+	allocSz := length * 4
+	node, err := common.DefaultAllocator.Alloc(allocSz)
 	if err != nil {
 		panic(err)
 	}
-	buf := node[:length]
 	defer common.DefaultAllocator.Free(node)
-	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
+	sortedIdx := unsafe.Slice((*uint32)(unsafe.Pointer(&node[0])), length)
+
 	vecs, mapping := task.mergeColumn(sortVecs, &sortedIdx, true, rows, to, schema.HasSortKey())
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)

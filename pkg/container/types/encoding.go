@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
 
@@ -287,10 +288,10 @@ func DecodeStringSlice(data []byte) []string {
 	for i := int32(0); i < cnt; i++ {
 		if i == cnt-1 {
 			tm = data[os[i]:]
-			vs[i] = *(*string)(unsafe.Pointer(&tm))
+			vs[i] = util.UnsafeBytesToString(tm)
 		} else {
 			tm = data[os[i]:os[i+1]]
-			vs[i] = *(*string)(unsafe.Pointer(&tm))
+			vs[i] = util.UnsafeBytesToString(tm)
 		}
 	}
 	return vs

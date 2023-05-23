@@ -14,11 +14,6 @@
 
 package wal
 
-func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry, err error) {
-	e, err = driver.impl.FuzzyCheckpoint(GroupPrepare, indexes)
-	return
-}
-
 func (driver *walDriver) RangeCheckpoint(start, end uint64) (e LogEntry, err error) {
 	e, err = driver.impl.RangeCheckpoint(GroupPrepare, start, end)
 	return

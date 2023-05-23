@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type MVCCChain[T txnif.MVCCNode[T]] struct {
@@ -315,31 +314,23 @@ func (be *MVCCChain[T]) IsEmpty() bool {
 	return head == nil
 }
 
-func (be *MVCCChain[T]) ApplyRollback(index *wal.Index) error {
+func (be *MVCCChain[T]) ApplyRollback() error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetLatestNodeLocked().ApplyRollback(index)
+	return be.GetLatestNodeLocked().ApplyRollback()
 
 }
 
-func (be *MVCCChain[T]) ApplyCommit(index *wal.Index) error {
+func (be *MVCCChain[T]) ApplyCommit() error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetLatestNodeLocked().ApplyCommit(index)
+	return be.GetLatestNodeLocked().ApplyCommit()
 }
 
-func (be *MVCCChain[T]) Apply1PCCommit(index *wal.Index) error {
+func (be *MVCCChain[T]) Apply1PCCommit() error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetLatestNodeLocked().ApplyCommit(index)
-}
-
-func (be *MVCCChain[T]) GetLogIndex() *wal.Index {
-	node := be.GetLatestNodeLocked()
-	if node.IsNil() {
-		return nil
-	}
-	return node.GetLogIndex()
+	return be.GetLatestNodeLocked().ApplyCommit()
 }
 
 func (be *MVCCChain[T]) CloneLatestNode() (*MVCCChain[T], T) {
