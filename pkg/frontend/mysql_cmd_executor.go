@@ -639,6 +639,10 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 				if err != nil {
 					return err
 				}
+				err = doSetGlobalSystemVariable(ctx, ses, name, value)
+				if err != nil {
+					return err
+				}
 			} else {
 				err = ses.SetSessionVar(name, value)
 				if err != nil {
@@ -808,9 +812,9 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 
 	var sysVars map[string]interface{}
 	if sv.Global {
-		sysVars = make(map[string]interface{})
-		for k, v := range gSysVarsDefs {
-			sysVars[k] = v.Default
+		sysVars, err = doGetGlobalSystemVariable(ses.GetRequestContext(), ses)
+		if err != nil {
+			return err
 		}
 	} else {
 		sysVars = ses.CopyAllSessionVars()
@@ -1528,7 +1532,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	var ret *plan2.Plan
 	var err error
 	if ses != nil {
-		ses.accountId = getAccountId(requestCtx)
+		ses.accountId = defines.GetAccountId(requestCtx)
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {

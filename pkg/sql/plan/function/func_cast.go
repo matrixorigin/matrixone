@@ -26,6 +26,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -4202,8 +4203,8 @@ func appendNulls[T types.FixedSizeT](result vector.FunctionResultWrapper, length
 
 // convertByteSliceToString is just a temp method.
 func convertByteSliceToString(v []byte) string {
-	// s := *(*string)(unsafe.Pointer(&v))
-	return string(v)
+	return util.UnsafeBytesToString(v)
+	// return string(v)
 }
 
 // shorten the string to the one with no more than 101 characters.

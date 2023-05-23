@@ -156,7 +156,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 					return nil, err
 				}
 			}
-			bat, err = p.s3BlockReader.LoadColumns(context.Background(), p.getSeqnums(colNames), p.getTyps(colNames), location.ID(), p.procMPool)
+			bat, err = p.s3BlockReader.LoadColumns(ctx, p.getSeqnums(colNames), p.getTyps(colNames), location.ID(), p.procMPool)
 			if err != nil {
 				return nil, err
 			}
