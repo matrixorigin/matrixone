@@ -156,46 +156,46 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 		return GetOffsetWithFunc(vs, v.(bool), CompareBool, skipmask)
 	case types.T_int8:
 		vs := vector.MustFixedCol[int8](vec)
-		return GetOffsetOfOrdered[int8](vs, v.(int8), skipmask)
+		return GetOffsetOfOrdered(vs, v.(int8), skipmask)
 	case types.T_int16:
 		vs := vector.MustFixedCol[int16](vec)
-		return GetOffsetOfOrdered[int16](vs, v.(int16), skipmask)
+		return GetOffsetOfOrdered(vs, v.(int16), skipmask)
 	case types.T_int32:
 		vs := vector.MustFixedCol[int32](vec)
-		return GetOffsetOfOrdered[int32](vs, v.(int32), skipmask)
+		return GetOffsetOfOrdered(vs, v.(int32), skipmask)
 	case types.T_int64:
 		vs := vector.MustFixedCol[int64](vec)
-		return GetOffsetOfOrdered[int64](vs, v.(int64), skipmask)
+		return GetOffsetOfOrdered(vs, v.(int64), skipmask)
 	case types.T_uint8:
 		vs := vector.MustFixedCol[uint8](vec)
-		return GetOffsetOfOrdered[uint8](vs, v.(uint8), skipmask)
+		return GetOffsetOfOrdered(vs, v.(uint8), skipmask)
 	case types.T_uint16:
 		vs := vector.MustFixedCol[uint16](vec)
-		return GetOffsetOfOrdered[uint16](vs, v.(uint16), skipmask)
+		return GetOffsetOfOrdered(vs, v.(uint16), skipmask)
 	case types.T_uint32:
 		vs := vector.MustFixedCol[uint32](vec)
-		return GetOffsetOfOrdered[uint32](vs, v.(uint32), skipmask)
+		return GetOffsetOfOrdered(vs, v.(uint32), skipmask)
 	case types.T_uint64:
 		vs := vector.MustFixedCol[uint64](vec)
-		return GetOffsetOfOrdered[uint64](vs, v.(uint64), skipmask)
+		return GetOffsetOfOrdered(vs, v.(uint64), skipmask)
 	case types.T_float32:
 		vs := vector.MustFixedCol[float32](vec)
-		return GetOffsetOfOrdered[float32](vs, v.(float32), skipmask)
+		return GetOffsetOfOrdered(vs, v.(float32), skipmask)
 	case types.T_float64:
 		vs := vector.MustFixedCol[float64](vec)
-		return GetOffsetOfOrdered[float64](vs, v.(float64), skipmask)
+		return GetOffsetOfOrdered(vs, v.(float64), skipmask)
 	case types.T_date:
 		vs := vector.MustFixedCol[types.Date](vec)
-		return GetOffsetOfOrdered[types.Date](vs, v.(types.Date), skipmask)
+		return GetOffsetOfOrdered(vs, v.(types.Date), skipmask)
 	case types.T_time:
 		vs := vector.MustFixedCol[types.Time](vec)
-		return GetOffsetOfOrdered[types.Time](vs, v.(types.Time), skipmask)
+		return GetOffsetOfOrdered(vs, v.(types.Time), skipmask)
 	case types.T_datetime:
 		vs := vector.MustFixedCol[types.Datetime](vec)
-		return GetOffsetOfOrdered[types.Datetime](vs, v.(types.Datetime), skipmask)
+		return GetOffsetOfOrdered(vs, v.(types.Datetime), skipmask)
 	case types.T_timestamp:
 		vs := vector.MustFixedCol[types.Timestamp](vec)
-		return GetOffsetOfOrdered[types.Timestamp](vs, v.(types.Timestamp), skipmask)
+		return GetOffsetOfOrdered(vs, v.(types.Timestamp), skipmask)
 	case types.T_decimal64:
 		vs := vector.MustFixedCol[types.Decimal64](vec)
 		return GetOffsetWithFunc(

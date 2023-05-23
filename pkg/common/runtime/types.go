@@ -28,6 +28,8 @@ const (
 	LockService = "lock-service"
 	// CtlService ctl service
 	CtlService = "ctl-service"
+	// InternalSQLExecutor attr name for internal sql executor
+	InternalSQLExecutor = "internal-sql-executor"
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"
 	// TxnMode runtime default txn mode
