@@ -267,6 +267,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	// repetitive computation
 	handled := make(map[*batch.Batch]struct{})
 	for _, part := range parts {
+		// TODO: It might includ some deleted row size
 		iter := part.NewRowsIter(ts, nil, false)
 		for iter.Next() {
 			entry := iter.Entry()
@@ -278,7 +279,6 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			}
 			for i, s := range entry.Batch.Attrs {
 				if _, ok := neededColumnName[s]; ok {
-					// TODO: It might includ some deleted row size
 					ret += int64(entry.Batch.Vecs[i].Size())
 				}
 			}

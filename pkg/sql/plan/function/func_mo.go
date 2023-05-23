@@ -130,25 +130,11 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				return err
 			}
 
-			// we still get rows first,
 			rel.Ranges(ctx, nil)
-			rows, err := rel.Rows(ctx)
+			size, err := rel.Size(ctx, AllColumns)
 			if err != nil {
 				return err
 			}
-
-			// and get attributes, then multiply size.
-			// XXX THIS IS COMPLETELY WRONG.  Esp for types like varchar(10000)
-			// but each row just uses a few bytes.
-			attrs, err := rel.TableColumns(ctx)
-			if err != nil {
-				return err
-			}
-			size := int64(0)
-			for _, attr := range attrs {
-				size += rows * int64(attr.Type.TypeSize())
-			}
-
 			if err = rs.Append(size, false); err != nil {
 				return err
 			}
