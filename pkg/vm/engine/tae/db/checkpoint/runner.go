@@ -178,6 +178,8 @@ type runner struct {
 		checkpointQueueSize int
 	}
 
+	ctx context.Context
+
 	// logtail sourcer
 	source    logtail.Collector
 	catalog   *catalog.Catalog
@@ -214,6 +216,7 @@ type runner struct {
 }
 
 func NewRunner(
+	ctx context.Context,
 	fs *objectio.ObjectFS,
 	catalog *catalog.Catalog,
 	scheduler tasks.TaskScheduler,
@@ -221,6 +224,7 @@ func NewRunner(
 	wal wal.Driver,
 	opts ...Option) *runner {
 	r := &runner{
+		ctx:       ctx,
 		catalog:   catalog,
 		scheduler: scheduler,
 		source:    source,
@@ -447,7 +451,7 @@ func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	}
 
 	// TODO: checkpoint entry should maintain the location
-	_, err = writer.WriteEnd(context.Background())
+	_, err = writer.WriteEnd(r.ctx)
 	return
 }
 

@@ -37,6 +37,8 @@ type basicHAKeeperClient interface {
 	AllocateID(ctx context.Context) (uint64, error)
 	// AllocateIDByKey allocate a globally unique ID by key.
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
+	// AllocateIDByKey allocate a globally unique ID by key.
+	AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error)
 	// GetClusterDetails queries the HAKeeper and return CN and DN nodes that are
 	// known to the HAKeeper.
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
@@ -247,6 +249,13 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 
 // AllocateIDByKey implements the basicHAKeeperClient interface.
 func (c *managedHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return c.AllocateIDByKeyWithBatch(ctx, key, c.cfg.AllocateIDBatch)
+}
+
+func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
+	ctx context.Context,
+	key string,
+	batch uint64) (uint64, error) {
 	// empty key is used in shared allocated IDs.
 	if len(key) == 0 {
 		return 0, moerr.NewInternalError(ctx, "key should not be empty")
@@ -270,7 +279,7 @@ func (c *managedHAKeeperClient) AllocateIDByKey(ctx context.Context, key string)
 		if err := c.prepareClientLocked(ctx); err != nil {
 			return 0, err
 		}
-		firstID, err := c.mu.client.sendCNAllocateID(ctx, key, c.cfg.AllocateIDBatch)
+		firstID, err := c.mu.client.sendCNAllocateID(ctx, key, batch)
 		if err != nil {
 			c.resetClientLocked()
 		}
@@ -279,7 +288,7 @@ func (c *managedHAKeeperClient) AllocateIDByKey(ctx context.Context, key string)
 		}
 
 		allocIDs.nextID = firstID + 1
-		allocIDs.lastID = firstID + c.cfg.AllocateIDBatch - 1
+		allocIDs.lastID = firstID + batch - 1
 		c.mu.Unlock()
 		return firstID, err
 	}

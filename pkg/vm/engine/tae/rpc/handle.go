@@ -871,7 +871,7 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		//Appends a batch of data into table.
-		err = AppendDataToTable(tb, req.Batch)
+		err = AppendDataToTable(ctx, tb, req.Batch)
 		return
 	}
 	//handle delete

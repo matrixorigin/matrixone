@@ -425,7 +425,7 @@ func (z *Zonemap) Unmarshal(data []byte) error {
 
 type ModifyBlockMeta struct {
 	meta    catalog.BlockInfo
-	deletes []int
+	deletes []int64
 }
 
 type Columns []column

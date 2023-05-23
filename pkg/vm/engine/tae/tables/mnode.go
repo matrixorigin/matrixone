@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"context"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -79,16 +80,17 @@ func (node *memoryNode) close() {
 func (node *memoryNode) IsPersisted() bool { return false }
 
 func (node *memoryNode) BatchDedup(
+	ctx context.Context,
 	keys containers.Vector,
 	keysZM index.ZM,
 	skipFn func(row uint32) error,
 	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, keysZM, skipFn, bf)
+	return node.pkIndex.BatchDedup(ctx, keys, keysZM, skipFn, bf)
 }
 
-func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {
-	if err = node.pkIndex.Dedup(key, nil); err != nil {
+func (node *memoryNode) ContainsKey(ctx context.Context, key any) (ok bool, err error) {
+	if err = node.pkIndex.Dedup(ctx, key, nil); err != nil {
 		return
 	}
 	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
