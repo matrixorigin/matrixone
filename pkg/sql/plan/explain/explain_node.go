@@ -278,15 +278,6 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, filterInfo)
 	}
 
-	// Get Block Filter list info
-	if len(ndesc.Node.BlockFilterList) > 0 {
-		filterInfo, err := ndesc.GetBlockFilterConditionInfo(ctx, options)
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, filterInfo)
-	}
-
 	// Get Limit And Offset info
 	if ndesc.Node.Limit != nil {
 		buf := bytes.NewBuffer(make([]byte, 0, 160))
@@ -351,29 +342,6 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, optio
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		first := true
 		for _, v := range ndesc.Node.FilterList {
-			if !first {
-				buf.WriteString(", ")
-			}
-			first = false
-			err := describeExpr(ctx, v, options, buf)
-			if err != nil {
-				return "", err
-			}
-		}
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return "", moerr.NewNYI(ctx, "explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return "", moerr.NewNYI(ctx, "explain format dot")
-	}
-	return buf.String(), nil
-}
-
-func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 300))
-	buf.WriteString("Block Filter Cond: ")
-	if options.Format == EXPLAIN_FORMAT_TEXT {
-		first := true
-		for _, v := range ndesc.Node.BlockFilterList {
 			if !first {
 				buf.WriteString(", ")
 			}

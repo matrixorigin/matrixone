@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 const (
@@ -90,7 +89,7 @@ type TxnCmd struct {
 
 	// for replay
 	isLast bool
-	Idx    *wal.Index
+	Lsn    uint64
 }
 
 type TxnStateCmd struct {
