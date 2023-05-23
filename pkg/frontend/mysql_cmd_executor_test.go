@@ -763,7 +763,13 @@ func Test_handleShowVariables(t *testing.T) {
 		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -775,19 +781,43 @@ func Test_handleShowVariables(t *testing.T) {
 			t.Error(err)
 		}
 
+		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false, nil)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
+		tenant := &TenantInfo{
+			Tenant:   "sys",
+			TenantID: 0,
+			User:     DefaultTenantMoAdmin,
+		}
+		ses.SetTenantInfo(tenant)
 		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName("t")
 		mce := &MysqlCmdExecutor{}
-
 		mce.SetSession(ses)
 		proto.SetSession(ses)
 
-		sv := &tree.ShowVariables{Global: true}
+		sv := &tree.ShowVariables{Global: false}
+		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+		bh.init()
+
+		sql := getSystemVariablesWithAccount(0)
+		rows := [][]interface{}{
+			{"syspublications", ""},
+		}
+
+		bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
+		sv = &tree.ShowVariables{Global: true}
 		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
 	})
 }
