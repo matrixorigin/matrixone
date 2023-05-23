@@ -300,6 +300,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges []
 	return
 }
 
+// XXX: See comment in EncodeBlockInfo
+// Mauybe ranges should be []BlockInfo, not *[][]byte
+//
 // this function is to filter out the blocks to be read and marshal them into a byte array
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
