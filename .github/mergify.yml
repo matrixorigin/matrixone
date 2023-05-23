@@ -2,6 +2,12 @@ queue_rules:
   - name: default
     conditions: []
     checks_timeout: 4h
+    speculative_checks: 3
+    batch_size: 3
+    merge_bot_account: matrix-meow
+
+    
+
 
 pull_request_rules:
   - name: Automatic merge on approval
@@ -10,8 +16,6 @@ pull_request_rules:
       - "#changes-requested-reviews-by<=0"
       - "-label=do-not-merge/wip"
       - "check-success=UT Test on Ubuntu/x64"
-      - "check-success=e2e BVT Test on Linux/x64(LAUNCH, PULL, 1CN)"
-      - "check-success=Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PULL)"
       - "check-success=e2e BVT Test on Linux/x64(LAUNCH, PUSH, 1CN)"
       - "check-success=Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PROXY, PUSH)"
       # - "check-success=Multi-CN e2e BVT Test on Linux/x64(LAUNCH, PUSH)"
@@ -25,6 +29,8 @@ pull_request_rules:
       queue:
         name: default
         method: squash
+        merge_bot_account: matrix-meow
+        allow_merging_configuration_change: true
         commit_message_template: |
           {{ title }} (#{{ number }})
 
