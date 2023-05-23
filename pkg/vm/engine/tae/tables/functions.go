@@ -158,18 +158,18 @@ func dedupNABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 }
 
 func dedupNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, bool, int) error {
-	//vec, mask, def := parseNADedeupArgs(args...)
-	//vs := vector.MustFixedCol[T](vec)
+	vec, mask, def := parseNADedeupArgs(args...)
+	vs := vector.MustFixedCol[T](vec)
 	return func(v T, _ bool, row int) (err error) {
 		// logutil.Infof("row=%d,v=%v", row, v)
-		/*		if _, existed := compute.GetOffsetOfOrdered2(
-					vs,
-					v,
-					mask,
-				); existed {
-					entry := common.TypeStringValue(*vec.GetType(), any(v), false)
-					return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-				}*/
+		if _, existed := compute.GetOffsetOfOrdered(
+			vs,
+			v,
+			mask,
+		); existed {
+			entry := common.TypeStringValue(*vec.GetType(), any(v), false)
+			return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
+		}
 		return
 	}
 }
