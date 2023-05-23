@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -56,6 +57,7 @@ type TxnLogtailRespBuilder struct {
 	logtails *[]logtail.TableLogtail
 
 	batchToClose []*containers.Batch
+	insertBatch  *roaring.Bitmap
 }
 
 func NewTxnLogtailRespBuilder() *TxnLogtailRespBuilder {
@@ -64,12 +66,17 @@ func NewTxnLogtailRespBuilder() *TxnLogtailRespBuilder {
 		batches:      make([]*containers.Batch, batchTotalNum),
 		logtails:     &logtails,
 		batchToClose: make([]*containers.Batch, 0),
+		insertBatch:  roaring.New(),
 	}
 }
 
 func (b *TxnLogtailRespBuilder) Close() {
-	for _, bat := range b.batchToClose {
-		bat.Close()
+	for i, bat := range b.batchToClose {
+		if b.insertBatch.Contains(uint32(i)) {
+			b.closeInsertBatch(bat)
+		} else {
+			bat.Close()
+		}
 	}
 }
 
@@ -151,15 +158,22 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 		for len(mybat.Vecs) < 2+int(seqnum) {
 			mybat.AppendPlaceholder()
 		}
-		mybat.AddVector(src.Attrs[i], src.Vecs[i].TryConvertConst())
+		mybat.AddVector(src.Attrs[i], src.Vecs[i])
 	}
 
 	if b.batches[dataInsBatch] == nil {
 		b.batches[dataInsBatch] = mybat
 	} else {
 		b.batches[dataInsBatch].Extend(mybat)
-		mybat.Close()
+		b.closeInsertBatch(mybat)
 	}
+}
+
+// closeInsertBatch closes rowid and committs
+// Other vectors are closed in localsegment
+func (b *TxnLogtailRespBuilder) closeInsertBatch(bat *containers.Batch) {
+	bat.Vecs[0].Close()
+	bat.Vecs[1].Close()
 }
 
 func (b *TxnLogtailRespBuilder) visitDelete(deletes []uint32, prefix []byte) {
@@ -307,6 +321,7 @@ func (b *TxnLogtailRespBuilder) rotateTable(dbName, tableName string, dbid, tid 
 	}
 	b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, false)
 	if b.batches[dataInsBatch] != nil {
+		b.insertBatch.Add(uint32(len(b.batchToClose)))
 		b.batchToClose = append(b.batchToClose, b.batches[dataInsBatch])
 		b.batches[dataInsBatch] = nil
 	}
@@ -331,6 +346,9 @@ func (b *TxnLogtailRespBuilder) BuildResp() {
 	b.buildLogtailEntry(pkgcatalog.MO_DATABASE_ID, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_DATABASE, pkgcatalog.MO_CATALOG, dbDelBatch, true)
 	for i := range b.batches {
 		if b.batches[i] != nil {
+			if int8(i) == dataInsBatch {
+				b.insertBatch.Add(uint32(len(b.batchToClose)))
+			}
 			b.batchToClose = append(b.batchToClose, b.batches[i])
 			b.batches[i] = nil
 		}
