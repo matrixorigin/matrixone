@@ -2,11 +2,7 @@ FROM matrixorigin/tester:go1.20-jdk8
 
 WORKDIR /
 
-ENV https_proxy 'http://10.222.1.111:8080'
-
 RUN git clone https://github.com/matrixorigin/mo-tester.git && apt update && apt install -y mariadb-client
-
-ENV https_proxy ''
 
 COPY . /matrixone
 
