@@ -2,12 +2,6 @@ queue_rules:
   - name: default
     conditions: []
     checks_timeout: 4h
-    speculative_checks: 3
-    batch_size: 3
-    merge_bot_account: matrix-meow
-
-    
-
 
 pull_request_rules:
   - name: Automatic merge on approval
@@ -29,8 +23,6 @@ pull_request_rules:
       queue:
         name: default
         method: squash
-        merge_bot_account: matrix-meow
-        allow_merging_configuration_change: true
         commit_message_template: |
           {{ title }} (#{{ number }})
 
