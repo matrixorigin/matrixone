@@ -19,14 +19,13 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"math"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 func ParseFromString(s string) (ret ByteJson, err error) {
@@ -34,7 +33,7 @@ func ParseFromString(s string) (ret ByteJson, err error) {
 		err = moerr.NewInvalidInputNoCtx("json text %s", s)
 		return
 	}
-	data := string2Slice(s)
+	data := util.UnsafeStringToBytes(s)
 	ret, err = ParseFromByteSlice(data)
 	return
 }
@@ -261,15 +260,7 @@ func addJsonNumber(buf []byte, in json.Number) (TpCode, []byte, error) {
 	var tpCode TpCode
 	return tpCode, nil, moerr.NewInvalidInputNoCtx("json number %v", in)
 }
-func string2Slice(s string) []byte {
-	str := (*reflect.StringHeader)(unsafe.Pointer(&s))
-	var ret []byte
-	retPtr := (*reflect.SliceHeader)(unsafe.Pointer(&ret))
-	retPtr.Data = str.Data
-	retPtr.Len = str.Len
-	retPtr.Cap = str.Len
-	return ret
-}
+
 func calStrLen(buf []byte) (int, int) {
 	strLen, lenLen := uint64(buf[0]), 1
 	if strLen >= utf8.RuneSelf {
@@ -277,6 +268,7 @@ func calStrLen(buf []byte) (int, int) {
 	}
 	return int(strLen), lenLen
 }
+
 func isIdentifier(s string) bool {
 	if len(s) == 0 {
 		return false
@@ -366,11 +358,11 @@ func genIndexOrKey(pathStr string) ([]byte, []byte) {
 	if pathStr[len(pathStr)-1] == ']' {
 		// find last '['
 		idx := strings.LastIndex(pathStr, "[")
-		return string2Slice(pathStr[idx : len(pathStr)-1]), nil
+		return util.UnsafeStringToBytes(pathStr[idx : len(pathStr)-1]), nil
 	}
 	// find last '.'
 	idx := strings.LastIndex(pathStr, ".")
-	return nil, string2Slice(pathStr[idx+1:])
+	return nil, util.UnsafeStringToBytes(pathStr[idx+1:])
 }
 
 // for test

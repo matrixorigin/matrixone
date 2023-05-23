@@ -263,6 +263,7 @@ func getBytesFromPrimaryVectorForHash(
 		//panic("primary value vector should not contain nulls")
 	}
 	if vec.GetType().IsFixedLen() {
+		// WTF is this?   Fix later when vector is refactored.
 		// is slice
 		size := vec.GetType().TypeSize()
 		l := vec.Length() * size
