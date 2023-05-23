@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -624,7 +625,7 @@ func (r *Row) ToStrings() []string {
 		case types.T_uint64:
 			col[idx] = fmt.Sprintf("%d", uint64(r.Columns[idx].Integer))
 		case types.T_float64:
-			col[idx] = fmt.Sprintf("%.1f", r.Columns[idx].GetFloat64())
+			col[idx] = strconv.FormatFloat(r.Columns[idx].GetFloat64(), 'f', -1, 64)
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			switch r.Columns[idx].Type {
