@@ -152,17 +152,17 @@ func TestRow_ToStrings(t *testing.T) {
 		{
 			name:   "nil",
 			fields: fields{Table: dummyTable, prepare: func(r *Row) { r.Reset() }},
-			want:   []string{"", "0", "0.0"},
+			want:   []string{"", "0", "0"},
 		},
 		{
 			name: "nil",
 			fields: fields{Table: dummyTable,
 				prepare: func(r *Row) {
 					r.SetColumnVal(dummyStrColumn, StringField("0"))
-					r.SetColumnVal(dummyFloat64Column, Float64Field(1.1))
+					r.SetColumnVal(dummyFloat64Column, Float64Field(1.1234567))
 					r.SetColumnVal(dummyInt64Column, Int64Field(1))
 				}},
-			want: []string{"0", "1", "1.1"},
+			want: []string{"0", "1", "1.1234567"},
 		},
 	}
 	for _, tt := range tests {
