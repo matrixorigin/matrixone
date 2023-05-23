@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -89,6 +91,10 @@ func NewService(
 		},
 	}
 
+	if _, err = srv.getHAKeeperClient(); err != nil {
+		return nil, err
+	}
+
 	pu := config.NewParameterUnit(
 		&cfg.Frontend,
 		nil,
@@ -96,7 +102,7 @@ func NewService(
 		engine.Nodes{engine.Node{
 			Addr: cfg.ServiceAddress,
 		}})
-
+	pu.HAKeeperClient = srv._hakeeperClient
 	cfg.Frontend.SetDefaultValues()
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 	frontend.InitServerVersion(pu.SV.MoVersion)
@@ -106,9 +112,6 @@ func NewService(
 
 	srv.pu = pu
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
-		return nil, err
-	}
-	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
 
@@ -226,6 +229,7 @@ func (s *service) stopRPCs() error {
 			return err
 		}
 	}
+	s.timestampWaiter.Close()
 	return nil
 }
 
@@ -354,7 +358,6 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 			return
 		}
 		s._hakeeperClient = client
-		s.pu.HAKeeperClient = client
 		s.initClusterService()
 		s.initLockService()
 	})
@@ -491,6 +494,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 func (s *service) initLockService() {
 	cfg := s.cfg.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(cfg)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 }
 
 // put the waiting-next type msg into client session's cache and return directly
@@ -534,4 +538,15 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 	msg := message.(*pipeline.Message)
 	msg.SetData(append(data, msg.GetData()...))
 	return nil
+}
+
+func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
+	exec := compile.NewSQLExecutor(
+		s.cfg.ServiceAddress,
+		s.storeEngine,
+		mp,
+		s._txnClient,
+		s.fileService,
+		s.aicm)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
 }

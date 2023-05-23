@@ -401,6 +401,20 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		return nil
 	}
 	//for loading deleted rowid.
+	db, err := h.db.Catalog.GetDatabaseByID(req.DatabaseId)
+	if err != nil {
+		return err
+	}
+	tbl, err := db.GetTableEntryByID(req.TableID)
+	if err != nil {
+		return err
+	}
+	var version uint32
+	if req.Schema != nil {
+		version = req.Schema.Version
+	}
+	schema := tbl.GetVersionSchema(version)
+	pkIdx := schema.GetPrimaryKey().Idx
 	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
 	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
@@ -417,7 +431,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint16{location.ID()})
+		pref.AddBlock([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
