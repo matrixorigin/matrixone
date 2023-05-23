@@ -1031,6 +1031,25 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 	return nil
 }
 
+// InitSetSessionVar sets the value of system variable in session when start a connection
+func (ses *Session) InitSetSessionVar(name string, value interface{}) error {
+	gSysVars := ses.GetGlobalSysVars()
+	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
+		cv, err := def.GetType().Convert(value)
+		if err != nil {
+			errutil.ReportError(ses.GetRequestContext(), err)
+			return err
+		}
+
+		if def.UpdateSessVar == nil {
+			ses.SetSysVar(def.GetName(), cv)
+		} else {
+			return def.UpdateSessVar(ses, ses.GetSysVars(), def.GetName(), cv)
+		}
+	}
+	return nil
+}
+
 // GetSessionVar gets this value of the system variable in session
 func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 	gSysVars := ses.GetGlobalSysVars()
@@ -1368,6 +1387,106 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	logInfo(sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)
+}
+
+func (ses *Session) InitGlobalSystemVariables() error {
+	var err error
+	var rsset []ExecResult
+	tenantInfo := ses.GetTenantInfo()
+	// if is system account
+	if tenantInfo.IsSysTenant() {
+		sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
+		sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
+		sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+
+		// get system variable from mo_mysql_compatibility mode
+		sqlForGetVariables := getSystemVariablesWithAccount(sysAccountID)
+		pu := ses.GetParameterUnit()
+		mp := ses.GetMemPool()
+
+		rsset, err = executeSQLInBackgroundSession(
+			sysTenantCtx,
+			ses,
+			mp,
+			pu,
+			sqlForGetVariables)
+		if err != nil {
+			return err
+		}
+		if execResultArrayHasData(rsset) {
+			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+				variable_name, err := rsset[0].GetString(sysTenantCtx, i, 0)
+				if err != nil {
+					return err
+				}
+				variable_value, err := rsset[0].GetString(sysTenantCtx, i, 1)
+				if err != nil {
+					return err
+				}
+
+				if sv, ok := gSysVarsDefs[variable_name]; ok {
+					val, err := sv.GetType().ConvertFromString(variable_value)
+					if err != nil {
+						return err
+					}
+					err = ses.InitSetSessionVar(variable_name, val)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		} else {
+			return moerr.NewInternalError(sysTenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", sysAccountName)
+		}
+	} else {
+		tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+
+		// get system variable from mo_mysql_compatibility mode
+		sqlForGetVariables := getSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
+		pu := ses.GetParameterUnit()
+		mp := ses.GetMemPool()
+
+		rsset, err = executeSQLInBackgroundSession(
+			tenantCtx,
+			ses,
+			mp,
+			pu,
+			sqlForGetVariables)
+		if err != nil {
+			return err
+		}
+		if execResultArrayHasData(rsset) {
+			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+				variable_name, err := rsset[0].GetString(tenantCtx, i, 0)
+				if err != nil {
+					return err
+				}
+				variable_value, err := rsset[0].GetString(tenantCtx, i, 1)
+				if err != nil {
+					return err
+				}
+
+				if sv, ok := gSysVarsDefs[variable_name]; ok {
+					if !sv.Dynamic || sv.GetScope() == ScopeSession {
+						continue
+					}
+					val, err := sv.GetType().ConvertFromString(variable_value)
+					if err != nil {
+						return err
+					}
+					err = ses.InitSetSessionVar(variable_name, val)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		} else {
+			return moerr.NewInternalError(tenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", tenantInfo.GetTenant())
+		}
+	}
+	return err
 }
 
 func (ses *Session) GetPrivilege() *privilege {
