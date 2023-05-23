@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -183,7 +184,6 @@ func (blk *ablock) resolveColumnData(
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnData(
-			node.MustPNode(),
 			txn,
 			readSchema,
 			col,
@@ -556,8 +556,8 @@ func (blk *ablock) inMemoryBatchDedup(
 	txn txnif.TxnReader,
 	isCommitting bool,
 	keys containers.Vector,
+	keysZM index.ZM,
 	rowmask *roaring.Bitmap,
-	zm []byte,
 	bf objectio.BloomFilter,
 ) (err error) {
 	var dupRow uint32
@@ -565,8 +565,8 @@ func (blk *ablock) inMemoryBatchDedup(
 	defer blk.RUnlock()
 	_, err = mnode.BatchDedup(
 		keys,
+		keysZM,
 		blk.checkConflictAndDupClosure(txn, isCommitting, &dupRow, rowmask),
-		zm,
 		bf)
 
 	// definitely no duplicate
@@ -582,9 +582,9 @@ func (blk *ablock) inMemoryBatchDedup(
 func (blk *ablock) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
+	keysZM index.ZM,
 	rowmask *roaring.Bitmap,
 	precommit bool,
-	zm []byte,
 	bf objectio.BloomFilter,
 ) (err error) {
 	defer func() {
@@ -595,16 +595,15 @@ func (blk *ablock) BatchDedup(
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask, zm, bf)
+		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, keysZM, rowmask, bf)
 	} else {
 		return blk.PersistedBatchDedup(
-			node.MustPNode(),
 			txn,
 			precommit,
 			keys,
+			keysZM,
 			rowmask,
 			true,
-			zm,
 			bf,
 		)
 	}
