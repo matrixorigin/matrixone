@@ -111,13 +111,13 @@ func genShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 	for regIndex := range shuffledBats {
 		if lenShuffledSels[regIndex] > 0 {
 
-			//if ap.ctr.batsCount == 0 {
-			//initialize bats
-			shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
-			for j := range shuffledBats[regIndex].Vecs {
-				shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
+			if ap.ctr.batsCount == 0 {
+				//initialize bats
+				shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
+				for j := range shuffledBats[regIndex].Vecs {
+					shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
+				}
 			}
-			//}
 
 			b := shuffledBats[regIndex]
 			for vecIndex := range b.Vecs {
@@ -160,7 +160,6 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		}
 	}
 
-	ap.ctr.batsCount = 0
 	return false, nil
 }
 
@@ -236,6 +235,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 		}
 	}
 
+	ap.ctr.batsCount = 0
 	return false, nil
 }
 
