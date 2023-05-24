@@ -97,6 +97,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	bat := proc.InputBatch()
 	if bat == nil {
+		if ap.FuncId == ShuffleToAllFunc {
+			return sendShuffledBats(ap, proc)
+		}
 		return true, nil
 	}
 

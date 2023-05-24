@@ -240,7 +240,10 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 		return false, err
 	}
 
-	return sendShuffledBats(ap, proc)
+	if ap.ctr.batsCount == ap.ctr.aliveRegCnt {
+		return sendShuffledBats(ap, proc)
+	}
+	return false, nil
 }
 
 // send to all receiver (include LocalReceiver and RemoteReceiver)
