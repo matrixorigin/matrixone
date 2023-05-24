@@ -99,7 +99,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	bat, err := blockio.BlockRead(r.ctx, info, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
@@ -172,27 +172,38 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	}
 
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+
+	r.sels = r.sels[:0]
+	//TODO:: need to handle case : len(r.blks[o].deletes) == 0
+	deletes := make([]int64, len(r.blks[0].deletes))
+	copy(deletes, r.blks[0].deletes)
+	//FIXME::why sort deletes?  batch.Shrink need to shrink by the ordered sels.
+	sort.Slice(deletes, func(i, j int) bool {
+		return deletes[i] < deletes[j]
+	})
+
+	bat, err := blockio.BlockRead(r.ctx, info, deletes, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
-	//FIXME::
 	bat.SetAttributes(cols)
-	r.sels = r.sels[:0]
-	//TODO:: need to handle case : len(r.blks[o].deletes) == 0
-	deletes := make([]int, len(r.blks[0].deletes))
-	//FIXME::this is a bug : bat had shinked , the row numnber had changed..
-	copy(deletes, r.blks[0].deletes)
-	//FIXME::why sort deletes?  batch.Shrink need to shrink by the ordered sels.
-	sort.Ints(deletes)
-	for i := 0; i < bat.Length(); i++ {
-		if len(deletes) > 0 && i == deletes[0] {
-			deletes = deletes[1:]
-			continue
-		}
-		r.sels = append(r.sels, int64(i))
-	}
-	bat.Shrink(r.sels)
+
+	//r.sels = r.sels[:0]
+	////TODO:: need to handle case : len(r.blks[o].deletes) == 0
+	//deletes := make([]int, len(r.blks[0].deletes))
+	////FIXME::this is a bug : bat had shinked , the row numnber had changed..
+	//copy(deletes, r.blks[0].deletes)
+	////FIXME::why sort deletes?  batch.Shrink need to shrink by the ordered sels.
+	//sort.Ints(deletes)
+
+	//for i := 0; i < bat.Length(); i++ {
+	//	if len(deletes) > 0 && i == deletes[0] {
+	//		deletes = deletes[1:]
+	//		continue
+	//	}
+	//	r.sels = append(r.sels, int64(i))
+	//}
+	//bat.Shrink(r.sels)
 
 	logutil.Debug(testutil.OperatorCatchBatch("block merge reader", bat))
 	return bat, nil

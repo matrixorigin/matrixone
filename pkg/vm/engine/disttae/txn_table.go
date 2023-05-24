@@ -209,7 +209,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 func (tbl *txnTable) LoadDeletesForBlockIn(
 	state *logtailreplay.PartitionState,
 	in bool,
-	deleteBlockId map[types.Blockid][]int,
+	deleteBlockId map[types.Blockid][]int64,
 	deletesRowId map[types.Rowid]uint8) error {
 
 	for blk, bats := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
@@ -238,7 +238,7 @@ func (tbl *txnTable) LoadDeletesForBlockIn(
 				for _, rowId := range rowIds {
 					if deleteBlockId != nil {
 						id, offset := rowId.Decode()
-						deleteBlockId[id] = append(deleteBlockId[id], int(offset))
+						deleteBlockId[id] = append(deleteBlockId[id], int64(offset))
 					} else if deletesRowId != nil {
 						deletesRowId[rowId] = 0
 					} else {
@@ -375,7 +375,7 @@ func (tbl *txnTable) rangesOnePart(
 	modifies *[]ModifyBlockMeta, // output modified blocks after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	deletes := make(map[types.Blockid][]int)
+	deletes := make(map[types.Blockid][]int64)
 
 	//collect deletes from PartitionState.dirtyRows.
 	{
@@ -384,7 +384,7 @@ func (tbl *txnTable) rangesOnePart(
 		for iter.Next() {
 			entry := iter.Entry()
 			id, offset := entry.RowID.Decode()
-			deletes[id] = append(deletes[id], int(offset))
+			deletes[id] = append(deletes[id], int64(offset))
 		}
 		iter.Close()
 	}
@@ -403,7 +403,7 @@ func (tbl *txnTable) rangesOnePart(
 			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for _, v := range vs {
 				id, offset := v.Decode()
-				deletes[id] = append(deletes[id], int(offset))
+				deletes[id] = append(deletes[id], int64(offset))
 			}
 		}
 	}

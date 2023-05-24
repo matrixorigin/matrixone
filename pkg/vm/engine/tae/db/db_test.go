@@ -4351,7 +4351,7 @@ func TestBlockRead(t *testing.T) {
 	err = blockio.BlockPrefetch(colIdxs, fs, infos)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
-		context.Background(), info, colIdxs, colTyps,
+		context.Background(), info, nil, colIdxs, colTyps,
 		beforeDel, fs, pool, nil,
 	)
 	assert.NoError(t, err)
@@ -4359,13 +4359,13 @@ func TestBlockRead(t *testing.T) {
 	assert.Equal(t, 20, b1.Vecs[0].Length())
 
 	b2, err := blockio.BlockReadInner(
-		context.Background(), info, colIdxs, colTyps,
+		context.Background(), info, nil, colIdxs, colTyps,
 		afterFirstDel, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
-		context.Background(), info, colIdxs, colTyps,
+		context.Background(), info, nil, colIdxs, colTyps,
 		afterSecondDel, fs, pool, nil,
 	)
 	assert.NoError(t, err)
@@ -4375,6 +4375,7 @@ func TestBlockRead(t *testing.T) {
 	// read rowid column only
 	b4, err := blockio.BlockReadInner(
 		context.Background(), info,
+		nil,
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
 		afterSecondDel, fs, pool, nil,
@@ -4387,7 +4388,7 @@ func TestBlockRead(t *testing.T) {
 	info.EntryState = false
 	b5, err := blockio.BlockReadInner(
 		context.Background(), info,
-		[]uint16{2},
+		nil, []uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
 		afterSecondDel, fs, pool, nil,
 	)
