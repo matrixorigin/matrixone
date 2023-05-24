@@ -458,8 +458,6 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 var testmux sync.Mutex
 
 func (w *S3Writer) WriteS3Batch(bat *batch.Batch, proc *process.Process) error {
-	testmux.Lock()
-	defer testmux.Unlock()
 	w.InitBuffers(bat)
 	if w.Put(bat, proc) {
 		w.SortAndFlush(proc)
