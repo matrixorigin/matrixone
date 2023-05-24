@@ -51,11 +51,7 @@ func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs int) ([][]int32, []
 			if v < 0 {
 				v = -v
 			}
-
 			regIndex := v % int32(lenRegs)
-			if v == 447384 {
-				logutil.Warnf("!!!!! got 447384, send to %v", regIndex)
-			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 			lenShuffledSels[regIndex]++
 		}
