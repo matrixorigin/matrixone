@@ -76,6 +76,8 @@ type container struct {
 	sels            [][]int32
 	lenshuffledSels []int
 	remoteToIdx     map[uuid.UUID]int
+	shuffledBats    []*batch.Batch
+	batsCount       int
 }
 
 type Argument struct {

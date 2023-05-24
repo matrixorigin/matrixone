@@ -99,20 +99,24 @@ func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs int) ([][]int32, []
 	return sels, lenShuffledSels
 }
 
-func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.Process) ([]*batch.Batch, error) {
+func genShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.Process) error {
 	//release old bats
 	defer proc.PutBatch(bat)
 
 	lenVecs := len(bat.Vecs)
-	shuffledBats := make([]*batch.Batch, lenRegs)
+	shuffledBats := ap.ctr.shuffledBats
 	sels, lenShuffledSels := getShuffledSels(ap, bat, lenRegs)
 
 	//generate new shuffled bats
 	for regIndex := range shuffledBats {
 		if lenShuffledSels[regIndex] > 0 {
-			shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
-			for j := range shuffledBats[regIndex].Vecs {
-				shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
+
+			if ap.ctr.batsCount == 0 {
+				//initialize bats
+				shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
+				for j := range shuffledBats[regIndex].Vecs {
+					shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
+				}
 			}
 
 			b := shuffledBats[regIndex]
@@ -120,7 +124,7 @@ func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 				v := b.Vecs[vecIndex]
 				err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
 			b.Zs = proc.Mp().GetSels()
@@ -130,7 +134,8 @@ func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 		}
 	}
 
-	return shuffledBats, nil
+	ap.ctr.batsCount++
+	return nil
 }
 
 // common sender: send to all LocalReceiver
@@ -197,7 +202,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 		}
 	}
 
-	shuffledBats, err := getShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
+	err := genShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
 	if err != nil {
 		return false, err
 	}
@@ -205,7 +210,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 	// send to remote regs
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := ap.ctr.remoteToIdx[r.uuid]
-		batToSend := shuffledBats[batIndex]
+		batToSend := ap.ctr.shuffledBats[batIndex]
 		if batToSend != nil {
 			encodeData, errEncode := types.Encode(batToSend)
 			if errEncode != nil {
@@ -220,7 +225,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 	//send to all local regs
 	for i, reg := range ap.LocalRegs {
 		batIndex := ap.ShuffleRegIdxLocal[i]
-		batToSend := shuffledBats[batIndex]
+		batToSend := ap.ctr.shuffledBats[batIndex]
 		if batToSend != nil {
 			select {
 			case <-reg.Ctx.Done():
