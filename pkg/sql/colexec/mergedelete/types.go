@@ -21,8 +21,10 @@ import (
 
 type Argument struct {
 	AffectedRows uint64
-	// single table's delete
+	// 1. single table's delete (main table)
 	DelSource engine.Relation
+	// 2. partition sub tables
+	PartitionSources []engine.Relation
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

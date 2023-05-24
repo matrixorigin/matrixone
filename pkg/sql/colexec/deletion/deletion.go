@@ -47,11 +47,11 @@ func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	if ap.RemoteDelete {
 		ap.ctr = new(container)
-		ap.ctr.blockId_rowIdBatch = make(map[string]*batch.Batch)
-		ap.ctr.blockId_metaLoc = make(map[string]*batch.Batch)
 		ap.ctr.blockId_type = make(map[string]int8)
 		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
 		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerSegment)}
+		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[string]*batch.Batch)
+		ap.ctr.partitionId_blockId_metaLoc = make(map[int]map[string]*batch.Batch)
 	}
 	return nil
 }
@@ -66,38 +66,49 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 		if p.RemoteDelete {
 			// ToDo: CNBlock Compaction
 			// blkId,delta_metaLoc,type
-			resBat := batch.NewWithSize(4)
+			resBat := batch.NewWithSize(5)
 			resBat.Attrs = []string{
 				catalog.BlockMeta_Delete_ID,
 				catalog.BlockMeta_DeltaLoc,
 				catalog.BlockMeta_Type,
+				catalog.BlockMeta_Partition,
 				catalog.BlockMeta_Deletes_Length,
 			}
 			resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 			resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
 			resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
-			for blkid, bat := range p.ctr.blockId_rowIdBatch {
-				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
-				bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
-				bytes, err := bat.MarshalBinary()
-				if err != nil {
-					return true, err
+			resBat.SetVector(3, vector.NewVec(types.T_int32.ToType()))
+
+			for pidx, blockId_rowIdBatch := range p.ctr.partitionId_blockId_rowIdBatch {
+				for blkid, bat := range blockId_rowIdBatch {
+					vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+					bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
+					bytes, err := bat.MarshalBinary()
+					if err != nil {
+						return true, err
+					}
+					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
+					vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_type[blkid], false, proc.GetMPool())
+					vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
 				}
-				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-				vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_type[blkid], false, proc.GetMPool())
 			}
-			for blkid, bat := range p.ctr.blockId_metaLoc {
-				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
-				bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
-				bytes, err := bat.MarshalBinary()
-				if err != nil {
-					return true, err
+
+			for pidx, blockId_metaLoc := range p.ctr.partitionId_blockId_metaLoc {
+				for blkid, bat := range blockId_metaLoc {
+					vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+					bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
+					bytes, err := bat.MarshalBinary()
+					if err != nil {
+						return true, err
+					}
+					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
+					vector.AppendFixed(resBat.GetVector(2), int8(FlushMetaLoc), false, proc.GetMPool())
+					vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
 				}
-				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-				vector.AppendFixed(resBat.GetVector(2), int8(FlushMetaLoc), false, proc.GetMPool())
 			}
+
 			resBat.SetZs(resBat.Vecs[0].Length(), proc.GetMPool())
-			resBat.SetVector(3, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.Length(), proc.GetMPool()))
+			resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.Length(), proc.GetMPool()))
 			proc.SetInputBatch(resBat)
 		} else {
 			// ToDo: need ouyuaning to make sure there are only one table
