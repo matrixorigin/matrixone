@@ -15,8 +15,6 @@
 package colexec
 
 import (
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -455,12 +453,7 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 // no more data or the data size reaches 64M, at that time
 // we will trigger write s3.
 
-// todo: remove the lock
-var testmux sync.Mutex
-
 func (w *S3Writer) WriteS3Batch(bat *batch.Batch, proc *process.Process) error {
-	testmux.Lock()
-	defer testmux.Unlock()
 	w.InitBuffers(bat)
 	if w.Put(bat, proc) {
 		w.SortAndFlush(proc)
