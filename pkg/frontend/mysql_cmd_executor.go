@@ -1149,12 +1149,20 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 }
 
 // handleAlterDatabaseConfig alter a database's mysql_compatibility_mode
-func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *tree.AlterDataBaseConfig) error {
+func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
+	err := doCheckRole(ctx, ses)
+	if err != nil {
+		return err
+	}
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
 // handleAlterAccountConfig alter a account's mysql_compatibility_mode
-func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, st *tree.AlterDataBaseConfig) error {
+func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, ses *Session, st *tree.AlterDataBaseConfig) error {
+	err := doCheckRole(ctx, ses)
+	if err != nil {
+		return err
+	}
 	return doAlterAccountConfig(ctx, mce.GetSession(), st)
 }
 
@@ -2711,11 +2719,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.InvalidatePrivilegeCache()
 			selfHandle = true
 			if st.IsAccountLevel {
-				if err = mce.handleAlterAccountConfig(requestCtx, st); err != nil {
+				if err = mce.handleAlterAccountConfig(requestCtx, ses, st); err != nil {
 					goto handleFailed
 				}
 			} else {
-				if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
+				if err = mce.handleAlterDataBaseConfig(requestCtx, ses, st); err != nil {
 					goto handleFailed
 				}
 			}
@@ -3620,6 +3628,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_uuid:
 		col.SetColumnType(defines.MYSQL_TYPE_UUID)
+	case types.T_TS:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_Blockid:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	default:
 		return moerr.NewInternalError(ctx, "RunWhileSend : unsupported type %d", engineType)
 	}
