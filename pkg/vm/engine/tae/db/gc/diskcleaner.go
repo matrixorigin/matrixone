@@ -16,7 +16,6 @@ package gc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"sync"
 	"sync/atomic"
 

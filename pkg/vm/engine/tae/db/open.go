@@ -16,7 +16,6 @@ package db
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"path"
 	"sync/atomic"
 	"time"

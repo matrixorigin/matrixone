@@ -16,7 +16,6 @@ package checkpoint
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -452,7 +451,7 @@ func (r *runner) saveCheckpoint(start, end types.TS) (err error) {
 	}
 
 	// TODO: checkpoint entry should maintain the location
-	_, err = writer.WriteEnd(context.Background())
+	_, err = writer.WriteEnd(r.ctx)
 	return
 }
 
