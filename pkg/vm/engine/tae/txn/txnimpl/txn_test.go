@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"sync"
@@ -416,7 +417,7 @@ func TestTxnManager1(t *testing.T) {
 
 func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
 	c := catalog.MockCatalog(nil)
-	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
+	driver := wal.NewDriverWithBatchStore(context.Background(), dir, "store", nil)
 	indexCache := model.NewSimpleLRU(int64(common.G))
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
