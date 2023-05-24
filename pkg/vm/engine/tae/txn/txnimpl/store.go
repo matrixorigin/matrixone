@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
@@ -37,6 +38,7 @@ import (
 )
 
 type txnStore struct {
+	ctx context.Context
 	txnbase.NoopTxnStore
 	mu            sync.RWMutex
 	transferTable *model.HashPageTable
@@ -55,23 +57,26 @@ type txnStore struct {
 }
 
 var TxnStoreFactory = func(
+	ctx context.Context,
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
 	indexCache model.LRUCache,
 	dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(catalog, driver, transferTable, indexCache, dataFactory)
+		return newStore(ctx, catalog, driver, transferTable, indexCache, dataFactory)
 	}
 }
 
 func newStore(
+	ctx context.Context,
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
 	indexCache model.LRUCache,
 	dataFactory *tables.DataFactory) *txnStore {
 	return &txnStore{
+		ctx:           ctx,
 		transferTable: transferTable,
 		dbs:           make(map[uint64]*txnDB),
 		catalog:       catalog,
@@ -494,6 +499,9 @@ func (store *txnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.S
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.Create.Add(1)
+	})
 	return db.CreateSegment(tid, is1PC)
 }
 
@@ -502,6 +510,9 @@ func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) 
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.CreateNonAppendable.Add(1)
+	})
 	return db.CreateNonAppendableSegment(tid, is1PC)
 }
 
@@ -533,6 +544,9 @@ func (store *txnStore) CreateNonAppendableBlock(id *common.ID, opts *objectio.Cr
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Block.CreateNonAppendable.Add(1)
+	})
 	return db.CreateNonAppendableBlock(id, opts)
 }
 
@@ -549,6 +563,9 @@ func (store *txnStore) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block,
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Block.Create.Add(1)
+	})
 	return db.CreateBlock(id, is1PC)
 }
 
@@ -557,6 +574,9 @@ func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Block.SoftDelete.Add(1)
+	})
 	return db.SoftDeleteBlock(id)
 }
 
@@ -565,6 +585,9 @@ func (store *txnStore) SoftDeleteSegment(id *common.ID) (err error) {
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.SoftDelete.Add(1)
+	})
 	return db.SoftDeleteSegment(id)
 }
 
