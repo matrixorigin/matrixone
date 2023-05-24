@@ -369,10 +369,10 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
-	if err := e.pClient.checkTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
-		e.delTransaction(txn)
-		return err
-	}
+	//if err := e.pClient.checkTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
+	//	e.delTransaction(txn)
+	//	return err
+	//}
 
 	return nil
 }
