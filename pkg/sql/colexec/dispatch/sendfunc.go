@@ -245,7 +245,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 				maxSize = ap.ctr.shuffledBats[i].Length()
 			}
 		}
-		if maxSize > 8192 {
+		if maxSize > shuffleBatchSize*0.5 {
 			return sendShuffledBats(ap, proc)
 		}
 	}
