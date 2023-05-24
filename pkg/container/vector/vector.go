@@ -292,6 +292,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.length = 0
 	v.cantFreeData = false
 	v.cantFreeArea = false
+	types.PutTypeToPool(v.typ)
 
 	v.nsp.Reset()
 }
