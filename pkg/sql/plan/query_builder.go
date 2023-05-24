@@ -2376,6 +2376,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, childId)
 	case "current_account":
 		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, childId)
+	case "metadata_scan":
+		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}
