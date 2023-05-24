@@ -30,36 +30,6 @@ import (
 )
 
 var (
-	createDatabase = `create database if not exists %s`
-	createTables   = map[string]string{
-		"sys_async_task": `create table if not exists %s.sys_async_task (
-			task_id                     int primary key auto_increment,
-			task_metadata_id            varchar(50) unique not null,
-			task_metadata_executor      int,
-			task_metadata_context       blob,
-			task_metadata_option        varchar(1000),
-			task_parent_id              varchar(50),
-			task_status                 int,
-			task_runner                 varchar(50),
-			task_epoch                  int,
-			last_heartbeat              bigint,
-			result_code                 int null,
-			error_msg                   varchar(1000) null,
-			create_at                   bigint,
-			end_at                      bigint)`,
-		"sys_cron_task": `create table if not exists %s.sys_cron_task (
-			cron_task_id				int primary key auto_increment,
-    		task_metadata_id            varchar(50) unique not null,
-			task_metadata_executor      int,
-			task_metadata_context       blob,
-			task_metadata_option 		varchar(1000),
-			cron_expr					varchar(100) not null,
-			next_time					bigint,
-			trigger_times				int,
-			create_at					bigint,
-			update_at					bigint)`,
-	}
-
 	insertAsyncTask = `insert into %s.sys_async_task(
                            task_metadata_id,
                            task_metadata_executor,
@@ -815,43 +785,8 @@ func (m *mysqlTaskStorage) useDB(db *sql.DB) (err error) {
 	if err := db.Ping(); err != nil {
 		return errNotReady
 	}
-	for _, err := db.Exec("use " + m.dbname); err != nil; _, err = db.Exec("use " + m.dbname) {
-		me, ok := err.(*mysql.MySQLError)
-		if !ok || me.Number != moerr.ER_BAD_DB_ERROR {
-			return err
-		}
-		if _, err = db.Exec(fmt.Sprintf(createDatabase, m.dbname)); err != nil {
-			return multierr.Append(err, db.Close())
-		}
-	}
-	rows, err := db.Query("show tables")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if e := rows.Close(); e != nil {
-			err = errors.Join(err, e)
-		}
-		if e := rows.Err(); e != nil {
-			err = errors.Join(err, e)
-		}
-	}()
-
-	tables := make(map[string]struct{}, len(createTables))
-	for rows.Next() {
-		var table string
-		if err := rows.Scan(&table); err != nil {
-			return err
-		}
-		tables[table] = struct{}{}
-	}
-
-	for table, createSql := range createTables {
-		if _, ok := tables[table]; !ok {
-			if _, err = db.Exec(fmt.Sprintf(createSql, m.dbname)); err != nil {
-				return multierr.Append(err, db.Close())
-			}
-		}
+	if _, err := db.Exec("use " + m.dbname); err != nil {
+		return multierr.Append(err, db.Close())
 	}
 	return nil
 }
