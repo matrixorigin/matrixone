@@ -105,21 +105,22 @@ func genShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 
 	lenVecs := len(bat.Vecs)
 	shuffledBats := ap.ctr.shuffledBats
+	if ap.ctr.batsCount == 0 {
+		//initialize shuffled bats
+		for regIndex := range shuffledBats {
+			shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
+			shuffledBats[regIndex].Zs = proc.Mp().GetSels()
+			for j := range shuffledBats[regIndex].Vecs {
+				shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
+			}
+		}
+	}
+
 	sels, lenShuffledSels := getShuffledSels(ap, bat, lenRegs)
 
 	//generate new shuffled bats
 	for regIndex := range shuffledBats {
 		if lenShuffledSels[regIndex] > 0 {
-
-			if ap.ctr.batsCount == 0 {
-				//initialize bats
-				shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
-				shuffledBats[regIndex].Zs = proc.Mp().GetSels()
-				for j := range shuffledBats[regIndex].Vecs {
-					shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
-				}
-			}
-
 			b := shuffledBats[regIndex]
 			for vecIndex := range b.Vecs {
 				v := b.Vecs[vecIndex]
