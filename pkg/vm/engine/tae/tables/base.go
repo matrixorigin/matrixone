@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -304,7 +305,6 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 }
 
 func (blk *baseBlock) ResolvePersistedColumnData(
-	pnode *persistedNode,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdx int,
@@ -340,29 +340,16 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	return
 }
 
-func (blk *baseBlock) PersistedBatchDedup(
-	pnode *persistedNode,
+func (blk *baseBlock) dedupWithLoad(
 	txn txnif.TxnReader,
-	isCommitting bool,
 	keys containers.Vector,
+	sels *roaring.Bitmap,
 	rowmask *roaring.Bitmap,
 	isAblk bool,
-	zm []byte,
-	bf objectio.BloomFilter,
 ) (err error) {
-	sels, err := pnode.BatchDedup(
-		keys,
-		nil,
-		zm,
-		bf,
-	)
-	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
-		return
-	}
 	schema := blk.meta.GetSchema()
 	def := schema.GetSingleSortKey()
 	view, err := blk.ResolvePersistedColumnData(
-		pnode,
 		txn,
 		schema,
 		def.Idx,
@@ -388,6 +375,37 @@ func (blk *baseBlock) PersistedBatchDedup(
 	return
 }
 
+func (blk *baseBlock) PersistedBatchDedup(
+	txn txnif.TxnReader,
+	isCommitting bool,
+	keys containers.Vector,
+	keysZM index.ZM,
+	rowmask *roaring.Bitmap,
+	isAblk bool,
+	bf objectio.BloomFilter,
+) (err error) {
+	ctx := context.TODO()
+	pkIndex, err := MakeImmuIndex(
+		ctx,
+		blk.meta,
+		bf,
+		blk.indexCache,
+		blk.fs.Service,
+	)
+	if err != nil {
+		return
+	}
+	sels, err := pkIndex.BatchDedup(
+		ctx,
+		keys,
+		keysZM,
+	)
+	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+		return
+	}
+	return blk.dedupWithLoad(txn, keys, sels, rowmask, isAblk)
+}
+
 func (blk *baseBlock) getPersistedValue(
 	pnode *persistedNode,
 	txn txnif.TxnReader,
@@ -410,7 +428,7 @@ func (blk *baseBlock) getPersistedValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view2, err := blk.ResolvePersistedColumnData(pnode, txn, schema, col, true)
+	view2, err := blk.ResolvePersistedColumnData(txn, schema, col, true)
 	if err != nil {
 		return
 	}

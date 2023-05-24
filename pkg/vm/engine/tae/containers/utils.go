@@ -321,7 +321,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(bool, bool, int) error)
 		}
-		return ForeachWindowFixed[bool](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -333,7 +333,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(int8, bool, int) error)
 		}
-		return ForeachWindowFixed[int8](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -345,7 +345,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(int16, bool, int) error)
 		}
-		return ForeachWindowFixed[int16](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -357,7 +357,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(int32, bool, int) error)
 		}
-		return ForeachWindowFixed[int32](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -369,7 +369,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(int64, bool, int) error)
 		}
-		return ForeachWindowFixed[int64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -381,7 +381,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(uint8, bool, int) error)
 		}
-		return ForeachWindowFixed[uint8](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -393,7 +393,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(uint16, bool, int) error)
 		}
-		return ForeachWindowFixed[uint16](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -405,7 +405,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(uint32, bool, int) error)
 		}
-		return ForeachWindowFixed[uint32](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -417,7 +417,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(uint64, bool, int) error)
 		}
-		return ForeachWindowFixed[uint64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -429,7 +429,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Decimal64, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Decimal64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -441,7 +441,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Decimal128, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Decimal128](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -453,7 +453,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Decimal256, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Decimal256](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -465,7 +465,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(float32, bool, int) error)
 		}
-		return ForeachWindowFixed[float32](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -477,7 +477,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(float64, bool, int) error)
 		}
-		return ForeachWindowFixed[float64](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -489,7 +489,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Timestamp, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Timestamp](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -501,7 +501,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Date, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Date](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -513,7 +513,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Time, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Time](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -525,7 +525,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Datetime, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Datetime](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -537,7 +537,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.TS, bool, int) error)
 		}
-		return ForeachWindowFixed[types.TS](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -549,7 +549,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Blockid, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Blockid](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -561,7 +561,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Uuid, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Uuid](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,
@@ -573,7 +573,7 @@ func ForeachVectorWindow(
 		if op1 != nil {
 			op = op1.(func(types.Rowid, bool, int) error)
 		}
-		return ForeachWindowFixed[types.Rowid](
+		return ForeachWindowFixed(
 			vec,
 			start,
 			length,

@@ -37,7 +37,7 @@ import (
 var clientBaseConnID uint32 = 1000
 
 // parse parses the account information from whole username.
-func (a *clientInfo) parse(full string) error {
+func (c *clientInfo) parse(full string) error {
 	var delimiter byte = ':'
 	if strings.IndexByte(full, '#') >= 0 {
 		delimiter = '#'
@@ -53,8 +53,11 @@ func (a *clientInfo) parse(full string) error {
 	if len(username) == 0 {
 		return moerr.NewInternalErrorNoCtx("invalid username '%s'", full)
 	}
-	a.labelInfo.Tenant = Tenant(tenant)
-	a.username = username
+	if tenant == "" {
+		tenant = superTenant
+	}
+	c.labelInfo.Tenant = Tenant(tenant)
+	c.username = username
 	return nil
 }
 
@@ -340,6 +343,10 @@ func (c *clientConn) handleSetVar(e *setVarEvent) error {
 
 // handleSuspendAccountEvent handles the suspend account event.
 func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent) error {
+	// Ignore the sys tenant.
+	if strings.ToLower(string(e.account)) == superTenant {
+		return nil
+	}
 	// handle kill connection.
 	cns, err := c.router.SelectByTenant(e.account)
 	if err != nil {
@@ -394,22 +401,51 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 		return nil, moerr.NewInternalErrorNoCtx("no router available")
 	}
 
-	// Select the best CN server from backend.
-	//
-	// NB: The selected CNServer must have label hash in it.
-	cn, err := c.router.Route(c.ctx, c.clientInfo)
-	if err != nil {
-		return nil, err
+	badCNServers := make(map[string]struct{})
+	filterFn := func(uuid string) bool {
+		if _, ok := badCNServers[uuid]; ok {
+			return true
+		}
+		return false
 	}
-	// We have to set proxy connection ID after cn is returned.
-	cn.proxyConnID = c.connID
 
-	// Set the salt value of cn server.
-	cn.salt = c.mysqlProto.GetSalt()
-	sc, r, err := c.router.Connect(cn, c.handshakePack, c.tun)
-	if err != nil {
-		return nil, err
+	var err error
+	var cn *CNServer
+	var sc ServerConn
+	var r []byte
+	for {
+		// Select the best CN server from backend.
+		//
+		// NB: The selected CNServer must have label hash in it.
+		cn, err = c.router.Route(c.ctx, c.clientInfo, filterFn)
+		if err != nil {
+			return nil, err
+		}
+		// We have to set proxy connection ID after cn is returned.
+		cn.proxyConnID = c.connID
+
+		// Set the salt value of cn server.
+		cn.salt = c.mysqlProto.GetSalt()
+
+		// After select a CN server, we try to connect to it. If connect
+		// fails, and it is a retryable error, we reselect another CN server.
+		sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
+		if err != nil {
+			if isRetryableErr(err) {
+				badCNServers[cn.uuid] = struct{}{}
+				c.log.Warn("failed to connect to CN server, will retry",
+					zap.String("current server uuid", cn.uuid),
+					zap.String("current server address", cn.addr),
+					zap.Any("bad backend servers", badCNServers))
+				continue
+			} else {
+				return nil, err
+			}
+		} else {
+			break
+		}
 	}
+
 	if sendToClient {
 		// r is the packet received from CN server, send r to client.
 		if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
