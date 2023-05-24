@@ -191,11 +191,14 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 }
 
 func sendShuffledBats(ap *Argument, proc *process.Process) (bool, error) {
+	if ap.ctr.batsCount == 0 {
+		return false, nil
+	}
 	// send to remote regs
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := ap.ctr.remoteToIdx[r.uuid]
 		batToSend := ap.ctr.shuffledBats[batIndex]
-		if batToSend != nil {
+		if batToSend != nil && batToSend.Length() != 0 {
 			encodeData, errEncode := types.Encode(batToSend)
 			if errEncode != nil {
 				return false, errEncode
@@ -210,7 +213,7 @@ func sendShuffledBats(ap *Argument, proc *process.Process) (bool, error) {
 	for i, reg := range ap.LocalRegs {
 		batIndex := ap.ShuffleRegIdxLocal[i]
 		batToSend := ap.ctr.shuffledBats[batIndex]
-		if batToSend != nil {
+		if batToSend != nil && batToSend.Length() != 0 {
 			select {
 			case <-reg.Ctx.Done():
 				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
