@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
@@ -72,7 +73,7 @@ func (txn *activeTxn) lockRemoved(
 	s := v.slice()
 	defer s.unref()
 	s.iter(func(v []byte) bool {
-		if _, ok := removedLocks[unsafeByteSliceToString(v)]; !ok {
+		if _, ok := removedLocks[util.UnsafeBytesToString(v)]; !ok {
 			newV.append([][]byte{v})
 		}
 		return true

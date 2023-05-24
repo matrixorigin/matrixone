@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
@@ -69,7 +70,7 @@ func (d *detector) close() {
 }
 
 func (d *detector) txnClosed(txnID []byte) {
-	v := unsafeByteSliceToString(txnID)
+	v := util.UnsafeBytesToString(txnID)
 	d.ignoreTxns.Delete(v)
 }
 
@@ -154,7 +155,7 @@ func (w *waiters) add(txn pb.WaitTxn) bool {
 			return false
 		}
 	}
-	v := unsafeByteSliceToString(txn.TxnID)
+	v := util.UnsafeBytesToString(txn.TxnID)
 	if _, ok := w.ignoreTxns.Load(v); ok {
 		return true
 	}

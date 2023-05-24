@@ -15,6 +15,7 @@
 package defines
 
 import (
+	"context"
 	"math"
 	"sync"
 )
@@ -163,6 +164,13 @@ const (
 type TenantIDKey struct{}
 type UserIDKey struct{}
 type RoleIDKey struct{}
+
+func GetAccountId(ctx context.Context) uint32 {
+	if v := ctx.Value(TenantIDKey{}); v != nil {
+		return v.(uint32)
+	}
+	return 0
+}
 
 // EngineKey use EngineKey{} to get engine from Context
 type EngineKey struct{}

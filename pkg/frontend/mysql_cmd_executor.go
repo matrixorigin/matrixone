@@ -635,7 +635,15 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 	setVarFunc := func(system, global bool, name string, value interface{}) error {
 		if system {
 			if global {
+				err = doCheckRole(ctx, ses)
+				if err != nil {
+					return err
+				}
 				err = ses.SetGlobalVar(name, value)
+				if err != nil {
+					return err
+				}
+				err = doSetGlobalSystemVariable(ctx, ses, name, value)
 				if err != nil {
 					return err
 				}
@@ -808,9 +816,9 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 
 	var sysVars map[string]interface{}
 	if sv.Global {
-		sysVars = make(map[string]interface{})
-		for k, v := range gSysVarsDefs {
-			sysVars[k] = v.Default
+		sysVars, err = doGetGlobalSystemVariable(ses.GetRequestContext(), ses)
+		if err != nil {
+			return err
 		}
 	} else {
 		sysVars = ses.CopyAllSessionVars()
@@ -1302,23 +1310,6 @@ func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.Sh
 	return err
 }
 
-func (mce *MysqlCmdExecutor) handleShowPublications(ctx context.Context, sp *tree.ShowPublications, cwIndex, cwsLen int) error {
-	var err error
-	ses := mce.GetSession()
-	proto := ses.GetMysqlProtocol()
-	err = doShowPublications(ctx, ses, sp)
-	if err != nil {
-		return err
-	}
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
-
-	if err = proto.SendResponse(ctx, resp); err != nil {
-		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
-	}
-	return err
-}
-
 func (mce *MysqlCmdExecutor) handleShowSubscriptions(ctx context.Context, ss *tree.ShowSubscriptions, cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()
@@ -1528,7 +1519,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	var ret *plan2.Plan
 	var err error
 	if ses != nil {
-		ses.accountId = getAccountId(requestCtx)
+		ses.accountId = defines.GetAccountId(requestCtx)
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
@@ -2688,11 +2679,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropPublication(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.ShowPublications:
-			selfHandle = true
-			if err = mce.handleShowPublications(requestCtx, st, i, len(cws)); err != nil {
-				goto handleFailed
-			}
 		case *tree.ShowCreatePublications:
 			selfHandle = true
 			if err = mce.handleShowCreatePublications(requestCtx, st, i, len(cws)); err != nil {
@@ -2889,7 +2875,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
-			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus:
+			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications:
 			columns, err = cw.GetColumns()
 			if err != nil {
 				logErrorf(ses.GetDebugString(), "GetColumns from Computation handler failed. error: %v", err)
