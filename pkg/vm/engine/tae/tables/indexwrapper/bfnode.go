@@ -48,8 +48,8 @@ func NewBfReader(
 	}
 }
 
-func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
-	bf, err := LoadBF(context.Background(), r.key, r.indexCache, r.fs.Service, false)
+func (r *BfReader) MayContainsKey(ctx context.Context, key any) (b bool, err error) {
+	bf, err := LoadBF(ctx, r.key, r.indexCache, r.fs.Service, false)
 	if err != nil {
 		return
 	}
@@ -64,11 +64,12 @@ func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
 }
 
 func (r *BfReader) MayContainsAnyKeys(
+	ctx context.Context,
 	keys containers.Vector,
 	bf objectio.BloomFilter,
 ) (b bool, m *roaring.Bitmap, err error) {
 	if bf.Size() == 0 {
-		if bf, err = LoadBF(context.Background(), r.key, r.indexCache, r.fs.Service, false); err != nil {
+		if bf, err = LoadBF(ctx, r.key, r.indexCache, r.fs.Service, false); err != nil {
 			return
 		}
 	}

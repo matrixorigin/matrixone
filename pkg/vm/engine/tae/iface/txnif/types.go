@@ -239,7 +239,7 @@ type TxnStore interface {
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
-	Append(dbId, id uint64, data *containers.Batch) error
+	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(dbId, id uint64,
 		zm []objectio.ZoneMap, metaLocs []objectio.Location) error
 

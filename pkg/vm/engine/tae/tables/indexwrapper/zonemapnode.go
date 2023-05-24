@@ -43,12 +43,12 @@ func NewZmReader(
 	}
 }
 
-func (r *ZmReader) getZoneMap() (*index.ZM, error) {
+func (r *ZmReader) getZoneMap(ctx context.Context) (*index.ZM, error) {
 	cached := r.cache.Load()
 	if cached != nil {
 		return cached, nil
 	}
-	meta, err := objectio.FastLoadObjectMeta(context.Background(), &r.metaLoc, r.fs.Service)
+	meta, err := objectio.FastLoadObjectMeta(ctx, &r.metaLoc, r.fs.Service)
 	if err != nil {
 		return nil, err
 	}
@@ -57,8 +57,8 @@ func (r *ZmReader) getZoneMap() (*index.ZM, error) {
 	return &zm, err
 }
 
-func (r *ZmReader) Contains(key any) bool {
-	zm, err := r.getZoneMap()
+func (r *ZmReader) Contains(ctx context.Context, key any) bool {
+	zm, err := r.getZoneMap(ctx)
 	if err != nil {
 		// TODOa: Error Handling?
 		return false
@@ -66,16 +66,16 @@ func (r *ZmReader) Contains(key any) bool {
 	return zm.Contains(key)
 }
 
-func (r *ZmReader) Intersect(zm index.ZM) (ok bool) {
-	base, err := r.getZoneMap()
+func (r *ZmReader) Intersect(ctx context.Context, zm index.ZM) (ok bool) {
+	base, err := r.getZoneMap(ctx)
 	if err != nil {
 		return false
 	}
 	return base.FastIntersect(zm)
 }
 
-func (r *ZmReader) FastContainsAny(keys containers.Vector) (ok bool) {
-	zm, err := r.getZoneMap()
+func (r *ZmReader) FastContainsAny(ctx context.Context, keys containers.Vector) (ok bool) {
+	zm, err := r.getZoneMap(ctx)
 	if err != nil {
 		// TODOa: Error Handling?
 		return false
@@ -83,8 +83,8 @@ func (r *ZmReader) FastContainsAny(keys containers.Vector) (ok bool) {
 	return zm.FastContainsAny(keys)
 }
 
-func (r *ZmReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
-	zm, err := r.getZoneMap()
+func (r *ZmReader) ContainsAny(ctx context.Context, keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
+	zm, err := r.getZoneMap(ctx)
 	if err != nil {
 		// TODOa: Error Handling?
 		return

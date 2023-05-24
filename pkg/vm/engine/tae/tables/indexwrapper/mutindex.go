@@ -15,6 +15,7 @@
 package indexwrapper
 
 import (
+	"context"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -82,7 +83,7 @@ func (idx *mutableIndex) GetActiveRow(key any) (row []uint32, err error) {
 func (idx *mutableIndex) String() string {
 	return idx.art.String()
 }
-func (idx *mutableIndex) Dedup(key any, skipfn func(row uint32) (err error)) (err error) {
+func (idx *mutableIndex) Dedup(ctx context.Context, key any, skipfn func(row uint32) (err error)) (err error) {
 	exist := idx.zonemap.Contains(key)
 	if !exist {
 		return
@@ -102,6 +103,7 @@ func (idx *mutableIndex) Dedup(key any, skipfn func(row uint32) (err error)) (er
 }
 
 func (idx *mutableIndex) BatchDedup(
+	ctx context.Context,
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
 	zm []byte,
@@ -114,7 +116,7 @@ func (idx *mutableIndex) BatchDedup(
 		}
 	} else {
 		if keys.Length() == 1 {
-			err = idx.Dedup(keys.ShallowGet(0), skipfn)
+			err = idx.Dedup(ctx, keys.ShallowGet(0), skipfn)
 			return
 		}
 		// 1. all keys are definitely not existed

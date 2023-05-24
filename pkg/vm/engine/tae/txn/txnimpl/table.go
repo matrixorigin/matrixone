@@ -566,7 +566,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 	return nil
 }
 
-func (tbl *txnTable) Append(data *containers.Batch) (err error) {
+func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err error) {
 	if tbl.schema.HasPK() {
 		skip := tbl.store.txn.GetPKDedupSkip()
 		if skip == txnif.PKDedupSkipNone {
@@ -576,12 +576,12 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 				return
 			}
 			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupSnapByPK(
+			if err = tbl.DedupSnapByPK(ctx,
 				data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
 				return
 			}
 		} else if skip == txnif.PKDedupSkipWorkSpace {
-			if err = tbl.DedupSnapByPK(
+			if err = tbl.DedupSnapByPK(ctx,
 				data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
 				return
 			}
@@ -627,13 +627,13 @@ func (tbl *txnTable) AddBlksWithMetaLoc(
 					return
 				}
 				//do PK deduplication check against txn's snapshot data.
-				if err = tbl.DedupSnapByPK(v); err != nil {
+				if err = tbl.DedupSnapByPK(context.Background(), v); err != nil {
 					return
 				}
 			}
 		} else if skip == txnif.PKDedupSkipWorkSpace {
 			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupSnapByMetaLocs(metaLocs); err != nil {
+			if err = tbl.DedupSnapByMetaLocs(context.Background(), metaLocs); err != nil {
 				return
 			}
 		}
@@ -920,8 +920,8 @@ func (tbl *txnTable) updateDedupedBlockID(id *types.Blockid) {
 // DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
-func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
-	r := trace.StartRegion(context.Background(), "DedupSnapByPK")
+func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector) (err error) {
+	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
 	h := newRelation(tbl)
 	it := newRelationBlockItOnSnap(h)
@@ -965,7 +965,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 			bf = objectio.BloomFilter{}
 		} else if !objectio.IsSameObjectLocVsShort(location, &name) {
 			if bf, err = indexwrapper.LoadBF(
-				context.Background(),
+				ctx,
 				location,
 				tbl.store.indexCache,
 				tbl.store.dataFactory.Fs.Service,
@@ -978,6 +978,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 		name = *objectio.ToObjectNameShort(&blk.ID)
 
 		if err = blkData.BatchDedup(
+			ctx,
 			tbl.store.txn,
 			keys, rowmask,
 			false,
@@ -997,7 +998,7 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 // DedupSnapByMetaLocs 1. checks whether the Primary Key of all the input blocks exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending blocks into this table.
-func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err error) {
+func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objectio.Location) (err error) {
 	loaded := make(map[int]containers.Vector)
 	for i, loc := range metaLocs {
 		h := newRelation(tbl)
@@ -1035,6 +1036,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 				loaded[i] = vec
 			}
 			if err = blkData.BatchDedup(
+				ctx,
 				tbl.store.txn,
 				loaded[i],
 				rowmask,
@@ -1061,7 +1063,8 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, zm index.ZM) (err error) {
-	trace.WithRegion(context.Background(), "DoPrecommitDedupByPK", func() {
+	ctx := context.Background()
+	trace.WithRegion(ctx, "DoPrecommitDedupByPK", func() {
 		segIt := tbl.entry.MakeSegmentIt(false)
 		for segIt.Valid() {
 			seg := segIt.Get().GetPayload()
@@ -1125,6 +1128,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, zm index.ZM) (e
 					}
 				}
 				if err = blkData.BatchDedup(
+					ctx,
 					tbl.store.txn,
 					pks,
 					rowmask,
@@ -1211,6 +1215,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 				}
 			}
 			if err = blkData.BatchDedup(
+				context.Background(),
 				tbl.store.txn,
 				pks,
 				rowmask,
@@ -1269,7 +1274,7 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 		}
 	}
 	//Check whether primary key is duplicated in txn's snapshot data.
-	err = tbl.DedupSnapByPK(key)
+	err = tbl.DedupSnapByPK(context.Background(), key)
 	return
 }
 

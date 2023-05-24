@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"context"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -116,6 +117,7 @@ func (blk *block) GetColumnDataById(
 }
 
 func (blk *block) BatchDedup(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
 	rowmask *roaring.Bitmap,
@@ -131,6 +133,7 @@ func (blk *block) BatchDedup(
 	node := blk.PinNode()
 	defer node.Unref()
 	return blk.PersistedBatchDedup(
+		ctx,
 		node.MustPNode(),
 		txn,
 		precommit,
@@ -191,6 +194,7 @@ func (blk *block) EstimateScore(ttl time.Duration, force bool) int {
 }
 
 func (blk *block) GetByFilter(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	filter *handle.Filter) (offset uint32, err error) {
 	if filter.Op != handle.FilterEq {
@@ -204,14 +208,15 @@ func (blk *block) GetByFilter(
 
 	node := blk.PinNode()
 	defer node.Unref()
-	return blk.getPersistedRowByFilter(node.MustPNode(), txn, filter)
+	return blk.getPersistedRowByFilter(ctx, node.MustPNode(), txn, filter)
 }
 
 func (blk *block) getPersistedRowByFilter(
+	ctx context.Context,
 	pnode *persistedNode,
 	txn txnif.TxnReader,
 	filter *handle.Filter) (offset uint32, err error) {
-	ok, err := pnode.ContainsKey(filter.Val)
+	ok, err := pnode.ContainsKey(ctx, filter.Val)
 	if err != nil {
 		return
 	}

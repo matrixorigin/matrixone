@@ -15,6 +15,7 @@
 package indexwrapper
 
 import (
+	"context"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -39,14 +40,14 @@ func (index *immutableIndex) BatchUpsert(keysCtx *idxpkg.KeysCtx, offset int) (e
 }
 func (index *immutableIndex) GetActiveRow(key any) ([]uint32, error) { panic("not support") }
 func (index *immutableIndex) String() string                         { return "immutable" }
-func (index *immutableIndex) Dedup(key any, _ func(row uint32) error) (err error) {
-	exist := index.zmReader.Contains(key)
+func (index *immutableIndex) Dedup(ctx context.Context, key any, _ func(row uint32) error) (err error) {
+	exist := index.zmReader.Contains(ctx, key)
 	// 1. if not in [min, max], key is definitely not found
 	if !exist {
 		return
 	}
 	if index.bfReader != nil {
-		exist, err = index.bfReader.MayContainsKey(key)
+		exist, err = index.bfReader.MayContainsKey(ctx, key)
 		// 2. check bloomfilter has some error. return err
 		if err != nil {
 			err = TranslateError(err)
@@ -63,6 +64,7 @@ func (index *immutableIndex) Dedup(key any, _ func(row uint32) error) (err error
 }
 
 func (index *immutableIndex) BatchDedup(
+	ctx context.Context,
 	keys containers.Vector,
 	skipfn func(row uint32) (err error),
 	zm []byte,
@@ -71,21 +73,21 @@ func (index *immutableIndex) BatchDedup(
 	var exist bool
 	inputZM := idxpkg.ZM(zm)
 	if inputZM.Valid() {
-		if exist = index.zmReader.Intersect(inputZM); !exist {
+		if exist = index.zmReader.Intersect(ctx, inputZM); !exist {
 			return
 		}
 	} else {
 		if keys.Length() == 1 {
-			err = index.Dedup(keys.ShallowGet(0), skipfn)
+			err = index.Dedup(ctx, keys.ShallowGet(0), skipfn)
 			return
 		}
 		// 1. all keys are not in [min, max]. definitely not
-		if exist = index.zmReader.FastContainsAny(keys); !exist {
+		if exist = index.zmReader.FastContainsAny(ctx, keys); !exist {
 			return
 		}
 	}
 	if index.bfReader != nil {
-		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, bf)
+		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(ctx, keys, bf)
 		// 2. check bloomfilter has some unknown error. return err
 		if err != nil {
 			err = TranslateError(err)

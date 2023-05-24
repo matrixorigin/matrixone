@@ -161,7 +161,7 @@ func (store *txnStore) BatchDedup(dbId, id uint64, pk containers.Vector) (err er
 	return db.BatchDedup(id, pk)
 }
 
-func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
+func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
@@ -170,7 +170,7 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 	// if db.IsDeleted() {
 	// 	return txnbase.ErrNotFound
 	// }
-	return db.Append(id, data)
+	return db.Append(ctx, id, data)
 }
 
 func (store *txnStore) AddBlksWithMetaLoc(

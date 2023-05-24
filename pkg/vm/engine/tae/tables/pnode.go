@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/RoaringBitmap/roaring"
@@ -90,16 +91,17 @@ func (node *persistedNode) Rows() uint32 {
 }
 
 func (node *persistedNode) BatchDedup(
+	ctx context.Context,
 	keys containers.Vector,
 	skipFn func(row uint32) error,
 	zm []byte,
 	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn, zm, bf)
+	return node.pkIndex.BatchDedup(ctx, keys, skipFn, zm, bf)
 }
 
-func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
-	if err = node.pkIndex.Dedup(key, nil); err == nil {
+func (node *persistedNode) ContainsKey(ctx context.Context, key any) (ok bool, err error) {
+	if err = node.pkIndex.Dedup(ctx, key, nil); err == nil {
 		return
 	}
 	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {

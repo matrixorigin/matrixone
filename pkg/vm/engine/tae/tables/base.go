@@ -341,6 +341,7 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 }
 
 func (blk *baseBlock) PersistedBatchDedup(
+	ctx context.Context,
 	pnode *persistedNode,
 	txn txnif.TxnReader,
 	isCommitting bool,
@@ -351,6 +352,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 	bf objectio.BloomFilter,
 ) (err error) {
 	sels, err := pnode.BatchDedup(
+		ctx,
 		keys,
 		nil,
 		zm,
