@@ -460,37 +460,6 @@ func (tbl *txnTable) LoadDeletesForBlockIn(
 	return nil
 }
 
-func (tbl *txnTable) LoadDeletesForBlock(
-	blockID *types.Blockid,
-	deleteBlockId map[types.Blockid][]int,
-	deletesRowId map[types.Rowid]uint8) error {
-	for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blockID] {
-		vs := vector.MustStrCol(bat.GetVector(0))
-		for _, metalLoc := range vs {
-			location, err := blockio.EncodeLocationFromString(metalLoc)
-			if err != nil {
-				return err
-			}
-			rowIdBat, err := blockio.LoadColumns(tbl.db.txn.proc.Ctx, []uint16{0}, nil, tbl.db.txn.engine.fs, location, tbl.db.txn.proc.GetMPool())
-			if err != nil {
-				return err
-			}
-			rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
-			for _, rowId := range rowIds {
-				if deleteBlockId != nil {
-					id, offset := rowId.Decode()
-					deleteBlockId[id] = append(deleteBlockId[id], int(offset))
-				} else if deletesRowId != nil {
-					deletesRowId[rowId] = 0
-				} else {
-					panic("Load Block Deletes Error")
-				}
-			}
-		}
-	}
-	return nil
-}
-
 func (tbl *txnTable) GetEngineType() engine.EngineType {
 	return engine.Disttae
 }
