@@ -1,0 +1,43 @@
+select * from metadata_scan('table_func_metadata_scan.no_exist_table', '*') g;
+SQL parser error: table "no_exist_table" does not exist
+drop table if exists t;
+create table t(a int, b varchar);
+insert into t values(1, null);
+insert into t values(2, "abc");
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+insert into t select * from t;
+select count(*) from t;
+count(*)
+8192
+select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
+count(*)
+2
+select count(*) from metadata_scan('table_func_metadata_scan.t', 'a') g;
+count(*)
+1
+select count(*) from metadata_scan('table_func_metadata_scan.t', 'c') g;
+invalid input: bad input column name c
+select column_name, rows_count, null_count, compress_size, origin_size from metadata_scan('table_func_metadata_scan.t', 'a') g;
+column_name    rows_count    null_count    compress_size    origin_size
+a    8192    0    5384    32805
+select column_name, rows_count, null_count, compress_size, origin_size from metadata_scan('table_func_metadata_scan.t', '*') g;
+column_name    rows_count    null_count    compress_size    origin_size
+a    8192    0    5384    32805
+b    8192    4096    7254    197697
+select sum(compress_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
+sum(compress_size)
+12638
+select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
+sum(origin_size)
+230502
+drop table if exists t;
