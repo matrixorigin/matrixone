@@ -1008,13 +1008,6 @@ func getTyp(ctx context.Context) string {
 	return ""
 }
 
-func getAccountId(ctx context.Context) uint32 {
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		return v.(uint32)
-	}
-	return 0
-}
-
 func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 	var accountId, userId, roleId uint32
 
@@ -1103,7 +1096,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 func genDatabaseKey(ctx context.Context, name string) databaseKey {
 	return databaseKey{
 		name:      name,
-		accountId: getAccountId(ctx),
+		accountId: defines.GetAccountId(ctx),
 	}
 }
 
@@ -1111,7 +1104,7 @@ func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
-		accountId:  getAccountId(ctx),
+		accountId:  defines.GetAccountId(ctx),
 	}
 }
 

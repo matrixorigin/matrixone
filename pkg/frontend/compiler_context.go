@@ -531,6 +531,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
 		Version:      schemaVersion,
+		IsTemporary:  table.GetEngineType() == engine.Memory,
 	}
 	return obj, tableDef
 }

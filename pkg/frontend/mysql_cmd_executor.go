@@ -635,6 +635,10 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 	setVarFunc := func(system, global bool, name string, value interface{}) error {
 		if system {
 			if global {
+				err = doCheckRole(ctx, ses)
+				if err != nil {
+					return err
+				}
 				err = ses.SetGlobalVar(name, value)
 				if err != nil {
 					return err
@@ -1532,7 +1536,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	var ret *plan2.Plan
 	var err error
 	if ses != nil {
-		ses.accountId = getAccountId(requestCtx)
+		ses.accountId = defines.GetAccountId(requestCtx)
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
