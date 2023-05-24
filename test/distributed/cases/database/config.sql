@@ -27,8 +27,6 @@ use test1;
 select version();
 alter account config abc set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.8.0';
 select version();
-use test1;
-select version();
 drop database test;
 drop database test1;
 -- @session

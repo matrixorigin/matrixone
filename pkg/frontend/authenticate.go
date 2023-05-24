@@ -8066,8 +8066,8 @@ handleFailed:
 func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDataBaseConfig) error {
 	var err error
 	var sql string
-	var erArray []ExecResult
 	var newCtx context.Context
+	var isExist bool
 
 	accountName := stmt.AccountName
 	update_config := stmt.UpdateConfig
@@ -8082,24 +8082,14 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 
 	// step 1: check account exists or not
 	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	sql, err = getSqlForCheckTenant(newCtx, accountName)
-	if err != nil {
-		goto handleFailed
-	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
+	isExist, err = checkTenantExistsOrNot(newCtx, bh, accountName)
 	if err != nil {
 		goto handleFailed
 	}
 
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		goto handleFailed
-	}
-
-	if !execResultArrayHasData(erArray) {
+	if !isExist {
 		err = moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
-		goto handleFailed
+		return err
 	}
 
 	// step2: update the config
