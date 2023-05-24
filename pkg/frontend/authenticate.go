@@ -8067,6 +8067,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	var err error
 	var sql string
 	var erArray []ExecResult
+	var newCtx context.Context
 
 	accountName := stmt.AccountName
 	update_config := stmt.UpdateConfig
@@ -8080,7 +8081,8 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	}
 
 	// step 1: check account exists or not
-	sql, err = getSqlForCheckTenant(ctx, accountName)
+	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	sql, err = getSqlForCheckTenant(newCtx, accountName)
 	if err != nil {
 		goto handleFailed
 	}
@@ -8199,6 +8201,8 @@ func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 
 func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var datname string
+	var err error
+	var sql string
 
 	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
 		datname = string(deleteDatabaseStmt.Name)
@@ -8206,13 +8210,32 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 		if _, ok := sysDatabases[datname]; ok {
 			return nil
 		}
-		deletesql := getSqlForDeleteMysqlCompatbilityMode(datname)
 
 		bh := ses.GetBackgroundExec(ctx)
-		err := bh.Exec(ctx, deletesql)
+		err = bh.Exec(ctx, "begin")
+		if err != nil {
+			goto handleFailed
+		}
+		sql = getSqlForDeleteMysqlCompatbilityMode(datname)
+
+		err = bh.Exec(ctx, sql)
 		if err != nil {
 			return err
 		}
+
+		err = bh.Exec(ctx, "commit;")
+		if err != nil {
+			goto handleFailed
+		}
+		return err
+
+	handleFailed:
+		//ROLLBACK the transaction
+		rbErr := bh.Exec(ctx, "rollback;")
+		if rbErr != nil {
+			return rbErr
+		}
+		return err
 	}
 	return nil
 }
