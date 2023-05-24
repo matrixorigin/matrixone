@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"go/constant"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -238,6 +239,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
+			TblId:         node.TableDef.TblId,
 			Name:          node.TableDef.Name,
 			Defs:          node.TableDef.Defs,
 			Name2ColIndex: node.TableDef.Name2ColIndex,

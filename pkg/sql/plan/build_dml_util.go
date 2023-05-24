@@ -50,6 +50,7 @@ func getDmlPlanCtx() *dmlPlanCtx {
 	ctx.isFkRecursionCall = false
 	ctx.lockTable = false
 	ctx.checkInsertPkDup = false
+	ctx.pkFilterExpr = nil
 	return ctx
 }
 
@@ -90,6 +91,7 @@ type dmlPlanCtx struct {
 	isFkRecursionCall bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
 	lockTable         bool //we need lock table in stmt: delete from tbl
 	checkInsertPkDup  bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
+	pkFilterExpr      *Expr
 }
 
 // information of deleteNode, which is about the deleted table
@@ -109,7 +111,8 @@ type deleteNodeInfo struct {
 // buildInsertPlans  build insert plan.
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
-	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, checkInsertPkDup bool) error {
+	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32,
+	checkInsertPkDup bool, pkFilterExpr *Expr) error {
 
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
@@ -118,7 +121,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, pkFilterExpr)
 	return err
 }
 
@@ -191,7 +194,8 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
-	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength, sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup)
+	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
+		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.pkFilterExpr)
 
 	return err
 }
@@ -295,7 +299,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols[:j], insertUniqueTableDef.Cols[j+1:]...)
 							}
 						}
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, true)
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, true, nil)
 						if err != nil {
 							return err
 						}
@@ -701,6 +705,7 @@ func makeInsertPlan(
 	addAffectedRows bool,
 	isFkRecursionCall bool,
 	checkInsertPkDup bool,
+	pkFilterExpr *Expr,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -773,7 +778,7 @@ func makeInsertPlan(
 					return err
 				}
 
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup)
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDup, nil)
 				if err != nil {
 					return err
 				}
@@ -919,20 +924,21 @@ func makeInsertPlan(
 
 				rowIdDef := MakeRowIdColDef()
 				tableDef.Cols = append(tableDef.Cols, rowIdDef)
-				rightId := builder.appendNode(&Node{
+				scanPkExpr := &Expr{
+					Typ: pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							ColPos: int32(pkPos),
+							Name:   tableDef.Pkey.PkeyColName,
+						},
+					},
+				}
+				scanNode := &Node{
 					NodeType: plan.Node_TABLE_SCAN,
 					Stats:    &plan.Stats{},
 					ObjRef:   objRef,
 					TableDef: tableDef,
-					ProjectList: []*Expr{{
-						Typ: pkTyp,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								ColPos: int32(pkPos),
-								Name:   tableDef.Pkey.PkeyColName,
-							},
-						},
-					}, {
+					ProjectList: []*Expr{scanPkExpr, {
 						Typ: rowIdDef.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &ColRef{
@@ -941,7 +947,17 @@ func makeInsertPlan(
 							},
 						},
 					}},
-				}, bindCtx)
+				}
+				if pkFilterExpr != nil {
+					filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{scanPkExpr, pkFilterExpr})
+					if err != nil {
+						return err
+					}
+					scanNode.FilterList = []*Expr{filterExpr}
+				}
+
+				rightId := builder.appendNode(scanNode, bindCtx)
+
 				rightRowIdExpr := &Expr{
 					Typ: rowIdDef.Typ,
 					Expr: &plan.Expr_Col{

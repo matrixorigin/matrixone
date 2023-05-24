@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -41,6 +43,10 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
+	}
+	if !updatePlanCtxs[0].checkInsertPkDup {
+		pkFilterExpr := getPkFilterExpr(builder, tblInfo.tableDefs[0])
+		updatePlanCtxs[0].pkFilterExpr = pkFilterExpr
 	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
@@ -180,6 +186,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			updateColPosMap[colName] = offset
 			offset++
 		}
+
 		// append  table.* to project list
 		upPlanCtx := getDmlPlanCtx()
 		upPlanCtx.objRef = tableInfo.objRef[i]
@@ -217,6 +224,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		Limit:   stmt.Limit,
 		With:    stmt.With,
 	}
+
 	//ftCtx := tree.NewFmtCtx(dialect.MYSQL)
 	//selectAst.Format(ftCtx)
 	//sql := ftCtx.String()
@@ -226,4 +234,30 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		return -1, nil, err
 	}
 	return lastNodeId, updatePlanCtxs, nil
+}
+
+func getPkFilterExpr(builder *QueryBuilder, tableDef *TableDef) *Expr {
+
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 {
+			continue
+		}
+
+		preNode := builder.qry.Nodes[node.Children[0]]
+		if preNode.NodeType != plan.Node_TABLE_SCAN || preNode.TableDef.TblId != tableDef.TblId {
+			continue
+		}
+
+		pkName := fmt.Sprintf("%s.%s", tableDef.Name, tableDef.Pkey.PkeyColName)
+		if e, ok := node.FilterList[0].Expr.(*plan.Expr_F); ok && e.F.Func.ObjName == "=" {
+			if pkExpr, ok := e.F.Args[0].Expr.(*plan.Expr_Col); ok && pkExpr.Col.Name == pkName {
+				return DeepCopyExpr(e.F.Args[1])
+			}
+
+			if pkExpr, ok := e.F.Args[1].Expr.(*plan.Expr_Col); ok && pkExpr.Col.Name == pkName {
+				return DeepCopyExpr(e.F.Args[0])
+			}
+		}
+	}
+	return nil
 }
