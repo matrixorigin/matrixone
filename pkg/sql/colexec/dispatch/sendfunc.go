@@ -160,6 +160,7 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		}
 	}
 
+	ap.ctr.batsCount = 0
 	return false, nil
 }
 
