@@ -506,6 +506,9 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		Name2ColIndex: table.Name2ColIndex,
 		Indexes:       make([]*IndexDef, len(table.Indexes)),
 		Fkeys:         make([]*plan.ForeignKeyDef, len(table.Fkeys)),
+		IsLocked:      table.IsLocked,
+		IsTemporary:   table.IsTemporary,
+		TableLockType: table.TableLockType,
 	}
 
 	for idx, col := range table.Cols {
