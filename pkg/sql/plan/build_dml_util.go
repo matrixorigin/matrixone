@@ -893,63 +893,78 @@ func makeInsertPlan(
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			isUpdate := updateColLength > 0
 
-			pkColExpr := &Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						ColPos: int32(pkPos),
-						Name:   tableDef.Pkey.PkeyColName,
-					},
-				},
-			}
-			rightExpr := &Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						Name:   tableDef.Pkey.PkeyColName,
-					},
-				},
-			}
-			condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{pkColExpr, rightExpr})
-			if err != nil {
-				return err
-			}
-
 			if isUpdate {
-				rowIdDef := MakeRowIdColDef()
-				tableDef.Cols = append(tableDef.Cols, rowIdDef)
-
-				rowIdExpr := &Expr{
-					Typ: rowIdDef.Typ,
+				pkColExpr := &Expr{
+					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							ColPos: int32(len(tableDef.Cols) - 1),
-							Name:   rowIdDef.Name,
+							RelPos: 1,
+							ColPos: int32(pkPos),
+							Name:   tableDef.Pkey.PkeyColName,
 						},
 					},
 				}
+				rightExpr := &Expr{
+					Typ: pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							Name: tableDef.Pkey.PkeyColName,
+						},
+					},
+				}
+				condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{pkColExpr, rightExpr})
+				if err != nil {
+					return err
+				}
+
+				rowIdDef := MakeRowIdColDef()
+				tableDef.Cols = append(tableDef.Cols, rowIdDef)
 				rightId := builder.appendNode(&Node{
-					NodeType:    plan.Node_TABLE_SCAN,
-					Stats:       &plan.Stats{},
-					ObjRef:      objRef,
-					TableDef:    tableDef,
-					ProjectList: []*Expr{pkColExpr, rowIdExpr},
+					NodeType: plan.Node_TABLE_SCAN,
+					Stats:    &plan.Stats{},
+					ObjRef:   objRef,
+					TableDef: tableDef,
+					ProjectList: []*Expr{{
+						Typ: pkTyp,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								ColPos: int32(pkPos),
+								Name:   tableDef.Pkey.PkeyColName,
+							},
+						},
+					}, {
+						Typ: rowIdDef.Typ,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								ColPos: int32(len(tableDef.Cols) - 1),
+								Name:   rowIdDef.Name,
+							},
+						},
+					}},
 				}, bindCtx)
 				rightRowIdExpr := &Expr{
 					Typ: rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							RelPos: 1,
 							ColPos: 1,
+							Name:   rowIdDef.Name,
+						},
+					},
+				}
+				rowIdExpr := &Expr{
+					Typ: rowIdDef.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: 1,
+							ColPos: int32(len(tableDef.Cols) - 1),
 							Name:   rowIdDef.Name,
 						},
 					},
 				}
 				lastNodeId = builder.appendNode(&plan.Node{
 					NodeType:    plan.Node_JOIN,
-					Children:    []int32{lastNodeId, rightId},
-					JoinType:    plan.Node_LEFT,
+					Children:    []int32{rightId, lastNodeId},
+					JoinType:    plan.Node_RIGHT,
 					OnList:      []*Expr{condExpr},
 					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
 				}, bindCtx)
@@ -1082,6 +1097,29 @@ func makeInsertPlan(
 				}, bindCtx)
 				builder.appendStep(lastNodeId)
 			} else {
+				pkColExpr := &Expr{
+					Typ: pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							ColPos: int32(pkPos),
+							Name:   tableDef.Pkey.PkeyColName,
+						},
+					},
+				}
+				rightExpr := &Expr{
+					Typ: pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 1,
+							Name:   tableDef.Pkey.PkeyColName,
+						},
+					},
+				}
+				condExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{pkColExpr, rightExpr})
+				if err != nil {
+					return err
+				}
+
 				rightId := builder.appendNode(&plan.Node{
 					NodeType:    plan.Node_TABLE_SCAN,
 					Stats:       &plan.Stats{},
@@ -1544,15 +1582,31 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		}
 	}
 	if len(hiddenColumnTyp) > 0 {
-		for i, typ := range hiddenColumnTyp {
-			preInsertProjection = append(preInsertProjection, &plan.Expr{
-				Typ: typ,
-				Expr: &plan.Expr_Col{Col: &plan.ColRef{
-					RelPos: -1,
-					ColPos: int32(i),
-					Name:   hiddenColumnName[i],
-				}},
-			})
+		if isUpdate {
+			rowIdProj := preInsertProjection[len(preInsertProjection)-1]
+			preInsertProjection = preInsertProjection[:len(preInsertProjection)-1]
+			for i, typ := range hiddenColumnTyp {
+				preInsertProjection = append(preInsertProjection, &plan.Expr{
+					Typ: typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: int32(i),
+						Name:   hiddenColumnName[i],
+					}},
+				})
+			}
+			preInsertProjection = append(preInsertProjection, rowIdProj)
+		} else {
+			for i, typ := range hiddenColumnTyp {
+				preInsertProjection = append(preInsertProjection, &plan.Expr{
+					Typ: typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: int32(i),
+						Name:   hiddenColumnName[i],
+					}},
+				})
+			}
 		}
 	}
 
