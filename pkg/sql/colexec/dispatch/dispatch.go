@@ -160,7 +160,7 @@ func (arg *Argument) initShuffle() {
 	if arg.ctr.sels == nil {
 		arg.ctr.sels = make([][]int32, arg.ctr.aliveRegCnt)
 		for i := 0; i < arg.ctr.aliveRegCnt; i++ {
-			arg.ctr.sels[i] = make([]int32, shuffleBatchSize)
+			arg.ctr.sels[i] = make([]int32, 8192)
 		}
 		arg.ctr.batsCount = 0
 		arg.ctr.shuffledBats = make([]*batch.Batch, arg.ctr.aliveRegCnt)
