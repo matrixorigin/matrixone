@@ -356,7 +356,7 @@ import (
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE
 
 // SET tokens
-%token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
+%token <str> NAMES GLOBAL PERSIST SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
 %token <str> LOCAL EVENTS PLUGINS
 
 // Functions
@@ -1918,6 +1918,15 @@ var_assignment:
             Value: $4,
         }
     }
+|   PERSIST var_name equal_or_assignment set_expr
+    {
+        $$ = &tree.VarAssignmentExpr{
+            System: true,
+            Global: true,
+            Name: $2,
+            Value: $4,
+        }
+    }
 |   SESSION var_name equal_or_assignment set_expr
     {
         $$ = &tree.VarAssignmentExpr{
@@ -2586,22 +2595,34 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-     ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
-     {
+    ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
+    {
         $$ = &tree.AlterDataBaseConfig{
             DbName:$3,
             UpdateConfig: $7,
             IsAccountLevel: false,
         }
-     }
-|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
-     {
+    }
+|   ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
+    {
         $$ = &tree.AlterDataBaseConfig{
             AccountName:$4,
             UpdateConfig: $8,
             IsAccountLevel: true,
         }
-     }
+    }
+|   ALTER ACCOUNT CONFIG SET MYSQL_COMPATIBILITY_MODE  var_name equal_or_assignment set_expr
+    {
+        assignments := []*tree.VarAssignmentExpr{
+            &tree.VarAssignmentExpr{
+                System: true,
+                Global: true,
+                Name: $6,
+                Value: $8,
+            },
+        }
+        $$ = &tree.SetVar{Assignments: assignments} 
+    }
     
 alter_account_auth_option:
 {
@@ -9187,6 +9208,7 @@ non_reserved_keyword:
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
 |   GLOBAL
+|   PERSIST
 |   GRANT
 |   INT
 |   INTEGER
