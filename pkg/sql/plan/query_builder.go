@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"go/constant"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -244,6 +245,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
 			Partition:     node.TableDef.Partition,
+			IsLocked:      node.TableDef.IsLocked,
+			IsTemporary:   node.TableDef.IsTemporary,
+			TableLockType: node.TableDef.TableLockType,
 		}
 
 		for i, col := range node.TableDef.Cols {
