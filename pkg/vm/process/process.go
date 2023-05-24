@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -47,6 +48,7 @@ func New(
 		TxnClient:    txnClient,
 		TxnOperator:  txnOperator,
 		FileService:  fileService,
+		IncrService:  incrservice.GetAutoIncrementService(),
 		UnixTime:     time.Now().UnixNano(),
 		LastInsertID: new(uint64),
 		LockService:  lockService,
@@ -78,6 +80,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.AnalInfos = p.AnalInfos
 	proc.SessionInfo = p.SessionInfo
 	proc.FileService = p.FileService
+	proc.IncrService = p.IncrService
 	proc.UnixTime = p.UnixTime
 	proc.LastInsertID = p.LastInsertID
 	proc.LockService = p.LockService

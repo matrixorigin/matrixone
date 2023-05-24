@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -374,12 +374,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		// 3. init temp-db to store temporary relations
 		err = tempEngine.Create(requestCtx, defines.TEMPORARY_DBNAME, cwft.ses.txnHandler.txnOperator)
-		if err != nil {
-			return nil, err
-		}
-
-		// 4. add auto_IncrementTable fortemp-db
-		err = colexec.CreateAutoIncrTable(cwft.ses.GetStorage(), requestCtx, cwft.proc, defines.TEMPORARY_DBNAME)
 		if err != nil {
 			return nil, err
 		}

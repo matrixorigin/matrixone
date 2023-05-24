@@ -230,7 +230,7 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 	}
 }
 
-func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
+func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
 	reconnectErr := make(chan error)
 
 	go func() {
@@ -239,10 +239,9 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 			errChan := make(chan error, parallelNums)
 			receiver := make([]routineController, parallelNums)
 			for i := range receiver {
-				receiver[i] = createRoutineToConsumeLogTails(i, bufferLength, e, errChan)
+				receiver[i] = createRoutineToConsumeLogTails(ctx, i, bufferLength, e, errChan)
 			}
 
-			ctx := context.TODO()
 			ch := make(chan logTailSubscriberResponse, 1)
 			// a dead loop to receive log, if lost connect, should reconnect.
 			for {
@@ -328,7 +327,7 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 				e.cleanMemoryTable()
 
 				go func() {
-					err := client.firstTimeConnectToLogTailServer(context.TODO())
+					err := client.firstTimeConnectToLogTailServer(ctx)
 					reconnectErr <- err
 				}()
 				break
@@ -337,9 +336,8 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 	}()
 }
 
-func (client *pushClient) unusedTableGCTicker() {
+func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 	go func() {
-		ctx := context.TODO()
 		ticker := time.NewTicker(unsubscribeProcessTicker)
 		for {
 			<-ticker.C
@@ -617,8 +615,8 @@ func (e *Engine) InitLogTailPushModel(
 		timestampWaiter); err != nil {
 		return err
 	}
-	e.pClient.receiveTableLogTailContinuously(e)
-	e.pClient.unusedTableGCTicker()
+	e.pClient.receiveTableLogTailContinuously(ctx, e)
+	e.pClient.unusedTableGCTicker(ctx)
 
 	// first time connect to log tail server, should push subscription of some table on `mo_catalog` database.
 	if err := e.pClient.firstTimeConnectToLogTailServer(ctx); err != nil {
@@ -646,7 +644,7 @@ func distributeSubscribeResponse(
 		e.pClient.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % parallelNums
-		recRoutines[routineIndex].sendSubscribeResponse(response)
+		recRoutines[routineIndex].sendSubscribeResponse(ctx, response)
 	}
 	// no matter how we consume the response, should update all timestamp.
 	e.pClient.receivedLogTailTime.updateTimestamp(parallelNums, *lt.Ts)
@@ -724,13 +722,12 @@ func distributeUnSubscribeResponse(
 }
 
 type routineController struct {
-	ctx        context.Context
 	routineId  int
 	closeChan  chan bool
 	signalChan chan routineControlCmd
 }
 
-func (rc *routineController) sendSubscribeResponse(r *logtail.SubscribeResponse) {
+func (rc *routineController) sendSubscribeResponse(ctx context.Context, r *logtail.SubscribeResponse) {
 	rc.signalChan <- cmdToConsumeSub{log: r}
 }
 
@@ -751,10 +748,10 @@ func (rc *routineController) close() {
 }
 
 func createRoutineToConsumeLogTails(
+	ctx context.Context,
 	routineId int, signalBufferLength int,
 	e *Engine, errOut chan error) routineController {
 	controller := routineController{
-		ctx:        context.TODO(),
 		routineId:  routineId,
 		closeChan:  make(chan bool),
 		signalChan: make(chan routineControlCmd, signalBufferLength),
@@ -764,7 +761,7 @@ func createRoutineToConsumeLogTails(
 		for {
 			select {
 			case cmd := <-receiver.signalChan:
-				if err := cmd.action(engine, receiver); err != nil {
+				if err := cmd.action(ctx, engine, receiver); err != nil {
 					errRet <- err
 				}
 
@@ -781,7 +778,7 @@ func createRoutineToConsumeLogTails(
 
 // a signal to control the routine which is responsible for consuming log tail.
 type routineControlCmd interface {
-	action(e *Engine, ctrl *routineController) error
+	action(ctx context.Context, e *Engine, ctrl *routineController) error
 }
 
 type cmdToConsumeSub struct{ log *logtail.SubscribeResponse }
@@ -789,9 +786,9 @@ type cmdToConsumeLog struct{ log logtail.TableLogtail }
 type cmdToUpdateTime struct{ time timestamp.Timestamp }
 type cmdToConsumeUnSub struct{ log *logtail.UnSubscribeResponse }
 
-func (cmd cmdToConsumeSub) action(e *Engine, ctrl *routineController) error {
+func (cmd cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeSubscribeResponse(ctrl.ctx, response, true); err != nil {
+	if err := e.consumeSubscribeResponse(ctx, response, true); err != nil {
 		return err
 	}
 	lt := response.GetLogtail()
@@ -800,20 +797,20 @@ func (cmd cmdToConsumeSub) action(e *Engine, ctrl *routineController) error {
 	return nil
 }
 
-func (cmd cmdToConsumeLog) action(e *Engine, ctrl *routineController) error {
+func (cmd cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeUpdateLogTail(ctrl.ctx, response, true); err != nil {
+	if err := e.consumeUpdateLogTail(ctx, response, true); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (cmd cmdToUpdateTime) action(e *Engine, ctrl *routineController) error {
+func (cmd cmdToUpdateTime) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	e.pClient.receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.time)
 	return nil
 }
 
-func (cmd cmdToConsumeUnSub) action(e *Engine, _ *routineController) error {
+func (cmd cmdToConsumeUnSub) action(ctx context.Context, e *Engine, _ *routineController) error {
 	table := cmd.log.Table
 	e.cleanMemoryTableWithTable(table.DbId, table.TbId)
 	e.pClient.subscribed.setTableUnsubscribe(table.DbId, table.TbId)

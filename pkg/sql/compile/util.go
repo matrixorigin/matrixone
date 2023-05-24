@@ -18,14 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"time"
 )
 
 const (
@@ -338,18 +339,21 @@ func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *proces
 
 func genNewUniqueIndexDuplicateCheck(c *Compile, database, table, cols string) error {
 	duplicateCheckSql := fmt.Sprintf(selectOriginTableConstraintFormat, cols, database, table, cols, cols)
-	fill := func(_ any, b *batch.Batch) error {
-		if b == nil || b.Length() == 0 {
-			return nil
-		}
-		t, err := types.Unpack(b.Vecs[0].GetBytesAt(0))
-		if err != nil {
-			return err
-		}
-		return moerr.NewDuplicateEntry(c.ctx, t.ErrString(), cols)
+	res, err := c.runSqlWithResult(duplicateCheckSql)
+	if err != nil {
+		return err
 	}
+	defer res.Close()
 
-	return c.runSql(duplicateCheckSql, fill)
+	res.ReadRows(func(colVecs []*vector.Vector) bool {
+		if t, e := types.Unpack(colVecs[0].GetBytesAt(0)); e != nil {
+			err = e
+		} else {
+			err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(), cols)
+		}
+		return true
+	})
+	return err
 }
 
 func partsToColsStr(parts []string) string {

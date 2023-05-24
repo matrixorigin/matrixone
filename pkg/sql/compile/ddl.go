@@ -26,12 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -57,17 +58,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		datType = catalog.SystemDBTypeSubscription
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	err := c.e.Create(ctx,
-		dbName, c.proc.TxnOperator)
-	if err != nil {
-		return err
-	}
-
-	// subscription database does not need to create auto increment table
-	if datType == catalog.SystemDBTypeSubscription {
-		return nil
-	}
-	return colexec.CreateAutoIncrTable(c.e, c.ctx, c.proc, dbName)
+	return c.e.Create(ctx, dbName, c.proc.TxnOperator)
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -84,7 +75,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 	// delete all index object under the database from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
-	err = c.runSql(deleteSql, nil)
+	err = c.runSql(deleteSql)
 	if err != nil {
 		return err
 	}
@@ -194,7 +185,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 						}
 						//2. delete index object from mo_catalog.mo_indexes
 						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tableDef.TblId, indexdef.IndexName)
-						err = c.runSql(deleteSql, nil)
+						err = c.runSql(deleteSql)
 						if err != nil {
 							return err
 						}
@@ -222,7 +213,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 			if err != nil {
 				return err
 			}
-			err = c.runSql(insertSql, nil)
+			err = c.runSql(insertSql)
 			if err != nil {
 				return err
 			}
@@ -231,14 +222,14 @@ func (s *Scope) AlterTable(c *Compile) error {
 				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
 				// 2. create index table from unique index object
 				createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
-				err = c.runSql(createSQL, nil)
+				err = c.runSql(createSQL)
 				if err != nil {
 					return err
 				}
 
 				// 3. insert data into index table for unique index object
 				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
-				err = c.runSql(insertSQL, nil)
+				err = c.runSql(insertSQL)
 				if err != nil {
 					return err
 				}
@@ -258,7 +249,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 					} else {
 						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, tableDef.TblId, indexdef.IndexName)
 					}
-					err = c.runSql(updateSql, nil)
+					err = c.runSql(updateSql)
 					if err != nil {
 						return err
 					}
@@ -368,7 +359,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
-	tableCols := planCols
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
@@ -518,16 +508,21 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		err = c.runSql(insertSQL, nil)
+		err = c.runSql(insertSQL)
 		if err != nil {
 			return err
 		}
 	}
-	return colexec.CreateAutoIncrCol(c.ctx, dbSource, c.proc, tableCols, tblName)
+	return maybeCreateAutoIncrement(
+		c.ctx,
+		dbSource,
+		qry.GetTableDef(),
+		c.proc.TxnOperator,
+		nil)
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
-	if dbName == "mo_task" {
+	if dbName == catalog.MOTaskDB {
 		return false
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_INDEXES {
 		return false
@@ -539,7 +534,6 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
-	tableCols := planCols
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
@@ -602,7 +596,14 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		}
 	}
 
-	return colexec.CreateAutoIncrCol(c.ctx, tmpDBSource, c.proc, tableCols, engine.GetTempTableName(dbName, tblName))
+	return maybeCreateAutoIncrement(
+		c.ctx,
+		tmpDBSource,
+		qry.GetTableDef(),
+		c.proc.TxnOperator,
+		func() string {
+			return engine.GetTempTableName(dbName, tblName)
+		})
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {
@@ -634,13 +635,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	if qry.TableExist {
 		def := qry.GetIndex().GetIndexTables()[0]
 		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
-		err = c.runSql(createSQL, nil)
+		err = c.runSql(createSQL)
 		if err != nil {
 			return err
 		}
 
 		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
-		err = c.runSql(insertSQL, nil)
+		err = c.runSql(insertSQL)
 		if err != nil {
 			return err
 		}
@@ -677,7 +678,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	err = c.runSql(sql, nil)
+	err = c.runSql(sql)
 	if err != nil {
 		return err
 	}
@@ -728,7 +729,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 	//3. delete index object from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.ctx), qry.IndexName)
-	err = c.runSql(deleteSql, nil)
+	err = c.runSql(deleteSql)
 	if err != nil {
 		return err
 	}
@@ -990,19 +991,22 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	}
 
-	id := rel.GetTableID(c.ctx)
-
 	if isTemp {
-		err = colexec.ResetAutoInsrCol(c.e, c.ctx, engine.GetTempTableName(dbName, tblName), dbSource, c.proc, id, newId, defines.TEMPORARY_DBNAME)
-	} else {
-		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
+		oldId = rel.GetTableID(c.ctx)
 	}
+	err = incrservice.GetAutoIncrementService().Reset(
+		c.ctx,
+		oldId,
+		newId,
+		false,
+		c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
+
 	// update index information in mo_catalog.mo_indexes
 	updateSql := fmt.Sprintf(updateMoIndexesTruncateTableFormat, newId, oldId)
-	err = c.runSql(updateSql, nil)
+	err = c.runSql(updateSql)
 	if err != nil {
 		return err
 	}
@@ -1097,7 +1101,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
 		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
 			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
-			err = c.runSql(deleteSql, nil)
+			err = c.runSql(deleteSql)
 			if err != nil {
 				return err
 			}
@@ -1122,7 +1126,10 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
+			err := incrservice.GetAutoIncrementService().Delete(
+				c.ctx,
+				rel.GetTableID(c.ctx),
+				c.proc.TxnOperator)
 			if err != nil {
 				return err
 			}
@@ -1147,7 +1154,10 @@ func (s *Scope) DropTable(c *Compile) error {
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
 			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+			err := incrservice.GetAutoIncrementService().Delete(
+				c.ctx,
+				rel.GetTableID(c.ctx),
+				c.proc.TxnOperator)
 			if err != nil {
 				return err
 			}
@@ -1626,4 +1636,32 @@ func lockTable(
 		proc,
 		id,
 		defs[0].Type)
+}
+
+func maybeCreateAutoIncrement(
+	ctx context.Context,
+	db engine.Database,
+	def *plan.TableDef,
+	txnOp client.TxnOperator,
+	nameResolver func() string) error {
+	if def.TblId == 0 {
+		name := def.Name
+		if nameResolver != nil {
+			name = nameResolver()
+		}
+		tb, err := db.Relation(ctx, name)
+		if err != nil {
+			return err
+		}
+		def.TblId = tb.GetTableID(ctx)
+	}
+	cols := incrservice.GetAutoColumnFromDef(def)
+	if len(cols) == 0 {
+		return nil
+	}
+	return incrservice.GetAutoIncrementService().Create(
+		ctx,
+		def.TblId,
+		cols,
+		txnOp)
 }

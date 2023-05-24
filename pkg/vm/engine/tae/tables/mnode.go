@@ -24,7 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 )
 
 var _ NodeT = (*memoryNode)(nil)
@@ -37,7 +38,7 @@ type memoryNode struct {
 	prefix      []byte
 
 	//index for primary key : Art tree + ZoneMap.
-	pkIndex indexwrapper.Index
+	pkIndex *indexwrapper.MutIndex
 }
 
 func newMemoryNode(block *baseBlock) *memoryNode {
@@ -61,7 +62,7 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 		return
 	}
 	pkDef := schema.GetSingleSortKey()
-	node.pkIndex = indexwrapper.NewPkMutableIndex(pkDef.Type)
+	node.pkIndex = indexwrapper.NewMutIndex(pkDef.Type)
 }
 
 func (node *memoryNode) close() {
@@ -79,11 +80,11 @@ func (node *memoryNode) IsPersisted() bool { return false }
 
 func (node *memoryNode) BatchDedup(
 	keys containers.Vector,
+	keysZM index.ZM,
 	skipFn func(row uint32) error,
-	zm []byte,
 	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn, zm, bf)
+	return node.pkIndex.BatchDedup(keys, keysZM, skipFn, bf)
 }
 
 func (node *memoryNode) ContainsKey(key any) (ok bool, err error) {

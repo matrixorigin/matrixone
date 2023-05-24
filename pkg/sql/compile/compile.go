@@ -27,15 +27,11 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -47,15 +43,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -2603,24 +2601,23 @@ func (s *Scope) affectedRows() uint64 {
 	return affectedRows
 }
 
-func (c *Compile) runSql(sql string, fill func(any, *batch.Batch) error) error {
-	if sql == "" {
-		return nil
-	}
-	stmts, err := parsers.Parse(c.ctx, dialect.MYSQL, sql, 1)
+func (c *Compile) runSql(sql string) error {
+	res, err := c.runSqlWithResult(sql)
 	if err != nil {
 		return err
 	}
+	res.Close()
+	return nil
+}
 
-	pn, err := plan2.BuildPlan(c.proc.SessionInfo.SqlHelper.GetCompilerContext().(plan2.CompilerContext), stmts[0])
-	if err != nil {
-		return err
+func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
+	v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
 	}
-	newC := New(c.addr, c.db, sql, c.tenant, c.uid, c.ctx, c.e,
-		c.proc, stmts[0], c.isInternal, c.cnLabel)
-	if err := newC.Compile(c.ctx, pn, nil, fill); err != nil {
-		return err
-	}
-	return newC.Run(0)
-
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}.
+		WithTxn(c.proc.TxnOperator).
+		WithDatabase(c.db)
+	return exec.Exec(c.proc.Ctx, sql, opts)
 }
