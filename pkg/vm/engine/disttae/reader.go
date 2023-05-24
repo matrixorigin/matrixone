@@ -176,10 +176,14 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	if err != nil {
 		return nil, err
 	}
+	//FIXME::
 	bat.SetAttributes(cols)
 	r.sels = r.sels[:0]
+	//TODO:: need to handle case : len(r.blks[o].deletes) == 0
 	deletes := make([]int, len(r.blks[0].deletes))
+	//FIXME::this is a bug : bat had shinked , the row numnber had changed..
 	copy(deletes, r.blks[0].deletes)
+	//FIXME::why sort deletes?  batch.Shrink need to shrink by the ordered sels.
 	sort.Ints(deletes)
 	for i := 0; i < bat.Length(); i++ {
 		if len(deletes) > 0 && i == deletes[0] {

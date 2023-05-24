@@ -205,7 +205,57 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	return 0, nil
 }
 
-func (tbl *txnTable) LoadDeletesForBlock(blockID *types.Blockid, deleteBlockId map[types.Blockid][]int, deletesRowId map[types.Rowid]uint8) error {
+// LoadDeletesForBlockIn loads deletes for blocks in PartitionState.
+func (tbl *txnTable) LoadDeletesForBlockIn(
+	state *logtailreplay.PartitionState,
+	in bool,
+	deleteBlockId map[types.Blockid][]int,
+	deletesRowId map[types.Rowid]uint8) error {
+
+	for blk, bats := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
+		if in != state.BlockVisible(
+			blk, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
+			continue
+		}
+		for _, bat := range bats {
+			vs := vector.MustStrCol(bat.GetVector(0))
+			for _, metalLoc := range vs {
+				location, err := blockio.EncodeLocationFromString(metalLoc)
+				if err != nil {
+					return err
+				}
+				rowIdBat, err := blockio.LoadColumns(
+					tbl.db.txn.proc.Ctx,
+					[]uint16{0},
+					nil,
+					tbl.db.txn.engine.fs,
+					location,
+					tbl.db.txn.proc.GetMPool())
+				if err != nil {
+					return err
+				}
+				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
+				for _, rowId := range rowIds {
+					if deleteBlockId != nil {
+						id, offset := rowId.Decode()
+						deleteBlockId[id] = append(deleteBlockId[id], int(offset))
+					} else if deletesRowId != nil {
+						deletesRowId[rowId] = 0
+					} else {
+						panic("Load Block Deletes Error")
+					}
+				}
+			}
+		}
+
+	}
+	return nil
+}
+
+func (tbl *txnTable) LoadDeletesForBlock(
+	blockID *types.Blockid,
+	deleteBlockId map[types.Blockid][]int,
+	deletesRowId map[types.Rowid]uint8) error {
 	for _, bat := range tbl.db.txn.blockId_dn_delete_metaLoc_batch[*blockID] {
 		vs := vector.MustStrCol(bat.GetVector(0))
 		for _, metalLoc := range vs {
@@ -300,7 +350,20 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges []
 	return
 }
 
-// this function is to filter out the blocks to be read and marshal them into a byte array
+// txn can read :
+//  1. snapshot data
+//      1>. DN blocks data resides in S3.
+//      2>.partition state data resides in memory. read by partitionRead.
+
+//      deletes for DN's block exists in four places, rangesOnePart() collect 2 and 3 and 4.
+//      1. in delta location through dn writing S3. read by blockRead.
+//      2. in dn memory, namely cn partition state, read by blockMergeReader.
+//  	3. batch of row id in memory being deleted by txn.
+//  	4. in delta location being deleted through txn writing S3.
+
+//  2. data in txn's workspace. read by partitionRead.
+//     1>.txn workspace : raw batch data resides in memory.
+//     2>.txn workspace : CN blocks resides in S3.
 func (tbl *txnTable) rangesOnePart(
 	ctx context.Context,
 	ts timestamp.Timestamp, // snapshot timestamp
@@ -313,63 +376,29 @@ func (tbl *txnTable) rangesOnePart(
 	proc *process.Process, // process of this transaction
 ) (err error) {
 	deletes := make(map[types.Blockid][]int)
-	//ids := make([]types.Blockid, len(blocks))
-	//appendIds := make([]types.Blockid, 0, 1)
 
-	//for i := range blocks {
-	//	// if cn can see a appendable block, this block must contain all updates
-	//	// in cache, no need to do merge read, BlockRead will filter out
-	//	// invisible and deleted rows with respect to the timestamp
-	//	if blocks[i].EntryState {
-	//		appendIds = append(appendIds, blocks[i].BlockID)
-	//	} else {
-	//		if blocks[i].CommitTs.ToTimestamp().Less(ts) { // hack
-	//			ids[i] = blocks[i].BlockID
-	//		}
-	//	}
-	//}
-
-	// non-append -> flush-deletes -- yes
-	// non-append -> raw-deletes  -- yes
-	// append     -> raw-deletes -- yes
-	// append     -> flush-deletes -- yes
-	//for _, blockID := range ids {
-	//	ts := types.TimestampToTS(ts)
-	//	iter := state.NewRowsIter(ts, &blockID, true)
-	//	for iter.Next() {
-	//		entry := iter.Entry()
-	//		id, offset := entry.RowID.Decode()
-	//		deletes[id] = append(deletes[id], int(offset))
-	//	}
-	//	iter.Close()
-	//	// DN flush deletes rowids block
-	//	if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
-	//		return
-	//	}
-	//}
-
-	for _, blk := range blocks {
-		//for non-appendable block
-		if !blk.EntryState {
-			ts := types.TimestampToTS(ts)
-			iter := state.NewRowsIter(ts, &blk.BlockID, true)
-			for iter.Next() {
-				entry := iter.Entry()
-				id, offset := entry.RowID.Decode()
-				deletes[id] = append(deletes[id], int(offset))
-			}
-			iter.Close()
+	//collect deletes from PartitionState.dirtyRows.
+	{
+		ts := types.TimestampToTS(ts)
+		iter := state.NewDirtyRowsIter(ts, nil, true)
+		for iter.Next() {
+			entry := iter.Entry()
+			id, offset := entry.RowID.Decode()
+			deletes[id] = append(deletes[id], int(offset))
 		}
-		if err = tbl.LoadDeletesForBlock(&blk.BlockID, deletes, nil); err != nil {
-			return
-		}
+		iter.Close()
 	}
-
+	//deletes on S3 written by txn maybe comes from PartitionState.rows or PartitionState.blocks,
+	// here oonly collect deletes from PartitionState.blocks.
+	if err = tbl.LoadDeletesForBlockIn(state, true, deletes, nil); err != nil {
+		return
+	}
+	//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks,Here
+	// only collect deletes in PartitionState.blocks into modifies.
 	for _, entry := range tbl.writes {
 		if entry.isGeneratedByTruncate() {
 			continue
 		}
-		// rawBatch detele rowId for Dn block
 		if entry.typ == DELETE && entry.fileName == "" {
 			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for _, v := range vs {
@@ -378,14 +407,6 @@ func (tbl *txnTable) rangesOnePart(
 			}
 		}
 	}
-
-	// add append-block flush-deletes
-	//for _, blockID := range appendIds {
-	//	// DN flush deletes rowids block
-	//	if err = tbl.LoadDeletesForBlock(&blockID, deletes, nil); err != nil {
-	//		return
-	//	}
-	//}
 
 	var (
 		objMeta   objectio.ObjectMeta
@@ -1043,6 +1064,8 @@ func (tbl *txnTable) newReader(
 					if entry.isGeneratedByTruncate() {
 						continue
 					}
+					//FIXME:: deletes in txn.Write maybe comes from PartitionState.Rows ,
+					//        so Partition Reader need to skip them.
 					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 					for _, v := range vs {
 						deletes[v] = 0
@@ -1050,38 +1073,12 @@ func (tbl *txnTable) newReader(
 				}
 			}
 		}
-		// get all blocks in disk
-		meta_blocks := make(map[types.Blockid]bool)
-		if len(tbl.blockInfos) > 0 {
-			for _, blk := range tbl.blockInfos[0] {
-				meta_blocks[blk.BlockID] = true
-			}
+		states, err := tbl.getParts(ctx)
+		if err != nil {
+			return nil, err
 		}
-
-		for blkId := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
-			if !meta_blocks[blkId] {
-				tbl.LoadDeletesForBlock(&blkId, nil, deletes)
-			}
-		}
-		// add add rawBatchRowId deletes info
-		for _, entry := range tbl.writes {
-			if entry.isGeneratedByTruncate() {
-				continue
-			}
-			// rawBatch detele rowId for memory Dn block
-			if entry.typ == DELETE && entry.fileName == "" {
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				if len(vs) == 0 {
-					continue
-				}
-				blkId := vs[0].CloneBlockID()
-				if !meta_blocks[blkId] {
-					for _, v := range vs {
-						deletes[v] = 0
-					}
-				}
-			}
-		}
+		//FIXME::deletes maybe comes from PartitionState.rows, PartitionReader need to skip them.
+		tbl.LoadDeletesForBlockIn(states[partitionIndex], false, nil, deletes)
 	}
 
 	readers := make([]engine.Reader, readerNumber)
