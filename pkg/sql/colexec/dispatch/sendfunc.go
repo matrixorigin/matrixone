@@ -31,8 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs int) ([][]int32, []int) {
-	sels, lenShuffledSels := ap.getSels()
+func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs int) [][]int32 {
+	sels := ap.getSels()
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
@@ -43,7 +43,6 @@ func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs int) ([][]int32, []
 			}
 			regIndex := v % int64(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
-			lenShuffledSels[regIndex]++
 		}
 	case types.T_int32:
 		groupByCol := vector.MustFixedCol[int32](groupByVec)
@@ -53,7 +52,6 @@ func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs int) ([][]int32, []
 			}
 			regIndex := v % int32(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
-			lenShuffledSels[regIndex]++
 		}
 	case types.T_int16:
 		groupByCol := vector.MustFixedCol[int16](groupByVec)
@@ -63,40 +61,35 @@ func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs int) ([][]int32, []
 			}
 			regIndex := v % int16(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
-			lenShuffledSels[regIndex]++
 		}
 	case types.T_uint64:
 		groupByCol := vector.MustFixedCol[uint64](groupByVec)
 		for row, v := range groupByCol {
 			regIndex := v % uint64(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
-			lenShuffledSels[regIndex]++
 		}
 	case types.T_uint32:
 		groupByCol := vector.MustFixedCol[uint32](groupByVec)
 		for row, v := range groupByCol {
 			regIndex := v % uint32(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
-			lenShuffledSels[regIndex]++
 		}
 	case types.T_uint16:
 		groupByCol := vector.MustFixedCol[uint16](groupByVec)
 		for row, v := range groupByCol {
 			regIndex := v % uint16(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
-			lenShuffledSels[regIndex]++
 		}
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol := vector.MustFixedCol[types.Varlena](groupByVec)
 		for row, v := range groupByCol {
 			regIndex := plan2.SimpleHashToRange(v.GetByteSlice(groupByVec.GetArea()), lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
-			lenShuffledSels[regIndex]++
 		}
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
-	return sels, lenShuffledSels
+	return sels
 }
 
 func genShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.Process) error {
@@ -116,11 +109,12 @@ func genShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 		}
 	}
 
-	sels, lenShuffledSels := getShuffledSels(ap, bat, lenRegs)
+	sels := getShuffledSels(ap, bat, lenRegs)
 
 	//generate new shuffled bats
 	for regIndex := range shuffledBats {
-		if lenShuffledSels[regIndex] > 0 {
+		lenSels := len(sels[regIndex])
+		if lenSels > 0 {
 			b := shuffledBats[regIndex]
 			for vecIndex := range b.Vecs {
 				v := b.Vecs[vecIndex]
@@ -129,7 +123,7 @@ func genShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 					return err
 				}
 			}
-			for i := 0; i < lenShuffledSels[regIndex]; i++ {
+			for i := 0; i < lenSels; i++ {
 				b.Zs = append(b.Zs, bat.Zs[sels[regIndex][i]])
 			}
 		}

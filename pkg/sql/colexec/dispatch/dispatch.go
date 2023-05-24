@@ -162,16 +162,14 @@ func (arg *Argument) initShuffle() {
 		for i := 0; i < arg.ctr.aliveRegCnt; i++ {
 			arg.ctr.sels[i] = make([]int32, 8192)
 		}
-		arg.ctr.lenshuffledSels = make([]int, arg.ctr.aliveRegCnt)
 		arg.ctr.batsCount = 0
 		arg.ctr.shuffledBats = make([]*batch.Batch, arg.ctr.aliveRegCnt)
 	}
 }
 
-func (arg *Argument) getSels() ([][]int32, []int) {
+func (arg *Argument) getSels() [][]int32 {
 	for i := range arg.ctr.sels {
 		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
-		arg.ctr.lenshuffledSels[i] = 0
 	}
-	return arg.ctr.sels, arg.ctr.lenshuffledSels
+	return arg.ctr.sels
 }

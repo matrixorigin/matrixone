@@ -73,11 +73,10 @@ type container struct {
 	remoteRegsCnt int
 
 	// for shuffle reuse memory
-	sels            [][]int32
-	lenshuffledSels []int
-	remoteToIdx     map[uuid.UUID]int
-	shuffledBats    []*batch.Batch
-	batsCount       int
+	sels         [][]int32
+	remoteToIdx  map[uuid.UUID]int
+	shuffledBats []*batch.Batch
+	batsCount    int
 }
 
 type Argument struct {
