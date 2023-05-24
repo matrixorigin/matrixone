@@ -335,6 +335,14 @@ func TestColumnField_EncodedDatetime(t *testing.T) {
 			wantT: ZeroTime,
 			want:  "1970-01-01 00:00:00.000000",
 		},
+		{
+			name: "empty",
+			fields: fields{
+				cf: TimeField(time.Time{}),
+			},
+			wantT: time.Time{},
+			want:  "0001-01-01 00:00:00.000000",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -343,6 +351,29 @@ func TestColumnField_EncodedDatetime(t *testing.T) {
 			var bbuf [64]byte
 			dst := tt.fields.cf.EncodedDatetime(bbuf[:0])
 			require.Equal(t, tt.want, string(dst))
+		})
+	}
+}
+
+func TestTimeField(t *testing.T) {
+	type args struct {
+		val time.Time
+	}
+	tests := []struct {
+		name string
+		args args
+		want time.Time
+	}{
+		{
+			name: "empty",
+			args: args{},
+			want: time.Time{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := TimeField(tt.args.val)
+			assert.Equalf(t, tt.want, f.GetTime(), "TimeField(%v)", tt.args.val)
 		})
 	}
 }

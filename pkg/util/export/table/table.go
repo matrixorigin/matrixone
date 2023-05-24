@@ -434,7 +434,11 @@ func (cf *ColumnField) GetTime() time.Time {
 	if cf.Interface != nil {
 		return time.Unix(0, cf.Integer).In(cf.Interface.(*time.Location))
 	} else {
-		return time.Unix(0, cf.Integer)
+		if cf.Integer == 0 {
+			return time.Time{}
+		} else {
+			return time.Unix(0, cf.Integer)
+		}
 	}
 }
 
@@ -451,7 +455,12 @@ func (cf *ColumnField) EncodedDatetime(dst []byte) []byte {
 	return Time2DatetimeBuffed(cf.GetTime(), dst[:0])
 }
 
+var emptyTime = time.Time{}
+
 func TimeField(val time.Time) ColumnField {
+	if val == emptyTime {
+		return ColumnField{Type: TDatetime, Integer: 0, Interface: nil}
+	}
 	secs := val.UnixNano()
 	return ColumnField{Type: TDatetime, Integer: secs, Interface: val.Location()}
 }
