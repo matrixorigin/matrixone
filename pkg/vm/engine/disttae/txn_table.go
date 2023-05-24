@@ -561,7 +561,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges []
 // txn can read :
 //  1. snapshot data
 //      1>. DN blocks data resides in S3.
-//      2>.partition state data resides in memory. read by partitionRead.
+//      2>.partition state data resides in memory. read by partitionReader
 
 //      deletes for DN's block exists in four places, rangesOnePart() collect 2 and 3 and 4.
 //      1. in delta location through dn writing S3. read by blockRead.
@@ -569,7 +569,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges []
 //  	3. batch of row id in memory being deleted by txn.
 //  	4. in delta location being deleted through txn writing S3.
 
-//  2. data in txn's workspace. read by partitionRead.
+//  2. data in txn's workspace. read by partitionReader.
 //     1>.txn workspace : raw batch data resides in memory.
 //     2>.txn workspace : CN blocks resides in S3.
 func (tbl *txnTable) rangesOnePart(
@@ -597,12 +597,12 @@ func (tbl *txnTable) rangesOnePart(
 		iter.Close()
 	}
 	//deletes on S3 written by txn maybe comes from PartitionState.rows or PartitionState.blocks,
-	// here oonly collect deletes from PartitionState.blocks.
+	// here only collect deletes from PartitionState.blocks.
 	if err = tbl.LoadDeletesForBlockIn(state, true, deletes, nil); err != nil {
 		return
 	}
-	//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks,Here
-	// only collect deletes in PartitionState.blocks into modifies.
+	//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks,
+	// at the end of this function, we only collect deletes in PartitionState.blocks into modifies.
 	for _, entry := range tbl.writes {
 		if entry.isGeneratedByTruncate() {
 			continue
@@ -1345,7 +1345,6 @@ func (tbl *txnTable) newReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
 				blks:     []ModifyBlockMeta{blks[i]},
 			})
 		}
@@ -1359,7 +1358,6 @@ func (tbl *txnTable) newReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
 				blks:     []ModifyBlockMeta{blks[i]},
 			}
 		}
@@ -1381,7 +1379,6 @@ func (tbl *txnTable) newReader(
 				ctx:      ctx,
 				tableDef: tbl.tableDef,
 				blks:     blks[(i-1)*step:],
-				sels:     make([]int64, 0, 1024),
 			}
 		} else {
 			readers[i] = &blockMergeReader{
@@ -1390,7 +1387,6 @@ func (tbl *txnTable) newReader(
 				ctx:      ctx,
 				tableDef: tbl.tableDef,
 				blks:     blks[(i-1)*step : i*step],
-				sels:     make([]int64, 0, 1024),
 			}
 		}
 	}
