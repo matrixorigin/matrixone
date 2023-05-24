@@ -13,6 +13,7 @@ x-mo-common: &mo-common
     volumes:
       - ../../etc/launch-tae-compose/config:/config
       - ../../test:/test
+      - ../../docker-compose-log:/log
     restart: on-failure
     tty: true
 
@@ -21,7 +22,7 @@ services:
   cn-0:
     container_name: cn-0
     <<: *mo-common
-    entrypoint: ["/mo-service", "-debug-http", ":12345", "-cfg", "/config/cn-0.toml"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/cn-0.toml | tee /log/cn-0.log"]
     profiles:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
@@ -36,11 +37,13 @@ services:
       - AWS_SECRET_ACCESS_KEY=minio123
     networks:
       monet:
+        aliases:
+          - "cn0"
 
   cn-1:
     container_name: cn-1
     <<: *mo-common
-    entrypoint: ["/mo-service", "-debug-http", ":12345", "-cfg", "/config/cn-1.toml"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/cn-1.toml | tee /log/cn-1.log"]
     depends_on:
       - dn
     ports:
@@ -54,11 +57,13 @@ services:
       - AWS_SECRET_ACCESS_KEY=minio123
     networks:
       monet:
+        aliases:
+          - "cn1"
 
   dn:
     container_name: dn
     <<: *mo-common
-    entrypoint: ["/mo-service", "-debug-http", ":12345", "-cfg", "/config/dn.toml"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/dn.toml | tee /log/dn.log"]
     profiles:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
@@ -71,6 +76,8 @@ services:
       - AWS_SECRET_ACCESS_KEY=minio123
     networks:
       monet:
+        aliases:
+          - "dn"
 
   logservice:
     container_name: logservice
@@ -78,7 +85,7 @@ services:
     profiles:
       - launch-tae-CN-tae-DN
       - launch-tae-multi-CN-tae-DN
-    entrypoint: ["/mo-service", "-debug-http", ":12345", "-cfg", "/config/log.toml"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/log.toml | tee /log/logservice.log"]
     depends_on:
       - createbuckets
     ports:
@@ -90,6 +97,8 @@ services:
       - AWS_SECRET_ACCESS_KEY=minio123
     networks:
       monet:
+        aliases:
+          - "logservice"
 
   minio:
     image: minio/minio:latest
@@ -143,6 +152,3 @@ volumes:
 networks:
   monet:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 179.19.0.0/16

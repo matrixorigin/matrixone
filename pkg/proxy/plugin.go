@@ -40,7 +40,9 @@ func newPluginRouter(r Router, p Plugin) *pluginRouter {
 }
 
 // Route implements Router.Route.
-func (r *pluginRouter) Route(ctx context.Context, ci clientInfo) (*CNServer, error) {
+func (r *pluginRouter) Route(
+	ctx context.Context, ci clientInfo, filter func(uuid string) bool,
+) (*CNServer, error) {
 	re, err := r.plugin.RecommendCN(ctx, ci)
 	if err != nil {
 		return nil, err
@@ -65,7 +67,7 @@ func (r *pluginRouter) Route(ctx context.Context, ci clientInfo) (*CNServer, err
 		return nil, withCode(moerr.NewInfoNoCtx(re.Message),
 			codeAuthFailed)
 	case plugin.Bypass:
-		return r.Router.Route(ctx, ci)
+		return r.Router.Route(ctx, ci, filter)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unknown recommended action %d", re.Action)
 	}
