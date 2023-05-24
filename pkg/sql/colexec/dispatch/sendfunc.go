@@ -190,23 +190,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	return false, nil
 }
 
-// shuffle to all receiver (include LocalReceiver and RemoteReceiver)
-func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	if !ap.ctr.prepared {
-		end, err := ap.waitRemoteRegsReady(proc)
-		if err != nil {
-			return false, err
-		}
-		if end {
-			return true, nil
-		}
-	}
-
-	err := genShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
-	if err != nil {
-		return false, err
-	}
-
+func sendShuffledBats(ap *Argument, proc *process.Process) (bool, error) {
 	// send to remote regs
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := ap.ctr.remoteToIdx[r.uuid]
@@ -237,6 +221,26 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 
 	ap.ctr.batsCount = 0
 	return false, nil
+}
+
+// shuffle to all receiver (include LocalReceiver and RemoteReceiver)
+func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+	if !ap.ctr.prepared {
+		end, err := ap.waitRemoteRegsReady(proc)
+		if err != nil {
+			return false, err
+		}
+		if end {
+			return true, nil
+		}
+	}
+
+	err := genShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
+	if err != nil {
+		return false, err
+	}
+
+	return sendShuffledBats(ap, proc)
 }
 
 // send to all receiver (include LocalReceiver and RemoteReceiver)
