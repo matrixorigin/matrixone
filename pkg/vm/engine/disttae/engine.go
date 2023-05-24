@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"runtime"
 	"strings"
 	"sync"
@@ -406,11 +405,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if err != nil {
 		return err
 	}
-	t := time.Now()
 	_, err = op.Write(ctx, reqs)
-	if t := time.Now().Sub(t); t > 5*time.Second {
-		fmt.Printf("+++precommit time: %v\n", t)
-	}
 	return err
 }
 
