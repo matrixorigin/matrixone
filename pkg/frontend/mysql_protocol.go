@@ -85,7 +85,7 @@ func InitServerVersion(v string) {
 			serverVersion.Store(string(vv))
 		}
 	} else {
-		serverVersion.Store("0.5.0")
+		serverVersion.Store("0.7.0")
 	}
 }
 
