@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -146,14 +147,14 @@ func (e *testEngine) getTestDB() (txn txnif.AsyncTxn, db handle.Database) {
 
 func (e *testEngine) DoAppend(bat *containers.Batch) {
 	txn, rel := e.getRelation()
-	err := rel.Append(bat)
+	err := rel.Append(context.Background(), bat)
 	assert.NoError(e.t, err)
 	assert.NoError(e.t, txn.Commit())
 }
 
 func (e *testEngine) doAppendWithTxn(bat *containers.Batch, txn txnif.AsyncTxn, skipConflict bool) (err error) {
 	rel := e.getRelationWithTxn(txn)
-	err = rel.Append(bat)
+	err = rel.Append(context.Background(), bat)
 	if !skipConflict {
 		assert.NoError(e.t, err)
 	}
@@ -172,7 +173,7 @@ func (e *testEngine) tryAppend(bat *containers.Batch) {
 		return
 	}
 
-	err = rel.Append(bat)
+	err = rel.Append(context.Background(), bat)
 	if err != nil {
 		_ = txn.Rollback()
 		return
@@ -365,7 +366,7 @@ func createRelationAndAppend(
 	}
 	rel, err = db.CreateRelation(schema)
 	assert.NoError(t, err)
-	err = rel.Append(bat)
+	err = rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
 	assert.Nil(t, txn.Commit())
 	return
@@ -483,7 +484,7 @@ func appendFailClosure(t *testing.T, data *containers.Batch, name string, e *DB,
 		txn, _ := e.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(name)
-		err := rel.Append(data)
+		err := rel.Append(context.Background(), data)
 		assert.NotNil(t, err)
 		assert.Nil(t, txn.Rollback())
 	}
@@ -497,7 +498,7 @@ func appendClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg 
 		txn, _ := e.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(name)
-		err := rel.Append(data)
+		err := rel.Append(context.Background(), data)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -515,7 +516,7 @@ func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *DB, 
 			_ = txn.Rollback()
 			return
 		}
-		if err = rel.Append(data); err != nil {
+		if err = rel.Append(context.Background(), data); err != nil {
 			_ = txn.Rollback()
 			return
 		}
