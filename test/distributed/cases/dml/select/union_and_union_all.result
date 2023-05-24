@@ -645,3 +645,8 @@ d    444    d    454
 null    null    f    666
 null    null    g    777
 drop table t17;
+select * from (select 'tb1' as name, 1 as count union all select 'tb3' as name, 3 as count union all select 'tb2' as name, 2 as count) order by count;
+name    count
+tb1    1
+tb2    2
+tb3    3
