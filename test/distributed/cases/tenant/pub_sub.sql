@@ -203,3 +203,18 @@ create publication pubname4 database db1 comment 'publication to all tenant';
 create database sub_db4 from sys publication pubname4;
 drop publication pubname4;
 drop database db1;
+
+create database db1;
+create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
+create publication pubname2 database db1 account test_tenant_1 comment 'publish db1 database';
+set global syspublications = "pubname1,pubname1";
+create account test_tenant_1 admin_name 'test_account' identified by '111';
+set global syspublications = "pubname1,pubname2";
+create account test_tenant_2 admin_name 'test_account' identified by '111';
+show publications;
+show publications;
+drop publication pubname1;
+drop publication pubname2;
+drop account test_tenant_1;
+drop account test_tenant_2;
+drop database db1;

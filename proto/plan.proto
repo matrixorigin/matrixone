@@ -416,6 +416,7 @@ message TableDef {
 	map<string, int32> name2col_index = 26;
 	bool isLocked = 27;
 	TableLockType tableLockType = 28;
+	bool is_temporary = 29;
 }
 
 message TableFunction{
