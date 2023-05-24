@@ -15,8 +15,8 @@
 package proxy
 
 import (
+	"errors"
 	"fmt"
-	"github.com/cockroachdb/errors"
 )
 
 // errorCode indicates the errors.
@@ -49,7 +49,6 @@ type errWithCode struct {
 }
 
 var _ error = (*errWithCode)(nil)
-var _ fmt.Formatter = (*errWithCode)(nil)
 
 func (e *errWithCode) Error() string {
 	if e.code == 0 {
@@ -57,8 +56,6 @@ func (e *errWithCode) Error() string {
 	}
 	return fmt.Sprintf("%s: %v", e.code, e.cause)
 }
-
-func (e *errWithCode) Format(s fmt.State, verb rune) { errors.FormatError(e, s, verb) }
 
 func withCode(err error, code errorCode) error {
 	if err == nil {
@@ -72,4 +69,30 @@ func getErrorCode(err error) errorCode {
 		return e.code
 	}
 	return codeNone
+}
+
+// connectErr is the error when it is failed to connect to
+// backend CN servers. It is used to retry to connect to
+// other servers.
+type connectErr struct {
+	cause error
+}
+
+// newConnectErr creates a new connectErr.
+func newConnectErr(e error) error {
+	return &connectErr{
+		cause: e,
+	}
+}
+
+func (e *connectErr) Error() string {
+	return e.cause.Error()
+}
+
+var _ error = (*connectErr)(nil)
+
+// isRetryableErr returns true if it is connectErr.
+func isRetryableErr(e error) bool {
+	_, ok := e.(*connectErr)
+	return ok
 }

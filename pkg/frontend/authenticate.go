@@ -8362,3 +8362,20 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		return moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
 	}
 }
+
+func doCheckRole(ctx context.Context, ses *Session) error {
+	var err error
+	tenantInfo := ses.GetTenantInfo()
+	currentAccount := tenantInfo.GetTenant()
+	currentRole := tenantInfo.GetDefaultRole()
+	if currentAccount == sysAccountName {
+		if currentRole != moAdminRoleName {
+			err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+		}
+	} else {
+		if currentRole != accountAdminRoleName {
+			err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+		}
+	}
+	return err
+}
