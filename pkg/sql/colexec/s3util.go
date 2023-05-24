@@ -75,7 +75,7 @@ type S3Writer struct {
 const (
 	// WriteS3Threshold when batches'  size of table reaches this, we will
 	// trigger write s3
-	WriteS3Threshold uint64 = 16 * mpool.MB
+	WriteS3Threshold uint64 = 1 * mpool.MB
 
 	TagS3Size            uint64 = 10 * mpool.MB
 	TagS3SizeForMOLogger        = 256 * mpool.KB
