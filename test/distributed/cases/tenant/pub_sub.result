@@ -72,6 +72,7 @@ drop database t;
 create account acc0 admin_name 'root' identified by '111';
 create account acc1 admin_name 'root' identified by '111';
 create account acc2 admin_name 'root' identified by '111';
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 create database sys_db_1;
 use sys_db_1;
 create table sys_tbl_1(a int primary key );
@@ -81,6 +82,7 @@ create publication sys_pub_1 database sys_db_1;
 show publications;
 Name    Database
 sys_pub_1    sys_db_1
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
@@ -124,6 +126,7 @@ Number of columns in sys_tbl_1
 show table_values from sys_tbl_1;
 max(a)    min(a)
 3    1
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
@@ -154,6 +157,7 @@ a
 2
 3
 alter publication sys_pub_1 account acc1;
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 show subscriptions;
 Name    From_Account
 sub1    sys
@@ -174,6 +178,7 @@ a
 2
 3
 alter publication sys_pub_1 account add acc0;
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 show subscriptions;
 Name    From_Account
 sub1    sys
