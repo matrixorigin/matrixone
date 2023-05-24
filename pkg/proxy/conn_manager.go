@@ -147,18 +147,13 @@ func newConnManager() *connManager {
 
 // selectOne select the most suitable CN server according the connection count
 // on each CN server. The least count CN server is returned.
-func (m *connManager) selectOne(hash LabelHash, cns []*CNServer, excludeEmptyCN bool) *CNServer {
+func (m *connManager) selectOne(hash LabelHash, cns []*CNServer) *CNServer {
 	m.Lock()
 	defer m.Unlock()
 
 	var ret *CNServer
 	var minCount = math.MaxInt
 	for _, cn := range cns {
-		// If there are CNs with labels and without labels both, then we should
-		// only select CN from the ones with labels.
-		if excludeEmptyCN && len(cn.cnLabel) == 0 {
-			continue
-		}
 		ci, ok := m.conns[hash]
 		// There are no connections yet on all CN servers of this tenant.
 		// Means that no CN server has been connected for this tenant.
