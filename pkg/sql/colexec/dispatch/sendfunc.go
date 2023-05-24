@@ -240,7 +240,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 		return false, err
 	}
 
-	if ap.ctr.batsCount == ap.ctr.aliveRegCnt {
+	if ap.ctr.batsCount == 1 {
 		return sendShuffledBats(ap, proc)
 	}
 	return false, nil
