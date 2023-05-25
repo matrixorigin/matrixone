@@ -175,7 +175,6 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 
 		f, err := b.Send(ctx, request)
 		if err != nil && err == backendClosed {
-			logutil.Fatalf("TODO: remove")
 			continue
 		}
 		return f, err
@@ -191,7 +190,6 @@ func (c *client) NewStream(backend string, lock bool) (Stream, error) {
 
 		st, err := b.NewStream(lock)
 		if err != nil && err == backendClosed {
-			logutil.Fatalf("TODO: remove")
 			continue
 		}
 		return st, err
@@ -207,7 +205,6 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
 		if err != nil && err == backendClosed {
-			logutil.Fatalf("TODO: remove")
 			continue
 		}
 		_, err = f.Get()
