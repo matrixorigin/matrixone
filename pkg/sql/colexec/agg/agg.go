@@ -24,8 +24,8 @@ import (
 )
 
 func NewUnaryAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
-	eval func([]T2) []T2, merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool),
-	fill func(int64, T1, T2, int64, bool, bool) (T2, bool),
+	eval func([]T2) ([]T2, error), merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error),
 	batchFill func(any, any, int64, int64, []uint64, []int64, *nulls.Nulls) error) Agg[*UnaryAgg[T1, T2]] {
 	return &UnaryAgg[T1, T2]{
 		op:        op,
@@ -38,6 +38,7 @@ func NewUnaryAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp ty
 		batchFill: batchFill,
 		isCount:   isCount,
 		ityps:     []types.Type{ityp},
+		err:       nil,
 	}
 }
 
@@ -123,9 +124,15 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) er
 	vec := vecs[0]
 	hasNull := vec.GetNulls().Contains(uint64(sel))
 	if vec.GetType().IsVarlen() {
-		a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(int(sel))).(T1), a.vs[i], z, a.es[i], hasNull)
+		a.vs[i], a.es[i], a.err = a.fill(i, (any)(vec.GetBytesAt(int(sel))).(T1), a.vs[i], z, a.es[i], hasNull)
+		if a.err != nil {
+			return a.err
+		}
 	} else {
-		a.vs[i], a.es[i] = a.fill(i, vector.MustFixedCol[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
+		a.vs[i], a.es[i], a.err = a.fill(i, vector.MustFixedCol[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)
+		if a.err != nil {
+			return a.err
+		}
 	}
 	return nil
 }
@@ -141,9 +148,15 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 			}
 			j := vps[i] - 1
 			if !vec.IsConst() {
-				a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetBytesAt(i+int(start))).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+				a.vs[j], a.es[j], a.err = a.fill(int64(j), (any)(vec.GetBytesAt(i+int(start))).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+				if a.err != nil {
+					return a.err
+				}
 			} else {
-				a.vs[j], a.es[j] = a.fill(int64(j), (any)(vec.GetBytesAt(0)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+				a.vs[j], a.es[j], a.err = a.fill(int64(j), (any)(vec.GetBytesAt(0)).(T1), a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+				if a.err != nil {
+					return a.err
+				}
 			}
 
 		}
@@ -151,8 +164,8 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 	}
 	vs := vector.MustFixedCol[T1](vec)
 	if a.batchFill != nil {
-		if err := a.batchFill(a.vs, vs, start, int64(len(os)), vps, zs, vec.GetNulls()); err != nil {
-			return err
+		if a.err = a.batchFill(a.vs, vs, start, int64(len(os)), vps, zs, vec.GetNulls()); a.err != nil {
+			return a.err
 		}
 		nsp := vec.GetNulls()
 		if nsp.Any() {
@@ -186,7 +199,10 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 			continue
 		}
 		j := vps[i] - 1
-		a.vs[j], a.es[j] = a.fill(int64(j), vs[vi], a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+		a.vs[j], a.es[j], a.err = a.fill(int64(j), vs[vi], a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+		if a.err != nil {
+			return a.err
+		}
 		vi += int64(inc)
 	}
 	return nil
@@ -201,18 +217,30 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 		}
 		if vec.IsConstNull() {
 			var v T1
-			a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zsum, a.es[i], true)
+			a.vs[i], a.es[i], a.err = a.fill(i, v, a.vs[i], zsum, a.es[i], true)
+			if a.err != nil {
+				return a.err
+			}
 		} else if vec.GetType().IsVarlen() {
-			a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(0)).(T1), a.vs[i], zsum, a.es[i], false)
+			a.vs[i], a.es[i], a.err = a.fill(i, (any)(vec.GetBytesAt(0)).(T1), a.vs[i], zsum, a.es[i], false)
+			if a.err != nil {
+				return a.err
+			}
 		} else {
-			a.vs[i], a.es[i] = a.fill(i, vector.GetFixedAt[T1](vec, 0), a.vs[i], zsum, a.es[i], false)
+			a.vs[i], a.es[i], a.err = a.fill(i, vector.GetFixedAt[T1](vec, 0), a.vs[i], zsum, a.es[i], false)
+			if a.err != nil {
+				return a.err
+			}
 		}
 		return nil
 	} else if vec.GetType().IsVarlen() {
 		len := vec.Length()
 		for j := 0; j < len; j++ {
 			hasNull := vec.GetNulls().Contains(uint64(j))
-			a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(j)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
+			a.vs[i], a.es[i], a.err = a.fill(i, (any)(vec.GetBytesAt(j)).(T1), a.vs[i], zs[j], a.es[i], hasNull)
+			if a.err != nil {
+				return a.err
+			}
 		}
 
 		return nil
@@ -220,7 +248,10 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 		vs := vector.MustFixedCol[T1](vec)
 		for j, v := range vs {
 			hasNull := vec.GetNulls().Contains(uint64(j))
-			a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
+			a.vs[i], a.es[i], a.err = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
+			if a.err != nil {
+				return a.err
+			}
 		}
 		return nil
 	}
@@ -232,7 +263,10 @@ func (a *UnaryAgg[T1, T2]) Merge(b Agg[any], x, y int64) error {
 	if a.es[x] && !b0.es[y] {
 		a.otyp = b0.otyp
 	}
-	a.vs[x], a.es[x] = a.merge(x, y, a.vs[x], b0.vs[y], a.es[x], b0.es[y], b0.priv)
+	a.vs[x], a.es[x], a.err = a.merge(x, y, a.vs[x], b0.vs[y], a.es[x], b0.es[y], b0.priv)
+	if a.err != nil {
+		return a.err
+	}
 	return nil
 }
 
@@ -246,7 +280,10 @@ func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, vps [
 		if a.es[j] && !b0.es[int64(i)+start] {
 			a.otyp = b0.otyp
 		}
-		a.vs[j], a.es[j] = a.merge(int64(j), int64(i)+start, a.vs[j], b0.vs[int64(i)+start], a.es[j], b0.es[int64(i)+start], b0.priv)
+		a.vs[j], a.es[j], a.err = a.merge(int64(j), int64(i)+start, a.vs[j], b0.vs[int64(i)+start], a.es[j], b0.es[int64(i)+start], b0.priv)
+		if a.err != nil {
+			return a.err
+		}
 	}
 	return nil
 }
@@ -258,6 +295,9 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		a.vs = nil
 		a.es = nil
 	}()
+	if a.err != nil {
+		return nil, a.err
+	}
 	nsp := nulls.NewWithSize(len(a.es))
 	if !a.isCount {
 		for i, e := range a.es {
@@ -268,7 +308,10 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 	}
 	if a.otyp.IsVarlen() {
 		vec := vector.NewVec(a.otyp)
-		a.vs = a.eval(a.vs)
+		a.vs, a.err = a.eval(a.vs)
+		if a.err != nil {
+			return nil, a.err
+		}
 		vs := (any)(a.vs).([][]byte)
 		if err := vector.AppendBytesList(vec, vs, nil, m); err != nil {
 			vec.Free(m)
@@ -278,7 +321,11 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		return vec, nil
 	}
 	vec := vector.NewVec(a.otyp)
-	if err := vector.AppendFixedList(vec, a.eval(a.vs), nil, m); err != nil {
+	a.vs, a.err = a.eval(a.vs)
+	if a.err != nil {
+		return nil, a.err
+	}
+	if err := vector.AppendFixedList(vec, a.vs, nil, m); err != nil {
 		vec.Free(m)
 		return nil, err
 	}
