@@ -18,8 +18,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -40,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
@@ -298,7 +301,6 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 	}
 
 	s.createMOServer(cancelMoServerCtx, pu, aicm)
-
 	return nil
 }
 
@@ -329,7 +331,7 @@ func (s *service) initEngine(
 
 	}
 
-	return nil
+	return s.bootstrap()
 }
 
 func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) {
@@ -549,4 +551,42 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s.fileService,
 		s.aicm)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+}
+
+func (s *service) bootstrap() error {
+	return s.stopper.RunTask(func(ctx context.Context) {
+		rt := runtime.ProcessLevelRuntime()
+		v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+		if !ok {
+			panic("missing internal sql executor")
+		}
+
+		ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+		defer cancel()
+		b := bootstrap.NewBootstrapper(
+			&locker{hakeeperClient: s._hakeeperClient},
+			rt.Clock(),
+			v.(executor.SQLExecutor))
+		// bootstrap can not failed. We panic here to make sure the service can not start.
+		// If bootstrap failed, need clean all data to retry.
+		if err := b.Bootstrap(ctx); err != nil {
+			panic(err)
+		}
+	})
+}
+
+var (
+	bootstrapKey = "_mo_bootstrap"
+)
+
+type locker struct {
+	hakeeperClient logservice.CNHAKeeperClient
+}
+
+func (l *locker) Get(ctx context.Context) (bool, error) {
+	v, err := l.hakeeperClient.AllocateIDByKeyWithBatch(ctx, bootstrapKey, 1)
+	if err != nil {
+		return false, err
+	}
+	return v == 1, nil
 }
