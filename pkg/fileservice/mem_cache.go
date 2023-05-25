@@ -57,7 +57,9 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 		o.objCache = lruobjcache.New(capacity, func(key any, value []byte, _ int64) {
 			if true {
 				_key := key.(IOVectorCacheKey)
-				o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size)
+				if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
+					panic(err)
+				}
 			}
 		})
 	}
@@ -69,7 +71,9 @@ func WithClock(capacity int64) MemCacheOptionFunc {
 		o.objCache = clockobjcache.New(capacity, func(key any, value []byte, _ int64) {
 			if true {
 				_key := key.(IOVectorCacheKey)
-				o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size)
+				if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
+					panic(err)
+				}
 			}
 		})
 	}

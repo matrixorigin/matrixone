@@ -35,20 +35,26 @@ func (i *OverlapChecker) Insert(key string, low, high int64) error {
 	if _, ok := i.keyIntervals[key]; !ok {
 		i.keyIntervals[key] = NewIntervalTree()
 	} else if i.keyIntervals[key].Contains(interval) {
-		return moerr.NewInternalErrorNoCtx("Duplicate data interval in %s", i.tag)
+		return moerr.NewInternalErrorNoCtx("Duplicate key range in %s", i.tag)
 	}
 
 	i.keyIntervals[key].Insert(interval)
 	return nil
 }
 
-func (i *OverlapChecker) Remove(key string, low, high int64) {
+func (i *OverlapChecker) Remove(key string, low, high int64) error {
 	interval := Interval{low: low, high: high}
 	if _, ok := i.keyIntervals[key]; !ok {
-		return
+		return moerr.NewInternalErrorNoCtx("Key Range not found for removal in %s", i.tag)
 	}
 
 	if i.keyIntervals[key].Contains(interval) {
 		i.keyIntervals[key].Remove(interval)
+
+		if i.keyIntervals[key].Size() == 0 {
+			delete(i.keyIntervals, key)
+		}
 	}
+
+	return nil
 }

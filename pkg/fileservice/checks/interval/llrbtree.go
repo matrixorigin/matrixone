@@ -243,3 +243,7 @@ func (t *IntTree) isRed(node *Node) bool {
 	}
 	return node.isRed
 }
+
+func (t *IntTree) Size() int {
+	return 0
+}

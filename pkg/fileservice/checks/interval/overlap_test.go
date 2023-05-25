@@ -14,8 +14,36 @@
 
 package interval
 
-import "testing"
+import (
+	"github.com/stretchr/testify/assert"
+	"testing"
+)
 
 func TestIntervalChecker(t *testing.T) {
 
+	tree := NewOverlapChecker("MemCache_LRU")
+
+	// [0,5]
+	err := tree.Insert("s3://db1/table1/sst1", 0, 5)
+	assert.Nil(t, err)
+
+	//[0,5], [5,10]
+	err = tree.Insert("s3://db1/table1/sst1", 5, 10)
+	assert.Nil(t, err)
+
+	//[0,5], [5,10]
+	err = tree.Insert("s3://db1/table1/sst1", 6, 7)
+	assert.NotNil(t, err)
+
+	//[0,5]
+	err = tree.Remove("s3://db1/table1/sst1", 5, 10)
+	assert.Nil(t, err)
+
+	//[0,5], [6,7]
+	err = tree.Insert("s3://db1/table1/sst1", 6, 7)
+	assert.Nil(t, err)
+
+	//[3,7]
+	err = tree.Insert("s3://db1/table1/sst2", 3, 7)
+	assert.Nil(t, err)
 }
