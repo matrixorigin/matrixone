@@ -557,7 +557,7 @@ func (tbl *txnTable) rangesOnePart(
 	//collect deletes from PartitionState.dirtyRows.
 	{
 		ts := types.TimestampToTS(ts)
-		iter := state.NewDirtyRowsIter(ts, nil, true)
+		iter := state.NewDirtyRowsIter(ts, nil)
 		for iter.Next() {
 			entry := iter.Entry()
 			id, offset := entry.RowID.Decode()
