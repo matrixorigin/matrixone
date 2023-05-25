@@ -592,7 +592,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
-	if dbName == "mo_task" {
+	if dbName == catalog.MOTaskDB {
 		return false
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_INDEXES {
 		return false

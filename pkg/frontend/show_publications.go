@@ -17,10 +17,11 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 const (
@@ -65,46 +66,6 @@ func getSqlForShowCreatePub(ctx context.Context, pubName string) (string, error)
 		return "", moerr.NewInternalError(ctx, "invalid publication name '%s'", pubName)
 	}
 	return fmt.Sprintf(getCreatePublicationsInfoFormat, pubName), nil
-}
-
-func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublications) error {
-	var err error
-	var rs = &MysqlResultSet{}
-	var erArray []ExecResult
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.Exec(ctx, "begin;")
-	if err != nil {
-		goto handleFailed
-	}
-	err = bh.Exec(ctx, getPublicationsInfoFormat)
-	if err != nil {
-		goto handleFailed
-	}
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		goto handleFailed
-	}
-	if execResultArrayHasData(erArray) {
-		rs = erArray[0].(*MysqlResultSet)
-	} else {
-		rs.AddColumn(showPublicationOutputColumns[0])
-		rs.AddColumn(showPublicationOutputColumns[1])
-	}
-	ses.SetMysqlResultSet(rs)
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
-	return nil
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return rbErr
-	}
-	return err
 }
 
 func doShowCreatePublications(ctx context.Context, ses *Session, scp *tree.ShowCreatePublications) error {

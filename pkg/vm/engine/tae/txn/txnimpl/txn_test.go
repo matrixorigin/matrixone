@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"sync"
@@ -100,11 +101,11 @@ const (
 //				h := tbl.store.nodesMgr.Pin(n.storage.mnode)
 //				var err error
 //				if err = n.storage.mnode.Expand(common.K*1, func() error {
-//					_, err := n.Append(bat, 0)
+//					_, err := n.Append(context.Background(), bat, 0)
 //					return err
 //				}); err != nil {
 //					err = n.storage.mnode.Expand(common.K*1, func() error {
-//						_, err := n.Append(bat, 0)
+//						_, err := n.Append(context.Background(), bat, 0)
 //						return err
 //					})
 //				}
@@ -156,7 +157,7 @@ func TestTable(t *testing.T) {
 		defer bat.Close()
 		bats := bat.Split(100)
 		for _, data := range bats {
-			err := rel.Append(data)
+			err := rel.Append(context.Background(), data)
 			assert.Nil(t, err)
 		}
 		tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
@@ -208,7 +209,7 @@ func TestAppend(t *testing.T) {
 
 	err := tbl.BatchDedupLocal(bats[0])
 	assert.Nil(t, err)
-	err = tbl.Append(bats[0])
+	err = tbl.Append(context.Background(), bats[0])
 	assert.Nil(t, err)
 	assert.Equal(t, int(brows), int(tbl.UncommittedRows()))
 	assert.Equal(t, int(brows), int(tbl.localSegment.index.Count()))
@@ -218,14 +219,14 @@ func TestAppend(t *testing.T) {
 
 	err = tbl.BatchDedupLocal(bats[1])
 	assert.Nil(t, err)
-	err = tbl.Append(bats[1])
+	err = tbl.Append(context.Background(), bats[1])
 	assert.Nil(t, err)
 	assert.Equal(t, 2*int(brows), int(tbl.UncommittedRows()))
 	assert.Equal(t, 2*int(brows), int(tbl.localSegment.index.Count()))
 
 	err = tbl.BatchDedupLocal(bats[2])
 	assert.Nil(t, err)
-	err = tbl.Append(bats[2])
+	err = tbl.Append(context.Background(), bats[2])
 	assert.Nil(t, err)
 	assert.Equal(t, 3*int(brows), int(tbl.UncommittedRows()))
 	assert.Equal(t, 3*int(brows), int(tbl.localSegment.index.Count()))
@@ -306,7 +307,7 @@ func TestLoad(t *testing.T) {
 	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
 	tbl, _ := tDB.getOrSetTable(rel.ID())
 
-	err := tbl.Append(bats[0])
+	err := tbl.Append(context.Background(), bats[0])
 	assert.NoError(t, err)
 
 	v, _, err := tbl.GetLocalValue(100, 0)
@@ -337,7 +338,7 @@ func TestNodeCommand(t *testing.T) {
 
 	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
 	tbl, _ := tDB.getOrSetTable(rel.ID())
-	err := tbl.Append(bat)
+	err := tbl.Append(context.Background(), bat)
 	assert.Nil(t, err)
 
 	err = tbl.RangeDeleteLocalRows(100, 200)
@@ -416,7 +417,7 @@ func TestTxnManager1(t *testing.T) {
 
 func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
 	c := catalog.MockCatalog(nil)
-	driver := wal.NewDriverWithBatchStore(dir, "store", nil)
+	driver := wal.NewDriverWithBatchStore(context.Background(), dir, "store", nil)
 	indexCache := model.NewSimpleLRU(int64(common.G))
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
@@ -750,9 +751,9 @@ func TestDedup1(t *testing.T) {
 		txn, _ := mgr.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		err := rel.Append(bats[0])
+		err := rel.Append(context.Background(), bats[0])
 		assert.NoError(t, err)
-		err = rel.Append(bats[0])
+		err = rel.Append(context.Background(), bats[0])
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 		assert.Nil(t, txn.Rollback())
 	}
@@ -761,7 +762,7 @@ func TestDedup1(t *testing.T) {
 		txn, _ := mgr.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		err := rel.Append(bats[0])
+		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -769,7 +770,7 @@ func TestDedup1(t *testing.T) {
 		txn, _ := mgr.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		err := rel.Append(bats[0])
+		err := rel.Append(context.Background(), bats[0])
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
 		assert.Nil(t, txn.Rollback())
 	}
@@ -777,28 +778,28 @@ func TestDedup1(t *testing.T) {
 		txn, _ := mgr.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		err := rel.Append(bats[1])
+		err := rel.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
 
 		txn2, _ := mgr.StartTxn(nil)
 		db2, _ := txn2.GetDatabase("db")
 		rel2, _ := db2.GetRelationByName(schema.Name)
-		err = rel2.Append(bats[2])
+		err = rel2.Append(context.Background(), bats[2])
 		assert.Nil(t, err)
-		err = rel2.Append(bats[3])
+		err = rel2.Append(context.Background(), bats[3])
 		assert.Nil(t, err)
 		assert.Nil(t, txn2.Commit())
 
 		txn3, _ := mgr.StartTxn(nil)
 		db3, _ := txn3.GetDatabase("db")
 		rel3, _ := db3.GetRelationByName(schema.Name)
-		err = rel3.Append(bats[4])
+		err = rel3.Append(context.Background(), bats[4])
 		assert.Nil(t, err)
-		err = rel3.Append(bats[5])
+		err = rel3.Append(context.Background(), bats[5])
 		assert.Nil(t, err)
 		assert.Nil(t, txn3.Commit())
 
-		err = rel.Append(bats[3])
+		err = rel.Append(context.Background(), bats[3])
 		assert.NoError(t, err)
 		err = txn.Commit()
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))

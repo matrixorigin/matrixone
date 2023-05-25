@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -336,7 +337,7 @@ func MockWarehouses(dbName string, num uint8, txn txnif.AsyncTxn) (err error) {
 	}
 	bat := catalog.MockBatch(wareHouse, int(num))
 	defer bat.Close()
-	err = rel.Append(bat)
+	err = rel.Append(context.Background(), bat)
 	return
 }
 
@@ -408,7 +409,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	balanceData := catalog.MockBatch(balance, int(conf.Users))
 	defer balanceData.Close()
-	if err = balanceRel.Append(balanceData); err != nil {
+	if err = balanceRel.Append(context.Background(), balanceData); err != nil {
 		panic(err)
 	}
 
@@ -429,7 +430,7 @@ func (app1 *APP1) Init(factor int) {
 		// logutil.Info(client.String())
 	}
 
-	if err = userRel.Append(userData); err != nil {
+	if err = userRel.Append(context.Background(), userData); err != nil {
 		panic(err)
 	}
 	price := containers.MakeVector(goods.ColDefs[2].Type)
@@ -446,7 +447,7 @@ func (app1 *APP1) Init(factor int) {
 	provider.AddColumnProvider(2, price)
 	goodsData := containers.MockBatchWithAttrs(goods.Types(), goods.Attrs(), conf.GoodKinds, goods.GetSingleSortKeyIdx(), provider)
 	defer goodsData.Close()
-	if err = goodsRel.Append(goodsData); err != nil {
+	if err = goodsRel.Append(context.Background(), goodsData); err != nil {
 		panic(err)
 	}
 
@@ -472,7 +473,7 @@ func (app1 *APP1) Init(factor int) {
 	if err != nil {
 		panic(err)
 	}
-	if err = repertoryRel.Append(repertoryData); err != nil {
+	if err = repertoryRel.Append(context.Background(), repertoryData); err != nil {
 		panic(err)
 	}
 }
@@ -578,13 +579,13 @@ func TestTxn7(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ := db.GetRelationByName(schema.Name)
-	err = rel.Append(bat)
+	err = rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
 	{
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		err := rel.Append(bat)
+		err := rel.Append(context.Background(), bat)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 	}
@@ -609,14 +610,14 @@ func TestTxn8(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.GetDatabase(pkgcatalog.MO_CATALOG)
 	rel, _ := db.CreateRelation(schema)
-	err := rel.Append(bats[0])
+	err := rel.Append(context.Background(), bats[0])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase(pkgcatalog.MO_CATALOG)
 	rel, _ = db.GetRelationByName(schema.Name)
-	err = rel.Append(bats[1])
+	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
 	pkv := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(pkv)
@@ -714,7 +715,7 @@ func TestTxn9(t *testing.T) {
 	schema2 := catalog.MockSchemaAll(13, 12)
 	_, _ = db.CreateRelation(schema2)
 	rel, _ := db.GetRelationByName(schema.Name)
-	err := rel.Append(bats[0])
+	err := rel.Append(context.Background(), bats[0])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	wg.Wait()
@@ -735,7 +736,7 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply)
 	rel, _ = db.GetRelationByName(schema.Name)
-	err = rel.Append(bats[1])
+	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	wg.Wait()
@@ -781,7 +782,7 @@ func TestTxn9(t *testing.T) {
 // 	assert.NoError(t, err)
 // 	defer view.Close()
 // 	t.Log(view.String())
-// 	err = rel1.Append(bat.Window(2, 1))
+// 	err = rel1.Append(context.Background(), bat.Window(2, 1))
 // 	assert.NoError(t, err)
 // 	blk = getOneBlock(rel1)
 // 	view, err = blk.GetColumnDataById(2, nil, nil)
@@ -790,7 +791,7 @@ func TestTxn9(t *testing.T) {
 // 	t.Log(view.String())
 // 	{
 // 		txn, rel := tae.getRelation()
-// 		err := rel.Append(bat.Window(2, 1))
+// 		err := rel.Append(context.Background(), bat.Window(2, 1))
 // 		assert.NoError(t, err)
 // 		assert.NoError(t, txn.Commit())
 // 		txn, rel = tae.getRelation()
@@ -807,7 +808,7 @@ func TestTxn9(t *testing.T) {
 // 	// assert.NoError(t, err)
 // 	win := bat.CloneWindow(2, 1)
 // 	win.Vecs[2].Update(0, int32(99))
-// 	err = rel1.Append(win)
+// 	err = rel1.Append(context.Background(), win)
 // 	{
 // 		// filter := handle.NewEQFilter(int32(99))
 // 		// txn, rel := tae.getRelation()
@@ -831,10 +832,10 @@ func TestTxn9(t *testing.T) {
 // 	bat1.Vecs[1].AppendMany(int32(1), int32(2))
 // 	bat2 := catalog.MockBatch(schema, 0)
 // 	defer bat2.Close()
-// 	bat2.Vecs[0].Append(int32(3))
-// 	bat2.Vecs[0].Append(int32(4))
-// 	bat2.Vecs[1].Append(int32(1))
-// 	bat2.Vecs[1].Append(int32(2))
+// 	bat2.Vecs[0].Append(context.Background(), int32(3))
+// 	bat2.Vecs[0].Append(context.Background(), int32(4))
+// 	bat2.Vecs[1].Append(context.Background(), int32(1))
+// 	bat2.Vecs[1].Append(context.Background(), int32(2))
 
 // 	tae.createRelAndAppend(bat1, true)
 
@@ -849,7 +850,7 @@ func TestTxn9(t *testing.T) {
 // 	assert.NoError(t, err)
 // 	defer view.Close()
 
-// 	err = rel.Append(bat2)
+// 	err = rel.Append(context.Background(), bat2)
 // 	assert.NoError(t, err)
 // 	it := rel.MakeBlockIt()
 // 	for it.Valid() {

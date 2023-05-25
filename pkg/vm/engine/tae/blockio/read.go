@@ -38,16 +38,17 @@ import (
 func BlockRead(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
+	deletes []int64,
 	seqnums []uint16,
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
 	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		logutil.Infof("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debugf("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
 	}
 	columnBatch, err := BlockReadInner(
-		ctx, info, seqnums, colTypes,
+		ctx, info, deletes, seqnums, colTypes,
 		types.TimestampToTS(ts), fs, mp, vp,
 	)
 	if err != nil {
@@ -93,6 +94,7 @@ func mergeDeleteRows(d1, d2 []int64) []int64 {
 func BlockReadInner(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
+	dels []int64,
 	seqnums []uint16,
 	colTypes []types.Type,
 	ts types.TS,
@@ -127,6 +129,8 @@ func BlockReadInner(
 				info.BlockID.String(), deletes.Length(), ts.ToString(), len(deletedRows))
 		}
 	}
+
+	deletedRows = mergeDeleteRows(deletedRows, dels)
 
 	result = batch.NewWithSize(len(loaded.Vecs))
 	for i, col := range loaded.Vecs {

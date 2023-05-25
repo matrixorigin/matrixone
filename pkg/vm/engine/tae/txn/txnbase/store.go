@@ -15,6 +15,7 @@
 package txnbase
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -28,11 +29,13 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
-func (store *NoopTxnStore) WaitPrepared() (err error)                            { return }
-func (store *NoopTxnStore) GetLSN() uint64                                       { return 0 }
-func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                           {}
-func (store *NoopTxnStore) Close() error                                         { return nil }
-func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error { return nil }
+func (store *NoopTxnStore) WaitPrepared() (err error)  { return }
+func (store *NoopTxnStore) GetLSN() uint64             { return 0 }
+func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn) {}
+func (store *NoopTxnStore) Close() error               { return nil }
+func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
+	return nil
+}
 func (store *NoopTxnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
 	metaLocs []objectio.Location,
