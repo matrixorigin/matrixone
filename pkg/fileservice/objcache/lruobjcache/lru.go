@@ -16,15 +16,18 @@ package lruobjcache
 
 import (
 	"container/list"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
 	"sync"
 )
 
 type LRU struct {
 	sync.Mutex
-	capacity int64
-	size     int64
-	evicts   *list.List
-	kv       map[any]*list.Element
+	capacity       int64
+	size           int64
+	evicts         *list.List
+	kv             map[any]*list.Element
+	overlapChecker *interval.OverlapChecker
 }
 
 type lruItem struct {
@@ -35,15 +38,25 @@ type lruItem struct {
 
 func New(capacity int64) *LRU {
 	return &LRU{
-		capacity: capacity,
-		evicts:   list.New(),
-		kv:       make(map[any]*list.Element),
+		capacity:       capacity,
+		evicts:         list.New(),
+		kv:             make(map[any]*list.Element),
+		overlapChecker: interval.NewIntervalChecker("MemCache"),
 	}
 }
 
 func (l *LRU) Set(key any, value []byte, size int64, preloading bool) {
 	l.Lock()
 	defer l.Unlock()
+
+	// check overlaps
+	if true {
+		_key := key.(fileservice.IOVectorCacheKey)
+		err := l.overlapChecker.Insert(_key.Path, _key.Offset, _key.Offset+_key.Size)
+		if err != nil {
+			panic(err)
+		}
+	}
 
 	if elem, ok := l.kv[key]; ok {
 		// replace
@@ -95,6 +108,12 @@ func (l *LRU) evict() {
 			l.size -= item.Size
 			l.evicts.Remove(elem)
 			delete(l.kv, item.Key)
+
+			if true {
+				_key := item.Key.(fileservice.IOVectorCacheKey)
+				l.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size)
+			}
+
 			break
 		}
 
