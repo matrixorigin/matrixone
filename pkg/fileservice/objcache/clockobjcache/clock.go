@@ -19,7 +19,7 @@ package clockobjcache
 type Clock struct {
 }
 
-func New(capacity int64) *Clock {
+func New(capacity int64, OnEvict func(key any, value []byte)) *Clock {
 	return &Clock{}
 }
 

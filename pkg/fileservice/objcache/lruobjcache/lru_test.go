@@ -20,7 +20,10 @@ import (
 )
 
 func TestLRU(t *testing.T) {
-	l := New(1)
+	keys := make(map[int]int)
+	l := New(1, func(key any, value []byte) {
+		keys[key.(int)]++
+	})
 
 	l.Set(1, []byte{42}, 1, false)
 	_, ok := l.kv[1]
@@ -33,11 +36,12 @@ func TestLRU(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = l.kv[2]
 	assert.True(t, ok)
+	assert.Equal(t, 1, keys[1])
 }
 
 func BenchmarkLRUSet(b *testing.B) {
 	const capacity = 1024
-	l := New(capacity)
+	l := New(capacity, nil)
 	for i := 0; i < b.N; i++ {
 		l.Set(i%capacity, []byte{byte(i)}, 1, false)
 	}
@@ -45,7 +49,7 @@ func BenchmarkLRUSet(b *testing.B) {
 
 func BenchmarkLRUParallelSet(b *testing.B) {
 	const capacity = 1024
-	l := New(capacity)
+	l := New(capacity, nil)
 	b.RunParallel(func(pb *testing.PB) {
 		for i := 0; pb.Next(); i++ {
 			l.Set(i%capacity, []byte{byte(i)}, 1, false)
@@ -55,7 +59,7 @@ func BenchmarkLRUParallelSet(b *testing.B) {
 
 func BenchmarkLRUParallelSetOrGet(b *testing.B) {
 	const capacity = 1024
-	l := New(capacity)
+	l := New(capacity, nil)
 	b.RunParallel(func(pb *testing.PB) {
 		for i := 0; pb.Next(); i++ {
 			l.Set(i%capacity, []byte{byte(i)}, 1, false)

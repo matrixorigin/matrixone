@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/checks/interval"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/clockobjcache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/objcache/lruobjcache"
@@ -23,9 +24,10 @@ import (
 )
 
 type MemCache struct {
-	objCache    ObjectCache
-	ch          chan func()
-	counterSets []*perfcounter.CounterSet
+	objCache       ObjectCache
+	ch             chan func()
+	counterSets    []*perfcounter.CounterSet
+	overlapChecker *interval.OverlapChecker
 }
 
 func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
@@ -42,21 +44,34 @@ func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
 	}
 
 	return &MemCache{
-		objCache:    initOpts.objCache,
-		ch:          ch,
-		counterSets: initOpts.counterSets,
+		objCache:       initOpts.objCache,
+		overlapChecker: initOpts.overlapChecker,
+		ch:             ch,
+		counterSets:    initOpts.counterSets,
 	}
 }
 
 func WithLRU(capacity int64) MemCacheOptionFunc {
 	return func(o *memCacheOptions) {
-		o.objCache = lruobjcache.New(capacity)
+		o.overlapChecker = interval.NewIntervalChecker("MemCache")
+		o.objCache = lruobjcache.New(capacity, func(key any, value []byte) {
+			if true {
+				_key := key.(IOVectorCacheKey)
+				o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size)
+			}
+		})
 	}
 }
 
 func WithClock(capacity int64) MemCacheOptionFunc {
 	return func(o *memCacheOptions) {
-		o.objCache = clockobjcache.New(capacity)
+		o.overlapChecker = interval.NewIntervalChecker("MemCache")
+		o.objCache = clockobjcache.New(capacity, func(key any, value []byte) {
+			if true {
+				_key := key.(IOVectorCacheKey)
+				o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size)
+			}
+		})
 	}
 }
 
@@ -69,8 +84,9 @@ func WithPerfCounterSets(counterSets []*perfcounter.CounterSet) MemCacheOptionFu
 type MemCacheOptionFunc func(*memCacheOptions)
 
 type memCacheOptions struct {
-	objCache    ObjectCache
-	counterSets []*perfcounter.CounterSet
+	objCache       ObjectCache
+	overlapChecker *interval.OverlapChecker
+	counterSets    []*perfcounter.CounterSet
 }
 
 func defaultMemCacheOptions() memCacheOptions {
@@ -160,6 +176,15 @@ func (m *MemCache) Update(
 			Offset: entry.Offset,
 			Size:   entry.Size,
 		}
+
+		// check overlaps
+		if true {
+			err = m.overlapChecker.Insert(path.File, entry.Offset, entry.Offset+entry.Size)
+			if err != nil {
+				panic(err)
+			}
+		}
+
 		if async {
 			obj := entry.ObjectBytes // copy from loop variable
 			objSize := entry.ObjectSize

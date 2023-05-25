@@ -14,6 +14,7 @@
 
 package interval
 
+// Interval [low, high)
 type Interval struct {
 	low, high int64
 }
