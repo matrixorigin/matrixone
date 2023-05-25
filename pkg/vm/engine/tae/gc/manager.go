@@ -89,11 +89,13 @@ func (mgr *Manager) process(jobs ...any) {
 	if len(jobSet) == 0 {
 		return
 	}
+	logutil.Debugf("processing gavin %d", len(dedupJobs))
 	for _, cj := range dedupJobs {
 		logutil.Debugf("processing %s", cj.String())
 		if err := cj.job(context.Background()); err != nil {
 			logutil.Errorf("process gc job %s: %v", cj.name, err)
 		}
+		logutil.Debugf("process gc job %s done", cj.String())
 	}
 }
 
