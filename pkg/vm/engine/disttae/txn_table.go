@@ -1033,6 +1033,8 @@ func (tbl *txnTable) compaction() error {
 			remove_batch[bat] = true
 		}
 	}
+	tbl.db.txn.Lock()
+	defer tbl.db.txn.Unlock()
 	for i := 0; i < len(tbl.db.txn.writes); i++ {
 		if remove_batch[tbl.db.txn.writes[i].bat] {
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
@@ -1236,7 +1238,7 @@ func (tbl *txnTable) newReader(
 	ts := txn.meta.SnapshotTS
 	fs := txn.engine.fs
 
-	if !txn.readOnly {
+	if !txn.readOnly.Load() {
 		inserts = make([]*batch.Batch, 0, len(entries))
 		deletes = make(map[types.Rowid]uint8)
 		for _, entry := range entries {

@@ -341,7 +341,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		op:              op,
 		proc:            proc,
 		engine:          e,
-		readOnly:        true,
 		meta:            op.Txn(),
 		idGen:           e.idGen,
 		dnStores:        e.getDNServices(),
@@ -365,6 +364,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 	}
+	txn.readOnly.Store(true)
 	// TxnWorkSpace SegmentName
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
@@ -384,7 +384,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
 	defer e.delTransaction(txn)
-	if txn.readOnly {
+	if txn.readOnly.Load() {
 		return nil
 	}
 	err := txn.DumpBatch(true, 0)
