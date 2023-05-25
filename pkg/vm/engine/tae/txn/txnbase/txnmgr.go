@@ -295,7 +295,7 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	mgr.CommitListener.OnBeginPrePrepare(op.Txn)
 	defer mgr.CommitListener.OnEndPrePrepare(op.Txn)
 	// If txn is trying committing, call txn.PrePrepare()
-	now := time.Now()
+	//now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare())
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("gavin error")
