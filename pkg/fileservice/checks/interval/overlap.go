@@ -20,35 +20,35 @@ import (
 
 type OverlapChecker struct {
 	tag          string
-	intervalsMap map[string]*IntTree
+	keyIntervals map[string]*IntTree
 }
 
-func NewIntervalChecker(tag string) *OverlapChecker {
+func NewOverlapChecker(tag string) *OverlapChecker {
 	return &OverlapChecker{
-		intervalsMap: make(map[string]*IntTree),
+		keyIntervals: make(map[string]*IntTree),
 		tag:          tag,
 	}
 }
 
 func (i *OverlapChecker) Insert(key string, low, high int64) error {
 	interval := Interval{low: low, high: high}
-	if _, ok := i.intervalsMap[key]; !ok {
-		i.intervalsMap[key] = NewIntervalTree()
-	} else if i.intervalsMap[key].Contains(interval) {
+	if _, ok := i.keyIntervals[key]; !ok {
+		i.keyIntervals[key] = NewIntervalTree()
+	} else if i.keyIntervals[key].Contains(interval) {
 		return moerr.NewInternalErrorNoCtx("Duplicate data interval in %s", i.tag)
 	}
 
-	i.intervalsMap[key].Insert(interval)
+	i.keyIntervals[key].Insert(interval)
 	return nil
 }
 
 func (i *OverlapChecker) Remove(key string, low, high int64) {
 	interval := Interval{low: low, high: high}
-	if _, ok := i.intervalsMap[key]; !ok {
+	if _, ok := i.keyIntervals[key]; !ok {
 		return
 	}
 
-	if i.intervalsMap[key].Contains(interval) {
-		i.intervalsMap[key].Remove(interval)
+	if i.keyIntervals[key].Contains(interval) {
+		i.keyIntervals[key].Remove(interval)
 	}
 }
