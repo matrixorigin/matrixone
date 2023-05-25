@@ -839,7 +839,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		builder.applySwapRuleByStats(rootID, true)
-		SortFilterListByStats(builder.GetContext(), rootID, builder)
+		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all join operators
