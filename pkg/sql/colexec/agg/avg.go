@@ -86,7 +86,7 @@ func (a *Avg[T]) Grows(cnt int) {
 	}
 }
 
-func (a *Avg[T]) Eval(vs []float64) ([]float64, error) {
+func (a *Avg[T]) Eval(vs []float64, err error) ([]float64, error) {
 	for i := range vs {
 		if a.Cnts[i] == 0 {
 			continue
@@ -139,8 +139,10 @@ func (a *Decimal64Avg) Grows(cnt int) {
 	}
 }
 
-func (a *Decimal64Avg) Eval(vs []types.Decimal128) ([]types.Decimal128, error) {
-	var err error
+func (a *Decimal64Avg) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+	if err != nil {
+		return nil, err
+	}
 	for i := range vs {
 		if a.Cnts[i] == 0 {
 			continue
@@ -227,8 +229,10 @@ func (a *Decimal128Avg) Grows(cnt int) {
 	}
 }
 
-func (a *Decimal128Avg) Eval(vs []types.Decimal128) ([]types.Decimal128, error) {
-	var err error
+func (a *Decimal128Avg) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+	if err != nil {
+		return nil, err
+	}
 	for i := range vs {
 		if a.Cnts[i] == 0 {
 			continue

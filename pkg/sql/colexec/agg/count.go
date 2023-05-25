@@ -39,7 +39,7 @@ func NewCount[T1 types.OrderedT | Decimal128AndString](isStar bool) *Count[T1] {
 func (c *Count[T1]) Grows(_ int) {
 }
 
-func (c *Count[T1]) Eval(vs []int64) ([]int64, error) {
+func (c *Count[T1]) Eval(vs []int64, err error) ([]int64, error) {
 	return vs, nil
 }
 

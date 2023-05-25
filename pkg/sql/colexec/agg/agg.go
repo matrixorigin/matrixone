@@ -24,7 +24,7 @@ import (
 )
 
 func NewUnaryAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
-	eval func([]T2) ([]T2, error), merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
+	eval func([]T2, error) ([]T2, error), merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error),
 	batchFill func(any, any, int64, int64, []uint64, []int64, *nulls.Nulls) error) Agg[*UnaryAgg[T1, T2]] {
 	return &UnaryAgg[T1, T2]{
@@ -295,9 +295,6 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		a.vs = nil
 		a.es = nil
 	}()
-	if a.err != nil {
-		return nil, a.err
-	}
 	nsp := nulls.NewWithSize(len(a.es))
 	if !a.isCount {
 		for i, e := range a.es {
@@ -308,7 +305,7 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 	}
 	if a.otyp.IsVarlen() {
 		vec := vector.NewVec(a.otyp)
-		a.vs, a.err = a.eval(a.vs)
+		a.vs, a.err = a.eval(a.vs, a.err)
 		if a.err != nil {
 			return nil, a.err
 		}
@@ -321,7 +318,7 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mpool.MPool) (*vector.Vector, error) {
 		return vec, nil
 	}
 	vec := vector.NewVec(a.otyp)
-	a.vs, a.err = a.eval(a.vs)
+	a.vs, a.err = a.eval(a.vs, a.err)
 	if a.err != nil {
 		return nil, a.err
 	}

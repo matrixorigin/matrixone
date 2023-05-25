@@ -94,7 +94,7 @@ func (variance *Variance[T1]) Grows(count int) {
 	}
 }
 
-func (variance *Variance[T1]) Eval(vs []float64) ([]float64, error) {
+func (variance *Variance[T1]) Eval(vs []float64, err error) ([]float64, error) {
 	for i, v := range vs {
 		avg := (variance.Sum[i]) / (variance.Counts[i])
 		vs[i] = (v)/(variance.Counts[i]) - math.Pow(avg, 2)
@@ -182,11 +182,14 @@ func (v *VD64) Grows(cnt int) {
 	}
 }
 
-func (v *VD64) Eval(vs []types.Decimal128) ([]types.Decimal128, error) {
+func (v *VD64) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
 	for i, k := range vs {
 		if v.Counts[i] == 1 {
 			vs[i] = types.Decimal128{B0_63: 0, B64_127: 0}
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		a, _, err := v.Sum[i].Div(types.Decimal128{B0_63: uint64(v.Counts[i]), B64_127: 0}, v.Typ.Scale, 0)
 		if err != nil {
@@ -300,11 +303,14 @@ func (v *VD128) Grows(cnt int) {
 	}
 }
 
-func (v *VD128) Eval(vs []types.Decimal128) ([]types.Decimal128, error) {
+func (v *VD128) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
 	for i, k := range vs {
 		if v.Counts[i] == 1 {
 			vs[i] = types.Decimal128{B0_63: 0, B64_127: 0}
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		a, _, err := v.Sum[i].Div(types.Decimal128{B0_63: uint64(v.Counts[i]), B64_127: 0}, v.Typ.Scale, 0)
 		if err != nil {

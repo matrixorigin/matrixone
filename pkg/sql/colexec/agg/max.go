@@ -61,7 +61,7 @@ func NewMax[T Compare]() *Max[T] {
 func (m *Max[T]) Grows(_ int) {
 }
 
-func (m *Max[T]) Eval(vs []T) ([]T, error) {
+func (m *Max[T]) Eval(vs []T, err error) ([]T, error) {
 	return vs, nil
 }
 
@@ -99,7 +99,7 @@ func NewD64Max() *Decimal64Max {
 func (m *Decimal64Max) Grows(_ int) {
 }
 
-func (m *Decimal64Max) Eval(vs []types.Decimal64) ([]types.Decimal64, error) {
+func (m *Decimal64Max) Eval(vs []types.Decimal64, err error) ([]types.Decimal64, error) {
 	return vs, nil
 }
 
@@ -137,7 +137,7 @@ func NewD128Max() *Decimal128Max {
 func (m *Decimal128Max) Grows(_ int) {
 }
 
-func (m *Decimal128Max) Eval(vs []types.Decimal128) ([]types.Decimal128, error) {
+func (m *Decimal128Max) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
 	return vs, nil
 }
 
@@ -175,7 +175,7 @@ func NewBoolMax() *BoolMax {
 func (m *BoolMax) Grows(_ int) {
 }
 
-func (m *BoolMax) Eval(vs []bool) ([]bool, error) {
+func (m *BoolMax) Eval(vs []bool, err error) ([]bool, error) {
 	return vs, nil
 }
 
@@ -214,7 +214,7 @@ func NewStrMax() *StrMax {
 func (m *StrMax) Grows(_ int) {
 }
 
-func (m *StrMax) Eval(vs [][]byte) ([][]byte, error) {
+func (m *StrMax) Eval(vs [][]byte, err error) ([][]byte, error) {
 	return vs, nil
 }
 
@@ -254,7 +254,7 @@ func NewUuidMax() *UuidMax {
 func (m *UuidMax) Grows(_ int) {
 }
 
-func (m *UuidMax) Eval(vs []types.Uuid) ([]types.Uuid, error) {
+func (m *UuidMax) Eval(vs []types.Uuid, err error) ([]types.Uuid, error) {
 	return vs, nil
 }
 

@@ -171,7 +171,7 @@ type UnaryAgg[T1, T2 any] struct {
 	// grows used for add groups
 	grows func(int)
 	// eval used to get final aggregated value
-	eval func([]T2) ([]T2, error)
+	eval func([]T2, error) ([]T2, error)
 	// merge
 	// 	first argument is the group number to be merged
 	//  second argument is the group number used to merge
@@ -227,7 +227,7 @@ type UnaryDistAgg[T1, T2 any] struct {
 	// grows used for add groups
 	grows func(int)
 	// eval used to get final aggregated value
-	eval func([]T2) ([]T2, error)
+	eval func([]T2, error) ([]T2, error)
 	// merge
 	// 	first argument is the group number to be merged
 	//  second argument is the group number used to merge

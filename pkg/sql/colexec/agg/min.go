@@ -61,7 +61,7 @@ func NewMin[T Compare]() *Min[T] {
 func (m *Min[T]) Grows(_ int) {
 }
 
-func (m *Min[T]) Eval(vs []T) ([]T, error) {
+func (m *Min[T]) Eval(vs []T, err error) ([]T, error) {
 	return vs, nil
 }
 
@@ -99,7 +99,7 @@ func NewD64Min() *Decimal64Min {
 func (m *Decimal64Min) Grows(_ int) {
 }
 
-func (m *Decimal64Min) Eval(vs []types.Decimal64) ([]types.Decimal64, error) {
+func (m *Decimal64Min) Eval(vs []types.Decimal64, err error) ([]types.Decimal64, error) {
 	return vs, nil
 }
 
@@ -137,7 +137,7 @@ func NewD128Min() *Decimal128Min {
 func (m *Decimal128Min) Grows(_ int) {
 }
 
-func (m *Decimal128Min) Eval(vs []types.Decimal128) ([]types.Decimal128, error) {
+func (m *Decimal128Min) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
 	return vs, nil
 }
 
@@ -175,7 +175,7 @@ func NewBoolMin() *BoolMin {
 func (m *BoolMin) Grows(_ int) {
 }
 
-func (m *BoolMin) Eval(vs []bool) ([]bool, error) {
+func (m *BoolMin) Eval(vs []bool, err error) ([]bool, error) {
 	return vs, nil
 }
 
@@ -214,7 +214,7 @@ func NewStrMin() *StrMin {
 func (m *StrMin) Grows(_ int) {
 }
 
-func (m *StrMin) Eval(vs [][]byte) ([][]byte, error) {
+func (m *StrMin) Eval(vs [][]byte, err error) ([][]byte, error) {
 	return vs, nil
 }
 
@@ -254,7 +254,7 @@ func NewUuidMin() *UuidMin {
 func (m *UuidMin) Grows(_ int) {
 }
 
-func (m *UuidMin) Eval(vs []types.Uuid) ([]types.Uuid, error) {
+func (m *UuidMin) Eval(vs []types.Uuid, err error) ([]types.Uuid, error) {
 	return vs, nil
 }
 
