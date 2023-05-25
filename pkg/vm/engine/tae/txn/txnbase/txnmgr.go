@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -298,9 +299,9 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	op.Txn.SetError(op.Txn.PrePrepare())
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("gavin error")
-		logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
-		logutil.Debug("gavin error")
-		logutil.Errorf("gavin [PrePrepare] %v", op.Txn.GetError())
+		// logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
+		fmt.Print("gavin error3")
+		logutil.Debug("gavin error 2")
 	})
 }
 
