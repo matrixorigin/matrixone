@@ -623,6 +623,8 @@ type MetadataScanInfo struct {
 	MetaLoc      ObjectLocation
 	DelLoc       ObjectLocation
 	CommitTs     types.TS
+	CreateTs     types.TS
+	DeleteTs     types.TS
 	SegId        types.Uuid
 	RowCnt       int64
 	NullCnt      int64
@@ -641,6 +643,8 @@ var (
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // meta_loc
 		types.New(types.T_varchar, types.MaxVarcharLen, 0), // delta_loc
 		types.New(types.T_TS, 0, 0),                        // commit_ts
+		types.New(types.T_TS, 0, 0),                        // create_ts
+		types.New(types.T_TS, 0, 0),                        // delete_ts
 		types.New(types.T_uuid, 0, 0),                      // meta_seg
 		types.New(types.T_int64, 0, 0),                     // row_count
 		types.New(types.T_int64, 0, 0),                     // null_count
@@ -658,6 +662,8 @@ var (
 		"meta_loc",
 		"delta_loc",
 		"commit_ts",
+		"create_ts",
+		"delete_ts",
 		"meta_seg",
 		"rows_count",
 		"null_count",
@@ -678,17 +684,18 @@ const (
 	META_LOC      = 4
 	DELTA_LOC     = 5
 	COMMIT_TS     = 6
-	SEG_ID        = 7
-	ROWS_CNT      = 8
-	NULL_CNT      = 9
-	COMPRESS_SIZE = 10
-	ORIGIN_SIZE   = 11
-	MIN           = 12
-	MAX           = 13
+	CREATE_TS     = 7
+	DELETE_TS     = 8
+	SEG_ID        = 9
+	ROWS_CNT      = 10
+	NULL_CNT      = 11
+	COMPRESS_SIZE = 12
+	ORIGIN_SIZE   = 13
+	MIN           = 14
+	MAX           = 15
 )
 
 func (m *MetadataScanInfo) FillBlockInfo(info *BlockInfo) {
-	m.BlockId = info.BlockID
 	m.EntryState = info.EntryState
 	m.Sorted = info.Sorted
 	m.MetaLoc = info.MetaLoc
