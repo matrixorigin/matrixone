@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type compactBlockEntry struct {
@@ -105,11 +104,11 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	})
 	return
 }
-func (entry *compactBlockEntry) ApplyRollback(index *wal.Index) (err error) {
+func (entry *compactBlockEntry) ApplyRollback() (err error) {
 	//TODO:?
 	return
 }
-func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
+func (entry *compactBlockEntry) ApplyCommit() (err error) {
 	_ = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().TryUpgrade()
 	return
 }

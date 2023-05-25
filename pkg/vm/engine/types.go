@@ -551,6 +551,8 @@ type Relation interface {
 	MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error)
 
 	GetEngineType() EngineType
+
+	GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error)
 }
 
 type Reader interface {

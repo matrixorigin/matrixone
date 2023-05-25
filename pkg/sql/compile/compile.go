@@ -972,8 +972,15 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	} else {
 		fileList = []string{param.Filepath}
 	}
+
 	if len(fileList) == 0 {
-		return nil, nil
+		ret := &Scope{
+			Magic:      Normal,
+			DataSource: nil,
+			Proc:       process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
+		}
+
+		return []*Scope{ret}, nil
 	}
 
 	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
@@ -1641,7 +1648,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, idxToShuffle int) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
-	dop := plan2.GetShuffleDop(n)
+	dop := plan2.GetShuffleDop()
 	parent, children := c.newScopeListForGroup(validScopeCount(ss), dop)
 
 	j := 0
@@ -2067,16 +2074,14 @@ func (c *Compile) NumCPU() int {
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
-	if blocks < cpunum {
-		if blocks <= 0 {
-			return 1
-		}
-		return blocks
-	}
-	if cpunum <= 0 {
+	if cpunum <= 0 || blocks <= 0 {
 		return 1
 	}
-	return cpunum
+
+	if cpunum <= blocks {
+		return cpunum
+	}
+	return blocks
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {

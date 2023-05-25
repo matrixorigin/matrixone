@@ -3216,7 +3216,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	_, err = meta.GetBlockData().GetByFilter(txn, filter)
 	assert.NoError(t, err)
 
-	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, false, []byte{}, objectio.BloomFilter{})
+	err = meta.GetBlockData().BatchDedup(txn, bat.Vecs[1], nil, nil, false, objectio.BloomFilter{})
 	assert.Error(t, err)
 }
 
@@ -4840,6 +4840,101 @@ func TestTransfer2(t *testing.T) {
 	assert.Equal(t, expectV, v)
 	assert.NoError(t, err)
 	_ = txn2.Commit()
+}
+
+func TestMergeBlocks3(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(5, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 5
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 100)
+	defer bat.Close()
+	tae.createRelAndAppend(bat, true)
+	filter5 := handle.NewEQFilter(bat.Vecs[3].Get(15))
+	filter9 := handle.NewEQFilter(bat.Vecs[3].Get(19))
+	filter8 := handle.NewEQFilter(bat.Vecs[3].Get(18))
+	filter7 := handle.NewEQFilter(bat.Vecs[3].Get(17))
+	// delete all rows in first blk in seg1 and the 5th,9th rows in blk2
+	{
+		txn, rel := tae.getRelation()
+		segit := rel.MakeSegmentIt()
+		seg1 := segit.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segHandle, err := rel.GetSegment(&seg1.ID)
+		require.NoError(t, err)
+
+		blk1it := segHandle.MakeBlockIt()
+		blk11Handle := blk1it.GetBlock()
+		view, err := blk11Handle.GetColumnDataByName(catalog.PhyAddrColumnName)
+		view.GetData()
+		require.NoError(t, err)
+		err = rel.DeleteByPhyAddrKeys(view.GetData())
+		require.NoError(t, err)
+
+		require.NoError(t, rel.DeleteByFilter(filter5))
+		require.NoError(t, rel.DeleteByFilter(filter9))
+		require.NoError(t, txn.Commit())
+	}
+
+	// 1. merge first segment
+	// 2. delete 7th row in blk2 during executing merge task
+	// 3. delete 8th row in blk2 and commit that after merging, test transfer
+	{
+		del8txn, rel8 := tae.getRelation()
+		valrow8, null, err := rel8.GetValueByFilter(filter8, schema.GetColIdx(catalog.PhyAddrColumnName))
+		require.NoError(t, err)
+		require.False(t, null)
+
+		del7txn, rel7 := tae.getRelation()
+		mergetxn, relm := tae.getRelation()
+
+		// merge first segment
+		segit := relm.MakeSegmentIt()
+		seg1 := segit.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segHandle, err := relm.GetSegment(&seg1.ID)
+		require.NoError(t, err)
+		metas := make([]*catalog.BlockEntry, 0, 10)
+		it := segHandle.MakeBlockIt()
+		for ; it.Valid(); it.Next() {
+			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			metas = append(metas, meta)
+		}
+		segsToMerge := []*catalog.SegmentEntry{seg1}
+		task, err := jobs.NewMergeBlocksTask(nil, mergetxn, metas, segsToMerge, nil, tae.Scheduler)
+		require.NoError(t, err)
+		require.NoError(t, task.OnExec())
+
+		// delete del7 after starting merge txn
+		require.NoError(t, rel7.DeleteByFilter(filter7))
+		require.NoError(t, del7txn.Commit())
+
+		// commit merge, and it will carry del7 to the new block
+		require.NoError(t, mergetxn.Commit())
+
+		// delete 8 row and it is expected to be transfered correctly
+		rel8.DeleteByPhyAddrKey(valrow8)
+		require.NoError(t, del8txn.Commit())
+	}
+
+	// consistency check
+	{
+		var err error
+		txn, rel := tae.getRelation()
+		_, _, err = rel.GetValueByFilter(filter5, 3)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+		_, _, err = rel.GetValueByFilter(filter7, 3)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+		_, _, err = rel.GetValueByFilter(filter8, 3)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+		_, _, err = rel.GetValueByFilter(filter9, 3)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+
+		checkAllColRowsByScan(t, rel, 86, true)
+		require.NoError(t, txn.Commit())
+	}
+
 }
 
 func TestCompactEmptyBlock(t *testing.T) {
@@ -6707,4 +6802,130 @@ func TestCommitS3Blocks(t *testing.T) {
 		assert.Error(t, err)
 		assert.NoError(t, txn.Commit())
 	}
+}
+
+func TestDedupSnapshot1(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 3
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	tae.createRelAndAppend(bat, true)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+
+	txn, rel := tae.getRelation()
+	txn.SetSnapshotTS(txn.GetStartTS().Next())
+	txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	_ = txn.Commit()
+}
+
+func TestDedupSnapshot2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 3
+	tae.bindSchema(schema)
+	data := catalog.MockBatch(schema, 200)
+	createRelation(t, tae.DB, "db", schema, true)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, name, 0, nil)
+	assert.Nil(t, err)
+	writer.SetPrimaryKey(3)
+	_, err = writer.WriteBatch(containers.ToCNBatch(data))
+	assert.Nil(t, err)
+	blocks, _, err := writer.Sync(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
+	metaLoc := blockio.EncodeLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(data.Vecs[0].Length()),
+		blocks[0].GetID())
+	assert.Nil(t, err)
+
+	txn, rel := tae.getRelation()
+	err = rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc})
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	txn.SetSnapshotTS(txn.GetStartTS().Next())
+	txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+	err = rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc})
+	assert.NoError(t, err)
+	_ = txn.Commit()
+}
+
+func TestDedupSnapshot3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 3
+	tae.bindSchema(schema)
+	createRelation(t, tae.DB, "db", schema, true)
+
+	totalRows := 100
+
+	bat := catalog.MockBatch(schema, int(totalRows))
+	bats := bat.Split(totalRows)
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(80)
+	defer pool.Release()
+
+	appendFn := func(offset uint32) func() {
+		return func() {
+			defer wg.Done()
+			txn, _ := tae.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ := database.GetRelationByName(schema.Name)
+			err := rel.BatchDedup(bats[offset].Vecs[3])
+			txn.Commit()
+			if err != nil {
+				logutil.Infof("err is %v", err)
+				return
+			}
+
+			txn2, _ := tae.StartTxn(nil)
+			txn2.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+			txn2.SetSnapshotTS(txn.GetStartTS())
+			database, _ = txn2.GetDatabase("db")
+			rel, _ = database.GetRelationByName(schema.Name)
+			_ = rel.Append(bats[offset])
+			_ = txn2.Commit()
+		}
+	}
+
+	for i := 0; i < totalRows; i++ {
+		for j := 0; j < 5; j++ {
+			wg.Add(1)
+			err := pool.Submit(appendFn(uint32(i)))
+			assert.Nil(t, err)
+		}
+	}
+	wg.Wait()
+
+	tae.checkRowsByScan(totalRows, false)
 }

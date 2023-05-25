@@ -1185,6 +1185,12 @@ var (
 		}, {
 			input: "set global a = 1",
 		}, {
+			input:  "set persist a = 1",
+			output: "set global a = 1",
+		}, {
+			input:  "alter account config set MYSQL_COMPATIBILITY_MODE a = 1",
+			output: "set global a = 1",
+		}, {
 			input: "set a = 1",
 		}, {
 			input: "rollback",

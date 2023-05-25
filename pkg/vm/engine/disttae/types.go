@@ -85,8 +85,7 @@ type Engine struct {
 	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
-	usePushModel bool
-	pClient      pushClient
+	pClient pushClient
 }
 
 // Transaction represents a transaction

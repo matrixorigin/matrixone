@@ -65,15 +65,12 @@ func (art *simpleARTMap) Insert(key []byte, offset uint32) (err error) {
 	return
 }
 
-func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32) (err error) {
-	existence := make(map[any]bool)
+func (art *simpleARTMap) BatchInsert(
+	keys containers.Vector,
+	offset, length int,
+	startRow uint32,
+) (err error) {
 	op := func(v []byte, _ bool, i int) error {
-		if keys.NeedVerify {
-			if _, found := existence[string(v)]; found {
-				return ErrDuplicate
-			}
-			existence[string(v)] = true
-		}
 		chain := NewIndexMVCCChain()
 		chain.Insert(startRow)
 		old, _ := art.tree.Insert(v, chain)
@@ -85,7 +82,7 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32) (err error)
 		startRow++
 		return nil
 	}
-	err = containers.ForeachWindowBytes(keys.Keys, keys.Start, keys.Count, op, nil)
+	err = containers.ForeachWindowBytes(keys, offset, length, op, nil)
 	return
 }
 

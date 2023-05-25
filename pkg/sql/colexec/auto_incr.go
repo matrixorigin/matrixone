@@ -17,8 +17,9 @@ package colexec
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -690,9 +691,6 @@ func DeleteAutoIncrCol(eg engine.Engine, ctx context.Context, db engine.Database
 				}
 				bat.Clean(proc.Mp())
 			}
-
-			// Delete the cache.
-			deleteAutoIncrCache(name, proc)
 		}
 	}
 	if err = CommitTxn(eg, txn, ctx); err != nil {

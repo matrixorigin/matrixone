@@ -321,6 +321,7 @@ func init() {
 		"properties":               PROPERTIES,
 		"privileges":               PRIVILEGES,
 		"plugins":                  PLUGINS,
+		"persist":                  PERSIST,
 		"query":                    QUERY,
 		"quarter":                  QUARTER,
 		"quick":                    QUICK,

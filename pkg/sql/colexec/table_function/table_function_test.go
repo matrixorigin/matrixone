@@ -36,6 +36,10 @@ func TestCall(t *testing.T) {
 	end, err = Call(0, testutil.NewProc(), &arg, false, false)
 	require.NoError(t, err)
 	require.True(t, end)
+	arg.Name = "metadata_scan"
+	end, err = Call(0, testutil.NewProc(), &arg, false, false)
+	require.NoError(t, err)
+	require.True(t, end)
 	arg.Name = "not_exist"
 	end, err = Call(0, testutil.NewProc(), &arg, false, false)
 	require.Error(t, err)
@@ -47,6 +51,9 @@ func TestPrepare(t *testing.T) {
 	err := Prepare(testutil.NewProc(), &arg)
 	require.Error(t, err)
 	arg.Name = "generate_series"
+	err = Prepare(testutil.NewProc(), &arg)
+	require.NoError(t, err)
+	arg.Name = "metadata_scan"
 	err = Prepare(testutil.NewProc(), &arg)
 	require.NoError(t, err)
 	arg.Name = "not_exist"

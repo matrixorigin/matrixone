@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -53,9 +54,6 @@ func newBlock(
 }
 
 func (blk *block) Init() (err error) {
-	node := blk.PinNode()
-	defer node.Unref()
-	node.MustPNode().init()
 	return
 }
 
@@ -104,23 +102,25 @@ func (blk *block) GetColumnDataById(
 	readSchema any,
 	col int,
 ) (view *model.ColumnView, err error) {
-	node := blk.PinNode()
-	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnData(
-		node.MustPNode(),
 		txn,
 		schema,
 		col,
 		false)
 }
+func (blk *block) DataCommittedBefore(ts types.TS) bool {
+	blk.meta.RLock()
+	defer blk.meta.RUnlock()
+	return blk.meta.GetCreatedAt().Less(ts)
+}
 
 func (blk *block) BatchDedup(
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
+	keysZM index.ZM,
 	rowmask *roaring.Bitmap,
 	precommit bool,
-	zm []byte,
 	bf objectio.BloomFilter,
 ) (err error) {
 	defer func() {
@@ -128,16 +128,13 @@ func (blk *block) BatchDedup(
 			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
 		}
 	}()
-	node := blk.PinNode()
-	defer node.Unref()
 	return blk.PersistedBatchDedup(
-		node.MustPNode(),
 		txn,
 		precommit,
 		keys,
+		keysZM,
 		rowmask,
 		false,
-		zm,
 		bf,
 	)
 }

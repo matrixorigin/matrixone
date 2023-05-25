@@ -15,8 +15,7 @@
 package functionUtil
 
 import (
-	"unsafe"
-
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -29,12 +28,9 @@ func ConvertD64ToD128(v types.Decimal64) types.Decimal128 {
 }
 
 func QuickStrToBytes(s string) []byte {
-	return *(*[]byte)(unsafe.Pointer(&s))
+	return util.UnsafeStringToBytes(s)
 }
 
 func QuickBytesToStr(data []byte) string {
-	if data == nil {
-		return ""
-	}
-	return *(*string)(unsafe.Pointer(&data))
+	return util.UnsafeBytesToString(data)
 }

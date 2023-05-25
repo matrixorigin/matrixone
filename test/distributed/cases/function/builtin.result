@@ -651,7 +651,7 @@ insert into t1 values(1, 2);
 insert into t1 values(3, 4);
 select mo_table_rows(db_name,'t1'),mo_table_size(db_name,'t1') from (select database() as db_name);
 mo_table_rows(db_name, t1)    mo_table_size(db_name, t1)
-2    48
+2    16
 drop table if exists t1;
 drop database if exists test01;
 create database test01;
