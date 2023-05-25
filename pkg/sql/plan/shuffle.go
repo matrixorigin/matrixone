@@ -25,10 +25,20 @@ const (
 	ShuffleThreshHold    = 50000
 )
 
-func SimpleHashToRange(bytes []byte, upperLimit int) int {
+const (
+	m1 = 0xa0761d6478bd642f
+	m2 = 0xe7037ed1a0b428db
+	m3 = 0x8ebc6af09c88c6e3
+)
+
+func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	lenBytes := len(bytes)
 	//sample five bytes
-	return (int(bytes[0])*(int(bytes[lenBytes/4])+int(bytes[lenBytes/2])+int(bytes[lenBytes*3/4])) + int(bytes[lenBytes-1])) % upperLimit
+	return (uint64(bytes[0])*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])) + uint64(bytes[lenBytes-1])) % upperLimit
+}
+
+func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
+	return ((i^m1)*(i^m2) + (i ^ m3)) % upperLimit
 }
 
 func GetHashColumnIdx(expr *plan.Expr) int {
