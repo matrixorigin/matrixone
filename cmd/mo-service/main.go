@@ -227,6 +227,7 @@ func startDNService(
 		cfg.initMetaCache()
 		c := cfg.getDNServiceConfig()
 		s, err := dnservice.NewService(
+			perfCounterSet,
 			&c,
 			r,
 			fileService)

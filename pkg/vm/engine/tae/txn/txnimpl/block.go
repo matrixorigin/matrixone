@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -275,7 +276,7 @@ func (blk *txnBlock) GetSegment() (seg handle.Segment) {
 }
 
 func (blk *txnBlock) GetByFilter(filter *handle.Filter) (offset uint32, err error) {
-	return blk.entry.GetBlockData().GetByFilter(blk.table.store.txn, filter)
+	return blk.entry.GetBlockData().GetByFilter(context.Background(), blk.table.store.txn, filter)
 }
 
 // newRelationBlockItOnSnap make a iterator on txn 's segments of snapshot, exclude segment of workspace
