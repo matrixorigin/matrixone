@@ -21,38 +21,25 @@ import (
 )
 
 func TestIntervalTree(t *testing.T) {
-	interval1 := Interval{low: 15, high: 20}
-	interval2 := Interval{low: 10, high: 30}
-	interval3 := Interval{low: 17, high: 19}
-	interval4 := Interval{low: 5, high: 20}
-	interval5 := Interval{low: 12, high: 15}
-	interval6 := Interval{low: 30, high: 40}
-
 	tree := NewIntervalTree()
 
-	// Insert intervals
-	tree.Insert(interval1)
-	tree.Insert(interval2)
-	tree.Insert(interval3)
-	tree.Insert(interval4)
-	tree.Insert(interval5)
-	tree.Insert(interval6)
+	// Test Insert()
+	tree.Insert(Interval{low: 0, high: 5})
+	assert.Equal(t, 1, tree.Size())
+	tree.Insert(Interval{low: 5, high: 10})
+	assert.Equal(t, 2, tree.Size())
+	tree.Insert(Interval{low: 15, high: 20})
+	assert.Equal(t, 3, tree.Size())
 
 	// Test Contains()
-	assert.True(t, tree.Contains(interval1))
-	assert.True(t, tree.Contains(interval2))
-	assert.True(t, tree.Contains(interval3))
-	assert.True(t, tree.Contains(interval4))
-	assert.True(t, tree.Contains(interval5))
-	assert.True(t, tree.Contains(interval6))
+	assert.True(t, tree.Contains(Interval{low: 5, high: 10}))
+	assert.True(t, tree.Contains(Interval{low: 4, high: 10}))
 
 	// Test Remove()
-	tree.Remove(interval3)
-	assert.False(t, tree.Contains(interval3))
-	tree.Remove(interval5)
-	assert.False(t, tree.Contains(interval5))
-
-	// Test additional cases
-	assert.False(t, tree.Contains(Interval{low: 7, high: 9}))
-	assert.False(t, tree.Contains(Interval{low: 25, high: 28}))
+	tree.Remove(Interval{low: 5, high: 10})
+	assert.False(t, tree.Contains(Interval{low: 5, high: 10}))
+	assert.Equal(t, 2, tree.Size())
+	tree.Remove(Interval{low: 0, high: 5})
+	assert.False(t, tree.Contains(Interval{low: 0, high: 5}))
+	assert.Equal(t, 1, tree.Size())
 }

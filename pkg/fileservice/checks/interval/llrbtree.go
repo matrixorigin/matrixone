@@ -14,6 +14,15 @@
 
 package interval
 
+type Tree interface {
+	Insert(interval Interval)
+	Remove(interval Interval)
+	Contains(interval Interval) bool
+	Size() int
+}
+
+var _ Tree = new(IntTree)
+
 // Interval [low, high)
 type Interval struct {
 	low, high int64
