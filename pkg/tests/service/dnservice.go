@@ -17,6 +17,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"path/filepath"
 	"sync"
 	"time"
@@ -143,7 +144,8 @@ func newDNService(
 	fs fileservice.FileService,
 	opts dnOptions,
 ) (DNService, error) {
-	svc, err := dnservice.NewService(cfg, rt, fs, opts...)
+	CounterSet := new(perfcounter.CounterSet)
+	svc, err := dnservice.NewService(CounterSet, cfg, rt, fs, opts...)
 	if err != nil {
 		return nil, err
 	}

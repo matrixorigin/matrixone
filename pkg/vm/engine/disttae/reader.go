@@ -16,10 +16,9 @@ package disttae
 
 import (
 	"context"
-	"sort"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -99,7 +98,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	bat, err := blockio.BlockRead(r.ctx, info, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
@@ -172,17 +171,33 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	}
 
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+
+	//TODO::there is a bug to fix.
+	//var deletes []int64
+	//if len(r.blks[0].deletes) > 0 {
+	//	deletes := make([]int64, len(r.blks[0].deletes))
+	//	copy(deletes, r.blks[0].deletes)
+	//	//FIXME::why sort deletes?  batch.Shrink need to shrink by the ordered sels.
+	//	sort.Slice(deletes, func(i, j int) bool {
+	//		return deletes[i] < deletes[j]
+	//	})
+	//}
+	bat, err := blockio.BlockRead(r.ctx, info, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
 	bat.SetAttributes(cols)
+
+	//TODO::there is a bug to fix
 	r.sels = r.sels[:0]
-	deletes := make([]int, len(r.blks[0].deletes))
+	deletes := make([]int64, len(r.blks[0].deletes))
 	copy(deletes, r.blks[0].deletes)
-	sort.Ints(deletes)
+	//sort.Ints(deletes)
+	sort.Slice(deletes, func(i, j int) bool {
+		return deletes[i] < deletes[j]
+	})
 	for i := 0; i < bat.Length(); i++ {
-		if len(deletes) > 0 && i == deletes[0] {
+		if len(deletes) > 0 && i == int(deletes[0]) {
 			deletes = deletes[1:]
 			continue
 		}

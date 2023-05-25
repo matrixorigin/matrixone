@@ -120,6 +120,11 @@ type Config struct {
 		// roll back the transaction.
 		ZombieTimeout toml.Duration `toml:"zombie-timeout"`
 
+		// If IncrementalDedup is true, it will enable the incremental dedup feature.
+		// If incremental dedup feature is disable,
+		// IncrementalDedup will be treated as FullSkipWorkspaceDedup.
+		IncrementalDedup bool `toml:"incremental-dedup"`
+
 		// Storage txn storage config
 		Storage struct {
 			// dataDir data dir used to store the data

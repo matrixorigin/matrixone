@@ -15,6 +15,7 @@
 package data
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -86,7 +87,9 @@ type Block interface {
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
 
-	BatchDedup(txn txnif.AsyncTxn,
+	DataCommittedBefore(ts types.TS) bool
+	BatchDedup(ctx context.Context,
+		txn txnif.AsyncTxn,
 		pks containers.Vector,
 		pksZM index.ZM,
 		rowmask *roaring.Bitmap,
@@ -96,7 +99,7 @@ type Block interface {
 	//BatchDedupByMetaLoc(txn txnif.AsyncTxn, fs *objectio.ObjectFS,
 	//	metaLoc objectio.Location, rowmask *roaring.Bitmap, precommit bool) error
 
-	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
+	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
 	Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error
 	PPString(level common.PPLevel, depth int, prefix string) string

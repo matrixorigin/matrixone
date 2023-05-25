@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"unsafe"
@@ -144,6 +145,7 @@ func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, e
 	}
 	def := n.table.GetLocalSchema().ColDefs[colIdx]
 	return tables.LoadPersistedColumnData(
+		context.Background(),
 		n.table.store.dataFactory.Fs,
 		nil,
 		def,
