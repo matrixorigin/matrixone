@@ -454,6 +454,8 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		//   		   2. push the AppendNode into the MVCCHandle of block
 		mgr.onPrePrepare(op)
 
+		logutil.Debug("gavin: [dequeuePreparing]")
+
 		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
 		//1. Allocate a timestamp , set it to txn's prepare timestamp and commit timestamp,
 		//   which would be changed in the future if txn is 2PC.
