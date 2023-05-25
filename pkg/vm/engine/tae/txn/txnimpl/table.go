@@ -576,12 +576,17 @@ func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 			}
 			//do PK deduplication check against txn's snapshot data.
 			if err = tbl.DedupSnapByPK(
-				data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
+				data.Vecs[tbl.schema.GetSingleSortKeyIdx()], false); err != nil {
 				return
 			}
 		} else if skip == txnif.PKDedupSkipWorkSpace {
 			if err = tbl.DedupSnapByPK(
-				data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
+				data.Vecs[tbl.schema.GetSingleSortKeyIdx()], false); err != nil {
+				return
+			}
+		} else if skip == txnif.PKDedupSkipSnapshot {
+			if err = tbl.DedupSnapByPK(
+				data.Vecs[tbl.schema.GetSingleSortKeyIdx()], true); err != nil {
 				return
 			}
 		}
@@ -624,13 +629,18 @@ func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error
 					return
 				}
 				//do PK deduplication check against txn's snapshot data.
-				if err = tbl.DedupSnapByPK(v); err != nil {
+				if err = tbl.DedupSnapByPK(v, false); err != nil {
 					return
 				}
 			}
 		} else if skip == txnif.PKDedupSkipWorkSpace {
 			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupSnapByMetaLocs(metaLocs); err != nil {
+			if err = tbl.DedupSnapByMetaLocs(metaLocs, false); err != nil {
+				return
+			}
+		} else if skip == txnif.PKDedupSkipSnapshot {
+			//do PK deduplication check against txn's snapshot data.
+			if err = tbl.DedupSnapByMetaLocs(metaLocs, true); err != nil {
 				return
 			}
 		}
@@ -953,7 +963,7 @@ func (tbl *txnTable) tryGetCurrentObjectBF(
 // DedupSnapByPK 1. checks whether these primary keys exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending data into this table.
-func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
+func (tbl *txnTable) DedupSnapByPK(keys containers.Vector, dedupAfterSnapshotTS bool) (err error) {
 	r := trace.StartRegion(context.Background(), "DedupSnapByPK")
 	defer r.End()
 	ctx := context.TODO()
@@ -983,6 +993,10 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 		}
 		blkData := blk.GetBlockData()
 		if blkData == nil {
+			it.Next()
+			continue
+		}
+		if dedupAfterSnapshotTS && blkData.DataCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
 			it.Next()
 			continue
 		}
@@ -1035,15 +1049,28 @@ func (tbl *txnTable) DedupSnapByPK(keys containers.Vector) (err error) {
 // DedupSnapByMetaLocs 1. checks whether the Primary Key of all the input blocks exist in the list of block
 // which are visible and not dropped at txn's snapshot timestamp.
 // 2. It is called when appending blocks into this table.
-func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err error) {
+func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location, dedupAfterSnapshotTS bool) (err error) {
 	loaded := make(map[int]containers.Vector)
+	maxSegmentHint := uint64(0)
+	maxBlockID := &types.Blockid{}
 	for i, loc := range metaLocs {
 		h := newRelation(tbl)
 		it := newRelationBlockItOnSnap(h)
 		for it.Valid() {
 			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			segmentHint := blk.GetSegment().SortHint
+			if segmentHint > maxSegmentHint {
+				maxSegmentHint = segmentHint
+			}
+			if blk.ID.Compare(*maxBlockID) > 0 {
+				maxBlockID = &blk.ID
+			}
 			blkData := blk.GetBlockData()
 			if blkData == nil {
+				it.Next()
+				continue
+			}
+			if dedupAfterSnapshotTS && blkData.DataCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
 				it.Next()
 				continue
 			}
@@ -1089,6 +1116,8 @@ func (tbl *txnTable) DedupSnapByMetaLocs(metaLocs []objectio.Location) (err erro
 		if v, ok := loaded[i]; ok {
 			v.Close()
 		}
+		tbl.updateDedupedSegmentHint(maxSegmentHint)
+		tbl.updateDedupedBlockID(maxBlockID)
 	}
 	return
 }
@@ -1307,7 +1336,7 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 		}
 	}
 	//Check whether primary key is duplicated in txn's snapshot data.
-	err = tbl.DedupSnapByPK(key)
+	err = tbl.DedupSnapByPK(key, false)
 	return
 }
 
