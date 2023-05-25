@@ -416,6 +416,7 @@ message TableDef {
 	map<string, int32> name2col_index = 26;
 	bool isLocked = 27;
 	TableLockType tableLockType = 28;
+	bool is_temporary = 29;
 }
 
 message TableFunction{
@@ -655,6 +656,9 @@ message Node {
 	bool IsEnd = 36;
 	repeated LockTarget lock_targets = 37;
 	repeated Expr block_filter_list = 38;
+
+	// FILTER for block zonemap
+	repeated Expr block_filter_list = 39;
 }
 
 message LockTarget {

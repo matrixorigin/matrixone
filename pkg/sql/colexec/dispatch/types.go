@@ -33,6 +33,7 @@ const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 	procTimeout           = 10000 * time.Second
 	waitNotifyTimeout     = 45 * time.Second
+	shuffleBatchSize      = 4096
 
 	// send to all reg functions
 	SendToAllLocalFunc = iota
@@ -73,9 +74,10 @@ type container struct {
 	remoteRegsCnt int
 
 	// for shuffle reuse memory
-	sels            [][]int32
-	lenshuffledSels []int
-	remoteToIdx     map[uuid.UUID]int
+	sels         [][]int32
+	remoteToIdx  map[uuid.UUID]int
+	shuffledBats []*batch.Batch
+	batsCount    int
 }
 
 type Argument struct {

@@ -40,6 +40,8 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		f, e = metaScanCall(idx, proc, tblArg)
 	case "current_account":
 		f, e = currentAccountCall(idx, proc, tblArg)
+	case "metadata_scan":
+		f, e = metadataScan(idx, proc, tblArg)
 	default:
 		return true, moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}
@@ -82,6 +84,8 @@ func Prepare(proc *process.Process, arg any) error {
 		return metaScanPrepare(proc, tblArg)
 	case "current_account":
 		return currentAccountPrepare(proc, tblArg)
+	case "metadata_scan":
+		return metadataScanPrepare(proc, tblArg)
 	default:
 		return moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.Name))
 	}

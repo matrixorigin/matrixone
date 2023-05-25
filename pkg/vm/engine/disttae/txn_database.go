@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,7 +51,7 @@ func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 		}
 		return true
 	})
-	tbls, _ := db.txn.engine.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+	tbls, _ := db.txn.engine.catalog.Tables(defines.GetAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
 	for _, tbl := range tbls {
 		//if the table is deleted, do not save it.
 		if _, exist := deleteTables[tbl]; !exist {
@@ -85,7 +86,7 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	})
 
 	if tblName == "" {
-		tbls, tblIds := db.txn.engine.catalog.Tables(getAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
+		tbls, tblIds := db.txn.engine.catalog.Tables(defines.GetAccountId(ctx), db.databaseId, db.txn.meta.SnapshotTS)
 		for idx, tblId := range tblIds {
 			if tblId == id {
 				tblName = tbls[idx]
@@ -139,7 +140,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 	item := &cache.TableItem{
 		Name:       name,
 		DatabaseId: db.databaseId,
-		AccountId:  getAccountId(ctx),
+		AccountId:  defines.GetAccountId(ctx),
 		Ts:         db.txn.meta.SnapshotTS,
 	}
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
@@ -204,7 +205,7 @@ func (db *txnDatabase) Delete(ctx context.Context, name string) error {
 		item := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
-			AccountId:  getAccountId(ctx),
+			AccountId:  defines.GetAccountId(ctx),
 			Ts:         db.txn.meta.SnapshotTS,
 		}
 		if ok := db.txn.engine.catalog.GetTable(item); !ok {
@@ -269,7 +270,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 		item := &cache.TableItem{
 			Name:       name,
 			DatabaseId: db.databaseId,
-			AccountId:  getAccountId(ctx),
+			AccountId:  defines.GetAccountId(ctx),
 			Ts:         db.txn.meta.SnapshotTS,
 		}
 		if ok := db.txn.engine.catalog.GetTable(item); !ok {

@@ -48,7 +48,7 @@ type mockRouter struct {
 	mockRouteFn func(ctx context.Context, ci clientInfo) (*CNServer, error)
 }
 
-func (r *mockRouter) Route(ctx context.Context, ci clientInfo) (*CNServer, error) {
+func (r *mockRouter) Route(ctx context.Context, ci clientInfo, f func(string) bool) (*CNServer, error) {
 	if r.mockRouteFn != nil {
 		return r.mockRouteFn(ctx, ci)
 	}
@@ -140,7 +140,7 @@ func TestPluginRouter_Route(t *testing.T) {
 			p := &mockPlugin{mockRecommendCNFn: tt.mockRecommendCNFn}
 			r := &mockRouter{mockRouteFn: tt.mockRouteFn}
 			pr := newPluginRouter(r, p)
-			cn, err := pr.Route(context.TODO(), clientInfo{})
+			cn, err := pr.Route(context.TODO(), clientInfo{}, nil)
 			if tt.expectErr {
 				require.Error(t, err)
 				require.Nil(t, cn)

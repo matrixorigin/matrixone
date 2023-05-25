@@ -117,7 +117,6 @@ func NewService(
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
-
 	srv.pu = pu
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
@@ -505,9 +504,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 func (s *service) initLockService() {
 	cfg := s.cfg.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(cfg)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(
-		runtime.LockService,
-		s.lockService)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 }
 
 // put the waiting-next type msg into client session's cache and return directly

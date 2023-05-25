@@ -1709,7 +1709,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, idxToShuffle int) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
-	dop := plan2.GetShuffleDop(n)
+	dop := plan2.GetShuffleDop()
 	parent, children := c.newScopeListForGroup(validScopeCount(ss), dop)
 
 	j := 0
@@ -2137,16 +2137,14 @@ func (c *Compile) NumCPU() int {
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
-	if blocks < cpunum {
-		if blocks <= 0 {
-			return 1
-		}
-		return blocks
-	}
-	if cpunum <= 0 {
+	if cpunum <= 0 || blocks <= 0 {
 		return 1
 	}
-	return cpunum
+
+	if cpunum <= blocks {
+		return cpunum
+	}
+	return blocks
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {
@@ -2236,8 +2234,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 	}
 
-	monoExprList, _ := plan2.HandleFiltersForZM(n.FilterList, c.proc)
-	ranges, err = rel.Ranges(ctx, monoExprList...)
+	ranges, err = rel.Ranges(ctx, n.BlockFilterList...)
 	if err != nil {
 		return nil, err
 	}
@@ -2253,7 +2250,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			subranges, err := subrelation.Ranges(ctx, monoExprList...)
+			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList...)
 			if err != nil {
 				return nil, err
 			}

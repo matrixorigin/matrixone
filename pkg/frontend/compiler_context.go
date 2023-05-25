@@ -399,6 +399,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		pubAccountId = sub.AccountId
 		dbName = sub.DbName
 	}
+	isTemporary := table.GetEngineType() == engine.Memory
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -526,6 +527,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
 		Version:      schemaVersion,
+		IsTemporary:  isTemporary,
 	}
 	return obj, tableDef
 }

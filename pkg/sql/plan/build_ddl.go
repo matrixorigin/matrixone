@@ -680,6 +680,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				indexs = append(indexs, name)
 			}
 		case *tree.ForeignKey:
+			if createTable.Temporary {
+				return nil, moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
+			}
 			fkData, err := getForeignKeyData(ctx, createTable.TableDef, def)
 			if err != nil {
 				return err
@@ -1958,6 +1961,11 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 	if tableRef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
 	}
+
+	if tableRef.IsTemporary {
+		return nil, moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
+	}
+
 	fkData.DbName = fkDbName
 	fkData.TableName = fkTableName
 

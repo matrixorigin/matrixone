@@ -247,6 +247,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
 			Partition:     node.TableDef.Partition,
+			IsLocked:      node.TableDef.IsLocked,
+			IsTemporary:   node.TableDef.IsTemporary,
+			TableLockType: node.TableDef.TableLockType,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -838,7 +841,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		builder.applySwapRuleByStats(rootID, true)
-		SortFilterListByStats(builder.GetContext(), rootID, builder)
+		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all join operators
@@ -2381,6 +2384,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, childId)
 	case "current_account":
 		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, childId)
+	case "metadata_scan":
+		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}

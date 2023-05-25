@@ -1315,6 +1315,10 @@ const (
 
 	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s';`
 
+	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
+
+	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
+
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
@@ -1728,6 +1732,22 @@ func getSystemVariablesWithAccount(accountId uint64) string {
 
 func getSqlForUpdateSystemVariableValue(varValue string, accountId uint64, varName string) string {
 	return fmt.Sprintf(updateSystemVariableValueFormat, varValue, accountId, varName)
+}
+
+func getSqlForupdateConfigurationByDbNameAndAccountName(ctx context.Context, varValue, accountName, dbName, varName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateConfigurationByDbNameAndAccountNameFormat, varValue, accountName, dbName, varName), nil
+}
+
+func getSqlForupdateConfigurationByAccount(ctx context.Context, varValue, accountName, varName string) (string, error) {
+	err := inputNameIsInvalid(ctx, accountName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(updateConfigurationByAccountNameFormat, varValue, accountName, varName), nil
 }
 
 func getSqlForSpBody(ctx context.Context, name string, db string) (string, error) {
@@ -7965,13 +7985,144 @@ handleFailed:
 }
 
 func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
-	//to do
-	return nil
+	var err error
+	var sql string
+	var erArray []ExecResult
+	var accountName string
+
+	datname := ad.DbName
+	update_config := ad.UpdateConfig
+	accountName = ses.GetTenantInfo().GetTenant()
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	// step1:check database exists or not
+	sql, err = getSqlForCheckDatabase(ctx, datname)
+	if err != nil {
+		goto handleFailed
+	}
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "there is no database %s to change config", datname)
+		goto handleFailed
+	}
+
+	// step2: update the mo_mysql_compatibility_mode of that database
+	sql, err = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, update_config, accountName, datname, "version_compatibility")
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	// step3: update the session verison
+
+	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == datname {
+		err = changeVersion(ctx, ses, ses.GetDatabaseName())
+		if err != nil {
+			return err
+		}
+	}
+
+	return err
+
+handleFailed:
+
+	// ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+
 }
 
 func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDataBaseConfig) error {
-	//to do
-	return nil
+	var err error
+	var sql string
+	var newCtx context.Context
+	var isExist bool
+
+	accountName := stmt.AccountName
+	update_config := stmt.UpdateConfig
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
+
+	// step 1: check account exists or not
+	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	isExist, err = checkTenantExistsOrNot(newCtx, bh, accountName)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if !isExist {
+		err = moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
+		return err
+	}
+
+	// step2: update the config
+	sql, err = getSqlForupdateConfigurationByAccount(ctx, update_config, accountName, "version_compatibility")
+	if err != nil {
+		goto handleFailed
+	}
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	// step3: update the session verison
+	if len(ses.GetDatabaseName()) != 0 {
+		err = changeVersion(ctx, ses, ses.GetDatabaseName())
+		if err != nil {
+			return err
+		}
+	}
+
+	return err
+
+handleFailed:
+	// ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }
 
 func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
@@ -8039,6 +8190,8 @@ func insertRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 
 func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var datname string
+	var err error
+	var sql string
 
 	if deleteDatabaseStmt, ok := stmt.(*tree.DropDatabase); ok {
 		datname = string(deleteDatabaseStmt.Name)
@@ -8046,13 +8199,34 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 		if _, ok := sysDatabases[datname]; ok {
 			return nil
 		}
+
 		deletesql := getSqlForDeleteMysqlCompatbilityMode(datname)
 
 		bh := ses.GetBackgroundExec(ctx)
-		err := bh.Exec(ctx, deletesql)
+		err = bh.Exec(ctx, "begin")
+		if err != nil {
+			goto handleFailed
+		}
+		sql = getSqlForDeleteMysqlCompatbilityMode(datname)
+
+		err = bh.Exec(ctx, sql)
 		if err != nil {
 			return err
 		}
+
+		err = bh.Exec(ctx, "commit;")
+		if err != nil {
+			goto handleFailed
+		}
+		return err
+
+	handleFailed:
+		//ROLLBACK the transaction
+		rbErr := bh.Exec(ctx, "rollback;")
+		if rbErr != nil {
+			return rbErr
+		}
+		return err
 	}
 	return nil
 }
@@ -8065,6 +8239,11 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 	variable_name := "version_compatibility"
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin")
+	if err != nil {
+		goto handleFailed
+	}
 
 	sql = getSqlForGetSystemVariableValueWithDatabase(dbName, variable_name)
 
@@ -8086,6 +8265,19 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 		} else {
 			return config, err
 		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return defaultConfig, err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return defaultConfig, rbErr
 	}
 	return defaultConfig, err
 }
@@ -8360,4 +8552,21 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 	} else {
 		return moerr.NewInternalError(ctx, errorSystemVariableDoesNotExist())
 	}
+}
+
+func doCheckRole(ctx context.Context, ses *Session) error {
+	var err error
+	tenantInfo := ses.GetTenantInfo()
+	currentAccount := tenantInfo.GetTenant()
+	currentRole := tenantInfo.GetDefaultRole()
+	if currentAccount == sysAccountName {
+		if currentRole != moAdminRoleName {
+			err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+		}
+	} else {
+		if currentRole != accountAdminRoleName {
+			err = moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+		}
+	}
+	return err
 }
