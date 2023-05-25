@@ -167,6 +167,15 @@ func (blk *ablock) resolveColumnDatas(
 	}
 }
 
+func (blk *ablock) DataCommittedBefore(ts types.TS) bool {
+	if !blk.IsAppendFrozen() {
+		return false
+	}
+	blk.RLock()
+	defer blk.RUnlock()
+	return blk.mvcc.LastAnodeCommittedBeforeLocked(ts)
+}
+
 func (blk *ablock) resolveColumnData(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
