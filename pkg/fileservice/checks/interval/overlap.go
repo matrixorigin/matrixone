@@ -41,7 +41,7 @@ func (i *OverlapChecker) Insert(key string, low, high int64) error {
 		for _, v := range overlaps {
 			overlapsMsg += fmt.Sprintf("[%d %d), ", v.Ivl.Begin, v.Ivl.End)
 		}
-		return moerr.NewInternalErrorNoCtx("Duplicate key range in %s. The key %s contains overlapping intervals %s", i.tag, key, overlapsMsg)
+		return moerr.NewInternalErrorNoCtx("Duplicate key range found in %s when inserting [%d %d). The key %s contains overlapping intervals %s", i.tag, low, high, key, overlapsMsg)
 	}
 
 	i.keyIntervals[key].Insert(interval, true)

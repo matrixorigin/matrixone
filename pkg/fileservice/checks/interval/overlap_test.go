@@ -50,12 +50,12 @@ func TestIntervalChecker(t *testing.T) {
 	//[0,5), [3,5), [5,6), [6,7)
 	err = tree.Insert("s3://db1/table1/A", 3, 5)
 	assert.NotNil(t, err)
-	assert.Equal(t, "internal error: Duplicate key range in MemCache_LRU. The key s3://db1/table1/A contains overlapping intervals [0 5), ", err.Error())
+	assert.Equal(t, "internal error: Duplicate key range found in MemCache_LRU when inserting [3 5). The key s3://db1/table1/A contains overlapping intervals [0 5), ", err.Error())
 
 	//[0,5), [3,6), [5,6), [6,7)
 	err = tree.Insert("s3://db1/table1/A", 3, 6)
 	assert.NotNil(t, err)
-	assert.Equal(t, "internal error: Duplicate key range in MemCache_LRU. The key s3://db1/table1/A contains overlapping intervals [0 5), [5 6), ", err.Error())
+	assert.Equal(t, "internal error: Duplicate key range found in MemCache_LRU when inserting [3 6). The key s3://db1/table1/A contains overlapping intervals [0 5), [5 6), ", err.Error())
 
 	//[3,7)
 	err = tree.Insert("s3://db1/table1/B", 3, 7)
