@@ -56,8 +56,9 @@ func (p *PartitionState) NewDirtyRowsIter(
 	blockID *types.Blockid) *rowsIter {
 	iter := p.dirtyRows.Copy().Iter()
 	ret := &rowsIter{
-		ts:   ts,
-		iter: iter,
+		ts:          ts,
+		iter:        iter,
+		iterDeleted: true,
 	}
 	if blockID != nil {
 		ret.checkBlockID = true
