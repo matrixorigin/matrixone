@@ -1133,7 +1133,7 @@ func makeInsertPlan(
 					IsEnd:      true,
 				}, bindCtx)
 				builder.appendStep(lastNodeId)
-			} else if !pkTyp.AutoIncr {
+			} else {
 				scanTableDef := DeepCopyTableDef(tableDef)
 				scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
 				scanNode := &plan.Node{
