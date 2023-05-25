@@ -1133,10 +1133,10 @@ func makeInsertPlan(
 					IsEnd:      true,
 				}, bindCtx)
 				builder.appendStep(lastNodeId)
-			} else {
+			} else if !pkTyp.AutoIncr {
 				scanTableDef := DeepCopyTableDef(tableDef)
 				scanTableDef.Cols = []*ColDef{scanTableDef.Cols[pkPos]}
-				rightId := builder.appendNode(&plan.Node{
+				scanNode := &plan.Node{
 					NodeType: plan.Node_TABLE_SCAN,
 					Stats:    &plan.Stats{},
 					ObjRef:   objRef,
@@ -1150,7 +1150,22 @@ func makeInsertPlan(
 							},
 						},
 					}},
-				}, bindCtx)
+				}
+				if !checkInsertPkDup && pkFilterExpr != nil {
+					filterExpr, err := bindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
+						Typ: pkTyp,
+						Expr: &plan.Expr_Col{
+							Col: &ColRef{
+								Name: tableDef.Pkey.PkeyColName,
+							},
+						},
+					}, pkFilterExpr})
+					if err != nil {
+						return err
+					}
+					scanNode.FilterList = []*Expr{filterExpr}
+				}
+				rightId := builder.appendNode(scanNode, bindCtx)
 
 				leftExpr := &Expr{
 					Typ: pkTyp,

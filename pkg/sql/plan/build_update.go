@@ -155,6 +155,10 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 					if name.NumParts == 1 && name.Parts[0] == tableDef.Pkey.PkeyColName {
 						checkInsertPkDup = false
 					}
+				} else if name, ok := comp.Right.(*tree.UnresolvedName); ok {
+					if name.NumParts == 1 && name.Parts[0] == tableDef.Pkey.PkeyColName {
+						checkInsertPkDup = false
+					}
 				}
 			}
 		}
