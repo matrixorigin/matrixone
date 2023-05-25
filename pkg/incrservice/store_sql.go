@@ -188,15 +188,15 @@ func (s *sqlStore) GetCloumns(
 		return true
 	})
 
-	var cols []AutoColumn
+	cols := make([]AutoColumn, len(colNames))
 	for idx, colName := range colNames {
-		cols = append(cols, AutoColumn{
+		cols[idx] = AutoColumn{
 			TableID:  tableID,
 			ColName:  colName,
 			ColIndex: int(indexes[idx]),
 			Offset:   offsets[idx],
 			Step:     steps[idx],
-		})
+		}
 	}
 	return cols, nil
 }
