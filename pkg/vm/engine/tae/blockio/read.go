@@ -135,6 +135,10 @@ func BlockReadInner(
 	result = batch.NewWithSize(len(loaded.Vecs))
 	for i, col := range loaded.Vecs {
 		typ := *col.GetType()
+		if typ.Oid == types.T_Rowid {
+			result.Vecs[i] = col
+			continue
+		}
 		if vp == nil {
 			result.Vecs[i] = vector.NewVec(typ)
 		} else {
@@ -149,12 +153,11 @@ func BlockReadInner(
 		}
 	}
 
-	if rowid != nil {
-		rowid.Free(mp)
-	}
-
 	if err != nil {
 		for _, col := range result.Vecs {
+			if col.GetType().Oid == types.T_Rowid {
+				continue
+			}
 			if col != nil {
 				col.Free(mp)
 			}
