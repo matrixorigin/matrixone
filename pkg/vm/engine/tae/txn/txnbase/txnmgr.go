@@ -298,6 +298,8 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	op.Txn.SetError(op.Txn.PrePrepare())
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
+		logutil.Errorf("gavin error")
+		logutil.Errorf("[PrePrepare] %v", op.Txn.GetError())
 	})
 }
 
