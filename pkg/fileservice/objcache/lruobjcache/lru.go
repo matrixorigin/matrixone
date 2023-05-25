@@ -25,7 +25,7 @@ type LRU struct {
 	size     int64
 	evicts   *list.List
 	kv       map[any]*list.Element
-	onEvict  func(key any, value []byte)
+	onEvict  func(key any, value []byte, sz int64)
 }
 
 type lruItem struct {
@@ -34,7 +34,7 @@ type lruItem struct {
 	Size  int64
 }
 
-func New(capacity int64, OnEvict func(key any, value []byte)) *LRU {
+func New(capacity int64, OnEvict func(key any, value []byte, sz int64)) *LRU {
 	return &LRU{
 		capacity: capacity,
 		evicts:   list.New(),
@@ -98,7 +98,7 @@ func (l *LRU) evict() {
 			l.evicts.Remove(elem)
 			delete(l.kv, item.Key)
 			if l.onEvict != nil {
-				l.onEvict(item.Key, item.Value)
+				l.onEvict(item.Key, item.Value, item.Size)
 			}
 			break
 		}

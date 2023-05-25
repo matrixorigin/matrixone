@@ -21,7 +21,7 @@ import (
 
 func TestLRU(t *testing.T) {
 	keys := make(map[int]int)
-	l := New(1, func(key any, value []byte) {
+	l := New(1, func(key any, value []byte, _ int64) {
 		keys[key.(int)]++
 	})
 
