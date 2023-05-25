@@ -353,6 +353,7 @@ type blockReader struct {
 }
 
 type blockMergeReader struct {
+	sels     []int64
 	blks     []ModifyBlockMeta
 	ctx      context.Context
 	fs       fileservice.FileService

@@ -1314,6 +1314,7 @@ func (tbl *txnTable) newReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tbl.tableDef,
+				sels:     make([]int64, 0, 1024),
 				blks:     []ModifyBlockMeta{blks[i]},
 			})
 		}
@@ -1327,6 +1328,7 @@ func (tbl *txnTable) newReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tbl.tableDef,
+				sels:     make([]int64, 0, 1024),
 				blks:     []ModifyBlockMeta{blks[i]},
 			}
 		}
@@ -1347,6 +1349,7 @@ func (tbl *txnTable) newReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tbl.tableDef,
+				sels:     make([]int64, 0, 1024),
 				blks:     blks[(i-1)*step:],
 			}
 		} else {
@@ -1355,6 +1358,7 @@ func (tbl *txnTable) newReader(
 				ts:       ts,
 				ctx:      ctx,
 				tableDef: tbl.tableDef,
+				sels:     make([]int64, 0, 1024),
 				blks:     blks[(i-1)*step : i*step],
 			}
 		}
