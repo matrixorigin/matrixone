@@ -404,8 +404,9 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 				// fetch total logtail for table
 				var tail logtail.TableLogtail
+				var closeCB func()
 				moprobe.WithRegion(ctx, moprobe.SubscriptionPullLogTail, func() {
-					tail, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
+					tail, closeCB, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
 				})
 				if subErr != nil {
 					logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
@@ -422,6 +423,9 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				if subErr != nil {
 					logger.Error("fail to send subscription response", zap.Error(subErr))
 					return
+				}
+				if closeCB != nil {
+					closeCB()
 				}
 
 				// mark table as subscribed
@@ -463,7 +467,9 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 						continue
 					}
 				}
-				e.closeCB()
+				if e.closeCB != nil {
+					e.closeCB()
+				}
 
 				// update waterline for all subscribed tables
 				s.waterline.Advance(to)
