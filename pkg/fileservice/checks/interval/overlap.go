@@ -20,38 +20,38 @@ import (
 
 type OverlapChecker struct {
 	tag          string
-	keyIntervals map[string]*IntTree
+	keyIntervals map[string]IntervalTree
 }
 
 func NewOverlapChecker(tag string) *OverlapChecker {
 	return &OverlapChecker{
-		keyIntervals: make(map[string]*IntTree),
+		keyIntervals: make(map[string]IntervalTree),
 		tag:          tag,
 	}
 }
 
 func (i *OverlapChecker) Insert(key string, low, high int64) error {
-	interval := Interval{low: low, high: high}
+	interval := NewInt64Interval(low, high)
 	if _, ok := i.keyIntervals[key]; !ok {
 		i.keyIntervals[key] = NewIntervalTree()
 	} else if i.keyIntervals[key].Contains(interval) {
 		return moerr.NewInternalErrorNoCtx("Duplicate key range in %s", i.tag)
 	}
 
-	i.keyIntervals[key].Insert(interval)
+	i.keyIntervals[key].Insert(interval, true)
 	return nil
 }
 
 func (i *OverlapChecker) Remove(key string, low, high int64) error {
-	interval := Interval{low: low, high: high}
+	interval := NewInt64Interval(low, high)
 	if _, ok := i.keyIntervals[key]; !ok {
 		return moerr.NewInternalErrorNoCtx("Key Range not found for removal in %s", i.tag)
 	}
 
 	if i.keyIntervals[key].Contains(interval) {
-		i.keyIntervals[key].Remove(interval)
+		i.keyIntervals[key].Delete(interval)
 
-		if i.keyIntervals[key].Size() == 0 {
+		if i.keyIntervals[key].Len() == 0 {
 			delete(i.keyIntervals, key)
 		}
 	}
