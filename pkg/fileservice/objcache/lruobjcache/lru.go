@@ -21,11 +21,11 @@ import (
 
 type LRU struct {
 	sync.Mutex
-	capacity int64
-	size     int64
-	evicts   *list.List
-	kv       map[any]*list.Element
-	onEvict  func(key any, value []byte, sz int64)
+	capacity  int64
+	size      int64
+	evicts    *list.List
+	kv        map[any]*list.Element
+	postEvict func(key any, value []byte, sz int64)
 }
 
 type lruItem struct {
@@ -34,12 +34,12 @@ type lruItem struct {
 	Size  int64
 }
 
-func New(capacity int64, OnEvict func(key any, value []byte, sz int64)) *LRU {
+func New(capacity int64, postEvict func(key any, value []byte, sz int64)) *LRU {
 	return &LRU{
-		capacity: capacity,
-		evicts:   list.New(),
-		kv:       make(map[any]*list.Element),
-		onEvict:  OnEvict,
+		capacity:  capacity,
+		evicts:    list.New(),
+		kv:        make(map[any]*list.Element),
+		postEvict: postEvict,
 	}
 }
 
@@ -97,8 +97,8 @@ func (l *LRU) evict() {
 			l.size -= item.Size
 			l.evicts.Remove(elem)
 			delete(l.kv, item.Key)
-			if l.onEvict != nil {
-				l.onEvict(item.Key, item.Value, item.Size)
+			if l.postEvict != nil {
+				l.postEvict(item.Key, item.Value, item.Size)
 			}
 			break
 		}

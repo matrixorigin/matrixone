@@ -44,8 +44,8 @@ func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
 	}
 
 	return &MemCache{
-		objCache:       initOpts.objCache,
 		overlapChecker: initOpts.overlapChecker,
+		objCache:       initOpts.objCache,
 		ch:             ch,
 		counterSets:    initOpts.counterSets,
 	}
@@ -53,7 +53,7 @@ func NewMemCache(opts ...MemCacheOptionFunc) *MemCache {
 
 func WithLRU(capacity int64) MemCacheOptionFunc {
 	return func(o *memCacheOptions) {
-		o.overlapChecker = interval.NewOverlapChecker("MemCache")
+		o.overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
 		o.objCache = lruobjcache.New(capacity, func(key any, value []byte, _ int64) {
 			if true {
 				_key := key.(IOVectorCacheKey)
@@ -65,7 +65,7 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 
 func WithClock(capacity int64) MemCacheOptionFunc {
 	return func(o *memCacheOptions) {
-		o.overlapChecker = interval.NewOverlapChecker("MemCache")
+		o.overlapChecker = interval.NewOverlapChecker("MemCache_Clock")
 		o.objCache = clockobjcache.New(capacity, func(key any, value []byte, _ int64) {
 			if true {
 				_key := key.(IOVectorCacheKey)
@@ -177,7 +177,7 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		// check overlaps
+		// TODO: check key overlaps here.
 		if true {
 			err = m.overlapChecker.Insert(path.File, entry.Offset, entry.Offset+entry.Size)
 			if err != nil {

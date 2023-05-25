@@ -20,9 +20,9 @@ import (
 )
 
 func TestLRU(t *testing.T) {
-	keys := make(map[int]int)
+	kv := make(map[int][]byte)
 	l := New(1, func(key any, value []byte, _ int64) {
-		keys[key.(int)]++
+		kv[key.(int)] = value
 	})
 
 	l.Set(1, []byte{42}, 1, false)
@@ -36,7 +36,7 @@ func TestLRU(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = l.kv[2]
 	assert.True(t, ok)
-	assert.Equal(t, 1, keys[1])
+	assert.Equal(t, []byte{42}, kv[1])
 }
 
 func BenchmarkLRUSet(b *testing.B) {
