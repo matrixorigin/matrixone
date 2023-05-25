@@ -320,7 +320,6 @@ func (rb *remoteBackend) doSend(f *Future) error {
 }
 
 func (rb *remoteBackend) Close() {
-	rb.inactive()
 	rb.cancelOnce.Do(func() {
 		rb.cancel()
 	})
@@ -335,6 +334,7 @@ func (rb *remoteBackend) Close() {
 
 	rb.stopper.Stop()
 	rb.doClose()
+	rb.inactive()
 }
 
 func (rb *remoteBackend) Busy() bool {
