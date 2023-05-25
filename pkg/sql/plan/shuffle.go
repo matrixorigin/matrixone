@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -25,10 +26,14 @@ const (
 	ShuffleThreshHold    = 50000
 )
 
-func SimpleHashToRange(bytes []byte, upperLimit int) int {
+func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	lenBytes := len(bytes)
 	//sample five bytes
-	return (int(bytes[0])*(int(bytes[lenBytes/4])+int(bytes[lenBytes/2])+int(bytes[lenBytes*3/4])) + int(bytes[lenBytes-1])) % upperLimit
+	return (uint64(bytes[0])*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])) + uint64(bytes[lenBytes-1])) % upperLimit
+}
+
+func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
+	return hashtable.Wyhash64(i) % upperLimit
 }
 
 func GetHashColumnIdx(expr *plan.Expr) int {
