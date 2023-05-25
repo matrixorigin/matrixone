@@ -17,7 +17,6 @@ package model
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type ColumnView struct {
@@ -26,7 +25,6 @@ type ColumnView struct {
 	data       containers.Vector
 	UpdateMask *roaring.Bitmap
 	UpdateVals map[uint32]any
-	LogIndexes []*wal.Index
 }
 
 func NewColumnView(colIdx int) *ColumnView {

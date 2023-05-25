@@ -26,6 +26,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
@@ -668,7 +669,7 @@ func runLockServiceTestsWithLevel(
 
 func TestUnsafeStringToByteSlice(t *testing.T) {
 	v := "abc"
-	assert.Equal(t, []byte(v), unsafeStringToByteSlice(v))
+	assert.Equal(t, []byte(v), util.UnsafeStringToBytes(v))
 }
 
 func waitWaiters(

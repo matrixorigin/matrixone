@@ -38,7 +38,6 @@ func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *co
 }
 func (store *NoopTxnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
-	zm []objectio.ZoneMap,
 	metaLocs []objectio.Location,
 ) error {
 	return nil

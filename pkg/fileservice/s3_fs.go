@@ -29,11 +29,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"go.uber.org/zap"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -43,6 +38,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 // S3FS is a FileService implementation backed by S3
@@ -971,7 +970,12 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		return nil, err
 	}
 
-	s3Options := []func(*s3.Options){}
+	s3Options := []func(*s3.Options){
+		func(opts *s3.Options) {
+			opts.RetryMaxAttempts = 128
+			opts.RetryMode = aws.RetryModeAdaptive
+		},
+	}
 
 	if credentialProvider != nil {
 		s3Options = append(s3Options,
@@ -1089,6 +1093,7 @@ func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3
 			return output.Body, nil
 		},
 		min,
+		isRetryableError,
 	)
 	if err != nil {
 		return nil, err

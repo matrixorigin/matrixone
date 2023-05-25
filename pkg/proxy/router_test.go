@@ -47,7 +47,7 @@ func TestCNServer(t *testing.T) {
 		defer cancel()
 		addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 		require.NoError(t, os.RemoveAll(addr))
-		stopFn := startTestCNServer(t, ctx, addr)
+		stopFn := startTestCNServer(t, ctx, addr, nil)
 		defer func() {
 			require.NoError(t, stopFn())
 		}()
@@ -83,12 +83,12 @@ func TestRouter_SelectEmptyCN(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1})
+	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 }
 
-func TestRouter_Route(t *testing.T) {
+func TestRouter_RouteForCommon(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
@@ -111,6 +111,7 @@ func TestRouter_Route(t *testing.T) {
 	re := testRebalancer(t, st, logger, mc)
 
 	ru := newRouter(mc, re, true)
+	ctx := context.TODO()
 
 	li1 := labelInfo{
 		Tenant: "t1",
@@ -118,7 +119,7 @@ func TestRouter_Route(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1})
+	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 
@@ -128,7 +129,7 @@ func TestRouter_Route(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li2})
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li2}, nil)
 	require.Error(t, err)
 	require.Nil(t, cn)
 
@@ -138,19 +139,24 @@ func TestRouter_Route(t *testing.T) {
 			"k2": "v1",
 		},
 	}
-	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li3})
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li3}, nil)
 	require.Error(t, err)
 	require.Nil(t, cn)
 
+	// empty tenant means sys tenant.
 	li4 := labelInfo{
 		Tenant: "",
 		Labels: map[string]string{
 			"k2": "v1",
 		},
 	}
-	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li4})
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li4, username: "dump"}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
+
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li4}, nil)
+	require.Error(t, err)
+	require.Nil(t, cn)
 
 	li5 := labelInfo{
 		Tenant: "sys",
@@ -158,9 +164,74 @@ func TestRouter_Route(t *testing.T) {
 			"k2": "v1",
 		},
 	}
-	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li5})
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li5, username: "dump"}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
+
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li5}, nil)
+	require.Error(t, err)
+	require.Nil(t, cn)
+}
+
+func TestRouter_RouteForSys(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	defer mc.Close()
+	re := testRebalancer(t, st, logger, mc)
+	ru := newRouter(mc, re, true)
+	li1 := labelInfo{
+		Tenant: "sys",
+	}
+
+	hc.updateCN("cn1", "", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	mc.ForceRefresh()
+	time.Sleep(time.Millisecond * 200)
+	ctx := context.TODO()
+	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1, username: "dump"}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	require.Equal(t, "cn1", cn.uuid)
+
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	require.Error(t, err)
+	require.Nil(t, cn)
+
+	hc.updateCN("cn2", "", map[string]metadata.LabelList{})
+	mc.ForceRefresh()
+	time.Sleep(time.Millisecond * 200)
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	require.Equal(t, "cn2", cn.uuid)
+
+	hc.updateCN("cn3", "", map[string]metadata.LabelList{
+		"k1": {Labels: []string{"v1"}},
+	})
+	mc.ForceRefresh()
+	time.Sleep(time.Millisecond * 200)
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	require.Equal(t, "cn3", cn.uuid)
+
+	hc.updateCN("cn4", "", map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"sys"}},
+	})
+	mc.ForceRefresh()
+	time.Sleep(time.Millisecond * 200)
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	require.Equal(t, "cn4", cn.uuid)
 }
 
 func TestRouter_SelectByConnID(t *testing.T) {
@@ -178,7 +249,7 @@ func TestRouter_SelectByConnID(t *testing.T) {
 	temp := os.TempDir()
 	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr1))
-	stopFn1 := startTestCNServer(t, ctx, addr1)
+	stopFn1 := startTestCNServer(t, ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
@@ -219,7 +290,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn1 := startTestCNServer(t, ctx, addr1)
+	stopFn1 := startTestCNServer(t, ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
@@ -231,7 +302,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn2 := startTestCNServer(t, ctx, addr2)
+	stopFn2 := startTestCNServer(t, ctx, addr2, nil)
 	defer func() {
 		require.NoError(t, stopFn2())
 	}()
@@ -243,7 +314,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn3 := startTestCNServer(t, ctx, addr3)
+	stopFn3 := startTestCNServer(t, ctx, addr3, nil)
 	defer func() {
 		require.NoError(t, stopFn3())
 	}()
@@ -263,7 +334,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1})
+	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -278,7 +349,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li2})
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li2}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -293,7 +364,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li3})
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li3}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -325,7 +396,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn1 := startTestCNServer(t, ctx, addr1)
+	stopFn1 := startTestCNServer(t, ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
@@ -336,7 +407,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 		tenantLabelKey: {Labels: []string{"t1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn2 := startTestCNServer(t, ctx, addr2)
+	stopFn2 := startTestCNServer(t, ctx, addr2, nil)
 	defer func() {
 		require.NoError(t, stopFn2())
 	}()
@@ -347,7 +418,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 		tenantLabelKey: {Labels: []string{"t1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn3 := startTestCNServer(t, ctx, addr3)
+	stopFn3 := startTestCNServer(t, ctx, addr3, nil)
 	defer func() {
 		require.NoError(t, stopFn3())
 	}()
@@ -367,7 +438,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err := ru.Route(context.TODO(), clientInfo{labelInfo: li1})
+	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -382,7 +453,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li2})
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li2}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -397,7 +468,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 			"k1": "v1",
 		},
 	}
-	cn, err = ru.Route(context.TODO(), clientInfo{labelInfo: li3})
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li3}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
@@ -407,4 +478,118 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	connResult[cn.uuid] = struct{}{}
 
 	require.Equal(t, 1, len(connResult))
+}
+
+func TestRouter_Filter(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+	// Construct backend CN servers.
+	temp := os.TempDir()
+	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr1))
+	hc.updateCN("cn1", addr1, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+		"k1":           {Labels: []string{"v1"}},
+		"k2":           {Labels: []string{"v2"}},
+	})
+	stopFn1 := startTestCNServer(t, ctx, addr1, nil)
+	defer func() {
+		require.NoError(t, stopFn1())
+	}()
+
+	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr2))
+	hc.updateCN("cn2", addr2, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+		"k2":           {Labels: []string{"v2"}},
+	})
+	stopFn2 := startTestCNServer(t, ctx, addr2, nil)
+	defer func() {
+		require.NoError(t, stopFn2())
+	}()
+
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	defer mc.Close()
+	mc.ForceRefresh()
+	time.Sleep(time.Millisecond * 200)
+	re := testRebalancer(t, st, logger, mc)
+
+	ru := newRouter(mc, re, true)
+
+	cn, err := ru.Route(ctx, clientInfo{username: "dump"}, func(s string) bool {
+		return s == "cn1"
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	require.Equal(t, cn.uuid, "cn2")
+}
+
+func TestRouter_RetryableConnect(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+	rt := runtime.DefaultRuntime()
+	logger := rt.Logger()
+	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
+	defer st.Stop()
+	hc := &mockHAKeeperClient{}
+	// Construct backend CN servers.
+	temp := os.TempDir()
+	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr1))
+	hc.updateCN("cn1", addr1, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	stopFn1 := startTestCNServer(t, ctx, addr1, nil)
+	defer func() {
+		require.NoError(t, stopFn1())
+	}()
+
+	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr2))
+	hc.updateCN("cn2", addr2, map[string]metadata.LabelList{
+		tenantLabelKey: {Labels: []string{"t1"}},
+	})
+	// We do NOT start cn2 here, to return a retryable error.
+
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	defer mc.Close()
+	mc.ForceRefresh()
+	time.Sleep(time.Millisecond * 200)
+	re := testRebalancer(t, st, logger, mc)
+
+	ru := newRouter(mc, re, true)
+
+	li1 := labelInfo{
+		Tenant: "t1",
+	}
+	cn, err := ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
+		return s == "cn1"
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	cn.addr = "unix://" + cn.addr
+	tu1 := newTunnel(context.TODO(), nil, nil)
+	_, _, err = ru.Connect(cn, testPacket, tu1)
+	require.True(t, isRetryableErr(err))
+
+	cn, err = ru.Route(ctx, clientInfo{labelInfo: li1}, func(s string) bool {
+		return s == "cn2"
+	})
+	require.NoError(t, err)
+	require.NotNil(t, cn)
+	cn.addr = "unix://" + cn.addr
+	_, _, err = ru.Connect(cn, testPacket, tu1)
+	require.NoError(t, err)
+	require.Equal(t, "cn1", cn.uuid)
 }

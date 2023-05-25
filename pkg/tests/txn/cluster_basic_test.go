@@ -15,13 +15,18 @@
 package txn
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/tests/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,6 +150,64 @@ func TestWriteSkewIsAllowed(t *testing.T) {
 
 			checkRead(t, mustNewTxn(t, cli), k1, "b", nil, true)
 			checkRead(t, mustNewTxn(t, cli), k2, "a", nil, true)
+		})
+	}
+}
+
+func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode.")
+		return
+	}
+
+	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
+	// A Txn read and write will success.
+	for name, options := range testOptionsSet {
+		t.Run(name, func(t *testing.T) {
+			c, err := NewCluster(t,
+				getBasicClusterOptions(options...))
+			require.NoError(t, err)
+			defer c.Stop()
+			c.Start()
+
+			v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.InternalSQLExecutor)
+			if !ok {
+				panic("missing internal sql executor")
+			}
+			exec := v.(executor.SQLExecutor)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			exec.ExecTxn(
+				ctx,
+				func(te executor.TxnExecutor) error {
+					res, err := te.Exec("create database zx")
+					require.NoError(t, err)
+					res.Close()
+
+					res, err = te.Exec("create table t1 (id int primary key, name varchar(255))")
+					require.NoError(t, err)
+					res.Close()
+
+					res, err = te.Exec("insert into t1 values (1, 'a'),(2, 'b'),(3, 'c')")
+					require.NoError(t, err)
+					require.Equal(t, uint64(3), res.AffectedRows)
+					res.Close()
+
+					res, err = te.Exec("select id,name from t1 order by id")
+					require.NoError(t, err)
+					var ids []int32
+					var names []string
+					res.ReadRows(func(cols []*vector.Vector) bool {
+						ids = append(ids, executor.GetFixedRows[int32](cols[0])...)
+						names = append(names, executor.GetStringRows(cols[1])...)
+						return true
+					})
+					require.Equal(t, []int32{1, 2, 3}, ids)
+					require.Equal(t, []string{"a", "b", "c"}, names)
+					res.Close()
+					return nil
+				},
+				executor.Options{}.WithDatabase("zx"))
 		})
 	}
 }

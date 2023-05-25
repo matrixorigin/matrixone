@@ -29,3 +29,6 @@ test/distributed/resources/into_outfile/outfile_*.csv
 test/distributed/resources/into_outfile_2/outfile_*.csv
 test/distributed/resources/json/export_*.csv
 
+#make compose bvt generate files
+docker-compose-log/
+

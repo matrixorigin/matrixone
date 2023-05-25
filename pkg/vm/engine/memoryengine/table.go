@@ -365,3 +365,7 @@ func (t *Table) GetTableID(ctx context.Context) uint64 {
 func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	return nil, nil, nil
 }
+
+func (t *Table) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
+	return nil, nil
+}

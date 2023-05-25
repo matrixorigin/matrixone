@@ -104,13 +104,13 @@ func (s *service) initMemoryEngineNonDist(
 	)
 	pu.TxnClient = txnClient
 
-	engine := memoryengine.New(
+	s.storeEngine = memoryengine.New(
 		ctx,
 		memoryengine.NewDefaultShardPolicy(mp),
 		memoryengine.RandomIDGenerator,
 		cluster,
 	)
-	pu.StorageEngine = engine
-
+	pu.StorageEngine = s.storeEngine
+	s.initInternalSQlExecutor(mp)
 	return nil
 }
