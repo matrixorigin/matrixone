@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -101,7 +102,7 @@ func (db *txnDB) BatchDedup(id uint64, pk containers.Vector) (err error) {
 	return table.DoBatchDedup(pk)
 }
 
-func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
+func (db *txnDB) Append(ctx context.Context, id uint64, bat *containers.Batch) error {
 	table, err := db.getOrSetTable(id)
 	if err != nil {
 		return err
@@ -109,7 +110,7 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.Append(bat)
+	return table.Append(ctx, bat)
 }
 
 func (db *txnDB) AddBlksWithMetaLoc(
