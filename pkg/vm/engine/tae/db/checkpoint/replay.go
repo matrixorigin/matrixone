@@ -15,7 +15,6 @@
 package checkpoint
 
 import (
-	"context"
 	"sort"
 	"sync"
 	"time"
@@ -39,7 +38,7 @@ type metaFile struct {
 }
 
 func (r *runner) Replay(dataFactory catalog.DataFactory) (maxTs types.TS, err error) {
-	ctx := context.Background()
+	ctx := r.ctx
 	dirs, err := r.fs.ListDir(CheckpointDir)
 	if err != nil {
 		return
