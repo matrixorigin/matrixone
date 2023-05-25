@@ -61,7 +61,7 @@ func DbIsSystemDb(dbName string) bool {
 	if dbName == catalog.MO_COLUMNS {
 		return true
 	}
-	if dbName == "mo_task" {
+	if dbName == catalog.MOTaskDB {
 		return true
 	}
 	if dbName == "information_schema" {

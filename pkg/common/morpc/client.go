@@ -167,40 +167,50 @@ func (c *client) maybeInitBackends() error {
 }
 
 func (c *client) Send(ctx context.Context, backend string, request Message) (*Future, error) {
-	b, err := c.getBackend(backend, false)
-	if err != nil {
-		return nil, err
-	}
+	for {
+		b, err := c.getBackend(backend, false)
+		if err != nil {
+			return nil, err
+		}
 
-	f, err := b.Send(ctx, request)
-	if err != nil {
-		return nil, err
+		f, err := b.Send(ctx, request)
+		if err != nil && err == backendClosed {
+			continue
+		}
+		return f, err
 	}
-	return f, nil
 }
 
 func (c *client) NewStream(backend string, lock bool) (Stream, error) {
-	b, err := c.getBackend(backend, lock)
-	if err != nil {
-		return nil, err
-	}
+	for {
+		b, err := c.getBackend(backend, lock)
+		if err != nil {
+			return nil, err
+		}
 
-	return b.NewStream(lock)
+		st, err := b.NewStream(lock)
+		if err != nil && err == backendClosed {
+			continue
+		}
+		return st, err
+	}
 }
 
 func (c *client) Ping(ctx context.Context, backend string) error {
-	b, err := c.getBackend(backend, false)
-	if err != nil {
-		return err
-	}
+	for {
+		b, err := c.getBackend(backend, false)
+		if err != nil {
+			return err
+		}
 
-	f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
-	if err != nil {
+		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
+		if err != nil && err == backendClosed {
+			continue
+		}
+		_, err = f.Get()
+		f.Close()
 		return err
 	}
-	defer f.Close()
-	_, err = f.Get()
-	return err
 }
 
 func (c *client) Close() error {

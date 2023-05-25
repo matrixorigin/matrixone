@@ -321,6 +321,28 @@ func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 	})
 }
 
+func TestCannotGetClosedBackend(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+		defer cancel()
+
+		c := newTestClient(t, WithClientMaxBackendPerHost(2))
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
+			return cs.Write(ctx, request.Message)
+		})
+
+		st, err := c.NewStream(testAddr, true)
+		require.NoError(t, err)
+		require.NoError(t, st.Close(true))
+
+		require.NoError(t, c.Ping(ctx, testAddr))
+	})
+}
+
 func BenchmarkSend(b *testing.B) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()

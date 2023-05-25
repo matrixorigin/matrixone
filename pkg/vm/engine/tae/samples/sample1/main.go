@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"runtime/pprof"
 	"sync"
@@ -82,7 +83,7 @@ func main() {
 			if err != nil {
 				panic(err)
 			}
-			if err := rel.Append(b); err != nil {
+			if err := rel.Append(context.Background(), b); err != nil {
 				panic(err)
 			}
 			if err := txn.Commit(); err != nil {

@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,35 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package perfcounter
 
 import (
-	"errors"
-	"io"
-	"strings"
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func isRetryableError(err error) bool {
-	// Is error
-	if errors.Is(err, io.ErrUnexpectedEOF) {
-		return true
-	}
-	str := err.Error()
-	// match exact string
-	switch str {
-	case "connection reset by peer",
-		"connection timed out":
-		return true
-	}
-	// match sub-string
-	if strings.Contains(str, "unexpected EOF") {
-		return true
-	}
-	if strings.Contains(str, "connection reset by peer") {
-		return true
-	}
-	if strings.Contains(str, "connection timed out") {
-		return true
-	}
-	return false
+func TestWithCounterSetFrom(t *testing.T) {
+	var c1, c2 CounterSet
+	ctx := WithCounterSet(context.Background(), &c1, &c2)
+	ctx2 := WithCounterSetFrom(context.Background(), ctx)
+	Update(ctx2, func(set *CounterSet) {
+		set.DistTAE.Logtail.Entries.Add(1)
+	})
+	assert.Equal(t, int64(1), c1.DistTAE.Logtail.Entries.Load())
 }

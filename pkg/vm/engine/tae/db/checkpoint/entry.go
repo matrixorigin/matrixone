@@ -185,17 +185,17 @@ func (e *CheckpointEntry) Read(
 	}
 	return
 }
-func (e *CheckpointEntry) GetByTableID(fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
+func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectFS, tid uint64) (ins, del, cnIns, segDel *api.Batch, err error) {
 	reader, err := blockio.NewObjectReader(fs.Service, e.location)
 	if err != nil {
 		return
 	}
 	data := logtail.NewCheckpointData()
 	defer data.Close()
-	if err = data.PrefetchFrom(context.Background(), fs.Service, e.location); err != nil {
+	if err = data.PrefetchFrom(ctx, fs.Service, e.location); err != nil {
 		return
 	}
-	if err = data.ReadFrom(context.Background(), reader, common.DefaultAllocator); err != nil {
+	if err = data.ReadFrom(ctx, reader, common.DefaultAllocator); err != nil {
 		return
 	}
 	ins, del, cnIns, segDel, err = data.GetTableData(tid)

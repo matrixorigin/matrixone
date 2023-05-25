@@ -365,3 +365,4 @@ select A.NAME, A.PHONE, B.NAME, B.PHONE from t17 B left join t17 A on B.NAME = A
 where B.IID = 2 and (A.PHONE <> B.PHONE or A.NAME is null);
 
 drop table t17;
+select * from (select 'tb1' as name, 1 as count union all select 'tb3' as name, 3 as count union all select 'tb2' as name, 2 as count) order by count;
