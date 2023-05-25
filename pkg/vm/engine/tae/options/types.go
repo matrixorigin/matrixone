@@ -15,6 +15,7 @@
 package options
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -78,4 +79,5 @@ type Options struct {
 	Lc        logservicedriver.LogServiceClientFactory
 	Shard     metadata.DNShard
 	LogStoreT LogstoreType
+	Ctx       context.Context
 }

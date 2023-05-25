@@ -43,6 +43,7 @@ type taeStorage struct {
 var _ storage.TxnStorage = (*taeStorage)(nil)
 
 func NewTAEStorage(
+	ctx context.Context,
 	dataDir string,
 	shard metadata.DNShard,
 	factory logservice.ClientFactory,
@@ -60,6 +61,7 @@ func NewTAEStorage(
 		Shard:         shard,
 		CheckpointCfg: ckpCfg,
 		LogStoreT:     logStore,
+		Ctx:           ctx,
 	}
 
 	taeHandler := rpc.NewTAEHandle(dataDir, opt)
