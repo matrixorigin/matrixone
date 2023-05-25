@@ -69,6 +69,9 @@ jobs:
           mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
+          curl http://localhost:32345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/dn-dump-stacks.log
+          curl http://localhost:32345/debug/pprof/heap\?seconds=5 -o ${{ github.workspace }}/docker-compose-log/dn-heap.out
+          curl http://localhost:32345/debug/pprof/trace\?seconds=5 -o ${{ github.workspace }}/docker-compose-log/dn-trace.out
 
 
       - name: shutdown containers
