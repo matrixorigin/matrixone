@@ -106,6 +106,7 @@ func genShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.
 			for j := range shuffledBats[regIndex].Vecs {
 				v := proc.GetVector(*bat.Vecs[j].GetType())
 				if v.Capacity() < shuffleBatchSize/2 {
+					logutil.Warnf("!capacity %v", v.Capacity())
 					v.PreExtend(shuffleBatchSize-v.Capacity(), proc.Mp())
 				}
 				shuffledBats[regIndex].Vecs[j] = v
