@@ -46,7 +46,10 @@ type PartitionState struct {
 	rows         *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
 	blocks       *btree.BTreeG[BlockEntry]
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
-	checkpoints  []string
+	//for non-appendable block's memory deletes, used to getting dirty
+	// non-appendable blocks quickly.
+	dirtyRows   *btree.BTreeG[RowEntry]
+	checkpoints []string
 
 	// noData indicates whether to retain data batch
 	// for primary key dedup, reading data is not required
@@ -135,6 +138,7 @@ func NewPartitionState(noData bool) *PartitionState {
 		rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
 		blocks:       btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		primaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		dirtyRows:    btree.NewBTreeGOptions((RowEntry).Less, opts),
 	}
 }
 
@@ -144,6 +148,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		blocks:       p.blocks.Copy(),
 		primaryIndex: p.primaryIndex.Copy(),
 		noData:       p.noData,
+		dirtyRows:    p.dirtyRows.Copy(),
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -319,6 +324,22 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 			}
 
 			p.rows.Set(entry)
+
+			//handle memory deletes for non-appendable block.
+			bPivot := BlockEntry{
+				BlockInfo: catalog.BlockInfo{
+					BlockID: blockID,
+				},
+			}
+			be, ok := p.blocks.Get(bPivot)
+			if ok && !be.EntryState {
+				p.dirtyRows.Set(RowEntry{
+					BlockID: blockID,
+					RowID:   rowID,
+					Time:    timeVector[i],
+					Deleted: true,
+				})
+			}
 		})
 	}
 
@@ -390,6 +411,12 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					}
 					// delete row entry
 					p.rows.Delete(entry)
+
+					// detete dirty rows for nblk
+					if !entryStateVector[i] {
+						p.dirtyRows.Delete(entry)
+					}
+
 					numDeleted++
 					// delete primary index entry
 					if len(entry.PrimaryIndexBytes) > 0 {
