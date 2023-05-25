@@ -174,14 +174,14 @@ jobs:
           path: ./mo-load
           ref: main
 
-      - name: Clone mo-sysbench Repo
-        if: ${{ always() && !cancelled() }}
-        uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/mo-sysbench
-          token: ${{secrets.TOKEN_ACTION}}
-          path: ./mo-sysbench
-          ref: main
+#       - name: Clone mo-sysbench Repo
+#         if: ${{ always() && !cancelled() }}
+#         uses: actions/checkout@v3
+#         with:
+#           repository: matrixorigin/mo-sysbench
+#           token: ${{secrets.TOKEN_ACTION}}
+#           path: ./mo-sysbench
+#           ref: main
 
       - name: Clone mo-tpcc Repo
         if: ${{ always() && !cancelled() }}
@@ -427,11 +427,16 @@ jobs:
         run: |
           echo ${{ needs.docker_image_build.outputs.version }}
           mkdir -p $GITHUB_WORKSPACE/reports
-          cp -r $GITHUB_WORKSPACE/mo-ssb/report/* $GITHUB_WORKSPACE/reports
-          cp -r $GITHUB_WORKSPACE/mo-load-data/report/* $GITHUB_WORKSPACE/reports
-          cp -r $GITHUB_WORKSPACE/mo-tpcc/report/* $GITHUB_WORKSPACE/reports
-          cp -r $GITHUB_WORKSPACE/mo-load/report/* $GITHUB_WORKSPACE/reports
-          cp -r $GITHUB_WORKSPACE/mo-tpch/report/* $GITHUB_WORKSPACE/reports
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-ssb
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-load-data
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-tpcc
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-load
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-tpch
+          cp -r $GITHUB_WORKSPACE/mo-ssb/report $GITHUB_WORKSPACE/reports/mo-ssb
+          cp -r $GITHUB_WORKSPACE/mo-load-data/report $GITHUB_WORKSPACE/reports/mo-load-data
+          cp -r $GITHUB_WORKSPACE/mo-tpcc/report $GITHUB_WORKSPACE/reports/mo-tpcc
+          cp -r $GITHUB_WORKSPACE/mo-load/report $GITHUB_WORKSPACE/reports/mo-load
+          cp -r $GITHUB_WORKSPACE/mo-tpch/report $GITHUB_WORKSPACE/reports/mo-tpch
 
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
           sed -i '/  host:*/c\  host: "${{secrets.REPORT_DB_ADDR}}"' config.yml
@@ -481,13 +486,13 @@ jobs:
       - name: Test Plugin Result export
         if: ${{ failure() || cancelled() }}
         run: | 
-          mv $GITHUB_WORKSPACE/mo-nightly-regression/result/.temp $GITHUB_WORKSPACE/reports/result
+          aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/reports --recursive
           aws s3 cp $GITHUB_WORKSPACE/reports s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/reports --recursive
       - name : ISSUE Notice
         if: ${{ failure() || cancelled() }}
         uses: chf007/action-wechat-work@master
         env:
-          WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_WORK_BOT_WEBHOOK }}
+          WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_MO_CHECKIN_BOT_WEBHOOK }}
         with:
           msgtype: markdown
           content: "MO Checkin Regression On EKS failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})  <@shuqi.qin><@JiejieJia><@SuDong>"
@@ -552,8 +557,8 @@ jobs:
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod
 
 
-          # move result to s3://mo-checkin-regression/result/
-          if [ '${{ needs.test.result }}'x == 'failure'x ]; then aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }} --recursive > /dev/null 2>&1; aws s3 mv s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; fi
+          # move result to s3://mo-checkin-regression/result/ only test fail
+          if [ '${{ needs.test.result }}'x == 'failure'x ]; then aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; aws s3 mv s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; fi
           kubectl get bucket -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
 
           kubectl delete namespace mo-checkin-regression-${{ github.event.pull_request.number }}
