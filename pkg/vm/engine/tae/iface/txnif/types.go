@@ -59,6 +59,7 @@ type TxnReader interface {
 	GetPrepareTS() types.TS
 	GetParticipants() []uint64
 	GetSnapshotTS() types.TS
+	SetSnapshotTS(types.TS)
 	HasSnapshotLag() bool
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState

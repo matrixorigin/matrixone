@@ -361,3 +361,14 @@ func (n *MVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
 func (n *MVCCHandle) GetDeleteNodeByRow(row uint32) (an *DeleteNode) {
 	return n.deletes.GetDeleteNodeByRow(row)
 }
+
+func (n *MVCCHandle) LastAnodeCommittedBeforeLocked(ts types.TS) bool {
+	anode := n.appends.GetUpdateNodeLocked()
+	if anode == nil {
+		return false
+	}
+	if !anode.IsCommitted() {
+		return false
+	}
+	return anode.GetCommitTS().Less(ts)
+}

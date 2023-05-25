@@ -296,6 +296,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		ProjectList:     make([]*plan.Expr, len(node.ProjectList)),
 		OnList:          make([]*plan.Expr, len(node.OnList)),
 		FilterList:      make([]*plan.Expr, len(node.FilterList)),
+		BlockFilterList: make([]*plan.Expr, len(node.BlockFilterList)),
 		GroupBy:         make([]*plan.Expr, len(node.GroupBy)),
 		GroupingSet:     make([]*plan.Expr, len(node.GroupingSet)),
 		AggList:         make([]*plan.Expr, len(node.AggList)),
@@ -324,6 +325,10 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	for idx, expr := range node.FilterList {
 		newNode.FilterList[idx] = DeepCopyExpr(expr)
+	}
+
+	for idx, expr := range node.BlockFilterList {
+		newNode.BlockFilterList[idx] = DeepCopyExpr(expr)
 	}
 
 	for idx, expr := range node.GroupBy {
@@ -506,6 +511,9 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		Name2ColIndex: table.Name2ColIndex,
 		Indexes:       make([]*IndexDef, len(table.Indexes)),
 		Fkeys:         make([]*plan.ForeignKeyDef, len(table.Fkeys)),
+		IsLocked:      table.IsLocked,
+		IsTemporary:   table.IsTemporary,
+		TableLockType: table.TableLockType,
 	}
 
 	for idx, col := range table.Cols {

@@ -109,6 +109,11 @@ func (blk *block) GetColumnDataById(
 		col,
 		false)
 }
+func (blk *block) DataCommittedBefore(ts types.TS) bool {
+	blk.meta.RLock()
+	defer blk.meta.RUnlock()
+	return blk.meta.GetCreatedAt().Less(ts)
+}
 
 func (blk *block) BatchDedup(
 	txn txnif.AsyncTxn,

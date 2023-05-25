@@ -86,6 +86,7 @@ type Block interface {
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
 
+	DataCommittedBefore(ts types.TS) bool
 	BatchDedup(txn txnif.AsyncTxn,
 		pks containers.Vector,
 		pksZM index.ZM,
