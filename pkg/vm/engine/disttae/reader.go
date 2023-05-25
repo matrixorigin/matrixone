@@ -137,6 +137,7 @@ func (r *blockMergeReader) Close() error {
 func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if len(r.blks) == 0 {
+		r.sels = nil
 		return nil, nil
 	}
 	defer func() { r.blks = r.blks[1:] }()
