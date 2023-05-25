@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
@@ -31,17 +30,18 @@ func TestReadRows(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	res := Result{mp: mp}
-	bat := newBatch(2)
-	appendCols(t, bat, 0, types.New(types.T_int32, 0, 0), []int32{1, 2, 3, 4}, mp)
-	appendBytesCols(t, bat, 1, types.New(types.T_varchar, 2, 0), [][]byte{[]byte("s1"), []byte("s2"), []byte("s3"), []byte("s4")}, mp)
-	res.Batches = append(res.Batches, bat)
+	memRes := NewMemResult(
+		[]types.Type{types.New(types.T_int32, 0, 0), types.New(types.T_varchar, 2, 0)},
+		mp)
+	memRes.NewBatch()
+	require.NoError(t, AppendFixedRows(memRes, 0, []int32{1, 2, 3, 4}))
+	require.NoError(t, AppendStringRows(memRes, 1, []string{"s1", "s2", "s3", "s4"}))
 
-	bat = newBatch(2)
-	appendCols(t, bat, 0, types.New(types.T_int32, 0, 0), []int32{5, 6, 7, 8}, mp)
-	appendBytesCols(t, bat, 1, types.New(types.T_varchar, 2, 0), [][]byte{[]byte("s5"), []byte("s6"), []byte("s7"), []byte("s8")}, mp)
-	res.Batches = append(res.Batches, bat)
+	memRes.NewBatch()
+	require.NoError(t, AppendFixedRows(memRes, 0, []int32{5, 6, 7, 8}))
+	require.NoError(t, AppendStringRows(memRes, 1, []string{"s5", "s6", "s7", "s8"}))
 
+	res := memRes.GetResult()
 	defer res.Close()
 
 	var col1 []int32
@@ -56,38 +56,4 @@ func TestReadRows(t *testing.T) {
 	assert.Equal(t, []int32{1, 2, 3, 4, 5, 6, 7, 8}, col1)
 	assert.Equal(t, [][]byte{[]byte("s1"), []byte("s2"), []byte("s3"), []byte("s4"), []byte("s5"), []byte("s6"), []byte("s7"), []byte("s8")}, col2)
 	assert.Equal(t, []string{"s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"}, cols2WithString)
-}
-
-func newBatch(cols int) *batch.Batch {
-	bat := batch.NewWithSize(cols)
-	bat.InitZsOne(cols)
-	return bat
-}
-
-func appendCols[T any](
-	t *testing.T,
-	bat *batch.Batch,
-	colIndex int,
-	tp types.Type,
-	values []T,
-	mp *mpool.MPool) {
-
-	col := vector.NewVec(tp)
-	require.NoError(t, vector.AppendFixedList(col, values, nil, mp))
-	bat.Vecs[colIndex] = col
-}
-
-func appendBytesCols(
-	t *testing.T,
-	bat *batch.Batch,
-	colIndex int,
-	tp types.Type,
-	values [][]byte,
-	mp *mpool.MPool) {
-
-	col := vector.NewVec(tp)
-	for _, v := range values {
-		require.NoError(t, vector.AppendBytes(col, v[:], false, mp))
-	}
-	bat.Vecs[colIndex] = col
 }
