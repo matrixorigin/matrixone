@@ -15,6 +15,7 @@
 package logtail
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"time"
@@ -796,8 +797,11 @@ func (collector *BaseCollector) VisitSeg(entry *catalog.SegmentEntry) (err error
 		} else {
 			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_ID).Append(entry.ID, false)
 			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_CreateAt).Append(segNode.GetEnd(), false)
-			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_State).Append(entry.IsAppendable(), false)
-			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_Sorted).Append(entry.IsSorted(), false)
+			buf := &bytes.Buffer{}
+			if _, err := entry.SegmentNode.WriteTo(buf); err != nil {
+				return err
+			}
+			collector.data.bats[SEGInsertIDX].GetVectorByName(SegmentAttr_SegNode).Append(buf.Bytes(), false)
 			collector.data.bats[SEGInsertTxnIDX].GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().GetID(), false)
 			collector.data.bats[SEGInsertTxnIDX].GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().GetID(), false)
 			segNode.TxnMVCCNode.AppendTuple(collector.data.bats[SEGInsertTxnIDX])
