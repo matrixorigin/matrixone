@@ -220,7 +220,7 @@ insert into t1 values(1, 2);
 insert into t1 values(1, null);
 delete from t1 where a = 1;
 drop database if exists db1;
-create database test;use test;
+use `delete`;
 create table temp(a int);
 insert into temp select * from generate_series(1,8192) g;
 create table t(a int);
@@ -251,9 +251,8 @@ commit;
 select count(*) from t;
 count(*)
 8387584
-drop database if exists test;
-create database test;
-use test;
+drop table if exists temp;
+drop table if exists t;
 create table temp(a int);
 insert into temp select * from generate_series(1,8192) g;
 create table t(a int);
@@ -280,4 +279,4 @@ commit;
 select count(*) from t;
 count(*)
 0
-drop database if exists test;
+drop database if exists `delete`;
