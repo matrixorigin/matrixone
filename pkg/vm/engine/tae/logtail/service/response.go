@@ -41,9 +41,6 @@ func (r *LogtailResponse) GetID() uint64 {
 
 func (r *LogtailResponse) Reset() {
 	r.LogtailResponse.Reset()
-	if r.closeCB != nil {
-		r.closeCB()
-	}
 }
 
 func (r *LogtailResponse) DebugString() string {
@@ -83,6 +80,10 @@ func (p *responsePool) Acquire() *LogtailResponse {
 
 func (p *responsePool) Release(resp *LogtailResponse) {
 	resp.Reset()
+	if resp.closeCB != nil {
+		resp.closeCB()
+		resp.closeCB = nil
+	}
 	p.pool.Put(resp)
 }
 
