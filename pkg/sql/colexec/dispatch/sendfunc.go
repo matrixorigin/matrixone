@@ -31,50 +31,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs uint64) [][]int32 {
+func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs int) [][]int32 {
 	sels := ap.getSels()
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedCol[int64](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			if v < 0 {
+				v = -v
+			}
+			regIndex := v % int64(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_int32:
 		groupByCol := vector.MustFixedCol[int32](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			if v < 0 {
+				v = -v
+			}
+			regIndex := v % int32(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_int16:
 		groupByCol := vector.MustFixedCol[int16](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			if v < 0 {
+				v = -v
+			}
+			regIndex := v % int16(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_uint64:
 		groupByCol := vector.MustFixedCol[uint64](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(v, lenRegs)
+			regIndex := v % uint64(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_uint32:
 		groupByCol := vector.MustFixedCol[uint32](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			regIndex := v % uint32(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_uint16:
 		groupByCol := vector.MustFixedCol[uint16](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			regIndex := v % uint16(lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_char, types.T_varchar, types.T_text:
 		groupByCol := vector.MustFixedCol[types.Varlena](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := plan2.SimpleCharHashToRange(v.GetByteSlice(groupByVec.GetArea()), lenRegs)
+			regIndex := plan2.SimpleHashToRange(v.GetByteSlice(groupByVec.GetArea()), lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	default:
@@ -83,7 +92,7 @@ func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs uint64) [][]int32 {
 	return sels
 }
 
-func genShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process) error {
+func genShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.Process) error {
 	//release old bats
 	defer proc.PutBatch(bat)
 
@@ -100,7 +109,7 @@ func genShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process) erro
 		}
 	}
 
-	sels := getShuffledSels(ap, bat, uint64(ap.ctr.aliveRegCnt))
+	sels := getShuffledSels(ap, bat, lenRegs)
 
 	//generate new shuffled bats
 	for regIndex := range shuffledBats {
@@ -180,7 +189,6 @@ func sendShuffledBats(ap *Argument, proc *process.Process) (bool, error) {
 	if ap.ctr.batsCount == 0 {
 		return false, nil
 	}
-
 	// send to remote regs
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := ap.ctr.remoteToIdx[r.uuid]
@@ -225,7 +233,7 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 		}
 	}
 
-	err := genShuffledBats(ap, bat, proc)
+	err := genShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
 	if err != nil {
 		return false, err
 	}

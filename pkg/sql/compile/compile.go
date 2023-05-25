@@ -2323,7 +2323,7 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
 		// get timestamp in objName to make sure it is random enough
 		objTimeStamp := unmarshalledBlockInfo.MetaLocation().Name()[:7]
-		index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(lenCN))
+		index := plan2.SimpleHashToRange(objTimeStamp, lenCN)
 		nodes[index].Data = append(nodes[index].Data, blk)
 	}
 	minWorkLoad := math.MaxInt32
