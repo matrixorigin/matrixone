@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -372,7 +371,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 		return
 	}
 	s.waterline.Advance(e.to)
-	logutil.Infof("init waterline to %v", e.to.String())
+	logger.Info("init waterline", zap.String("to", e.to.String()))
 
 	for {
 		select {

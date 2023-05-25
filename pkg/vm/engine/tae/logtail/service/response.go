@@ -75,11 +75,11 @@ func (p *responsePool) Acquire() *LogtailResponse {
 }
 
 func (p *responsePool) Release(resp *LogtailResponse) {
-	resp.Reset()
 	if resp.closeCB != nil {
 		resp.closeCB()
 		resp.closeCB = nil
 	}
+	resp.Reset()
 	p.pool.Put(resp)
 }
 
