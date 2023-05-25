@@ -102,12 +102,15 @@ func (s *StdD64) Grows(size int) {
 }
 
 func (s *StdD64) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
-	s.Variance.Eval(vs, err)
+	vs, err = s.Variance.Eval(vs, err)
+	if err != nil {
+		return nil, err
+	}
 	for i, v := range vs {
 		tmp := math.Sqrt(types.Decimal128ToFloat64(v, s.Variance.ScaleDivMul))
-		d, err := types.Decimal128FromFloat64(tmp, 38, s.Variance.ScaleDivMul)
-		if err != nil {
-			return nil, err
+		d, err1 := types.Decimal128FromFloat64(tmp, 38, s.Variance.ScaleDivMul)
+		if err1 != nil {
+			return nil, err1
 		}
 		vs[i] = d
 	}
@@ -144,12 +147,15 @@ func (s *StdD128) Grows(size int) {
 }
 
 func (s *StdD128) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
-	s.Variance.Eval(vs, err)
+	vs, err = s.Variance.Eval(vs, err)
+	if err != nil {
+		return nil, err
+	}
 	for i, v := range vs {
 		tmp := math.Sqrt(types.Decimal128ToFloat64(v, s.Variance.ScaleDivMul))
-		d, err := types.Decimal128FromFloat64(tmp, 38, s.Variance.ScaleDivMul)
-		if err != nil {
-			return nil, err
+		d, err1 := types.Decimal128FromFloat64(tmp, 38, s.Variance.ScaleDivMul)
+		if err1 != nil {
+			return nil, err1
 		}
 		vs[i] = d
 	}
