@@ -6803,3 +6803,129 @@ func TestCommitS3Blocks(t *testing.T) {
 		assert.NoError(t, txn.Commit())
 	}
 }
+
+func TestDedupSnapshot1(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 3
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	tae.createRelAndAppend(bat, true)
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+
+	txn, rel := tae.getRelation()
+	txn.SetSnapshotTS(txn.GetStartTS().Next())
+	txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	_ = txn.Commit()
+}
+
+func TestDedupSnapshot2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 3
+	tae.bindSchema(schema)
+	data := catalog.MockBatch(schema, 200)
+	createRelation(t, tae.DB, "db", schema, true)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, name, 0, nil)
+	assert.Nil(t, err)
+	writer.SetPrimaryKey(3)
+	_, err = writer.WriteBatch(containers.ToCNBatch(data))
+	assert.Nil(t, err)
+	blocks, _, err := writer.Sync(context.Background())
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
+	metaLoc := blockio.EncodeLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(data.Vecs[0].Length()),
+		blocks[0].GetID())
+	assert.Nil(t, err)
+
+	txn, rel := tae.getRelation()
+	err = rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc})
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	txn.SetSnapshotTS(txn.GetStartTS().Next())
+	txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+	err = rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc})
+	assert.NoError(t, err)
+	_ = txn.Commit()
+}
+
+func TestDedupSnapshot3(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 3
+	tae.bindSchema(schema)
+	createRelation(t, tae.DB, "db", schema, true)
+
+	totalRows := 100
+
+	bat := catalog.MockBatch(schema, int(totalRows))
+	bats := bat.Split(totalRows)
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(80)
+	defer pool.Release()
+
+	appendFn := func(offset uint32) func() {
+		return func() {
+			defer wg.Done()
+			txn, _ := tae.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ := database.GetRelationByName(schema.Name)
+			err := rel.BatchDedup(bats[offset].Vecs[3])
+			txn.Commit()
+			if err != nil {
+				logutil.Infof("err is %v", err)
+				return
+			}
+
+			txn2, _ := tae.StartTxn(nil)
+			txn2.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+			txn2.SetSnapshotTS(txn.GetStartTS())
+			database, _ = txn2.GetDatabase("db")
+			rel, _ = database.GetRelationByName(schema.Name)
+			_ = rel.Append(bats[offset])
+			_ = txn2.Commit()
+		}
+	}
+
+	for i := 0; i < totalRows; i++ {
+		for j := 0; j < 5; j++ {
+			wg.Add(1)
+			err := pool.Submit(appendFn(uint32(i)))
+			assert.Nil(t, err)
+		}
+	}
+	wg.Wait()
+
+	tae.checkRowsByScan(totalRows, false)
+}

@@ -15,9 +15,9 @@
 package proxy
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,4 +43,12 @@ func TestErrorCode_WithCode(t *testing.T) {
 	require.Equal(t, "Client disconnect: internal error: error3", c.Error())
 	c = withCode(moerr.NewInternalErrorNoCtx("error4"), codeServerDisconnect)
 	require.Equal(t, "Server disconnect: internal error: error4", c.Error())
+}
+
+func TestRetryableError(t *testing.T) {
+	e := newConnectErr(nil)
+	require.True(t, isRetryableErr(e))
+
+	e = newConnectErr(moerr.NewInternalErrorNoCtx("e"))
+	require.Equal(t, e.Error(), "internal error: e")
 }
