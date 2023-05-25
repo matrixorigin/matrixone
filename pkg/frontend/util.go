@@ -546,12 +546,12 @@ func rowsetDataToVector(
 		}
 
 		if expr, ok := e.Expr.(*plan.Expr_P); ok {
-			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, batch.EmptyBatch, params[int(expr.P.Pos)])
+			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, batch.EmptyForConstFoldBatch, params[int(expr.P.Pos)])
 			if err != nil {
 				return err
 			}
 		} else if _, ok := e.Expr.(*plan.Expr_V); ok {
-			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, batch.EmptyBatch, e)
+			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, batch.EmptyForConstFoldBatch, e)
 			if err != nil {
 				return err
 			}
@@ -559,7 +559,7 @@ func rowsetDataToVector(
 			exprImpl = e
 		} else {
 			exprImpl = plan2.DeepCopyExpr(e)
-			exprImpl, err = rewriteExpr(ctx, proc, compileCtx, batch.EmptyBatch, params, exprImpl)
+			exprImpl, err = rewriteExpr(ctx, proc, compileCtx, batch.EmptyForConstFoldBatch, params, exprImpl)
 			if err != nil {
 				return err
 			}
@@ -571,7 +571,7 @@ func rowsetDataToVector(
 		}
 
 		var vec *vector.Vector
-		vec, err = colexec.EvalExpressionOnce(proc, exprImpl, []*batch.Batch{batch.EmptyBatch})
+		vec, err = colexec.EvalExpressionOnce(proc, exprImpl, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
 			return err
 		}
