@@ -59,6 +59,7 @@ type TxnReader interface {
 	GetPrepareTS() types.TS
 	GetParticipants() []uint64
 	GetSnapshotTS() types.TS
+	SetSnapshotTS(types.TS)
 	HasSnapshotLag() bool
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState
@@ -236,7 +237,7 @@ type TxnStore interface {
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
-	Append(dbId, id uint64, data *containers.Batch) error
+	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(dbId, id uint64, metaLocs []objectio.Location) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error

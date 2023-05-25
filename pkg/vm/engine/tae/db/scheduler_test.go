@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -43,7 +44,7 @@ func TestCheckpoint1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
-		err := rel.Append(bat)
+		err := rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -179,7 +180,7 @@ func TestSchedule1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
-		err := rel.Append(bat)
+		err := rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}

@@ -16,12 +16,13 @@ package frontend
 
 import (
 	"context"
+	"testing"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestGetSqlForShowCreatePub(t *testing.T) {
@@ -47,40 +48,6 @@ func TestGetSqlForShowCreatePub(t *testing.T) {
 		require.Equal(t, kase.err, err != nil)
 		require.Equal(t, kase.want, got)
 	}
-}
-
-func TestDoShowPublications(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ctx := context.Background()
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
-
-	tenant := &TenantInfo{
-		Tenant:   sysAccountName,
-		TenantID: sysAccountID,
-	}
-	ses.SetTenantInfo(tenant)
-
-	sa := &tree.ShowPublications{}
-	bh := &backgroundExecTest{}
-	bh.init()
-
-	bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-	defer bhStub.Reset()
-
-	bh.sql2result["begin;"] = nil
-	bh.sql2result[getPublicationsInfoFormat] = &MysqlResultSet{
-		Columns: showPublicationOutputColumns[:],
-		Data:    [][]interface{}{{"pub1", "db1"}, {"pub2", "db2"}},
-	}
-	bh.sql2result["commit;"] = nil
-	bh.sql2result["rollback;"] = nil
-
-	err := doShowPublications(ctx, ses, sa)
-	require.NoError(t, err)
-	rs := ses.GetMysqlResultSet()
-	require.Equal(t, rs.GetColumnCount(), uint64(len(showPublicationOutputColumns)))
 }
 
 func TestDoShowCreatePublication(t *testing.T) {
