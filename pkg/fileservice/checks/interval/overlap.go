@@ -15,6 +15,7 @@
 package interval
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -34,8 +35,13 @@ func (i *OverlapChecker) Insert(key string, low, high int64) error {
 	interval := NewInt64Interval(low, high)
 	if _, ok := i.keyIntervals[key]; !ok {
 		i.keyIntervals[key] = NewIntervalTree()
-	} else if i.keyIntervals[key].Contains(interval) {
-		return moerr.NewInternalErrorNoCtx("Duplicate key range in %s", i.tag)
+	} else if i.keyIntervals[key].Intersects(interval) {
+		overlaps := i.keyIntervals[key].Stab(interval)
+		overlapsMsg := ""
+		for _, v := range overlaps {
+			overlapsMsg += fmt.Sprintf("[%d %d), ", v.Ivl.Begin, v.Ivl.End)
+		}
+		return moerr.NewInternalErrorNoCtx("Duplicate key range in %s. The key %s contains overlapping intervals %s", i.tag, key, overlapsMsg)
 	}
 
 	i.keyIntervals[key].Insert(interval, true)

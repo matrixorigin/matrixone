@@ -23,27 +23,41 @@ func TestIntervalChecker(t *testing.T) {
 
 	tree := NewOverlapChecker("MemCache_LRU")
 
-	// [0,5]
-	err := tree.Insert("s3://db1/table1/sst1", 0, 5)
+	// [0,5)
+	err := tree.Insert("s3://db1/table1/A", 0, 5)
 	assert.Nil(t, err)
 
-	//[0,5], [5,10]
-	err = tree.Insert("s3://db1/table1/sst1", 5, 10)
+	//[0,5), [5,10)
+	err = tree.Insert("s3://db1/table1/A", 5, 10)
 	assert.Nil(t, err)
 
-	//[0,5], [5,10]
-	err = tree.Insert("s3://db1/table1/sst1", 6, 7)
+	//[0,5), [5,10)
+	err = tree.Insert("s3://db1/table1/A", 6, 7)
 	assert.NotNil(t, err)
 
-	//[0,5]
-	err = tree.Remove("s3://db1/table1/sst1", 5, 10)
+	//[0,5)
+	err = tree.Remove("s3://db1/table1/A", 5, 10)
 	assert.Nil(t, err)
 
-	//[0,5], [6,7]
-	err = tree.Insert("s3://db1/table1/sst1", 6, 7)
+	//[0,5), [6,7)
+	err = tree.Insert("s3://db1/table1/A", 6, 7)
 	assert.Nil(t, err)
 
-	//[3,7]
-	err = tree.Insert("s3://db1/table1/sst2", 3, 7)
+	//[0,5), [5,6), [6,7)
+	err = tree.Insert("s3://db1/table1/A", 5, 6)
+	assert.Nil(t, err)
+
+	//[0,5), [3,5), [5,6), [6,7)
+	err = tree.Insert("s3://db1/table1/A", 3, 5)
+	assert.NotNil(t, err)
+	assert.Equal(t, "internal error: Duplicate key range in MemCache_LRU. The key s3://db1/table1/A contains overlapping intervals [0 5), ", err.Error())
+
+	//[0,5), [3,6), [5,6), [6,7)
+	err = tree.Insert("s3://db1/table1/A", 3, 6)
+	assert.NotNil(t, err)
+	assert.Equal(t, "internal error: Duplicate key range in MemCache_LRU. The key s3://db1/table1/A contains overlapping intervals [0 5), [5 6), ", err.Error())
+
+	//[3,7)
+	err = tree.Insert("s3://db1/table1/B", 3, 7)
 	assert.Nil(t, err)
 }

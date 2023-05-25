@@ -209,6 +209,8 @@ type IntervalTree interface {
 	Union(inIvt IntervalTree, ivl Interval)
 }
 
+var _ IntervalTree = new(intervalTree)
+
 // NewIntervalTree returns a new interval tree.
 func NewIntervalTree() IntervalTree {
 	sentinel := &intervalNode{
