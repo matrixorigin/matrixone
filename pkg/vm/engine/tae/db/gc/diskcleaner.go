@@ -179,14 +179,14 @@ func (cleaner *DiskCleaner) replay() error {
 
 	for _, dir := range readDirs {
 		table := NewGCTable()
-		err = table.Prefetch(context.Background(), GCMetaDir+dir.Name, dir.Size, cleaner.fs)
+		err = table.Prefetch(cleaner.ctx, GCMetaDir+dir.Name, dir.Size, cleaner.fs)
 		if err != nil {
 			return err
 		}
 	}
 	for _, dir := range readDirs {
 		table := NewGCTable()
-		err = table.ReadTable(context.Background(), GCMetaDir+dir.Name, dir.Size, cleaner.fs)
+		err = table.ReadTable(cleaner.ctx, GCMetaDir+dir.Name, dir.Size, cleaner.fs)
 		if err != nil {
 			return err
 		}

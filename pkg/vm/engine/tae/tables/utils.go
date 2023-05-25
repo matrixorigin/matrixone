@@ -28,6 +28,7 @@ import (
 )
 
 func LoadPersistedColumnData(
+	ctx context.Context,
 	fs *objectio.ObjectFS,
 	id *common.ID,
 	def *catalog.ColDef,
@@ -36,7 +37,7 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows())
 	}
-	bat, err := blockio.LoadColumns(context.Background(), []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, fs.Service, location, nil)
+	bat, err := blockio.LoadColumns(ctx, []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, fs.Service, location, nil)
 	if err != nil {
 		return
 	}

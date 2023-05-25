@@ -119,7 +119,7 @@ func (node *persistedNode) GetColumnDataWindow(
 	col int,
 ) (vec containers.Vector, err error) {
 	var data containers.Vector
-	if data, err = node.block.LoadPersistedColumnData(readSchema, col); err != nil {
+	if data, err = node.block.LoadPersistedColumnData(context.Background(), readSchema, col); err != nil {
 		return
 	}
 	if to-from == uint32(data.Length()) {
@@ -136,6 +136,7 @@ func (node *persistedNode) Foreach(
 	colIdx int, op func(v any, isNull bool, row int) error, sel *roaring.Bitmap) (err error) {
 	var data containers.Vector
 	if data, err = node.block.LoadPersistedColumnData(
+		context.Background(),
 		readSchema,
 		colIdx,
 	); err != nil {

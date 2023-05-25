@@ -90,6 +90,7 @@ func (blk *block) GetColumnDataByIds(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnDatas(
+		context.Background(),
 		node.MustPNode(),
 		txn,
 		schema,
@@ -227,7 +228,7 @@ func (blk *block) getPersistedRowByFilter(
 	var sortKey containers.Vector
 	schema := blk.meta.GetSchema()
 	idx := schema.GetSingleSortKeyIdx()
-	if sortKey, err = blk.LoadPersistedColumnData(schema, idx); err != nil {
+	if sortKey, err = blk.LoadPersistedColumnData(ctx, schema, idx); err != nil {
 		return
 	}
 	defer sortKey.Close()

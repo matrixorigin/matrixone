@@ -158,6 +158,7 @@ func (blk *ablock) resolveColumnDatas(
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnDatas(
+			context.Background(),
 			node.MustPNode(),
 			txn,
 			readSchema,
@@ -374,7 +375,7 @@ func (blk *ablock) getPersistedRowByFilter(
 	}
 	// Note: sort key do not change
 	schema := blk.meta.GetSchema()
-	sortKey, err := blk.LoadPersistedColumnData(schema, schema.GetSingleSortKeyIdx())
+	sortKey, err := blk.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx())
 	if err != nil {
 		return
 	}
