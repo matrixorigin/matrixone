@@ -313,8 +313,8 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		if err != nil {
 			return
 		}
-		skip := seg.table.store.txn.GetPKDedupSkip()
-		if schema.HasPK() && skip == txnif.PKDedupSkipNone {
+		dedupType := seg.table.store.txn.GetDedupType()
+		if schema.HasPK() && dedupType == txnif.FullDedup {
 			if err = seg.index.BatchInsert(
 				data.Attrs[schema.GetSingleSortKeyIdx()],
 				data.Vecs[schema.GetSingleSortKeyIdx()],
@@ -341,9 +341,9 @@ func (seg *localSegment) AddBlksWithMetaLoc(
 ) (err error) {
 	for i, metaLoc := range metaLocs {
 		seg.registerNode(metaLoc, nil)
-		skip := seg.table.store.txn.GetPKDedupSkip()
+		dedupType := seg.table.store.txn.GetDedupType()
 		//insert primary keys into seg.index
-		if pkVecs != nil && skip == txnif.PKDedupSkipNone {
+		if pkVecs != nil && dedupType == txnif.FullDedup {
 			if err = seg.index.BatchInsert(
 				seg.table.GetLocalSchema().GetSingleSortKey().Name,
 				pkVecs[i],

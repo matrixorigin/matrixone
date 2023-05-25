@@ -70,7 +70,7 @@ func (s *store) createTxnStorage(ctx context.Context, shard metadata.DNShard) (s
 		return s.newMemKVStorage(shard, logClient)
 
 	case StorageTAE:
-		ts, err := s.newTAEStorage(shard, factory)
+		ts, err := s.newTAEStorage(ctx, shard, factory)
 		if err != nil {
 			return nil, err
 		}
@@ -126,7 +126,7 @@ func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Cli
 	return mem.NewKVTxnStorage(0, logClient, s.rt.Clock()), nil
 }
 
-func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
+func (s *store) newTAEStorage(ctx context.Context, shard metadata.DNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
 	ckpcfg := &options.CheckpointCfg{
 		MinCount:            s.cfg.Ckp.MinCount,
 		ScanInterval:        s.cfg.Ckp.ScanInterval.Duration,
@@ -151,6 +151,7 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 	}
 
 	return taestorage.NewTAEStorage(
+		ctx,
 		s.cfg.Txn.Storage.dataDir,
 		shard,
 		factory,
@@ -159,5 +160,7 @@ func (s *store) newTAEStorage(shard metadata.DNShard, factory logservice.ClientF
 		ckpcfg,
 		logtailServerAddr,
 		logtailServerCfg,
-		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))
+		options.LogstoreType(s.cfg.Txn.Storage.LogBackend),
+		s.cfg.Txn.IncrementalDedup,
+	)
 }

@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"context"
 	"time"
 
 	"sync/atomic"
@@ -158,6 +159,7 @@ func (blk *ablock) resolveColumnDatas(
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnDatas(
+			context.Background(),
 			node.MustPNode(),
 			txn,
 			readSchema,
@@ -344,6 +346,7 @@ func (blk *ablock) getInMemoryValue(
 
 // GetByFilter will read pk column, which seqnum will not change, no need to pass the read schema.
 func (blk *ablock) GetByFilter(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	filter *handle.Filter) (offset uint32, err error) {
 	if filter.Op != handle.FilterEq {
@@ -360,17 +363,18 @@ func (blk *ablock) GetByFilter(
 	if !node.IsPersisted() {
 		return blk.getInMemoryRowByFilter(node.MustMNode(), txn, filter)
 	} else {
-		return blk.getPersistedRowByFilter(node.MustPNode(), txn, filter)
+		return blk.getPersistedRowByFilter(ctx, node.MustPNode(), txn, filter)
 	}
 }
 
 // only used by tae only
 // not to optimize it
 func (blk *ablock) getPersistedRowByFilter(
+	ctx context.Context,
 	pnode *persistedNode,
 	txn txnif.TxnReader,
 	filter *handle.Filter) (row uint32, err error) {
-	ok, err := pnode.ContainsKey(filter.Val)
+	ok, err := pnode.ContainsKey(ctx, filter.Val)
 	if err != nil {
 		return
 	}
@@ -380,7 +384,7 @@ func (blk *ablock) getPersistedRowByFilter(
 	}
 	// Note: sort key do not change
 	schema := blk.meta.GetSchema()
-	sortKey, err := blk.LoadPersistedColumnData(schema, schema.GetSingleSortKeyIdx())
+	sortKey, err := blk.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx())
 	if err != nil {
 		return
 	}
@@ -561,6 +565,7 @@ func (blk *ablock) checkConflictAndDupClosure(
 }
 
 func (blk *ablock) inMemoryBatchDedup(
+	ctx context.Context,
 	mnode *memoryNode,
 	txn txnif.TxnReader,
 	isCommitting bool,
@@ -573,6 +578,7 @@ func (blk *ablock) inMemoryBatchDedup(
 	blk.RLock()
 	defer blk.RUnlock()
 	_, err = mnode.BatchDedup(
+		ctx,
 		keys,
 		keysZM,
 		blk.checkConflictAndDupClosure(txn, isCommitting, &dupRow, rowmask),
@@ -589,6 +595,7 @@ func (blk *ablock) inMemoryBatchDedup(
 }
 
 func (blk *ablock) BatchDedup(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
 	keysZM index.ZM,
@@ -604,9 +611,10 @@ func (blk *ablock) BatchDedup(
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, keysZM, rowmask, bf)
+		return blk.inMemoryBatchDedup(ctx, node.MustMNode(), txn, precommit, keys, keysZM, rowmask, bf)
 	} else {
 		return blk.PersistedBatchDedup(
+			ctx,
 			txn,
 			precommit,
 			keys,
