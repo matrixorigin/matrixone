@@ -75,6 +75,7 @@ func (mgr *Manager) addJob(
 }
 
 func (mgr *Manager) process(jobs ...any) {
+	logutil.Debugf("processing gavin second process beginning")
 	jobSet := make(map[string]bool)
 	var dedupJobs []*cronJob
 	for _, job := range jobs {
@@ -89,8 +90,8 @@ func (mgr *Manager) process(jobs ...any) {
 	if len(jobSet) == 0 {
 		return
 	}
-	logutil.Debugf("processing gavin %d", len(dedupJobs))
 	logutil.Debugf("processing gavin second %d", len(dedupJobs))
+	logutil.Debugf("processing gavin %d", len(dedupJobs))
 	for _, cj := range dedupJobs {
 		logutil.Debugf("processing %s", cj.String())
 		if err := cj.job(context.Background()); err != nil {
