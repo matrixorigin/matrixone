@@ -26,7 +26,6 @@ import (
 // LogtailResponse wraps logtail.LogtailResponse.
 type LogtailResponse struct {
 	logtail.LogtailResponse
-	closeCB func()
 }
 
 var _ morpc.Message = (*LogtailResponse)(nil)
@@ -75,10 +74,6 @@ func (p *responsePool) Acquire() *LogtailResponse {
 }
 
 func (p *responsePool) Release(resp *LogtailResponse) {
-	if resp.closeCB != nil {
-		resp.closeCB()
-		resp.closeCB = nil
-	}
 	resp.Reset()
 	p.pool.Put(resp)
 }

@@ -456,13 +456,14 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 				// publish incremental logtail for all subscribed tables
 				for _, session := range s.ssmgr.ListSession() {
-					if err := session.Publish(ctx, from, to, e.closeCB, wraps...); err != nil {
+					if err := session.Publish(ctx, from, to, wraps...); err != nil {
 						logger.Error("fail to publish incremental logtail", zap.Error(err),
 							zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
 						)
 						continue
 					}
 				}
+				e.closeCB()
 
 				// update waterline for all subscribed tables
 				s.waterline.Advance(to)

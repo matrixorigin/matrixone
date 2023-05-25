@@ -342,7 +342,7 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 
 // Publish publishes incremental logtail.
 func (ss *Session) Publish(
-	ctx context.Context, from, to timestamp.Timestamp, closeCB func(), wraps ...wrapLogtail,
+	ctx context.Context, from, to timestamp.Timestamp, wraps ...wrapLogtail,
 ) error {
 	// no need to send incremental logtail if no table subscribed
 	if atomic.LoadInt32(&ss.active) <= 0 {
@@ -368,7 +368,7 @@ func (ss *Session) Publish(
 	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
 	defer cancel()
 
-	err := ss.SendUpdateResponse(sendCtx, ss.exactFrom, to, closeCB, qualified...)
+	err := ss.SendUpdateResponse(sendCtx, ss.exactFrom, to, qualified...)
 	if err == nil {
 		ss.heartbeatTimer.Reset(ss.heartbeatInterval)
 		ss.exactFrom = to
@@ -432,12 +432,11 @@ func (ss *Session) SendUnsubscriptionResponse(
 
 // SendUpdateResponse sends publishment response.
 func (ss *Session) SendUpdateResponse(
-	sendCtx context.Context, from, to timestamp.Timestamp, closecb func(), tails ...logtail.TableLogtail,
+	sendCtx context.Context, from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
 ) error {
 	ss.logger.Debug("send incremental logtail", zap.Any("From", from.String()), zap.String("To", to.String()), zap.Int("tables", len(tails)))
 
 	resp := ss.responses.Acquire()
-	resp.closeCB = closecb
 	resp.Response = newUpdateResponse(from, to, tails...)
 	return ss.SendResponse(sendCtx, resp)
 }
