@@ -39,10 +39,6 @@ func (r *LogtailResponse) GetID() uint64 {
 	return r.ResponseId
 }
 
-func (r *LogtailResponse) Reset() {
-	r.LogtailResponse.Reset()
-}
-
 func (r *LogtailResponse) DebugString() string {
 	return ""
 }
