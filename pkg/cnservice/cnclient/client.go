@@ -47,12 +47,9 @@ func AcquireMessage() *pipeline.Message {
 }
 
 func IsCNClientReady() bool {
-	if client != nil {
-		client.Lock()
-		defer client.Unlock()
-		return client != nil && client.ready
-	}
-	return false
+	client.Lock()
+	defer client.Unlock()
+	return client.ready
 }
 
 type CNClient struct {

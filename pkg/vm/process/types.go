@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -213,13 +214,14 @@ func (proc *Process) InitSeq() {
 
 func (proc *Process) SetLastInsertID(num uint64) {
 	if proc.LastInsertID != nil {
-		*proc.LastInsertID = num
+		atomic.StoreUint64(proc.LastInsertID, num)
 	}
 }
 
 func (proc *Process) GetLastInsertID() uint64 {
 	if proc.LastInsertID != nil {
-		return *proc.LastInsertID
+		num := atomic.LoadUint64(proc.LastInsertID)
+		return num
 	}
 	return 0
 }
