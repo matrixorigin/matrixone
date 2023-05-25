@@ -910,9 +910,6 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 			mp = mpool.MustNewNoFixed("session-prepare-insert-values")
 		}
 		prepareStmt.mp = mp
-		emptyBatch := batch.NewWithSize(0)
-		emptyBatch.Zs = []int64{1}
-		prepareStmt.emptyBatch = emptyBatch
 		prepareStmt.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(bat.Vecs))
 		for i, vec := range bat.Vecs {
 			prepareStmt.ufs[i] = vector.GetUnionOneFunction(*vec.GetType(), mp)

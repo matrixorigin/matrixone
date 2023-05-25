@@ -241,7 +241,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 					bat.CleanOnlyData()
 					for i := 0; i < colCount; i++ {
 						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
-							colsData[i].Data, bat.Vecs[i], prepareStmt.emptyBatch, executePlan.Args, prepareStmt.ufs[i]); err != nil {
+							colsData[i].Data, bat.Vecs[i], executePlan.Args, prepareStmt.ufs[i]); err != nil {
 							return nil, err
 						}
 					}
