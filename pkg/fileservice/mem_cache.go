@@ -55,11 +55,9 @@ func WithLRU(capacity int64) MemCacheOptionFunc {
 	return func(o *memCacheOptions) {
 		o.overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
 		o.objCache = lruobjcache.New(capacity, func(key any, value []byte, _ int64) {
-			if true {
-				_key := key.(IOVectorCacheKey)
-				if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
-					panic(err)
-				}
+			_key := key.(IOVectorCacheKey)
+			if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
+				panic(err)
 			}
 		})
 	}
@@ -69,11 +67,9 @@ func WithClock(capacity int64) MemCacheOptionFunc {
 	return func(o *memCacheOptions) {
 		o.overlapChecker = interval.NewOverlapChecker("MemCache_Clock")
 		o.objCache = clockobjcache.New(capacity, func(key any, value []byte, _ int64) {
-			if true {
-				_key := key.(IOVectorCacheKey)
-				if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
-					panic(err)
-				}
+			_key := key.(IOVectorCacheKey)
+			if err := o.overlapChecker.Remove(_key.Path, _key.Offset, _key.Offset+_key.Size); err != nil {
+				panic(err)
 			}
 		})
 	}
@@ -181,14 +177,7 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		// TODO: check key overlaps here.
-		if true {
-			err = m.overlapChecker.Insert(path.File, entry.Offset, entry.Offset+entry.Size)
-			if err != nil {
-				panic(err)
-			}
-		}
-
+		var oldVal any
 		if async {
 			obj := entry.ObjectBytes // copy from loop variable
 			objSize := entry.ObjectSize
@@ -196,8 +185,18 @@ func (m *MemCache) Update(
 				m.objCache.Set(key, obj, objSize, vector.Preloading)
 			}
 		} else {
-			m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
+			oldVal = m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
 		}
+
+		// Update overlap checker when new key-interval is inserted into the cache.
+		// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
+		if oldVal == nil {
+			err = m.overlapChecker.Insert(path.File, entry.Offset, entry.Offset+entry.Size)
+			if err != nil {
+				panic(err)
+			}
+		}
+
 	}
 	return nil
 }
