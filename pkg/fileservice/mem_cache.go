@@ -194,8 +194,7 @@ func (m *MemCache) Update(
 		// Update overlap checker when new key-interval is inserted into the cache.
 		// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
 		if oldVal == nil {
-			err = m.overlapChecker.Insert(path.File, entry.Offset, entry.Offset+entry.Size)
-			if err != nil {
+			if err = m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
 				panic(err)
 			}
 		}
