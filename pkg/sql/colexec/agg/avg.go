@@ -165,7 +165,7 @@ func (a *Decimal64Avg) Fill(i int64, value types.Decimal64, ov types.Decimal128,
 			y.B64_127 = ^y.B64_127
 		}
 		tmp, _, err := y.Mul(x, a.Typ.Scale, 0)
-		if err != nil {
+		if err == nil {
 			ov, err = ov.Add128(tmp)
 		}
 		return ov, false, err
@@ -250,7 +250,7 @@ func (a *Decimal128Avg) Fill(i int64, value types.Decimal128, ov types.Decimal12
 		}
 		var err error
 		value, _, err = value.Mul(x, a.Typ.Scale, 0)
-		if err != nil {
+		if err == nil {
 			ov, err = ov.Add128(value)
 		}
 		return ov, false, err
