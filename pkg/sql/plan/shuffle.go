@@ -38,7 +38,7 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 }
 
 func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
-	return ((i^m1)*(i^m2) + (i ^ m3)) % upperLimit
+	return (((i^m1)*(i^m2) + (i ^ m3) + i) % 1033) % upperLimit
 }
 
 func GetHashColumnIdx(expr *plan.Expr) int {
