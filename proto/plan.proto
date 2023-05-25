@@ -656,9 +656,6 @@ message Node {
 	bool IsEnd = 36;
 	repeated LockTarget lock_targets = 37;
 	repeated Expr block_filter_list = 38;
-
-	// FILTER for block zonemap
-	repeated Expr block_filter_list = 39;
 }
 
 message LockTarget {

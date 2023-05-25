@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
@@ -31,16 +30,18 @@ func TestReadRows(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	res := Result{mp: mp}
-	bat := newBatch(2)
-	appendCols(t, bat, 0, types.New(types.T_int32, 0, 0), []int32{1, 2, 3, 4}, mp)
-	appendBytesCols(t, bat, 1, types.New(types.T_varchar, 2, 0), [][]byte{[]byte("s1"), []byte("s2"), []byte("s3"), []byte("s4")}, mp)
-	res.Batches = append(res.Batches, bat)
+	memRes := NewMemResult(
+		[]types.Type{types.New(types.T_int32, 0, 0), types.New(types.T_varchar, 2, 0)},
+		mp)
+	memRes.NewBatch()
+	require.NoError(t, AppendFixedRows(memRes, 0, []int32{1, 2, 3, 4}))
+	require.NoError(t, AppendStringRows(memRes, 1, []string{"s1", "s2", "s3", "s4"}))
 
-	bat = newBatch(2)
-	appendCols(t, bat, 0, types.New(types.T_int32, 0, 0), []int32{5, 6, 7, 8}, mp)
-	appendBytesCols(t, bat, 1, types.New(types.T_varchar, 2, 0), [][]byte{[]byte("s5"), []byte("s6"), []byte("s7"), []byte("s8")}, mp)
-	res.Batches = append(res.Batches, bat)
+	memRes.NewBatch()
+	require.NoError(t, AppendFixedRows(memRes, 0, []int32{5, 6, 7, 8}))
+	require.NoError(t, AppendStringRows(memRes, 1, []string{"s5", "s6", "s7", "s8"}))
+
+	res := memRes.GetResult()
 	defer res.Close()
 
 	var col1 []int32

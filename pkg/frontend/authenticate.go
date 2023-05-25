@@ -8200,8 +8200,6 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 			return nil
 		}
 
-		deletesql := getSqlForDeleteMysqlCompatbilityMode(datname)
-
 		bh := ses.GetBackgroundExec(ctx)
 		err = bh.Exec(ctx, "begin")
 		if err != nil {

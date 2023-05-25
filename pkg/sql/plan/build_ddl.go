@@ -681,7 +681,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			}
 		case *tree.ForeignKey:
 			if createTable.Temporary {
-				return nil, moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
+				return moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
 			}
 			fkData, err := getForeignKeyData(ctx, createTable.TableDef, def)
 			if err != nil {
