@@ -209,11 +209,11 @@ func NewRemoteBackend(
 		return nil, err
 	}
 	rb.activeReadLoop(false)
-
+	fmt.Println("gavin NewRemoteBackend remote backend start before writeLoop")
 	if err := rb.stopper.RunTask(rb.writeLoop); err != nil {
 		return nil, err
 	}
-
+	fmt.Println("gavin NewRemoteBackend remote backend start after writeLoop")
 	rb.active()
 	return rb, nil
 }
@@ -472,6 +472,7 @@ func (rb *remoteBackend) doWrite(ctx context.Context, id uint64, f *Future) time
 		ce.Write(zap.Uint64("request-id", id),
 			zap.String("request", f.send.Message.DebugString()))
 	}
+	fmt.Println("gavin backend.go write request", id, f.send.Message.DebugString())
 	if err := rb.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
 		rb.logger.Error("write request failed",
 			zap.Uint64("request-id", id),

@@ -17,6 +17,7 @@ package txnbase
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -113,8 +114,10 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	prepareWALQueue := sm.NewSafeQueue(20000, 1000, mgr.onPrepareWAL)
 	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
-
+	fmt.Println("gavinyue NewTxnManager 116")
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
+
+	defer fmt.Println("gavinyue NewTxnManager 119")
 	return mgr
 }
 
@@ -298,11 +301,30 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	//now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare())
 	common.DoIfDebugEnabled(func() {
+
 		logutil.Debug("gavin error")
 		// logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
 		fmt.Print("gavin error3")
+		PrintMemUsage()
+		// Force GC to clear up, should see a memory drop
+		runtime.GC()
+		PrintMemUsage()
 		logutil.Debug("gavin error 2")
 	})
+}
+
+func PrintMemUsage() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
+	fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
+	fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
+	fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
+	fmt.Printf("\tNumGC = %v\n", m.NumGC)
+}
+
+func bToMb(b uint64) uint64 {
+	return b / 1024 / 1024
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
