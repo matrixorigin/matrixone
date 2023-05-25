@@ -95,11 +95,7 @@ func genShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process) erro
 			shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
 			shuffledBats[regIndex].Zs = proc.Mp().GetSels()
 			for j := range shuffledBats[regIndex].Vecs {
-				v := proc.GetVector(*bat.Vecs[j].GetType())
-				if v.Capacity() < shuffleBatchSize/2 {
-					v.PreExtend(shuffleBatchSize-v.Capacity(), proc.Mp())
-				}
-				shuffledBats[regIndex].Vecs[j] = v
+				shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
 			}
 		}
 	}
@@ -185,9 +181,6 @@ func sendShuffledBats(ap *Argument, proc *process.Process) (bool, error) {
 		return false, nil
 	}
 
-	for i := range ap.ctr.shuffledBats {
-		logutil.Infof("bats index %v, length %v", i, ap.ctr.shuffledBats[i].Length())
-	}
 	// send to remote regs
 	for _, r := range ap.ctr.remoteReceivers {
 		batIndex := ap.ctr.remoteToIdx[r.uuid]
