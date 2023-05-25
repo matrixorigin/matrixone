@@ -91,6 +91,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool) error {
 	var err error
+
 	for {
 		bat, _, err := ctr.ReceiveFromSingleReg(0, anal)
 		if err != nil {
@@ -101,7 +102,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			break
 		}
 		if bat.Length() == 0 {
-			defer proc.PutBatch(bat)
+			bat.Clean(proc.Mp())
 			continue
 		}
 		anal.Input(bat, isFirst)
@@ -109,7 +110,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat); err != nil {
 			return err
 		}
-		proc.PutBatch(bat)
+		bat.Clean(proc.Mp())
 	}
 	if ctr.bat == nil || ctr.bat.Length() == 0 || !ap.NeedHashMap {
 		return nil
