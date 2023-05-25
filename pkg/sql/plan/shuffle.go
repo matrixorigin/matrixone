@@ -21,7 +21,7 @@ import (
 
 const (
 	HashMapSizeForBucket = 250000
-	MAXShuffleDOP        = 16
+	MAXShuffleDOP        = 64
 	ShuffleThreshHold    = 50000
 )
 
@@ -86,10 +86,6 @@ func GetShuffleIndexForGroupBy(n *plan.Node) int {
 	return -1
 }
 
-func GetShuffleDop(n *plan.Node) (dop int) {
-	dop = int(n.Stats.HashmapSize/HashMapSizeForBucket) + 1
-	if dop > MAXShuffleDOP {
-		dop = MAXShuffleDOP
-	}
-	return
+func GetShuffleDop() (dop int) {
+	return MAXShuffleDOP
 }

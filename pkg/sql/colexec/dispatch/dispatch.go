@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/google/uuid"
 
@@ -57,7 +58,7 @@ func Prepare(proc *process.Process, arg any) error {
 		} else {
 			ap.prepareLocal()
 		}
-		ap.initSelsForShuffleReuse()
+		ap.initShuffle()
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
@@ -96,6 +97,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	bat := proc.InputBatch()
 	if bat == nil {
+		if ap.FuncId == ShuffleToAllFunc {
+			return sendShuffledBats(ap, proc)
+		}
 		return true, nil
 	}
 
@@ -152,20 +156,20 @@ func (arg *Argument) prepareLocal() {
 	arg.ctr.remoteReceivers = nil
 }
 
-func (arg *Argument) initSelsForShuffleReuse() {
+func (arg *Argument) initShuffle() {
 	if arg.ctr.sels == nil {
 		arg.ctr.sels = make([][]int32, arg.ctr.aliveRegCnt)
 		for i := 0; i < arg.ctr.aliveRegCnt; i++ {
 			arg.ctr.sels[i] = make([]int32, 8192)
 		}
-		arg.ctr.lenshuffledSels = make([]int, arg.ctr.aliveRegCnt)
+		arg.ctr.batsCount = 0
+		arg.ctr.shuffledBats = make([]*batch.Batch, arg.ctr.aliveRegCnt)
 	}
 }
 
-func (arg *Argument) getSels() ([][]int32, []int) {
+func (arg *Argument) getSels() [][]int32 {
 	for i := range arg.ctr.sels {
 		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
-		arg.ctr.lenshuffledSels[i] = 0
 	}
-	return arg.ctr.sels, arg.ctr.lenshuffledSels
+	return arg.ctr.sels
 }
