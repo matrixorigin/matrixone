@@ -103,13 +103,13 @@ func BlockReadInner(
 	vp engine.VectorPool,
 ) (result *batch.Batch, err error) {
 	var (
-		rowid       *vector.Vector
+		//rowid       *vector.Vector
 		deletedRows []int64
 		loaded      *batch.Batch
 	)
 
 	// read block data from storage
-	if loaded, rowid, deletedRows, err = readBlockData(
+	if loaded, _, deletedRows, err = readBlockData(
 		ctx, seqnums, colTypes, info, ts, fs, mp,
 	); err != nil {
 		return
