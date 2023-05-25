@@ -184,10 +184,13 @@ func (s *server) adjust() {
 }
 
 func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) error {
+	logutil.Debugf("gavin: onMessage")
 	cs, err := s.getSession(rs)
 	if err != nil {
+		logutil.Errorf("gavin: onMessage", zap.Error(err))
 		return err
 	}
+	logutil.Debugf("gavin: onMessage 2")
 	request := value.(RPCMessage)
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),

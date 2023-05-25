@@ -68,7 +68,10 @@ func (s *store) heartbeat(ctx context.Context) {
 		s.rt.Logger().Error("failed to send dn heartbeat", zap.Error(err))
 		return
 	}
+	s.rt.Logger().Debug("gavin: received dn heartbeat callback")
 	s.handleCommands(cb.Commands)
+	s.rt.Logger().Debug("gavin: handled dn heartbeat callback")
+
 }
 
 func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
