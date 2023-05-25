@@ -15,16 +15,16 @@
 package tables
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"context"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ NodeT = (*persistedNode)(nil)
@@ -32,10 +32,6 @@ var _ NodeT = (*persistedNode)(nil)
 type persistedNode struct {
 	common.RefHelper
 	block *baseBlock
-	//ZM and BF index for primary key column.
-	pkIndex indexwrapper.Index
-	//ZM and BF index for all columns.
-	indexes map[int]indexwrapper.Index
 }
 
 func newPersistedNode(block *baseBlock) *persistedNode {
@@ -43,46 +39,10 @@ func newPersistedNode(block *baseBlock) *persistedNode {
 		block: block,
 	}
 	node.OnZeroCB = node.close
-	if block.meta.HasPersistedData() {
-		node.init()
-	}
 	return node
 }
 
-func (node *persistedNode) close() {
-	for i, index := range node.indexes {
-		index.Close()
-		node.indexes[i] = nil
-	}
-	node.indexes = nil
-}
-
-func (node *persistedNode) init() {
-	node.indexes = make(map[int]indexwrapper.Index)
-	schema := node.block.meta.GetSchema()
-	pkIdx := -1
-	if schema.HasPK() {
-		pkIdx = schema.GetSingleSortKeyIdx()
-	}
-	metaloc := node.block.meta.GetMetaLoc()
-	if len(metaloc) != objectio.LocationLen {
-		logutil.Infof("%s bad metaloc %q: %s", node.block.meta.ID.String(), metaloc, node.block.meta.String())
-	}
-	for i := range schema.ColDefs {
-		index := indexwrapper.NewImmutableIndex()
-		if err := index.ReadFrom(
-			node.block.indexCache,
-			node.block.fs,
-			metaloc,
-			schema.ColDefs[i]); err != nil {
-			panic(err)
-		}
-		node.indexes[i] = index
-		if i == pkIdx {
-			node.pkIndex = index
-		}
-	}
-}
+func (node *persistedNode) close() {}
 
 func (node *persistedNode) Rows() uint32 {
 	location := node.block.meta.GetMetaLoc()
@@ -90,15 +50,21 @@ func (node *persistedNode) Rows() uint32 {
 }
 
 func (node *persistedNode) BatchDedup(
+	ctx context.Context,
 	keys containers.Vector,
+	keysZM index.ZM,
 	skipFn func(row uint32) error,
-	zm []byte,
+	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(keys, skipFn, zm)
+	panic("should not be called")
 }
 
-func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
-	if err = node.pkIndex.Dedup(key, nil); err == nil {
+func (node *persistedNode) ContainsKey(ctx context.Context, key any) (ok bool, err error) {
+	pkIndex, err := MakeImmuIndex(ctx, node.block.meta, nil, node.block.indexCache, node.block.fs.Service)
+	if err != nil {
+		return
+	}
+	if err = pkIndex.Dedup(ctx, key); err == nil {
 		return
 	}
 	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
@@ -116,7 +82,7 @@ func (node *persistedNode) GetColumnDataWindow(
 	col int,
 ) (vec containers.Vector, err error) {
 	var data containers.Vector
-	if data, err = node.block.LoadPersistedColumnData(readSchema, col); err != nil {
+	if data, err = node.block.LoadPersistedColumnData(context.Background(), readSchema, col); err != nil {
 		return
 	}
 	if to-from == uint32(data.Length()) {
@@ -126,6 +92,20 @@ func (node *persistedNode) GetColumnDataWindow(
 		data.Close()
 	}
 	return
+}
+
+func (node *persistedNode) Foreach(
+	readSchema *catalog.Schema,
+	colIdx int, op func(v any, isNull bool, row int) error, sel *roaring.Bitmap) (err error) {
+	var data containers.Vector
+	if data, err = node.block.LoadPersistedColumnData(
+		context.Background(),
+		readSchema,
+		colIdx,
+	); err != nil {
+		return
+	}
+	return data.Foreach(op, sel)
 }
 
 func (node *persistedNode) GetDataWindow(

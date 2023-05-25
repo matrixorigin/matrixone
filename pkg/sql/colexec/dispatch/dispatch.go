@@ -17,6 +17,9 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+
+	"github.com/google/uuid"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -47,6 +50,15 @@ func Prepare(proc *process.Process, arg any) error {
 			ctr.sendFunc = sendToAllFunc
 		}
 		ap.prepareRemote(proc)
+
+	case ShuffleToAllFunc:
+		ap.ctr.sendFunc = shuffleToAllFunc
+		if ap.ctr.remoteRegsCnt > 0 {
+			ap.prepareRemote(proc)
+		} else {
+			ap.prepareLocal()
+		}
+		ap.initShuffle()
 
 	case SendToAnyFunc:
 		if ctr.remoteRegsCnt == 0 {
@@ -85,6 +97,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	bat := proc.InputBatch()
 	if bat == nil {
+		if ap.FuncId == ShuffleToAllFunc {
+			return sendShuffledBats(ap, proc)
+		}
 		return true, nil
 	}
 
@@ -126,7 +141,11 @@ func (arg *Argument) prepareRemote(proc *process.Process) {
 	arg.ctr.prepared = false
 	arg.ctr.isRemote = true
 	arg.ctr.remoteReceivers = make([]*WrapperClientSession, 0, arg.ctr.remoteRegsCnt)
-	for _, rr := range arg.RemoteRegs {
+	arg.ctr.remoteToIdx = make(map[uuid.UUID]int)
+	for i, rr := range arg.RemoteRegs {
+		if arg.FuncId == ShuffleToAllFunc {
+			arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
+		}
 		colexec.Srv.PutNotifyChIntoUuidMap(rr.Uuid, proc)
 	}
 }
@@ -135,4 +154,22 @@ func (arg *Argument) prepareLocal() {
 	arg.ctr.prepared = true
 	arg.ctr.isRemote = false
 	arg.ctr.remoteReceivers = nil
+}
+
+func (arg *Argument) initShuffle() {
+	if arg.ctr.sels == nil {
+		arg.ctr.sels = make([][]int32, arg.ctr.aliveRegCnt)
+		for i := 0; i < arg.ctr.aliveRegCnt; i++ {
+			arg.ctr.sels[i] = make([]int32, 8192)
+		}
+		arg.ctr.batsCount = 0
+		arg.ctr.shuffledBats = make([]*batch.Batch, arg.ctr.aliveRegCnt)
+	}
+}
+
+func (arg *Argument) getSels() [][]int32 {
+	for i := range arg.ctr.sels {
+		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
+	}
+	return arg.ctr.sels
 }

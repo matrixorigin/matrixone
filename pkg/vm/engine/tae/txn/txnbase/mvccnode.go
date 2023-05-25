@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type TxnMVCCNode struct {
@@ -30,7 +28,6 @@ type TxnMVCCNode struct {
 	Txn                 txnif.TxnReader
 	Aborted             bool
 	is1PC               bool // for subTxn
-	LogIndex            *wal.Index
 }
 
 var (
@@ -305,21 +302,11 @@ func (un *TxnMVCCNode) Compare2(o *TxnMVCCNode) int {
 	return 1
 }
 
-func (un *TxnMVCCNode) SetLogIndex(idx *wal.Index) {
-	un.LogIndex = idx
-
-}
-func (un *TxnMVCCNode) GetLogIndex() *wal.Index {
-	return un.LogIndex
-}
-func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
+func (un *TxnMVCCNode) ApplyCommit() (ts types.TS, err error) {
 	if un.Is1PC() {
 		un.End = un.Txn.GetPrepareTS()
 	} else {
 		un.End = un.Txn.GetCommitTS()
-	}
-	if index != nil {
-		un.SetLogIndex(index)
 	}
 	un.Txn = nil
 	ts = un.End
@@ -331,14 +318,11 @@ func (un *TxnMVCCNode) PrepareRollback() (err error) {
 	return
 }
 
-func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (ts types.TS, err error) {
+func (un *TxnMVCCNode) ApplyRollback() (ts types.TS, err error) {
 	ts = un.Txn.GetCommitTS()
 	un.End = ts
 	un.Txn = nil
 	un.Aborted = true
-	if index != nil {
-		un.SetLogIndex(index)
-	}
 	return
 }
 
@@ -356,16 +340,6 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(sn1)
-	var sn int64
-	logIndex := un.LogIndex
-	if logIndex == nil {
-		logIndex = new(wal.Index)
-	}
-	sn, err = logIndex.WriteTo(w)
-	if err != nil {
-		return
-	}
-	n += sn
 	if sn1, err = w.Write(types.EncodeBool(&un.is1PC)); err != nil {
 		return
 	}
@@ -388,14 +362,6 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(sn)
 
-	var sn2 int64
-	un.LogIndex = &store.Index{}
-	sn2, err = un.LogIndex.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	n += sn2
-
 	if sn, err = r.Read(types.EncodeBool(&un.is1PC)); err != nil {
 		return
 	}
@@ -414,7 +380,6 @@ func (un *TxnMVCCNode) Update(o *TxnMVCCNode) {
 	if !un.Prepare.Equal(o.Prepare) {
 		panic(fmt.Sprintf("logic err expect %s, prepare at %s", un.Prepare.ToString(), o.Prepare.ToString()))
 	}
-	un.LogIndex = o.LogIndex
 }
 
 func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
@@ -422,16 +387,14 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 	n.Start = un.Start
 	n.Prepare = un.Prepare
 	n.End = un.End
-	n.LogIndex = un.LogIndex.Clone()
 	return n
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%s,%s,%s][%v]",
+	return fmt.Sprintf("[%s,%s,%s]",
 		un.Start.ToString(),
 		un.Prepare.ToString(),
-		un.End.ToString(),
-		un.LogIndex)
+		un.End.ToString())
 }
 
 func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
@@ -444,15 +407,6 @@ func (un *TxnMVCCNode) AppendTuple(bat *containers.Batch) {
 	bat.GetVectorByName(SnapshotAttr_StartTS).Append(un.Start, false)
 	bat.GetVectorByName(SnapshotAttr_PrepareTS).Append(un.Prepare, false)
 	bat.GetVectorByName(SnapshotAttr_CommitTS).Append(un.End, false)
-	if un.LogIndex != nil {
-		bat.GetVectorByName(SnapshotAttr_LogIndex_LSN).Append(un.LogIndex.LSN, false)
-		bat.GetVectorByName(SnapshotAttr_LogIndex_CSN).Append(un.LogIndex.CSN, false)
-		bat.GetVectorByName(SnapshotAttr_LogIndex_Size).Append(un.LogIndex.Size, false)
-	} else {
-		bat.GetVectorByName(SnapshotAttr_LogIndex_LSN).Append(uint64(0), false)
-		bat.GetVectorByName(SnapshotAttr_LogIndex_CSN).Append(uint32(0), false)
-		bat.GetVectorByName(SnapshotAttr_LogIndex_Size).Append(uint32(0), false)
-	}
 }
 
 func (un *TxnMVCCNode) ReadTuple(bat *containers.Batch, offset int) {
@@ -463,20 +417,10 @@ func ReadTuple(bat *containers.Batch, row int) (un *TxnMVCCNode) {
 	end := bat.GetVectorByName(SnapshotAttr_CommitTS).Get(row).(types.TS)
 	start := bat.GetVectorByName(SnapshotAttr_StartTS).Get(row).(types.TS)
 	prepare := bat.GetVectorByName(SnapshotAttr_PrepareTS).Get(row).(types.TS)
-	lsn := bat.GetVectorByName(SnapshotAttr_LogIndex_LSN).Get(row).(uint64)
-	var logIndex *wal.Index
-	if lsn != 0 {
-		logIndex = &wal.Index{
-			LSN:  lsn,
-			CSN:  bat.GetVectorByName(SnapshotAttr_LogIndex_CSN).Get(row).(uint32),
-			Size: bat.GetVectorByName(SnapshotAttr_LogIndex_Size).Get(row).(uint32),
-		}
-	}
 	un = &TxnMVCCNode{
-		Start:    start,
-		Prepare:  prepare,
-		End:      end,
-		LogIndex: logIndex,
+		Start:   start,
+		Prepare: prepare,
+		End:     end,
 	}
 	return
 }

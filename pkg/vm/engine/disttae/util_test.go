@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -55,14 +56,19 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 		argTypes[i] = plan2.MakeTypeByPlan2Expr(arg)
 	}
 
-	funId, returnType, _, _ := function.GetFunctionByName(context.TODO(), name, argTypes)
+	finfo, err := function.GetFunctionByName(context.TODO(), name, argTypes)
+	if err != nil {
+		panic(err)
+	}
+
+	retTyp := finfo.GetReturnType()
 
 	return &plan.Expr{
-		Typ: plan2.MakePlan2Type(&returnType),
+		Typ: plan2.MakePlan2Type(&retTyp),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj:     funId,
+					Obj:     finfo.GetEncodedOverloadID(),
 					ObjName: name,
 				},
 				Args: args,
@@ -271,7 +277,10 @@ func TestEvalZonemapFilter(t *testing.T) {
 
 	for _, tc := range cases {
 		for i, expr := range tc.exprs {
-			zm := evalFilterExprWithZonemap(context.Background(), tc.meta, expr, columnMap, proc)
+			cnt := plan2.AssignAuxIdForExpr(expr, 0)
+			zms := make([]objectio.ZoneMap, cnt)
+			vecs := make([]*vector.Vector, cnt)
+			zm := evalFilterExprWithZonemap(context.Background(), tc.meta, expr, zms, vecs, columnMap, proc)
 			require.Equal(t, tc.expect[i], zm, tc.desc[i])
 		}
 	}

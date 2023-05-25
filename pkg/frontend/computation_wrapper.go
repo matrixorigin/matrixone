@@ -197,7 +197,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil {
-		cwft.ses.accountId = getAccountId(requestCtx)
+		cwft.ses.accountId = defines.GetAccountId(requestCtx)
 		err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
 	}
 	if err != nil {
@@ -282,10 +282,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		//check privilege
 		/* prepare not need check privilege
-		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
-		if err != nil {
-			return nil, err
-		}
+		   err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
+		   if err != nil {
+		   	return nil, err
+		   }
 		*/
 	} else {
 		var vp *plan2.VisitPlan

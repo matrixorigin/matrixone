@@ -157,5 +157,5 @@ func GetPanicLogger(options ...zap.Option) *zap.Logger {
 // returned zap logger should only be used in tests.
 func GetPanicLoggerWithLevel(level zapcore.Level, options ...zap.Option) *zap.Logger {
 	return GetLoggerWithOptions(level, nil, nil,
-		zap.OnFatal(zapcore.WriteThenPanic))
+		zap.WithFatalHook(zapcore.WriteThenPanic))
 }

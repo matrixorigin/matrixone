@@ -15,6 +15,9 @@
 package clusterservice
 
 import (
+	"context"
+
+	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -63,4 +66,13 @@ type MOCluster interface {
 	// DebugUpdateCNLabel updates the labels on specified CN. It is only used in mo_ctl
 	// internally for debug purpose.
 	DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
+}
+
+type ClusterClient interface {
+	GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error)
+}
+
+type labelSupportedClient interface {
+	ClusterClient
+	UpdateCNLabel(ctx context.Context, label logpb.CNStoreLabel) error
 }

@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 var (
@@ -110,15 +109,6 @@ func (s *taskScheduler) ScheduleMultiScopedFn(
 	fn tasks.FuncT) (task tasks.Task, err error) {
 	task = tasks.NewMultiScopedFnTask(ctx, taskType, scopes, fn)
 	err = s.Schedule(task)
-	return
-}
-
-func (s *taskScheduler) Checkpoint(indexes []*wal.Index) (err error) {
-	entry, err := s.db.Wal.Checkpoint(indexes)
-	if err != nil {
-		return err
-	}
-	s.db.BGCheckpointRunner.EnqueueWait(entry)
 	return
 }
 

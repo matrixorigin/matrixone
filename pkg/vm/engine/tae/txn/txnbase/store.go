@@ -15,6 +15,7 @@
 package txnbase
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -28,14 +29,15 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
-func (store *NoopTxnStore) WaitPrepared() (err error)                            { return }
-func (store *NoopTxnStore) GetLSN() uint64                                       { return 0 }
-func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                           {}
-func (store *NoopTxnStore) Close() error                                         { return nil }
-func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error { return nil }
+func (store *NoopTxnStore) WaitPrepared() (err error)  { return }
+func (store *NoopTxnStore) GetLSN() uint64             { return 0 }
+func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn) {}
+func (store *NoopTxnStore) Close() error               { return nil }
+func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
+	return nil
+}
 func (store *NoopTxnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
-	zm []objectio.ZoneMap,
 	metaLocs []objectio.Location,
 ) error {
 	return nil
@@ -47,6 +49,7 @@ func (store *NoopTxnStore) ApplyRollback() error   { return nil }
 func (store *NoopTxnStore) PreApplyCommit() error  { return nil }
 func (store *NoopTxnStore) ApplyCommit() error     { return nil }
 func (store *NoopTxnStore) Apply2PCPrepare() error { return nil }
+func (store *NoopTxnStore) PrepareWAL() error      { return nil }
 
 func (store *NoopTxnStore) DoneWaitEvent(cnt int)                                  {}
 func (store *NoopTxnStore) AddWaitEvent(cnt int)                                   {}
@@ -149,7 +152,7 @@ func (store *NoopTxnStore) ObserveTxn(
 	visitMetadata func(block any),
 	visitSegment func(any),
 	visitAppend func(bat any),
-	visitDelete func(deletes []uint32, prefix []byte)) {
+	visitDelete func(deletes txnif.DeleteNode)) {
 }
 
 func (store *NoopTxnStore) GetTransactionType() txnif.TxnType {

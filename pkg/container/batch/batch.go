@@ -265,6 +265,22 @@ func (bat *Batch) String() string {
 	return buf.String()
 }
 
+func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
+	rbat := NewWithSize(len(bat.Vecs))
+	rbat.SetAttributes(bat.Attrs)
+	for j, vec := range bat.Vecs {
+		typ := *bat.GetVector(int32(j)).GetType()
+		rvec := vector.NewVec(typ)
+		if err := vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
+			rbat.Clean(mp)
+			return nil, err
+		}
+		rbat.SetVector(int32(j), rvec)
+	}
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
+	return rbat, nil
+}
+
 func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil
@@ -311,6 +327,10 @@ func (bat *Batch) AddCnt(cnt int) {
 
 func (bat *Batch) SubCnt(cnt int) {
 	atomic.StoreInt64(&bat.Cnt, bat.Cnt-int64(cnt))
+}
+
+func (bat *Batch) GetCnt() int64 {
+	return atomic.LoadInt64(&bat.Cnt)
 }
 
 func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {

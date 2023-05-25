@@ -635,7 +635,15 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 	setVarFunc := func(system, global bool, name string, value interface{}) error {
 		if system {
 			if global {
+				err = doCheckRole(ctx, ses)
+				if err != nil {
+					return err
+				}
 				err = ses.SetGlobalVar(name, value)
+				if err != nil {
+					return err
+				}
+				err = doSetGlobalSystemVariable(ctx, ses, name, value)
 				if err != nil {
 					return err
 				}
@@ -808,9 +816,9 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 
 	var sysVars map[string]interface{}
 	if sv.Global {
-		sysVars = make(map[string]interface{})
-		for k, v := range gSysVarsDefs {
-			sysVars[k] = v.Default
+		sysVars, err = doGetGlobalSystemVariable(ses.GetRequestContext(), ses)
+		if err != nil {
+			return err
 		}
 	} else {
 		sysVars = ses.CopyAllSessionVars()
@@ -858,10 +866,16 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 			return err
 		}
 
-		vec, err := colexec.EvalExpr(bat, proc, planExpr)
+		executor, err := colexec.NewExpressionExecutor(proc, planExpr)
 		if err != nil {
 			return err
 		}
+		vec, err := executor.Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			executor.Free()
+			return err
+		}
+
 		bs := vector.MustFixedCol[bool](vec)
 		sels := proc.Mp().GetSels()
 		for i, b := range bs {
@@ -869,6 +883,8 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 				sels = append(sels, int64(i))
 			}
 		}
+		executor.Free()
+
 		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 		v0 := vector.MustStrCol(bat.Vecs[0])
@@ -1133,12 +1149,20 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.Al
 }
 
 // handleAlterDatabaseConfig alter a database's mysql_compatibility_mode
-func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ad *tree.AlterDataBaseConfig) error {
+func (mce *MysqlCmdExecutor) handleAlterDataBaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {
+	err := doCheckRole(ctx, ses)
+	if err != nil {
+		return err
+	}
 	return doAlterDatabaseConfig(ctx, mce.GetSession(), ad)
 }
 
 // handleAlterAccountConfig alter a account's mysql_compatibility_mode
-func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, st *tree.AlterDataBaseConfig) error {
+func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, ses *Session, st *tree.AlterDataBaseConfig) error {
+	err := doCheckRole(ctx, ses)
+	if err != nil {
+		return err
+	}
 	return doAlterAccountConfig(ctx, mce.GetSession(), st)
 }
 
@@ -1196,8 +1220,30 @@ func (mce *MysqlCmdExecutor) handleDropProcedure(ctx context.Context, dp *tree.D
 	return doDropProcedure(ctx, mce.GetSession(), dp)
 }
 
-func (mce *MysqlCmdExecutor) handleCallProcedure(ctx context.Context, call *tree.CallStmt) error {
-	return doInterpretCall(ctx, mce.GetSession(), call)
+func (mce *MysqlCmdExecutor) handleCallProcedure(ctx context.Context, call *tree.CallStmt, proc *process.Process, cwIndex, cwsLen int) error {
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	results, err := doInterpretCall(ctx, mce.GetSession(), call)
+	if err != nil {
+		return err
+	}
+
+	resp := NewGeneralOkResponse(COM_QUERY)
+
+	if len(results) == 0 {
+		if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
+			return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+		}
+	} else {
+		for i, result := range results {
+			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
+			resp = SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i, len(results))
+			if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
+				return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+			}
+		}
+	}
+	return nil
 }
 
 // handleGrantRole grants the role
@@ -1260,23 +1306,6 @@ func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.Sh
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	err = doShowAccounts(ctx, ses, sa)
-	if err != nil {
-		return err
-	}
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
-
-	if err = proto.SendResponse(ctx, resp); err != nil {
-		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
-	}
-	return err
-}
-
-func (mce *MysqlCmdExecutor) handleShowPublications(ctx context.Context, sp *tree.ShowPublications, cwIndex, cwsLen int) error {
-	var err error
-	ses := mce.GetSession()
-	proto := ses.GetMysqlProtocol()
-	err = doShowPublications(ctx, ses, sp)
 	if err != nil {
 		return err
 	}
@@ -1358,25 +1387,38 @@ func doShowBackendServers(ses *Session) error {
 
 	tenant := ses.GetTenantInfo().GetTenant()
 	var se clusterservice.Selector
-	if tenant != sysAccountName {
+	if !isSysTenant(tenant) {
 		labels := ses.GetMysqlProtocol().GetConnectAttrs()
 		labels["account"] = tenant
 		se = clusterservice.NewSelector().SelectByLabel(
 			filterLabels(labels), clusterservice.EQ)
 	}
 	cluster := clusterservice.GetMOCluster()
+	var notEmpty, empty bool
+	var rows [][]interface{}
 	cluster.GetCNService(se, func(s metadata.CNService) bool {
 		row := make([]interface{}, 3)
 		row[0] = s.ServiceID
 		row[1] = s.SQLAddress
 		var labelStr string
+		if len(s.Labels) > 0 {
+			notEmpty = true
+		} else {
+			empty = true
+		}
 		for key, value := range s.Labels {
 			labelStr += fmt.Sprintf("%s:%s;", key, strings.Join(value.Labels, ","))
 		}
 		row[2] = labelStr
-		mrs.AddRow(row)
+		rows = append(rows, row)
 		return true
 	})
+	for _, row := range rows {
+		if row[2] == "" && empty && notEmpty {
+			continue
+		}
+		mrs.AddRow(row)
+	}
 	return nil
 }
 
@@ -1485,7 +1527,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	var ret *plan2.Plan
 	var err error
 	if ses != nil {
-		ses.accountId = getAccountId(requestCtx)
+		ses.accountId = defines.GetAccountId(requestCtx)
 	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
@@ -2137,9 +2179,7 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 	if ses.pu.SV.SkipCheckPrivilege {
 		return nil
 	}
-	if ses.skipCheckPrivilege() {
-		return nil
-	}
+
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
@@ -2175,9 +2215,7 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 	if ses.pu.SV.SkipCheckPrivilege {
 		return nil
 	}
-	if ses.skipCheckPrivilege() {
-		return nil
-	}
+
 	if ses.skipAuthForSpecialUser() {
 		return nil
 	}
@@ -2649,11 +2687,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleDropPublication(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.ShowPublications:
-			selfHandle = true
-			if err = mce.handleShowPublications(requestCtx, st, i, len(cws)); err != nil {
-				goto handleFailed
-			}
 		case *tree.ShowCreatePublications:
 			selfHandle = true
 			if err = mce.handleShowCreatePublications(requestCtx, st, i, len(cws)); err != nil {
@@ -2686,11 +2719,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.InvalidatePrivilegeCache()
 			selfHandle = true
 			if st.IsAccountLevel {
-				if err = mce.handleAlterAccountConfig(requestCtx, st); err != nil {
+				if err = mce.handleAlterAccountConfig(requestCtx, ses, st); err != nil {
 					goto handleFailed
 				}
 			} else {
-				if err = mce.handleAlterDataBaseConfig(requestCtx, st); err != nil {
+				if err = mce.handleAlterDataBaseConfig(requestCtx, ses, st); err != nil {
 					goto handleFailed
 				}
 			}
@@ -2746,7 +2779,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		case *tree.CallStmt:
 			selfHandle = true
-			if err = mce.handleCallProcedure(requestCtx, st); err != nil {
+			if err = mce.handleCallProcedure(requestCtx, st, proc, i, len(cws)); err != nil {
 				goto handleFailed
 			}
 		case *tree.Grant:
@@ -2850,7 +2883,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
-			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus:
+			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications:
 			columns, err = cw.GetColumns()
 			if err != nil {
 				logErrorf(ses.GetDebugString(), "GetColumns from Computation handler failed. error: %v", err)
@@ -3129,7 +3162,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.CreateSequence, *tree.DropSequence,
 			*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
 			*tree.CreateFunction, *tree.DropFunction,
-			*tree.CreateProcedure, *tree.DropProcedure, *tree.CallStmt,
+			*tree.CreateProcedure, *tree.DropProcedure,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
@@ -3595,6 +3628,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_uuid:
 		col.SetColumnType(defines.MYSQL_TYPE_UUID)
+	case types.T_TS:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_Blockid:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	default:
 		return moerr.NewInternalError(ctx, "RunWhileSend : unsupported type %d", engineType)
 	}

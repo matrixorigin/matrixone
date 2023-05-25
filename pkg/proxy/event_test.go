@@ -114,14 +114,14 @@ func TestMakeEvent(t *testing.T) {
 			dst: n1,
 		})
 		require.NotNil(t, e)
-		require.True(t, r)
+		require.False(t, r)
 
 		e, r = makeEvent(&eventReq{
 			msg: makeSimplePacket("alter account if exists  a1 suspend"),
 			dst: n1,
 		})
 		require.NotNil(t, e)
-		require.True(t, r)
+		require.False(t, r)
 
 		e, r = makeEvent(&eventReq{
 			msg: makeSimplePacket("alter1 account a1 suspend"),
@@ -140,14 +140,14 @@ func TestMakeEvent(t *testing.T) {
 			dst: n1,
 		})
 		require.NotNil(t, e)
-		require.True(t, r)
+		require.False(t, r)
 
 		e, r = makeEvent(&eventReq{
 			msg: makeSimplePacket("drop account if exists a1"),
 			dst: n1,
 		})
 		require.NotNil(t, e)
-		require.True(t, r)
+		require.False(t, r)
 
 		e, r = makeEvent(&eventReq{
 			msg: makeSimplePacket("dr1op account a1"),
@@ -168,7 +168,7 @@ func TestKillQueryEvent(t *testing.T) {
 	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr1))
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
-	stopFn1 := startTestCNServer(t, tp.ctx, addr1)
+	stopFn1 := startTestCNServer(t, tp.ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
@@ -176,7 +176,7 @@ func TestKillQueryEvent(t *testing.T) {
 	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr2))
 	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{})
-	stopFn2 := startTestCNServer(t, tp.ctx, addr2)
+	stopFn2 := startTestCNServer(t, tp.ctx, addr2, nil)
 	defer func() {
 		require.NoError(t, stopFn2())
 	}()
@@ -330,7 +330,7 @@ func TestSetVarEvent(t *testing.T) {
 	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr1))
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{})
-	stopFn1 := startTestCNServer(t, tp.ctx, addr1)
+	stopFn1 := startTestCNServer(t, tp.ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
@@ -338,7 +338,7 @@ func TestSetVarEvent(t *testing.T) {
 	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr2))
 	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{})
-	stopFn2 := startTestCNServer(t, tp.ctx, addr2)
+	stopFn2 := startTestCNServer(t, tp.ctx, addr2, nil)
 	defer func() {
 		require.NoError(t, stopFn2())
 	}()
@@ -486,7 +486,7 @@ func TestSuspendDropAccountEvent(t *testing.T) {
 	addr1 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr1))
 	cn1 := testMakeCNServer("uuid1", addr1, 10, "", labelInfo{Tenant: "t1"})
-	stopFn1 := startTestCNServer(t, tp.ctx, addr1)
+	stopFn1 := startTestCNServer(t, tp.ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn1())
 	}()
@@ -494,7 +494,7 @@ func TestSuspendDropAccountEvent(t *testing.T) {
 	addr2 := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr2))
 	cn2 := testMakeCNServer("uuid2", addr2, 20, "", labelInfo{Tenant: "t2"})
-	stopFn2 := startTestCNServer(t, tp.ctx, addr2)
+	stopFn2 := startTestCNServer(t, tp.ctx, addr2, nil)
 	defer func() {
 		require.NoError(t, stopFn2())
 	}()

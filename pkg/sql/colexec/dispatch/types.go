@@ -33,6 +33,7 @@ const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 	procTimeout           = 10000 * time.Second
 	waitNotifyTimeout     = 45 * time.Second
+	shuffleBatchSize      = 4096
 
 	// send to all reg functions
 	SendToAllLocalFunc = iota
@@ -43,6 +44,9 @@ const (
 	SendToAnyLocalFunc
 	SendToAnyRemoteFunc
 	SendToAnyFunc
+
+	//shuffle to all reg functions
+	ShuffleToAllFunc
 )
 
 type WrapperClientSession struct {
@@ -68,6 +72,12 @@ type container struct {
 	aliveRegCnt   int
 	localRegsCnt  int
 	remoteRegsCnt int
+
+	// for shuffle reuse memory
+	sels         [][]int32
+	remoteToIdx  map[uuid.UUID]int
+	shuffledBats []*batch.Batch
+	batsCount    int
 }
 
 type Argument struct {
@@ -79,6 +89,10 @@ type Argument struct {
 	LocalRegs []*process.WaitRegister
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
+	// for shuffle
+	ShuffleColIdx       int
+	ShuffleRegIdxLocal  []int
+	ShuffleRegIdxRemote []int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

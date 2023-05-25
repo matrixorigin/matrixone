@@ -119,7 +119,7 @@ func main() {
 	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 		// fmt.Printf("%s", payload)
 	}
-	err = s.Replay(a, nil)
+	err = s.Replay(a)
 	if err != nil {
 		panic(err)
 	}

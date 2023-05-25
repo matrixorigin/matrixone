@@ -84,8 +84,7 @@ type Engine struct {
 	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
-	usePushModel bool
-	pClient      pushClient
+	pClient pushClient
 }
 
 // Transaction represents a transaction
@@ -426,7 +425,7 @@ func (z *Zonemap) Unmarshal(data []byte) error {
 
 type ModifyBlockMeta struct {
 	meta    catalog.BlockInfo
-	deletes []int
+	deletes []int64
 }
 
 type Columns []column

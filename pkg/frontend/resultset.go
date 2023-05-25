@@ -510,6 +510,10 @@ func (mrs *MysqlResultSet) GetString(ctx context.Context, rindex, cindex uint64)
 		return v.String(), nil
 	case types.Uuid:
 		return v.ToString(), nil
+	case types.Blockid:
+		return v.String(), nil
+	case types.TS:
+		return v.ToString(), nil
 	default:
 		return "", moerr.NewInternalError(ctx, "unsupported type %d ", v)
 	}

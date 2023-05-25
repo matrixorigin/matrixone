@@ -17,9 +17,6 @@ package memoryengine
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -35,16 +32,8 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Stats(ctx context.Context, e *plan2.Expr, statsInfoMap any) (*plan.Stats, error) {
-	stats := plan2.DefaultStats()
-	rows, err := t.Rows(ctx)
-	if err != nil {
-		return stats, err
-	}
-	stats.TableCnt = float64(rows)
-	stats.Cost = stats.TableCnt
-	stats.Outcnt = stats.TableCnt
-	return stats, nil
+func (t *Table) Stats(ctx context.Context, statsInfoMap any) bool {
+	return false
 }
 
 func (t *Table) Rows(ctx context.Context) (int64, error) {
@@ -375,4 +364,8 @@ func (t *Table) GetTableID(ctx context.Context) uint64 {
 
 func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	return nil, nil, nil
+}
+
+func (t *Table) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
+	return nil, nil
 }

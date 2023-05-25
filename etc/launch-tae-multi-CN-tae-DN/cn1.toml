@@ -39,17 +39,12 @@ disableMetric = true
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 listen-address = "0.0.0.0:7001"
 service-address = "127.0.0.1:7001"
-turn-on-push-model = false
 
 [cn.Engine]
 type = "distributed-tae"
 
 [cn.frontend]
 port = 16001
-
-[cn.rpc]
-send-queue-size = 2
-busy-queue-size = 1
 
 [cn.txn]
 enable-sacrificing-freshness = false

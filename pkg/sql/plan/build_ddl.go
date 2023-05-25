@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -181,11 +180,16 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 			Width: 0,
 			Scale: 0,
 		},
+		Primary: true,
 		Default: &plan.Default{
 			NullAbility:  true,
 			Expr:         nil,
 			OriginString: "",
 		},
+	}
+	cs.TableDef.Pkey = &PrimaryKeyDef{
+		Names:       []string{Sequence_cols_name[4]},
+		PkeyColName: Sequence_cols_name[4],
 	}
 	for i := 5; i <= 6; i++ {
 		cols[i] = &plan.ColDef{
@@ -603,7 +607,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 				case *tree.AttributeAutoIncrement:
 					auto_incr = true
-					if !operator.IsInteger(types.T(colType.GetId())) {
+					if !types.T(colType.GetId()).IsInteger() {
 						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
@@ -681,6 +685,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				indexs = append(indexs, name)
 			}
 		case *tree.ForeignKey:
+			if createTable.Temporary {
+				return nil, moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
+			}
 			fkData, err := getForeignKeyData(ctx, createTable.TableDef, def)
 			if err != nil {
 				return nil, err
@@ -1989,6 +1996,11 @@ func getForeignKeyData(ctx CompilerContext, tableDef *TableDef, def *tree.Foreig
 	if tableRef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), ctx.DefaultDatabase(), fkTableName)
 	}
+
+	if tableRef.IsTemporary {
+		return nil, moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
+	}
+
 	fkData.DbName = fkDbName
 	fkData.TableName = fkTableName
 

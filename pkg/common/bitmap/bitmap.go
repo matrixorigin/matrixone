@@ -320,6 +320,17 @@ func (n *Bitmap) And(m *Bitmap) {
 	}
 }
 
+func (n *Bitmap) Negate() {
+	nBlock, nTail := int(n.len)/64, int(n.len)%64
+	for i := 0; i < nBlock; i++ {
+		n.data[i] = ^n.data[i]
+	}
+	if nTail > 0 {
+		mask := (uint64(1) << nTail) - 1
+		n.data[nBlock] ^= mask
+	}
+}
+
 func (n *Bitmap) TryExpand(m *Bitmap) {
 	n.TryExpandWithSize(int(m.len))
 }

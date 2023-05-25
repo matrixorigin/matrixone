@@ -153,6 +153,13 @@ func (bat *Batch) Allocated() int {
 	return allocated
 }
 
+func (bat *Batch) WindowDeletes(offset, length int) *roaring.Bitmap {
+	if bat.Deletes != nil && offset+length != bat.Length() {
+		return common.BM32Window(bat.Deletes, offset, offset+length)
+	}
+	return bat.Deletes
+}
+
 func (bat *Batch) Window(offset, length int) *Batch {
 	win := new(Batch)
 	win.Attrs = bat.Attrs
@@ -316,6 +323,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 		bat.Vecs = append(bat.Vecs, vec)
 		n += tmpn
 	}
+	// XXX Fix the following read, it is a very twisted way of reading uint32.
 	// Read Deletes
 	buf = make([]byte, int(unsafe.Sizeof(uint32(0))))
 	if _, err = r.Read(buf); err != nil {

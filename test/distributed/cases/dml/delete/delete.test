@@ -159,7 +159,7 @@ delete from t1 where a = 1;
 drop database if exists db1;
 
 # test cn block delete for single table, one CN
-create database test;use test;
+use `delete`;
 create table temp(a int);
 insert into temp select * from generate_series(1,8192) g;
 create table t(a int);
@@ -172,6 +172,7 @@ insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
+-- @bvt:issue#9447
 insert into t select * from t;
 begin;
 insert into t select * from t;
@@ -184,22 +185,15 @@ delete from t where a = 1;
 select count(*) from t;
 commit;
 select count(*) from t;
-drop database if exists test;
+-- @bvt:issue
 
 # test cn block delete for single table, multi CN
-create database test;
-use test;
+drop table if exists temp;
+drop table if exists t;
 create table temp(a int);
 insert into temp select * from generate_series(1,8192) g;
 create table t(a int);
 insert into t select * from temp;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
-insert into t select * from t;
 insert into t select * from t;
 begin;
 insert into t select * from t;
@@ -210,7 +204,8 @@ select count(*) from t;
 begin;
 insert into t select * from t;
 delete from t where a > 1;
+delete from t where a = 1;
 select count(*) from t;
 commit;
 select count(*) from t;
-drop database if exists test;
+drop database if exists `delete`;

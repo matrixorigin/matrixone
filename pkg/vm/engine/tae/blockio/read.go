@@ -32,23 +32,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 // BlockRead read block data from storage and apply deletes according given timestamp. Caller make sure metaloc is not empty
 func BlockRead(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
+	deletes []int64,
 	seqnums []uint16,
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
 	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		logutil.Infof("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debugf("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
 	}
 	columnBatch, err := BlockReadInner(
-		ctx, info, seqnums, colTypes,
+		ctx, info, deletes, seqnums, colTypes,
 		types.TimestampToTS(ts), fs, mp, vp,
 	)
 	if err != nil {
@@ -94,6 +94,7 @@ func mergeDeleteRows(d1, d2 []int64) []int64 {
 func BlockReadInner(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
+	dels []int64,
 	seqnums []uint16,
 	colTypes []types.Type,
 	ts types.TS,
@@ -128,6 +129,8 @@ func BlockReadInner(
 				info.BlockID.String(), deletes.Length(), ts.ToString(), len(deletedRows))
 		}
 	}
+
+	deletedRows = mergeDeleteRows(deletedRows, dels)
 
 	result = batch.NewWithSize(len(loaded.Vecs))
 	for i, col := range loaded.Vecs {
@@ -182,16 +185,6 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, []uint16,
 	return found, idxes, typs
 }
 
-func preparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32, pool *mpool.MPool) (col *vector.Vector, err error) {
-	col = vector.NewVec(typ)
-	col.PreExtend(int(length), pool)
-	for i := uint32(0); i < length; i++ {
-		rowid := model.EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
-		vector.AppendFixed(col, rowid, false, pool)
-	}
-	return
-}
-
 func readBlockData(
 	ctx context.Context,
 	colIndexes []uint16,
@@ -205,9 +198,8 @@ func readBlockData(
 	hasRowId, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 	if hasRowId {
 		// generate rowid
-		if rowid, err = preparePhyAddrData(
-			types.T_Rowid.ToType(),
-			info.BlockID[:],
+		if rowid, err = objectio.ConstructRowidColumn(
+			&info.BlockID,
 			0,
 			info.MetaLocation().Rows(),
 			m,
@@ -281,7 +273,7 @@ func readBlockData(
 }
 
 func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (*batch.Batch, error) {
-	bat, err := LoadColumns(ctx, []uint16{0, 1, 2}, nil, fs, deltaloc, nil)
+	bat, err := LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -296,13 +288,13 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows []int64)
 	deletedRows := nulls.NewWithSize(0)
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
-	aborts := vector.MustFixedCol[bool](deletes.Vecs[2])
+	aborts := vector.MustFixedCol[bool](deletes.Vecs[3])
 
 	for i, rowid := range rowids {
 		if aborts[i] || tss[i].Greater(ts) {
 			continue
 		}
-		_, row := model.DecodePhyAddrKey(&rowid)
+		row := rowid.GetRowOffset()
 		nulls.Add(deletedRows, uint64(row))
 	}
 

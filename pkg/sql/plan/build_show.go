@@ -1021,6 +1021,12 @@ func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Pla
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := "select pub_name as Name,database_name as `Database` from mo_catalog.mo_pubs;"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	stmt, err := getRewriteSQLStmt(ctx, sql)
