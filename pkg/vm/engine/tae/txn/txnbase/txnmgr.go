@@ -116,7 +116,10 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
 	fmt.Println("gavinyue NewTxnManager 116")
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
-
+	PrintMemUsage()
+	// Force GC to clear up, should see a memory drop
+	runtime.GC()
+	PrintMemUsage()
 	defer fmt.Println("gavinyue NewTxnManager 119")
 	return mgr
 }
@@ -304,12 +307,6 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 
 		logutil.Debug("gavin error")
 		// logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
-		fmt.Print("gavin error3")
-		PrintMemUsage()
-		// Force GC to clear up, should see a memory drop
-		runtime.GC()
-		PrintMemUsage()
-		logutil.Debug("gavin error 2")
 	})
 }
 
