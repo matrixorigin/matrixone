@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -76,6 +77,9 @@ func (mgr *Manager) addJob(
 
 func (mgr *Manager) process(jobs ...any) {
 	logutil.Debugf("processing gavin second process beginning")
+	fmt.Print("processing gavin second process beginning")
+	logutil.Debugf("processing gavin second process beginning2")
+
 	jobSet := make(map[string]bool)
 	var dedupJobs []*cronJob
 	for _, job := range jobs {
