@@ -405,9 +405,8 @@ func (tbl *txnTable) fillMetadataScanWithCol(col *plan.ColDef, location *objecti
 
 func (tbl *txnTable) GetDirtyBlksIn(
 	state *logtailreplay.PartitionState,
-	in bool,
-	dirtyBlks []ModifyBlockMeta) error {
-
+	in bool) []ModifyBlockMeta {
+	dirtyBlks := make([]ModifyBlockMeta, 0)
 	for blk := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
 		if in != state.BlockVisible(
 			blk, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
@@ -418,7 +417,7 @@ func (tbl *txnTable) GetDirtyBlksIn(
 			deletes: []int64{},
 		})
 	}
-	return nil
+	return dirtyBlks
 }
 
 func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid) (offsets []int64, err error) {
@@ -1290,14 +1289,14 @@ func (tbl *txnTable) newReader(
 
 	//load all dirty blocks for blockMergeReader.
 	//var blks []ModifyBlockMeta
-	blks := make([]ModifyBlockMeta, 0, 100)
+	blks := make([]ModifyBlockMeta, 0)
 	deleteBlks := make(map[types.Blockid][]int64)
 	if !txn.readOnly {
 		state, err := tbl.getPartitionState(ctx)
 		if err != nil {
 			return nil, err
 		}
-		tbl.GetDirtyBlksIn(state, true, blks)
+		blks = tbl.GetDirtyBlksIn(state, true)
 
 		for _, entry := range entries {
 			if entry.typ == DELETE &&
