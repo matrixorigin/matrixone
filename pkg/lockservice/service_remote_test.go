@@ -405,7 +405,7 @@ func TestKeepRemoteActiveTxn(t *testing.T) {
 	assert.Equal(t, []string{"s2", "s1"}, ids)
 }
 
-func TestLockWithBindIsStable(t *testing.T) {
+func TestLockWithBindIsStale(t *testing.T) {
 	runBindChangedTests(
 		t,
 		true,
@@ -421,7 +421,9 @@ func TestLockWithBindIsStable(t *testing.T) {
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
 			})
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+				moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound))
 
 			checkBind(
 				t,

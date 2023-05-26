@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"context"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -46,12 +47,13 @@ type NodeT interface {
 	GetValueByRow(readSchema *catalog.Schema, row, col int) (v any, isNull bool)
 	GetRowsByKey(key any) (rows []uint32, err error)
 	BatchDedup(
+		ctx context.Context,
 		keys containers.Vector,
 		keysZM index.ZM,
 		skipFn func(row uint32) error,
 		bf objectio.BloomFilter,
 	) (sels *roaring.Bitmap, err error)
-	ContainsKey(key any) (ok bool, err error)
+	ContainsKey(ctx context.Context, key any) (ok bool, err error)
 
 	Rows() uint32
 }

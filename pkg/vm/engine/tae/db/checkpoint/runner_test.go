@@ -27,7 +27,7 @@ import (
 
 func TestCkpCheck(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	r := NewRunner(nil, nil, nil, nil, nil)
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 
 	for i := 0; i < 100; i += 10 {
 		r.storage.entries.Set(&CheckpointEntry{
@@ -60,7 +60,7 @@ func TestCkpCheck(t *testing.T) {
 
 func TestGetCheckpoints1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	r := NewRunner(nil, nil, nil, nil, nil)
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 
 	// ckp0[0,10]
 	// ckp1[10,20]
@@ -136,7 +136,7 @@ func TestGetCheckpoints1(t *testing.T) {
 }
 func TestGetCheckpoints2(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	r := NewRunner(nil, nil, nil, nil, nil)
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 
 	// ckp0[0,10]
 	// ckp1[10,20]
@@ -238,7 +238,7 @@ func TestGetCheckpoints2(t *testing.T) {
 }
 func TestICKPSeekLT(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	r := NewRunner(nil, nil, nil, nil, nil)
+	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 
 	// ckp0[0,10]
 	// ckp1[10,20]

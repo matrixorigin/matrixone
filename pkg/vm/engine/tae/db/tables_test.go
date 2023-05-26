@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -129,7 +130,7 @@ func TestTxn1(t *testing.T) {
 			database, _ := txn.GetDatabase("db")
 			rel, err := database.GetRelationByName(schema.Name)
 			assert.Nil(t, err)
-			err = rel.Append(b)
+			err = rel.Append(context.Background(), b)
 			assert.Nil(t, err)
 			err = txn.Commit()
 			assert.Nil(t, err)
@@ -227,7 +228,7 @@ func TestTxn4(t *testing.T) {
 		provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 		bat := containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), 3, schema.GetSingleSortKeyIdx(), provider)
 		defer bat.Close()
-		err := rel.Append(bat)
+		err := rel.Append(context.Background(), bat)
 		t.Log(err)
 		assert.NotNil(t, err)
 		assert.Nil(t, txn.Commit())
@@ -259,9 +260,9 @@ func TestTxn5(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		err := rel.Append(bats[0])
+		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
-		err = rel.Append(bats[0])
+		err = rel.Append(context.Background(), bats[0])
 		assert.NotNil(t, err)
 		assert.Nil(t, txn.Rollback())
 	}
@@ -270,7 +271,7 @@ func TestTxn5(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		err := rel.Append(bats[0])
+		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -278,7 +279,7 @@ func TestTxn5(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		err := rel.Append(bats[0])
+		err := rel.Append(context.Background(), bats[0])
 		assert.NotNil(t, err)
 		assert.Nil(t, txn.Rollback())
 	}
@@ -286,15 +287,15 @@ func TestTxn5(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		err := rel.Append(bats[1])
+		err := rel.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
 
 		txn2, _ := db.StartTxn(nil)
 		db2, _ := txn2.GetDatabase("db")
 		rel2, _ := db2.GetRelationByName(schema.Name)
-		err = rel2.Append(bats[1])
+		err = rel2.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
-		err = rel2.Append(bats[2])
+		err = rel2.Append(context.Background(), bats[2])
 		assert.Nil(t, err)
 
 		assert.Nil(t, txn2.Commit())
@@ -323,7 +324,7 @@ func TestTxn6(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
-		err := rel.Append(bats[0])
+		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -453,7 +454,7 @@ func TestMergeBlocks1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
-		err := rel.Append(bat)
+		err := rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -554,7 +555,7 @@ func TestMergeBlocks2(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
-		err := rel.Append(bat)
+		err := rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -590,7 +591,7 @@ func TestCompaction1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
-		err := rel.Append(bats[0])
+		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -612,7 +613,7 @@ func TestCompaction1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		err := rel.Append(bats[1])
+		err := rel.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -651,7 +652,7 @@ func TestCompaction2(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db", "", "")
 		rel, _ := database.CreateRelation(schema)
-		err := rel.Append(bats[0])
+		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -714,7 +715,7 @@ func TestCompaction2(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
 		rel, _ := database.CreateRelation(schema)
-		err := rel.Append(bats[0])
+		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -722,7 +723,7 @@ func TestCompaction2(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		err := rel.Append(bats[1])
+		err := rel.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}()

@@ -35,7 +35,7 @@ spec:
     replicas: 1
     resources:
       requests:
-        cpu: 6
+        cpu: 3
         memory: 12Gi
       limits:
         cpu: 8
@@ -48,8 +48,8 @@ spec:
     replicas: 3
     resources:
       requests:
-        cpu: 6
-        memory: 12Gi
+        cpu: 1
+        memory: 2Gi
       limits:
         cpu: 8
         memory: 16Gi
