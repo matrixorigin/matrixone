@@ -1188,7 +1188,6 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		ctx,
 		num,
 		encodedPrimaryKey,
-		//i,
 		tbl.writes,
 	)
 	if err != nil {
@@ -1243,7 +1242,6 @@ func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
 	encodedPrimaryKey []byte,
-	//blks []ModifyBlockMeta,
 	entries []Entry,
 ) ([]engine.Reader, error) {
 	txn := tbl.db.txn
