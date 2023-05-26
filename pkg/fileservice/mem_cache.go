@@ -182,21 +182,25 @@ func (m *MemCache) Update(
 			obj := entry.ObjectBytes // copy from loop variable
 			objSize := entry.ObjectSize
 			m.ch <- func() {
-				//TODO: Need advise on how to handle async scenario?
-				// 1. Should we put overlap checker inside ObjectCache?
-				// Problem: ObjectCache accepts generic key (any). We need key in the form of IOVectorCacheKey.
-				// Causes circular dependency. We could create an extra pkg to remove circular dependency. But it wont be clean.
 				m.objCache.Set(key, obj, objSize, vector.Preloading)
+
+				// Update overlap checker when new key-interval is inserted into the cache.
+				// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
+				if isNewEntry {
+					if err = m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
+						panic(err)
+					}
+				}
 			}
 		} else {
 			isNewEntry = m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
-		}
 
-		// Update overlap checker when new key-interval is inserted into the cache.
-		// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
-		if isNewEntry {
-			if err = m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
-				panic(err)
+			// Update overlap checker when new key-interval is inserted into the cache.
+			// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
+			if isNewEntry {
+				if err = m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
+					panic(err)
+				}
 			}
 		}
 
