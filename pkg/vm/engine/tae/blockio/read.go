@@ -110,7 +110,7 @@ func BlockReadInner(
 
 	// read block data from storage
 	if loaded, _, deletedRows, err = readBlockData(
-		ctx, seqnums, colTypes, info, ts, fs, mp,
+		ctx, seqnums, colTypes, info, ts, fs, mp, vp,
 	); err != nil {
 		return
 	}
@@ -200,17 +200,19 @@ func readBlockData(
 	ts types.TS,
 	fs fileservice.FileService,
 	m *mpool.MPool,
+	vp engine.VectorPool,
 ) (bat *batch.Batch, rowid *vector.Vector, deletedRows []int64, err error) {
 
 	hasRowId, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 	if hasRowId {
 		// generate rowid
-		if rowid, err = objectio.ConstructRowidColumn(
+		rowid = vp.GetVector(objectio.RowidType)
+		if err = objectio.ConstructRowidColumnTo(
+			rowid,
 			&info.BlockID,
 			0,
 			info.MetaLocation().Rows(),
-			m,
-		); err != nil {
+			m); err != nil {
 			return
 		}
 		defer func() {
