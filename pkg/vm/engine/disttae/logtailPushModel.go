@@ -559,6 +559,7 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	}
 	s.doSubscribe = s.subscribeTable
 	s.doUnSubscribe = s.unSubscribeTable
+	s.requestLock <- true
 
 	return nil
 }
