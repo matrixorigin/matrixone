@@ -99,10 +99,6 @@ func wyhash(p unsafe.Pointer, seed, s uint64) uint64 {
 	return mix(m5^s, mix(a^m2, b^seed))
 }
 
-func Wyhash64(x uint64) uint64 {
-	return wyhash64(x, randseed)
-}
-
 func wyhash64(x, seed uint64) uint64 {
 	return mix(m5^8, mix(x^m2, x^seed^hashkey[0]^m1))
 }
