@@ -33,7 +33,7 @@ import (
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 4
 
-const MAX_INSERT_TIME_LIMIT = 10 * time.Second
+const MAX_INSERT_TIME_LIMIT = 20 * time.Second
 
 var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
