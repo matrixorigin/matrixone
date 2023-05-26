@@ -2531,7 +2531,6 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 	}
 
 handleSucceeded:
-
 	err = bh.Exec(ctx, "commit;")
 	if err != nil {
 		goto handleFailed
