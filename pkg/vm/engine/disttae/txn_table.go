@@ -1133,7 +1133,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 
 	// Very wired!!!
 	rds := make([]engine.Reader, num)
-	var mrd mergeReader
+	mrds := make([]mergeReader, num)
 
 	blks := tbl.modifiedBlocks
 	rds0, err := tbl.newReader(
@@ -1146,11 +1146,10 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	if err != nil {
 		return nil, err
 	}
-	mrd.rds = append(mrd.rds, rds0...)
+	mrds[0].rds = append(mrds[0].rds, rds0...)
 
 	for i := range rds {
-		rd := mrd
-		rds[i] = &rd
+		rds[i] = &mrds[i]
 	}
 
 	return rds, nil
