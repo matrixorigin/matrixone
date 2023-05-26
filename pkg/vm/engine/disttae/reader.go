@@ -188,6 +188,13 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	}
 	bat.SetAttributes(cols)
 
+	//start to load deletes
+	if len(r.blks[0].deletes) == 0 {
+		r.blks[0].deletes, err = r.table.LoadDeletesForBlock(r.blks[0].meta.BlockID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	//TODO::there is a bug to fix
 	r.sels = r.sels[:0]
 	deletes := make([]int64, len(r.blks[0].deletes))

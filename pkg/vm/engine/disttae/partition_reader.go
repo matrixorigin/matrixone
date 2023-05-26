@@ -200,7 +200,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			return rbat, nil
 		} else {
 			bat = p.inserts[0].GetSubBatch(colNames)
-			rowIds := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
+			//rowIds := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
 			p.inserts = p.inserts[1:]
 			b := batch.NewWithSize(len(colNames))
 			b.SetAttributes(colNames)
@@ -215,9 +215,10 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				srcVec := bat.Vecs[i]
 				uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
 				for j := 0; j < bat.Length(); j++ {
-					if _, ok := p.deletes[rowIds[j]]; ok {
-						continue
-					}
+					//FIXME:: it's redundant to check rowIds[j] in p.deletes.
+					//if _, ok := p.deletes[rowIds[j]]; ok {
+					//	continue
+					//}
 					if err := uf(vec, srcVec, int64(j)); err != nil {
 						return nil, err
 					}

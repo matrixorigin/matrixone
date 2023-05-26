@@ -365,7 +365,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 	}
-	// TxnWorkSpace SegmentName
+	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 

@@ -474,6 +474,19 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	})
 }
 
+func (p *PartitionState) GetBlock(blockID types.Blockid) *BlockEntry {
+	pivot := BlockEntry{
+		BlockInfo: catalog.BlockInfo{
+			BlockID: blockID,
+		},
+	}
+	entry, ok := p.blocks.Get(pivot)
+	if !ok {
+		return nil
+	}
+	return &entry
+}
+
 func (p *PartitionState) BlockVisible(blockID types.Blockid, ts types.TS) bool {
 	pivot := BlockEntry{
 		BlockInfo: catalog.BlockInfo{
