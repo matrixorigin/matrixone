@@ -15,6 +15,7 @@
 package jobs
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -92,7 +93,7 @@ func NewCompactBlockTask(
 
 func (task *compactBlockTask) Scopes() []common.ID { return task.scopes }
 
-func (task *compactBlockTask) PrepareData() (preparer *model.PreparedCompactedBlockData, empty bool, err error) {
+func (task *compactBlockTask) PrepareData(ctx context.Context) (preparer *model.PreparedCompactedBlockData, empty bool, err error) {
 	preparer = model.NewPreparedCompactedBlockData()
 	preparer.Columns = containers.NewBatch()
 
@@ -103,7 +104,7 @@ func (task *compactBlockTask) PrepareData() (preparer *model.PreparedCompactedBl
 		if def.IsPhyAddr() {
 			continue
 		}
-		view, err = task.compacted.GetColumnDataById(def.Idx)
+		view, err = task.compacted.GetColumnDataById(ctx, def.Idx)
 		if err != nil {
 			return
 		}
@@ -148,7 +149,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	defer seg.Close()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
-	preparer, empty, err := task.PrepareData()
+	preparer, empty, err := task.PrepareData(context.Background())
 	if err != nil {
 		return
 	}

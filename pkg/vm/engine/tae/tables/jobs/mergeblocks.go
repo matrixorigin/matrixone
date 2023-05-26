@@ -179,6 +179,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	logutil.Info("[Start] Mergeblocks", common.OperationField(task.Name()),
 		common.OperandField(task))
 	now := time.Now()
+	ctx := context.Background()
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
 		if toSegEntry, err = task.rel.CreateNonAppendableSegment(false); err != nil {
@@ -232,7 +233,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 
 	for i, block := range task.compacted {
-		if view, err = block.GetColumnDataById(sortColDef.Idx); err != nil {
+		if view, err = block.GetColumnDataById(ctx, sortColDef.Idx); err != nil {
 			return
 		}
 		defer view.Close()
@@ -312,7 +313,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		// If only one single sort key, it was processed before
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
-			if view, err = block.GetColumnDataById(def.Idx); err != nil {
+			if view, err = block.GetColumnDataById(ctx, def.Idx); err != nil {
 				return
 			}
 			defer view.Close()
@@ -348,7 +349,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return err
 		}
 	}
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, _, err := writer.Sync(ctx)
 	if err != nil {
 		return err
 	}

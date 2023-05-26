@@ -772,7 +772,7 @@ func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, 
 	return tbl.localSegment.GetValue(row, col)
 }
 
-func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
+func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
 	if tbl.localSegment != nil && id.SegmentID().Eq(tbl.localSegment.entry.ID) {
 		return tbl.localSegment.GetValue(row, col)
 	}
@@ -785,7 +785,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isN
 		panic(err)
 	}
 	block := meta.GetBlockData()
-	return block.GetValue(tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col))
+	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col))
 }
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {

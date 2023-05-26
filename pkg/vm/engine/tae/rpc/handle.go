@@ -17,6 +17,7 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"os"
 	"sync"
 	"syscall"
@@ -801,6 +802,7 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return
 	}
+	ctx = perfcounter.WithCounterSetFrom(ctx, h.db.Opts.Ctx)
 	switch req.PkCheck {
 	case db.FullDedup:
 		txn.SetDedupType(txnif.FullDedup)
