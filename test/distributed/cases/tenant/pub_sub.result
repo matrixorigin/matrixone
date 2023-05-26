@@ -169,7 +169,7 @@ sub1    sys
 select * from sub1.sys_tbl_1;
 SQL parser error: table "sys_tbl_1" does not exist
 use sub1;
-internal error: the account acc0 is not allowed to subscribe the publication sys_pub_1
+internal error: the account acc0 is not allowed to subscribe the publication sys_pub_1, allowed accountlist is acc1
 show subscriptions;
 Name    From_Account
 sub1    sys
@@ -199,7 +199,7 @@ a
 2
 3
 create database sub1 from sys publication sys_pub_1;
-internal error: the account acc2 is not allowed to subscribe the publication sys_pub_1
+internal error: the account acc2 is not allowed to subscribe the publication sys_pub_1, allowed accountlist is acc0,acc1
 use sys_db_1;
 insert into sys_tbl_1 values(4);
 create table sys_tbl_2(b text);
@@ -263,11 +263,11 @@ use acc2_db_1;
 create table acc2_tbl_2(c text);
 insert into acc2_tbl_1(q) values ('mo');
 create database sub2 from acc2 publication acc2_pub_1;
-internal error: the account acc1 is not allowed to subscribe the publication acc2_pub_1
+internal error: the account acc1 is not allowed to subscribe the publication acc2_pub_1, allowed accountlist is sys
 select * from sub2.acc2_tbl_1;
 SQL parser error: table "acc2_tbl_1" does not exist
 use sub2;
-internal error: the account acc0 is not allowed to subscribe the publication acc2_pub_1
+internal error: the account acc0 is not allowed to subscribe the publication acc2_pub_1, allowed accountlist is sys
 show tables;
 Tables_in_sub2
 acc2_tbl_1

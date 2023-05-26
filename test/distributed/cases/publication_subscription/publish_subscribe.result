@@ -328,9 +328,9 @@ mysql
 sub_db4
 mo_catalog
 use sub_db4;
-internal error: the account test_tenant_3 is not allowed to subscribe the publication pubname4
+internal error: the account test_tenant_3 is not allowed to subscribe the publication pubname4, allowed accountlist is test_tenant_1,test_tenant_2
 show tables;
-internal error: the account test_tenant_3 is not allowed to subscribe the publication pubname4
+internal error: the account test_tenant_3 is not allowed to subscribe the publication pubname4, allowed accountlist is test_tenant_1,test_tenant_2
 show databases;
 Database
 system
@@ -342,9 +342,9 @@ sub_db4_1
 sub_db4_2
 mo_catalog
 use sub_db4;
-internal error: the account test_tenant_4 is not allowed to subscribe the publication pubname4
+internal error: the account test_tenant_4 is not allowed to subscribe the publication pubname4, allowed accountlist is test_tenant_1,test_tenant_2
 show tables;
-internal error: the account test_tenant_4 is not allowed to subscribe the publication pubname4
+internal error: the account test_tenant_4 is not allowed to subscribe the publication pubname4, allowed accountlist is test_tenant_1,test_tenant_2
 alter publication pubname4 account all;
 show databases;
 Database
