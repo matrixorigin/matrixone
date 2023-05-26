@@ -120,11 +120,13 @@ CREATE TABLE `t_code_rule` (
   KEY `code_no` (`code_no`),
   KEY `org_no` (`org_no`)
 );
+-- @bvt:issue#6949
 start transaction ;
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',10);
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',20);
 commit ;
 select * from t_code_rule;
+-- @bvt:issue
 
 begin;
 -- @bvt:issue#7133

@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -870,9 +868,9 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	put := tbl.db.txn.engine.packerPool.Get(&packer)
 	defer put.Put()
 
-	if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
-		return err
-	}
+	// if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
+	// 	return err
+	// }
 
 	return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
 }
@@ -1057,9 +1055,9 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	put := tbl.db.txn.engine.packerPool.Get(&packer)
 	defer put.Put()
 
-	if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
-		return err
-	}
+	// if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
+	// 	return err
+	// }
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
 		return nil
@@ -1369,109 +1367,109 @@ func (tbl *txnTable) newReader(
 	return readers, nil
 }
 
-func (tbl *txnTable) updateLocalState(
-	ctx context.Context,
-	typ int,
-	bat *batch.Batch,
-	packer *types.Packer,
-) (
-	err error,
-) {
+// func (tbl *txnTable) updateLocalState(
+// 	ctx context.Context,
+// 	typ int,
+// 	bat *batch.Batch,
+// 	packer *types.Packer,
+// ) (
+// 	err error,
+// ) {
 
-	if bat.Vecs[0].GetType().Oid != types.T_Rowid {
-		// skip
-		return nil
-	}
+// 	if bat.Vecs[0].GetType().Oid != types.T_Rowid {
+// 		// skip
+// 		return nil
+// 	}
 
-	tbl.Lock()
-	defer tbl.Unlock()
-	if tbl.primaryIdx < 0 {
-		// no primary key, skip
-		return nil
-	}
+// 	tbl.Lock()
+// 	defer tbl.Unlock()
+// 	if tbl.primaryIdx < 0 {
+// 		// no primary key, skip
+// 		return nil
+// 	}
 
-	// hide primary key, auto_incr, nevery dedup.
-	if tbl.tableDef != nil {
-		pk := tbl.tableDef.Cols[tbl.primaryIdx]
-		if pk.Hidden && pk.Typ.AutoIncr {
-			return nil
-		}
-	}
+// 	// hide primary key, auto_incr, nevery dedup.
+// 	if tbl.tableDef != nil {
+// 		pk := tbl.tableDef.Cols[tbl.primaryIdx]
+// 		if pk.Hidden && pk.Typ.AutoIncr {
+// 			return nil
+// 		}
+// 	}
 
-	if tbl.localState == nil {
-		tbl.localState = logtailreplay.NewPartitionState(true)
-	}
+// 	if tbl.localState == nil {
+// 		tbl.localState = logtailreplay.NewPartitionState(true)
+// 	}
 
-	// make a logtail compatible batch
-	protoBatch, err := batch.BatchToProtoBatch(bat)
-	if err != nil {
-		panic(err)
-	}
-	vec := vector.NewVec(types.T_TS.ToType())
-	ts := types.TimestampToTS(tbl.nextLocalTS())
-	for i, l := 0, bat.Length(); i < l; i++ {
-		if err := vector.AppendFixed(
-			vec,
-			ts,
-			false,
-			tbl.db.txn.proc.Mp(),
-		); err != nil {
-			panic(err)
-		}
-	}
-	protoVec, err := vector.VectorToProtoVector(vec)
-	if err != nil {
-		panic(err)
-	}
-	newAttrs := make([]string, 0, len(protoBatch.Attrs)+1)
-	newAttrs = append(newAttrs, protoBatch.Attrs[:1]...)
-	newAttrs = append(newAttrs, "name")
-	newAttrs = append(newAttrs, protoBatch.Attrs[1:]...)
-	protoBatch.Attrs = newAttrs
-	newVecs := make([]*api.Vector, 0, len(protoBatch.Vecs)+1)
-	newVecs = append(newVecs, protoBatch.Vecs[:1]...)
-	newVecs = append(newVecs, protoVec)
-	newVecs = append(newVecs, protoBatch.Vecs[1:]...)
-	protoBatch.Vecs = newVecs
+// 	// make a logtail compatible batch
+// 	protoBatch, err := batch.BatchToProtoBatch(bat)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	vec := vector.NewVec(types.T_TS.ToType())
+// 	ts := types.TimestampToTS(tbl.nextLocalTS())
+// 	for i, l := 0, bat.Length(); i < l; i++ {
+// 		if err := vector.AppendFixed(
+// 			vec,
+// 			ts,
+// 			false,
+// 			tbl.db.txn.proc.Mp(),
+// 		); err != nil {
+// 			panic(err)
+// 		}
+// 	}
+// 	protoVec, err := vector.VectorToProtoVector(vec)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	newAttrs := make([]string, 0, len(protoBatch.Attrs)+1)
+// 	newAttrs = append(newAttrs, protoBatch.Attrs[:1]...)
+// 	newAttrs = append(newAttrs, "name")
+// 	newAttrs = append(newAttrs, protoBatch.Attrs[1:]...)
+// 	protoBatch.Attrs = newAttrs
+// 	newVecs := make([]*api.Vector, 0, len(protoBatch.Vecs)+1)
+// 	newVecs = append(newVecs, protoBatch.Vecs[:1]...)
+// 	newVecs = append(newVecs, protoVec)
+// 	newVecs = append(newVecs, protoBatch.Vecs[1:]...)
+// 	protoBatch.Vecs = newVecs
 
-	switch typ {
-	case INSERT:
-		return
-		/*
-			// this batch is from user, rather than logtail, use primaryIdx
-			primaryKeys := tbl.localState.HandleRowsInsert(ctx, protoBatch, tbl.primaryIdx, packer)
+// 	switch typ {
+// 	case INSERT:
 
-			// check primary key
-			for idx, primaryKey := range primaryKeys {
-				iter := tbl.localState.NewPrimaryKeyIter(ts, primaryKey)
-				n := 0
-				for iter.Next() {
-					n++
-				}
-				iter.Close()
-				if n > 1 {
-					primaryKeyVector := bat.Vecs[tbl.primaryIdx+1] //skip the first row id column
-				nullableVec := memorytable.VectorAt(primaryKeyVector, idx)
-					return moerr.NewDuplicateEntry(
-						ctx,
-						common.TypeStringValue(
-							*primaryKeyVector.GetType(),
-							nullableVec.Value, nullableVec.IsNull,
-						),
-						bat.Attrs[tbl.primaryIdx+1],
-					)
-				}
-			}
-		*/
-	case DELETE:
-		tbl.localState.HandleRowsDelete(ctx, protoBatch)
+// 		// this batch is from user, rather than logtail, use primaryIdx
+// 		primaryKeys := tbl.localState.HandleRowsInsert(ctx, protoBatch, tbl.primaryIdx, packer)
 
-	default:
-		panic(fmt.Sprintf("unknown type: %v", typ))
-	}
+// 		// check primary key
+// 		for idx, primaryKey := range primaryKeys {
+// 			iter := tbl.localState.NewPrimaryKeyIter(ts, primaryKey)
+// 			n := 0
+// 			for iter.Next() {
+// 				n++
+// 			}
+// 			iter.Close()
+// 			if n > 1 {
+// 				primaryKeyVector := bat.Vecs[tbl.primaryIdx+1] //skip the first row id column
+// 				nullableVec := memorytable.VectorAt(primaryKeyVector, idx)
+// 				return moerr.NewDuplicateEntry(
+// 					ctx,
+// 					common.TypeStringValue(
+// 						*primaryKeyVector.GetType(),
+// 						nullableVec.Value, nullableVec.IsNull,
+// 					),
+// 					bat.Attrs[tbl.primaryIdx+1],
+// 				)
+// 			}
+// 		}
 
-	return
-}
+// 		return
+// 	case DELETE:
+// 		tbl.localState.HandleRowsDelete(ctx, protoBatch)
+
+// 	default:
+// 		panic(fmt.Sprintf("unknown type: %v", typ))
+// 	}
+
+// 	return
+// }
 
 func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 	tbl.localTS = tbl.localTS.Next()

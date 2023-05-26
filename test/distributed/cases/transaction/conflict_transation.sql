@@ -66,7 +66,9 @@ select * from ct_05;
 create table ct_06(a bigint,b varchar(25),c int, d varchar(25),primary key(a),unique index c(c),key b(b),key d(d));
 start transaction ;
 insert into ct_06 select 5678,'high',487,'comment test';
+-- @bvt:issue#6949
 insert into ct_06 select 5679,'lower',487,'define';
+-- @bvt:issue
 insert into ct_06 values (897,'number',908,'run tools'),(898,'string',908,'ffff'),(899,'string',918,'while'),(900,'string',948,'word file'),(901,'string',902,'oooo'),(902,'string',87,'dddd'),(903,'string',87,'eeee');
 select * from ct_06;
 commit;
@@ -88,7 +90,6 @@ create table ct_07(a int,b varchar(25),c date, d double,primary key(a,c));
 insert into ct_07 values (1,'901','2011-09-29',0.01),(2,'187','2011-09-29',1.31),(3,'90','2111-02-09',10.01);
 begin;
 insert into ct_07 values (3,'90','2111-02-09',10.01);
--- @pattern
 insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),(4,'90','2011-09-29',89.3);
 select * from ct_07;
 commit;
