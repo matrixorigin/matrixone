@@ -2476,7 +2476,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", user.Username, user.Hostname)
 			goto handleFailed
 		} else {
-			return err
+			goto handleSucceeded
 		}
 	}
 
@@ -2529,6 +2529,8 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 			goto handleFailed
 		}
 	}
+
+handleSucceeded:
 
 	err = bh.Exec(ctx, "commit;")
 	if err != nil {
@@ -2958,6 +2960,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		accId                                                    int64
 		newCtx                                                   context.Context
 		subs                                                     *plan.SubscriptionMeta
+		tenantName                                               string
 	)
 
 	tenantInfo = ses.GetTenantInfo()
@@ -3060,13 +3063,13 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 					goto handleFailed
 				}
 
-				tenantName, err := erArray[0].GetString(newCtx, 0, 0)
+				tenantName, err = erArray[0].GetString(newCtx, 0, 0)
 				if err != nil {
 					goto handleFailed
 				}
 				if !isSubscriptionValid(allAccountStr == "true", accountList, tenantName) {
 					err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
-					return nil, err
+					goto handleFailed
 				}
 			}
 		} else {
@@ -3086,7 +3089,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		SubName:     subName,
 	}
 
-	return subs, nil
+	return subs, err
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
@@ -3149,7 +3152,8 @@ func isDbPublishing(ctx context.Context, dbName string, ses *Session) (bool, err
 		goto handleFailed
 	}
 	if !execResultArrayHasData(erArray) {
-		return false, moerr.NewInternalError(ctx, "there is no publication for database %s", dbName)
+		err = moerr.NewInternalError(ctx, "there is no publication for database %s", dbName)
+		goto handleFailed
 	}
 	count, err = erArray[0].GetInt64(ctx, 0, 0)
 	if err != nil {
@@ -7165,7 +7169,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	}
 
 	if !exists {
-		createSubscriptionDatabase(ctx, bh, newTenant, ses)
+		//just skip nonexistent pubs
+		_ = createSubscriptionDatabase(ctx, bh, newTenant, ses)
 	}
 
 	return err
@@ -7844,12 +7849,12 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, string(argsJson))
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	if execResultArrayHasData(erArray) {
@@ -7925,7 +7930,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	}
 	argsJson, err = json.Marshal(argList)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	// validate duplicate procedure declaration
@@ -7933,12 +7938,12 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	checkExistence = fmt.Sprintf(checkProcedureExistence, string(cp.Name.Name.ObjectName), dbName)
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	if execResultArrayHasData(erArray) {
@@ -7965,7 +7970,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		goto handleFailed
 	}
 
-	// return err
+	return err
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
@@ -8079,7 +8084,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 
 	if !isExist {
 		err = moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
-		return err
+		goto handleFailed
 	}
 
 	// step2: update the config
@@ -8200,7 +8205,7 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			return err
+			goto handleFailed
 		}
 
 		err = bh.Exec(ctx, "commit;")
@@ -8220,12 +8225,13 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 	return nil
 }
 
-func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (string, error) {
+func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (string, error) {
 	var err error
 	var erArray []ExecResult
 	var sql string
+	var resultConfig string
 	defaultConfig := "0.7"
-	variable_name := "version_compatibility"
+	variableName := "version_compatibility"
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -8234,25 +8240,23 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 		goto handleFailed
 	}
 
-	sql = getSqlForGetSystemVariableValueWithDatabase(dbName, variable_name)
+	sql = getSqlForGetSystemVariableValueWithDatabase(dbName, variableName)
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		return defaultConfig, err
+		goto handleFailed
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		return defaultConfig, err
+		goto handleFailed
 	}
 
 	if execResultArrayHasData(erArray) {
-		config, err := erArray[0].GetString(ctx, 0, 0)
+		resultConfig, err = erArray[0].GetString(ctx, 0, 0)
 		if err != nil {
-			return defaultConfig, err
-		} else {
-			return config, err
+			goto handleFailed
 		}
 	}
 
@@ -8260,7 +8264,7 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 	if err != nil {
 		goto handleFailed
 	}
-	return defaultConfig, err
+	return resultConfig, err
 
 handleFailed:
 	//ROLLBACK the transaction
@@ -8530,6 +8534,8 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		if err != nil {
 			goto handleFailed
 		}
+
+		return err
 
 	handleFailed:
 		//ROLLBACK the transaction

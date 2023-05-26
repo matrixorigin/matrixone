@@ -17,6 +17,7 @@ package memorystorage
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +35,9 @@ type StorageTxnClient struct {
 	storages map[string]*Storage
 }
 
+func (s *StorageTxnClient) Delete(_ *defines.DebugTxn) {
+}
+
 func NewStorageTxnClient(
 	clock clock.Clock,
 	storages map[string]*Storage,
@@ -49,6 +53,7 @@ var _ client.TxnClient = new(StorageTxnClient)
 func (s *StorageTxnClient) New(
 	ctx context.Context,
 	ts timestamp.Timestamp,
+	debug *defines.DebugTxn,
 	options ...client.TxnOption) (client.TxnOperator, error) {
 	now, _ := s.clock.Now()
 	meta := txn.TxnMeta{
@@ -92,7 +97,7 @@ func (s *StorageTxnOperator) ApplySnapshot(data []byte) error {
 	panic("unimplemented")
 }
 
-func (s *StorageTxnOperator) Commit(ctx context.Context) error {
+func (s *StorageTxnOperator) Commit(ctx context.Context, _ *defines.DebugTxn) error {
 	for _, storage := range s.storages {
 		if _, err := storage.Commit(ctx, s.meta); err != nil {
 			return err
@@ -142,7 +147,7 @@ func (s *StorageTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*r
 	return result, nil
 }
 
-func (s *StorageTxnOperator) Rollback(ctx context.Context) error {
+func (s *StorageTxnOperator) Rollback(ctx context.Context, _ *defines.DebugTxn) error {
 	for _, storage := range s.storages {
 		if err := storage.Rollback(ctx, s.meta); err != nil {
 			return err
@@ -206,7 +211,7 @@ func (s *StorageTxnOperator) WriteAndCommit(ctx context.Context, ops []txn.TxnRe
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Commit(ctx); err != nil {
+	if err := s.Commit(ctx, &defines.DebugTxn{0, "memorystorage", ""}); err != nil {
 		return nil, err
 	}
 	return result, nil

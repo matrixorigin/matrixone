@@ -122,7 +122,7 @@ func (s *sqlExecutor) adjustOptions(
 	}
 
 	if !opts.HasExistsTxn() {
-		txnOp, err := s.txnClient.New(ctx, opts.MinCommittedTS())
+		txnOp, err := s.txnClient.New(ctx, opts.MinCommittedTS(), &defines.DebugTxn{0, "sql_executor.go#adjustOptions", ""})
 		if err != nil {
 			return nil, executor.Options{}, err
 		}
@@ -229,7 +229,7 @@ func (exec *txnExecutor) commit() error {
 		exec.opts.Txn()); err != nil {
 		return err
 	}
-	return exec.opts.Txn().Commit(exec.ctx)
+	return exec.opts.Txn().Commit(exec.ctx, &defines.DebugTxn{0, "sql_executor.go#adjustOptions", ""})
 }
 
 func (exec *txnExecutor) rollback() error {
@@ -240,5 +240,5 @@ func (exec *txnExecutor) rollback() error {
 		exec.ctx,
 		exec.opts.Txn())
 	return multierr.Append(err,
-		exec.opts.Txn().Rollback(exec.ctx))
+		exec.opts.Txn().Rollback(exec.ctx, &defines.DebugTxn{0, "sql_executor.go#adjustOptions", ""}))
 }

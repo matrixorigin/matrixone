@@ -858,7 +858,7 @@ func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn c
 	if proc.TxnOperator != nil {
 		minSnapshotTS = proc.TxnOperator.Txn().SnapshotTS
 	}
-	txn, err = proc.TxnClient.New(proc.Ctx, minSnapshotTS)
+	txn, err = proc.TxnClient.New(proc.Ctx, minSnapshotTS, &defines.DebugTxn{0, "auto_incr.go#NewTxn", ""})
 	if err != nil {
 		return nil, err
 	}
@@ -889,7 +889,7 @@ func CommitTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) er
 		}
 		return err
 	}
-	err := txn.Commit(ctx)
+	err := txn.Commit(ctx, &defines.DebugTxn{0, "auto_incr.go#NewTxn", ""})
 	txn = nil
 	return err
 }
@@ -909,7 +909,7 @@ func RolllbackTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context)
 	if err := eg.Rollback(ctx, txn); err != nil {
 		return err
 	}
-	err := txn.Rollback(ctx)
+	err := txn.Rollback(ctx, &defines.DebugTxn{0, "auto_incr.go#NewTxn", ""})
 	txn = nil
 	return err
 }

@@ -1552,7 +1552,7 @@ func changeVersion(ctx context.Context, ses *Session, db string) error {
 	if _, ok := bannedCatalogDatabases[db]; ok {
 		return err
 	}
-	version, _ := GetVersionCompatbility(ctx, ses, db)
+	version, _ := GetVersionCompatibility(ctx, ses, db)
 	if ses.GetTenantInfo() != nil {
 		ses.GetTenantInfo().SetVersion(version)
 	}

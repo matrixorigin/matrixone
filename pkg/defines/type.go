@@ -16,6 +16,7 @@ package defines
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 )
@@ -212,4 +213,14 @@ type AutoIncrCache struct {
 	CurNum uint64
 	MaxNum uint64
 	Step   uint64
+}
+
+type DebugTxn struct {
+	Ptr   uintptr
+	Where string
+	TxnId string
+}
+
+func (dt *DebugTxn) String() string {
+	return fmt.Sprintf("ptr %x, where %s, txnId %s", dt.Ptr, dt.Where, dt.TxnId)
 }

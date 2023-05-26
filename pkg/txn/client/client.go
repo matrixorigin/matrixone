@@ -17,6 +17,8 @@ package client
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"sort"
 	"sync"
 
@@ -114,6 +116,47 @@ type txnClient struct {
 		// been processed.
 		latestCommitTS timestamp.Timestamp
 	}
+
+	mu2   sync.Mutex
+	dedup map[string]map[uintptr]*defines.DebugTxn
+}
+
+func (tc *txnClient) Delete(debug *defines.DebugTxn) {
+	tc.remove(debug)
+}
+
+func (tc *txnClient) saveIfNotExits(debug *defines.DebugTxn) {
+	if debug.Ptr == 0 || len(debug.Where) == 0 {
+		return
+	}
+
+	var whereMap map[uintptr]*defines.DebugTxn
+	var ok bool
+	tc.mu2.Lock()
+	defer tc.mu2.Unlock()
+	if whereMap, ok = tc.dedup[debug.Where]; !ok {
+		whereMap = make(map[uintptr]*defines.DebugTxn)
+		tc.dedup[debug.Where] = whereMap
+	}
+	if _, ok = whereMap[debug.Ptr]; ok {
+		panic(fmt.Sprintf("txnClient: duplicate txn %s", debug))
+	}
+	whereMap[debug.Ptr] = debug
+}
+
+func (tc *txnClient) remove(debug *defines.DebugTxn) {
+	if debug.Ptr == 0 || len(debug.Where) == 0 {
+		return
+	}
+	var whereMap map[uintptr]*defines.DebugTxn
+	var ok bool
+	tc.mu2.Lock()
+	defer tc.mu2.Unlock()
+	if whereMap, ok = tc.dedup[debug.Where]; ok {
+		if _, ok = whereMap[debug.Ptr]; ok {
+			delete(whereMap, debug.Ptr)
+		}
+	}
 }
 
 // NewTxnClient create a txn client with TxnSender and Options
@@ -123,6 +166,7 @@ func NewTxnClient(
 	c := &txnClient{
 		clock:  runtime.ProcessLevelRuntime().Clock(),
 		sender: sender,
+		dedup:  make(map[string]map[uintptr]*defines.DebugTxn),
 	}
 	for _, opt := range options {
 		opt(c)
@@ -143,7 +187,9 @@ func (client *txnClient) adjust() {
 func (client *txnClient) New(
 	ctx context.Context,
 	minTS timestamp.Timestamp,
+	debug *defines.DebugTxn,
 	options ...TxnOption) (TxnOperator, error) {
+	client.saveIfNotExits(debug)
 	ts, err := client.determineTxnSnapshot(ctx, minTS)
 	if err != nil {
 		return nil, err
@@ -163,6 +209,7 @@ func (client *txnClient) New(
 		WithUpdateLastCommitTSFunc(client.updateLastCommitTS),
 		WithTxnLockService(client.lockService))
 	return newTxnOperator(
+		client,
 		client.sender,
 		txnMeta,
 		options...), nil

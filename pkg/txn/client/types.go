@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -37,12 +38,14 @@ type TxnClient interface {
 	MinTimestamp() timestamp.Timestamp
 	// New returns a TxnOperator to handle read and write operation for a
 	// transaction.
-	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)
+	New(ctx context.Context, commitTS timestamp.Timestamp, debug *defines.DebugTxn, options ...TxnOption) (TxnOperator, error)
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
 	// Close closes client.sender
 	Close() error
+
+	Delete(debug *defines.DebugTxn)
 }
 
 // TxnClientWithCtl TxnClient to support ctl command.
@@ -103,9 +106,9 @@ type TxnOperator interface {
 	WriteAndCommit(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// Commit the transaction. If data has been written to multiple DN nodes, a
 	// 2pc distributed transaction commit process is used.
-	Commit(ctx context.Context) error
+	Commit(ctx context.Context, debug *defines.DebugTxn) error
 	// Rollback the transaction.
-	Rollback(ctx context.Context) error
+	Rollback(ctx context.Context, debug *defines.DebugTxn) error
 
 	// AddLockTable for pessimistic transactions, if the current transaction is successfully
 	// locked, the metadata corresponding to the lockservice needs to be recorded to the txn, and
