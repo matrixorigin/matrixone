@@ -405,17 +405,14 @@ func (tbl *txnTable) fillMetadataScanWithCol(col *plan.ColDef, location *objecti
 
 func (tbl *txnTable) GetDirtyBlksIn(
 	state *logtailreplay.PartitionState,
-	in bool) []ModifyBlockMeta {
-	dirtyBlks := make([]ModifyBlockMeta, 0)
+	in bool) []types.Blockid {
+	dirtyBlks := make([]types.Blockid, 0)
 	for blk := range tbl.db.txn.blockId_dn_delete_metaLoc_batch {
 		if in != state.BlockVisible(
 			blk, types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)) {
 			continue
 		}
-		dirtyBlks = append(dirtyBlks, ModifyBlockMeta{
-			meta:    state.GetBlock(blk).BlockInfo,
-			deletes: []int64{},
-		})
+		dirtyBlks = append(dirtyBlks, blk)
 	}
 	return dirtyBlks
 }
@@ -553,7 +550,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges []
 		exprs,
 		tbl.blockInfos,
 		&ranges,
-		//&tbl.modifiedBlocks,
+		&tbl.modifiedBlocks,
 		tbl.db.txn.proc,
 	)
 	return
@@ -581,44 +578,48 @@ func (tbl *txnTable) rangesOnePart(
 	exprs []*plan.Expr, // filter expression
 	blocks []catalog.BlockInfo, // whole block list
 	ranges *[][]byte, // output marshaled block list after filtering
-	//modifies *[]ModifyBlockMeta, // output modified blocks after filtering
+	modifies *[]ModifyBlockMeta, // output modified blocks after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	//deletes := make(map[types.Blockid][]int64)
+	deletes := make(map[types.Blockid][]int64)
 
 	//collect deletes from PartitionState.dirtyRows.
-	//{
-	//	ts := types.TimestampToTS(ts)
-	//	iter := state.NewDirtyRowsIter(ts, nil)
-	//	for iter.Next() {
-	//		entry := iter.Entry()
-	//		id, offset := entry.RowID.Decode()
-	//		deletes[id] = append(deletes[id], int64(offset))
-	//	}
-	//	iter.Close()
-	//}
+	{
+		ts := types.TimestampToTS(ts)
+		iter := state.NewDirtyRowsIter(ts, nil)
+		for iter.Next() {
+			entry := iter.Entry()
+			id, offset := entry.RowID.Decode()
+			deletes[id] = append(deletes[id], int64(offset))
+		}
+		iter.Close()
+	}
 
 	//deletes on S3 written by txn maybe comes from PartitionState.rows or PartitionState.blocks,
 	// here only collect deletes from PartitionState.blocks.
 	//if err = tbl.LoadDeletesForBlockIn(state, true, deletes, nil); err != nil {
 	//	return
 	//}
+	//only collect dirty blocks in PartitionState.blocks into modifies.
+	for _, bid := range tbl.GetDirtyBlksIn(state, true) {
+		deletes[bid] = []int64{}
+	}
 
-	//for _, entry := range tbl.writes {
-	//	if entry.isGeneratedByTruncate() {
-	//		continue
-	//	}
-	//	//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks,
-	//	// but at the end of this function, only collect deletes which comes from PartitionState.blocks
-	//	// into modifies.
-	//	if entry.typ == DELETE && entry.fileName == "" {
-	//		vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-	//		for _, v := range vs {
-	//			id, offset := v.Decode()
-	//			deletes[id] = append(deletes[id], int64(offset))
-	//		}
-	//	}
-	//}
+	for _, entry := range tbl.writes {
+		if entry.isGeneratedByTruncate() {
+			continue
+		}
+		//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks,
+		// but at the end of this function, only collect deletes which comes from PartitionState.blocks
+		// into modifies.
+		if entry.typ == DELETE && entry.fileName == "" {
+			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+			for _, v := range vs {
+				id, offset := v.Decode()
+				deletes[id] = append(deletes[id], int64(offset))
+			}
+		}
+	}
 
 	var (
 		objMeta   objectio.ObjectMeta
@@ -638,7 +639,6 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}()
 
-	//hasDeletes := len(deletes) > 0
 	isMono := make([]bool, len(exprs))
 
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
@@ -659,6 +659,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
+	hasDeletes := len(deletes) > 0
 	for _, blk := range blocks {
 		var skipBlk bool
 
@@ -711,17 +712,16 @@ func (tbl *txnTable) rangesOnePart(
 			continue
 		}
 
-		//if hasDeletes {
-		//	// collect deletes for blocks in partitionState.blocks.
-		//	if rows, ok := deletes[blk.BlockID]; ok {
-		//		*modifies = append(*modifies, ModifyBlockMeta{blk, rows})
-		//	} else {
-		//		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-		//	}
-		//} else {
-		//	// store the block in ranges
-		//	*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
-		//}
+		if hasDeletes {
+			// collect deletes for blocks in partitionState.blocks.
+			if rows, ok := deletes[blk.BlockID]; ok {
+				*modifies = append(*modifies, ModifyBlockMeta{blk, rows})
+			} else {
+				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
+			}
+			continue
+		}
+		// store the block in ranges
 		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
 	return
@@ -1187,8 +1187,8 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		ctx,
 		num,
 		encodedPrimaryKey,
-		tbl.writes,
-	)
+		tbl.modifiedBlocks,
+		tbl.writes)
 	if err != nil {
 		return nil, err
 	}
@@ -1241,6 +1241,7 @@ func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
 	encodedPrimaryKey []byte,
+	blks []ModifyBlockMeta,
 	entries []Entry,
 ) ([]engine.Reader, error) {
 	txn := tbl.db.txn
@@ -1285,60 +1286,6 @@ func (tbl *txnTable) newReader(
 		//FIXME::deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.
 		tbl.LoadDeletesForBlockIn(state, false, nil, deletes)
-	}
-
-	//load all dirty blocks for blockMergeReader.
-	//var blks []ModifyBlockMeta
-	blks := make([]ModifyBlockMeta, 0)
-	deleteBlks := make(map[types.Blockid][]int64)
-	if !txn.readOnly {
-		state, err := tbl.getPartitionState(ctx)
-		if err != nil {
-			return nil, err
-		}
-		blks = tbl.GetDirtyBlksIn(state, true)
-
-		for _, entry := range entries {
-			if entry.typ == DELETE &&
-				entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				/*
-					CASE:
-					create table t1(a int);
-					begin;
-					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-					show tables; // t1 must be shown
-				*/
-				if entry.isGeneratedByTruncate() {
-					continue
-				}
-				//FIXME:: deletes in txn.Write maybe comes from PartitionState.Rows or PartitionState.blk,
-				//        blockMergeReader need to skip them.
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					id, offset := v.Decode()
-					if state.GetBlock(id) != nil {
-						deleteBlks[id] = append(deleteBlks[id], int64(offset))
-					}
-				}
-			}
-		}
-	}
-	//important::load dirty blocks in partitionState.
-	{
-		iter := state.NewDirtyRowsIter(types.TimestampToTS(ts), nil)
-		for iter.Next() {
-			entry := iter.Entry()
-			id, offset := entry.RowID.Decode()
-			deleteBlks[id] = append(deleteBlks[id], int64(offset))
-		}
-		iter.Close()
-	}
-	//TODO::it's too inefficient.
-	for bid, dels := range deleteBlks {
-		blks = append(blks, ModifyBlockMeta{
-			meta:    state.GetBlock(bid).BlockInfo,
-			deletes: dels,
-		})
 	}
 
 	readers := make([]engine.Reader, readerNumber)
