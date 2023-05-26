@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -62,13 +61,11 @@ func (table *TransferTable[T]) Len() int {
 func (table *TransferTable[T]) prepareTTL(now time.Time) (items []*common.PinnedItem[T]) {
 	table.RLock()
 	defer table.RUnlock()
-	logutil.Debugf("processing transfer.go gavin 10 %d", len(table.pages))
 	for _, page := range table.pages {
 		if page.Item().TTL(now, table.ttl) {
 			items = append(items, page)
 		}
 	}
-	logutil.Debugf("processing transfer.go gavin 11")
 	return
 }
 
@@ -76,32 +73,21 @@ func (table *TransferTable[T]) executeTTL(items []*common.PinnedItem[T]) {
 	if len(items) == 0 {
 		return
 	}
-	logutil.Debugf("processing transfer.go gavin 4")
-
 	table.Lock()
-	logutil.Debugf("processing transfer.go gavin 5")
 
 	for _, pinned := range items {
 		delete(table.pages, *pinned.Item().ID())
 	}
-	logutil.Debugf("processing transfer.go gavin 6")
-
 	table.Unlock()
-	logutil.Debugf("processing transfer.go gavin 7")
 
 	for _, pinned := range items {
 		pinned.Close()
 	}
-	logutil.Debugf("processing transfer.go gavin 8")
 }
 
 func (table *TransferTable[T]) RunTTL(now time.Time) {
-	logutil.Debugf("processing transfer.go gavin")
 	items := table.prepareTTL(now)
-	logutil.Debugf("processing transfer.go gavin 2 %d", len(items))
 	table.executeTTL(items)
-	logutil.Debugf("processing transfer.go gavin 3")
-
 }
 
 func (table *TransferTable[T]) AddPage(page T) (dup bool) {

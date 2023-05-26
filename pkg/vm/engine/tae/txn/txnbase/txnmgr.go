@@ -64,7 +64,6 @@ func (bl *batchTxnCommitListener) OnBeginPrePrepare(txn txnif.AsyncTxn) {
 }
 
 func (bl *batchTxnCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn) {
-	logutil.Debugf("gavin OnEndPrePrepare %v, %d", txn, len(bl.listeners))
 	for _, l := range bl.listeners {
 		l.OnEndPrePrepare(txn)
 	}
@@ -115,11 +114,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	prepareWALQueue := sm.NewSafeQueue(20000, 1000, mgr.onPrepareWAL)
 	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
-	fmt.Println("gavinyue NewTxnManager 116")
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
-	PrintMemUsage()
-	// Force GC to clear up, should see a memory drop
-	defer fmt.Println("gavinyue NewTxnManager 119")
 	return mgr
 }
 
@@ -303,7 +298,6 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare())
 	common.DoIfDebugEnabled(func() {
-		logutil.Debug("gavin error")
 		logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
 	})
 }
@@ -474,11 +468,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 		// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
 		//   		   2. push the AppendNode into the MVCCHandle of block
-		PrintMemUsage()
 		mgr.onPrePrepare(op)
-		PrintMemUsage()
-		fmt.Println("gavin: [dequeuePreparing] start", now)
-		logutil.Debug("gavin: [dequeuePreparing]")
 
 		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
 		//1. Allocate a timestamp , set it to txn's prepare timestamp and commit timestamp,
@@ -495,8 +485,6 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
-		fmt.Println("gavin: [dequeuePreparing] end", item)
-
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[dequeuePreparing]",

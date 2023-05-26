@@ -16,7 +16,6 @@ package checkpoint
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -707,7 +706,6 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		return
 	}
 	logutil.Debugf(entry.String())
-	fmt.Println("gavin tryCompactTree 706")
 	visitor := new(model.BaseTreeVisitor)
 	visitor.BlockFn = func(force bool) func(uint64, uint64, *objectio.Segmentid, uint16, uint16) error {
 		return func(dbID, tableID uint64, segmentID *objectio.Segmentid, num, seq uint16) (err error) {
@@ -719,7 +717,6 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 	if err := entry.GetTree().Visit(visitor); err != nil {
 		panic(err)
 	}
-	fmt.Println("gavin tryCompactTree 718")
 }
 
 func (r *runner) onDirtyEntries(entries ...any) {

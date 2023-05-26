@@ -154,7 +154,6 @@ func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
 }
 
 func (db *DB) Close() error {
-	logutil.Info("gavin: [Close] start close db")
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
