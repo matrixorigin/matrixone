@@ -48,6 +48,10 @@ func (r RowID) Less(than RowID) bool {
 	return bytes.Compare(r[:], than[:]) < 0
 }
 
+func (p *Partition) Snapshot() *PartitionState {
+	return p.state.Load()
+}
+
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("unimplemented")
 }
