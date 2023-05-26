@@ -836,8 +836,7 @@ func updatePartitionOfPush(
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
-	partitions := e.getPartitions(dbId, tblId)
-	partition := partitions[dnId]
+	partition := e.getPartition(dbId, tblId)
 
 	select {
 	case <-partition.Lock():

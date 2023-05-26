@@ -35,35 +35,28 @@ import (
 func (txn *Transaction) getBlockInfos(
 	ctx context.Context,
 	tbl *txnTable,
-) (blocks [][]catalog.BlockInfo, err error) {
-	blocks = make([][]catalog.BlockInfo, len(txn.dnStores))
+) (blocks []catalog.BlockInfo, err error) {
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
-	states, err := tbl.getParts(ctx)
+	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for i := range txn.dnStores {
-		if i >= len(states) {
-			continue
-		}
-		var objectName objectio.ObjectNameShort
-		state := states[i]
-		iter := state.NewBlocksIter(ts)
-		for iter.Next() {
-			entry := iter.Entry()
-			location := entry.MetaLocation()
-			if !objectio.IsSameObjectLocVsShort(location, &objectName) {
-				// Prefetch object meta
-				if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
-					iter.Close()
-					return
-				}
-				objectName = *location.Name().Short()
+	var objectName objectio.ObjectNameShort
+	iter := state.NewBlocksIter(ts)
+	for iter.Next() {
+		entry := iter.Entry()
+		location := entry.MetaLocation()
+		if !objectio.IsSameObjectLocVsShort(location, &objectName) {
+			// Prefetch object meta
+			if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
+				iter.Close()
+				return
 			}
-			blocks[i] = append(blocks[i], entry.BlockInfo)
+			objectName = *location.Name().Short()
 		}
-		iter.Close()
+		blocks = append(blocks, entry.BlockInfo)
 	}
+	iter.Close()
 	return
 }
 
