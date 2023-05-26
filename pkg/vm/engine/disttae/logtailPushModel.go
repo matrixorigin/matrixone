@@ -61,8 +61,8 @@ const (
 
 	// each unsubscribeProcessTicker, we scan the table subscribe record.
 	// to unsubscribe the table which was unused for a long time (more than unsubscribeTimer).
-	unsubscribeProcessTicker = 20 * time.Minute
-	unsubscribeTimer         = 1 * time.Hour
+	unsubscribeProcessTicker = 20 * time.Hour
+	unsubscribeTimer         = 10 * time.Hour
 )
 
 const (

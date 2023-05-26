@@ -864,13 +864,14 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.dnStores[0], tbl.primaryIdx, false, false); err != nil {
 		return err
 	}
-	var packer *types.Packer
-	put := tbl.db.txn.engine.packerPool.Get(&packer)
-	defer put.Put()
-
-	// if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
-	// 	return err
-	// }
+	/*
+		var packer *types.Packer
+		put := tbl.db.txn.engine.packerPool.Get(&packer)
+		defer put.Put()
+		if err := tbl.updateLocalState(ctx, INSERT, ibat, packer); err != nil {
+			return err
+		}
+	*/
 
 	return tbl.db.txn.DumpBatch(false, tbl.writesOffset)
 }
@@ -1051,13 +1052,15 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	}
 	bat.SetAttributes([]string{catalog.Row_ID})
 
-	var packer *types.Packer
-	put := tbl.db.txn.engine.packerPool.Get(&packer)
-	defer put.Put()
+	/*
+		var packer *types.Packer
+		put := tbl.db.txn.engine.packerPool.Get(&packer)
+		defer put.Put()
 
-	// if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
-	// 	return err
-	// }
+		 if err := tbl.updateLocalState(ctx, DELETE, bat, packer); err != nil {
+		 	return err
+		 }
+	*/
 	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.Length() == 0 {
 		return nil
