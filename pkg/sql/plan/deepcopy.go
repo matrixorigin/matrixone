@@ -198,6 +198,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		PreDeleteCtx:    DeepCopyPreDeleteCtx(node.PreDeleteCtx),
 		OnDuplicateKey:  DeepCopyOnDupliateKeyCtx(node.OnDuplicateKey),
 		LockTargets:     make([]*plan.LockTarget, len(node.LockTargets)),
+		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:           node.IsEnd,
 	}
 

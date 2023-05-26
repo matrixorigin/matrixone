@@ -385,7 +385,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := motrace.StatementFromContext(ctx); stm != nil {
-		stm.SetExecPlan(cwft.plan, SerializeExecPlan)
+		copyPlan := plan2.DeepCopyPlan(cwft.plan)
+		stm.SetExecPlan(copyPlan, SerializeExecPlan)
 	}
 	return nil
 }

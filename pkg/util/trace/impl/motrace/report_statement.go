@@ -66,6 +66,17 @@ type StatementInfo struct {
 	ResultCount int64 `json:"result_count"` // see EndStatement
 
 	// flow ctrl
+	// #		|case 1 |case 2 |case 3 |case 4|
+	// end		| false | false | true  | true |  (set true at EndStatement)
+	// exported	| false | true  | false | true |  (set true at function FillRow, set false at function EndStatement)
+	//
+	// case 1: first gen statement_info record
+	// case 2: statement_info exported as `status=Running` record
+	// case 3: while query done, call EndStatement mark statement need to be exported again
+	// case 4: done final export
+	//
+	// normally    flow: case 1->2->3->4
+	// query-quick flow: case 1->3->4
 	end bool // cooperate with mux
 	mux sync.Mutex
 	// mark reported
@@ -93,7 +104,7 @@ func (s *StatementInfo) Size() int64 {
 func (s *StatementInfo) Free() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	if s.end { // cooperate with s.mux
+	if s.end && s.exported { // cooperate with s.mux
 		s.Statement = ""
 		s.StatementFingerprint = ""
 		s.StatementTag = ""
@@ -241,6 +252,7 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64) {
 			s.Status = StatementStatusFailed
 		}
 		if !s.reported || s.exported { // cooperate with s.mux
+			s.exported = false
 			s.Report(ctx)
 		}
 	}
