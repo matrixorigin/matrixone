@@ -443,7 +443,7 @@ func NewBackgroundSession(
 	ses.SetConnectContext(connCtx)
 	ses.SetBackgroundSession(true)
 	ses.UpdateDebugString()
-	ses.debugStr += "|" + ses.uuid.String()
+	ses.debugStr += "|" + upstream.uuid.String()
 	backSes := &BackgroundSession{
 		Session: ses,
 		cancel:  cancelBackgroundFunc,
