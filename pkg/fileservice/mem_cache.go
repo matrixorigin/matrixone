@@ -184,7 +184,7 @@ func (m *MemCache) Update(
 			m.ch <- func() {
 				//TODO: Need advise on how to check the old value for the async scenario. Are we using it now?
 				// Should we put overlap checker inside ObjectCache?
-				// The problem was that ObjectCache accepts generic key (any). We need key in the form of IOVectorCacheKey. Causes dependency cycle loop
+				// The problem was that ObjectCache accepts generic key (any). We need key in the form of IOVectorCacheKey. Causes circular dependency.
 				m.objCache.Set(key, obj, objSize, vector.Preloading)
 			}
 		} else {

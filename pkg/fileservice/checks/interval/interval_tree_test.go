@@ -374,7 +374,7 @@ func TestIntervalTreeRandom(t *testing.T) {
 	ivs := make(map[xy]struct{})
 	ivt := NewIntervalTree()
 	maxv := 128
-	rand.Seed(time.Now().UnixNano())
+	rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	for i := rand.Intn(maxv) + 1; i != 0; i-- {
 		x, y := int64(rand.Intn(maxv)), int64(rand.Intn(maxv))
