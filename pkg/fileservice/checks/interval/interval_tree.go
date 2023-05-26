@@ -31,6 +31,7 @@ package interval
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strings"
 )
@@ -58,7 +59,7 @@ func (c rbcolor) String() string {
 	case red:
 		return "red"
 	default:
-		panic(fmt.Errorf("unknown color %d", c))
+		panic(moerr.NewInternalErrorNoCtx("unknown color %d", c))
 	}
 }
 
