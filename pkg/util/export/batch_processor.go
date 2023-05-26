@@ -351,7 +351,7 @@ func (c *MOCollector) Start() bool {
 		go c.doExport(i)
 	}
 	c.stopWait.Add(1)
-	//go c.showStats()
+	go c.showStats()
 	return true
 }
 
