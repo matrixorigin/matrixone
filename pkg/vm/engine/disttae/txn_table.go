@@ -277,6 +277,8 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 				ret += int64(entry.Batch.Vecs[i].Size())
 			}
 		}
+
+		handled[entry.Batch] = struct{}{}
 	}
 	iter.Close()
 
