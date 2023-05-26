@@ -66,6 +66,7 @@ jobs:
       - name: export log
         if: ${{ failure() }}
         run: |
+          df -h > ${{ github.workspace }}/docker-compose-log/disk-usage.log
           mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
           curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
           curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
