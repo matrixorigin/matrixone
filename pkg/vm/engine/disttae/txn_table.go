@@ -488,9 +488,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges []
 
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
-	if len(tbl.blockInfos) == 0 {
-		return
-	}
+	// if len(tbl.blockInfos) == 0 {
+	// 	return
+	// }
 
 	tbl.modifiedBlocks = make([]ModifyBlockMeta, 0)
 
