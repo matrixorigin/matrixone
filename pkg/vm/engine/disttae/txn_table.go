@@ -1149,7 +1149,8 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	mrd.rds = append(mrd.rds, rds0...)
 
 	for i := range rds {
-		rds[i] = &mrd
+		rd := mrd
+		rds[i] = &rd
 	}
 
 	return rds, nil
