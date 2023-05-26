@@ -71,6 +71,9 @@ const (
 const (
 	// Non-hard-coded data dictionary table
 	MO_INDEXES = "mo_indexes"
+
+	// MOTaskDB mo task db name
+	MOTaskDB = "mo_task"
 )
 
 const (

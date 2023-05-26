@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2023 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,33 +14,23 @@
 
 package fileservice
 
-import (
-	"errors"
-	"io"
-	"strings"
-)
-
-func isRetryableError(err error) bool {
-	// Is error
-	if errors.Is(err, io.ErrUnexpectedEOF) {
-		return true
+func retry[T any](
+	fn func() (T, error),
+	maxAttemps int,
+	isRetryable func(error) bool,
+) (res T, err error) {
+	for {
+		res, err = fn()
+		if err != nil {
+			if isRetryable(err) {
+				maxAttemps--
+				if maxAttemps <= 0 {
+					return
+				}
+				continue
+			}
+			return
+		}
+		return
 	}
-	str := err.Error()
-	// match exact string
-	switch str {
-	case "connection reset by peer",
-		"connection timed out":
-		return true
-	}
-	// match sub-string
-	if strings.Contains(str, "unexpected EOF") {
-		return true
-	}
-	if strings.Contains(str, "connection reset by peer") {
-		return true
-	}
-	if strings.Contains(str, "connection timed out") {
-		return true
-	}
-	return false
 }

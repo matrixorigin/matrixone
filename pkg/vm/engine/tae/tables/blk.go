@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"context"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -87,6 +88,7 @@ func (blk *block) GetColumnDataByIds(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnDatas(
+		context.Background(),
 		node.MustPNode(),
 		txn,
 		schema,
@@ -116,6 +118,7 @@ func (blk *block) DataCommittedBefore(ts types.TS) bool {
 }
 
 func (blk *block) BatchDedup(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
 	keysZM index.ZM,
@@ -129,6 +132,7 @@ func (blk *block) BatchDedup(
 		}
 	}()
 	return blk.PersistedBatchDedup(
+		ctx,
 		txn,
 		precommit,
 		keys,
@@ -188,6 +192,7 @@ func (blk *block) EstimateScore(ttl time.Duration, force bool) int {
 }
 
 func (blk *block) GetByFilter(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	filter *handle.Filter) (offset uint32, err error) {
 	if filter.Op != handle.FilterEq {
@@ -201,14 +206,15 @@ func (blk *block) GetByFilter(
 
 	node := blk.PinNode()
 	defer node.Unref()
-	return blk.getPersistedRowByFilter(node.MustPNode(), txn, filter)
+	return blk.getPersistedRowByFilter(ctx, node.MustPNode(), txn, filter)
 }
 
 func (blk *block) getPersistedRowByFilter(
+	ctx context.Context,
 	pnode *persistedNode,
 	txn txnif.TxnReader,
 	filter *handle.Filter) (offset uint32, err error) {
-	ok, err := pnode.ContainsKey(filter.Val)
+	ok, err := pnode.ContainsKey(ctx, filter.Val)
 	if err != nil {
 		return
 	}
@@ -219,7 +225,7 @@ func (blk *block) getPersistedRowByFilter(
 	var sortKey containers.Vector
 	schema := blk.meta.GetSchema()
 	idx := schema.GetSingleSortKeyIdx()
-	if sortKey, err = blk.LoadPersistedColumnData(schema, idx); err != nil {
+	if sortKey, err = blk.LoadPersistedColumnData(ctx, schema, idx); err != nil {
 		return
 	}
 	defer sortKey.Close()

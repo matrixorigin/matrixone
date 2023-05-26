@@ -50,7 +50,7 @@ type TxnReader interface {
 	RUnlock()
 	IsReplay() bool
 	Is2PC() bool
-	GetPKDedupSkip() PKDedupSkipScope
+	GetDedupType() DedupType
 	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
@@ -108,7 +108,7 @@ type TxnChanger interface {
 	Commit() error
 	Rollback() error
 	SetCommitTS(cts types.TS) error
-	SetPKDedupSkip(skip PKDedupSkipScope)
+	SetDedupType(skip DedupType)
 	SetParticipants(ids []uint64) error
 	SetError(error)
 
@@ -237,7 +237,7 @@ type TxnStore interface {
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
-	Append(dbId, id uint64, data *containers.Batch) error
+	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error
 	AddBlksWithMetaLoc(dbId, id uint64, metaLocs []objectio.Location) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error

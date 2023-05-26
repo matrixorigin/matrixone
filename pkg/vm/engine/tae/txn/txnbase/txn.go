@@ -82,7 +82,7 @@ type Txn struct {
 	LSN                      uint64
 	TenantID, UserID, RoleID atomic.Uint32
 	isReplay                 bool
-	PKDedupSkip              txnif.PKDedupSkipScope
+	DedupType                txnif.DedupType
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -140,8 +140,8 @@ func (txn *Txn) SetPrepareCommitFn(fn func(txnif.AsyncTxn) error)   { txn.Prepar
 func (txn *Txn) SetPrepareRollbackFn(fn func(txnif.AsyncTxn) error) { txn.PrepareRollbackFn = fn }
 func (txn *Txn) SetApplyCommitFn(fn func(txnif.AsyncTxn) error)     { txn.ApplyCommitFn = fn }
 func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyRollbackFn = fn }
-func (txn *Txn) SetPKDedupSkip(skip txnif.PKDedupSkipScope)         { txn.PKDedupSkip = skip }
-func (txn *Txn) GetPKDedupSkip() txnif.PKDedupSkipScope             { return txn.PKDedupSkip }
+func (txn *Txn) SetDedupType(dedupType txnif.DedupType)             { txn.DedupType = dedupType }
+func (txn *Txn) GetDedupType() txnif.DedupType                      { return txn.DedupType }
 
 //The state transition of transaction is as follows:
 // 1PC: TxnStateActive--->TxnStatePreparing--->TxnStateCommitted/TxnStateRollbacked
