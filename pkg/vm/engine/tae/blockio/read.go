@@ -206,7 +206,11 @@ func readBlockData(
 	hasRowId, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 	if hasRowId {
 		// generate rowid
-		rowid = vp.GetVector(objectio.RowidType)
+		if vp == nil {
+			rowid = vector.NewVec(objectio.RowidType)
+		} else {
+			rowid = vp.GetVector(objectio.RowidType)
+		}
 		if err = objectio.ConstructRowidColumnTo(
 			rowid,
 			&info.BlockID,
