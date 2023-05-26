@@ -1183,22 +1183,18 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
-		//var blks []ModifyBlockMeta
 
-		//if len(tbl.blockInfos) > 0 {
-		//	blks = tbl.modifiedBlocks[i]
-		//}
-		rds0, err := tbl.newReader(
-			ctx,
-			num,
-			encodedPrimaryKey,
-			//i,
-			tbl.writes,
-		)
-		if err != nil {
-			return nil, err
-		}
-		mrds[0].rds = append(mrds[0].rds, rds0...)
+	rds0, err := tbl.newReader(
+		ctx,
+		num,
+		encodedPrimaryKey,
+		//i,
+		tbl.writes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	mrds[0].rds = append(mrds[0].rds, rds0...)
 
 	for i := range rds {
 		rds[i] = &mrds[i]
@@ -1253,7 +1249,7 @@ func (tbl *txnTable) newReader(
 	txn := tbl.db.txn
 	ts := txn.meta.SnapshotTS
 	fs := txn.engine.fs
-	states, err := tbl.getParts(ctx)
+	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1291,7 +1287,7 @@ func (tbl *txnTable) newReader(
 		}
 		//FIXME::deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.
-		tbl.LoadDeletesForBlockIn(states[partitionIndex], false, nil, deletes)
+		tbl.LoadDeletesForBlockIn(state, false, nil, deletes)
 	}
 
 	//load all dirty blocks for blockMergeReader.
@@ -1299,11 +1295,11 @@ func (tbl *txnTable) newReader(
 	blks := make([]ModifyBlockMeta, 0, 100)
 	deleteBlks := make(map[types.Blockid][]int64)
 	if !txn.readOnly {
-		states, err := tbl.getParts(ctx)
+		state, err := tbl.getPartitionState(ctx)
 		if err != nil {
 			return nil, err
 		}
-		tbl.GetDirtyBlksIn(states[partitionIndex], true, blks)
+		tbl.GetDirtyBlksIn(state, true, blks)
 
 		for _, entry := range entries {
 			if entry.typ == DELETE &&
@@ -1323,7 +1319,7 @@ func (tbl *txnTable) newReader(
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					id, offset := v.Decode()
-					if states[partitionIndex].GetBlock(id) != nil {
+					if state.GetBlock(id) != nil {
 						deleteBlks[id] = append(deleteBlks[id], int64(offset))
 					}
 				}
@@ -1332,7 +1328,7 @@ func (tbl *txnTable) newReader(
 	}
 	//important::load dirty blocks in partitionState.
 	{
-		iter := states[partitionIndex].NewDirtyRowsIter(types.TimestampToTS(ts), nil)
+		iter := state.NewDirtyRowsIter(types.TimestampToTS(ts), nil)
 		for iter.Next() {
 			entry := iter.Entry()
 			id, offset := entry.RowID.Decode()
@@ -1343,7 +1339,7 @@ func (tbl *txnTable) newReader(
 	//TODO::it's too inefficient.
 	for bid, dels := range deleteBlks {
 		blks = append(blks, ModifyBlockMeta{
-			meta:    states[partitionIndex].GetBlock(bid).BlockInfo,
+			meta:    state.GetBlock(bid).BlockInfo,
 			deletes: dels,
 		})
 	}
@@ -1365,19 +1361,19 @@ func (tbl *txnTable) newReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	parts, err := tbl.getParts(ctx)
+	partState, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var iter logtailreplay.RowsIter
 	if len(encodedPrimaryKey) > 0 {
-		iter = parts[partitionIndex].NewPrimaryKeyIter(
+		iter = partState.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
 			encodedPrimaryKey,
 		)
 	} else {
-		iter = parts[partitionIndex].NewRowsIter(
+		iter = partState.NewRowsIter(
 			types.TimestampToTS(ts),
 			nil,
 			false,
