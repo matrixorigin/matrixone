@@ -19,51 +19,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-type Rank struct {
+type RowNumber struct {
 	Ps [][]int64
 }
 
-func RankReturnType() types.Type {
+func RowNumberReturnType() types.Type {
 	return types.New(types.T_int64, 0, 0)
 }
 
-func NewRank() *Rank {
-	return &Rank{}
+func NewRowNumber() *RowNumber {
+	return &RowNumber{}
 }
 
-func (r *Rank) Grows(_ int) {}
+func (r *RowNumber) Grows(_ int) {}
 
-func (r *Rank) Eval(vs []int64) []int64 {
+func (r *RowNumber) Eval(vs []int64) []int64 {
 	idx := 0
 	for _, p := range r.Ps {
-		sn := int64(1)
-		vs[idx] = sn
-		for i := 1; i < len(p); i++ {
-
-			m := p[i] - p[i-1]
-
-			if m == 1 {
-				if i == len(p)-1 {
-					continue
-				}
-				idx++
-				sn++
-				vs[idx] = sn
-				continue
-			}
-
-			for t := 1; t < int(m); t++ {
-				idx++
-				vs[idx] = sn
-			}
-
+		n := p[len(p)-1] - p[0]
+		for i := int64(1); i <= n; i++ {
+			vs[idx] = i
+			idx++
 		}
-		idx++
 	}
 	return vs
 }
 
-func (r *Rank) Fill(i int64, value int64, ov int64, z int64, isEmpty bool, isNull bool) (int64, bool) {
+func (r *RowNumber) Fill(i int64, value int64, ov int64, z int64, isEmpty bool, isNull bool) (int64, bool) {
 	n := int(i) - len(r.Ps)
 	for j := 0; j < n+1; j++ {
 		r.Ps = append(r.Ps, []int64{})
@@ -72,18 +54,18 @@ func (r *Rank) Fill(i int64, value int64, ov int64, z int64, isEmpty bool, isNul
 	return 0, false
 }
 
-func (r *Rank) Merge(xIndex int64, yIndex int64, x int64, y int64, xEmpty bool, yEmpty bool, yAvg any) (int64, bool) {
+func (r *RowNumber) Merge(xIndex int64, yIndex int64, x int64, y int64, xEmpty bool, yEmpty bool, yAvg any) (int64, bool) {
 	return 0, false
 }
 
-func (r *Rank) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
+func (r *RowNumber) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
 	return nil
 }
 
-func (r *Rank) MarshalBinary() ([]byte, error) {
+func (r *RowNumber) MarshalBinary() ([]byte, error) {
 	return nil, nil
 }
 
-func (r *Rank) UnmarshalBinary(data []byte) error {
+func (r *RowNumber) UnmarshalBinary(data []byte) error {
 	return nil
 }

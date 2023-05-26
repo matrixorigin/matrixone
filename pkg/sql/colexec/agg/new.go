@@ -50,6 +50,8 @@ func ReturnType(op int, typ types.Type) (types.Type, error) {
 		otyp = MedianReturnType([]types.Type{typ})
 	case WinRank:
 		otyp = RankReturnType()
+	case WinRowNumber:
+		otyp = RowNumberReturnType()
 	}
 	if otyp.Oid == types.T_any {
 		return typ, moerr.NewInternalErrorNoCtx("'%v' not support %s", typ, Names[op])
@@ -89,7 +91,10 @@ func New(op int, dist bool, typ types.Type) (Agg[any], error) {
 		return newMedian(typ, dist), nil
 	case WinRank:
 		r := NewRank()
-		return NewUnaryAgg(AggregateAvg, r, false, typ, RankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
+		return NewUnaryAgg(WinRank, r, false, typ, RankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
+	case WinRowNumber:
+		r := NewRowNumber()
+		return NewUnaryAgg(WinRowNumber, r, false, typ, RowNumberReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for aggregate %s", typ, Names[op]))
 }

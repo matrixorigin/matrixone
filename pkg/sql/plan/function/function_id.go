@@ -490,6 +490,7 @@ var functionIdRegister = map[string]int32{
 	"last_uuid":                      LAST_QUERY_ID,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
+	"row_number":                     ROW_NUMBER,
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,

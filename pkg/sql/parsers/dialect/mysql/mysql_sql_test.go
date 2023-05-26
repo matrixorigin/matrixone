@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
-		output: "select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+		input:  "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+		output: "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 	}
 )
 

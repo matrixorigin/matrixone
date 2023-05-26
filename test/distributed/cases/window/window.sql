@@ -44,6 +44,16 @@ select c, sum(100) over (order by c range between 1 preceding and 1 following), 
 select c, sum(null) over (order by c range between 1 preceding and 1 following), a, b from t1;
 select a, b, c, rank() over (partition by a, b order by c) from t1;
 select a, c, rank() over(partition by a order by c rows current row) from t1;
+select a, row_number() over (partition by a) from t1 group by a, c;
+select a, c, row_number() over (partition by a order by c) from t1 group by a, c;
+select a, c, row_number() over (partition by a order by c) from t1 group by a, c;
+select a, c, b, row_number() over (partition by a, c, b) from t1;
+select a,  b, row_number() over (partition by a, b) from t1;
+select a, sum(b), row_number() over (partition by a +1), row_number() over (partition by c), c from t1 group by a, c;
+select a, row_number() over (partition by a) from t1;
+select a, row_number() over () from t1;
+select a, b, c, row_number() over (partition by a, b order by c) from t1;
+select a, c, row_number() over(partition by a order by c rows current row) from t1;
 
 drop table if exists t1;
 create table t1 (a int, b decimal(7, 2));

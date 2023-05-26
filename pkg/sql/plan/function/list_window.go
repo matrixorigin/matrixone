@@ -42,4 +42,25 @@ var supportedWindowFunctions = []FuncNew{
 			},
 		},
 	},
+	{
+		functionId: ROW_NUMBER,
+		class:      plan.Function_WIN_ORDER,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				specialId: agg.WinRowNumber,
+			},
+		},
+	},
 }
