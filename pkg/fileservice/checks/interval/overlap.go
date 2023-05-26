@@ -26,16 +26,19 @@ type OverlapChecker struct {
 
 func NewOverlapChecker(tag string) *OverlapChecker {
 	return &OverlapChecker{
-		keyIntervals: make(map[string]IntervalTree),
 		tag:          tag,
+		keyIntervals: make(map[string]IntervalTree),
 	}
 }
 
 func (i *OverlapChecker) Insert(key string, low, high int64) error {
 	interval := NewInt64Interval(low, high)
+
 	if _, ok := i.keyIntervals[key]; !ok {
+		// If key is not present, create a new tree.
 		i.keyIntervals[key] = NewIntervalTree()
 	} else if i.keyIntervals[key].Intersects(interval) {
+		// check if we have an overlap with existing ranges.
 		overlaps := i.keyIntervals[key].Stab(interval)
 		overlapsMsg := ""
 		for _, v := range overlaps {
@@ -44,6 +47,7 @@ func (i *OverlapChecker) Insert(key string, low, high int64) error {
 		return moerr.NewInternalErrorNoCtx("Duplicate key range found in %s when inserting [%d %d). The key %s contains overlapping intervals %s", i.tag, low, high, key, overlapsMsg)
 	}
 
+	// true is just a placeholder.
 	i.keyIntervals[key].Insert(interval, true)
 	return nil
 }
@@ -54,12 +58,10 @@ func (i *OverlapChecker) Remove(key string, low, high int64) error {
 		return moerr.NewInternalErrorNoCtx("Key Range not found for removal in %s", i.tag)
 	}
 
-	if i.keyIntervals[key].Contains(interval) {
-		i.keyIntervals[key].Delete(interval)
+	i.keyIntervals[key].Delete(interval)
 
-		if i.keyIntervals[key].Len() == 0 {
-			delete(i.keyIntervals, key)
-		}
+	if i.keyIntervals[key].Len() == 0 {
+		delete(i.keyIntervals, key)
 	}
 
 	return nil
