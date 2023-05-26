@@ -177,7 +177,7 @@ func (m *MemCache) Update(
 			Size:   entry.Size,
 		}
 
-		var oldVal any
+		var isReplace bool
 		if async {
 			obj := entry.ObjectBytes // copy from loop variable
 			objSize := entry.ObjectSize
@@ -188,12 +188,12 @@ func (m *MemCache) Update(
 				m.objCache.Set(key, obj, objSize, vector.Preloading)
 			}
 		} else {
-			oldVal = m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
+			isReplace = m.objCache.Set(key, entry.ObjectBytes, entry.ObjectSize, vector.Preloading)
 		}
 
 		// Update overlap checker when new key-interval is inserted into the cache.
 		// If we are replacing the data for an existing key, we don't have issue of wasted memory space.
-		if oldVal == nil {
+		if isReplace {
 			if err = m.overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Size); err != nil {
 				panic(err)
 			}

@@ -43,13 +43,13 @@ func New(capacity int64, postEvict func(key any, value []byte, sz int64)) *LRU {
 	}
 }
 
-func (l *LRU) Set(key any, value []byte, size int64, preloading bool) (oldVal any) {
+func (l *LRU) Set(key any, value []byte, size int64, preloading bool) (isReplace bool) {
 	l.Lock()
 	defer l.Unlock()
 
 	if elem, ok := l.kv[key]; ok {
 		// replace
-		oldVal = elem.Value
+		isReplace = true
 		item := elem.Value.(*lruItem)
 		l.size -= item.Size
 		l.size += size
@@ -62,6 +62,7 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool) (oldVal an
 
 	} else {
 		// insert
+		isReplace = false
 		item := &lruItem{
 			Key:   key,
 			Value: value,
@@ -78,7 +79,7 @@ func (l *LRU) Set(key any, value []byte, size int64, preloading bool) (oldVal an
 	}
 
 	l.evict()
-	return oldVal
+	return
 }
 
 func (l *LRU) evict() {

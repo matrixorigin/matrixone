@@ -23,7 +23,7 @@ func New(capacity int64, postEvict func(key any, value []byte, sz int64)) *Clock
 	return &Clock{}
 }
 
-func (c *Clock) Set(key any, value []byte, size int64, preloading bool) (oldVal any) {
+func (c *Clock) Set(key any, value []byte, size int64, preloading bool) (isReplace bool) {
 	//TODO implement me
 	panic("implement me")
 }
