@@ -137,6 +137,10 @@ func BlockReadInner(
 		typ := *col.GetType()
 		if typ.Oid == types.T_Rowid {
 			result.Vecs[i] = col
+			// shrink the vector by deleted rows
+			if len(deletedRows) > 0 {
+				result.Vecs[i].Shrink(deletedRows, true)
+			}
 			continue
 		}
 		if vp == nil {
