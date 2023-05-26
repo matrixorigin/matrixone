@@ -2110,25 +2110,25 @@ func makePreUpdateDeletePlan(
 	return nextSourceStep, nil
 }
 
-func getColPos(expr *Expr, colPos map[int32]int32) {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		colPos[e.Col.ColPos] = 0
-	case *plan.Expr_F:
-		for _, arg := range e.F.Args {
-			getColPos(arg, colPos)
-		}
-	}
-}
+// func getColPos(expr *Expr, colPos map[int32]int32) {
+// 	switch e := expr.Expr.(type) {
+// 	case *plan.Expr_Col:
+// 		colPos[e.Col.ColPos] = 0
+// 	case *plan.Expr_F:
+// 		for _, arg := range e.F.Args {
+// 			getColPos(arg, colPos)
+// 		}
+// 	}
+// }
 
-func resetColPos(expr *Expr, colPos map[int32]int32) {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		e.Col.ColPos = colPos[e.Col.ColPos]
-	case *plan.Expr_F:
-		for _, arg := range e.F.Args {
-			resetColPos(arg, colPos)
-		}
-	}
+// func resetColPos(expr *Expr, colPos map[int32]int32) {
+// 	switch e := expr.Expr.(type) {
+// 	case *plan.Expr_Col:
+// 		e.Col.ColPos = colPos[e.Col.ColPos]
+// 	case *plan.Expr_F:
+// 		for _, arg := range e.F.Args {
+// 			resetColPos(arg, colPos)
+// 		}
+// 	}
 
-}
+// }
