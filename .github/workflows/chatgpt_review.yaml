@@ -1,0 +1,20 @@
+name: ChatGPT Code Review
+
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  chatgpt-review-helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anc95/ChatGPT-CodeReview@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Optional
+          LANGUAGE: English

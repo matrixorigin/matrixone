@@ -160,5 +160,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.DNShard, facto
 		ckpcfg,
 		logtailServerAddr,
 		logtailServerCfg,
-		options.LogstoreType(s.cfg.Txn.Storage.LogBackend))
+		options.LogstoreType(s.cfg.Txn.Storage.LogBackend),
+		s.cfg.Txn.IncrementalDedup,
+	)
 }
