@@ -143,7 +143,6 @@ func WithUpdateLastCommitTSFunc(value func(timestamp.Timestamp)) TxnOption {
 }
 
 type txnOperator struct {
-	tc     TxnClient
 	sender rpc.TxnSender
 	txnID  []byte
 
@@ -335,6 +334,7 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
 	util.LogTxnCommit(tc.getTxnMeta(false))
+
 	if tc.option.readyOnly {
 		if tc.option.closeFunc != nil {
 			tc.option.closeFunc(tc.mu.txn)
@@ -354,6 +354,7 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
 	util.LogTxnRollback(tc.getTxnMeta(false))
+
 	tc.mu.Lock()
 	defer func() {
 		tc.mu.closed = true
