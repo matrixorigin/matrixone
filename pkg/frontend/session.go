@@ -443,6 +443,7 @@ func NewBackgroundSession(
 	ses.SetConnectContext(connCtx)
 	ses.SetBackgroundSession(true)
 	ses.UpdateDebugString()
+	ses.debugStr += "|" + ses.uuid.String()
 	backSes := &BackgroundSession{
 		Session: ses,
 		cancel:  cancelBackgroundFunc,
@@ -1688,6 +1689,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if len(statements) > 1 {
 		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
+	logutil.Infof("background exec sql/query trace: %s %s", sql, bh.ses.debugStr)
 	err = bh.mce.GetDoQueryFunc()(ctx, sql)
 	if err != nil {
 		return err
