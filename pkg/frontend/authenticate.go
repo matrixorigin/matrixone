@@ -3065,7 +3065,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 					goto handleFailed
 				}
 				if !isSubscriptionValid(allAccountStr == "true", accountList, tenantName) {
-					err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
+					err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s, allowed accountlist is %s", tenantName, pubName, accountList)
 					return nil, err
 				}
 			}
@@ -3074,7 +3074,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 			goto handleFailed
 		}
 	} else if !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
-		err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
+		err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s, allowed accountlist is %s", tenantInfo.GetTenant(), pubName, accountList)
 		goto handleFailed
 	}
 
