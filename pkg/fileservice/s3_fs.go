@@ -1048,12 +1048,20 @@ func newS3FS(arguments []string) (*S3FS, error) {
 
 }
 
+const maxRetryAttemps = 128
+
 func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
 	FSProfileHandler.AddSample()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, s.perfCounterSets...)
-	return s.s3Client.ListObjects(ctx, params, optFns...)
+	return retry(
+		func() (*s3.ListObjectsOutput, error) {
+			return s.s3Client.ListObjects(ctx, params, optFns...)
+		},
+		maxRetryAttemps,
+		isRetryableError,
+	)
 }
 
 func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
@@ -1061,7 +1069,13 @@ func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, opt
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Head.Add(1)
 	}, s.perfCounterSets...)
-	return s.s3Client.HeadObject(ctx, params, optFns...)
+	return retry(
+		func() (*s3.HeadObjectOutput, error) {
+			return s.s3Client.HeadObject(ctx, params, optFns...)
+		},
+		maxRetryAttemps,
+		isRetryableError,
+	)
 }
 
 func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
@@ -1069,6 +1083,7 @@ func (s *S3FS) s3PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, s.perfCounterSets...)
+	// not retryable because Reader may be half consumed
 	return s.s3Client.PutObject(ctx, params, optFns...)
 }
 
@@ -1086,7 +1101,13 @@ func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
 			params.Range = &rang
-			output, err := s.s3Client.GetObject(ctx, params, optFns...)
+			output, err := retry(
+				func() (*s3.GetObjectOutput, error) {
+					return s.s3Client.GetObject(ctx, params, optFns...)
+				},
+				maxRetryAttemps,
+				isRetryableError,
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -1106,7 +1127,13 @@ func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInpu
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, s.perfCounterSets...)
-	return s.s3Client.DeleteObjects(ctx, params, optFns...)
+	return retry(
+		func() (*s3.DeleteObjectsOutput, error) {
+			return s.s3Client.DeleteObjects(ctx, params, optFns...)
+		},
+		maxRetryAttemps,
+		isRetryableError,
+	)
 }
 
 func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
@@ -1114,5 +1141,11 @@ func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput,
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, s.perfCounterSets...)
-	return s.s3Client.DeleteObject(ctx, params, optFns...)
+	return retry(
+		func() (*s3.DeleteObjectOutput, error) {
+			return s.s3Client.DeleteObject(ctx, params, optFns...)
+		},
+		maxRetryAttemps,
+		isRetryableError,
+	)
 }

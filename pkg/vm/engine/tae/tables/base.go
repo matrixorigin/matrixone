@@ -201,11 +201,12 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 // 	return
 // }
 
-func (blk *baseBlock) LoadPersistedColumnData(schema *catalog.Schema, colIdx int) (
+func (blk *baseBlock) LoadPersistedColumnData(ctx context.Context, schema *catalog.Schema, colIdx int) (
 	vec containers.Vector, err error) {
 	def := schema.ColDefs[colIdx]
 	location := blk.meta.GetMetaLoc()
 	return LoadPersistedColumnData(
+		ctx,
 		blk.fs,
 		blk.meta.AsCommonID(),
 		def,
@@ -262,6 +263,7 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 }
 
 func (blk *baseBlock) ResolvePersistedColumnDatas(
+	ctx context.Context,
 	pnode *persistedNode,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
@@ -270,7 +272,7 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 
 	view = model.NewBlockView()
 	for _, colIdx := range colIdxs {
-		vec, err := blk.LoadPersistedColumnData(readSchema, colIdx)
+		vec, err := blk.LoadPersistedColumnData(ctx, readSchema, colIdx)
 		if err != nil {
 			return nil, err
 		}
@@ -310,7 +312,7 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	colIdx int,
 	skipDeletes bool) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(colIdx)
-	vec, err := blk.LoadPersistedColumnData(readSchema, colIdx)
+	vec, err := blk.LoadPersistedColumnData(context.Background(), readSchema, colIdx)
 	if err != nil {
 		return
 	}
@@ -376,6 +378,7 @@ func (blk *baseBlock) dedupWithLoad(
 }
 
 func (blk *baseBlock) PersistedBatchDedup(
+	ctx context.Context,
 	txn txnif.TxnReader,
 	isCommitting bool,
 	keys containers.Vector,
@@ -384,7 +387,6 @@ func (blk *baseBlock) PersistedBatchDedup(
 	isAblk bool,
 	bf objectio.BloomFilter,
 ) (err error) {
-	ctx := context.TODO()
 	pkIndex, err := MakeImmuIndex(
 		ctx,
 		blk.meta,

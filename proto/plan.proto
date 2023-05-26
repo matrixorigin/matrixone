@@ -664,6 +664,9 @@ message Node {
 	// used to connect two plans[steps]
 	int32 current_step = 31;
 	int32 source_step = 32;
+
+	// FILTER for block zonemap
+	repeated Expr block_filter_list = 33;
 }
 
 message IdList {

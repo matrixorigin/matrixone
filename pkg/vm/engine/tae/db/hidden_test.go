@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"sort"
 	"testing"
 
@@ -48,7 +49,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	bats := bat.Split(10)
 
 	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
-	err := rel.Append(bats[0])
+	err := rel.Append(context.Background(), bats[0])
 	{
 		offsets := make([]uint32, 0)
 		it := rel.MakeBlockIt()
@@ -99,15 +100,15 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
-	err = rel.Append(bats[1])
+	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	err = rel.Append(bats[2])
+	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
-	err = rel.Append(bats[3])
+	err = rel.Append(context.Background(), bats[3])
 	assert.NoError(t, err)
-	err = rel.Append(bats[4])
+	err = rel.Append(context.Background(), bats[4])
 	assert.NoError(t, err)
-	err = rel.Append(bats[5])
+	err = rel.Append(context.Background(), bats[5])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
@@ -205,7 +206,7 @@ func TestHidden2(t *testing.T) {
 	bats := bat.Split(10)
 
 	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
-	err := rel.Append(bats[0])
+	err := rel.Append(context.Background(), bats[0])
 	{
 		blk := getOneBlock(rel)
 		var hidden *model.ColumnView
@@ -269,17 +270,17 @@ func TestHidden2(t *testing.T) {
 			return
 		}, nil)
 	}
-	err = rel.Append(bats[1])
+	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	err = rel.Append(bats[1])
+	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	err = rel.Append(bats[1])
+	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	err = rel.Append(bats[2])
+	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
-	err = rel.Append(bats[2])
+	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
-	err = rel.Append(bats[2])
+	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 

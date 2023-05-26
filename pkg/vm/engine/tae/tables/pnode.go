@@ -50,6 +50,7 @@ func (node *persistedNode) Rows() uint32 {
 }
 
 func (node *persistedNode) BatchDedup(
+	ctx context.Context,
 	keys containers.Vector,
 	keysZM index.ZM,
 	skipFn func(row uint32) error,
@@ -58,8 +59,7 @@ func (node *persistedNode) BatchDedup(
 	panic("should not be called")
 }
 
-func (node *persistedNode) ContainsKey(key any) (ok bool, err error) {
-	ctx := context.TODO()
+func (node *persistedNode) ContainsKey(ctx context.Context, key any) (ok bool, err error) {
 	pkIndex, err := MakeImmuIndex(ctx, node.block.meta, nil, node.block.indexCache, node.block.fs.Service)
 	if err != nil {
 		return
@@ -82,7 +82,7 @@ func (node *persistedNode) GetColumnDataWindow(
 	col int,
 ) (vec containers.Vector, err error) {
 	var data containers.Vector
-	if data, err = node.block.LoadPersistedColumnData(readSchema, col); err != nil {
+	if data, err = node.block.LoadPersistedColumnData(context.Background(), readSchema, col); err != nil {
 		return
 	}
 	if to-from == uint32(data.Length()) {
@@ -99,6 +99,7 @@ func (node *persistedNode) Foreach(
 	colIdx int, op func(v any, isNull bool, row int) error, sel *roaring.Bitmap) (err error) {
 	var data containers.Vector
 	if data, err = node.block.LoadPersistedColumnData(
+		context.Background(),
 		readSchema,
 		colIdx,
 	); err != nil {
