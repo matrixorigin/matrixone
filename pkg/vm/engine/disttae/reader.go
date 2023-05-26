@@ -188,12 +188,29 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	}
 	bat.SetAttributes(cols)
 
-	//start to load deletes
+	//start to load deletes, which maybe
+	//in txn.blockId_dn_delete_metaLoc_batch or in partitionState.
 	if len(r.blks[0].deletes) == 0 {
-		r.blks[0].deletes, err = r.table.LoadDeletesForBlock(r.blks[0].meta.BlockID)
-		if err != nil {
-			return nil, err
+		if _, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[r.blks[0].meta.BlockID]; ok {
+			r.blks[0].deletes, err = r.table.LoadDeletesForBlock(r.blks[0].meta.BlockID)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			state, err := r.table.getPartitionState(ctx)
+			if err != nil {
+				return nil, err
+			}
+			ts := types.TimestampToTS(r.ts)
+			iter := state.NewRowsIter(ts, &r.blks[0].meta.BlockID, true)
+			for iter.Next() {
+				entry := iter.Entry()
+				_, offset := entry.RowID.Decode()
+				r.blks[0].deletes = append(r.blks[0].deletes, int64(offset))
+			}
+			iter.Close()
 		}
+
 	}
 	//TODO::there is a bug to fix
 	r.sels = r.sels[:0]

@@ -585,14 +585,19 @@ func (tbl *txnTable) rangesOnePart(
 
 	//collect deletes from PartitionState.dirtyRows.
 	{
-		ts := types.TimestampToTS(ts)
-		iter := state.NewDirtyRowsIter(ts, nil)
-		for iter.Next() {
-			entry := iter.Entry()
-			id, offset := entry.RowID.Decode()
-			deletes[id] = append(deletes[id], int64(offset))
-		}
-		iter.Close()
+		//ts := types.TimestampToTS(ts)
+		//iter := state.NewDirtyRowsIter(ts, nil)
+		//for iter.Next() {
+		//	entry := iter.Entry()
+		//	id, offset := entry.RowID.Decode()
+		//	deletes[id] = append(deletes[id], int64(offset))
+		//}
+		//iter.Close()
+		//collect PartitionState.dirtyBlks into modifies.
+		state.GetDirtyBlks().Scan(func(entry logtailreplay.BlockEntry) bool {
+			deletes[entry.BlockID] = []int64{}
+			return true
+		})
 	}
 
 	//deletes on S3 written by txn maybe comes from PartitionState.rows or PartitionState.blocks,
@@ -1305,19 +1310,19 @@ func (tbl *txnTable) newReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	partState, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
-	}
+	//partState, err := tbl.getPartitionState(ctx)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	var iter logtailreplay.RowsIter
 	if len(encodedPrimaryKey) > 0 {
-		iter = partState.NewPrimaryKeyIter(
+		iter = state.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
 			encodedPrimaryKey,
 		)
 	} else {
-		iter = partState.NewRowsIter(
+		iter = state.NewRowsIter(
 			types.TimestampToTS(ts),
 			nil,
 			false,
