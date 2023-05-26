@@ -33,6 +33,8 @@ import (
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
 const MAX_CHUNK_SIZE = 1024 * 1024 * 4
 
+const MAX_INSERT_TIME_LIMIT = 10 * time.Second
+
 var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
 // DefaultSqlWriter SqlWriter is a writer that writes data to a SQL database.
@@ -152,7 +154,11 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 
 		if sb.Len() >= maxLen || idx == len(records)-1 {
 			stmt := baseStr + sb.String() + ";"
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			time_limit := MAX_INSERT_TIME_LIMIT
+			if tbl.Table == "rawlog" {
+				time_limit = 3 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time_limit)
 			defer cancel() // it's important to ensure all paths call cancel to avoid resource leak
 			_, err := tx.ExecContext(ctx, stmt)
 			if err != nil {
@@ -187,7 +193,7 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 
 	cnt, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
-		logutil.Error("sqlWriter bulk insert failed", zap.Error(err), zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table))
+		logutil.Error("sqlWriter bulk insert failed", zap.Error(err), zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table), zap.Int("record_count", len(records)))
 		return 0, err
 	}
 	return cnt, nil
