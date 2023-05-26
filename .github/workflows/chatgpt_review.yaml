@@ -6,15 +6,21 @@ permissions:
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize]
-
+    types: [opened]
 jobs:
-  chatgpt-review-helper:
+  chatgpt-review:
+    name: ChatGPT Review
     runs-on: ubuntu-latest
     steps:
-      - uses: anc95/ChatGPT-CodeReview@main
-        env:
-          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # Optional
-          LANGUAGE: English
+    - uses: feiskyer/ChatGPT-Reviewer@v0
+      name: ChatGPT Review
+      env:
+        GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        # OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+      # Optional configurations:
+      with:
+        model: "gpt-3.5-turbo"
+        temperature: 0.2
+        review_per_file: false
+        comment_per_file: false
