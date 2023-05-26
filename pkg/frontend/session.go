@@ -442,6 +442,7 @@ func NewBackgroundSession(
 	ses.SetRequestContext(cancelBackgroundCtx)
 	ses.SetConnectContext(connCtx)
 	ses.SetBackgroundSession(true)
+	ses.UpdateDebugString()
 	backSes := &BackgroundSession{
 		Session: ses,
 		cancel:  cancelBackgroundFunc,
