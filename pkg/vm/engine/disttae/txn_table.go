@@ -267,50 +267,37 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	handled := make(map[*batch.Batch]struct{})
 	var meta objectio.ObjectMeta
 	for _, part := range parts {
-		fmt.Printf("into part traversal\n")
-		// calculate the in mem size
+		// Calculate the in mem size
 		// TODO: It might includ some deleted row size
 		iter := part.NewRowsIter(ts, nil, false)
-		fmt.Printf("row itr begin\n")
 		for iter.Next() {
 			entry := iter.Entry()
 			if _, ok := deletes[entry.RowID]; ok {
-				fmt.Printf("[rowitr] deleted one, skip\n")
 				continue
 			}
 			if _, ok := handled[entry.Batch]; ok {
-				fmt.Printf("[rowitr] handled one, skip\n")
 				continue
 			}
 
-			fmt.Printf("+++++\n")
 			for i, s := range entry.Batch.Attrs {
-				fmt.Printf("[rowitr] try to find col %s ...\n", s)
 				if _, ok := neededCols[s]; ok {
-					fmt.Printf("[rowitr] +++++ add %d\n", entry.Batch.Vecs[i].Size())
 					ret += int64(entry.Batch.Vecs[i].Size())
-				} else {
-					fmt.Printf("[rowitr] col %s not found\n", s)
 				}
 			}
 			handled[entry.Batch] = struct{}{}
 		}
-		fmt.Printf("row itr done\n")
 		iter.Close()
 
-		// calculate the block size
+		// Calculate the block size
 		biter := part.NewBlocksIter(ts)
-		fmt.Printf("block itr begin\n")
 		for biter.Next() {
 			blk := biter.Entry()
 			location := blk.MetaLocation()
 			if objectio.IsSameObjectLocVsMeta(location, meta) {
-				fmt.Printf("[blockitr] handled one, skip\n")
 				continue
 			}
 
 			if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
-				fmt.Printf("[blockitr] load failed, return\n")
 				biter.Close()
 				return 0, err
 			}
@@ -318,77 +305,12 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 			for _, col := range neededCols {
 				colmata := meta.MustGetColumn(uint16(col.Seqnum))
 				ret += int64(colmata.Location().Length())
-				fmt.Printf("[blockitr] +++++ add %d\n", colmata.Location().Length())
 			}
 		}
-		fmt.Printf("block itr done\n")
 		biter.Close()
 	}
 
 	return ret, nil
-	/*
-		ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-		parts, err := tbl.getParts(ctx)
-		if err != nil {
-			return 0, err
-		}
-		// Different rows may belong to same batch. So we have
-		// to record the batch which we have already handled to avoid
-		// repetitive computation
-		handled := make(map[*batch.Batch]struct{})
-		for _, part := range parts {
-			// TODO: It might includ some deleted row size
-			iter := part.NewRowsIter(ts, nil, false)
-			for iter.Next() {
-				entry := iter.Entry()
-				if _, ok := deletes[entry.RowID]; ok {
-					continue
-				}
-				if _, ok := handled[entry.Batch]; ok {
-					continue
-				}
-
-				for i, s := range entry.Batch.Attrs {
-					if _, ok := neededColumnName[s]; ok {
-						ret += int64(entry.Batch.Vecs[i].Size())
-					}
-				}
-				handled[entry.Batch] = struct{}{}
-			}
-			iter.Close()
-		}
-
-		if len(tbl.blockInfos) > 0 {
-			var (
-				meta    objectio.ObjectMeta
-				loadErr error
-			)
-
-			for i := range tbl.blockInfos {
-				for j := range tbl.blockInfos[i] {
-					blk := tbl.blockInfos[i][j]
-					location := blk.MetaLocation()
-					if objectio.IsSameObjectLocVsMeta(location, meta) {
-						continue
-					}
-
-					if meta, loadErr = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); loadErr != nil {
-						return 0, loadErr
-					}
-
-					for _, cname := range neededColumnName {
-						col, err := tbl.getColByName(ctx, cname)
-						if err != nil {
-							return 0, err
-						}
-						colmata := meta.MustGetColumn(uint16(col.Seqnum))
-						ret += int64(colmata.Location().Length())
-					}
-
-				}
-			}
-		}
-	*/
 }
 
 func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
@@ -404,6 +326,8 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	found := false
 	cols := tbl.getTableDef().GetCols()
 	for _, c := range cols {
+		// TODO: We can keep hidden column but need a better way to know
+		// whether it has the colmeta or not
 		if !c.Hidden && (c.Name == name || name == AllColumns) {
 			needCols = append(needCols, c)
 			found = true
@@ -433,7 +357,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 				Sorted:     blk.Sorted,
 				IsHidden:   col.Hidden,
 			}
-			FillMarshalTypeForBlockInfo(newInfo, blk)
+			FillByteFamilyTypeForBlockInfo(newInfo, blk)
 			blkmeta := meta.GetBlockMeta(uint32(bid))
 			colmeta := blkmeta.ColumnMeta(uint16(col.Seqnum))
 
@@ -456,50 +380,8 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 	return infoList, nil
 }
 
-func FillMarshalTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailreplay.BlockEntry) error {
-	/*
-		bid, err := blk.BlockID.Marshal()
-		if err != nil {
-			return err
-		}
-		info.BlockId = bid
-
-		mLoc, err := blk.MetaLoc.Marshal()
-		if err != nil {
-			return err
-		}
-		info.MetaLoc = mLoc
-
-		dLoc, err := blk.DeltaLoc.Marshal()
-		if err != nil {
-			return err
-		}
-		info.DelLoc = dLoc
-
-		seg, err := blk.SegmentID.Marshal()
-		if err != nil {
-			return err
-		}
-		info.SegId = seg
-
-		commitTs, err := blk.CommitTs.Marshal()
-		if err != nil {
-			return err
-		}
-		info.CommitTs = commitTs
-
-		createTs, err := blk.CreateTime.Marshal()
-		if err != nil {
-			return err
-		}
-		info.CreateTs = createTs
-
-		deleteTs, err := blk.DeleteTime.Marshal()
-		if err != nil {
-			return err
-		}
-		info.DeleteTs = deleteTs
-	*/
+func FillByteFamilyTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailreplay.BlockEntry) error {
+	// It is better to use the Marshal() method
 	info.BlockId = blk.BlockID[:]
 	info.MetaLoc = blk.MetaLoc[:]
 	info.DelLoc = blk.DeltaLoc[:]

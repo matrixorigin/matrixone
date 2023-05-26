@@ -17,7 +17,6 @@ package table_function
 import (
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -174,18 +173,10 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			vector.AppendFixed(opBat.Vecs[i], info.IsHidden, false, mp)
 
 		case plan.MetadataScanInfo_META_LOC:
-			var mLoc catalog.ObjectLocation
-			if err := mLoc.Unmarshal(info.MetaLoc); err != nil {
-				return err
-			}
-			vector.AppendBytes(opBat.Vecs[i], mLoc[:], false, mp)
+			vector.AppendBytes(opBat.Vecs[i], info.MetaLoc, false, mp)
 
 		case plan.MetadataScanInfo_DELTA_LOC:
-			var dLoc catalog.ObjectLocation
-			if err := dLoc.Unmarshal(info.MetaLoc); err != nil {
-				return err
-			}
-			vector.AppendBytes(opBat.Vecs[i], dLoc[:], false, mp)
+			vector.AppendBytes(opBat.Vecs[i], info.DelLoc, false, mp)
 
 		case plan.MetadataScanInfo_COMMIT_TS:
 			var ts types.TS
