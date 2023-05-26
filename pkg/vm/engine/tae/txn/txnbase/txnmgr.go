@@ -118,8 +118,6 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 	PrintMemUsage()
 	// Force GC to clear up, should see a memory drop
-	runtime.GC()
-	PrintMemUsage()
 	defer fmt.Println("gavinyue NewTxnManager 119")
 	return mgr
 }
@@ -314,7 +312,7 @@ func PrintMemUsage() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
+	fmt.Printf("txnmgr.go Alloc = %v MiB", bToMb(m.Alloc))
 	fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
 	fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
 	fmt.Printf("\tNumGC = %v\n", m.NumGC)
@@ -477,9 +475,8 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
 		//   		   2. push the AppendNode into the MVCCHandle of block
 		mgr.onPrePrepare(op)
-		fmt.Println("gavin: [dequeuePreparing] start", now)
 		PrintMemUsage()
-		runtime.GC()
+		fmt.Println("gavin: [dequeuePreparing] start", now)
 		logutil.Debug("gavin: [dequeuePreparing]")
 
 		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
