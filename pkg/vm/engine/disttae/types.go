@@ -79,8 +79,8 @@ type Engine struct {
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache
-	dnMap      map[string]int
-	partitions map[[2]uint64]logtailreplay.Partitions
+	dnID       string
+	partitions map[[2]uint64]*logtailreplay.Partition
 	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
@@ -258,13 +258,13 @@ type txnTable struct {
 	tableDef       *plan.TableDef
 	seqnums        []uint16
 	typs           []types.Type
-	_parts         []*logtailreplay.PartitionState
-	modifiedBlocks [][]ModifyBlockMeta
+	_partState     *logtailreplay.PartitionState
+	modifiedBlocks []ModifyBlockMeta
 
 	// blockInfos stores all the block infos for this table of this transaction
 	// it is only generated when the table is not created by this transaction
 	// it is initialized by updateBlockInfos and once it is initialized, it will not be updated
-	blockInfos [][]catalog.BlockInfo
+	blockInfos []catalog.BlockInfo
 
 	// specify whether the blockInfos is updated. once it is updated, it will not be updated again
 	blockInfosUpdated bool
