@@ -39,31 +39,19 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	defer put.Put()
 
 	{
-		parts := make(logtailreplay.Partitions, len(e.dnMap))
-		for i := range parts {
-			parts[i] = logtailreplay.NewPartition()
-		}
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = logtailreplay.NewPartition()
 	}
 
 	{
-		parts := make(logtailreplay.Partitions, len(e.dnMap))
-		for i := range parts {
-			parts[i] = logtailreplay.NewPartition()
-		}
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = logtailreplay.NewPartition()
 	}
 
 	{
-		parts := make(logtailreplay.Partitions, len(e.dnMap))
-		for i := range parts {
-			parts[i] = logtailreplay.NewPartition()
-		}
-		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
+		e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = logtailreplay.NewPartition()
 	}
 
 	{ // mo_catalog
-		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}][0]
+		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}]
 		bat, err := genCreateDatabaseTuple("", 0, 0, 0, catalog.MO_CATALOG, catalog.MO_CATALOG_ID, "", m)
 		if err != nil {
 			return err
@@ -81,7 +69,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	}
 
 	{ // mo_database
-		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}]
 		cols, err := genColumns(0, catalog.MO_DATABASE, catalog.MO_CATALOG, catalog.MO_DATABASE_ID,
 			catalog.MO_CATALOG_ID, catalog.MoDatabaseTableDefs)
 		if err != nil {
@@ -106,7 +94,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
 
-		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
@@ -142,7 +130,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	}
 
 	{ // mo_tables
-		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}]
 		cols, err := genColumns(0, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG_ID, catalog.MoTablesTableDefs)
 		if err != nil {
@@ -166,7 +154,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
 
-		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
@@ -202,7 +190,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	}
 
 	{ // mo_columns
-		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		part := e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}]
 		cols, err := genColumns(0, catalog.MO_COLUMNS, catalog.MO_CATALOG, catalog.MO_COLUMNS_ID,
 			catalog.MO_CATALOG_ID, catalog.MoColumnsTableDefs)
 		if err != nil {
@@ -226,7 +214,7 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 		e.catalog.InsertTable(bat)
 		bat.Clean(m)
 
-		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		part = e.partitions[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}]
 		bat = batch.NewWithSize(len(catalog.MoColumnsSchema))
 		bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 		bat.SetZs(len(cols), m)
@@ -264,58 +252,52 @@ func (e *Engine) init(ctx context.Context, m *mpool.MPool) error {
 	return nil
 }
 
-func (e *Engine) getPartitions(databaseId, tableId uint64) logtailreplay.Partitions {
+func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partition {
 	e.Lock()
 	defer e.Unlock()
-	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
+	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
-		parts = make(logtailreplay.Partitions, len(e.dnMap))
-		for i := range parts {
-			parts[i] = logtailreplay.NewPartition()
-		}
-		e.partitions[[2]uint64{databaseId, tableId}] = parts
+		partition = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
-	return parts
+	return partition
 }
 
 func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
-	parts := e.getPartitions(tbl.db.databaseId, tbl.tableId)
+	part := e.getPartition(tbl.db.databaseId, tbl.tableId)
 
-	for _, part := range parts {
+	select {
+	case <-part.Lock():
+		defer part.Unlock()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
-		select {
-		case <-part.Lock():
-			defer part.Unlock()
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	state, doneMutate := part.MutateState()
 
-		state, doneMutate := part.MutateState()
-
-		if err := state.ConsumeCheckpoints(func(checkpoint string) error {
-			entries, err := logtail.LoadCheckpointEntries(
-				ctx,
-				checkpoint,
-				tbl.tableId,
-				tbl.tableName,
-				tbl.db.databaseId,
-				tbl.db.databaseName,
-				tbl.db.txn.engine.fs)
-			if err != nil {
-				return err
-			}
-			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
-					return err
-				}
-			}
-			return nil
-		}); err != nil {
+	if err := state.ConsumeCheckpoints(func(checkpoint string) error {
+		entries, err := logtail.LoadCheckpointEntries(
+			ctx,
+			checkpoint,
+			tbl.tableId,
+			tbl.tableName,
+			tbl.db.databaseId,
+			tbl.db.databaseName,
+			tbl.db.txn.engine.fs)
+		if err != nil {
 			return err
 		}
-
-		doneMutate()
+		for _, entry := range entries {
+			if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
+
+	doneMutate()
 
 	return nil
 }
@@ -331,51 +313,43 @@ func (e *Engine) UpdateOfPull(ctx context.Context, dnList []DNStore, tbl *txnTab
 	primarySeqnum int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	logDebugf(op.Txn(), "UpdateOfPull")
 
-	parts := e.ensureTableParts(databaseId, tableId)
+	part := e.ensureTablePart(databaseId, tableId)
 
-	for _, dn := range dnList {
-		part := parts[e.dnMap[dn.ServiceID]]
-
-		if err := func() error {
-			select {
-			case <-part.Lock():
-				defer part.Unlock()
-				if part.TS.Greater(ts) || part.TS.Equal(ts) {
-					return nil
-				}
-			case <-ctx.Done():
-				return ctx.Err()
+	if err := func() error {
+		select {
+		case <-part.Lock():
+			defer part.Unlock()
+			if part.TS.Greater(ts) || part.TS.Equal(ts) {
+				return nil
 			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 
-			if err := updatePartitionOfPull(
-				primarySeqnum, tbl, ctx, op, e, part, dn,
-				genSyncLogTailReq(part.TS, ts, databaseId, tableId),
-			); err != nil {
-				return err
-			}
-
-			part.TS = ts
-
-			return nil
-		}(); err != nil {
+		if err := updatePartitionOfPull(
+			primarySeqnum, tbl, ctx, op, e, part, dnList[0],
+			genSyncLogTailReq(part.TS, ts, databaseId, tableId),
+		); err != nil {
 			return err
 		}
 
+		part.TS = ts
+
+		return nil
+	}(); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func (e *Engine) ensureTableParts(databaseId uint64, tableId uint64) logtailreplay.Partitions {
+func (e *Engine) ensureTablePart(databaseId uint64, tableId uint64) *logtailreplay.Partition {
 	e.Lock()
 	defer e.Unlock()
-	parts, ok := e.partitions[[2]uint64{databaseId, tableId}]
+	part, ok := e.partitions[[2]uint64{databaseId, tableId}]
 	if !ok {
-		parts = make(logtailreplay.Partitions, len(e.dnMap))
-		for i := range parts {
-			parts[i] = logtailreplay.NewPartition()
-		}
-		e.partitions[[2]uint64{databaseId, tableId}] = parts
+		part = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{databaseId, tableId}] = part
 	}
-	return parts
+	return part
 }

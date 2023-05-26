@@ -98,27 +98,23 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 	}
 
 	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-	parts, err := tbl.getParts(ctx)
+	partition, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return 0, err
 	}
-	for _, part := range parts {
-		iter := part.NewRowsIter(ts, nil, false)
-		for iter.Next() {
-			entry := iter.Entry()
-			if _, ok := deletes[entry.RowID]; ok {
-				continue
-			}
-			rows++
+	iter := partition.NewRowsIter(ts, nil, false)
+	for iter.Next() {
+		entry := iter.Entry()
+		if _, ok := deletes[entry.RowID]; ok {
+			continue
 		}
-		iter.Close()
+		rows++
 	}
+	iter.Close()
 
 	if len(tbl.blockInfos) > 0 {
-		for _, blks := range tbl.blockInfos {
-			for _, blk := range blks {
-				rows += int64(blk.MetaLocation().Rows())
-			}
+		for _, blk := range tbl.blockInfos {
+			rows += int64(blk.MetaLocation().Rows())
 		}
 	}
 
@@ -143,10 +139,10 @@ func (tbl *txnTable) ForeachBlock(
 
 func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {
 	var (
-		err   error
-		parts []*logtailreplay.PartitionState
+		err  error
+		part *logtailreplay.PartitionState
 	)
-	if parts, err = tbl.getParts(ctx); err != nil {
+	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return nil, nil, err
 	}
 
@@ -188,10 +184,8 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	for _, part := range parts {
-		if err = tbl.ForeachBlock(part, onBlkFn); err != nil {
-			return nil, nil, err
-		}
+	if err = tbl.ForeachBlock(part, onBlkFn); err != nil {
+		return nil, nil, err
 	}
 
 	if !inited {
@@ -258,7 +252,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	}
 
 	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-	parts, err := tbl.getParts(ctx)
+	part, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -266,26 +260,24 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	// to record the batch which we have already handled to avoid
 	// repetitive computation
 	handled := make(map[*batch.Batch]struct{})
-	for _, part := range parts {
-		// TODO: It might includ some deleted row size
-		iter := part.NewRowsIter(ts, nil, false)
-		for iter.Next() {
-			entry := iter.Entry()
-			if _, ok := deletes[entry.RowID]; ok {
-				continue
-			}
-			if _, ok := handled[entry.Batch]; ok {
-				continue
-			}
-			for i, s := range entry.Batch.Attrs {
-				if _, ok := neededColumnName[s]; ok {
-					ret += int64(entry.Batch.Vecs[i].Size())
-				}
-			}
-			handled[entry.Batch] = struct{}{}
+	// TODO: It might includ some deleted row size
+	iter := part.NewRowsIter(ts, nil, false)
+	for iter.Next() {
+		entry := iter.Entry()
+		if _, ok := deletes[entry.RowID]; ok {
+			continue
 		}
-		iter.Close()
+		if _, ok := handled[entry.Batch]; ok {
+			continue
+		}
+		for i, s := range entry.Batch.Attrs {
+			if _, ok := neededColumnName[s]; ok {
+				ret += int64(entry.Batch.Vecs[i].Size())
+			}
+		}
+		handled[entry.Batch] = struct{}{}
 	}
+	iter.Close()
 
 	if len(tbl.blockInfos) > 0 {
 		for _, s := range neededColumnName {
@@ -348,22 +340,20 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil, err
 	}
 
-	for i := range tbl.blockInfos {
-		for j := range tbl.blockInfos[i] {
-			blk := tbl.blockInfos[i][j]
-			location := blk.MetaLocation()
-			if !objectio.IsSameObjectLocVsMeta(location, meta) {
-				if meta, loadErr = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); loadErr != nil {
-					return nil, loadErr
-				}
+	for j := range tbl.blockInfos {
+		blk := tbl.blockInfos[j]
+		location := blk.MetaLocation()
+		if !objectio.IsSameObjectLocVsMeta(location, meta) {
+			if meta, loadErr = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); loadErr != nil {
+				return nil, loadErr
 			}
-
-			get, err := tbl.genMetadataScanInfo(ctx, &blk, location, &meta, col)
-			if err != nil {
-				return nil, err
-			}
-			infoList = append(infoList, get)
 		}
+
+		get, err := tbl.genMetadataScanInfo(ctx, &blk, location, &meta, col)
+		if err != nil {
+			return nil, err
+		}
+		infoList = append(infoList, get)
 	}
 
 	return infoList, nil
@@ -470,7 +460,7 @@ func (tbl *txnTable) reset(newId uint64) {
 		tbl.oldTableId = tbl.tableId
 	}
 	tbl.tableId = newId
-	tbl._parts = nil
+	tbl._partState = nil
 	tbl.blockInfos = nil
 	tbl.modifiedBlocks = nil
 	tbl.blockInfosUpdated = false
@@ -491,39 +481,30 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges []
 	}
 
 	// get the table's snapshot
-	var parts []*logtailreplay.PartitionState
-	if parts, err = tbl.getParts(ctx); err != nil {
+	var part *logtailreplay.PartitionState
+	if part, err = tbl.getPartitionState(ctx); err != nil {
 		return
 	}
 
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
+
+	tbl.modifiedBlocks = make([]ModifyBlockMeta, 0)
 	if len(tbl.blockInfos) == 0 {
 		return
 	}
 
-	tbl.modifiedBlocks = make([][]ModifyBlockMeta, len(tbl.blockInfos))
-
-	for _, i := range tbl.dnList {
-		blocks := tbl.blockInfos[i]
-		if len(blocks) == 0 {
-			continue
-		}
-		if err = tbl.rangesOnePart(
-			ctx,
-			tbl.db.txn.meta.SnapshotTS,
-			parts[i],
-			tbl.getTableDef(),
-			exprs,
-			blocks,
-			&ranges,
-			&tbl.modifiedBlocks[i],
-			tbl.db.txn.proc,
-		); err != nil {
-			return
-		}
-	}
-
+	err = tbl.rangesOnePart(
+		ctx,
+		tbl.db.txn.meta.SnapshotTS,
+		part,
+		tbl.getTableDef(),
+		exprs,
+		tbl.blockInfos,
+		&ranges,
+		&tbl.modifiedBlocks,
+		tbl.db.txn.proc,
+	)
 	return
 }
 
@@ -1143,27 +1124,22 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		}
 	}
 
+	// Very wired!!!
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
-	for _, i := range tbl.dnList {
-		var blks []ModifyBlockMeta
 
-		if len(tbl.blockInfos) > 0 {
-			blks = tbl.modifiedBlocks[i]
-		}
-		rds0, err := tbl.newReader(
-			ctx,
-			i,
-			num,
-			encodedPrimaryKey,
-			blks,
-			tbl.writes,
-		)
-		if err != nil {
-			return nil, err
-		}
-		mrds[i].rds = append(mrds[i].rds, rds0...)
+	blks := tbl.modifiedBlocks
+	rds0, err := tbl.newReader(
+		ctx,
+		num,
+		encodedPrimaryKey,
+		blks,
+		tbl.writes,
+	)
+	if err != nil {
+		return nil, err
 	}
+	mrds[0].rds = append(mrds[0].rds, rds0...)
 
 	for i := range rds {
 		rds[i] = &mrds[i]
@@ -1210,7 +1186,6 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 
 func (tbl *txnTable) newReader(
 	ctx context.Context,
-	partitionIndex int,
 	readerNumber int,
 	encodedPrimaryKey []byte,
 	blks []ModifyBlockMeta,
@@ -1250,12 +1225,12 @@ func (tbl *txnTable) newReader(
 				}
 			}
 		}
-		states, err := tbl.getParts(ctx)
+		state, err := tbl.getPartitionState(ctx)
 		if err != nil {
 			return nil, err
 		}
 		//FIXME::deletes maybe comes from PartitionState.rows, PartitionReader need to skip them.
-		tbl.LoadDeletesForBlockIn(states[partitionIndex], false, nil, deletes)
+		tbl.LoadDeletesForBlockIn(state, false, nil, deletes)
 	}
 
 	readers := make([]engine.Reader, readerNumber)
@@ -1275,19 +1250,19 @@ func (tbl *txnTable) newReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	parts, err := tbl.getParts(ctx)
+	part, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var iter logtailreplay.RowsIter
 	if len(encodedPrimaryKey) > 0 {
-		iter = parts[partitionIndex].NewPrimaryKeyIter(
+		iter = part.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
 			encodedPrimaryKey,
 		)
 	} else {
-		iter = parts[partitionIndex].NewRowsIter(
+		iter = part.NewRowsIter(
 			types.TimestampToTS(ts),
 			nil,
 			false,
@@ -1476,14 +1451,14 @@ func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
 
 // get the table's snapshot.
 // it is only initialized once for a transaction and will not change.
-func (tbl *txnTable) getParts(ctx context.Context) ([]*logtailreplay.PartitionState, error) {
-	if tbl._parts == nil {
+func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.PartitionState, error) {
+	if tbl._partState == nil {
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return nil, err
 		}
-		tbl._parts = tbl.db.txn.engine.getPartitions(tbl.db.databaseId, tbl.tableId).Snapshot()
+		tbl._partState = tbl.db.txn.engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot()
 	}
-	return tbl._parts, nil
+	return tbl._partState, nil
 }
 
 func (tbl *txnTable) updateBlockInfos(ctx context.Context) (err error) {
@@ -1498,7 +1473,7 @@ func (tbl *txnTable) updateBlockInfos(ctx context.Context) (err error) {
 		if err = tbl.updateLogtail(ctx); err != nil {
 			return
 		}
-		var blocks [][]catalog.BlockInfo
+		var blocks []catalog.BlockInfo
 		if blocks, err = tbl.db.txn.getBlockInfos(ctx, tbl); err != nil {
 			return
 		}
