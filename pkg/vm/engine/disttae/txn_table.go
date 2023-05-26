@@ -1471,10 +1471,10 @@ func (tbl *txnTable) newReader(
 // 	return
 // }
 
-func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
-	tbl.localTS = tbl.localTS.Next()
-	return tbl.localTS
-}
+// func (tbl *txnTable) nextLocalTS() timestamp.Timestamp {
+// 	tbl.localTS = tbl.localTS.Next()
+// 	return tbl.localTS
+// }
 
 // get the table's snapshot.
 // it is only initialized once for a transaction and will not change.

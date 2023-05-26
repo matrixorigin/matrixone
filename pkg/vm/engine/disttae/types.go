@@ -363,7 +363,7 @@ type txnTable struct {
 	localState *logtailreplay.PartitionState
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
-	localTS timestamp.Timestamp
+	// localTS timestamp.Timestamp
 	//rowid in mo_tables
 	rowid types.Rowid
 	//rowids in mo_columns
