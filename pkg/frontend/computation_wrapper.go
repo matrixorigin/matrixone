@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -385,8 +384,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := motrace.StatementFromContext(ctx); stm != nil {
-		copyPlan := plan2.DeepCopyPlan(cwft.plan)
-		stm.SetExecPlan(copyPlan, SerializeExecPlan)
+		stm.SetSerializableExecPlan(NewMarshalPlanHandler(ctx, stm.StatementID, cwft.plan))
 	}
 	return nil
 }
