@@ -222,5 +222,5 @@ type DebugTxn struct {
 }
 
 func (dt *DebugTxn) String() string {
-	return fmt.Sprintf("ptr %x, where %s, txnId %s", dt.Ptr, dt.Where, dt.TxnId)
+	return fmt.Sprintf("ptr %x where %s txnId %s", dt.Ptr, dt.Where, dt.TxnId)
 }
