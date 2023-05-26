@@ -17,9 +17,11 @@ package interval
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"sync"
 )
 
 type OverlapChecker struct {
+	sync.Mutex
 	tag          string
 	keyIntervals map[string]IntervalTree
 }
@@ -32,6 +34,9 @@ func NewOverlapChecker(tag string) *OverlapChecker {
 }
 
 func (i *OverlapChecker) Insert(key string, low, high int64) error {
+	i.Lock()
+	defer i.Unlock()
+
 	interval := NewInt64Interval(low, high)
 
 	if _, ok := i.keyIntervals[key]; !ok {
@@ -53,6 +58,9 @@ func (i *OverlapChecker) Insert(key string, low, high int64) error {
 }
 
 func (i *OverlapChecker) Remove(key string, low, high int64) error {
+	i.Lock()
+	defer i.Unlock()
+
 	interval := NewInt64Interval(low, high)
 	if _, ok := i.keyIntervals[key]; !ok {
 		return moerr.NewInternalErrorNoCtx("Key Range not found for removal in %s", i.tag)
