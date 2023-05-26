@@ -150,7 +150,7 @@ func doShowCreatePublications(ctx context.Context, ses *Session, scp *tree.ShowC
 	ses.SetMysqlResultSet(rs)
 	err = bh.Exec(ctx, "commit;")
 	if err != nil {
-		return err
+		goto handleFailed
 	}
 	return nil
 handleFailed:

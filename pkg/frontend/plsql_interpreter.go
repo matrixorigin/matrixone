@@ -282,7 +282,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 	// commit the first part sp
 	err = interpreter.bh.Exec(interpreter.ctx, "commit;")
 	if err != nil {
-		return err
+		goto handleFailed
 	}
 
 	// // commit the param flush part of sp

@@ -3923,12 +3923,12 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) er
 	checkDatabase = fmt.Sprintf(checkUdfArgs, string(df.Name.Name.ObjectName), dbName)
 	err = bh.Exec(ctx, checkDatabase)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	if execResultArrayHasData(erArray) {
@@ -3936,13 +3936,12 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) er
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			argstr, err = erArray[0].GetString(ctx, i, 0)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
 			funcId, err = erArray[0].GetInt64(ctx, i, 1)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
-			logutil.Debug("argstr: " + argstr)
 			argMap := make(map[string]string)
 			json.Unmarshal([]byte(argstr), &argMap)
 			argCount := 0
@@ -3957,7 +3956,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) er
 				goto handleArgMatch
 			}
 		}
-		goto handleFailed
+		return err
 	} else {
 		// no such function
 		return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
@@ -4018,19 +4017,19 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 	checkDatabase = fmt.Sprintf(checkStoredProcedureArgs, string(dp.Name.Name.ObjectName), dbName)
 	err = bh.Exec(ctx, checkDatabase)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	if execResultArrayHasData(erArray) {
 		// function with provided name and db exists, for now we don't support overloading for stored procedure, so go to handle deletion.
 		procId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 		goto handleArgMatch
 	} else {

@@ -107,7 +107,7 @@ func doShowSubscriptions(ctx context.Context, ses *Session, sp *tree.ShowSubscri
 	ses.SetMysqlResultSet(rs)
 	err = bh.Exec(ctx, "commit;")
 	if err != nil {
-		return err
+		goto handleFailed
 	}
 	return nil
 handleFailed:
