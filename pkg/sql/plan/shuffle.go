@@ -30,7 +30,7 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	lenBytes := len(bytes)
 	//sample five bytes
 	h := (uint64(bytes[0])*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])) + uint64(bytes[lenBytes-1]))
-	return (h % 113) % upperLimit
+	return hashtable.Wyhash64WithFixedSeed(h) % upperLimit
 }
 
 func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
