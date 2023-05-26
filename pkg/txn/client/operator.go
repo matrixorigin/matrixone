@@ -17,7 +17,6 @@ package client
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -169,11 +168,10 @@ type txnOperator struct {
 }
 
 func newTxnOperator(
-	ttc TxnClient,
 	sender rpc.TxnSender,
 	txnMeta txn.TxnMeta,
 	options ...TxnOption) *txnOperator {
-	tc := &txnOperator{tc: ttc, sender: sender}
+	tc := &txnOperator{sender: sender}
 	tc.mu.txn = txnMeta
 	tc.txnID = txnMeta.ID
 	for _, opt := range options {
@@ -335,9 +333,8 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 	return tc.doWrite(ctx, requests, true)
 }
 
-func (tc *txnOperator) Commit(ctx context.Context, debug *defines.DebugTxn) error {
+func (tc *txnOperator) Commit(ctx context.Context) error {
 	util.LogTxnCommit(tc.getTxnMeta(false))
-	defer tc.tc.Delete(debug)
 	if tc.option.readyOnly {
 		if tc.option.closeFunc != nil {
 			tc.option.closeFunc(tc.mu.txn)
@@ -355,9 +352,8 @@ func (tc *txnOperator) Commit(ctx context.Context, debug *defines.DebugTxn) erro
 	return nil
 }
 
-func (tc *txnOperator) Rollback(ctx context.Context, debug *defines.DebugTxn) error {
+func (tc *txnOperator) Rollback(ctx context.Context) error {
 	util.LogTxnRollback(tc.getTxnMeta(false))
-	defer tc.tc.Delete(debug)
 	tc.mu.Lock()
 	defer func() {
 		tc.mu.closed = true

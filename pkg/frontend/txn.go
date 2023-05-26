@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync"
-	"unsafe"
 )
 
 type TxnHandler struct {
@@ -123,14 +122,9 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
-	debug := &defines.DebugTxn{
-		uintptr(unsafe.Pointer(th)),
-		"frontend", ""}
-	logDebugf(th.ses.debugStr, "NewTxnOperator debug:%s", debug)
 	th.txnOperator, err = th.txnClient.New(
 		txnCtx,
 		th.ses.getLastCommitTS(),
-		debug,
 		opts...)
 	if err != nil {
 		return nil, nil, err
@@ -264,16 +258,10 @@ func (th *TxnHandler) CommitTxn() error {
 	defer func() {
 		logDebugf(sessionInfo, "CommitTxn exit txnId:%s", txnId)
 	}()
-	debug := &defines.DebugTxn{
-		uintptr(unsafe.Pointer(th)),
-		"frontend",
-		txnId,
-	}
-	logDebugf(sessionInfo, "CommitTxn debug:%s", debug)
 	if err = storage.Commit(ctx2, txnOp); err != nil {
 		logErrorf(sessionInfo, "CommitTxn: storage commit failed. txnId:%s error:%v", txnId, err)
 		if txnOp != nil {
-			err2 = txnOp.Rollback(ctx2, debug)
+			err2 = txnOp.Rollback(ctx2)
 			if err2 != nil {
 				logErrorf(sessionInfo, "CommitTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
 			}
@@ -282,7 +270,7 @@ func (th *TxnHandler) CommitTxn() error {
 		return err
 	}
 	if txnOp != nil {
-		err = txnOp.Commit(ctx2, debug)
+		err = txnOp.Commit(ctx2)
 		if err != nil {
 			th.SetTxnOperatorInvalid()
 			logErrorf(sessionInfo, "CommitTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
@@ -334,16 +322,10 @@ func (th *TxnHandler) RollbackTxn() error {
 	defer func() {
 		logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
 	}()
-	debug := &defines.DebugTxn{
-		uintptr(unsafe.Pointer(th)),
-		"frontend",
-		txnId,
-	}
-	logDebugf(sessionInfo, "RollbackTxn debug:%s", debug)
 	if err = storage.Rollback(ctx2, txnOp); err != nil {
 		logErrorf(sessionInfo, "RollbackTxn: storage rollback failed. txnId:%s error:%v", txnId, err)
 		if txnOp != nil {
-			err2 = txnOp.Rollback(ctx2, debug)
+			err2 = txnOp.Rollback(ctx2)
 			if err2 != nil {
 				logErrorf(sessionInfo, "RollbackTxn: txn operator rollback failed. txnId:%s error:%v", txnId, err2)
 			}
@@ -352,7 +334,7 @@ func (th *TxnHandler) RollbackTxn() error {
 		return err
 	}
 	if txnOp != nil {
-		err = txnOp.Rollback(ctx2, debug)
+		err = txnOp.Rollback(ctx2)
 		if err != nil {
 			th.SetTxnOperatorInvalid()
 			logErrorf(sessionInfo, "RollbackTxn: txn operator commit failed. txnId:%s error:%v", txnId, err)
