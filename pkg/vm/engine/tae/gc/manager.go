@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -74,8 +75,22 @@ func (mgr *Manager) addJob(
 	mgr.nameIdx[name] = cj
 	mgr.jobs = append(mgr.jobs, cj)
 }
+func PrintMemUsage() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
+	fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
+	fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
+	fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
+	fmt.Printf("\tNumGC = %v\n", m.NumGC)
+}
 
+func bToMb(b uint64) uint64 {
+	return b / 1024 / 1024
+}
 func (mgr *Manager) process(jobs ...any) {
+	PrintMemUsage()
+	runtime.GC()
 	logutil.Debugf("processing gavin second process beginning")
 	fmt.Print("processing gavin second process beginning")
 	logutil.Debugf("processing gavin second process beginning2")

@@ -464,6 +464,7 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 // OPRollback:the rollback of 2PC or 1PC
 func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	now := time.Now()
+
 	for _, item := range items {
 		op := item.(*OpTxn)
 
@@ -476,7 +477,9 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
 		//   		   2. push the AppendNode into the MVCCHandle of block
 		mgr.onPrePrepare(op)
-
+		fmt.Println("gavin: [dequeuePreparing] start", now)
+		PrintMemUsage()
+		runtime.GC()
 		logutil.Debug("gavin: [dequeuePreparing]")
 
 		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
@@ -494,6 +497,8 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
+		fmt.Println("gavin: [dequeuePreparing] end", item)
+
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[dequeuePreparing]",
