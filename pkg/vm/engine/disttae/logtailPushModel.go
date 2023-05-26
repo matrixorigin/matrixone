@@ -171,9 +171,9 @@ func (client *pushClient) subscribeTable(
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case subscriber := <-client.subscriber.lockSubscriber:
-		err := subscriber(ctx, tblId)
-		client.subscriber.lockSubscriber <- subscriber
+	case b := <-client.subscriber.requestLock:
+		err := client.subscriber.doSubscribe(ctx, tblId)
+		client.subscriber.requestLock <- b
 		if err != nil {
 			return err
 		}
@@ -187,9 +187,9 @@ func (client *pushClient) unsubscribeTable(
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case unsubscriber := <-client.subscriber.lockUnSubscriber:
-		err := unsubscriber(ctx, tblId)
-		client.subscriber.lockUnSubscriber <- unsubscriber
+	case b := <-client.subscriber.requestLock:
+		err := client.subscriber.doUnSubscribe(ctx, tblId)
+		client.subscriber.requestLock <- b
 		if err != nil {
 			return err
 		}
@@ -484,10 +484,9 @@ type logTailSubscriber struct {
 	dnNodeID      int
 	logTailClient *service.LogtailClient
 
-	// return a table subscribe method.
-	lockSubscriber chan func(context.Context, api.TableID) error
-	// return a table unsubscribe method.
-	lockUnSubscriber chan func(ctx context.Context, id api.TableID) error
+	requestLock   chan bool
+	doSubscribe   func(context.Context, api.TableID) error
+	doUnSubscribe func(context.Context, api.TableID) error
 }
 
 func clientIsPreparing(context.Context, api.TableID) error {
@@ -530,28 +529,22 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	// XXX we assume that we have only 1 dn now.
 	s.dnNodeID = 0
 
+	// if channel is not nil here, it's most likely called by reconnect process.
+	// we need to take out the content of channel to ensure that
+	// the subscriber can't be used during the init process.
+	if s.requestLock == nil {
+		s.requestLock = make(chan bool, 1)
+	} else {
+		<-s.requestLock
+	}
+	s.doSubscribe = clientIsPreparing
+	s.doUnSubscribe = clientIsPreparing
+
 	// close the old stream
 	oldClient := s.logTailClient
 	if oldClient != nil {
 		_ = oldClient.Close()
 	}
-
-	// if channel is not nil here, it's most likely called by reconnect process.
-	// we need to take out the content of channel to ensure that
-	// the subscriber can't be used during the init process.
-	if s.lockSubscriber == nil {
-		s.lockSubscriber = make(chan func(context.Context, api.TableID) error, 1)
-	} else {
-		<-s.lockSubscriber
-	}
-	s.lockSubscriber <- clientIsPreparing
-
-	if s.lockUnSubscriber == nil {
-		s.lockUnSubscriber = make(chan func(context.Context, api.TableID) error, 1)
-	} else {
-		<-s.lockUnSubscriber
-	}
-	s.lockUnSubscriber <- clientIsPreparing
 
 	stream, err := newRpcStreamToDnLogTailService(serviceAddr)
 	if err != nil {
@@ -564,11 +557,10 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	if err != nil {
 		return err
 	}
-	<-s.lockSubscriber
-	<-s.lockUnSubscriber
+	s.doSubscribe = s.subscribeTable
+	s.doUnSubscribe = s.unSubscribeTable
+	s.requestLock <- true
 
-	s.lockSubscriber <- s.subscribeTable
-	s.lockUnSubscriber <- s.unSubscribeTable
 	return nil
 }
 
