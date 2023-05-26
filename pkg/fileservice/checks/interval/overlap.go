@@ -22,14 +22,14 @@ import (
 
 type OverlapChecker struct {
 	sync.Mutex
-	tag          string
-	keyIntervals map[string]IntervalTree
+	tag       string
+	keyRanges map[string]IntervalTree
 }
 
 func NewOverlapChecker(tag string) *OverlapChecker {
 	return &OverlapChecker{
-		tag:          tag,
-		keyIntervals: make(map[string]IntervalTree),
+		tag:       tag,
+		keyRanges: make(map[string]IntervalTree),
 	}
 }
 
@@ -39,12 +39,12 @@ func (i *OverlapChecker) Insert(key string, low, high int64) error {
 
 	interval := NewInt64Interval(low, high)
 
-	if _, ok := i.keyIntervals[key]; !ok {
+	if _, ok := i.keyRanges[key]; !ok {
 		// If key is not present, create a new tree.
-		i.keyIntervals[key] = NewIntervalTree()
-	} else if i.keyIntervals[key].Intersects(interval) {
+		i.keyRanges[key] = NewIntervalTree()
+	} else if i.keyRanges[key].Intersects(interval) {
 		// check if we have an overlap with existing ranges.
-		overlaps := i.keyIntervals[key].Stab(interval)
+		overlaps := i.keyRanges[key].Stab(interval)
 		overlapsMsg := ""
 		for _, v := range overlaps {
 			overlapsMsg += fmt.Sprintf("[%d %d), ", v.Ivl.Begin, v.Ivl.End)
@@ -52,8 +52,7 @@ func (i *OverlapChecker) Insert(key string, low, high int64) error {
 		return moerr.NewInternalErrorNoCtx("Duplicate key range found in %s when inserting [%d %d). The key %s contains overlapping intervals %s", i.tag, low, high, key, overlapsMsg)
 	}
 
-	// true is just a placeholder.
-	i.keyIntervals[key].Insert(interval, true)
+	i.keyRanges[key].Insert(interval, struct{}{})
 	return nil
 }
 
@@ -62,14 +61,14 @@ func (i *OverlapChecker) Remove(key string, low, high int64) error {
 	defer i.Unlock()
 
 	interval := NewInt64Interval(low, high)
-	if _, ok := i.keyIntervals[key]; !ok {
+	if _, ok := i.keyRanges[key]; !ok {
 		return moerr.NewInternalErrorNoCtx("Key Range not found for removal in %s", i.tag)
 	}
 
-	i.keyIntervals[key].Delete(interval)
+	i.keyRanges[key].Delete(interval)
 
-	if i.keyIntervals[key].Len() == 0 {
-		delete(i.keyIntervals, key)
+	if i.keyRanges[key].Len() == 0 {
+		delete(i.keyRanges, key)
 	}
 
 	return nil
