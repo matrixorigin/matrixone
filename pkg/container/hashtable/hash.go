@@ -23,8 +23,8 @@ import (
 )
 
 var (
-	Int64BatchHash = wyhashInt64Batch
-
+	Int64BatchHash           = wyhashInt64Batch
+	Int64HashWithFixedSeed   = wyhash64WithFixedSeed
 	BytesBatchGenHashStates  = wyhashBytesBatch
 	Int192BatchGenHashStates = wyhashInt192Batch
 	Int256BatchGenHashStates = wyhashInt256Batch
@@ -99,7 +99,7 @@ func wyhash(p unsafe.Pointer, seed, s uint64) uint64 {
 	return mix(m5^s, mix(a^m2, b^seed))
 }
 
-func Wyhash64WithFixedSeed(x uint64) uint64 {
+func wyhash64WithFixedSeed(x uint64) uint64 {
 	return mix(m5^8, mix(x^m2, x^m3^m4^m1))
 }
 

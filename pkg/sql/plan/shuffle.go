@@ -30,11 +30,11 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	lenBytes := len(bytes)
 	//sample five bytes
 	h := (uint64(bytes[0])*(uint64(bytes[lenBytes/4])+uint64(bytes[lenBytes/2])+uint64(bytes[lenBytes*3/4])) + uint64(bytes[lenBytes-1]))
-	return hashtable.Wyhash64WithFixedSeed(h) % upperLimit
+	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
 }
 
 func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
-	return hashtable.Wyhash64WithFixedSeed(i) % upperLimit
+	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
 
 func GetHashColumnIdx(expr *plan.Expr) int {
