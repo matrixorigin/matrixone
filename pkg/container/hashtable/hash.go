@@ -46,12 +46,11 @@ func init() {
 }
 
 const (
-	m1        = 0xa0761d6478bd642f
-	m2        = 0xe7037ed1a0b428db
-	m3        = 0x8ebc6af09c88c6e3
-	m4        = 0x589965cc75374cc3
-	m5        = 0x1d8e4e27c47d124f
-	fixedSeed = 0x5931065b97ac307d
+	m1 = 0xa0761d6478bd642f
+	m2 = 0xe7037ed1a0b428db
+	m3 = 0x8ebc6af09c88c6e3
+	m4 = 0x589965cc75374cc3
+	m5 = 0x1d8e4e27c47d124f
 )
 
 func wyhash(p unsafe.Pointer, seed, s uint64) uint64 {
@@ -101,7 +100,7 @@ func wyhash(p unsafe.Pointer, seed, s uint64) uint64 {
 }
 
 func Wyhash64WithFixedSeed(x uint64) uint64 {
-	return wyhash64(x, fixedSeed)
+	return mix(m5^8, mix(x^m2, x^m3^m4^m1))
 }
 
 func wyhash64(x, seed uint64) uint64 {
