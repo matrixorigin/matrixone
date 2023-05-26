@@ -64,6 +64,7 @@ func (bl *batchTxnCommitListener) OnBeginPrePrepare(txn txnif.AsyncTxn) {
 }
 
 func (bl *batchTxnCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn) {
+	logutil.Debugf("gavin OnEndPrePrepare %v, %d", txn, len(bl.listeners))
 	for _, l := range bl.listeners {
 		l.OnEndPrePrepare(txn)
 	}
@@ -474,6 +475,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 		// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
 		//   		   2. push the AppendNode into the MVCCHandle of block
+		PrintMemUsage()
 		mgr.onPrePrepare(op)
 		PrintMemUsage()
 		fmt.Println("gavin: [dequeuePreparing] start", now)
