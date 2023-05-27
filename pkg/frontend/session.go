@@ -1730,8 +1730,7 @@ type SqlHelper struct {
 }
 
 // Made for sequence func. nextval, setval.
-func (sh *SqlHelper) ExecSql(sql string) ([]interface{}, error) {
-	var err error
+func (sh *SqlHelper) ExecSql(sql string) (ret []interface{},err error) {
 	var erArray []ExecResult
 
 	ctx := sh.ses.GetRequestContext()
@@ -1739,25 +1738,22 @@ func (sh *SqlHelper) ExecSql(sql string) ([]interface{}, error) {
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
 	if err != nil {
-		goto handleFailed
+		return nil,err
 	}
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		goto handleFailed
+		return nil,err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
-	}
-
-	// Success.
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
+		return nil,err
 	}
 
 	if len(erArray) == 0 {
@@ -1765,13 +1761,6 @@ func (sh *SqlHelper) ExecSql(sql string) ([]interface{}, error) {
 	}
 
 	return erArray[0].(*MysqlResultSet).Data[0], nil
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return nil, rbErr
-	}
-	return nil, err
 }
 
 func (ses *Session) updateLastCommitTS(lastCommitTS timestamp.Timestamp) {

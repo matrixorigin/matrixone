@@ -3821,7 +3821,25 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 					argCount++
 					fmtctx.Reset()
 				}
-				goto handleArgMatch
+				handleArgMatch := func() error{
+					//put it into the single transaction
+					err = bh.Exec(ctx, "begin;")
+					defer func() {
+						err = finishTxn(ctx, bh, err)
+					}()
+					if err != nil {
+						return err
+					}
+
+					sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
+
+					err = bh.Exec(ctx, sql)
+					if err != nil {
+						return err
+					}
+					return err
+				}
+				return handleArgMatch()
 			}
 		}
 		return err
@@ -3829,24 +3847,6 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 		// no such function
 		return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
 	}
-
-handleArgMatch:
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	sql = fmt.Sprintf(deleteUserDefinedFunctionFormat, funcId)
-
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	return err
 }
 
 func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) (err error) {
@@ -3887,7 +3887,25 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 		if err != nil {
 			return err
 		}
-		goto handleArgMatch
+		handleArgMatch := func() error {
+			//put it into the single transaction
+			err = bh.Exec(ctx, "begin;")
+			defer func() {
+				err = finishTxn(ctx, bh, err)
+			}()
+			if err != nil {
+				return err
+			}
+
+			sql = fmt.Sprintf(deleteStoredProcedureFormat, procId)
+
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+			return err
+		}
+		return handleArgMatch()
 	} else {
 		// no such procedure
 		if dp.IfExists {
@@ -3895,24 +3913,6 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 		}
 		return moerr.NewNoUDFNoCtx(string(dp.Name.Name.ObjectName))
 	}
-
-handleArgMatch:
-	//put it into the single transaction
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	sql = fmt.Sprintf(deleteStoredProcedureFormat, procId)
-
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	return err
 }
 
 // doRevokePrivilege accomplishes the RevokePrivilege statement
@@ -6779,6 +6779,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	var exists bool
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
+	var mp *mpool.MPool
+	var needCreate bool
 	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
 	defer span.End()
 	tenant := ses.GetTenantInfo()
@@ -6809,7 +6811,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
 
 	_, st := trace.Debug(ctx, "InitGeneralTenant.init_general_tenant")
-	mp, err := mpool.NewMPool("init_general_tenant", 0, mpool.NoFixed)
+	mp, err = mpool.NewMPool("init_general_tenant", 0, mpool.NoFixed)
 	if err != nil {
 		st.End()
 		return err
@@ -6826,31 +6828,43 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		return err
 	}
 
-	err = bh.Exec(ctx, "begin;")
-	if err != nil {
-		goto handleFailed
+	createNewAccount := func() (bool,error){
+		err = bh.Exec(ctx, "begin;")
+		defer func() {
+			err = finishTxn(ctx, bh, err)
+		}()
+		if err != nil {
+			return false,err
+		}
+
+		exists, err = checkTenantExistsOrNot(ctx, bh, ca.Name)
+		if err != nil {
+			return false,err
+		}
+
+		if exists {
+			if !ca.IfNotExists { //do nothing
+				return false,moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
+			}
+			return false,err
+		} else {
+			newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
+			if err != nil {
+				return false,err
+			}
+		}
+		return true,err
 	}
 
-	exists, err = checkTenantExistsOrNot(ctx, bh, ca.Name)
-	if err != nil {
-		goto handleFailed
+	needCreate,err = createNewAccount()
+	if err != nil{
+		return err
+	}
+	if !needCreate{
+		return err
 	}
 
-	if exists {
-		if !ca.IfNotExists { //do nothing
-			err = moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
-			goto handleFailed
-		}
-	} else {
-		newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
-		if err != nil {
-			goto handleFailed
-		}
-		err = bh.Exec(ctx, "commit;")
-		if err != nil {
-			goto handleFailed
-		}
-
+	{
 		err = bh.Exec(newTenantCtx, createMoIndexesSql)
 		if err != nil {
 			return err
@@ -6875,31 +6889,37 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 				return err
 			}
 		}
+	}
 
+	createTablesForNewAccount := func() error{
 		err = bh.Exec(ctx, "begin;")
+		defer func() {
+			err = finishTxn(ctx, bh, err)
+		}()
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 
 		err = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 
 		err = createTablesInSystemOfGeneralTenant(ctx, bh, newTenant)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTenant)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
+		return err
 	}
 
-	err = bh.Exec(ctx, "commit;")
+	err = createTablesForNewAccount()
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	if !exists {
@@ -6907,13 +6927,6 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		_ = createSubscriptionDatabase(ctx, bh, newTenant, ses)
 	}
 
-	return err
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return rbErr
-	}
 	return err
 }
 
