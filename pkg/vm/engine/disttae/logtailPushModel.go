@@ -238,6 +238,11 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
 	reconnectErr := make(chan error)
 
+	// If it was false, we should clean reconnectErr when we do reconnect action.
+	// Although last reconnection failed, but it was not because we get an error from this channel.
+	// but for other reasons.
+	lastReconnectRoutineHasClean := true
+	
 	go func() {
 		for {
 			// new parallelNums routine to consume log tails.
@@ -268,6 +273,8 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 
 				case err := <-reconnectErr:
 					cancel()
+					lastReconnectRoutineHasClean = true
+
 					if err != nil {
 						logutil.Errorf("reconnect to dn log tail service failed, reason: %s", err)
 						goto cleanAndReconnect
@@ -319,6 +326,10 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			for _, r := range receiver {
 				r.close()
 			}
+			if !lastReconnectRoutineHasClean {
+				<-reconnectErr
+			}
+
 			logutil.Infof("start to reconnect to dn log tail service")
 			for {
 				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
@@ -335,6 +346,8 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					err := client.firstTimeConnectToLogTailServer(ctx)
 					reconnectErr <- err
 				}()
+
+				lastReconnectRoutineHasClean = false
 				break
 			}
 		}
