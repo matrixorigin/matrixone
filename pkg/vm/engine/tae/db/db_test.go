@@ -674,7 +674,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	{
 		schema.Name = "tb-1"
 		txn, _, rel := createRelationNoCommit(t, db, "db", schema, false)
-		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 		err := rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc1})
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[0])
@@ -695,7 +695,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 
 		//do deduplication check against sanpshot data.
 		txn, rel = getRelation(t, 0, db, "db", schema.Name)
-		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 		err = rel.Append(context.Background(), bats[0])
 		assert.NotNil(t, err)
 		err = rel.Append(context.Background(), bats[1])
@@ -6826,7 +6826,7 @@ func TestDedupSnapshot1(t *testing.T) {
 
 	txn, rel := tae.getRelation()
 	txn.SetSnapshotTS(txn.GetStartTS().Next())
-	txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+	txn.SetDedupType(txnif.IncrementalDedup)
 	err := rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
 	_ = txn.Commit()
@@ -6869,7 +6869,7 @@ func TestDedupSnapshot2(t *testing.T) {
 
 	txn, rel = tae.getRelation()
 	txn.SetSnapshotTS(txn.GetStartTS().Next())
-	txn.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+	txn.SetDedupType(txnif.IncrementalDedup)
 	err = rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc})
 	assert.NoError(t, err)
 	_ = txn.Commit()
@@ -6910,7 +6910,7 @@ func TestDedupSnapshot3(t *testing.T) {
 			}
 
 			txn2, _ := tae.StartTxn(nil)
-			txn2.SetPKDedupSkip(txnif.PKDedupSkipSnapshot)
+			txn2.SetDedupType(txnif.IncrementalDedup)
 			txn2.SetSnapshotTS(txn.GetStartTS())
 			database, _ = txn2.GetDatabase("db")
 			rel, _ = database.GetRelationByName(schema.Name)

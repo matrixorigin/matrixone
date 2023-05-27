@@ -74,6 +74,8 @@ type Options struct {
 
 	TransferTableTTL time.Duration
 
+	IncrementalDedup bool
+
 	Clock     clock.Clock
 	Fs        fileservice.FileService
 	Lc        logservicedriver.LogServiceClientFactory
