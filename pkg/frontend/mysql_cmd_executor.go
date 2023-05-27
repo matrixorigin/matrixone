@@ -2403,7 +2403,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Host:          pu.SV.Host,
 		ConnectionID:  uint64(proto.ConnectionID()),
 		Database:      ses.GetDatabaseName(),
-		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		Version:       makeServerVersion(pu, serverVersion.Load().(string)),
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 		LastInsertID:  ses.GetLastInsertID(),
@@ -2421,7 +2421,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
-			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
+			proc.SessionInfo.Version = makeServerVersion(pu,ses.GetTenantInfo().GetVersion())
 		}
 	} else {
 		proc.SessionInfo.Account = sysAccountName
@@ -3330,7 +3330,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		Host:          pu.SV.Host,
 		ConnectionID:  uint64(proto.ConnectionID()),
 		Database:      ses.GetDatabaseName(),
-		Version:       pu.SV.ServerVersionPrefix + serverVersion.Load().(string),
+		Version:       makeServerVersion(pu, serverVersion.Load().(string)),
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 	}

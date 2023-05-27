@@ -601,3 +601,7 @@ func getVariableValue(varDefault interface{}) string {
 		return ""
 	}
 }
+
+func makeServerVersion(pu *mo_config.ParameterUnit,version string) string{
+	return pu.SV.ServerVersionPrefix + version
+}
