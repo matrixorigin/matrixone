@@ -4478,7 +4478,6 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 				}
 			}
 
-			sql = ""
 			if to.typ == roleType {
 				//revoke from role
 				//delete (granted_id,grantee_id) from the mo_role_grant
@@ -4673,7 +4672,6 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 				return err
 			}
 
-			sql = ""
 			if to.typ == roleType {
 				if from.id == to.id { //direct loop
 					return moerr.NewRoleGrantedToSelf(ctx, from.name, to.name)
