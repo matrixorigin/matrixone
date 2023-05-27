@@ -219,7 +219,7 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 
 	select {
 	case <-ctx.Done():
-		// close the channel, let routine panic to avoid leaking once ctx is done.
+		// close the channel to avoid go-routine leak.
 		close(ch)
 
 		logutil.Errorf("connect to dn log tail server failed")
@@ -238,11 +238,12 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
 	reconnectErr := make(chan error)
 
-	// If it was false, we should clean reconnectErr when we do reconnect action.
-	// Although last reconnection failed, but it was not because we get an error from this channel.
-	// but for other reasons.
-	lastReconnectRoutineHasClean := true
-	
+	// init isLastReconnectRoutineClean as true.
+	// and once it was false, we should clean reconnectErr before we do reconnect action.
+	// it means the last reconnection failed but not because we get an error from this channel.
+	// if not clean, it will cause some go-routine hang up.
+	isLastReconnectRoutineClean := true
+
 	go func() {
 		for {
 			// new parallelNums routine to consume log tails.
@@ -273,7 +274,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 
 				case err := <-reconnectErr:
 					cancel()
-					lastReconnectRoutineHasClean = true
+					isLastReconnectRoutineClean = true
 
 					if err != nil {
 						logutil.Errorf("reconnect to dn log tail service failed, reason: %s", err)
@@ -326,7 +327,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			for _, r := range receiver {
 				r.close()
 			}
-			if !lastReconnectRoutineHasClean {
+			if !isLastReconnectRoutineClean {
 				<-reconnectErr
 			}
 
@@ -347,7 +348,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					reconnectErr <- err
 				}()
 
-				lastReconnectRoutineHasClean = false
+				isLastReconnectRoutineClean = false
 				break
 			}
 		}
