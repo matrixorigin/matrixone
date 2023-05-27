@@ -136,8 +136,8 @@ type Session struct {
 
 	mu sync.Mutex
 
-	flag         bool
-	lastInsertID uint64
+	isNotBackgroundSession bool
+	lastInsertID           uint64
 
 	sqlSourceType []string
 
@@ -302,7 +302,7 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool, aicm *defines.AutoIncrCacheManager) *Session {
+func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, isNotBackgroundSession bool, aicm *defines.AutoIncrCacheManager) *Session {
 	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient)
 	ses := &Session{
 		protocol: proto,
@@ -335,7 +335,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		blockIdx:  0,
 		planCache: newPlanCache(100),
 	}
-	if flag {
+	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
 		ses.userDefinedVars = make(map[string]interface{})
 		ses.prepareStmts = make(map[string]*PrepareStmt)
@@ -345,7 +345,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		ses.seqLastValue = ""
 		ses.sqlHelper = &SqlHelper{ses: ses}
 	}
-	ses.flag = flag
+	ses.isNotBackgroundSession = isNotBackgroundSession
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
@@ -374,7 +374,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 }
 
 func (ses *Session) Close() {
-	if ses.flag {
+	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(nil)
