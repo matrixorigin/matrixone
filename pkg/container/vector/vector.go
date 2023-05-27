@@ -1301,6 +1301,16 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				return nil
 			}
+			if err := extend(v, w.length, mp); err != nil {
+				return err
+			}
+			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
+				area, err := mp.Grow(v.area, sz)
+				if err != nil {
+					return err
+				}
+				v.area = area[:len(v.area)]
+			}
 			for i := range ws {
 				if err := appendOneBytes(v, ws[i].GetByteSlice(w.area),
 					nulls.Contains(&w.nsp, uint64(i)), mp); err != nil {
