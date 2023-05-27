@@ -464,7 +464,7 @@ func (tbl *txnTable) reset(newId uint64) {
 }
 
 func (tbl *txnTable) resetSnapshot() {
-	tbl._parts = nil
+	tbl._partState = nil
 	tbl.blockInfos = nil
 	tbl.blockInfosUpdated = false
 }
