@@ -321,7 +321,7 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 	case c.awakeCollect <- item:
 		return nil
 	case <-time.After(5 * time.Second):
-		return moerr.NewInternalError(ctx, "MOCollector Collect timeout")
+		return nil
 	}
 }
 
