@@ -3183,7 +3183,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 
 			if st, ok := cw.GetAst().(*tree.CreateDatabase); ok {
-				insertRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+				insertRecordToMoMysqlCompatibilityMode(requestCtx, ses, stmt)
 				doGrantPrivilegeImplicitly(requestCtx, ses, st)
 			}
 
