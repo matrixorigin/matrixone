@@ -7680,56 +7680,63 @@ func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterData
 	var erArray []ExecResult
 	var accountName string
 
-	datname := ad.DbName
-	update_config := ad.UpdateConfig
+	dbName := ad.DbName
+	updateConfig := ad.UpdateConfig
 	accountName = ses.GetTenantInfo().GetTenant()
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
+	updateConfigForDatabase := func() error{
+		err = bh.Exec(ctx, "begin")
+		defer func() {
+			err = finishTxn(ctx, bh, err)
+		}()
+		if err != nil {
+			return err
+		}
+
+		// step1:check database exists or not
+		sql, err = getSqlForCheckDatabase(ctx, dbName)
+		if err != nil {
+			return err
+		}
+
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+
+		erArray, err = getResultSet(ctx, bh)
+		if err != nil {
+			return err
+		}
+
+		if !execResultArrayHasData(erArray) {
+			return moerr.NewInternalError(ctx, "there is no database %s to change config", dbName)
+		}
+
+		// step2: update the mo_mysql_compatibility_mode of that database
+		sql, err = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, updateConfig, accountName, dbName, "version_compatibility")
+		if err != nil {
+			return err
+		}
+
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
 		return err
 	}
 
-	// step1:check database exists or not
-	sql, err = getSqlForCheckDatabase(ctx, datname)
-	if err != nil {
-		return err
-	}
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-
-	if !execResultArrayHasData(erArray) {
-		return moerr.NewInternalError(ctx, "there is no database %s to change config", datname)
-	}
-
-	// step2: update the mo_mysql_compatibility_mode of that database
-	sql, err = getSqlForupdateConfigurationByDbNameAndAccountName(ctx, update_config, accountName, datname, "version_compatibility")
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, sql)
-	if err != nil {
+	err = updateConfigForDatabase()
+	if err != nil{
 		return err
 	}
 
 	// step3: update the session verison
-
-	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == datname {
+	if len(ses.GetDatabaseName()) != 0 && ses.GetDatabaseName() == dbName {
 		err = changeVersion(ctx, ses, ses.GetDatabaseName())
 		if err != nil {
 			return err
@@ -7750,32 +7757,40 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	err = bh.Exec(ctx, "begin")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
+	updateConfigForAccount := func()error{
+		err = bh.Exec(ctx, "begin")
+		defer func() {
+			err = finishTxn(ctx, bh, err)
+		}()
+		if err != nil {
+			return err
+		}
+
+		// step 1: check account exists or not
+		newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		isExist, err = checkTenantExistsOrNot(newCtx, bh, accountName)
+		if err != nil {
+			return err
+		}
+
+		if !isExist {
+			return moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
+		}
+
+		// step2: update the config
+		sql, err = getSqlForupdateConfigurationByAccount(ctx, update_config, accountName, "version_compatibility")
+		if err != nil {
+			return err
+		}
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
 		return err
 	}
 
-	// step 1: check account exists or not
-	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	isExist, err = checkTenantExistsOrNot(newCtx, bh, accountName)
-	if err != nil {
-		return err
-	}
-
-	if !isExist {
-		return moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
-	}
-
-	// step2: update the config
-	sql, err = getSqlForupdateConfigurationByAccount(ctx, update_config, accountName, "version_compatibility")
-	if err != nil {
-		return err
-	}
-	err = bh.Exec(ctx, sql)
-	if err != nil {
+	err = updateConfigForAccount()
+	if err != nil{
 		return err
 	}
 

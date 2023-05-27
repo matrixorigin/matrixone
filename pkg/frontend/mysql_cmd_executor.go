@@ -2421,7 +2421,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
-			proc.SessionInfo.Version = makeServerVersion(pu, ses.GetTenantInfo().GetVersion())
+			proc.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
 	} else {
 		proc.SessionInfo.Account = sysAccountName
