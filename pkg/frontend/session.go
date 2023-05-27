@@ -442,6 +442,7 @@ func NewBackgroundSession(
 	ses.SetRequestContext(cancelBackgroundCtx)
 	ses.SetConnectContext(connCtx)
 	ses.SetBackgroundSession(true)
+	ses.UpdateDebugString()
 	backSes := &BackgroundSession{
 		Session: ses,
 		cancel:  cancelBackgroundFunc,
@@ -526,6 +527,12 @@ func (ses *Session) UpdateDebugString() {
 	sb.WriteByte('|')
 	//session id
 	sb.WriteString(ses.uuid.String())
+	//upstream sessionid
+	if ses.upstream != nil {
+		sb.WriteByte('|')
+		sb.WriteString(ses.upstream.uuid.String())
+	}
+
 	ses.debugStr = sb.String()
 }
 
@@ -1552,7 +1559,7 @@ func changeVersion(ctx context.Context, ses *Session, db string) error {
 	if _, ok := bannedCatalogDatabases[db]; ok {
 		return err
 	}
-	version, _ := GetVersionCompatbility(ctx, ses, db)
+	version, _ := GetVersionCompatibility(ctx, ses, db)
 	if ses.GetTenantInfo() != nil {
 		ses.GetTenantInfo().SetVersion(version)
 	}
@@ -1687,6 +1694,9 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if len(statements) > 1 {
 		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
+	logInfo(bh.ses.GetDebugString(), "query trace(backgroundExecSql)",
+		logutil.ConnectionIdField(bh.ses.GetConnectionID()),
+		logutil.QueryField(SubStringFromBegin(sql, int(bh.ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
 	err = bh.mce.GetDoQueryFunc()(ctx, sql)
 	if err != nil {
 		return err

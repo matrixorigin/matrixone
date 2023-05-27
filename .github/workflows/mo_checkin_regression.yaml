@@ -4,6 +4,10 @@ on:
   pull_request_target:
     types:
       - closed
+    paths:
+      - '**.go'
+      - '**.c'
+      - '**.h'
 env: 
    branch: main
 
@@ -129,7 +133,7 @@ jobs:
 
   test:
     if: ${{ needs.setup_mo_test_env.result == 'success' && github.event.pull_request.merged == true }}  #
-    name: MO BIG DATA TOTAL TEST
+    name: MO CHECKIN REGRESSION TEST
     runs-on: arm64-runner
     timeout-minutes: 120
     needs: [setup_mo_test_env,docker_image_build]
@@ -154,7 +158,7 @@ jobs:
           
       - name: Clone mo-tpch Repo
         if: ${{ always() && !cancelled() }}
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tpch
           token: ${{secrets.TOKEN_ACTION}}
@@ -163,29 +167,37 @@ jobs:
 
       - name: Clone mo-load Repo
         if: ${{ always() && !cancelled() }}
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-load
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load
           ref: main
 
-      - name: Clone mo-sysbench Repo
-        if: ${{ always() && !cancelled() }}
-        uses: actions/checkout@v2
-        with:
-          repository: matrixorigin/mo-sysbench
-          token: ${{secrets.TOKEN_ACTION}}
-          path: ./mo-sysbench
-          ref: main
+#       - name: Clone mo-sysbench Repo
+#         if: ${{ always() && !cancelled() }}
+#         uses: actions/checkout@v3
+#         with:
+#           repository: matrixorigin/mo-sysbench
+#           token: ${{secrets.TOKEN_ACTION}}
+#           path: ./mo-sysbench
+#           ref: main
 
       - name: Clone mo-tpcc Repo
         if: ${{ always() && !cancelled() }}
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-tpcc
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-tpcc
+          ref: main
+
+      - name: Clone mo-night-regression Repo
+        uses: actions/checkout@v3
+        with:
+          repository: matrixorigin/mo-nightly-regression
+          token: ${{secrets.TOKEN_ACTION}}
+          path: ./mo-nightly-regression
           ref: main
           
       - name: Prepare Test EVN
@@ -240,125 +252,144 @@ jobs:
         if: ${{ always() }}
         timeout-minutes: 10
         run: |
+          set -uo pipefail
           export LC_ALL="C.UTF-8"
           locale
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
-          ./load.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -c cases/00_from_s3/ssb_10 -r -m -g
+          mkdir -p report
+          ./load.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -c cases/00_from_s3/ssb_10 -r -m -g | tee report/mo-load-data-ssb.log
           # start test
           cd $GITHUB_WORKSPACE/mo-ssb
-          ./run.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -q all -s 10 -t 5
+          mkdir -p report
+          ./run.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/mo-ssb.log
 
       # start tpch test
       - name: Load TPCH 10G Test Data
         if: ${{ always() }}
         run: |
+          set -uo pipefail
           export LC_ALL="C.UTF-8"
           locale
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
-          ./load.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -c cases/00_from_s3/tpch_10 -r -m -g
+          mkdir -p report
+          ./load.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -c cases/00_from_s3/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
 
       - name: Start TPCH 10G Test
         if: ${{ always() }}
         timeout-minutes: 15
         run: |
+          set -uo pipefail
           export LC_ALL="C.UTF-8"
           locale
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tpch
-          ./run.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -q all -s 10 -t 5
+          mkdir -p report
+          ./run.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/tpch.log
 
       # start sysbench test
       - name: Start OLTP Insert Test With 100 Threads
         if: ${{ always() }}
         timeout-minutes: 10
         run: |
+          set -uo pipefail
           export LC_ALL="C.UTF-8"
           locale
           sleep 60s
 
           cd $GITHUB_WORKSPACE/mo-load
+          mkdir -p report
           sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' mo.yml
           
           echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000
+          ./start.sh -m SYSBENCH -n 10 -s 100000 | tee report/load-oltp-insert.log
           sleep 10
           
           echo ''
           echo 'Start OLTP Insert Test With 100 threads'
-          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g
+          ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g | tee report/oltp-insert.log
 
       - name: Start OLTP Delete Test With 100 Threads
         if: ${{ always() }}
         timeout-minutes: 10
         run: |
+          set -uo pipefail
           export LC_ALL="C.UTF-8"
           locale
           sleep 60s
           
           cd $GITHUB_WORKSPACE/mo-load
+          mkdir -p report
           echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000
+          ./start.sh -m SYSBENCH -n 10 -s 100000 | tee report/load-oltp-delete.log
           sleep 10
           
           echo ''
           echo 'Start OLTP Delete Test With 100 threads'
-          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g
+          ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g | tee report/oltp-delete.log
           
       - name: Start OLTP Update Test With 100 Threads
         if: ${{ always() }}
         timeout-minutes: 10
         run: |
+          set -uo pipefail
           export LC_ALL="C.UTF-8"
           locale
           sleep 60s
           
           cd $GITHUB_WORKSPACE/mo-load
+          mkdir -p report
           echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000
+          ./start.sh -m SYSBENCH -n 10 -s 100000 | tee report/load-oltp-update.log
           sleep 10
           
           echo ''
           echo 'Start OLTP UPDATE Test With 100 threads'
-          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g
+          ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g | tee report/oltp-update.log
 
       - name: Start OLTP Point Select Test With 100 Threads
         if: ${{ always() }}
         timeout-minutes: 10
         run: |
+          set -uo pipefail
           export LC_ALL="C.UTF-8"
           locale
           sleep 60s
           
           cd $GITHUB_WORKSPACE/mo-load
+          mkdir -p report
           echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000
+          ./start.sh -m SYSBENCH -n 10 -s 100000 | tee report/load-oltp-select.log
           sleep 10
           
           echo ''
           echo 'Start OLTP Point Select Test With 100 threads'
-          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g
+          ./start.sh -c cases/sysbench/point_select_10_100000 -t 100 -d 5 -g | tee report/oltp-select.log
      
      # start tpcc test
       - name: Load TPCC 10 Warehouse Data
         if: ${{ always() }}
         run: |
+          set -uo pipefail
           export LC_ALL="C.UTF-8"
           locale
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
-          ./load.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -c cases/00_from_s3/tpcc_10 -r -m -g 
+          mkdir -p report
+          ./load.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
 
       - name: Start TPCC 10 Warehouses 10 terminals Test
         if: ${{ always() }}
         timeout-minutes: 10
         run: |
+          set -uo pipefail
           export LC_ALL="C.UTF-8"
           locale
           sleep 60s
           
           cd $GITHUB_WORKSPACE/mo-tpcc
+          mkdir -p report
           cp props.mo props_10.mo
           sed -i '/.*terminals=*/c\terminals=10' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
@@ -366,11 +397,11 @@ jobs:
           sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
-          ./runBenchmark.sh props_10.mo
-          ./runVerify.sh props_10.mo
+          ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark.log
+          ./runVerify.sh props_10.mo | tee report/tpcc-verify.sh
           
           if [ -f benchmarksql-error.log ];then
-            mv benchmarksql-error.log benchmarksql-error-10-10.log
+            mv benchmarksql-error.log report/benchmarksql-error-10-10.log
           fi
       
       # start large table test
@@ -391,11 +422,77 @@ jobs:
       #     # export LC_ALL="C.UTF-8"
       #     # cd $GITHUB_WORKSPACE/mo-tpch
       #     # ./run.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -q all -s 10 -t 5
+      - name: Modify Report Database Config
+        if: ${{ always() && !cancelled() }}
+        run: |
+          echo ${{ needs.docker_image_build.outputs.version }}
+          mkdir -p $GITHUB_WORKSPACE/reports
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-ssb
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-load-data
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-tpcc
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-load
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-tpch
+          cp -r $GITHUB_WORKSPACE/mo-ssb/report $GITHUB_WORKSPACE/reports/mo-ssb
+          cp -r $GITHUB_WORKSPACE/mo-load-data/report $GITHUB_WORKSPACE/reports/mo-load-data
+          cp -r $GITHUB_WORKSPACE/mo-tpcc/report $GITHUB_WORKSPACE/reports/mo-tpcc
+          cp -r $GITHUB_WORKSPACE/mo-load/report $GITHUB_WORKSPACE/reports/mo-load
+          cp -r $GITHUB_WORKSPACE/mo-tpch/report $GITHUB_WORKSPACE/reports/mo-tpch
+
+          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
+          sed -i '/  host:*/c\  host: "${{secrets.REPORT_DB_ADDR}}"' config.yml
+          sed -i '/  port:*/c\  port: ${{secrets.REPORT_DB_PORT}}' config.yml
+          sed -i '/  user:*/c\  user: "${{secrets.REPORT_DB_USER}}"' config.yml
+          sed -i '/  password:*/c\  password: "${{secrets.REPORT_DB_PASSWORD}}"' config.yml
+          sed -i '/  database:*/c\  database: "${{secrets.REPORT_DB_NAME}}"' config.yml
+          
+          sed -i '/  SSB:*/c\  SSB: "${{ github.workspace }}\/mo-ssb\/report"' config.yml
+          sed -i '/  TPCH:*/c\  TPCH: "${{ github.workspace }}\/mo-tpch\/report"' config.yml
+          sed -i '/  SYSBENCH:*/c\  SYSBENCH: "${{ github.workspace }}\/mo-load\/report"' config.yml
+          sed -i '/  TPCC:*/c\  TPCC: "${{ github.workspace }}\/mo-tpcc\/report"' config.yml
+          grep host config.yml
+          grep port config.yml
+          grep user config.yml
+
+      - name: Collect and Check SSB Test Result
+        if: ${{ always() && !cancelled() }}
+        run: |
+          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
+          grep SSB config.yml
+          python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} SSB
+          python Checker.py SSB
+      
+      - name: Collect and Check TPCH Test Result
+        if: ${{ always() && !cancelled() }}
+        run: |
+          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
+          grep TPCH config.yml
+          python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} TPCH
+          python Checker.py TPCH
+      - name: Collect and Check SYSBENCH Test Result
+        if: ${{ always() && !cancelled() }}
+        run: |
+          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
+          grep SYSBENCH config.yml
+          python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} SYSBENCH
+          python Checker.py SYSBENCH
+      - name: Collect and Check TPCC Test Result
+        if: ${{ always() && !cancelled() }}
+        run: |
+          cd $GITHUB_WORKSPACE/mo-nightly-regression/result
+          grep TPCC config.yml
+          python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} TPCC
+          python Checker.py TPCC
+
+      - name: Test Plugin Result export
+        if: ${{ failure() || cancelled() }}
+        run: | 
+          aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/reports --recursive
+          aws s3 cp $GITHUB_WORKSPACE/reports s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/reports --recursive
       - name : ISSUE Notice
         if: ${{ failure() || cancelled() }}
         uses: chf007/action-wechat-work@master
         env:
-          WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_WORK_BOT_WEBHOOK }}
+          WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_MO_CHECKIN_BOT_WEBHOOK }}
         with:
           msgtype: markdown
           content: "MO Checkin Regression On EKS failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})  <@shuqi.qin><@JiejieJia><@SuDong>"
@@ -460,9 +557,8 @@ jobs:
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod
 
 
-          # move result to s3://mo-checkin-regression/result/
-          aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }} --recursive > /dev/null 2>&1
-          aws s3 mv s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1
+          # move result to s3://mo-checkin-regression/result/ only test fail
+          if [ '${{ needs.test.result }}'x == 'failure'x ]; then aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; aws s3 mv s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; fi
           kubectl get bucket -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
 
           kubectl delete namespace mo-checkin-regression-${{ github.event.pull_request.number }}
