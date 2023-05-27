@@ -1694,9 +1694,6 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if len(statements) > 1 {
 		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
-	logInfo(bh.ses.GetDebugString(), "query trace(backgroundExecSql)",
-		logutil.ConnectionIdField(bh.ses.GetConnectionID()),
-		logutil.QueryField(SubStringFromBegin(sql, int(bh.ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
 	err = bh.mce.GetDoQueryFunc()(ctx, sql)
 	if err != nil {
 		return err
