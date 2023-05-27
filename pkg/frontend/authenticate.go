@@ -3821,7 +3821,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) (e
 					argCount++
 					fmtctx.Reset()
 				}
-				handleArgMatch := func() error{
+				handleArgMatch := func() error {
 					//put it into the single transaction
 					err = bh.Exec(ctx, "begin;")
 					defer func() {
@@ -6828,39 +6828,39 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		return err
 	}
 
-	createNewAccount := func() (bool,error){
+	createNewAccount := func() (bool, error) {
 		err = bh.Exec(ctx, "begin;")
 		defer func() {
 			err = finishTxn(ctx, bh, err)
 		}()
 		if err != nil {
-			return false,err
+			return false, err
 		}
 
 		exists, err = checkTenantExistsOrNot(ctx, bh, ca.Name)
 		if err != nil {
-			return false,err
+			return false, err
 		}
 
 		if exists {
 			if !ca.IfNotExists { //do nothing
-				return false,moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
+				return false, moerr.NewInternalError(ctx, "the tenant %s exists", ca.Name)
 			}
-			return false,err
+			return false, err
 		} else {
 			newTenant, newTenantCtx, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
 			if err != nil {
-				return false,err
+				return false, err
 			}
 		}
-		return true,err
+		return true, err
 	}
 
-	needCreate,err = createNewAccount()
-	if err != nil{
+	needCreate, err = createNewAccount()
+	if err != nil {
 		return err
 	}
-	if !needCreate{
+	if !needCreate {
 		return err
 	}
 
@@ -6891,7 +6891,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		}
 	}
 
-	createTablesForNewAccount := func() error{
+	createTablesForNewAccount := func() error {
 		err = bh.Exec(ctx, "begin;")
 		defer func() {
 			err = finishTxn(ctx, bh, err)

@@ -292,7 +292,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body 
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 		if expectedInvalidArgLengthErr {
-			err = errors.Join(err,moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args)))
+			err = errors.Join(err, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args)))
 		} else if expectInvalidArgErr {
 			err = errors.Join(err, moerr.NewInvalidArg(ctx, name+" function have invalid input args", badValue))
 		}
@@ -572,35 +572,35 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
-		return nil,err
+		return nil, err
 	}
 
 	for name := range dedup {
 		sql, err = getSqlForCheckTenant(ctx, name)
 		if err != nil {
-			return nil,err
+			return nil, err
 		}
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			return nil,err
+			return nil, err
 		}
 
 		erArray, err = getResultSet(ctx, bh)
 		if err != nil {
-			return nil,err
+			return nil, err
 		}
 
 		if execResultArrayHasData(erArray) {
 			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 				targetAccountId, err = erArray[0].GetUint64(ctx, i, 0)
 				if err != nil {
-					return nil,err
+					return nil, err
 				}
 			}
 			accountIds = append(accountIds, uint32(targetAccountId))
 		} else {
-			return nil,moerr.NewInternalError(ctx, "there is no account %s", name)
+			return nil, moerr.NewInternalError(ctx, "there is no account %s", name)
 		}
 	}
 	return accountIds, err

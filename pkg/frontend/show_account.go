@@ -118,7 +118,7 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormat, accountId)
 }
 
-func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error){
+func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {
 	var sql string
 	var accountIds [][]int32
 	var allAccountInfo []*batch.Batch

@@ -1730,7 +1730,7 @@ type SqlHelper struct {
 }
 
 // Made for sequence func. nextval, setval.
-func (sh *SqlHelper) ExecSql(sql string) (ret []interface{},err error) {
+func (sh *SqlHelper) ExecSql(sql string) (ret []interface{}, err error) {
 	var erArray []ExecResult
 
 	ctx := sh.ses.GetRequestContext()
@@ -1742,18 +1742,18 @@ func (sh *SqlHelper) ExecSql(sql string) (ret []interface{},err error) {
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
-		return nil,err
+		return nil, err
 	}
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		return nil,err
+		return nil, err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		return nil,err
+		return nil, err
 	}
 
 	if len(erArray) == 0 {

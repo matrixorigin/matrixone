@@ -221,7 +221,7 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 	return 0, nil
 }
 
-func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string)(err error) {
+func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (err error) {
 	curScope := make(map[string]interface{})
 	interpreter.bh.ClearExecResultSet()
 
