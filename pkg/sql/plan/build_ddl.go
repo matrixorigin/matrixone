@@ -471,10 +471,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			return nil, err
 		}
 
-		err = addPartitionTableDef(ctx.GetContext(), string(stmt.Table.ObjectName), createTable)
-		if err != nil {
-			return nil, err
-		}
+		//err = addPartitionTableDef(ctx.GetContext(), string(stmt.Table.ObjectName), createTable)
+		//if err != nil {
+		//	return nil, err
+		//}
 	}
 
 	return &Plan{

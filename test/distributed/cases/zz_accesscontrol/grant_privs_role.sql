@@ -111,7 +111,9 @@ select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catal
 use grant_db;
 show tables;
 create table grant_table_03 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
+-- @bvt:issue#8320
 show create table grant_table_03;
+-- @bvt:issue
 create view grant_v_1 as select * from grant_table_03;
 drop table grant_table_03;
 drop view  grant_v_1;
@@ -130,7 +132,9 @@ select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catal
 use grant_db4;
 show tables;
 create table grant_table_04 (id int,name varchar(50),num double)PARTITION BY KEY(id) PARTITIONS 4;
+-- @bvt:issue#8320
 show create table grant_table_04;
+-- @bvt:issue
 create view grant_v_2 as select * from grant_table_04;
 drop table grant_table_04;
 drop view grant_v_2;

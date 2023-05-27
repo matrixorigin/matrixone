@@ -1,3 +1,4 @@
+-- @bvt:issue#8320
 drop table if exists t1;
 CREATE TABLE t1 (
 col1 INT NOT NULL AUTO_INCREMENT,
@@ -56,3 +57,4 @@ select * from `%!%p0%!%t1`;
 select * from `%!%p1%!%t1`;
 select * from `%!%p2%!%t1`;
 select * from `%!%p3%!%t1`;
+-- @bvt:issue
