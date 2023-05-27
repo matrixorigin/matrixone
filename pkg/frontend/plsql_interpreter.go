@@ -223,6 +223,7 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 
 func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) error {
 	var tmpErr error
+	curScope := make(map[string]interface{})
 	interpreter.bh.ClearExecResultSet()
 
 	// use current database as default
@@ -234,11 +235,10 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 	// make sure the entire sp is in a single transaction
 	err = interpreter.bh.Exec(interpreter.ctx, "begin;")
 	if err != nil {
-		return err
+		goto handleFailed
 	}
 
 	// save parameters as local variables
-	curScope := make(map[string]interface{})
 	*interpreter.varScope = append(*interpreter.varScope, curScope)
 	for k, v := range interpreter.argsMap {
 		var value interface{}
@@ -251,7 +251,8 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 				_, value, _ := interpreter.ses.GetUserDefinedVar(varParam.Name)
 				if value == nil {
 					// raise an error as INOUT / IN type param has to have a value
-					return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or IN has to have a specified value.", k))
+					err = moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or IN has to have a specified value.", k))
+					goto handleFailed
 				}
 				// save param to local var scope
 				(*interpreter.varScope)[len(*interpreter.varScope)-1][strings.ToLower(k)] = value
@@ -259,12 +260,13 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 		} else {
 			// if param type is INOUT or OUT and the param is not provided with variable expr, raise an error
 			if interpreter.argsAttr[k] == tree.TYPE_INOUT || interpreter.argsAttr[k] == tree.TYPE_OUT {
-				return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or OUT has to be passed in using @.", k))
+				err = moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or OUT has to be passed in using @.", k))
+				goto handleFailed
 			}
 			// evaluate the param
 			value, err = interpreter.GetSimpleExprValueWithSpVar(v)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
 			// save param to local var scope
 			(*interpreter.varScope)[len(*interpreter.varScope)-1][strings.ToLower(k)] = value
@@ -280,7 +282,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 	// commit the first part sp
 	err = interpreter.bh.Exec(interpreter.ctx, "commit;")
 	if err != nil {
-		return err
+		goto handleFailed
 	}
 
 	// // commit the param flush part of sp
@@ -291,7 +293,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 
 	err = interpreter.FlushParam()
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	// err = interpreter.bh.Exec(interpreter.ctx, "commit;")
