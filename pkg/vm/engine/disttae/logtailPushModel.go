@@ -219,9 +219,14 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 
 	select {
 	case <-ctx.Done():
+		// close the channel, let routine panic to avoid leaking once ctx is done.
+		close(ch)
+
 		logutil.Errorf("connect to dn log tail server failed")
 		return ctx.Err()
 	case err = <-ch:
+		close(ch)
+
 		if err != nil {
 			return err
 		}
