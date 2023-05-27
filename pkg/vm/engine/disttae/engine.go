@@ -60,9 +60,9 @@ func New(
 			return true
 		})
 
-	dnMap := make(map[string]int)
-	for i := range services {
-		dnMap[services[i].ServiceID] = i
+	var dnID string
+	if len(services) > 0 {
+		dnID = services[0].ServiceID
 	}
 
 	e := &Engine{
@@ -71,8 +71,8 @@ func New(
 		cli:        cli,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
-		dnMap:      dnMap,
-		partitions: make(map[[2]uint64]logtailreplay.Partitions),
+		dnID:       dnID,
+		partitions: make(map[[2]uint64]*logtailreplay.Partition),
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -522,7 +522,7 @@ func (e *Engine) getDNServices() []DNStore {
 func (e *Engine) cleanMemoryTable() {
 	e.Lock()
 	defer e.Unlock()
-	e.partitions = make(map[[2]uint64]logtailreplay.Partitions)
+	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 }
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {

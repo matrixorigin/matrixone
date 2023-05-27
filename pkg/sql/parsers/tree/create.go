@@ -2536,7 +2536,7 @@ func (node *CreatePublication) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
 	ctx.WriteString(" database ")
 	node.Database.Format(ctx)
-	if len(node.AccountsSet.SetAccounts) > 0 {
+	if node.AccountsSet != nil && len(node.AccountsSet.SetAccounts) > 0 {
 		ctx.WriteString(" account ")
 		prefix := ""
 		for _, a := range node.AccountsSet.SetAccounts {

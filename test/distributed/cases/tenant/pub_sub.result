@@ -59,7 +59,7 @@ Duplicate entry 'pub1' for key 'pub_name'
 alter publication pub1 account `all`;
 show create publication pub1;
 Publication    Create Publication
-pub1   CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
+pub1    CREATE PUBLICATION pub1 DATABASE t ACCOUNT all
 show create publication pubx;
 internal error: publication 'pubx' does not exist
 drop publication pub1;
@@ -83,9 +83,9 @@ create publication sys_pub_1 database sys_db_1;
 show publications;
 Name    Database
 sys_pub_1    sys_db_1
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
-pub_name    database_name    account_list    all_account
-sys_pub_1    sys_db_1    all    null
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
+pub_name    database_name    account_list
+sys_pub_1    sys_db_1    all
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
@@ -129,9 +129,9 @@ Number of columns in sys_tbl_1
 show table_values from sys_tbl_1;
 max(a)    min(a)
 3    1
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
-pub_name    database_name    account_list    all_account
-sys_pub_1    sys_db_1    all    null
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
+pub_name    database_name    account_list
+sys_pub_1    sys_db_1    all
 create database sub1 from sys publication sys_pub_1;
 show databases;
 Database
@@ -162,9 +162,9 @@ a
 2
 3
 alter publication sys_pub_1 account acc1;
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
-pub_name    database_name    account_list    all_account
-sys_pub_1    sys_db_1    acc1    null
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
+pub_name    database_name    account_list
+sys_pub_1    sys_db_1    acc1
 show subscriptions;
 Name    From_Account
 sub1    sys
@@ -185,9 +185,9 @@ a
 2
 3
 alter publication sys_pub_1 account add acc0;
-select pub_name, database_name, account_list, all_account from mo_catalog.mo_pubs;
-pub_name    database_name    account_list    all_account
-sys_pub_1    sys_db_1    acc0,acc1    null
+select pub_name, database_name, account_list from mo_catalog.mo_pubs;
+pub_name    database_name    account_list
+sys_pub_1    sys_db_1    acc0,acc1
 show subscriptions;
 Name    From_Account
 sub1    sys
