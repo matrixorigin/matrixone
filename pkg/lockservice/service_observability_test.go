@@ -39,9 +39,11 @@ func TestGetWaitingList(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 
 			// txn1

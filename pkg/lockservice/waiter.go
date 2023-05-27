@@ -95,6 +95,7 @@ type waiter struct {
 	refCount       atomic.Int32
 	latestCommitTS timestamp.Timestamp
 	waitTxn        pb.WaitTxn
+	event          event
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -196,6 +197,7 @@ func (w *waiter) mustSendNotification(
 	}
 	select {
 	case w.c <- value:
+		w.event.notified()
 		return
 	default:
 	}

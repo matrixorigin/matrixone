@@ -42,9 +42,11 @@ func TestRowLock(t *testing.T) {
 			l := s[0]
 			ctx := context.Background()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 			acquired := false
 
@@ -79,9 +81,11 @@ func TestRowLockWithMany(t *testing.T) {
 			l := s[0]
 			ctx := context.Background()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 			_, err := l.Lock(
 				ctx,
@@ -104,9 +108,11 @@ func TestMultipleRowLocks(t *testing.T) {
 			l := s[0]
 			ctx := context.Background()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 			iter := 0
 			sum := 100
@@ -136,10 +142,12 @@ func TestCtxCancelWhileWaiting(t *testing.T) {
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
 			ctx, cancel := context.WithCancel(context.Background())
-			option := pb.LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+			option := LockOptions{
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 			var wg sync.WaitGroup
 			wg.Add(1)
@@ -298,9 +306,11 @@ func TestRowLockWithSameTxn(t *testing.T) {
 			l := s[0]
 			ctx := context.Background()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 
 			for i := 0; i < 10; i++ {
@@ -342,9 +352,11 @@ func TestRangeLock(t *testing.T) {
 			l := s[0]
 			ctx := context.Background()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 			acquired := false
 
@@ -379,9 +391,11 @@ func TestRangeLockWithMany(t *testing.T) {
 			l := s[0]
 			ctx := context.Background()
 			option := LockOptions{
-				Granularity: pb.Granularity_Range,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Range,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 			_, err := l.Lock(
 				ctx,
@@ -406,9 +420,11 @@ func TestMultipleRangeLocks(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			option := LockOptions{
-				Granularity: pb.Granularity_Range,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Range,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 
 			sum := 100
@@ -455,9 +471,11 @@ func TestLockResultWithNoConfict(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 
 			res, err := l.Lock(
@@ -488,9 +506,11 @@ func TestLockResultWithConfictAndTxnCommitted(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 
 			// txn1
@@ -539,9 +559,11 @@ func TestLockResultWithConfictAndTxnAborted(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 			option := LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
 			}
 
 			// txn1
@@ -640,9 +662,11 @@ func maybeAddTestLockWithDeadlock(
 	granularity pb.Granularity) pb.Result {
 	t.Logf("%s try lock %+v", string(txnID), lock)
 	res, err := l.Lock(ctx, table, lock, txnID, LockOptions{
-		Granularity: pb.Granularity_Row,
-		Mode:        pb.LockMode_Exclusive,
-		Policy:      pb.WaitPolicy_Wait,
+		LockOptions: pb.LockOptions{
+			Granularity: pb.Granularity_Row,
+			Mode:        pb.LockMode_Exclusive,
+			Policy:      pb.WaitPolicy_Wait,
+		},
 	})
 
 	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) {

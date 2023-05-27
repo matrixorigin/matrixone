@@ -81,7 +81,13 @@ func (s *service) Lock(
 	if err != nil {
 		return pb.Result{}, err
 	}
-	return l.lock(ctx, txn, rows, options)
+
+	var result pb.Result
+	l.lock(ctx, txn, rows, options, func(r pb.Result, e error) {
+		result = r
+		err = e
+	})
+	return result, err
 }
 
 func (s *service) Unlock(

@@ -60,11 +60,13 @@ func TestClose(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
 
-	_, err := tables[1].lock(ctx, txn, [][]byte{[]byte("k1")}, LockOptions{})
-	assert.NoError(t, err)
+	tables[1].lock(ctx, txn, [][]byte{[]byte("k1")}, LockOptions{}, func(r pb.Result, err error) {
+		assert.NoError(t, err)
+	})
 
-	_, err = tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{})
-	assert.NoError(t, err)
+	tables[2].lock(ctx, txn, [][]byte{[]byte("k2")}, LockOptions{}, func(r pb.Result, err error) {
+		assert.NoError(t, err)
+	})
 
 	txn.close(
 		"s1",
