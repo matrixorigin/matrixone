@@ -1027,6 +1027,12 @@ func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Pl
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := fmt.Sprintf("select pub_name as Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || ' ACCOUNT ' || account_list as 'Create Publication' from mo_catalog.mo_pubs where pub_name='%s';", stmt.Name)
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	stmt, err := getRewriteSQLStmt(ctx, sql)
