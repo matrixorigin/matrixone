@@ -318,8 +318,8 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 	case <-c.stopCh:
 		ctx = errutil.ContextWithNoReport(ctx, true)
 		return moerr.NewInternalError(ctx, "MOCollector stopped")
-	//case c.awakeCollect <- item:
-	//	return nil
+	case c.awakeCollect <- item:
+		return nil
 	default:
 		return nil
 	}
@@ -433,8 +433,7 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	}
 }
 
-// doGenerate handle buffer gen BatchRequest, which could be anything
-// goroutine worker
+// doGenerate handle buffer gen BatchRequest, which could be any goroutine worker
 func (c *MOCollector) doGenerate(idx int) {
 	defer c.stopWait.Done()
 	var buf = new(bytes.Buffer)

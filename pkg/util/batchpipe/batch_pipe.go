@@ -42,7 +42,7 @@ type Reminder interface {
 	RemindReset()
 }
 
-// ItemBuffer Stash items and construct a batch can be stored. for instance, an sql inserting all items into a table
+// ItemBuffer Stash items and construct a batch can be stored. for instance, a sql inserting all items into a table
 type ItemBuffer[T any, B any] interface {
 	Reminder
 	Add(item T)
