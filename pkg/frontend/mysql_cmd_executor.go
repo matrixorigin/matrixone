@@ -2402,157 +2402,161 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	var loadLocalErrGroup *errgroup.Group
 	var loadLocalWriter *io.PipeWriter
 
-	defer func() {
-		finishTxnFunc := func() error {
-			//execution succeeds during the transaction. commit the transaction
-			if err == nil {
-				commitTxnFunc := func() error {
-					//load data handle txn failure internally
-					incStatementCounter(tenant, stmt)
-					txnErr = ses.TxnCommitSingleStatement(stmt)
-					if txnErr != nil {
-						logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
-						return txnErr
+	//execution succeeds during the transaction. commit the transaction
+	commitTxnFunc := func() error {
+		//load data handle txn failure internally
+		incStatementCounter(tenant, stmt)
+		txnErr = ses.TxnCommitSingleStatement(stmt)
+		if txnErr != nil {
+			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			return txnErr
+		}
+		//response the client
+		respClient := func() error {
+			switch stmt.(type) {
+			case *tree.Select:
+				if len(proc.SessionInfo.SeqAddValues) != 0 {
+					ses.AddSeqValues(proc)
+				}
+				ses.SetSeqLastValue(proc)
+			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
+				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
+				*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
+				*tree.CreateSequence, *tree.DropSequence,
+				*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
+				*tree.CreateFunction, *tree.DropFunction,
+				*tree.CreateProcedure, *tree.DropProcedure,
+				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
+				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
+				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+				resp := mce.setResponse(i, len(cws), rspLen)
+				if _, ok := stmt.(*tree.Insert); ok {
+					resp.lastInsertId = proc.GetLastInsertID()
+					if proc.GetLastInsertID() != 0 {
+						ses.SetLastInsertID(proc.GetLastInsertID())
 					}
-					//response the client
-					respClient := func() error {
-						switch stmt.(type) {
-						case *tree.Select:
-							if len(proc.SessionInfo.SeqAddValues) != 0 {
-								ses.AddSeqValues(proc)
-							}
-							ses.SetSeqLastValue(proc)
-						case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
-							*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
-							*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.Load, *tree.MoDump,
-							*tree.CreateSequence, *tree.DropSequence,
-							*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount, *tree.AlterDataBaseConfig, *tree.CreatePublication, *tree.AlterPublication, *tree.DropPublication,
-							*tree.CreateFunction, *tree.DropFunction,
-							*tree.CreateProcedure, *tree.DropProcedure,
-							*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
-							*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
-							*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
-							*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
-							resp := mce.setResponse(i, len(cws), rspLen)
-							if _, ok := stmt.(*tree.Insert); ok {
-								resp.lastInsertId = proc.GetLastInsertID()
-								if proc.GetLastInsertID() != 0 {
-									ses.SetLastInsertID(proc.GetLastInsertID())
-								}
-							}
-							if len(proc.SessionInfo.SeqDeleteKeys) != 0 {
-								ses.DeleteSeqValues(proc)
-							}
+				}
+				if len(proc.SessionInfo.SeqDeleteKeys) != 0 {
+					ses.DeleteSeqValues(proc)
+				}
 
-							if st, ok := cw.GetAst().(*tree.CreateTable); ok {
-								_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
-							}
+				if st, ok := cw.GetAst().(*tree.CreateTable); ok {
+					_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
+				}
 
-							if st, ok := cw.GetAst().(*tree.CreateDatabase); ok {
-								_ = insertRecordToMoMysqlCompatibilityMode(requestCtx, ses, stmt)
-								_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
-							}
+				if st, ok := cw.GetAst().(*tree.CreateDatabase); ok {
+					_ = insertRecordToMoMysqlCompatibilityMode(requestCtx, ses, stmt)
+					_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
+				}
 
-							if _, ok := cw.GetAst().(*tree.DropDatabase); ok {
-								_ = deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
-							}
+				if _, ok := cw.GetAst().(*tree.DropDatabase); ok {
+					_ = deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, stmt)
+				}
 
-							if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-								retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-								logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-								return retErr
-							}
-
-						case *tree.PrepareStmt, *tree.PrepareString:
-							if ses.GetCmd() == COM_STMT_PREPARE {
-								if err2 = mce.GetSession().GetMysqlProtocol().SendPrepareResponse(requestCtx, prepareStmt); err2 != nil {
-									retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-									logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-									return retErr
-								}
-							} else {
-								resp := mce.setResponse(i, len(cws), rspLen)
-								if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-									retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-									logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-									return retErr
-								}
-							}
-
-						case *tree.SetVar:
-							resp := mce.setResponse(i, len(cws), rspLen)
-							if err = proto.SendResponse(requestCtx, resp); err != nil {
-								return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
-							}
-
-						case *tree.Deallocate:
-							//we will not send response in COM_STMT_CLOSE command
-							if ses.GetCmd() != COM_STMT_CLOSE {
-								resp := mce.setResponse(i, len(cws), rspLen)
-								if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-									retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-									logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-									return retErr
-								}
-							}
-
-						case *tree.Reset:
-							resp := mce.setResponse(i, len(cws), rspLen)
-							if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
-								retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
-								logStatementStatus(requestCtx, ses, stmt, fail, retErr)
-								return retErr
-							}
-						}
-						logStatementStatus(requestCtx, ses, stmt, success, nil)
-						return retErr
-					}
-					retErr = respClient()
-					if retErr != nil {
-						return retErr
-					}
+				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+					retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
-				retErr = commitTxnFunc()
-				if retErr != nil {
+
+			case *tree.PrepareStmt, *tree.PrepareString:
+				if ses.GetCmd() == COM_STMT_PREPARE {
+					if err2 = mce.GetSession().GetMysqlProtocol().SendPrepareResponse(requestCtx, prepareStmt); err2 != nil {
+						retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+						return retErr
+					}
+				} else {
+					resp := mce.setResponse(i, len(cws), rspLen)
+					if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+						retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+						return retErr
+					}
+				}
+
+			case *tree.SetVar:
+				resp := mce.setResponse(i, len(cws), rspLen)
+				if err = proto.SendResponse(requestCtx, resp); err != nil {
+					return moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err)
+				}
+
+			case *tree.Deallocate:
+				//we will not send response in COM_STMT_CLOSE command
+				if ses.GetCmd() != COM_STMT_CLOSE {
+					resp := mce.setResponse(i, len(cws), rspLen)
+					if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+						retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
+						return retErr
+					}
+				}
+
+			case *tree.Reset:
+				resp := mce.setResponse(i, len(cws), rspLen)
+				if err2 = mce.GetSession().GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+					retErr = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
-				return retErr
 			}
+			logStatementStatus(requestCtx, ses, stmt, success, nil)
+			return retErr
+		}
+		retErr = respClient()
+		if retErr != nil {
+			return retErr
+		}
+		return retErr
+	}
 
-			//get errors during the transaction. rollback the transaction
-			rollbackTxnFunc := func() error {
-				incStatementCounter(tenant, stmt)
-				incStatementErrorsCounter(tenant, stmt)
-				/*
-					Cases    | set Autocommit = 1/0 | BEGIN statement |
-					---------------------------------------------------
-					Case1      1                       Yes
-					Case2      1                       No
-					Case3      0                       Yes
-					Case4      0                       No
-					---------------------------------------------------
-					update error message in Case1,Case3,Case4.
-				*/
-				if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
-					ses.cleanCache()
-					ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
-				}
-				logError(ses.GetDebugString(), err.Error())
-				txnErr = ses.TxnRollbackSingleStatement(stmt)
-				if txnErr != nil {
-					logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
-					return txnErr
-				}
-				logStatementStatus(requestCtx, ses, stmt, fail, err)
-				return err
-			}
-			retErr = rollbackTxnFunc()
+	//get errors during the transaction. rollback the transaction
+	rollbackTxnFunc := func() error {
+		incStatementCounter(tenant, stmt)
+		incStatementErrorsCounter(tenant, stmt)
+		/*
+			Cases    | set Autocommit = 1/0 | BEGIN statement |
+			---------------------------------------------------
+			Case1      1                       Yes
+			Case2      1                       No
+			Case3      0                       Yes
+			Case4      0                       No
+			---------------------------------------------------
+			update error message in Case1,Case3,Case4.
+		*/
+		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
+			ses.cleanCache()
+			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
+		}
+		logError(ses.GetDebugString(), err.Error())
+		txnErr = ses.TxnRollbackSingleStatement(stmt)
+		if txnErr != nil {
+			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
+			return txnErr
+		}
+		logStatementStatus(requestCtx, ses, stmt, fail, err)
+		return err
+	}
+
+	//finish the transaction
+	finishTxnFunc := func() error {
+		if err == nil {
+			retErr = commitTxnFunc()
 			if retErr != nil {
 				return retErr
 			}
 			return retErr
 		}
+
+		retErr = rollbackTxnFunc()
+		if retErr != nil {
+			return retErr
+		}
+		return retErr
+	}
+
+	defer func() {
 		retErr = finishTxnFunc()
 	}()
 
@@ -3258,30 +3262,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.SetMysqlResultSet(nil)
 	}()
 
-	//var cmpBegin time.Time
-	//var ret interface{}
-	//var runner ComputationRunner
-	//var selfHandle bool
-	//var txnErr error
-	//var rspLen uint64
-	//var prepareStmt *PrepareStmt
-	//var err2 error
-	//var columns []interface{}
-	//var mrs *MysqlResultSet
 	canCache := true
-	//var loadLocalErrGroup *errgroup.Group
-	//var loadLocalWriter *io.PipeWriter
 
 	singleStatement := len(cws) == 1
 	sqlRecord := parsers.HandleSqlForRecord(sql)
 	for i, cw := range cws {
-		//create the transaction
-		//_, _, err = ses.TxnCreate()
-		//if err != nil {
-		//	logStatementStatus(requestCtx, ses, nil, fail, err)
-		//	return err
-		//}
-		//============== do not effect the transaction ===========
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
 				cwft.stmt.GetQueryType() == tree.QueryTypeOth ||
@@ -3332,7 +3317,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		}
 
-		//============== do not effect the transaction ===========
 		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant)
 		if err != nil {
 			return err
@@ -3469,17 +3453,17 @@ func SetNewResponse(category int, status uint16, cmd int, d interface{}, cwIndex
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Session, req *Request) (resp *Response, err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			moe, ok := e.(*moerr.Error)
-			if !ok {
-				err = moerr.ConvertPanicError(requestCtx, e)
-				resp = NewGeneralErrorResponse(COM_QUERY, err)
-			} else {
-				resp = NewGeneralErrorResponse(COM_QUERY, moe)
-			}
-		}
-	}()
+	//defer func() {
+	//	if e := recover(); e != nil {
+	//		moe, ok := e.(*moerr.Error)
+	//		if !ok {
+	//			err = moerr.ConvertPanicError(requestCtx, e)
+	//			resp = NewGeneralErrorResponse(COM_QUERY, err)
+	//		} else {
+	//			resp = NewGeneralErrorResponse(COM_QUERY, moe)
+	//		}
+	//	}
+	//}()
 
 	var sql string
 	logDebugf(ses.GetDebugString(), "cmd %v", req.GetCmd())
@@ -3637,8 +3621,6 @@ func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {
 func (mce *MysqlCmdExecutor) Close() {}
 
 /*
-=======
->>>>>>> main
 convert the type in computation engine to the type in mysql.
 */
 func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *MysqlColumn) error {
