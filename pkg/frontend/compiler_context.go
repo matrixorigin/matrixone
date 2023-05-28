@@ -495,14 +495,14 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		})
 	}
 
-	rowIdCol := plan2.MakeRowIdColDef()
-	cols = append(cols, rowIdCol)
 	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
 		cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
 	}
 	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
 		cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
 	}
+	rowIdCol := plan2.MakeRowIdColDef()
+	cols = append(cols, rowIdCol)
 
 	//convert
 	obj := &plan2.ObjectRef{

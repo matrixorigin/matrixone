@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -56,16 +55,26 @@ type StatementInfo struct {
 	Error      error               `json:"error"`
 	ResponseAt time.Time           `json:"response_at"`
 	Duration   time.Duration       `json:"duration"` // unit: ns
-	ExecPlan   any                 `json:"exec_plan"`
+	// new ExecPlan
+	ExecPlan SerializableExecPlan `json:"-"` // set by SetSerializableExecPlan
 	// RowsRead, BytesScan generated from ExecPlan
 	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
 	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
-	// SerializeExecPlan
-	SerializeExecPlan SerializeExecPlanFunc // see SetExecPlan, ExecPlan2Json
 
 	ResultCount int64 `json:"result_count"` // see EndStatement
 
 	// flow ctrl
+	// #		|case 1 |case 2 |case 3 |case 4|
+	// end		| false | false | true  | true |  (set true at EndStatement)
+	// exported	| false | true  | false | true |  (set true at function FillRow, set false at function EndStatement)
+	//
+	// case 1: first gen statement_info record
+	// case 2: statement_info exported as `status=Running` record
+	// case 3: while query done, call EndStatement mark statement need to be exported again
+	// case 4: done final export
+	//
+	// normally    flow: case 1->2->3->4
+	// query-quick flow: case 1->3->4
 	end bool // cooperate with mux
 	mux sync.Mutex
 	// mark reported
@@ -93,10 +102,13 @@ func (s *StatementInfo) Size() int64 {
 func (s *StatementInfo) Free() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	if s.end { // cooperate with s.mux
+	if s.end && s.exported { // cooperate with s.mux
 		s.Statement = ""
 		s.StatementFingerprint = ""
 		s.StatementTag = ""
+		if s.ExecPlan != nil {
+			s.ExecPlan.Free()
+		}
 		s.ExecPlan = nil
 		s.Error = nil
 	}
@@ -156,25 +168,18 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
 	var jsonByte []byte
 	var statsJsonByte []byte
 	var stats Statistic
-	if s.SerializeExecPlan == nil {
-		// use defaultSerializeExecPlan
-		if f := getDefaultSerializeExecPlan(); f == nil {
-			uuidStr := uuid.UUID(s.StatementID).String()
-			return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr),
-				`{"code":200,"message":"NO ExecPlan"}`
-		} else {
-			jsonByte, statsJsonByte, stats = f(ctx, s.ExecPlan, uuid.UUID(s.StatementID))
-			s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
-		}
+
+	if s.ExecPlan == nil {
+		uuidStr := uuid.UUID(s.StatementID).String()
+		return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr),
+			`{"code":200,"message":"NO ExecPlan"}`
 	} else {
-		// use s.SerializeExecPlan
-		// get real ExecPlan json-str
-		jsonByte, statsJsonByte, stats = s.SerializeExecPlan(ctx, s.ExecPlan, uuid.UUID(s.StatementID))
+		jsonByte, statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
 		s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
-		if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
-			// get nil ExecPlan json-str
-			jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
-		}
+		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
+		//	// get nil ExecPlan json-str
+		//	jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
+		//}
 	}
 	if len(statsJsonByte) == 0 {
 		statsJsonByte = []byte("{}")
@@ -182,28 +187,17 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
 	return string(jsonByte), string(statsJsonByte)
 }
 
-var defaultSerializeExecPlan atomic.Value
-
 type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
 
-func SetDefaultSerializeExecPlan(f SerializeExecPlanFunc) {
-	defaultSerializeExecPlan.Store(f)
+type SerializableExecPlan interface {
+	Marshal(context.Context) ([]byte, []byte, Statistic)
+	Free()
 }
 
-func getDefaultSerializeExecPlan() SerializeExecPlanFunc {
-	if defaultSerializeExecPlan.Load() == nil {
-		return nil
-	} else {
-		return defaultSerializeExecPlan.Load().(SerializeExecPlanFunc)
-	}
-}
-
-// SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
-func (s *StatementInfo) SetExecPlan(execPlan any, SerializeFunc SerializeExecPlanFunc) {
+func (s *StatementInfo) SetSerializableExecPlan(execPlan SerializableExecPlan) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.ExecPlan = execPlan
-	s.SerializeExecPlan = SerializeFunc
 }
 
 func (s *StatementInfo) SetTxnID(id []byte) {
@@ -241,6 +235,7 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64) {
 			s.Status = StatementStatusFailed
 		}
 		if !s.reported || s.exported { // cooperate with s.mux
+			s.exported = false
 			s.Report(ctx)
 		}
 	}

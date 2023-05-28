@@ -155,7 +155,8 @@ type QueryBuilder struct {
 
 	nextTag int32
 
-	mysqlCompatible bool
+	mysqlCompatible    bool
+	haveOnDuplicateKey bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
 }
 
 type CTERef struct {

@@ -25,10 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -65,9 +67,15 @@ func New(
 		dnID = services[0].ServiceID
 	}
 
+	ls, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.LockService)
+	if !ok {
+		logutil.Fatalf("missing lock service")
+	}
+
 	e := &Engine{
 		mp:         mp,
 		fs:         fs,
+		ls:         ls.(lockservice.LockService),
 		cli:        cli,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
@@ -253,7 +261,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if rel == nil {
 		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
-		for _, dbName := range dbNames {
+		for _, dbName = range dbNames {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
 				return "", "", nil, err
@@ -331,7 +339,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.cli,
 		op,
 		e.fs,
-		nil,
+		e.ls,
 		nil,
 	)
 
@@ -341,8 +349,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		op:              op,
 		proc:            proc,
 		engine:          e,
-		readOnly:        true,
-		meta:            op.Txn(),
+		meta:            op.TxnRef(),
 		idGen:           e.idGen,
 		dnStores:        e.getDNServices(),
 		tableMap:        new(sync.Map),
@@ -364,7 +371,9 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		cnBlkId_Pos:                     map[types.Blockid]Pos{},
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
+		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
+	txn.readOnly.Store(true)
 	// TxnWorkSpace SegmentName
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
@@ -383,10 +392,12 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
+	txn.IncrStatemenetID(ctx)
 	defer e.delTransaction(txn)
-	if txn.readOnly {
+	if txn.readOnly.Load() {
 		return nil
 	}
+	txn.mergeTxnWorkspace()
 	err := txn.DumpBatch(true, 0)
 	if err != nil {
 		return err

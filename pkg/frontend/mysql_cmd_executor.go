@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -3566,8 +3565,6 @@ func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {
 func (mce *MysqlCmdExecutor) Close() {}
 
 /*
-=======
->>>>>>> main
 convert the type in computation engine to the type in mysql.
 */
 func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *MysqlColumn) error {
@@ -3659,32 +3656,52 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.UUID) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
-	if queryPlan != nil && queryPlan.GetQuery() != nil {
-		marshalPlan := explain.BuildJsonPlan(ctx, uuid, &explain.MarshalPlanOptions, queryPlan.GetQuery())
-		stats.RowsRead, stats.BytesScan = marshalPlan.StatisticsRead()
+type marshalPlanHandler struct {
+	marshalPlan *explain.ExplainData
+	uuid        uuid.UUID
+}
+
+func NewMarshalPlanHandler(ctx context.Context, uuid uuid.UUID, plan *plan2.Plan) *marshalPlanHandler {
+	// TODO: need mem improvement
+	if plan == nil || plan.GetQuery() == nil {
+		return &marshalPlanHandler{
+			marshalPlan: nil,
+			uuid:        uuid,
+		}
+	}
+	return &marshalPlanHandler{
+		marshalPlan: explain.BuildJsonPlan(ctx, uuid, &explain.MarshalPlanOptions, plan.GetQuery()),
+		uuid:        uuid,
+	}
+}
+
+func (h *marshalPlanHandler) Free() {}
+
+func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
+	if h.marshalPlan != nil {
+		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		// XXX, `buffer` can be used repeatedly as a global variable in the future
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
 		buffer := bytes.NewBuffer(make([]byte, 0, 8192))
 		encoder := json.NewEncoder(buffer)
 		encoder.SetEscapeHTML(false)
-		err := encoder.Encode(marshalPlan)
+		err := encoder.Encode(h.marshalPlan)
 		if err != nil {
 			moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
-			jsonBytes = buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error())
+			jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
 		} else {
 			jsonBytes = buffer.Bytes()
 		}
 		// data transform Global to json
-		if len(marshalPlan.Steps) > 0 {
-			if len(marshalPlan.Steps) > 1 {
-				logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(marshalPlan.Steps))
-			}
+		if len(h.marshalPlan.Steps) > 0 {
+			// if len(h.marshalPlan.Steps) > 1 {
+			// logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(h.marshalPlan.Steps))
+			// }
 			// XXX, `buffer` can be used repeatedly as a global variable in the future
 			buffer := &bytes.Buffer{}
 			encoder := json.NewEncoder(buffer)
 			encoder.SetEscapeHTML(false)
-			global := marshalPlan.Steps[0].GraphData.Global
+			global := h.marshalPlan.Steps[0].GraphData.Global
 			err = encoder.Encode(&global)
 			if err != nil {
 				statsJonsBytes = []byte(fmt.Sprintf(`{"code":200,"message":"%q"}`, err.Error()))
@@ -3693,24 +3710,7 @@ func serializePlanToJson(ctx context.Context, queryPlan *plan2.Plan, uuid uuid.U
 			}
 		}
 	} else {
-		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrWarn, "sql query no record execution plan")
+		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
-	return jsonBytes, statsJonsBytes, stats
-}
-
-// SerializeExecPlan Serialize the execution plan by json
-var SerializeExecPlan = func(ctx context.Context, plan any, uuid uuid.UUID) ([]byte, []byte, motrace.Statistic) {
-	if plan == nil {
-		return serializePlanToJson(ctx, nil, uuid)
-	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
-		moError := moerr.NewInternalError(ctx, "execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
-		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error()), []byte{}, motrace.Statistic{}
-	} else {
-		// data transform to json dataStruct
-		return serializePlanToJson(ctx, queryPlan, uuid)
-	}
-}
-
-func init() {
-	motrace.SetDefaultSerializeExecPlan(SerializeExecPlan)
+	return
 }
