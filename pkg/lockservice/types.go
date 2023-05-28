@@ -87,7 +87,7 @@ type LockService interface {
 	//
 	// Returns false if conflicts are encountered in FastFail wait policy and ErrDeadLockDetected
 	// returns if current operation was aborted by deadlock detection.
-	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (pb.Result, error)
+	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options pb.LockOptions) (pb.Result, error)
 	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
 	// the txn was committed.
 	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp) error

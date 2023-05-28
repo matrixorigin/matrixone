@@ -39,12 +39,10 @@ func TestLockAndUnlockOnRemote(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 
-			option := LockOptions{
-				LockOptions: pb.LockOptions{
-					Granularity: pb.Granularity_Row,
-					Mode:        pb.LockMode_Exclusive,
-					Policy:      pb.WaitPolicy_Wait,
-				},
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
 			}
 
 			txn1 := []byte{1}
@@ -203,12 +201,10 @@ func TestLockResultWithConfictAndTxnCommittedOnRemote(t *testing.T) {
 			txn1 := []byte("txn1")
 			txn2 := []byte("txn2")
 			row1 := []byte{1}
-			option := LockOptions{
-				LockOptions: pb.LockOptions{
-					Granularity: pb.Granularity_Row,
-					Mode:        pb.LockMode_Exclusive,
-					Policy:      pb.WaitPolicy_Wait,
-				},
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
 			}
 
 			// txn1 hold lock row1 on l1
@@ -253,12 +249,10 @@ func TestLockResultWithConfictAndTxnAbortedOnRemote(t *testing.T) {
 			txn1 := []byte("txn1")
 			txn2 := []byte("txn2")
 			row1 := []byte{1}
-			option := LockOptions{
-				LockOptions: pb.LockOptions{
-					Granularity: pb.Granularity_Row,
-					Mode:        pb.LockMode_Exclusive,
-					Policy:      pb.WaitPolicy_Wait,
-				},
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
 			}
 
 			// txn1 hold lock row1 on l1
@@ -422,12 +416,10 @@ func TestLockWithBindIsStale(t *testing.T) {
 			table uint64) {
 
 			txnID2 := []byte("txn2")
-			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
-				LockOptions: pb.LockOptions{
-					Granularity: pb.Granularity_Row,
-					Mode:        pb.LockMode_Exclusive,
-					Policy:      pb.WaitPolicy_Wait,
-				},
+			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
 			})
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
@@ -502,12 +494,10 @@ func TestLockWithBindTimeout(t *testing.T) {
 			txnID2 := []byte("txn2")
 			// l2 hold the old bind, and can not connect to s1, and wait bind changed
 			for {
-				_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
-					LockOptions: pb.LockOptions{
-						Granularity: pb.Granularity_Row,
-						Mode:        pb.LockMode_Exclusive,
-						Policy:      pb.WaitPolicy_Wait,
-					},
+				_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
+					Granularity: pb.Granularity_Row,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
 				})
 				if err == nil {
 					// l2 get the bind
@@ -589,12 +579,10 @@ func TestLockWithBindNotFound(t *testing.T) {
 			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: 1})
 
 			txnID2 := []byte("txn2")
-			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, LockOptions{
-				LockOptions: pb.LockOptions{
-					Granularity: pb.Granularity_Row,
-					Mode:        pb.LockMode_Exclusive,
-					Policy:      pb.WaitPolicy_Wait,
-				},
+			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
 			})
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound))
 

@@ -350,7 +350,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 				lt := v.(*localLockTable)
 
 				for _, rows := range c.existsLock {
-					opts := LockOptions{}
+					opts := pb.LockOptions{}
 					if len(rows) > 1 {
 						opts.Granularity = pb.Granularity_Range
 					}
@@ -377,7 +377,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					lt.mu.Unlock()
 				}
 
-				opts := LockOptions{}
+				opts := pb.LockOptions{}
 				opts.Granularity = pb.Granularity_Range
 				_, err = l.Lock(ctx, table, c.newLock, []byte(c.txnID), opts)
 				require.NoError(t, err)
@@ -441,11 +441,11 @@ func TestMergeRangeWithConflict(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 
-			_, err = l.Lock(ctx, 1, [][]byte{{1}}, []byte("txn1"), LockOptions{})
+			_, err = l.Lock(ctx, 1, [][]byte{{1}}, []byte("txn1"), pb.LockOptions{})
 			require.NoError(t, err)
-			_, err = l.Lock(ctx, 1, [][]byte{{2}}, []byte("txn1"), LockOptions{})
+			_, err = l.Lock(ctx, 1, [][]byte{{2}}, []byte("txn1"), pb.LockOptions{})
 			require.NoError(t, err)
-			_, err = l.Lock(ctx, 1, [][]byte{{3}}, []byte("txn2"), LockOptions{})
+			_, err = l.Lock(ctx, 1, [][]byte{{3}}, []byte("txn2"), pb.LockOptions{})
 			require.NoError(t, err)
 			var wg sync.WaitGroup
 			wg.Add(3)
@@ -520,14 +520,10 @@ func TestMergeRangeWithConflict(t *testing.T) {
 		})
 }
 
-func getRowOptions() LockOptions {
-	return LockOptions{
-		LockOptions: pb.LockOptions{Granularity: pb.Granularity_Row},
-	}
+func getRowOptions() pb.LockOptions {
+	return pb.LockOptions{Granularity: pb.Granularity_Row}
 }
 
-func getRangeOptions() LockOptions {
-	return LockOptions{
-		LockOptions: pb.LockOptions{Granularity: pb.Granularity_Range},
-	}
+func getRangeOptions() pb.LockOptions {
+	return pb.LockOptions{Granularity: pb.Granularity_Range}
 }

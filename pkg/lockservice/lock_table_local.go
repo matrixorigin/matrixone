@@ -28,12 +28,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
+const (
+	eventsWorkers = 4
+)
+
 // a localLockTable instance manages the locks on a table
 type localLockTable struct {
 	bind     pb.LockTable
 	fsp      *fixedSlicePool
 	detector *detector
 	clock    clock.Clock
+	events   *waiterEvents
 	mu       struct {
 		sync.RWMutex
 		closed bool
@@ -45,14 +50,17 @@ func newLocalLockTable(
 	bind pb.LockTable,
 	fsp *fixedSlicePool,
 	detector *detector,
+	events *waiterEvents,
 	clock clock.Clock) lockTable {
 	l := &localLockTable{
 		bind:     bind,
 		fsp:      fsp,
 		detector: detector,
 		clock:    clock,
+		events:   events,
 	}
 	l.mu.store = newBtreeBasedStorage()
+	l.events.start()
 	return l
 }
 
@@ -66,37 +74,49 @@ func (l *localLockTable) lock(
 	ctx, span := trace.Debug(ctx, "lockservice.lock.local")
 	defer span.End()
 
-	table := l.bind.Table
-	logLocalLock(l.bind.ServiceID, txn, table, rows, opts)
-
-	var err error
+	logLocalLock(l.bind.ServiceID, txn, l.bind.Table, rows, opts)
 	c := newLockContext(ctx, txn, rows, opts, cb, l.bind)
+	if opts.async {
+		c.lockFunc = l.doLock
+	}
+	l.doLock(c, false)
+}
+
+func (l *localLockTable) doLock(
+	c lockContext,
+	blocked bool) {
+	var err error
+	table := l.bind.Table
 	for {
-		c, err = l.doAcquireLock(c)
-		if err != nil {
-			logLocalLockFailed(l.bind.ServiceID, txn, table, rows, opts, err)
-			c.done(err)
-			return
-		}
-		// no waiter, all locks are added
-		if c.w == nil {
-			txn.setBlocked(txn.txnID, nil, false)
-			logLocalLockAdded(l.bind.ServiceID, txn, l.bind.Table, rows, opts)
-			if c.result.Timestamp.IsEmpty() {
-				c.result.Timestamp = c.lockedTS
+		// blocked used for async callback, waiter is created, and added to wait list.
+		// So only need wait notify.
+		if !blocked {
+			c, err = l.doAcquireLock(c)
+			if err != nil {
+				logLocalLockFailed(l.bind.ServiceID, c.txn, table, c.rows, c.opts, err)
+				c.done(err)
+				return
 			}
-			c.done(nil)
-			return
+			// no waiter, all locks are added
+			if c.w == nil {
+				c.txn.setBlocked(c.txn.txnID, nil, false)
+				logLocalLockAdded(l.bind.ServiceID, c.txn, l.bind.Table, c.rows, c.opts)
+				if c.result.Timestamp.IsEmpty() {
+					c.result.Timestamp = c.lockedTS
+				}
+				c.done(nil)
+				return
+			}
+
+			// we handle remote lock on current rpc io read goroutine, so we can not wait here, otherwise
+			// the rpc will be blocked.
+			if c.opts.async {
+				return
+			}
 		}
 
-		// we handle remote lock on current rpc io read goroutine, so we can not wait here, otherwise
-		// the rpc will be blocked.
-		// if opts.async {
-		// 	return
-		// }
-
-		v := c.w.wait(ctx, l.bind.ServiceID)
-		logLocalLockWaitOnResult(l.bind.ServiceID, txn, table, rows[c.idx], opts, c.w, err)
+		v := c.w.wait(c.ctx, l.bind.ServiceID)
+		logLocalLockWaitOnResult(l.bind.ServiceID, c.txn, table, c.rows[c.idx], c.opts, c.w, err)
 		if v.err != nil {
 			c.w.close(l.bind.ServiceID, v)
 			c.done(v.err)
@@ -109,6 +129,7 @@ func (l *localLockTable) lock(
 		if !c.result.HasPrevCommit {
 			c.result.HasPrevCommit = !v.ts.IsEmpty()
 		}
+		blocked = false
 	}
 }
 
@@ -224,8 +245,11 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 				continue
 			}
 			c.w = getWaiter(l.bind.ServiceID, c.w, c.txn.txnID)
-			l.handleLockConflictLocked(c.txn, c.w, key, lock)
 			c.offset = idx
+			if c.opts.async {
+				l.events.add(c)
+			}
+			l.handleLockConflictLocked(c.txn, c.w, key, lock)
 			return c
 		}
 		l.addRowLockLocked(c.txn, row, getWaiter(l.bind.ServiceID, c.w, c.txn.txnID), c.opts.Mode)
@@ -301,7 +325,10 @@ func (l *localLockTable) handleLockConflictLocked(
 	logLocalLockWaitOn(l.bind.ServiceID, txn, l.bind.Table, w, key, conflictWith)
 }
 
-func getWaiter(serviceID string, w *waiter, txnID []byte) *waiter {
+func getWaiter(
+	serviceID string,
+	w *waiter,
+	txnID []byte) *waiter {
 	if w != nil {
 		return w
 	}

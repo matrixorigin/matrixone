@@ -19,6 +19,7 @@ type lockContext struct {
 	lockedTS timestamp.Timestamp
 	result   pb.Result
 	cb       func(pb.Result, error)
+	lockFunc func(lockContext, bool)
 }
 
 func newLockContext(
@@ -42,6 +43,13 @@ func (c lockContext) done(err error) {
 	c.cb(c.result, err)
 }
 
+func (c lockContext) doLock() {
+	if c.lockFunc == nil {
+		panic("missing lock")
+	}
+	c.lockFunc(c, true)
+}
+
 type event struct {
 	c      lockContext
 	eventC chan lockContext
@@ -57,14 +65,14 @@ func (e event) notified() {
 // to avoid too many goroutine blocked.
 type waiterEvents struct {
 	n       int
-	eventC  chan *waiter
+	eventC  chan lockContext
 	stopper *stopper.Stopper
 }
 
 func newWaiterEvents(n int) *waiterEvents {
 	return &waiterEvents{
 		n:       n,
-		eventC:  make(chan *waiter, 10000),
+		eventC:  make(chan lockContext, 10000),
 		stopper: stopper.NewStopper("waiter-events", stopper.WithLogger(getLogger().RawLogger())),
 	}
 }
@@ -82,13 +90,20 @@ func (mw *waiterEvents) close() {
 	close(mw.eventC)
 }
 
+func (mw *waiterEvents) add(c lockContext) {
+	c.w.event = event{
+		eventC: mw.eventC,
+		c:      c,
+	}
+}
+
 func (mw *waiterEvents) handle(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-mw.eventC:
-			// w.wait()
+		case c := <-mw.eventC:
+			c.doLock()
 		}
 	}
 }

@@ -86,6 +86,9 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 	runRPCTests(
 		t,
 		func(c Client, s Server) {
+			events := newWaiterEvents(1)
+			defer events.close()
+
 			s.RegisterMethodHandler(
 				pb.Method_KeepLockTableBind,
 				func(
@@ -113,12 +116,14 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 					pb.LockTable{ServiceID: "s1"},
 					nil,
 					nil,
+					events,
 					runtime.DefaultRuntime().Clock()))
 			m.Store(2,
 				newLocalLockTable(
 					pb.LockTable{ServiceID: "s1"},
 					nil,
 					nil,
+					events,
 					runtime.DefaultRuntime().Clock()))
 			m.Store(3,
 				newRemoteLockTable(
