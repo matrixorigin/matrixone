@@ -124,11 +124,7 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) er
 
 	if vec.IsConstNull() {
 		var v T1
-		if vec.GetType().IsVarlen() {
-			a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], z, a.es[i], true)
-		} else {
-			a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], z, a.es[i], true)
-		}
+		a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], z, a.es[i], true)
 		return nil
 	}
 
