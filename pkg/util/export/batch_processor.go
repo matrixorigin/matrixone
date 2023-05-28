@@ -318,8 +318,8 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 	case <-c.stopCh:
 		ctx = errutil.ContextWithNoReport(ctx, true)
 		return moerr.NewInternalError(ctx, "MOCollector stopped")
-	case c.awakeCollect <- item:
-		return nil
+	//case c.awakeCollect <- item:
+	//	return nil
 	default:
 		return nil
 	}
