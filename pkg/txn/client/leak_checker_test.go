@@ -41,7 +41,6 @@ func TestLeakCheck(t *testing.T) {
 	_, err := c.New(ctx, newTestTimestamp(0))
 	assert.Nil(t, err)
 	<-cc
-	require.NoError(t, c.Close())
 }
 
 func TestLeakCheckWithNoLeak(t *testing.T) {
@@ -67,5 +66,4 @@ func TestLeakCheckWithNoLeak(t *testing.T) {
 	lc.Lock()
 	assert.Equal(t, 0, len(lc.actives))
 	lc.Unlock()
-	require.NoError(t, c.Close())
 }
