@@ -1310,11 +1310,6 @@ func (tbl *txnTable) newReader(
 		mp[attr.Attr.Name] = attr.Attr.Type
 	}
 
-	//partState, err := tbl.getPartitionState(ctx)
-	//if err != nil {
-	//	return nil, err
-	//}
-
 	var iter logtailreplay.RowsIter
 	if len(encodedPrimaryKey) > 0 {
 		iter = state.NewPrimaryKeyIter(
