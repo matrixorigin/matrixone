@@ -464,18 +464,18 @@ func (m *MockRelation) Write(arg0 context.Context, arg1 *batch.Batch) error {
 }
 
 // MaxAndMinValues mocks base method.
-func (m *MockRelation) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
+func (m *MockRelation) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetMetadataScanInfoBytes", ctx)
-	ret0, _ := ret[0].([][]byte)
+	ret := m.ctrl.Call(m, "GetColumMetadataScanInfo", ctx)
+	ret0, _ := ret[0].([]*plan.MetadataScanInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // MaxAndMinValues indicates an expected call of MaxAndMinValues.
-func (mr *MockRelationMockRecorder) GetMetadataScanInfoBytes(ctx interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) GetColumMetadataScanInfo(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMetadataScanInfoBytes", reflect.TypeOf((*MockRelation)(nil).GetMetadataScanInfoBytes), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumMetadataScanInfo", reflect.TypeOf((*MockRelation)(nil).GetColumMetadataScanInfo), ctx)
 }
 
 // Write indicates an expected call of Write.
