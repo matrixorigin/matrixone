@@ -88,7 +88,7 @@ func (op *Op) OnExec(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	err = op.Impl.Execute()
+	err = op.Impl.Execute(ctx)
 	if err != nil {
 		return err
 	}

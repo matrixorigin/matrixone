@@ -141,7 +141,7 @@ func (task *compactBlockTask) Name() string {
 	return fmt.Sprintf("[%d]compact", task.ID())
 }
 
-func (task *compactBlockTask) Execute() (err error) {
+func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	logutil.Info("[Start]", common.OperationField(task.Name()),
 		common.OperandField(task.meta.Repr()))
 	now := time.Now()
@@ -149,7 +149,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	defer seg.Close()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
-	preparer, empty, err := task.PrepareData(context.Background())
+	preparer, empty, err := task.PrepareData(ctx)
 	if err != nil {
 		return
 	}
