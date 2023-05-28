@@ -179,7 +179,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	logutil.Info("[Start] Mergeblocks", common.OperationField(task.Name()),
 		common.OperandField(task))
 	now := time.Now()
-	ctx := context.Background()
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
 		if toSegEntry, err = task.rel.CreateNonAppendableSegment(false); err != nil {
