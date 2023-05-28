@@ -801,6 +801,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if toWriteS3 {
 			dataScope := c.newMergeScope(ss)
 			dataScope.IsEnd = true
+			if c.anal.qry.LoadTag {
+				dataScope.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, dataScope.NodeInfo.Mcpu) // reset the channel buffer of sink for load
+			}
 			mcpu := dataScope.NodeInfo.Mcpu
 			scopes := make([]*Scope, 0, mcpu)
 			regs := make([]*process.WaitRegister, 0, mcpu)
@@ -893,6 +896,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: c.NumCPU()},
 			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
 			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
+		}
+		if c.anal.qry.LoadTag {
+			rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, c.NumCPU()) // reset the channel buffer of sink for load
 		}
 		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
 		return []*Scope{rs}, nil
