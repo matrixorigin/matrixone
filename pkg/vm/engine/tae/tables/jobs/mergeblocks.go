@@ -175,7 +175,7 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 	return
 }
 
-func (task *mergeBlocksTask) Execute() (err error) {
+func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	logutil.Info("[Start] Mergeblocks", common.OperationField(task.Name()),
 		common.OperandField(task))
 	now := time.Now()
