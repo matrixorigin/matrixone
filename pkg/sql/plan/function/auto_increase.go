@@ -17,7 +17,6 @@ package function
 import (
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,8 +43,7 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 	if proc.TxnOperator != nil {
 		minSnapshotTS = proc.TxnOperator.Txn().SnapshotTS
 	}
-	txnOperator, err := proc.TxnClient.New(proc.Ctx, minSnapshotTS,
-		client.WithTxnCreateBy("auto_increase"))
+	txnOperator, err := proc.TxnClient.New(proc.Ctx, minSnapshotTS)
 	if err != nil {
 		return err
 	}
@@ -284,8 +282,7 @@ func newTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn c
 	if proc.TxnOperator != nil {
 		minSnapshotTS = proc.TxnOperator.Txn().SnapshotTS
 	}
-	txn, err = proc.TxnClient.New(proc.Ctx, minSnapshotTS,
-		client.WithTxnCreateBy("auto_increase.newTxn"))
+	txn, err = proc.TxnClient.New(proc.Ctx, minSnapshotTS)
 	if err != nil {
 		return nil, err
 	}

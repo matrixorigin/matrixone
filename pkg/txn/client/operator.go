@@ -97,13 +97,6 @@ func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	}
 }
 
-// WithTxnCreateBy set txn create by.Used to check leak txn
-func WithTxnCreateBy(createBy string) TxnOption {
-	return func(tc *txnOperator) {
-		tc.option.createBy = createBy
-	}
-}
-
 // WithTxnCacheWrite Set cache write requests, after each Write call, the request will not be sent
 // to the DN node immediately, but stored in the Coordinator's memory, and the Coordinator will
 // choose the right time to send the cached requests. The following scenarios trigger the sending
@@ -158,7 +151,6 @@ type txnOperator struct {
 		enableCacheWrite       bool
 		disable1PCOpt          bool
 		coordinator            bool
-		createBy               string
 		lockService            lockservice.LockService
 		closeFunc              func(txn.TxnMeta)
 		updateLastCommitTSFunc func(timestamp.Timestamp)
