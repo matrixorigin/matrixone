@@ -105,7 +105,7 @@ func (mgr *Manager) process(jobs ...any) {
 	}
 	for _, cj := range dedupJobs {
 		if err := cj.job(context.Background()); err != nil {
-			logutil.Errorf("process gc job gavin 100 %s: %v", cj.name, err)
+			logutil.Errorf("process gc job 100 %s: %v", cj.name, err)
 		}
 	}
 
