@@ -292,8 +292,6 @@ select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into dis_table_02 values (2,'oooo','1802-03-20');
-Duplicate entry '2' for key 'a'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 select b, c from dis_table_02;
 b    c
@@ -342,6 +340,7 @@ tittttt    1999-06-04 00:00:00
 select b, c from dis_table_02;
 b    c
 pppp    2020-09-08 00:00:00
+rollback;
 start transaction ;
 update dis_table_02 set b='catttteee' where a>1;
 select b, c from dis_table_02;
@@ -503,7 +502,7 @@ a    b    c    d
 insert into dis_table_07 values (2,'blue',12.00,'2024-01-20');
 begin;
 update dis_table_07 set d='2024-01-20' where a=2 and b='blue';
-Duplicate entry '3a15024601626c756500421be2cf5446490000' for key '__mo_cpkey_col'
+Duplicate entry '(2,blue,2024-01-20 00:00:00)' for key '__mo_cpkey_col'
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from dis_table_07;
 a    b    c    d

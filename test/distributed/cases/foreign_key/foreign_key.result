@@ -355,14 +355,14 @@ col1    col2    col3    col4
 truncate table fk_01;
 internal error: can not truncate table 'fk_01' referenced by some foreign key constraint
 insert into fk_01(col2,col3) values ('zhi','gao'),('er','li');
-select * from fk_01;
+select * from fk_01 order by col1;
 col1    col2    col3
 1    window    deli
 2    safer    prow
 3    ultra    strong
 4    aaa    bbb
-5    zhi    gao
-6    er    li
+9    zhi    gao
+10    er    li
 select * from fk_02;
 col1    col2    col3    col4
 1    aa    bb    2

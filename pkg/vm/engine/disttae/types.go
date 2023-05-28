@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -62,6 +65,10 @@ const (
 	INIT_ROWID_OFFSET             = math.MaxUint32
 )
 
+var (
+	_ client.Workspace = (*Transaction)(nil)
+)
+
 var GcCycle = 10 * time.Second
 
 type DNStore = metadata.DNService
@@ -76,6 +83,7 @@ type Engine struct {
 	sync.RWMutex
 	mp         *mpool.MPool
 	fs         fileservice.FileService
+	ls         lockservice.LockService
 	cli        client.TxnClient
 	idGen      IDGenerator
 	catalog    *cache.CatalogCache
@@ -92,7 +100,7 @@ type Transaction struct {
 	sync.Mutex
 	engine *Engine
 	// readOnly default value is true, once a write happen, then set to false
-	readOnly bool
+	readOnly atomic.Bool
 	// db       *DB
 	// blockId starts at 0 and keeps incrementing,
 	// this is used to name the file on s3 and then give it to tae to use
@@ -100,7 +108,7 @@ type Transaction struct {
 	// blockId uint64
 
 	// local timestamp for workspace operations
-	meta txn.TxnMeta
+	meta *txn.TxnMeta
 	op   client.TxnOperator
 
 	// writes cache stores any writes done by txn
@@ -142,6 +150,12 @@ type Transaction struct {
 	cnBlkId_Pos                     map[types.Blockid]Pos
 	blockId_raw_batch               map[types.Blockid]*batch.Batch
 	blockId_dn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
+
+	batchSelectList map[*batch.Batch][]int64
+
+	statementID int
+
+	statements []int
 }
 
 type Pos struct {
@@ -196,6 +210,61 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 	txn.deletedBlocks.addDeletedBlocks(blockId, offsets)
 }
 
+func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
+	txn.Lock()
+	defer txn.Unlock()
+	if txn.statementID > 0 {
+		start := txn.statements[txn.statementID-1]
+		writes := make([]Entry, 0, len(txn.writes[start:]))
+		for i := start; i < len(txn.writes); i++ {
+			if txn.writes[i].typ == DELETE {
+				writes = append(writes, txn.writes[i])
+			}
+		}
+		for i := start; i < len(txn.writes); i++ {
+			if txn.writes[i].typ != DELETE {
+				writes = append(writes, txn.writes[i])
+			}
+		}
+		txn.writes = append(txn.writes[:start], writes...)
+	}
+	txn.statements = append(txn.statements, len(txn.writes))
+	txn.statementID++
+	if txn.statementID > 1 && txn.meta.IsRCIsolation() {
+		if err := txn.op.UpdateSnapshot(
+			ctx,
+			timestamp.Timestamp{}); err != nil {
+			logutil.Fatalf(err.Error())
+			return err
+		}
+		txn.resetSnapshot()
+	}
+	return nil
+}
+
+func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
+	if txn.statementID > 0 {
+		txn.statementID--
+		end := txn.statements[txn.statementID]
+		for i := end; i < len(txn.writes); i++ {
+			if txn.writes[i].bat == nil {
+				continue
+			}
+			txn.writes[i].bat.Clean(txn.engine.mp)
+		}
+		txn.writes = txn.writes[:end]
+		txn.statements = txn.statements[:txn.statementID]
+	}
+	return nil
+}
+func (txn *Transaction) resetSnapshot() error {
+	txn.tableMap.Range(func(key, value interface{}) bool {
+		value.(*txnTable).resetSnapshot()
+		return true
+	})
+	return nil
+}
+
 // Entry represents a delete/insert
 type Entry struct {
 	typ          int
@@ -248,6 +317,8 @@ type databaseKey struct {
 
 // txnTable represents an opened table in a transaction
 type txnTable struct {
+	sync.Mutex
+
 	tableId   uint64
 	version   uint32
 	tableName string
@@ -292,7 +363,7 @@ type txnTable struct {
 	localState *logtailreplay.PartitionState
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
-	localTS timestamp.Timestamp
+	// localTS timestamp.Timestamp
 	//rowid in mo_tables
 	rowid types.Rowid
 	//rowids in mo_columns

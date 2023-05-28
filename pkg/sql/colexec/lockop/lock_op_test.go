@@ -121,7 +121,17 @@ func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 			c := make(chan struct{})
 			go func() {
 				defer close(c)
-				_, err = Call(0, proc, arg, false, false)
+				arg2 := &Argument{}
+				arg2.err = nil
+				arg2.targets = arg.targets
+				Prepare(proc, arg2)
+				defer arg2.parker.FreeMem()
+
+				_, err = Call(0, proc, arg2, false, false)
+				assert.NoError(t, err)
+
+				proc.SetInputBatch(nil)
+				_, err = Call(0, proc, arg2, false, false)
 				require.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 			}()

@@ -144,6 +144,7 @@ func (l *remoteLockTable) getLock(txnID, key []byte, fn func(Lock)) {
 					if w == nil {
 						break
 					}
+					w.clearAllNotify(l.serviceID, "remove temp notify")
 				}
 			}
 			return
@@ -203,7 +204,8 @@ func (l *remoteLockTable) doGetLock(txnID, key []byte) (Lock, bool, error) {
 			waiter: acquireWaiter(l.serviceID, txnID),
 		}
 		for _, v := range resp.GetTxnLock.WaitingList {
-			w := acquireWaiter(l.serviceID, v)
+			w := acquireWaiter(l.serviceID, v.TxnID)
+			w.waitTxn = v
 			lock.waiter.add(l.serviceID, w)
 		}
 		return lock, true, nil
