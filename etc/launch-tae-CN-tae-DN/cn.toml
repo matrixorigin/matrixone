@@ -47,3 +47,4 @@ type = "distributed-tae"
 [cn.txn]
 enable-sacrificing-freshness = false
 enable-cn-based-consistency = true
+panic-if-txn-leak-found = true
