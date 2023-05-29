@@ -68,9 +68,8 @@ func getSqlForShowCreatePub(ctx context.Context, pubName string) (string, error)
 	return fmt.Sprintf(getCreatePublicationsInfoFormat, pubName), nil
 }
 
-func doShowCreatePublications(ctx context.Context, ses *Session, scp *tree.ShowCreatePublications) error {
+func doShowCreatePublications(ctx context.Context, ses *Session, scp *tree.ShowCreatePublications) (err error) {
 	var (
-		err                                                                   error
 		rs                                                                    = &MysqlResultSet{}
 		erArray                                                               []ExecResult
 		sql                                                                   string
@@ -82,45 +81,47 @@ func doShowCreatePublications(ctx context.Context, ses *Session, scp *tree.ShowC
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	sql, err = getSqlForShowCreatePub(ctx, scp.Name)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	if !execResultArrayHasData(erArray) {
-		err = moerr.NewInternalError(ctx, "publication '%s' does not exist", scp.Name)
-		goto handleFailed
+		return moerr.NewInternalError(ctx, "publication '%s' does not exist", scp.Name)
 	}
 	pubName, err = erArray[0].GetString(ctx, 0, 0)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	databaseName, err = erArray[0].GetString(ctx, 0, 1)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	allAccountStr, err = erArray[0].GetString(ctx, 0, 2)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	allAccount = allAccountStr == "true"
 	accountList, err = erArray[0].GetString(ctx, 0, 3)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 	comment, err = erArray[0].GetString(ctx, 0, 4)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	createSql = fmt.Sprintf(showCreatePublicationFormat, pubName, databaseName)
@@ -148,16 +149,5 @@ func doShowCreatePublications(ctx context.Context, ses *Session, scp *tree.ShowC
 	rs.AddRow(row)
 
 	ses.SetMysqlResultSet(rs)
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
 	return nil
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return rbErr
-	}
-	return err
 }

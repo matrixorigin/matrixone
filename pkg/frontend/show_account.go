@@ -118,8 +118,7 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormat, accountId)
 }
 
-func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) error {
-	var err error
+func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (err error) {
 	var sql string
 	var accountIds [][]int32
 	var allAccountInfo []*batch.Batch
@@ -159,8 +158,12 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 	account := ses.GetTenantInfo()
 
 	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	//step1: current account is sys or non-sys ?
@@ -175,7 +178,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 		sql = getSqlForAllAccountInfo(sa.Like)
 		allAccountInfo, accountIds, err = getAccountInfo(ctx, bh, sql, true)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 		rsOfMoAccount := bh.ses.GetAllMysqlResultSet()[0]
 		MoAccountColumns = bh.ses.rs
@@ -190,7 +193,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 				newCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(id))
 				tempBatch, err = getTableStats(newCtx, bh, id)
 				if err != nil {
-					goto handleFailed
+					return err
 				}
 				eachAccountInfo = append(eachAccountInfo, tempBatch)
 			}
@@ -199,7 +202,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 			outputBatches[i] = batch.NewWithSize(finalColumnCount)
 			err = mergeOutputResult(ses, outputBatches[i], allAccountInfo[i], eachAccountInfo)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
 
 			for _, b := range eachAccountInfo {
@@ -215,20 +218,19 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 		outputRS := &MysqlResultSet{}
 		err = initOutputRs(outputRS, rsOfMoAccount, rsOfEachAccount, ctx)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 		oq := newFakeOutputQueue(outputRS)
 		for _, b := range outputBatches {
 			err = fillResultSet(oq, b, ses)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
 		}
 		ses.SetMysqlResultSet(outputRS)
 	} else {
 		if sa.Like != nil {
-			err = moerr.NewInternalError(ctx, "only sys account can use LIKE clause")
-			goto handleFailed
+			return moerr.NewInternalError(ctx, "only sys account can use LIKE clause")
 		}
 		//under non-sys account
 		//step2.1: switch into the sys account, get the account info
@@ -236,11 +238,10 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 		sql = getSqlForAccountInfo(uint64(account.GetTenantID()))
 		allAccountInfo, _, err = getAccountInfo(newCtx, bh, sql, false)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 		if len(allAccountInfo) != 1 {
-			err = moerr.NewInternalError(ctx, "no such account %v", account.TenantID)
-			goto handleFailed
+			return moerr.NewInternalError(ctx, "no such account %v", account.TenantID)
 		}
 		rsOfMoAccount := bh.ses.GetAllMysqlResultSet()[0]
 		MoAccountColumns = bh.ses.rs
@@ -250,7 +251,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 		//then merge into the final result batch
 		tempBatch, err = getTableStats(ctx, bh, int32(account.GetTenantID()))
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 		rsOfEachAccount := bh.ses.GetAllMysqlResultSet()[0]
 		EachAccountColumns = bh.ses.rs
@@ -259,26 +260,21 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 		outputBatches = []*batch.Batch{batch.NewWithSize(finalColumnCount)}
 		err = mergeOutputResult(ses, outputBatches[0], allAccountInfo[0], []*batch.Batch{tempBatch})
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 
 		//step3: generate mysql result set
 		outputRS := &MysqlResultSet{}
 		err = initOutputRs(outputRS, rsOfMoAccount, rsOfEachAccount, ctx)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 		oq := newFakeOutputQueue(outputRS)
 		err = fillResultSet(oq, outputBatches[0], ses)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 		ses.SetMysqlResultSet(outputRS)
-	}
-
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
 	}
 
 	ses.rs = mergeRsColumns(MoAccountColumns, EachAccountColumns)
@@ -286,14 +282,6 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) er
 		err = saveResult(ses, outputBatches)
 	}
 
-	return err
-
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return rbErr
-	}
 	return err
 }
 
