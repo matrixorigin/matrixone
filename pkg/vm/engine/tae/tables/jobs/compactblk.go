@@ -17,6 +17,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -291,6 +292,10 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		common.AnyField("compacted", task.meta.Repr()),
 		common.AnyField("created", createdStr),
 		common.DurationField(time.Since(now)))
+
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.CompactBlock.Add(1)
+	})
 	return
 }
 

@@ -103,12 +103,15 @@ type TAECounterSet struct {
 		Create              stats.Counter
 		CreateNonAppendable stats.Counter
 		SoftDelete          stats.Counter
+		MergeBlocks         stats.Counter
+		CompactBlock        stats.Counter
 	}
 
 	Block struct {
 		Create              stats.Counter
 		CreateNonAppendable stats.Counter
 		SoftDelete          stats.Counter
+		Flush               stats.Counter
 	}
 }
 

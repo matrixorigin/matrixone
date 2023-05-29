@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -83,5 +84,9 @@ func (task *flushBlkTask) Execute(ctx context.Context) error {
 		}
 	}
 	task.blocks, _, err = writer.Sync(ctx)
+
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Block.Flush.Add(1)
+	})
 	return err
 }
