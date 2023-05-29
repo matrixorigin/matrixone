@@ -221,6 +221,20 @@ func (mr *MockRelationMockRecorder) AddTableDef(arg0, arg1 interface{}) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddTableDef", reflect.TypeOf((*MockRelation)(nil).AddTableDef), arg0, arg1)
 }
 
+// AlterTable mocks base method.
+func (m *MockRelation) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AlterTable", ctx, c, constraint)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AlterTable indicates an expected call of AlterTable.
+func (mr *MockRelationMockRecorder) AlterTable(ctx, c, constraint interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AlterTable", reflect.TypeOf((*MockRelation)(nil).AlterTable), ctx, c, constraint)
+}
+
 // DelTableDef mocks base method.
 func (m *MockRelation) DelTableDef(arg0 context.Context, arg1 engine.TableDef) error {
 	m.ctrl.T.Helper()
@@ -247,6 +261,20 @@ func (m *MockRelation) Delete(arg0 context.Context, arg1 *batch.Batch, arg2 stri
 func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2)
+}
+
+// GetDBID mocks base method.
+func (m *MockRelation) GetDBID(arg0 context.Context) uint64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDBID", arg0)
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+// GetDBID indicates an expected call of GetDBID.
+func (mr *MockRelationMockRecorder) GetDBID(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDBID", reflect.TypeOf((*MockRelation)(nil).GetDBID), arg0)
 }
 
 // GetEngineType mocks base method.

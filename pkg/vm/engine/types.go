@@ -536,7 +536,11 @@ type Relation interface {
 	// only ConstraintDef can be modified
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
+	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
+
 	GetTableID(context.Context) uint64
+
+	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)

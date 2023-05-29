@@ -1576,18 +1576,62 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	return ret, err
 }
 
+func checkColModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
+	switch p := plan2.Plan.(type) {
+	case *plan.Plan_Query:
+		for i := range p.Query.Nodes {
+			if p.Query.Nodes[i].NodeType == plan.Node_TABLE_SCAN {
+				// check table_scan node' s tableDef whether be modified
+				tblName := p.Query.Nodes[i].TableDef.Name
+				dbName := p.Query.Nodes[i].ObjRef.SchemaName
+				_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tblName)
+				if tableDef == nil {
+					return true
+				}
+				colCnt1, colCnt2 := 0, 0
+				for j := 0; j < len(p.Query.Nodes[i].TableDef.Cols); j++ {
+					if p.Query.Nodes[i].TableDef.Cols[j].Hidden {
+						continue
+					}
+					colCnt1++
+				}
+				for j := 0; j < len(tableDef.Cols); j++ {
+					if tableDef.Cols[j].Hidden {
+						continue
+					}
+					colCnt2++
+				}
+				if colCnt1 != colCnt2 {
+					return true
+				}
+			}
+		}
+	default:
+	}
+	return false
+}
+
 /*
 GetComputationWrapper gets the execs from the computation engine
 */
 var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
 	if cached := ses.getCachedPlan(sql); cached != nil {
+		modify := false
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
+			if checkColModify(tcw.plan, proc, ses) {
+				modify = true
+				break
+			}
 			cw = append(cw, tcw)
 		}
-		return cw, nil
+		if modify {
+			cw = nil
+		} else {
+			return cw, nil
+		}
 	}
 
 	var stmts []tree.Statement = nil
