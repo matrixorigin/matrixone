@@ -1290,7 +1290,7 @@ func (tbl *txnTable) newReader(
 	//TODO:: put this logic into partitionReader.read.
 	var inserts []*batch.Batch
 	var deletes map[types.Rowid]uint8
-	if !txn.readOnly {
+	if !txn.readOnly.Load() {
 		inserts = make([]*batch.Batch, 0, len(entries))
 		deletes = make(map[types.Rowid]uint8)
 		for _, entry := range entries {
