@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -288,8 +289,7 @@ func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
 		c.statsInterval = cfg.ShowStatsInterval.Duration
 		c.maxBufferCnt = cfg.BufferCnt
 		if c.maxBufferCnt == -1 {
-			//c.maxBufferCnt = math.MaxInt32
-			c.maxBufferCnt = 10
+			c.maxBufferCnt = math.MaxInt32
 		} else if c.maxBufferCnt == 0 {
 			c.maxBufferCnt = int32(runtime.NumCPU())
 		}
