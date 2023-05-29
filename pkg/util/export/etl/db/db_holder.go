@@ -95,7 +95,7 @@ func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 			return err
 		}
 		dsn :=
-			fmt.Sprintf("%s:%s@tcp(%s)/?maxAllowedPacket=0",
+			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=30s&timeout=30s&maxAllowedPacket=0",
 				dbUser.UserName,
 				dbUser.Password,
 				dbAddress)
