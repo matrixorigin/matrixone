@@ -29,7 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-var nilTxnID [16]byte
+var NilStmtID [16]byte
+var NilTxnID [16]byte
+var NilSesID [16]byte
 
 // StatementInfo implement export.IBuffer2SqlItem and export.CsvFields
 type StatementInfo struct {
@@ -83,6 +85,16 @@ type StatementInfo struct {
 	exported bool
 }
 
+var stmtPool = sync.Pool{
+	New: func() any {
+		return &StatementInfo{}
+	},
+}
+
+func NewStatementInfo() *StatementInfo {
+	return stmtPool.Get().(*StatementInfo)
+}
+
 type Statistic struct {
 	RowsRead  int64
 	BytesScan int64
@@ -103,14 +115,25 @@ func (s *StatementInfo) Free() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if s.end && s.exported { // cooperate with s.mux
+		s.RoleId = 0
 		s.Statement = ""
 		s.StatementFingerprint = ""
 		s.StatementTag = ""
 		if s.ExecPlan != nil {
 			s.ExecPlan.Free()
 		}
+		s.RequestAt = time.Time{}
+		s.ResponseAt = time.Time{}
 		s.ExecPlan = nil
+		s.Status = StatementStatusRunning
 		s.Error = nil
+		s.RowsRead = 0
+		s.BytesScan = 0
+		s.ResultCount = 0
+		s.end = false
+		s.reported = false
+		s.exported = false
+		stmtPool.Put(s)
 	}
 }
 
@@ -205,7 +228,7 @@ func (s *StatementInfo) SetTxnID(id []byte) {
 }
 
 func (s *StatementInfo) IsZeroTxnID() bool {
-	return bytes.Equal(s.TransactionID[:], nilTxnID[:])
+	return bytes.Equal(s.TransactionID[:], NilTxnID[:])
 }
 
 func (s *StatementInfo) Report(ctx context.Context) {

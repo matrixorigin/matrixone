@@ -209,23 +209,26 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	var txnID uuid.UUID
+	stm := motrace.NewStatementInfo()
+	// set TransactionID
 	var txn TxnOperator
 	var err error
 	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 		_, txn, err = handler.GetTxn()
 		if err != nil {
 			logErrorf(ses.GetDebugString(), "RecordStatement. error:%v", err)
+			copy(stm.TransactionID[:], motrace.NilTxnID[:])
 		} else {
-			copy(txnID[:], txn.Txn().ID)
+			copy(stm.TransactionID[:], txn.Txn().ID)
 		}
 	}
-	var sesID uuid.UUID
-	copy(sesID[:], ses.GetUUID())
+	// set SessionID
+	copy(stm.SessionID[:], ses.GetUUID())
 	requestAt := envBegin
 	if !useEnv {
 		requestAt = time.Now()
 	}
+	// set StatementID
 	var stmID uuid.UUID
 	var statement tree.Statement = nil
 	var text string
@@ -238,23 +241,20 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
-	stm := &motrace.StatementInfo{
-		StatementID:          stmID,
-		TransactionID:        txnID,
-		SessionID:            sesID,
-		Account:              tenant.GetTenant(),
-		RoleId:               proc.SessionInfo.RoleId,
-		User:                 tenant.GetUser(),
-		Host:                 ses.protocol.Peer(),
-		Database:             ses.GetDatabaseName(),
-		Statement:            text,
-		StatementFingerprint: "", // fixme: (Reserved)
-		StatementTag:         "", // fixme: (Reserved)
-		SqlSourceType:        sqlType,
-		RequestAt:            requestAt,
-		StatementType:        getStatementType(statement).GetStatementType(),
-		QueryType:            getStatementType(statement).GetQueryType(),
-	}
+	copy(stm.StatementID[:], stmID[:])
+	// END> set StatementID
+	stm.Account = tenant.GetTenant()
+	stm.RoleId = proc.SessionInfo.RoleId
+	stm.User = tenant.GetUser()
+	stm.Host = ses.protocol.Peer()
+	stm.Database = ses.GetDatabaseName()
+	stm.Statement = text
+	stm.StatementFingerprint = "" // fixme= (Reserved)
+	stm.StatementTag = ""         // fixme= (Reserved)
+	stm.SqlSourceType = sqlType
+	stm.RequestAt = requestAt
+	stm.StatementType = getStatementType(statement).GetStatementType()
+	stm.QueryType = getStatementType(statement).GetQueryType()
 	if sqlType != "internal_sql" {
 		ses.tStmt = stm
 		ses.pushQueryId(types.Uuid(stmID).ToString())
