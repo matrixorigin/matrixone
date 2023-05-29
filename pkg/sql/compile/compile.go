@@ -1314,14 +1314,14 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	mergeChildren := c.newMergeScope(ss)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, false, 0),
+		Arg: constructBroadcastDispatch(0, rs, c.addr, n),
 	})
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Stats.BlockNum)), ss, children)
+	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Stats.BlockNum)), ss, children, n)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -1373,7 +1373,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 
 	switch node.JoinType {
 	case plan.Node_INNER:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
 		if len(node.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1402,7 +1402,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children)
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightSemi,
@@ -1411,7 +1411,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 					})
 				}
 			} else {
-				rs = c.newBroadcastJoinScopeList(ss, children)
+				rs = c.newBroadcastJoinScopeList(ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.Semi,
@@ -1421,7 +1421,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 				}
 			}
 		} else {
-			rs = c.newBroadcastJoinScopeList(ss, children)
+			rs = c.newBroadcastJoinScopeList(ss, children, node)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSemi,
@@ -1431,7 +1431,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 			}
 		}
 	case plan.Node_LEFT:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1449,7 +1449,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 		}
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children)
+			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
@@ -1461,7 +1461,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 			panic("dont pass any no-equal right join plan to this function,it should be changed to left join by the planner")
 		}
 	case plan.Node_SINGLE:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1480,7 +1480,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 	case plan.Node_ANTI:
 		if isEq {
 			if node.BuildOnLeft {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children)
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightAnti,
@@ -1489,7 +1489,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 					})
 				}
 			} else {
-				rs = c.newBroadcastJoinScopeList(ss, children)
+				rs = c.newBroadcastJoinScopeList(ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.Anti,
@@ -1499,7 +1499,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 				}
 			}
 		} else {
-			rs = c.newBroadcastJoinScopeList(ss, children)
+			rs = c.newBroadcastJoinScopeList(ss, children, node)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopAnti,
@@ -1509,7 +1509,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 			}
 		}
 	case plan.Node_MARK:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
 		for i := range rs {
 			//if isEq {
 			//	rs[i].appendInstruction(vm.Instruction{
@@ -1719,7 +1719,6 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node)
 	parent, children := c.newScopeListForGroup(validScopeCount(ss), dop)
 
 	j := 0
-	hashColumnIdx := plan2.GetHashColumn(n.GroupBy[n.Stats.ShuffleColIdx])
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
 			isEnd := ss[i].IsEnd
@@ -1729,7 +1728,7 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node)
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, true, int(hashColumnIdx.ColPos)),
+				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, n),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -1973,13 +1972,13 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scop
 	return ss
 }
 
-func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope {
+func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	// construct left
 	leftMerge := c.newMergeScope(ss)
 	leftMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, false, 0),
+		Arg: constructBroadcastDispatch(0, rs, c.addr, n),
 	})
 	leftMerge.IsEnd = true
 
@@ -1988,7 +1987,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	rightMerge := c.newMergeScope(children)
 	rightMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, false, 0),
+		Arg: constructBroadcastDispatch(1, rs, c.addr, n),
 	})
 	rightMerge.IsEnd = true
 
@@ -2037,7 +2036,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 //return rs
 //}
 
-func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *plan.Node) []*Scope {
 	length := len(ss)
 	rs := make([]*Scope, length)
 	idx := 0
@@ -2069,7 +2068,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, false, 0),
+		Arg: constructBroadcastDispatch(1, rs, c.addr, n),
 	})
 	mergeChildren.IsEnd = true
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
