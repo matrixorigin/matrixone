@@ -1,3 +1,4 @@
+-- @bvt:issue#8320
 CREATE TABLE tp1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4;
 show create table tp1;
 CREATE TABLE tp2 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3);
@@ -141,3 +142,4 @@ drop table tp17;
 drop table tp18;
 drop table tp19;
 drop table tp20;
+-- @bvt:issue

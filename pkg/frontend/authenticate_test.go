@@ -3439,7 +3439,7 @@ func Test_determineDML(t *testing.T) {
 						Nodes: []*plan2.Node{
 							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
 							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
-							{NodeType: plan.Node_UPDATE},
+							{NodeType: plan.Node_INSERT},
 						},
 					},
 				},

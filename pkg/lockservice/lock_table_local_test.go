@@ -394,8 +394,8 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 							assert.Equal(t, 0, l.waiter.waiters.len())
 						} else {
 							var waitTxns []string
-							l.waiter.waiters.iter(func(v []byte) bool {
-								waitTxns = append(waitTxns, string(v))
+							l.waiter.waiters.iter(func(v *waiter) bool {
+								waitTxns = append(waitTxns, string(v.txnID))
 								return true
 							})
 							require.Equal(t, c.mergedWaiters[idx], waitTxns)

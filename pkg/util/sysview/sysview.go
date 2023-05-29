@@ -187,7 +187,7 @@ var (
 			"att_comment as COLUMN_COMMENT,"+
 			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 			"if(true, NULL, 0) as SRS_ID "+
-			"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.AutoIncrTableName, catalog.PrefixPriColName+"%", catalog.Row_ID),
+			"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
 		//"CREATE TABLE IF NOT EXISTS COLUMNS(" +
 		//	"TABLE_CATALOG varchar(64)," +
 		//	"TABLE_SCHEMA varchar(64)," +
