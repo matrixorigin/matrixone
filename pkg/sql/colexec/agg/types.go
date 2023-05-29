@@ -44,6 +44,9 @@ const (
 	AggregateAnyValue
 	AggregateMedian
 	AggregateGroupConcat
+
+	WinRank
+	WinRowNumber
 )
 
 var Names = [...]string{
@@ -62,6 +65,9 @@ var Names = [...]string{
 	AggregateAnyValue:            "any",
 	AggregateMedian:              "median",
 	AggregateGroupConcat:         "group_concat",
+
+	WinRank:      "rank",
+	WinRowNumber: "row_number",
 }
 
 type Aggregate struct {

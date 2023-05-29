@@ -356,6 +356,7 @@ func init() {
 		"row":                      ROW,
 		"row_format":               ROW_FORMAT,
 		"row_count":                ROW_COUNT,
+		"row_number":               ROW_NUMBER,
 		"rtree":                    RTREE,
 		"schema":                   SCHEMA,
 		"schemas":                  SCHEMAS,
