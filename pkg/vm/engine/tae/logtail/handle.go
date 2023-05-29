@@ -165,6 +165,7 @@ func HandleSyncLogTailReq(
 	} else {
 		visitor = NewCatalogLogtailRespBuilder(scope, ckpLoc, start, end)
 	}
+	closeCB = visitor.Close
 
 	operator := mgr.GetTableOperator(start, end, c, did, tid, scope, visitor)
 	if err := operator.Run(); err != nil {

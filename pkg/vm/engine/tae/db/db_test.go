@@ -2465,7 +2465,7 @@ func TestSegDelLogtail(t *testing.T) {
 	mergeBlocks(t, 0, tae.DB, "db", schema, false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	resp, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.TS{}),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: did, TbId: tid},
@@ -2484,6 +2484,8 @@ func TestSegDelLogtail(t *testing.T) {
 	require.Equal(t, api.Entry_Delete, resp.Commands[2].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[2].TableName, "seg"))
 	require.Equal(t, uint32(1), resp.Commands[2].Bat.Vecs[0].Len) /* 1 old segment */
+
+	close()
 
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -3821,7 +3823,7 @@ func TestLogtailBasic(t *testing.T) {
 	ctx := context.Background()
 
 	// get db catalog change
-	resp, err := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, err := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
@@ -3841,8 +3843,10 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, fixedColCnt, len(resp.Commands[1].Bat.Vecs))
 	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
 
+	close()
+
 	// get table catalog change
-	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -3856,9 +3860,10 @@ func TestLogtailBasic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, schema.Name, relname.GetStringAt(0))
 	require.Equal(t, schema.Name, relname.GetStringAt(1))
+	close()
 
 	// get columns catalog change
-	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -3869,9 +3874,10 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, len(catalog.SystemColumnSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
 	// sysColumnsCount := len(catalog.SystemDBSchema.ColDefs) + len(catalog.SystemTableSchema.ColDefs) + len(catalog.SystemColumnSchema.ColDefs)
 	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
+	close()
 
 	// get user table change
-	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
@@ -3917,6 +3923,7 @@ func TestLogtailBasic(t *testing.T) {
 	for _, v := range rowidMap {
 		require.Equal(t, 2, v)
 	}
+	close()
 }
 
 // txn1: create relation and append, half blk
@@ -5638,7 +5645,7 @@ func TestAlterTableBasic(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	resp, _ := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, _ := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -5657,9 +5664,11 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
 
+	close()
+
 	tae.restart()
 
-	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -5677,6 +5686,7 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
+	close()
 
 	logutil.Info(tae.Catalog.SimplePPString(common.PPL2))
 
@@ -5686,7 +5696,7 @@ func TestAlterTableBasic(t *testing.T) {
 	require.NoError(t, err)
 	txn.Commit()
 
-	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -5695,6 +5705,7 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, 2, len(resp.Commands)) // create and drop
 	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
+	close()
 }
 
 func TestAlterColumnAndFreeze(t *testing.T) {
@@ -5819,7 +5830,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	checkAllColRowsByScan(t, rel, 20, true)
 	require.NoError(t, txn.Commit())
 
-	resp, _ := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, _ := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: did, TbId: tid},
@@ -5839,6 +5850,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	require.Equal(t, "mock_9", bat2.Attrs[2+schema2.GetSeqnum("mock_9")])
 	require.Equal(t, "xyz", bat2.Attrs[2+schema1.GetSeqnum("xyz")])
 	require.Equal(t, "xyz", bat2.Attrs[2+schema2.GetSeqnum("xyz")])
+	close()
 	logutil.Infof(tae.Catalog.SimplePPString(common.PPL1))
 }
 
