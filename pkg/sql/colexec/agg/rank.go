@@ -33,7 +33,7 @@ func NewRank() *Rank {
 
 func (r *Rank) Grows(_ int) {}
 
-func (r *Rank) Eval(vs []int64) []int64 {
+func (r *Rank) Eval(vs []int64, err error) ([]int64, error) {
 	idx := 0
 	for _, p := range r.Ps {
 		sn := int64(1)
@@ -60,20 +60,20 @@ func (r *Rank) Eval(vs []int64) []int64 {
 		}
 		idx++
 	}
-	return vs
+	return vs, nil
 }
 
-func (r *Rank) Fill(i int64, value int64, ov int64, z int64, isEmpty bool, isNull bool) (int64, bool) {
+func (r *Rank) Fill(i int64, value int64, ov int64, z int64, isEmpty bool, isNull bool) (int64, bool, error) {
 	n := int(i) - len(r.Ps)
 	for j := 0; j < n+1; j++ {
 		r.Ps = append(r.Ps, []int64{})
 	}
 	r.Ps[i] = append(r.Ps[i], value)
-	return 0, false
+	return 0, false, nil
 }
 
-func (r *Rank) Merge(xIndex int64, yIndex int64, x int64, y int64, xEmpty bool, yEmpty bool, yAvg any) (int64, bool) {
-	return 0, false
+func (r *Rank) Merge(xIndex int64, yIndex int64, x int64, y int64, xEmpty bool, yEmpty bool, yAvg any) (int64, bool, error) {
+	return 0, false, nil
 }
 
 func (r *Rank) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
