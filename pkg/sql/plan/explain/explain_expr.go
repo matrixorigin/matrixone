@@ -83,6 +83,39 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		if err != nil {
 			return err
 		}
+	case *plan.Expr_W:
+		w := exprImpl.W
+		funcExpr := w.WindowFunc.Expr.(*plan.Expr_F)
+		err := funcExprExplain(ctx, funcExpr, expr.Typ, options, buf)
+		if err != nil {
+			return err
+		}
+
+		if len(w.PartitionBy) > 0 {
+			buf.WriteString("; Partition By: ")
+			for i, arg := range w.PartitionBy {
+				if i > 0 {
+					buf.WriteString(", ")
+				}
+				err = describeExpr(ctx, arg, options, buf)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		if len(w.OrderBy) > 0 {
+			buf.WriteString("; Order By: ")
+			for i, arg := range w.OrderBy {
+				if i > 0 {
+					buf.WriteString(", ")
+				}
+				err = describeExpr(ctx, arg.Expr, options, buf)
+				if err != nil {
+					return err
+				}
+			}
+		}
 	case *plan.Expr_Sub:
 		subqryExpr := expr.Expr.(*plan.Expr_Sub)
 		buf.WriteString("subquery nodeId = " + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10))
