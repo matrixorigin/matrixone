@@ -50,7 +50,7 @@ var ErrNoAvailableCNServers = moerr.NewInternalErrorNoCtx("no available CN serve
 // newProxyHandler creates a new proxy handler.
 func newProxyHandler(
 	ctx context.Context,
-	runtime runtime.Runtime,
+	rt runtime.Runtime,
 	cfg Config,
 	st *stopper.Stopper,
 	cs *counterSet,
@@ -70,6 +70,7 @@ func newProxyHandler(
 
 	// Create the MO cluster.
 	mc := clusterservice.NewMOCluster(c, cfg.Cluster.RefreshInterval.Duration)
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
 	// Create the rebalancer.
 	var opts []rebalancerOption
@@ -81,7 +82,7 @@ func newProxyHandler(
 		opts = append(opts, withRebalancerDisabled())
 	}
 
-	re, err := newRebalancer(st, runtime.Logger(), mc, opts...)
+	re, err := newRebalancer(st, rt.Logger(), mc, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +98,7 @@ func newProxyHandler(
 	}
 	return &handler{
 		ctx:            context.Background(),
-		logger:         runtime.Logger(),
+		logger:         rt.Logger(),
 		config:         cfg,
 		stopper:        st,
 		moCluster:      mc,

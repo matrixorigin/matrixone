@@ -62,10 +62,10 @@ func (txn *Transaction) getBlockInfos(
 
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
-	return txn.readOnly
+	return txn.readOnly.Load()
 }
 
-// Write used to write data to the transaction buffer
+// WriteBatch used to write data to the transaction buffer
 // insert/delete/update all use this api
 // insertBatchHasRowId : it denotes the batch has Rowid when the typ is INSERT.
 // if typ is not INSERT, it is always false.
@@ -82,8 +82,10 @@ func (txn *Transaction) WriteBatch(
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
 	insertBatchHasRowId bool,
 	truncate bool) error {
-	txn.readOnly = false
+	txn.readOnly.Store(false)
 	bat.Cnt = 1
+	txn.Lock()
+	defer txn.Unlock()
 	if typ == INSERT {
 		if !insertBatchHasRowId {
 			txn.genBlock()
@@ -104,8 +106,6 @@ func (txn *Transaction) WriteBatch(
 		}
 		txn.workspaceSize += uint64(bat.Size())
 	}
-	txn.Lock()
-	defer txn.Unlock()
 	txn.writes = append(txn.writes, Entry{
 		typ:          typ,
 		bat:          bat,
@@ -120,15 +120,44 @@ func (txn *Transaction) WriteBatch(
 }
 
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
-
+	var size uint64
+	txn.Lock()
+	defer txn.Unlock()
 	if !(offset > 0 || txn.workspaceSize >= colexec.WriteS3Threshold ||
 		(force && txn.workspaceSize >= colexec.TagS3Size)) {
 		return nil
 	}
-
-	size, mp := txn.dumpWrites(offset)
-	if mp == nil {
+	for i := offset; i < len(txn.writes); i++ {
+		if txn.writes[i].bat == nil {
+			continue
+		}
+		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+			size += uint64(txn.writes[i].bat.Size())
+		}
+	}
+	if offset > 0 && size < txn.workspaceSize {
 		return nil
+	}
+	mp := make(map[[2]string][]*batch.Batch)
+	for i := offset; i < len(txn.writes); i++ {
+		// TODO: after shrink, we should update workspace size
+		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
+			continue
+		}
+		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
+			bat := txn.writes[i].bat
+			// skip rowid
+			bat.Attrs = bat.Attrs[1:]
+			bat.Vecs = bat.Vecs[1:]
+			mp[key] = append(mp[key], bat)
+			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
+			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
+			// maybe this will cause that the log imcrements unlimitly
+			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
+			// i--
+			txn.writes[i].bat = nil
+		}
 	}
 
 	for key := range mp {
@@ -136,7 +165,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		if err != nil {
 			return err
 		}
-		s3Writer.InitBuffers(mp[key][0])
+		s3Writer.InitBuffers(txn.proc, mp[key][0])
 		for i := 0; i < len(mp[key]); i++ {
 			s3Writer.Put(mp[key][i], txn.proc)
 		}
@@ -162,49 +191,50 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 	}
 	txn.workspaceSize -= size
+
 	return nil
 }
 
-func (txn *Transaction) dumpWrites(offset int) (size uint64, mp map[[2]string][]*batch.Batch) {
-	txn.Lock()
-	defer txn.Unlock()
+// func (txn *Transaction) dumpWrites(offset int) (size uint64, mp map[[2]string][]*batch.Batch) {
+// 	txn.Lock()
+// 	defer txn.Unlock()
 
-	for i := offset; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil {
-			continue
-		}
-		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			size += uint64(txn.writes[i].bat.Size())
-		}
-	}
-	if offset > 0 && size < txn.workspaceSize {
-		return 0, nil
-	}
+// 	for i := offset; i < len(txn.writes); i++ {
+// 		if txn.writes[i].bat == nil {
+// 			continue
+// 		}
+// 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+// 			size += uint64(txn.writes[i].bat.Size())
+// 		}
+// 	}
+// 	if offset > 0 && size < txn.workspaceSize {
+// 		return 0, nil
+// 	}
 
-	mp = make(map[[2]string][]*batch.Batch)
-	for i := offset; i < len(txn.writes); i++ {
-		// TODO: after shrink, we should update workspace size
-		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
-			continue
-		}
-		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
-			bat := txn.writes[i].bat
-			// skip rowid
-			bat.Attrs = bat.Attrs[1:]
-			bat.Vecs = bat.Vecs[1:]
-			mp[key] = append(mp[key], bat)
-			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
-			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
-			// maybe this will cause that the log imcrements unlimitly
-			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
-			// i--
-			txn.writes[i].bat = nil
-		}
-	}
+// 	mp = make(map[[2]string][]*batch.Batch)
+// 	for i := offset; i < len(txn.writes); i++ {
+// 		// TODO: after shrink, we should update workspace size
+// 		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
+// 			continue
+// 		}
+// 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+// 			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
+// 			bat := txn.writes[i].bat
+// 			// skip rowid
+// 			bat.Attrs = bat.Attrs[1:]
+// 			bat.Vecs = bat.Vecs[1:]
+// 			mp[key] = append(mp[key], bat)
+// 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
+// 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
+// 			// maybe this will cause that the log imcrements unlimitly
+// 			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
+// 			// i--
+// 			txn.writes[i].bat = nil
+// 		}
+// 	}
 
-	return
-}
+// 	return
+// }
 
 func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Relation, error) {
 	sortIdx, attrs, tbl, err := txn.getSortIdx(key)
@@ -213,7 +243,7 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 	}
 	s3Writer := &colexec.S3Writer{}
 	s3Writer.SetSortIdx(-1)
-	s3Writer.Init()
+	s3Writer.Init(txn.proc)
 	s3Writer.SetMp(attrs)
 	if sortIdx != -1 {
 		s3Writer.SetSortIdx(sortIdx)
@@ -271,7 +301,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	} else if typ == INSERT {
 		txn.updatePosForCNBlock(bat.GetVector(0), idx)
 	}
-	txn.readOnly = false
+	txn.readOnly.Store(false)
 	txn.writes = append(txn.writes, Entry{
 		typ:          typ,
 		tableId:      tableId,
@@ -392,11 +422,8 @@ func (txn *Transaction) deleteTableWrites(
 				}
 			}
 			if len(sels) != len(vs) {
-				e.bat.Shrink(sels)
-				rowIds := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
-				for i := range rowIds {
-					(&rowIds[i]).SetRowOffset(uint32(i))
-				}
+				txn.batchSelectList[e.bat] = append(txn.batchSelectList[e.bat], sels...)
+
 			}
 		}
 	}
@@ -425,6 +452,17 @@ func (txn *Transaction) genRowId() types.Rowid {
 		txn.rowId[5] = 0
 	}
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
+}
+
+func (txn *Transaction) mergeTxnWorkspace() {
+	txn.Lock()
+	defer txn.Unlock()
+	for _, e := range txn.writes {
+		if sels, ok := txn.batchSelectList[e.bat]; ok {
+			e.bat.Shrink(sels)
+			delete(txn.batchSelectList, e.bat)
+		}
+	}
 }
 
 func evalFilterExprWithZonemap(

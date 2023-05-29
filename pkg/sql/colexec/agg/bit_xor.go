@@ -45,48 +45,48 @@ func NewBitXor[T1 types.Ints | types.UInts | types.Floats]() *BitXor[T1] {
 func (bx *BitXor[T1]) Grows(_ int) {
 }
 
-func (bx *BitXor[T1]) Eval(vs []uint64) []uint64 {
-	return vs
+func (bx *BitXor[T1]) Eval(vs []uint64, err error) ([]uint64, error) {
+	return vs, nil
 }
 
-func (bx *BitXor[T1]) Merge(_, _ int64, x, y uint64, IsEmpty1 bool, IsEmpty2 bool, _ any) (uint64, bool) {
+func (bx *BitXor[T1]) Merge(_, _ int64, x, y uint64, IsEmpty1 bool, IsEmpty2 bool, _ any) (uint64, bool, error) {
 	if IsEmpty1 && !IsEmpty2 {
-		return y, false
+		return y, false, nil
 	} else if IsEmpty2 && !IsEmpty1 {
-		return x, false
+		return x, false, nil
 	} else if IsEmpty1 && IsEmpty2 {
-		return x, true
+		return x, true, nil
 	} else {
-		return x ^ y, false
+		return x ^ y, false, nil
 	}
 }
 
-func (bx *BitXor[T1]) Fill(_ int64, v1 T1, v2 uint64, z int64, IsEmpty bool, hasNull bool) (uint64, bool) {
+func (bx *BitXor[T1]) Fill(_ int64, v1 T1, v2 uint64, z int64, IsEmpty bool, hasNull bool) (uint64, bool, error) {
 	if hasNull {
-		return v2, IsEmpty
+		return v2, IsEmpty, nil
 	} else if IsEmpty {
 		if z%2 == 0 {
-			return uint64(0), false
+			return uint64(0), false, nil
 		} else {
 			if float64(v1) > math.MaxUint64 {
-				return math.MaxInt64, false
+				return math.MaxInt64, false, nil
 			}
 			if float64(v1) < 0 {
-				return uint64(int64(v1)), false
+				return uint64(int64(v1)), false, nil
 			}
-			return uint64(v1), false
+			return uint64(v1), false, nil
 		}
 	}
 	if z%2 == 0 {
-		return v2, false
+		return v2, false, nil
 	} else {
 		if float64(v1) > math.MaxUint64 {
-			return math.MaxInt64 ^ v2, false
+			return math.MaxInt64 ^ v2, false, nil
 		}
 		if float64(v1) < 0 {
-			return uint64(int64(v1)) ^ v2, false
+			return uint64(int64(v1)) ^ v2, false, nil
 		}
-		return uint64(v1) ^ v2, false
+		return uint64(v1) ^ v2, false, nil
 	}
 }
 
@@ -108,36 +108,36 @@ func NewBitXorBinary() *BitXorBinary {
 func (bab *BitXorBinary) Grows(_ int) {
 }
 
-func (bab *BitXorBinary) Eval(vs [][]byte) [][]byte {
-	return vs
+func (bab *BitXorBinary) Eval(vs [][]byte, err error) ([][]byte, error) {
+	return vs, nil
 }
 
-func (bab *BitXorBinary) Merge(gNum1, gNum2 int64, v1, v2 []byte, empty1, empty2 bool, _ any) ([]byte, bool) {
+func (bab *BitXorBinary) Merge(gNum1, gNum2 int64, v1, v2 []byte, empty1, empty2 bool, _ any) ([]byte, bool, error) {
 	if empty1 {
-		return v2, empty2
+		return v2, empty2, nil
 	}
 	if empty2 {
-		return v1, empty1
+		return v1, empty1, nil
 	}
 
 	result := make([]byte, len(v1))
 	types.BitXor(result, v1, v2)
 
-	return result, false
+	return result, false, nil
 }
 
-func (bab *BitXorBinary) Fill(gNum int64, v1, v2 []byte, _ int64, isNew, isNull bool) ([]byte, bool) {
+func (bab *BitXorBinary) Fill(gNum int64, v1, v2 []byte, _ int64, isNew, isNull bool) ([]byte, bool, error) {
 	if isNull {
-		return v2, isNew
+		return v2, isNew, nil
 	}
 	if isNew {
-		return v1, !isNew
+		return v1, !isNew, nil
 	}
 
 	result := make([]byte, len(v1))
 	types.BitXor(result, v1, v2)
 
-	return result, false
+	return result, false, nil
 }
 
 func (bab *BitXorBinary) MarshalBinary() ([]byte, error) {

@@ -18,7 +18,12 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -229,7 +235,7 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
-		bat, err := decodeBatch(c.proc.Mp(), dataBuffer)
+		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
 		if err != nil {
 			return err
 		}
@@ -545,6 +551,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			if err := types.Decode([]byte(dsc.Block), bat); err != nil {
 				return nil, err
 			}
+			bat.Cnt = 1
 			s.DataSource.Bat = bat
 		}
 	}
@@ -605,57 +612,49 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			IsRemote:     t.IsRemote,
-			Affected:     t.Affected,
-			Ref:          t.InsertCtx.Ref,
-			TableDef:     t.InsertCtx.TableDef,
-			ClusterTable: t.InsertCtx.ClusterTable,
-			ParentIdx:    t.InsertCtx.ParentIdx,
-			IdxIdx:       t.InsertCtx.IdxIdx,
+			ToWriteS3:         t.ToWriteS3,
+			Ref:               t.InsertCtx.Ref,
+			Attrs:             t.InsertCtx.Attrs,
+			AddAffectedRows:   t.InsertCtx.AddAffectedRows,
+			PartitionTableIds: t.InsertCtx.PartitionTableIDs,
+			PartitionIdx:      int32(t.InsertCtx.PartitionIndexInBatch),
 		}
 	case *deletion.Argument:
-		onSetUpdateCols := make([]*pipeline.Map, 0, len(t.DeleteCtx.OnSetUpdateCol))
-		for i := 0; i < len(t.DeleteCtx.OnSetUpdateCol); i++ {
-			onSetUpdateCols[i].Mp = t.DeleteCtx.OnSetUpdateCol[i]
-		}
-		onSetIdxs := make([]*pipeline.Array, 0, len(t.DeleteCtx.OnSetIdx))
-		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
-			onSetIdxs[i].Array = t.DeleteCtx.OnSetIdx[i]
-		}
-		for i := 0; i < len(t.DeleteCtx.OnSetIdx); i++ {
-
-		}
 		in.Delete = &pipeline.Deletion{
 			Ts:           t.Ts,
-			AffectedRows: t.AffectedRows,
+			AffectedRows: t.AffectedRows(),
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 			IBucket:      t.IBucket,
 			NBucket:      t.Nbucket,
 			// deleteCtx
-			CanTruncate:    t.DeleteCtx.CanTruncate,
-			DelRef:         t.DeleteCtx.DelRef,
-			IdxIdx:         t.DeleteCtx.IdxIdx,
-			OnRestrictIdx:  t.DeleteCtx.OnRestrictIdx,
-			OnCascadeIdx:   t.DeleteCtx.OnCascadeIdx,
-			OnSetRef:       t.DeleteCtx.OnSetRef,
-			OnSetTableDef:  t.DeleteCtx.OnSetTableDef,
-			OnSetUpdateCol: onSetUpdateCols,
-			OnSetIdx:       onSetIdxs,
+			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
+			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
+			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
+			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
+			Ref:                   t.DeleteCtx.Ref,
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
-			Affected:        t.Affected,
-			Ref:             t.Ref,
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName:         t.SchemaName,
-			TableDef:           t.TableDef,
-			ParentIdxPreInsert: t.ParentIdx,
+			SchemaName: t.SchemaName,
+			TableDef:   t.TableDef,
+			HasAutoCol: t.HasAutoCol,
+			IsUpdate:   t.IsUpdate,
+			Attrs:      t.Attrs,
+		}
+	case *lockop.Argument:
+		in.LockOp = &pipeline.LockOp{
+			Targets: t.CopyToPipelineTarget(),
+		}
+	case *preinsertunique.Argument:
+		in.PreInsertUnique = &pipeline.PreInsertUnique{
+			PreInsertUkCtx: t.PreInsertCtx,
 		}
 	case *anti.Argument:
 		in.Anti = &pipeline.AntiJoin{
@@ -668,7 +667,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Result:    t.Result,
 		}
 	case *dispatch.Argument:
-		in.Dispatch = &pipeline.Dispatch{FuncId: int32(t.FuncId)}
+		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleColIdx = int32(t.ShuffleColIdx)
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
 		for i := range t.ShuffleRegIdxLocal {
@@ -954,43 +953,31 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	switch v.Op {
 	case vm.Deletion:
 		t := opr.GetDelete()
-		onSetUpdateCols := make([]map[string]int32, 0, len(t.OnSetUpdateCol))
-		for i := 0; i < len(t.OnSetUpdateCol); i++ {
-			onSetUpdateCols = append(onSetUpdateCols, t.OnSetUpdateCol[i].Mp)
-		}
-		onSetIdxs := make([][]int32, 0, len(t.OnSetIdx))
-		for i := 0; i < len(t.OnSetIdx); i++ {
-			onSetIdxs = append(onSetIdxs, t.OnSetIdx[i].Array)
-		}
 		v.Arg = &deletion.Argument{
 			Ts:           t.Ts,
-			AffectedRows: t.AffectedRows,
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 			IBucket:      t.IBucket,
 			Nbucket:      t.NBucket,
 			DeleteCtx: &deletion.DeleteCtx{
-				CanTruncate:    t.CanTruncate,
-				DelRef:         t.DelRef,
-				IdxIdx:         t.IdxIdx,
-				OnRestrictIdx:  t.OnRestrictIdx,
-				OnCascadeIdx:   t.OnCascadeIdx,
-				OnSetRef:       t.OnSetRef,
-				OnSetTableDef:  t.OnSetTableDef,
-				OnSetUpdateCol: onSetUpdateCols,
-				OnSetIdx:       onSetIdxs,
+				CanTruncate:           t.CanTruncate,
+				RowIdIdx:              int(t.RowIdIdx),
+				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
+				Ref:                   t.Ref,
+				AddAffectedRows:       t.AddAffectedRows,
 			},
 		}
 	case vm.Insert:
 		t := opr.GetInsert()
 		v.Arg = &insert.Argument{
-			Affected: t.Affected,
-			IsRemote: t.IsRemote,
+			ToWriteS3: t.ToWriteS3,
 			InsertCtx: &insert.InsertCtx{
-				Ref:          t.Ref,
-				TableDef:     t.TableDef,
-				ParentIdx:    t.ParentIdx,
-				ClusterTable: t.ClusterTable,
+				Ref:                   t.Ref,
+				AddAffectedRows:       t.AddAffectedRows,
+				Attrs:                 t.Attrs,
+				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionIndexInBatch: int(t.PartitionIdx),
 			},
 		}
 	case vm.PreInsert:
@@ -998,13 +985,31 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &preinsert.Argument{
 			SchemaName: t.GetSchemaName(),
 			TableDef:   t.GetTableDef(),
-			ParentIdx:  t.GetParentIdxPreInsert(),
+			Attrs:      t.GetAttrs(),
+			HasAutoCol: t.GetHasAutoCol(),
+			IsUpdate:   t.GetIsUpdate(),
+		}
+	case vm.LockOp:
+		t := opr.GetLockOp()
+		lockArg := lockop.NewArgument()
+		for _, target := range t.Targets {
+			typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
+			lockArg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+		}
+		for _, target := range t.Targets {
+			if target.LockTable {
+				lockArg.LockTable(target.TableId)
+			}
+		}
+		v.Arg = lockArg
+	case vm.PreInsertUnique:
+		t := opr.GetPreInsertUnique()
+		v.Arg = &preinsertunique.Argument{
+			PreInsertCtx: t.GetPreInsertUkCtx(),
 		}
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
 		v.Arg = &onduplicatekey.Argument{
-			Affected:        t.Affected,
-			Ref:             t.Ref,
 			TableDef:        t.TableDef,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
@@ -1051,6 +1056,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 
 		v.Arg = &dispatch.Argument{
+			IsSink:              t.IsSink,
 			FuncId:              int(t.FuncId),
 			LocalRegs:           regs,
 			RemoteRegs:          rrs,
@@ -1317,20 +1323,20 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 	}
 	for i := range target.analInfos {
 		n := source[i]
-		target.analInfos[i].OutputSize += n.OutputSize
-		target.analInfos[i].OutputRows += n.OutputRows
-		target.analInfos[i].InputRows += n.InputRows
-		target.analInfos[i].InputSize += n.InputSize
-		target.analInfos[i].MemorySize += n.MemorySize
-		target.analInfos[i].TimeConsumed += n.TimeConsumed
-		target.analInfos[i].WaitTimeConsumed += n.WaitTimeConsumed
-		target.analInfos[i].DiskIO += n.DiskIO
-		target.analInfos[i].S3IOByte += n.S3IOByte
-		target.analInfos[i].S3IOInputCount += n.S3IOInputCount
-		target.analInfos[i].S3IOOutputCount += n.S3IOOutputCount
-		target.analInfos[i].NetworkIO += n.NetworkIO
-		target.analInfos[i].ScanTime += n.ScanTime
-		target.analInfos[i].InsertTime += n.InsertTime
+		atomic.AddInt64(&target.analInfos[i].OutputSize, n.OutputSize)
+		atomic.AddInt64(&target.analInfos[i].OutputRows, n.OutputRows)
+		atomic.AddInt64(&target.analInfos[i].InputRows, n.InputRows)
+		atomic.AddInt64(&target.analInfos[i].InputSize, n.InputSize)
+		atomic.AddInt64(&target.analInfos[i].MemorySize, n.MemorySize)
+		atomic.AddInt64(&target.analInfos[i].TimeConsumed, n.TimeConsumed)
+		atomic.AddInt64(&target.analInfos[i].WaitTimeConsumed, n.WaitTimeConsumed)
+		atomic.AddInt64(&target.analInfos[i].DiskIO, n.DiskIO)
+		atomic.AddInt64(&target.analInfos[i].S3IOByte, n.S3IOByte)
+		atomic.AddInt64(&target.analInfos[i].S3IOInputCount, n.S3IOInputCount)
+		atomic.AddInt64(&target.analInfos[i].S3IOOutputCount, n.S3IOOutputCount)
+		atomic.AddInt64(&target.analInfos[i].NetworkIO, n.NetworkIO)
+		atomic.AddInt64(&target.analInfos[i].ScanTime, n.ScanTime)
+		atomic.AddInt64(&target.analInfos[i].InsertTime, n.InsertTime)
 	}
 }
 
@@ -1492,22 +1498,26 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 }
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
-func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
+func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
-	//mp := proc.Mp()
 	err := types.Decode(data, bat)
-	// allocated memory of vec from mPool.
-	for i := range bat.Vecs {
-		oldVec := bat.Vecs[i]
-		vec, err1 := oldVec.Dup(mp)
-		if err1 != nil {
-			for j := 0; j < i; j++ {
-				bat.Vecs[j].Free(mp)
-			}
-			return nil, err1
-		}
-		bat.ReplaceVector(oldVec, vec)
+	if err != nil {
+		return nil, err
 	}
+	// allocated memory of vec from mPool.
+	for i, vec := range bat.Vecs {
+		typ := *vec.GetType()
+		rvec := vector.NewVec(typ)
+		if vp != nil {
+			rvec = vp.GetVector(typ)
+		}
+		if err := vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
+			bat.Clean(mp)
+			return nil, err
+		}
+		bat.Vecs[i] = rvec
+	}
+	bat.Cnt = 1
 	// allocated memory of aggVec from mPool.
 	for i, ag := range bat.Aggs {
 		err = ag.WildAggReAlloc(mp)

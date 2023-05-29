@@ -47,7 +47,7 @@ col1    col2    col3    col4
 2    Bob    25.0    zbcvdf
 3    Carol    23.0    zbcvdf
 4    Dora    29.0    zbcvdf
-insert into t3 values(4,"Dora", 29,'zbcvdf');
+insert into t3 values(4,"Dora", 28,'zbcvdf');
 Duplicate entry '4' for key 'col1'
 insert into t3 values(5,"Dora", 29,'zbcvdf');
 Duplicate entry '4601446f72610020c1e80000' for key '__mo_index_idx_col'

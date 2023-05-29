@@ -1,3 +1,4 @@
+-- @skip:issue#7889
 drop database if exists test_temporary;
 create database test_temporary;
 use test_temporary;

@@ -883,9 +883,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 	funcName := funcRef.Parts[0]
 
-	if function.GetFunctionIsAggregateByName(funcName) {
+	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 		return b.impl.BindAggFunc(funcName, astExpr, depth, isRoot)
-	} else if function.GetFunctionIsWinFunByName(funcName) {
+	} else if function.GetFunctionIsWinFunByName(funcName) && astExpr.WindowSpec != nil {
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
@@ -973,9 +973,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
-	// } else {
-	// 	return nil, err
-	// }
 
 	// not a builtin func, look to resolve udf
 	cmpCtx := b.builder.compCtx
@@ -1029,7 +1026,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Exp
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
 	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
 	switch name {
-	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde":
+	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in":
 		if err == nil && proc != nil {
 			bat := batch.NewWithSize(0)
 			bat.Zs = []int64{1}
