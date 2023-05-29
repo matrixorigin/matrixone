@@ -31,6 +31,11 @@ import (
 )
 
 var (
+	_ EventableTxnOperator = (*txnOperator)(nil)
+	_ DebugableTxnOperator = (*txnOperator)(nil)
+)
+
+var (
 	readTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAERead:      {},
 		moerr.ErrRpcError:     {},
@@ -84,12 +89,6 @@ func WithTxnCNCoordinator() TxnOption {
 	}
 }
 
-func WithTxnClose(client *txnClient) TxnOption {
-	return func(tc *txnOperator) {
-		tc.option.closeFunc = client.popTransaction
-	}
-}
-
 // WithTxnLockService set txn lock service
 func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	return func(tc *txnOperator) {
@@ -134,26 +133,16 @@ func WithTxnIsolation(value txn.TxnIsolation) TxnOption {
 	}
 }
 
-// WithUpdateLastCommitTSFunc we maintain a CN-based last commit timestamp to ensure that a
-// session with that CN can see previous writes.
-func WithUpdateLastCommitTSFunc(value func(timestamp.Timestamp)) TxnOption {
-	return func(tc *txnOperator) {
-		tc.option.updateLastCommitTSFunc = value
-	}
-}
-
 type txnOperator struct {
 	sender rpc.TxnSender
 	txnID  []byte
 
 	option struct {
-		readyOnly              bool
-		enableCacheWrite       bool
-		disable1PCOpt          bool
-		coordinator            bool
-		lockService            lockservice.LockService
-		closeFunc              func(txn.TxnMeta)
-		updateLastCommitTSFunc func(timestamp.Timestamp)
+		readyOnly        bool
+		enableCacheWrite bool
+		disable1PCOpt    bool
+		coordinator      bool
+		lockService      lockservice.LockService
 	}
 
 	mu struct {
@@ -162,8 +151,10 @@ type txnOperator struct {
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
+		callbacks    map[EventType][]func(txn.TxnMeta)
 	}
-	workspace Workspace
+	workspace       Workspace
+	timestampWaiter TimestampWaiter
 }
 
 func newTxnOperator(
@@ -229,6 +220,12 @@ func (tc *txnOperator) Txn() txn.TxnMeta {
 	return tc.getTxnMeta(false)
 }
 
+func (tc *txnOperator) TxnRef() *txn.TxnMeta {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return &tc.mu.txn
+}
+
 func (tc *txnOperator) Snapshot() ([]byte, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -247,12 +244,31 @@ func (tc *txnOperator) Snapshot() ([]byte, error) {
 	return snapshot.Marshal()
 }
 
-func (tc *txnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (tc *txnOperator) UpdateSnapshot(
+	ctx context.Context,
+	ts timestamp.Timestamp) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if err := tc.checkStatus(true); err != nil {
 		return err
 	}
+
+	// ony push model support RC isolation
+	if tc.timestampWaiter == nil {
+		return nil
+	}
+
+	// we need to waiter the latest snapshot ts which is greater than the current snapshot
+	if ts.IsEmpty() {
+		lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
+			ctx,
+			tc.mu.txn.SnapshotTS)
+		if err != nil {
+			return err
+		}
+		ts = lastSnapshotTS
+	}
+
 	if tc.mu.txn.SnapshotTS.Less(ts) {
 		tc.mu.txn.SnapshotTS = ts
 	}
@@ -336,9 +352,9 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 	util.LogTxnCommit(tc.getTxnMeta(false))
 
 	if tc.option.readyOnly {
-		if tc.option.closeFunc != nil {
-			tc.option.closeFunc(tc.mu.txn)
-		}
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
+		tc.closeLocked()
 		return nil
 	}
 
@@ -357,19 +373,17 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 
 	tc.mu.Lock()
 	defer func() {
-		tc.mu.closed = true
-		if tc.option.closeFunc != nil {
-			tc.option.closeFunc(tc.mu.txn)
-		}
+		tc.mu.txn.Status = txn.TxnStatus_Aborted
+		tc.closeLocked()
 		tc.mu.Unlock()
 	}()
 
-	if len(tc.mu.txn.DNShards) == 0 {
-		return nil
-	}
-
 	if tc.needUnlockLocked() {
 		defer tc.unlock(ctx)
+	}
+
+	if len(tc.mu.txn.DNShards) == 0 {
+		return nil
 	}
 
 	result, err := tc.handleError(tc.doSend(ctx, []txn.TxnRequest{{
@@ -440,13 +454,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 	if commit {
 		tc.mu.Lock()
 		defer func() {
-			tc.mu.closed = true
-			if tc.option.closeFunc != nil {
-				tc.option.closeFunc(tc.mu.txn)
-			}
-			if tc.option.updateLastCommitTSFunc != nil {
-				tc.option.updateLastCommitTSFunc(tc.mu.txn.CommitTS)
-			}
+			tc.closeLocked()
 			tc.mu.Unlock()
 		}()
 		if tc.needUnlockLocked() {
@@ -468,6 +476,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 
 	if commit {
 		if len(tc.mu.txn.DNShards) == 0 { // commit no write handled txn
+			tc.mu.txn.Status = txn.TxnStatus_Committed
 			return nil, nil
 		}
 		requests = tc.maybeInsertCachedWrites(ctx, requests, true)
@@ -624,6 +633,7 @@ func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, lo
 		defer tc.mu.Unlock()
 	}
 	tc.mu.txn.CommitTS = resp.Txn.CommitTS
+	tc.mu.txn.Status = resp.Txn.Status
 	return result, nil
 }
 
@@ -785,4 +795,9 @@ func (tc *txnOperator) needUnlockLocked() bool {
 		return false
 	}
 	return tc.option.lockService != nil
+}
+
+func (tc *txnOperator) closeLocked() {
+	tc.mu.closed = true
+	tc.triggerEventLocked(ClosedEvent)
 }

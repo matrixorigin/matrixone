@@ -111,7 +111,7 @@ func (v *Vector) GetNulls() *nulls.Nulls {
 
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 	if nsp != nil {
-		v.nsp = *nsp
+		v.nsp.InitWith(nsp)
 	} else {
 		v.nsp.Reset()
 	}
@@ -292,6 +292,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.length = 0
 	v.cantFreeData = false
 	v.cantFreeArea = false
+	types.PutTypeToPool(v.typ)
 
 	v.nsp.Reset()
 }
@@ -1310,25 +1311,21 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				v.area = area[:len(v.area)]
 			}
-			if w.nsp.Any() {
-				for i := 0; i < w.length; i++ {
-					if nulls.Contains(&w.nsp, uint64(i)) {
-						nulls.Add(&v.nsp, uint64(i+v.length))
+			vs := v.col.([]types.Varlena)
+			var va types.Varlena
+			var err error
+			for i := range ws {
+				if nulls.Contains(&w.nsp, uint64(i)) {
+					nulls.Add(&v.nsp, uint64(v.length))
+				} else {
+					va, v.area, err = types.BuildVarlena(ws[i].GetByteSlice(w.area), v.area, mp)
+					if err != nil {
+						return err
 					}
 				}
+				vs[v.length] = va
+				v.length++
 			}
-			sz := v.typ.TypeSize()
-			length := uint32(len(v.area))
-			v.area = append(v.area, w.area...)
-			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			vs := v.col.([]types.Varlena)
-			for i, j := v.length, v.length+w.length; i < j; i++ {
-				if vs[i][0] > types.VarlenaInlineSize {
-					s := vs[i].U32Slice()
-					s[1] += length
-				}
-			}
-			v.length += w.length
 			return nil
 		}
 	case types.T_Blockid:

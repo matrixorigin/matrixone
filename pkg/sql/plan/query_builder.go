@@ -227,6 +227,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				return nil, err
 			}
 		}
+
 	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
@@ -238,6 +239,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
+			TblId:         node.TableDef.TblId,
 			Name:          node.TableDef.Name,
 			Defs:          node.TableDef.Defs,
 			Name2ColIndex: node.TableDef.Name2ColIndex,
@@ -1771,6 +1773,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	return nodeID, nil
+}
+
+func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
+	stepPos := len(builder.qry.Steps)
+	builder.qry.Steps = append(builder.qry.Steps, nodeID)
+	return int32(stepPos)
 }
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {

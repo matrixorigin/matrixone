@@ -28,17 +28,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
@@ -46,8 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/tidwall/btree"
-
-	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 type TenantInfo struct {
@@ -727,7 +725,7 @@ var (
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
-		catalog.AutoIncrTableName:     0,
+		catalog.MOAutoIncrTable:       0,
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
@@ -743,12 +741,19 @@ var (
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
-		catalog.AutoIncrTableName:     0,
+		catalog.MOAutoIncrTable:       0,
 		"mo_indexes":                  0,
 		"mo_pubs":                     0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
-	createAutoTableSql           = fmt.Sprintf("create table `%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);", catalog.AutoIncrTableName)
+	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
+		table_id   bigint unsigned, 
+		col_name     varchar(770), 
+		col_index      int,
+		offset     bigint unsigned, 
+		step       bigint unsigned,  
+		primary key(table_id, col_name)
+	);`, catalog.MOAutoIncrTable)
 	// mo_indexes is a data dictionary table, must be created first when creating tenants, and last when deleting tenants
 	// mo_indexes table does not have `auto_increment` column,
 	createMoIndexesSql = `create table mo_indexes(
@@ -905,9 +910,8 @@ var (
 	}
 	dropMoPubsSql     = `drop table if exists mo_catalog.mo_pubs;`
 	deleteMoPubsSql   = `delete from mo_catalog.mo_pubs;`
-	dropAutoIcrColSql = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.AutoIncrTableName)
-
-	dropMoIndexes = `drop table if exists mo_catalog.mo_indexes;`
+	dropAutoIcrColSql = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
+	dropMoIndexes     = `drop table if exists mo_catalog.mo_indexes;`
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -2476,7 +2480,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 			err = moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", user.Username, user.Hostname)
 			goto handleFailed
 		} else {
-			return err
+			goto handleSucceeded
 		}
 	}
 
@@ -2530,6 +2534,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) error {
 		}
 	}
 
+handleSucceeded:
 	err = bh.Exec(ctx, "commit;")
 	if err != nil {
 		goto handleFailed
@@ -2958,6 +2963,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		accId                                                    int64
 		newCtx                                                   context.Context
 		subs                                                     *plan.SubscriptionMeta
+		tenantName                                               string
 	)
 
 	tenantInfo = ses.GetTenantInfo()
@@ -2966,9 +2972,9 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	}
 
 	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+
 	//get pubAccountId from publication info
 	sql, err = getSqlForAccountIdAndStatus(newCtx, accName, true)
-
 	if err != nil {
 		return nil, err
 	}
@@ -3060,13 +3066,13 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 					goto handleFailed
 				}
 
-				tenantName, err := erArray[0].GetString(newCtx, 0, 0)
+				tenantName, err = erArray[0].GetString(newCtx, 0, 0)
 				if err != nil {
 					goto handleFailed
 				}
 				if !isSubscriptionValid(allAccountStr == "true", accountList, tenantName) {
 					err = moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
-					return nil, err
+					goto handleFailed
 				}
 			}
 		} else {
@@ -3078,6 +3084,11 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		goto handleFailed
 	}
 
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		return nil, err
+	}
+
 	subs = &plan.SubscriptionMeta{
 		Name:        pubName,
 		AccountId:   int32(accId),
@@ -3086,7 +3097,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		SubName:     subName,
 	}
 
-	return subs, nil
+	return subs, err
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
@@ -3149,7 +3160,8 @@ func isDbPublishing(ctx context.Context, dbName string, ses *Session) (bool, err
 		goto handleFailed
 	}
 	if !execResultArrayHasData(erArray) {
-		return false, moerr.NewInternalError(ctx, "there is no publication for database %s", dbName)
+		err = moerr.NewInternalError(ctx, "there is no publication for database %s", dbName)
+		goto handleFailed
 	}
 	count, err = erArray[0].GetInt64(ctx, 0, 0)
 	if err != nil {
@@ -3558,7 +3570,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	//step 6 : drop table mo_role_privs
 	//step 7 : drop table mo_user_defined_function
 	//step 8 : drop table mo_mysql_compatibility_mode
-	//step 9 : drop table %!%mo_increment_columns
+	//step 9 : drop table mo_increment_columns
 	for _, sql = range getSqlForDropAccount() {
 		err = bh.Exec(deleteCtx, sql)
 		if err != nil {
@@ -3914,12 +3926,12 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) er
 	checkDatabase = fmt.Sprintf(checkUdfArgs, string(df.Name.Name.ObjectName), dbName)
 	err = bh.Exec(ctx, checkDatabase)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	if execResultArrayHasData(erArray) {
@@ -3927,13 +3939,12 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) er
 		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 			argstr, err = erArray[0].GetString(ctx, i, 0)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
 			funcId, err = erArray[0].GetInt64(ctx, i, 1)
 			if err != nil {
-				goto handleFailed
+				return err
 			}
-			logutil.Debug("argstr: " + argstr)
 			argMap := make(map[string]string)
 			json.Unmarshal([]byte(argstr), &argMap)
 			argCount := 0
@@ -3948,7 +3959,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction) er
 				goto handleArgMatch
 			}
 		}
-		goto handleFailed
+		return err
 	} else {
 		// no such function
 		return moerr.NewNoUDFNoCtx(string(df.Name.Name.ObjectName))
@@ -4009,19 +4020,19 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 	checkDatabase = fmt.Sprintf(checkStoredProcedureArgs, string(dp.Name.Name.ObjectName), dbName)
 	err = bh.Exec(ctx, checkDatabase)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	if execResultArrayHasData(erArray) {
 		// function with provided name and db exists, for now we don't support overloading for stored procedure, so go to handle deletion.
 		procId, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
-			goto handleFailed
+			return err
 		}
 		goto handleArgMatch
 	} else {
@@ -5269,33 +5280,53 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 	}
 	if p.GetQuery() != nil { //select,insert select, update, delete
 		q := p.GetQuery()
-		lastNode := q.Nodes[len(q.Nodes)-1]
+
+		// lastNode := q.Nodes[len(q.Nodes)-1]
 		var t PrivilegeType
 		var clusterTable bool
 		var clusterTableOperation clusterTableOperationType
+
+		switch q.StmtType {
+		case plan.Query_UPDATE:
+			t = PrivilegeTypeUpdate
+			clusterTableOperation = clusterTableModify
+		case plan.Query_DELETE:
+			t = PrivilegeTypeDelete
+			clusterTableOperation = clusterTableModify
+		case plan.Query_INSERT:
+			t = PrivilegeTypeInsert
+			clusterTableOperation = clusterTableModify
+		default:
+			t = PrivilegeTypeSelect
+			clusterTableOperation = clusterTableSelect
+		}
+
 		for _, node := range q.Nodes {
 			if node.NodeType == plan.Node_TABLE_SCAN {
-				switch lastNode.NodeType {
-				case plan.Node_UPDATE:
-					t = PrivilegeTypeUpdate
-					clusterTableOperation = clusterTableModify
-				case plan.Node_DELETE:
-					t = PrivilegeTypeDelete
-					clusterTableOperation = clusterTableModify
-				default:
-					t = PrivilegeTypeSelect
-					clusterTableOperation = clusterTableSelect
-				}
 				if node.ObjRef != nil {
 					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
 						clusterTable = true
 					} else {
 						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
 					}
+
+					var scanTyp PrivilegeType
+					switch q.StmtType {
+					case plan.Query_UPDATE:
+						scanTyp = PrivilegeTypeUpdate
+						clusterTableOperation = clusterTableModify
+					case plan.Query_DELETE:
+						scanTyp = PrivilegeTypeDelete
+						clusterTableOperation = clusterTableModify
+					default:
+						scanTyp = PrivilegeTypeSelect
+						clusterTableOperation = clusterTableSelect
+					}
+
 					//do not check the privilege of the index table
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
-							typ:                   t,
+							typ:                   scanTyp,
 							databaseName:          node.ObjRef.GetSchemaName(),
 							tableName:             node.ObjRef.GetObjName(),
 							isClusterTable:        clusterTable,
@@ -5303,38 +5334,30 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 						})
 					}
 				}
-			} else if node.NodeType == plan.Node_INSERT { //insert select
-				if node.ObjRef != nil {
-					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
-						clusterTable = true
-					} else {
-						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
-					}
+			} else if node.NodeType == plan.Node_INSERT {
+				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
+					objRef := node.InsertCtx.Ref
 					//do not check the privilege of the index table
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
-							typ:                   PrivilegeTypeInsert,
-							databaseName:          node.ObjRef.GetSchemaName(),
-							tableName:             node.ObjRef.GetObjName(),
-							isClusterTable:        clusterTable,
+							typ:                   t,
+							databaseName:          objRef.GetSchemaName(),
+							tableName:             objRef.GetObjName(),
+							isClusterTable:        node.InsertCtx.IsClusterTable,
 							clusterTableOperation: clusterTableModify,
 						})
 					}
 				}
 			} else if node.NodeType == plan.Node_DELETE {
-				if node.ObjRef != nil {
-					if node.TableDef != nil && node.TableDef.TableType == catalog.SystemClusterRel {
-						clusterTable = true
-					} else {
-						clusterTable = isClusterTable(node.ObjRef.GetSchemaName(), node.ObjRef.GetObjName())
-					}
+				if node.DeleteCtx != nil && node.DeleteCtx.Ref != nil {
+					objRef := node.DeleteCtx.Ref
 					//do not check the privilege of the index table
 					if !isIndexTable(node.ObjRef.GetObjName()) {
 						appendPt(privilegeTips{
-							typ:                   PrivilegeTypeDelete,
-							databaseName:          node.ObjRef.GetSchemaName(),
-							tableName:             node.ObjRef.GetObjName(),
-							isClusterTable:        clusterTable,
+							typ:                   t,
+							databaseName:          objRef.GetSchemaName(),
+							tableName:             objRef.GetObjName(),
+							isClusterTable:        node.DeleteCtx.IsClusterTable,
 							clusterTableOperation: clusterTableModify,
 						})
 					}
@@ -7112,12 +7135,10 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if err != nil {
 			goto handleFailed
 		}
-
 		err = bh.Exec(newTenantCtx, createMoIndexesSql)
 		if err != nil {
 			return err
 		}
-
 		err = bh.Exec(newTenantCtx, createAutoTableSql)
 		if err != nil {
 			return err
@@ -7130,29 +7151,24 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			createDbInformationSchemaSql,
 			"create database mysql;",
 		}
-
 		for _, db := range createDbSqls {
 			err = bh.Exec(newTenantCtx, db)
 			if err != nil {
 				return err
 			}
 		}
-
 		err = bh.Exec(ctx, "begin;")
 		if err != nil {
 			goto handleFailed
 		}
-
 		err = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant)
 		if err != nil {
 			goto handleFailed
 		}
-
 		err = createTablesInSystemOfGeneralTenant(ctx, bh, newTenant)
 		if err != nil {
 			goto handleFailed
 		}
-
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTenant)
 		if err != nil {
 			goto handleFailed
@@ -7165,7 +7181,8 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	}
 
 	if !exists {
-		createSubscriptionDatabase(ctx, bh, newTenant, ses)
+		//just skip nonexistent pubs
+		_ = createSubscriptionDatabase(ctx, bh, newTenant, ses)
 	}
 
 	return err
@@ -7844,12 +7861,12 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName, string(argsJson))
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	if execResultArrayHasData(erArray) {
@@ -7925,7 +7942,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	}
 	argsJson, err = json.Marshal(argList)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	// validate duplicate procedure declaration
@@ -7933,12 +7950,12 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	checkExistence = fmt.Sprintf(checkProcedureExistence, string(cp.Name.Name.ObjectName), dbName)
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	if execResultArrayHasData(erArray) {
@@ -7965,7 +7982,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		goto handleFailed
 	}
 
-	// return err
+	return err
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
@@ -8079,7 +8096,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 
 	if !isExist {
 		err = moerr.NewInternalError(ctx, "there is no account %s to change config", accountName)
-		return err
+		goto handleFailed
 	}
 
 	// step2: update the config
@@ -8200,7 +8217,7 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			return err
+			goto handleFailed
 		}
 
 		err = bh.Exec(ctx, "commit;")
@@ -8220,12 +8237,13 @@ func deleteRecordToMoMysqlCompatbilityMode(ctx context.Context, ses *Session, st
 	return nil
 }
 
-func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (string, error) {
+func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (string, error) {
 	var err error
 	var erArray []ExecResult
 	var sql string
+	var resultConfig string
 	defaultConfig := "0.7"
-	variable_name := "version_compatibility"
+	variableName := "version_compatibility"
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -8234,25 +8252,23 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 		goto handleFailed
 	}
 
-	sql = getSqlForGetSystemVariableValueWithDatabase(dbName, variable_name)
+	sql = getSqlForGetSystemVariableValueWithDatabase(dbName, variableName)
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		return defaultConfig, err
+		goto handleFailed
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		return defaultConfig, err
+		goto handleFailed
 	}
 
 	if execResultArrayHasData(erArray) {
-		config, err := erArray[0].GetString(ctx, 0, 0)
+		resultConfig, err = erArray[0].GetString(ctx, 0, 0)
 		if err != nil {
-			return defaultConfig, err
-		} else {
-			return config, err
+			goto handleFailed
 		}
 	}
 
@@ -8260,7 +8276,7 @@ func GetVersionCompatbility(ctx context.Context, ses *Session, dbName string) (s
 	if err != nil {
 		goto handleFailed
 	}
-	return defaultConfig, err
+	return resultConfig, err
 
 handleFailed:
 	//ROLLBACK the transaction
@@ -8530,6 +8546,8 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		if err != nil {
 			goto handleFailed
 		}
+
+		return err
 
 	handleFailed:
 		//ROLLBACK the transaction

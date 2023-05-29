@@ -16,9 +16,11 @@ package colexec
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"strconv"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -107,9 +109,11 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 			hasIndex = true
 			break
 		}
-		if _, ok := constraint.(*engine.PrimaryKeyDef); ok {
-			hasIndex = true
-			break
+		if pkdef, ok := constraint.(*engine.PrimaryKeyDef); ok {
+			if pkdef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+				hasIndex = true
+				break
+			}
 		}
 	}
 
@@ -366,4 +370,16 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 
 	bat.SetZs(bat.GetVector(0).Length(), proc.Mp())
 	return bat, nil
+}
+
+func GetNewRelation(eg engine.Engine, dbName, tbleName string, txn client.TxnOperator, ctx context.Context) (engine.Relation, error) {
+	dbHandler, err := eg.Database(ctx, dbName, txn)
+	if err != nil {
+		return nil, err
+	}
+	tableHandler, err := dbHandler.Relation(ctx, tbleName)
+	if err != nil {
+		return nil, err
+	}
+	return tableHandler, nil
 }
