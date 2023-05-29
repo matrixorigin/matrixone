@@ -321,6 +321,7 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 	case c.awakeCollect <- item:
 		return nil
 	default:
+		logutil.Debug("MOCollector Collect chan is full", zap.String("name", item.GetName()), zap.Int("chanSize", len(c.awakeCollect)))
 		return nil
 	}
 }
@@ -360,6 +361,7 @@ func (c *MOCollector) Start() bool {
 func (c *MOCollector) allocBuffer() {
 	c.bufferCond.L.Lock()
 	for c.bufferTotal.Load() == c.maxBufferCnt {
+		logutil.Debug("allocBuffer: buffer is full, wait", zap.Int32("maxBufferCnt", c.maxBufferCnt))
 		c.bufferCond.Wait()
 	}
 	c.bufferTotal.Add(1)
@@ -428,7 +430,13 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		req := holder.getGenerateReq()
 		if req != nil {
-			c.awakeGenerate <- req
+			select {
+			case c.awakeGenerate <- req:
+				return
+			default:
+				logutil.Debug("MOCollector Generate chan is full", zap.Int("chanSize", len(c.awakeGenerate)))
+				return
+			}
 		}
 	}
 }
@@ -448,6 +456,8 @@ loop:
 				select {
 				case c.awakeBatch <- exportReq:
 				case <-c.stopCh:
+				default:
+					logutil.Debug("MOCollector Batch chan is full", zap.Int("chanSize", len(c.awakeBatch)))
 				}
 			}
 		case <-c.stopCh:
