@@ -430,14 +430,13 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		req := holder.getGenerateReq()
 		if req != nil {
-			c.awakeGenerate <- req
-			//select {
-			//case c.awakeGenerate <- req:
-			//	return
-			//default:
-			//	logutil.Debug("MOCollector Generate chan is full", zap.Int("chanSize", len(c.awakeGenerate)))
-			//	return
-			//}
+			select {
+			case c.awakeGenerate <- req:
+				return
+			default:
+				logutil.Debug("MOCollector Generate chan is full", zap.Int("chanSize", len(c.awakeGenerate)))
+				return
+			}
 		}
 	}
 }
@@ -457,9 +456,8 @@ loop:
 				select {
 				case c.awakeBatch <- exportReq:
 				case <-c.stopCh:
-					//default:
-					//	logutil.Debug("MOCollector Batch chan is full", zap.Int("chanSize", len(c.awakeBatch)))
-					//}
+				default:
+					logutil.Debug("MOCollector Batch chan is full", zap.Int("chanSize", len(c.awakeBatch)))
 				}
 			}
 		case <-c.stopCh:
