@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"runtime/pprof"
 	"sync"
@@ -84,7 +85,7 @@ func main() {
 			if err != nil {
 				panic(err)
 			}
-			if err := rel.Append(b); err != nil {
+			if err := rel.Append(context.Background(), b); err != nil {
 				panic(err)
 			}
 			if err := txn.Commit(); err != nil {
@@ -121,7 +122,7 @@ func main() {
 			for blkIt.Valid() {
 				blk := blkIt.GetBlock()
 				logutil.Info(blk.String())
-				view, err := blk.GetColumnDataById(0)
+				view, err := blk.GetColumnDataById(context.Background(), 0)
 				logutil.Infof("Block %s Rows %d", blk.Fingerprint().BlockString(), view.Length())
 				if err != nil {
 					panic(err)

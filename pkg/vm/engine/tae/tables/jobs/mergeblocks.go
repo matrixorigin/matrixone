@@ -175,7 +175,7 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 	return
 }
 
-func (task *mergeBlocksTask) Execute() (err error) {
+func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	logutil.Info("[Start] Mergeblocks", common.OperationField(task.Name()),
 		common.OperandField(task))
 	now := time.Now()
@@ -232,7 +232,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 
 	for i, block := range task.compacted {
-		if view, err = block.GetColumnDataById(sortColDef.Idx); err != nil {
+		if view, err = block.GetColumnDataById(ctx, sortColDef.Idx); err != nil {
 			return
 		}
 		defer view.Close()
@@ -265,13 +265,14 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 
 	// merge sort the sort key
-	node, err := common.DefaultAllocator.Alloc(length * 4)
+	allocSz := length * 4
+	node, err := common.DefaultAllocator.Alloc(allocSz)
 	if err != nil {
 		panic(err)
 	}
-	buf := node[:length]
 	defer common.DefaultAllocator.Free(node)
-	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
+	sortedIdx := unsafe.Slice((*uint32)(unsafe.Pointer(&node[0])), length)
+
 	vecs, mapping := task.mergeColumn(sortVecs, &sortedIdx, true, rows, to, schema.HasSortKey())
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
@@ -311,7 +312,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		// If only one single sort key, it was processed before
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
-			if view, err = block.GetColumnDataById(def.Idx); err != nil {
+			if view, err = block.GetColumnDataById(ctx, def.Idx); err != nil {
 				return
 			}
 			defer view.Close()
@@ -347,7 +348,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return err
 		}
 	}
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, _, err := writer.Sync(ctx)
 	if err != nil {
 		return err
 	}

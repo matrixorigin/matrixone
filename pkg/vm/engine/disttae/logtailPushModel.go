@@ -171,9 +171,9 @@ func (client *pushClient) subscribeTable(
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case subscriber := <-client.subscriber.lockSubscriber:
-		err := subscriber(ctx, tblId)
-		client.subscriber.lockSubscriber <- subscriber
+	case b := <-client.subscriber.requestLock:
+		err := client.subscriber.doSubscribe(ctx, tblId)
+		client.subscriber.requestLock <- b
 		if err != nil {
 			return err
 		}
@@ -187,9 +187,9 @@ func (client *pushClient) unsubscribeTable(
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case unsubscriber := <-client.subscriber.lockUnSubscriber:
-		err := unsubscriber(ctx, tblId)
-		client.subscriber.lockUnSubscriber <- unsubscriber
+	case b := <-client.subscriber.requestLock:
+		err := client.subscriber.doUnSubscribe(ctx, tblId)
+		client.subscriber.requestLock <- b
 		if err != nil {
 			return err
 		}
@@ -207,31 +207,35 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 
 	ch := make(chan error)
 	go func() {
+		var er error
 		for _, ti := range tableIds {
-			er := client.TryToSubscribeTable(ctx, databaseId, ti)
+			er = client.TryToSubscribeTable(ctx, databaseId, ti)
 			if er != nil {
-				ch <- er
-				return
+				break
 			}
 		}
-		ch <- nil
+		ch <- er
 	}()
 
-	select {
-	case <-ctx.Done():
+	err = <-ch
+	close(ch)
+
+	if err != nil {
 		logutil.Errorf("connect to dn log tail server failed")
-		return ctx.Err()
-	case err = <-ch:
-		if err != nil {
-			return err
-		}
-		client.receivedLogTailTime.ready.Store(true)
-		return nil
+		return err
 	}
+	client.receivedLogTailTime.ready.Store(true)
+	return nil
 }
 
-func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
+func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
 	reconnectErr := make(chan error)
+
+	// init isLastReconnectRoutineClean as true.
+	// and once it was false, we should clean reconnectErr before we do reconnect action.
+	// it means the last reconnection failed but not because we get an error from this channel.
+	// if not clean, it will cause some go-routine hang up.
+	isLastReconnectRoutineClean := true
 
 	go func() {
 		for {
@@ -239,10 +243,9 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 			errChan := make(chan error, parallelNums)
 			receiver := make([]routineController, parallelNums)
 			for i := range receiver {
-				receiver[i] = createRoutineToConsumeLogTails(i, bufferLength, e, errChan)
+				receiver[i] = createRoutineToConsumeLogTails(ctx, i, bufferLength, e, errChan)
 			}
 
-			ctx := context.TODO()
 			ch := make(chan logTailSubscriberResponse, 1)
 			// a dead loop to receive log, if lost connect, should reconnect.
 			for {
@@ -264,6 +267,8 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 
 				case err := <-reconnectErr:
 					cancel()
+					isLastReconnectRoutineClean = true
+
 					if err != nil {
 						logutil.Errorf("reconnect to dn log tail service failed, reason: %s", err)
 						goto cleanAndReconnect
@@ -315,6 +320,10 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 			for _, r := range receiver {
 				r.close()
 			}
+			if !isLastReconnectRoutineClean {
+				<-reconnectErr
+			}
+
 			logutil.Infof("start to reconnect to dn log tail service")
 			for {
 				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
@@ -328,18 +337,19 @@ func (client *pushClient) receiveTableLogTailContinuously(e *Engine) {
 				e.cleanMemoryTable()
 
 				go func() {
-					err := client.firstTimeConnectToLogTailServer(context.TODO())
+					err := client.firstTimeConnectToLogTailServer(ctx)
 					reconnectErr <- err
 				}()
+
+				isLastReconnectRoutineClean = false
 				break
 			}
 		}
 	}()
 }
 
-func (client *pushClient) unusedTableGCTicker() {
+func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 	go func() {
-		ctx := context.TODO()
 		ticker := time.NewTicker(unsubscribeProcessTicker)
 		for {
 			<-ticker.C
@@ -486,10 +496,9 @@ type logTailSubscriber struct {
 	dnNodeID      int
 	logTailClient *service.LogtailClient
 
-	// return a table subscribe method.
-	lockSubscriber chan func(context.Context, api.TableID) error
-	// return a table unsubscribe method.
-	lockUnSubscriber chan func(ctx context.Context, id api.TableID) error
+	requestLock   chan bool
+	doSubscribe   func(context.Context, api.TableID) error
+	doUnSubscribe func(context.Context, api.TableID) error
 }
 
 func clientIsPreparing(context.Context, api.TableID) error {
@@ -532,28 +541,22 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	// XXX we assume that we have only 1 dn now.
 	s.dnNodeID = 0
 
+	// if channel is not nil here, it's most likely called by reconnect process.
+	// we need to take out the content of channel to ensure that
+	// the subscriber can't be used during the init process.
+	if s.requestLock == nil {
+		s.requestLock = make(chan bool, 1)
+	} else {
+		<-s.requestLock
+	}
+	s.doSubscribe = clientIsPreparing
+	s.doUnSubscribe = clientIsPreparing
+
 	// close the old stream
 	oldClient := s.logTailClient
 	if oldClient != nil {
 		_ = oldClient.Close()
 	}
-
-	// if channel is not nil here, it's most likely called by reconnect process.
-	// we need to take out the content of channel to ensure that
-	// the subscriber can't be used during the init process.
-	if s.lockSubscriber == nil {
-		s.lockSubscriber = make(chan func(context.Context, api.TableID) error, 1)
-	} else {
-		<-s.lockSubscriber
-	}
-	s.lockSubscriber <- clientIsPreparing
-
-	if s.lockUnSubscriber == nil {
-		s.lockUnSubscriber = make(chan func(context.Context, api.TableID) error, 1)
-	} else {
-		<-s.lockUnSubscriber
-	}
-	s.lockUnSubscriber <- clientIsPreparing
 
 	stream, err := newRpcStreamToDnLogTailService(serviceAddr)
 	if err != nil {
@@ -566,11 +569,10 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	if err != nil {
 		return err
 	}
-	<-s.lockSubscriber
-	<-s.lockUnSubscriber
+	s.doSubscribe = s.subscribeTable
+	s.doUnSubscribe = s.unSubscribeTable
+	s.requestLock <- true
 
-	s.lockSubscriber <- s.subscribeTable
-	s.lockUnSubscriber <- s.unSubscribeTable
 	return nil
 }
 
@@ -606,18 +608,9 @@ func (s *logTailSubscriber) receiveResponse() logTailSubscriberResponse {
 	}
 }
 
-func (e *Engine) SetPushModelFlag(turnOn bool) {
-	e.usePushModel = turnOn
-}
-
-func (e *Engine) UsePushModelOrNot() bool {
-	return e.usePushModel
-}
-
 func (e *Engine) InitLogTailPushModel(
 	ctx context.Context,
 	timestampWaiter client.TimestampWaiter) error {
-	e.SetPushModelFlag(true)
 
 	// get log tail service address.
 	dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
@@ -626,8 +619,8 @@ func (e *Engine) InitLogTailPushModel(
 		timestampWaiter); err != nil {
 		return err
 	}
-	e.pClient.receiveTableLogTailContinuously(e)
-	e.pClient.unusedTableGCTicker()
+	e.pClient.receiveTableLogTailContinuously(ctx, e)
+	e.pClient.unusedTableGCTicker(ctx)
 
 	// first time connect to log tail server, should push subscription of some table on `mo_catalog` database.
 	if err := e.pClient.firstTimeConnectToLogTailServer(ctx); err != nil {
@@ -655,7 +648,7 @@ func distributeSubscribeResponse(
 		e.pClient.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % parallelNums
-		recRoutines[routineIndex].sendSubscribeResponse(response)
+		recRoutines[routineIndex].sendSubscribeResponse(ctx, response)
 	}
 	// no matter how we consume the response, should update all timestamp.
 	e.pClient.receivedLogTailTime.updateTimestamp(parallelNums, *lt.Ts)
@@ -733,13 +726,12 @@ func distributeUnSubscribeResponse(
 }
 
 type routineController struct {
-	ctx        context.Context
 	routineId  int
 	closeChan  chan bool
 	signalChan chan routineControlCmd
 }
 
-func (rc *routineController) sendSubscribeResponse(r *logtail.SubscribeResponse) {
+func (rc *routineController) sendSubscribeResponse(ctx context.Context, r *logtail.SubscribeResponse) {
 	rc.signalChan <- cmdToConsumeSub{log: r}
 }
 
@@ -760,10 +752,10 @@ func (rc *routineController) close() {
 }
 
 func createRoutineToConsumeLogTails(
+	ctx context.Context,
 	routineId int, signalBufferLength int,
 	e *Engine, errOut chan error) routineController {
 	controller := routineController{
-		ctx:        context.TODO(),
 		routineId:  routineId,
 		closeChan:  make(chan bool),
 		signalChan: make(chan routineControlCmd, signalBufferLength),
@@ -773,7 +765,7 @@ func createRoutineToConsumeLogTails(
 		for {
 			select {
 			case cmd := <-receiver.signalChan:
-				if err := cmd.action(engine, receiver); err != nil {
+				if err := cmd.action(ctx, engine, receiver); err != nil {
 					errRet <- err
 				}
 
@@ -790,7 +782,7 @@ func createRoutineToConsumeLogTails(
 
 // a signal to control the routine which is responsible for consuming log tail.
 type routineControlCmd interface {
-	action(e *Engine, ctrl *routineController) error
+	action(ctx context.Context, e *Engine, ctrl *routineController) error
 }
 
 type cmdToConsumeSub struct{ log *logtail.SubscribeResponse }
@@ -798,9 +790,9 @@ type cmdToConsumeLog struct{ log logtail.TableLogtail }
 type cmdToUpdateTime struct{ time timestamp.Timestamp }
 type cmdToConsumeUnSub struct{ log *logtail.UnSubscribeResponse }
 
-func (cmd cmdToConsumeSub) action(e *Engine, ctrl *routineController) error {
+func (cmd cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeSubscribeResponse(ctrl.ctx, response, true); err != nil {
+	if err := e.consumeSubscribeResponse(ctx, response, true); err != nil {
 		return err
 	}
 	lt := response.GetLogtail()
@@ -809,20 +801,20 @@ func (cmd cmdToConsumeSub) action(e *Engine, ctrl *routineController) error {
 	return nil
 }
 
-func (cmd cmdToConsumeLog) action(e *Engine, ctrl *routineController) error {
+func (cmd cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeUpdateLogTail(ctrl.ctx, response, true); err != nil {
+	if err := e.consumeUpdateLogTail(ctx, response, true); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (cmd cmdToUpdateTime) action(e *Engine, ctrl *routineController) error {
+func (cmd cmdToUpdateTime) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	e.pClient.receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.time)
 	return nil
 }
 
-func (cmd cmdToConsumeUnSub) action(e *Engine, _ *routineController) error {
+func (cmd cmdToConsumeUnSub) action(ctx context.Context, e *Engine, _ *routineController) error {
 	table := cmd.log.Table
 	e.cleanMemoryTableWithTable(table.DbId, table.TbId)
 	e.pClient.subscribed.setTableUnsubscribe(table.DbId, table.TbId)
@@ -848,8 +840,7 @@ func updatePartitionOfPush(
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
-	partitions := e.getPartitions(dbId, tblId)
-	partition := partitions[dnId]
+	partition := e.getPartition(dbId, tblId)
 
 	select {
 	case <-partition.Lock():

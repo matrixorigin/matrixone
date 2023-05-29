@@ -17,6 +17,7 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"os"
 	"sync"
 	"syscall"
@@ -401,6 +402,20 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		return nil
 	}
 	//for loading deleted rowid.
+	db, err := h.db.Catalog.GetDatabaseByID(req.DatabaseId)
+	if err != nil {
+		return err
+	}
+	tbl, err := db.GetTableEntryByID(req.TableID)
+	if err != nil {
+		return err
+	}
+	var version uint32
+	if req.Schema != nil {
+		version = req.Schema.Version
+	}
+	schema := tbl.GetVersionSchema(version)
+	pkIdx := schema.GetPrimaryKey().Idx
 	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
 	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
@@ -417,7 +432,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint16{location.ID()})
+		pref.AddBlock([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -787,8 +802,18 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return
 	}
-	if req.PkCheck == db.PKCheckDisable {
-		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+	ctx = perfcounter.WithCounterSetFrom(ctx, h.db.Opts.Ctx)
+	switch req.PkCheck {
+	case db.FullDedup:
+		txn.SetDedupType(txnif.FullDedup)
+	case db.IncrementalDedup:
+		if h.db.Opts.IncrementalDedup {
+			txn.SetDedupType(txnif.IncrementalDedup)
+		} else {
+			txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+		}
+	case db.FullSkipWorkspaceDedup:
+		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
@@ -825,9 +850,8 @@ func (h *Handle) HandleWrite(
 				}
 				locations = append(locations, location)
 			}
-			err = tb.AddBlksWithMetaLoc(
-				nil,
-				locations)
+
+			err = tb.AddBlksWithMetaLoc(locations)
 			return
 		}
 		//check the input batch passed by cn is valid.
@@ -850,7 +874,7 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		//Appends a batch of data into table.
-		err = AppendDataToTable(tb, req.Batch)
+		err = AppendDataToTable(ctx, tb, req.Batch)
 		return
 	}
 	//handle delete

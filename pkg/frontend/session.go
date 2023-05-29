@@ -343,8 +343,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		// For seq init values.
 		ses.seqCurValues = make(map[uint64]string)
 		ses.seqLastValue = ""
-		ses.sqlHelper = &SqlHelper{ses: ses}
 	}
+	ses.sqlHelper = &SqlHelper{ses: ses}
 	ses.flag = flag
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
@@ -442,6 +442,7 @@ func NewBackgroundSession(
 	ses.SetRequestContext(cancelBackgroundCtx)
 	ses.SetConnectContext(connCtx)
 	ses.SetBackgroundSession(true)
+	ses.UpdateDebugString()
 	backSes := &BackgroundSession{
 		Session: ses,
 		cancel:  cancelBackgroundFunc,
@@ -526,6 +527,12 @@ func (ses *Session) UpdateDebugString() {
 	sb.WriteByte('|')
 	//session id
 	sb.WriteString(ses.uuid.String())
+	//upstream sessionid
+	if ses.upstream != nil {
+		sb.WriteByte('|')
+		sb.WriteString(ses.upstream.uuid.String())
+	}
+
 	ses.debugStr = sb.String()
 }
 
@@ -825,21 +832,9 @@ func (ses *Session) SaveResultSet() {
 func (ses *Session) AppendResultBatch(bat *batch.Batch) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	// just copy
-	var err error
-	copied := &batch.Batch{
-		Cnt:   1,
-		Attrs: make([]string, len(bat.Attrs)),
-		Vecs:  make([]*vector.Vector, len(bat.Vecs)),
-		Zs:    make([]int64, len(bat.Zs)),
-	}
-	copy(copied.Attrs, bat.Attrs)
-	copy(copied.Zs, bat.Zs)
-	for i := range copied.Vecs {
-		copied.Vecs[i], err = bat.Vecs[i].Dup(ses.mp)
-		if err != nil {
-			return err
-		}
+	copied, err := bat.Dup(ses.mp)
+	if err != nil {
+		return err
 	}
 	ses.resultBatches = append(ses.resultBatches, copied)
 	return nil
@@ -922,9 +917,6 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 			mp = mpool.MustNewNoFixed("session-prepare-insert-values")
 		}
 		prepareStmt.mp = mp
-		emptyBatch := batch.NewWithSize(0)
-		emptyBatch.Zs = []int64{1}
-		prepareStmt.emptyBatch = emptyBatch
 		prepareStmt.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(bat.Vecs))
 		for i, vec := range bat.Vecs {
 			prepareStmt.ufs[i] = vector.GetUnionOneFunction(*vec.GetType(), mp)
@@ -1027,6 +1019,25 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 		}
 	} else {
 		return moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
+	}
+	return nil
+}
+
+// InitSetSessionVar sets the value of system variable in session when start a connection
+func (ses *Session) InitSetSessionVar(name string, value interface{}) error {
+	gSysVars := ses.GetGlobalSysVars()
+	if def, _, ok := gSysVars.GetGlobalSysVar(name); ok {
+		cv, err := def.GetType().Convert(value)
+		if err != nil {
+			errutil.ReportError(ses.GetRequestContext(), err)
+			return err
+		}
+
+		if def.UpdateSessVar == nil {
+			ses.SetSysVar(def.GetName(), cv)
+		} else {
+			return def.UpdateSessVar(ses, ses.GetSysVars(), def.GetName(), cv)
+		}
 	}
 	return nil
 }
@@ -1370,6 +1381,106 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	return GetPassWord(pwd)
 }
 
+func (ses *Session) InitGlobalSystemVariables() error {
+	var err error
+	var rsset []ExecResult
+	tenantInfo := ses.GetTenantInfo()
+	// if is system account
+	if tenantInfo.IsSysTenant() {
+		sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
+		sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
+		sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+
+		// get system variable from mo_mysql_compatibility mode
+		sqlForGetVariables := getSystemVariablesWithAccount(sysAccountID)
+		pu := ses.GetParameterUnit()
+		mp := ses.GetMemPool()
+
+		rsset, err = executeSQLInBackgroundSession(
+			sysTenantCtx,
+			ses,
+			mp,
+			pu,
+			sqlForGetVariables)
+		if err != nil {
+			return err
+		}
+		if execResultArrayHasData(rsset) {
+			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+				variable_name, err := rsset[0].GetString(sysTenantCtx, i, 0)
+				if err != nil {
+					return err
+				}
+				variable_value, err := rsset[0].GetString(sysTenantCtx, i, 1)
+				if err != nil {
+					return err
+				}
+
+				if sv, ok := gSysVarsDefs[variable_name]; ok {
+					val, err := sv.GetType().ConvertFromString(variable_value)
+					if err != nil {
+						return err
+					}
+					err = ses.InitSetSessionVar(variable_name, val)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		} else {
+			return moerr.NewInternalError(sysTenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", sysAccountName)
+		}
+	} else {
+		tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+
+		// get system variable from mo_mysql_compatibility mode
+		sqlForGetVariables := getSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
+		pu := ses.GetParameterUnit()
+		mp := ses.GetMemPool()
+
+		rsset, err = executeSQLInBackgroundSession(
+			tenantCtx,
+			ses,
+			mp,
+			pu,
+			sqlForGetVariables)
+		if err != nil {
+			return err
+		}
+		if execResultArrayHasData(rsset) {
+			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+				variable_name, err := rsset[0].GetString(tenantCtx, i, 0)
+				if err != nil {
+					return err
+				}
+				variable_value, err := rsset[0].GetString(tenantCtx, i, 1)
+				if err != nil {
+					return err
+				}
+
+				if sv, ok := gSysVarsDefs[variable_name]; ok {
+					if !sv.Dynamic || sv.GetScope() == ScopeSession {
+						continue
+					}
+					val, err := sv.GetType().ConvertFromString(variable_value)
+					if err != nil {
+						return err
+					}
+					err = ses.InitSetSessionVar(variable_name, val)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		} else {
+			return moerr.NewInternalError(tenantCtx, "there is no data in  mo_mysql_compatibility_mode table for account %s", tenantInfo.GetTenant())
+		}
+	}
+	return err
+}
+
 func (ses *Session) GetPrivilege() *privilege {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1433,7 +1544,7 @@ func changeVersion(ctx context.Context, ses *Session, db string) error {
 	if _, ok := bannedCatalogDatabases[db]; ok {
 		return err
 	}
-	version, _ := GetVersionCompatbility(ctx, ses, db)
+	version, _ := GetVersionCompatibility(ctx, ses, db)
 	if ses.GetTenantInfo() != nil {
 		ses.GetTenantInfo().SetVersion(version)
 	}
@@ -1568,6 +1679,9 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if len(statements) > 1 {
 		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
+	logInfo(bh.ses.GetDebugString(), "query trace(backgroundExecSql)",
+		logutil.ConnectionIdField(bh.ses.GetConnectionID()),
+		logutil.QueryField(SubStringFromBegin(sql, int(bh.ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
 	err = bh.mce.GetDoQueryFunc()(ctx, sql)
 	if err != nil {
 		return err
@@ -1598,6 +1712,10 @@ func (bh *BackgroundHandler) GetExecResultBatches() []*batch.Batch {
 
 type SqlHelper struct {
 	ses *Session
+}
+
+func (sh *SqlHelper) GetCompilerContext() any {
+	return sh.ses.txnCompileCtx
 }
 
 // Made for sequence func. nextval, setval.

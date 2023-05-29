@@ -60,7 +60,7 @@ func NewFlushBlkTask(
 
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
-func (task *flushBlkTask) Execute() error {
+func (task *flushBlkTask) Execute(ctx context.Context) error {
 	seg := task.meta.ID.Segment()
 	num, _ := task.meta.ID.Offsets()
 	name := objectio.BuildObjectName(seg, num)
@@ -82,6 +82,6 @@ func (task *flushBlkTask) Execute() error {
 			return err
 		}
 	}
-	task.blocks, _, err = writer.Sync(context.Background())
+	task.blocks, _, err = writer.Sync(ctx)
 	return err
 }

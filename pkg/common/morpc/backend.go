@@ -278,7 +278,7 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	defer rb.stateMu.RUnlock()
 
 	if rb.stateMu.state == stateStopped {
-		return nil, moerr.NewBackendClosedNoCtx()
+		return nil, backendClosed
 	}
 
 	rb.mu.Lock()
@@ -300,7 +300,7 @@ func (rb *remoteBackend) doSend(f *Future) error {
 		rb.stateMu.RLock()
 		if rb.stateMu.state == stateStopped {
 			rb.stateMu.RUnlock()
-			return moerr.NewBackendClosedNoCtx()
+			return backendClosed
 		}
 
 		// The close method need acquire the write lock, so we cannot block at here.
@@ -320,7 +320,6 @@ func (rb *remoteBackend) doSend(f *Future) error {
 }
 
 func (rb *remoteBackend) Close() {
-	rb.inactive()
 	rb.cancelOnce.Do(func() {
 		rb.cancel()
 	})
@@ -335,6 +334,7 @@ func (rb *remoteBackend) Close() {
 
 	rb.stopper.Stop()
 	rb.doClose()
+	rb.inactive()
 }
 
 func (rb *remoteBackend) Busy() bool {
@@ -699,11 +699,11 @@ func (rb *remoteBackend) resetConn() error {
 	sleep := time.Millisecond * 200
 	for {
 		if !rb.running() {
-			return moerr.NewBackendClosedNoCtx()
+			return backendClosed
 		}
 		select {
 		case <-rb.ctx.Done():
-			return moerr.NewBackendClosedNoCtx()
+			return backendClosed
 		default:
 		}
 
@@ -727,7 +727,7 @@ func (rb *remoteBackend) resetConn() error {
 			}
 			select {
 			case <-rb.ctx.Done():
-				return moerr.NewBackendClosedNoCtx()
+				return backendClosed
 			default:
 			}
 			if duration >= wait {
@@ -845,12 +845,12 @@ type stream struct {
 	cancel           context.CancelFunc
 
 	// reset fields
-	id uint64
-	mu struct {
-		sync.Mutex
-		closed               bool
-		sequence             uint32
-		lastReceivedSequence uint32
+	id                   uint64
+	sequence             uint32
+	lastReceivedSequence uint32
+	mu                   struct {
+		sync.RWMutex
+		closed bool
 	}
 }
 
@@ -879,8 +879,8 @@ func newStream(
 func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
 	s.unlockAfterClose = unlockAfterClose
-	s.mu.sequence = 0
-	s.mu.lastReceivedSequence = 0
+	s.sequence = 0
+	s.lastReceivedSequence = 0
 	s.mu.closed = false
 	for {
 		select {
@@ -915,9 +915,9 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	f.ref()
 	defer f.Close()
 
-	s.mu.Lock()
+	s.mu.RLock()
 	if s.mu.closed {
-		s.mu.Unlock()
+		s.mu.RUnlock()
 		return moerr.NewStreamClosedNoCtx()
 	}
 
@@ -927,7 +927,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	// 2. backend read goroutine:   cancelActiveStream -> backend.Lock
 	// 3. backend read goroutine:   cancelActiveStream -> stream.Lock : deadlock here
 	// 4. current goroutine:        f.Close -> backend.Lock           : deadlock here
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	if err != nil {
 		return err
@@ -940,20 +940,20 @@ func (s *stream) doSendLocked(
 	ctx context.Context,
 	f *Future,
 	request Message) error {
-	s.mu.sequence++
+	s.sequence++
 	f.init(RPCMessage{
 		Ctx:            ctx,
 		Message:        request,
 		stream:         true,
-		streamSequence: s.mu.sequence,
+		streamSequence: s.sequence,
 	})
 
 	return s.sendFunc(f)
 }
 
 func (s *stream) Receive() (chan Message, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.mu.closed {
 		return nil, moerr.NewStreamClosedNoCtx()
 	}
@@ -985,8 +985,8 @@ func (s *stream) done(
 	ctx context.Context,
 	message RPCMessage,
 	clean bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	if s.mu.closed {
 		return
@@ -1000,11 +1000,11 @@ func (s *stream) done(
 		panic("BUG")
 	}
 	if response != nil &&
-		message.streamSequence != s.mu.lastReceivedSequence+1 {
+		message.streamSequence != s.lastReceivedSequence+1 {
 		response = nil
 	}
 
-	s.mu.lastReceivedSequence = message.streamSequence
+	s.lastReceivedSequence = message.streamSequence
 	select {
 	case s.c <- response:
 	case <-ctx.Done():

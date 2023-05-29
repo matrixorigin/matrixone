@@ -18,7 +18,6 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
-	"sync"
 	"testing"
 
 	// "net/http"
@@ -34,7 +33,6 @@ import (
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
-	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -114,142 +112,6 @@ func mockEntry() entry.Entry {
 	// copy(payload,buf)
 	// e.SetPayload(payload)
 	return e
-}
-
-// func testPerformance(t *testing.T) {
-// 	// driver := newTestDriver(t)
-// 	driver, server := newTestLogserviceDriver(t)
-// 	defer server.Close()
-// 	wal := NewStore(driver)
-// 	defer wal.Close()
-
-// 	entryCount := 50000
-// 	// entries := make([]entry.Entry, 0)
-// 	wg := sync.WaitGroup{}
-// 	worker, _ := ants.NewPool(100)
-// 	appendfn := func(i int, group uint32) func() {
-// 		return func() {
-// 			// e := entries[i]
-// 			e := mockEntry()
-// 			wal.Append(group, e)
-// 			// assert.NoError(t, err)
-// 			e.WaitDone()
-// 			// assert.NoError(t, e.WaitDone())
-// 			e.Free()
-// 			wg.Done()
-// 		}
-// 	}
-
-// 	// t0:=time.Now()
-// 	// for i := 0; i < entryCount; i++ {
-// 	// 	e := mockEntry()
-// 	// 	entries = append(entries, e)
-// 	// }
-// 	// logutil.Infof("make %d entries takes %v", entryCount, time.Since(t0))
-// 	t0 := time.Now()
-// 	for i := 0; i < entryCount; i++ {
-// 		group := uint32(10 + rand.Intn(3))
-// 		wg.Add(1)
-// 		worker.Submit(appendfn(i, group))
-// 	}
-// 	// wg.Wait()
-// 	logutil.Infof("%d entries takes %v", entryCount, time.Since(t0))
-// 	// for i := 0; i < entryCount; i++ {
-// 	// 	e := entries[i]
-// 	// 	e.Free()
-// 	// }
-
-// }
-func TestWal(t *testing.T) {
-	driver := newTestDriver(t, int(common.M)*64)
-	wal := NewStore(driver)
-	defer wal.Close()
-
-	entryCount := 5
-	entries := make([]entry.Entry, 0)
-	wg := sync.WaitGroup{}
-	worker, _ := ants.NewPool(10000)
-	defer worker.Release()
-	appendfn := func(i int, group uint32) func() {
-		return func() {
-			e := entries[i]
-			lsn, err := wal.Append(group, e)
-			assert.NoError(t, err)
-			assert.NoError(t, e.WaitDone())
-			entryGroupID, entryLSN := e.GetLsn()
-			assert.Equal(t, group, entryGroupID)
-			assert.Equal(t, lsn, entryLSN)
-
-			currLsn := wal.GetCurrSeqNum(group)
-			assert.LessOrEqual(t, lsn, currLsn)
-			wg.Done()
-		}
-	}
-
-	truncatefn := func(i int) func() {
-		return func() {
-			e := entries[i]
-			assert.NoError(t, e.WaitDone())
-			entryGroupID, entryLSN := e.GetLsn()
-			idxes := []*Index{{LSN: entryLSN, CSN: 0, Size: 1}}
-			ckpEntry, err := wal.FuzzyCheckpoint(entryGroupID, idxes)
-			assert.NoError(t, err)
-			err = ckpEntry.WaitDone()
-			assert.NoError(t, err)
-			ckpGroup, ckpLsn := ckpEntry.GetLsn()
-			_, err = wal.Load(ckpGroup, ckpLsn)
-			assert.Equal(t, GroupCKP, ckpGroup)
-			assert.NoError(t, err)
-			ckpEntry.Free()
-			wg.Done()
-		}
-	}
-
-	readfn := func(i int) func() {
-		return func() {
-			e := entries[i]
-			assert.NoError(t, e.WaitDone())
-			entryGroupID, entryLSN := e.GetLsn()
-			e2, err := wal.Load(entryGroupID, entryLSN)
-			assert.NoError(t, err)
-			// entryGroupID2, entryLSN2 := e2.GetLsn()
-			// assert.Equal(t, entryGroupID, entryGroupID2)
-			// assert.Equal(t, entryLSN, entryLSN2)
-			// assert.Equal(t, e.GetPayload(), e2.GetPayload())
-			// testutils.WaitExpect(4000, func() bool {
-			// 	return wal.GetSynced(entryGroupID) >= entryLSN
-			// })
-			// synced := wal.GetSynced(entryGroupID)
-			// assert.LessOrEqual(t, entryLSN, synced)
-			e2.Free()
-			wg.Done()
-		}
-	}
-
-	for i := 0; i < entryCount; i++ {
-		e := mockEntry()
-		entries = append(entries, e)
-	}
-	// t0:= time.Now()
-	for i := 0; i < entryCount; i++ {
-		group := uint32(10 + rand.Intn(3))
-		// group := uint32(5)
-		wg.Add(1)
-		_ = worker.Submit(appendfn(i, group))
-		wg.Add(1)
-		_ = worker.Submit(readfn(i))
-	}
-	wg.Wait()
-	// logutil.Infof("%d entries takes %v",entryCount,time.Since(t0))
-	for i := 0; i < entryCount; i++ {
-		wg.Add(1)
-		_ = worker.Submit(truncatefn(i))
-	}
-	wg.Wait()
-	for i := 0; i < entryCount; i++ {
-		e := entries[i]
-		e.Free()
-	}
 }
 
 func TestReplay(t *testing.T) {

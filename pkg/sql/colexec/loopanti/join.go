@@ -100,11 +100,15 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = bat.Vecs[pos]
-		bat.Vecs[pos] = nil
+		// rbat.Vecs[i] = bat.Vecs[pos]
+		// bat.Vecs[pos] = nil
+		typ := *bat.Vecs[pos].GetType()
+		rbat.Vecs[i] = vector.NewVec(typ)
+		if err := vector.GetUnionAllFunction(typ, proc.Mp())(rbat.Vecs[i], bat.Vecs[pos]); err != nil {
+			return err
+		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil

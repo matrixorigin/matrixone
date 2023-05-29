@@ -17,10 +17,12 @@ insert into test_table values (1,'a'),(2,'b'),(3,'c');
 
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
+-- @bvt:issue#9525
 execute s1 using @a;
 begin;
 execute s1 using @a;
 rollback;
+-- @bvt:issue
 
 deallocate prepare s1;
 -- @session

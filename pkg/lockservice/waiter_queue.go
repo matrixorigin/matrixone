@@ -24,7 +24,7 @@ type waiterQueue interface {
 	pop() (*waiter, []*waiter)
 	put(...*waiter)
 	all() []*waiter
-	iter(func([]byte) bool)
+	iter(func(*waiter) bool)
 
 	beginChange()
 	commitChange()
@@ -75,12 +75,12 @@ func (q *sliceBasedWaiterQueue) put(w ...*waiter) {
 	}
 }
 
-func (q *sliceBasedWaiterQueue) iter(fn func([]byte) bool) {
+func (q *sliceBasedWaiterQueue) iter(fn func(*waiter) bool) {
 	q.RLock()
 	defer q.RUnlock()
 	n := len(q.waiters)
 	for i := q.offset; i < n; i++ {
-		if !fn(q.waiters[i].txnID) {
+		if !fn(q.waiters[i]) {
 			return
 		}
 	}

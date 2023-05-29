@@ -34,7 +34,6 @@ jobs:
       - name: echo config
         run: |
           cd $GITHUB_WORKSPACE/head
-          sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-CN-tae-DN/cn.toml
           sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-CN-tae-DN/cn.toml
           cat ./etc/launch-tae-CN-tae-DN/cn.toml
           cat ./etc/launch-tae-CN-tae-DN/dn.toml
@@ -121,8 +120,6 @@ jobs:
       - name: echo dn.toml
         run: |
           cd $GITHUB_WORKSPACE/head
-          sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
-          sed -i 's/turn-on-push-model = false/turn-on-push-model = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
           sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
           sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
           cat ./etc/launch-tae-multi-CN-tae-DN/cn1.toml

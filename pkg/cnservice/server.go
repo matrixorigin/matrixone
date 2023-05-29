@@ -18,26 +18,32 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
@@ -89,6 +95,10 @@ func NewService(
 		},
 	}
 
+	if _, err = srv.getHAKeeperClient(); err != nil {
+		return nil, err
+	}
+
 	pu := config.NewParameterUnit(
 		&cfg.Frontend,
 		nil,
@@ -96,7 +106,7 @@ func NewService(
 		engine.Nodes{engine.Node{
 			Addr: cfg.ServiceAddress,
 		}})
-
+	pu.HAKeeperClient = srv._hakeeperClient
 	cfg.Frontend.SetDefaultValues()
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 	frontend.InitServerVersion(pu.SV.MoVersion)
@@ -104,11 +114,13 @@ func NewService(
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
 	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
 
-	srv.pu = pu
-	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
+	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	if _, err = srv.getHAKeeperClient(); err != nil {
+	srv.pu = pu
+	srv.pu.LockService = srv.lockService
+	srv.pu.HAKeeperClient = srv._hakeeperClient
+	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
 
@@ -226,6 +238,7 @@ func (s *service) stopRPCs() error {
 			return err
 		}
 	}
+	s.timestampWaiter.Close()
 	return nil
 }
 
@@ -294,7 +307,6 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 	}
 
 	s.createMOServer(cancelMoServerCtx, pu, aicm)
-
 	return nil
 }
 
@@ -325,7 +337,7 @@ func (s *service) initEngine(
 
 	}
 
-	return nil
+	return s.bootstrap()
 }
 
 func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) {
@@ -354,7 +366,6 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 			return
 		}
 		s._hakeeperClient = client
-		s.pu.HAKeeperClient = client
 		s.initClusterService()
 		s.initLockService()
 	})
@@ -466,9 +477,11 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			return
 		}
 		var opts []client.TxnClientCreateOption
+		opts = append(opts,
+			client.WithTimestampWaiter(s.timestampWaiter))
 		if s.cfg.Txn.EnableSacrificingFreshness {
 			opts = append(opts,
-				client.WithEnableSacrificingFreshness(s.timestampWaiter))
+				client.WithEnableSacrificingFreshness())
 		}
 		if s.cfg.Txn.EnableCNBasedConsistency {
 			opts = append(opts,
@@ -491,6 +504,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 func (s *service) initLockService() {
 	cfg := s.cfg.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(cfg)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 }
 
 // put the waiting-next type msg into client session's cache and return directly
@@ -534,4 +548,73 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 	msg := message.(*pipeline.Message)
 	msg.SetData(append(data, msg.GetData()...))
 	return nil
+}
+
+func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
+	exec := compile.NewSQLExecutor(
+		s.cfg.ServiceAddress,
+		s.storeEngine,
+		mp,
+		s._txnClient,
+		s.fileService,
+		s.aicm)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+}
+
+func (s *service) initIncrService() {
+	rt := runtime.ProcessLevelRuntime()
+	v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic("missing internal sql executor")
+	}
+
+	store, err := incrservice.NewSQLStore(v.(executor.SQLExecutor))
+	if err != nil {
+		panic(err)
+	}
+	incrService := incrservice.NewIncrService(
+		store,
+		s.cfg.AutoIncrement)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(
+		runtime.AutoIncrmentService,
+		incrService)
+}
+
+func (s *service) bootstrap() error {
+	s.initIncrService()
+	return s.stopper.RunTask(func(ctx context.Context) {
+		rt := runtime.ProcessLevelRuntime()
+		v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+		if !ok {
+			panic("missing internal sql executor")
+		}
+
+		ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+		defer cancel()
+		b := bootstrap.NewBootstrapper(
+			&locker{hakeeperClient: s._hakeeperClient},
+			rt.Clock(),
+			v.(executor.SQLExecutor))
+		// bootstrap can not failed. We panic here to make sure the service can not start.
+		// If bootstrap failed, need clean all data to retry.
+		if err := b.Bootstrap(ctx); err != nil {
+			panic(err)
+		}
+	})
+}
+
+var (
+	bootstrapKey = "_mo_bootstrap"
+)
+
+type locker struct {
+	hakeeperClient logservice.CNHAKeeperClient
+}
+
+func (l *locker) Get(ctx context.Context) (bool, error) {
+	v, err := l.hakeeperClient.AllocateIDByKeyWithBatch(ctx, bootstrapKey, 1)
+	if err != nil {
+		return false, err
+	}
+	return v == 1, nil
 }

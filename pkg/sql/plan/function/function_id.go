@@ -53,6 +53,8 @@ const (
 	ISNOTTRUE                 //ISNOTTRUE
 	ISFALSE                   //ISFALSE
 	ISNOTFALSE                //ISNOTTRUE
+	ISEMPTY                   //ISEMPTY
+	NOT_IN_ROWS               //NOT_IN_ROWS
 	OP_BIT_AND                // &
 	OP_BIT_OR                 // |
 	OP_BIT_XOR                // ^
@@ -74,6 +76,7 @@ const (
 	ARRAY_SIZE     // ARRAY_SIZE
 	ASCII          // ASCII
 	ASIN           // ASIN
+	ASSERT         // ASSERT
 	ATAN           // ATAN
 	ATAN2          // ATAN2
 	AVG            // AVG
@@ -421,6 +424,7 @@ var functionIdRegister = map[string]int32{
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	"abs":                            ABS,
 	"acos":                           ACOS,
+	"assert":                         ASSERT,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
@@ -440,6 +444,7 @@ var functionIdRegister = map[string]int32{
 	"log":                            LOG,
 	"ltrim":                          LTRIM,
 	"month":                          MONTH,
+	"not_in_rows":                    NOT_IN_ROWS,
 	"oct":                            OCT,
 	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
@@ -454,6 +459,7 @@ var functionIdRegister = map[string]int32{
 	"extract":                        EXTRACT,
 	"if":                             IFF,
 	"iff":                            IFF,
+	"isempty":                        ISEMPTY,
 	"date_add":                       DATE_ADD,
 	"date_sub":                       DATE_SUB,
 	"atan":                           ATAN,

@@ -179,14 +179,14 @@ func (cleaner *DiskCleaner) replay() error {
 
 	for _, dir := range readDirs {
 		table := NewGCTable()
-		err = table.Prefetch(context.Background(), GCMetaDir+dir.Name, dir.Size, cleaner.fs)
+		err = table.Prefetch(cleaner.ctx, GCMetaDir+dir.Name, dir.Size, cleaner.fs)
 		if err != nil {
 			return err
 		}
 	}
 	for _, dir := range readDirs {
 		table := NewGCTable()
-		err = table.ReadTable(context.Background(), GCMetaDir+dir.Name, dir.Size, cleaner.fs)
+		err = table.ReadTable(cleaner.ctx, GCMetaDir+dir.Name, dir.Size, cleaner.fs)
 		if err != nil {
 			return err
 		}
@@ -347,7 +347,7 @@ func (cleaner *DiskCleaner) tryGC() error {
 	gc := cleaner.softGC()
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
-	err := cleaner.delWorker.ExecDelete(gc)
+	err := cleaner.delWorker.ExecDelete(cleaner.ctx, gc)
 	if err != nil {
 		return err
 	}
@@ -451,7 +451,7 @@ func (cleaner *DiskCleaner) mergeGCFile() error {
 		logutil.Errorf("SaveTable failed: %v", err.Error())
 		return err
 	}
-	err = cleaner.fs.DelFiles(context.Background(), deleteFiles)
+	err = cleaner.fs.DelFiles(cleaner.ctx, deleteFiles)
 	if err != nil {
 		logutil.Errorf("DelFiles failed: %v", err.Error())
 		return err

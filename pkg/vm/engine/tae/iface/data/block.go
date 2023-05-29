@@ -15,6 +15,7 @@
 package data
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -71,7 +73,7 @@ type Block interface {
 	PrepareCompact() bool
 
 	Rows() int
-	GetColumnDataById(txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int) (*model.ColumnView, error)
+	GetColumnDataById(ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int) (*model.ColumnView, error)
 	GetColumnDataByIds(txn txnif.AsyncTxn, readSchema any, colIdxes []int) (*model.BlockView, error)
 	Prefetch(idxes []uint16) error
 	GetMeta() any
@@ -85,18 +87,20 @@ type Block interface {
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
 
-	BatchDedup(txn txnif.AsyncTxn,
+	DataCommittedBefore(ts types.TS) bool
+	BatchDedup(ctx context.Context,
+		txn txnif.AsyncTxn,
 		pks containers.Vector,
+		pksZM index.ZM,
 		rowmask *roaring.Bitmap,
 		precommit bool,
-		zm []byte,
 		bf objectio.BloomFilter) error
 	//TODO::
 	//BatchDedupByMetaLoc(txn txnif.AsyncTxn, fs *objectio.ObjectFS,
 	//	metaLoc objectio.Location, rowmask *roaring.Bitmap, precommit bool) error
 
-	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
-	GetValue(txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
+	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
+	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
 	Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error
 	PPString(level common.PPLevel, depth int, prefix string) string
 

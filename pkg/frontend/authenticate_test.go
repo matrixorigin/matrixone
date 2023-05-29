@@ -3439,7 +3439,7 @@ func Test_determineDML(t *testing.T) {
 						Nodes: []*plan2.Node{
 							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
 							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
-							{NodeType: plan.Node_UPDATE},
+							{NodeType: plan.Node_INSERT},
 						},
 					},
 				},
@@ -7972,4 +7972,49 @@ func TestCheckSubscriptionValid(t *testing.T) {
 		require.Equal(t, kases[idx].err, err != nil)
 	}
 
+}
+
+func TestDoCheckRole(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+
+	ses.SetTenantInfo(tenant)
+	err := doCheckRole(ctx, ses)
+	require.NoError(t, err)
+
+	tenant = &TenantInfo{
+		Tenant:        "default_1",
+		User:          "admin",
+		DefaultRole:   accountAdminRoleName,
+		TenantID:      3001,
+		UserID:        2,
+		DefaultRoleID: accountAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+	err = doCheckRole(ctx, ses)
+	require.NoError(t, err)
+
+	tenant = &TenantInfo{
+		Tenant:        "default_1",
+		User:          "admin",
+		DefaultRole:   "role1",
+		TenantID:      3001,
+		UserID:        2,
+		DefaultRoleID: 10,
+	}
+	ses.SetTenantInfo(tenant)
+	err = doCheckRole(ctx, ses)
+	require.Error(t, err)
 }

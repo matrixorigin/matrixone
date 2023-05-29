@@ -166,7 +166,7 @@ func (store *txnStore) BatchDedup(dbId, id uint64, pk containers.Vector) (err er
 	return db.BatchDedup(id, pk)
 }
 
-func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
+func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
@@ -175,12 +175,11 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 	// if db.IsDeleted() {
 	// 	return txnbase.ErrNotFound
 	// }
-	return db.Append(id, data)
+	return db.Append(ctx, id, data)
 }
 
 func (store *txnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
-	zm []objectio.ZoneMap,
 	metaLoc []objectio.Location,
 ) error {
 	store.IncreateWriteCnt()
@@ -188,7 +187,7 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(tid, zm, metaLoc)
+	return db.AddBlksWithMetaLoc(tid, metaLoc)
 }
 
 func (store *txnStore) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
@@ -397,7 +396,7 @@ func (store *txnStore) ObserveTxn(
 							Version:    schema.Version,
 							NextSeqnum: uint16(schema.Extra.NextColSeqnum),
 							Seqnums:    schema.AllSeqnums(),
-							Batch:      anode.storage.mnode.data,
+							Batch:      anode.data,
 						}
 						visitAppend(bat)
 					}

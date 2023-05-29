@@ -121,6 +121,7 @@
 /pkg/sql/compile @nnsgmsone
 /pkg/sql/parsers @iamlinjunhong
 /pkg/sql/plan @ouyuanning @aunjgr
+/pkg/sql/plan/function @m-schen
 
 # pkg/taskservice
 /pkg/taskservice @zhangxu19830126

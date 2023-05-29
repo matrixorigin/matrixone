@@ -15,6 +15,7 @@
 package ops
 
 import (
+	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -204,7 +205,7 @@ func (w *OpWorker) opCancelOp(op iops.IOp) {
 }
 
 func (w *OpWorker) onOp(op iops.IOp) {
-	err := op.OnExec()
+	err := op.OnExec(context.Background())
 	w.Stats.AddProcessed()
 	if err != nil {
 		w.Stats.AddFailed()

@@ -103,7 +103,7 @@ func TestGroup(t *testing.T) {
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
 		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
+		tc.proc.Reg.InputBatch = batch.EmptyBatch
 		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
@@ -137,7 +137,7 @@ func BenchmarkGroup(b *testing.B) {
 			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
 			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = &batch.Batch{}
+			tc.proc.Reg.InputBatch = batch.EmptyBatch
 			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = nil
@@ -151,6 +151,16 @@ func BenchmarkGroup(b *testing.B) {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Aggregate) groupTestCase {
+	for _, expr := range exprs {
+		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
+			idx := col.Col.ColPos
+			expr.Typ = &plan.Type{
+				Id:    int32(ts[idx].Oid),
+				Width: ts[idx].Width,
+				Scale: ts[idx].Scale,
+			}
+		}
+	}
 	return groupTestCase{
 		flgs: flgs,
 		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),

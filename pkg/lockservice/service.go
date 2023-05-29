@@ -19,10 +19,10 @@ import (
 	"context"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -154,7 +154,7 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 			s.getLockTable), nil
 	}
 
-	waitingList, err := s.getTxnWaitingList(txn.TxnID, txn.CreatedOn)
+	waitingList, err := s.getTxnWaitingListOnRemote(txn.TxnID, txn.CreatedOn)
 	if err != nil {
 		return false, err
 	}
@@ -279,7 +279,7 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 	txnID []byte,
 	create bool,
 	remoteService string) *activeTxn {
-	txnKey := unsafeByteSliceToString(txnID)
+	txnKey := util.UnsafeBytesToString(txnID)
 	h.mu.RLock()
 	if v, ok := h.mu.activeTxns[txnKey]; ok {
 		h.mu.RUnlock()
@@ -309,7 +309,7 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 }
 
 func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
-	txnKey := unsafeByteSliceToString(txnID)
+	txnKey := util.UnsafeBytesToString(txnID)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	v, ok := h.mu.activeTxns[txnKey]
@@ -372,12 +372,4 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 type remote struct {
 	id   string
 	time time.Time
-}
-
-func unsafeByteSliceToString(key []byte) string {
-	return *(*string)(unsafe.Pointer(&key))
-}
-
-func unsafeStringToByteSlice(key string) []byte {
-	return *(*[]byte)(unsafe.Pointer(&key))
 }

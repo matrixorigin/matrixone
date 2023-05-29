@@ -18,10 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"go/constant"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
@@ -226,6 +227,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				return nil, err
 			}
 		}
+
 	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
@@ -237,6 +239,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
+			TblId:         node.TableDef.TblId,
 			Name:          node.TableDef.Name,
 			Defs:          node.TableDef.Defs,
 			Name2ColIndex: node.TableDef.Name2ColIndex,
@@ -244,6 +247,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
 			Partition:     node.TableDef.Partition,
+			IsLocked:      node.TableDef.IsLocked,
+			IsTemporary:   node.TableDef.IsTemporary,
+			TableLockType: node.TableDef.TableLockType,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -835,7 +841,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		builder.applySwapRuleByStats(rootID, true)
-		SortFilterListByStats(builder.GetContext(), rootID, builder)
+		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all join operators
@@ -1769,6 +1775,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	return nodeID, nil
 }
 
+func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
+	stepPos := len(builder.qry.Steps)
+	builder.qry.Steps = append(builder.qry.Steps, nodeID)
+	return int32(stepPos)
+}
+
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
 	nodeID := int32(len(builder.qry.Nodes))
 	node.NodeId = nodeID
@@ -2372,6 +2384,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, childId)
 	case "current_account":
 		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, childId)
+	case "metadata_scan":
+		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}
