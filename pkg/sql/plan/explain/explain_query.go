@@ -71,7 +71,7 @@ func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions,
 	nodes := query.Nodes
 	expdata := NewExplainData(uuid)
 	for index, rootNodeId := range query.Steps {
-		graphData := NewGraphData()
+		graphData := NewGraphData(len(nodes))
 		err := PreOrderPlan(ctx, nodes[rootNodeId], nodes, graphData, options)
 		if err != nil {
 			var errdata *ExplainData
