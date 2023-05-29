@@ -3065,6 +3065,11 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 			return nil, moerr.NewInternalError(newCtx, "the subscribe %s is not valid", pubName)
 		}
 	} else if !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
+		logErrorf(ses.GetDebugString(),
+			"subName %s , accName %s, pubName %s, databaseName %s allAccountStr %s accountList %s account %s",
+			subName, accName, pubName,
+			databaseName, allAccountStr, accountList,
+			tenantInfo.GetTenant())
 		return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 	}
 
