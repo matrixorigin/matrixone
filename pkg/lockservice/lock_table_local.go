@@ -240,7 +240,14 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 			// current txn's lock
 			if bytes.Equal(c.txn.txnID, lock.txnID) {
 				if c.w != nil {
-					panic("BUG: can not has a waiter on self txn")
+					if len(c.w.sameTxnWaiters) > 0 {
+						panic("BUG: same txn waiters should be empty")
+					}
+					if v := c.w.close(l.bind.ServiceID, notifyValue{}); v != nil {
+						panic("BUG: waiters should be empty")
+					}
+					c.w = nil
+					return c
 				}
 				continue
 			}
