@@ -588,26 +588,28 @@ func (tbl *txnTable) rangesOnePart(
 
 	//collect deletes from PartitionState.dirtyBlocks.
 	{
-		//ts := types.TimestampToTS(ts)
-		//iter := state.NewDirtyRowsIter(ts, nil)
-		//for iter.Next() {
-		//	entry := iter.Entry()
-		//	id, offset := entry.RowID.Decode()
-		//	deletes[id] = append(deletes[id], int64(offset))
-		//}
-		//iter.Close()
-
-		//collect PartitionState.dirtyBlks into modifies.
-		//state.GetDirtyBlks().Scan(func(entry logtailreplay.BlockEntry) bool {
-		//	deletes[entry.BlockID] = []int64{}
-		//	return true
-		//})
-		iter := state.NewDirtyBlocksIter()
+		ts := types.TimestampToTS(ts)
+		iter := state.NewDirtyRowsIter(ts, nil)
 		for iter.Next() {
 			entry := iter.Entry()
-			deletes[entry.BlockID] = []int64{}
+			id, offset := entry.RowID.Decode()
+			deletes[id] = append(deletes[id], int64(offset))
 		}
 		iter.Close()
+
+		//iter := state.NewDirtyBlocksIter()
+		//for iter.Next() {
+		//	entry := iter.Entry()
+		//	//deletes[entry.BlockID] = []int64{}
+		//	rowIt := state.NewRowsIter(types.TimestampToTS(ts), &entry.BlockID, true)
+		//	for rowIt.Next() {
+		//		rowEntry := rowIt.Entry()
+		//		_, offset := rowEntry.RowID.Decode()
+		//		deletes[entry.BlockID] = append(deletes[entry.BlockID], int64(offset))
+		//	}
+		//	rowIt.Close()
+		//}
+		//iter.Close()
 	}
 
 	//deletes on S3 written by txn maybe comes from PartitionState.rows or PartitionState.blocks,

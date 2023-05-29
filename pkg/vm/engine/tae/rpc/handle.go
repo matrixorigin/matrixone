@@ -819,17 +819,17 @@ func (h *Handle) HandleWrite(
 	case db.FullSkipWorkspaceDedup:
 		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
 			req.Type, req.TableID,
 			req.TableName, req.DatabaseId, req.DatabaseName,
 			txn.String(),
 		)
-		logutil.Debugf("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
+		logutil.Infof("[precommit] write batch: %s\n", common.PrintMoBatch(req.Batch, common.PrintN))
 	})
 	defer func() {
-		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] handle write end txn: %s\n", txn.String())
+		common.DoIfInfoEnabled(func() {
+			logutil.Infof("[precommit] handle write end txn: %s\n", txn.String())
 		})
 	}()
 
