@@ -168,8 +168,10 @@ col3 int
 );
 
 -- echo duplicate
+-- @bvt:issue#3433
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6;
 select * from t6;
+-- @bvt:issue
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6 FIELDS ESCAPED BY '\\';
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6 LINES STARTING BY 'aaa';
 drop table t6;

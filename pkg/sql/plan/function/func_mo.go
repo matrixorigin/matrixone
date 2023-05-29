@@ -319,7 +319,7 @@ var (
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
-		catalog.AutoIncrTableName:     0,
+		catalog.MOAutoIncrTable:       0,
 		"mo_indexes":                  0,
 		"mo_pubs":                     0,
 	}
