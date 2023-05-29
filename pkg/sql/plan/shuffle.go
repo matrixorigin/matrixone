@@ -55,7 +55,7 @@ func GetHashColumnIdx(expr *plan.Expr) int {
 // to judge if groupby need to go shuffle
 // if true, return index of which column to shuffle
 // else, return -1
-func GetShuffleIndexForGroupBy(n *plan.Node) int {
+func determinShuffleForGroupBy(n *plan.Node) int32 {
 	if n.NodeType != plan.Node_AGG {
 		return -1
 	}
@@ -86,12 +86,29 @@ func GetShuffleIndexForGroupBy(n *plan.Node) int {
 	}
 	//for now ,only support integer and string type
 	switch types.T(n.GroupBy[idx].Typ.Id) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
-		return idx
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+		return int32(idx)
+	case types.T_varchar, types.T_char, types.T_text:
+		return int32(idx)
 	}
 	return -1
 }
 
 func GetShuffleDop() (dop int) {
 	return MAXShuffleDOP
+}
+
+func determinShuffleMethod(nodeID int32, builder *QueryBuilder) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			determinShuffleMethod(child, builder)
+		}
+	}
+	switch node.NodeType {
+	case plan.Node_AGG:
+		node.Stats.ShuffleColIdx = determinShuffleForGroupBy(node)
+	default:
+		node.Stats.ShuffleColIdx = -1
+	}
 }

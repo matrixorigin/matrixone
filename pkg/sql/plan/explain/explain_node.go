@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -415,7 +414,7 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 
-	idx := plan2.GetShuffleIndexForGroupBy(ndesc.Node)
+	idx := ndesc.Node.Stats.ShuffleColIdx
 	if idx >= 0 {
 		buf.WriteString(" shuffle: ")
 		err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
