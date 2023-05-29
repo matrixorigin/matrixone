@@ -69,7 +69,6 @@ func (sw *DefaultSqlWriter) WriteStrings(record []string) error {
 
 func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 	sw.buffer = append(sw.buffer, row.ToStrings())
-	//sw.flushBuffer(false)
 	return nil
 }
 

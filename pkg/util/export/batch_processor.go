@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -179,7 +178,7 @@ func (r *bufferExportReq) handle() error {
 
 func (r *bufferExportReq) callback(err error) {}
 
-// getGenerateReq get req to do generate logic
+// get req to do generate logic
 // return nil, if b.buffer is nil
 func (b *bufferHolder) getGenerateReq() generateReq {
 	b.mux.Lock()
@@ -289,7 +288,8 @@ func WithOBCollectorConfig(cfg *config.OBCollectorConfig) MOCollectorOption {
 		c.statsInterval = cfg.ShowStatsInterval.Duration
 		c.maxBufferCnt = cfg.BufferCnt
 		if c.maxBufferCnt == -1 {
-			c.maxBufferCnt = math.MaxInt32
+			//c.maxBufferCnt = math.MaxInt32
+			c.maxBufferCnt = 10
 		} else if c.maxBufferCnt == 0 {
 			c.maxBufferCnt = int32(runtime.NumCPU())
 		}
