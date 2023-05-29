@@ -89,3 +89,15 @@ func TestQueueChange(t *testing.T) {
 	q.rollbackChange()
 	assert.Equal(t, 1, q.len())
 }
+
+func TestAddSameTxnWaiter(t *testing.T) {
+	q := newWaiterQueue()
+	q.put(acquireWaiter("s1", []byte("w")), acquireWaiter("s1", []byte("w1")))
+	assert.Equal(t, 2, len(q.waiters))
+
+	q.put(acquireWaiter("s1", []byte("w")))
+	assert.Equal(t, 2, len(q.waiters))
+
+	w, _ := q.pop()
+	assert.Equal(t, 1, len(w.sameTxnWaiters))
+}
