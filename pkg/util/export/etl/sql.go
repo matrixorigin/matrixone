@@ -187,8 +187,7 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 		return 0, err
 	}
 	now := time.Now()
-	logutil.Info("sqlWriter starting the bulk insert", zap.String("table", tbl.Table))
-	defer logutil.Info("sqlWriter finished the bulk insert", zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table))
+	defer logutil.Debug("sqlWriter finished the bulk insert", zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table), zap.Int("record_count", len(records)))
 
 	cnt, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
