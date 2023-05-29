@@ -73,6 +73,8 @@ func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 }
 
 func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
+	logutil.Debug("sqlWriter flushBuffer started", zap.Int("buffer size", len(sw.buffer)), zap.Bool("force", force))
+	now := time.Now()
 	sw.mux.Lock()
 	defer sw.mux.Unlock()
 
@@ -83,8 +85,8 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	if err != nil {
 		sw.dumpBufferToCSV()
 	}
-	sw.buffer = sw.buffer[:0] // Clear the buffer
 	_, err = sw.csvWriter.FlushAndClose()
+	logutil.Debug("sqlWriter flushBuffer finished", zap.Int("cnt", cnt), zap.Error(err), zap.Duration("time", time.Since(now))
 	return cnt, err
 }
 
@@ -100,7 +102,7 @@ func (sw *DefaultSqlWriter) dumpBufferToCSV() error {
 }
 
 func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
-	if len(sw.buffer) == 0 {
+	if sw.buffer != nil && len(sw.buffer) == 0 {
 		return 0, nil
 	}
 	cnt, err := sw.flushBuffer(true)
@@ -187,12 +189,12 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 		return 0, err
 	}
 	now := time.Now()
-	defer logutil.Debug("sqlWriter finished the bulk insert", zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table), zap.Int("record_count", len(records)))
-
 	cnt, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
 		logutil.Error("sqlWriter bulk insert failed", zap.Error(err), zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table), zap.Int("record_count", len(records)))
 		return 0, err
+	} else {
+		logutil.Debug("sqlWriter finished the bulk insert", zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table), zap.Int("record_count", len(records)))
 	}
 	return cnt, nil
 }
