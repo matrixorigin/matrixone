@@ -6619,6 +6619,7 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 // during the system is booting.
 func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) (err error) {
 	var exists bool
+	var mp *mpool.MPool
 	pu := config.GetParameterUnit(ctx)
 
 	tenant := &TenantInfo{
@@ -6634,7 +6635,7 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) (err
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(rootID))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 
-	mp, err := mpool.NewMPool("init_system_tenant", 0, mpool.NoFixed)
+	mp, err = mpool.NewMPool("init_system_tenant", 0, mpool.NoFixed)
 	if err != nil {
 		return err
 	}
@@ -7253,6 +7254,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 	var newRoleId int64
 	var status string
 	var sql string
+	var mp *mpool.MPool
 
 	err = normalizeNamesOfUsers(ctx, cu.Users)
 	if err != nil {
@@ -7266,7 +7268,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 		}
 	}
 
-	mp, err := mpool.NewMPool("init_user", 0, mpool.NoFixed)
+	mp, err = mpool.NewMPool("init_user", 0, mpool.NoFixed)
 	if err != nil {
 		return err
 	}
