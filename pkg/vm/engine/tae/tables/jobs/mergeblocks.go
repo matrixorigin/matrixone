@@ -17,6 +17,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"time"
 	"unsafe"
 
@@ -400,5 +401,9 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		common.OperationField(task.Name()),
 		common.OperandField(task),
 		common.DurationField(time.Since(now)))
+
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.MergeBlocks.Add(1)
+	})
 	return err
 }
