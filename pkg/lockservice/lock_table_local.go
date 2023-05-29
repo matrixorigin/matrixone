@@ -303,6 +303,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	txn.setBlocked(w.txnID, w, true)
 	conflictWith.waiter.add(l.bind.ServiceID, w)
 	if err := l.detector.check(
+		conflictWith.txnID,
 		txn.toWaitTxn(
 			l.bind.ServiceID,
 			true)); err != nil {

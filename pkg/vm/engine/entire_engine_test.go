@@ -352,6 +352,10 @@ func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
 }
 
+func (o *testOperator) TxnRef() *txn.TxnMeta {
+	return &txn.TxnMeta{}
+}
+
 func (o *testOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	return nil, nil
 }
@@ -360,6 +364,6 @@ func (o *testOperator) AddLockTable(lock.LockTable) error {
 	return nil
 }
 
-func (o *testOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
 }

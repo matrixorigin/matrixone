@@ -116,9 +116,10 @@ func (s *service) handleRemoteGetLock(
 			n := lock.waiter.waiters.len()
 			if n > 0 {
 				resp.GetTxnLock.Value = int32(lock.value)
-				values := make([][]byte, 0, n)
-				lock.waiter.waiters.iter(func(v []byte) bool {
-					values = append(values, v)
+				values := make([]pb.WaitTxn, 0, n)
+				lock.waiter.waiters.iter(func(w *waiter) bool {
+					txn := s.activeTxnHolder.getActiveTxn(w.txnID, false, "")
+					values = append(values, txn.toWaitTxn(s.cfg.ServiceID, false))
 					return true
 				})
 				resp.GetTxnLock.WaitingList = values
@@ -182,7 +183,7 @@ func (s *service) getLocalLockTable(
 	return l, nil
 }
 
-func (s *service) getTxnWaitingList(
+func (s *service) getTxnWaitingListOnRemote(
 	txnID []byte,
 	createdOn string) ([]pb.WaitTxn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)

@@ -215,12 +215,18 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 				txnID,
 				lockKey,
 				func(lock Lock) {
-					lock.waiter.waiters.iter(func(id []byte) bool {
-						if txn := holder.getActiveTxn(id, false, ""); txn != nil {
-							hasDeadLock = !waiters(txn.toWaitTxn(serviceID, bytes.Equal(txn.txnID, id)))
-							return !hasDeadLock
+					lock.waiter.waiters.iter(func(w *waiter) bool {
+						wt := w.waitTxn
+						if len(wt.TxnID) == 0 {
+							if txn := holder.getActiveTxn(w.txnID, false, ""); txn != nil {
+								wt = txn.toWaitTxn(serviceID, bytes.Equal(txn.txnID, w.txnID))
+							}
 						}
-						return false
+						if len(wt.TxnID) == 0 {
+							return true
+						}
+						hasDeadLock = !waiters(wt)
+						return !hasDeadLock
 					})
 				})
 			return !hasDeadLock

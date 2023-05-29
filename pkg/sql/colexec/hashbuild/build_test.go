@@ -77,7 +77,7 @@ func TestBuild(t *testing.T) {
 		for {
 			ok, err := Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
-			require.Equal(t, true, ok)
+			require.Equal(t, false, ok)
 			mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			mp.Free()

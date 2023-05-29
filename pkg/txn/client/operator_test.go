@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRead(t *testing.T) {
@@ -368,10 +369,6 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
 		assert.False(t, tc2.option.coordinator)
 		tc2.option.coordinator = true
-		tc.option.updateLastCommitTSFunc = nil
-		tc2.option.updateLastCommitTSFunc = nil
-		tc.option.closeFunc = nil
-		tc2.option.closeFunc = nil
 		assert.Equal(t, tc.option, tc2.option)
 		assert.Equal(t, 1, len(tc2.mu.lockTables))
 	}, WithTxnReadyOnly(), WithTxnDisable1PCOpt())
@@ -422,17 +419,62 @@ func TestAddLockTable(t *testing.T) {
 	})
 }
 
+func TestUpdateSnaphotTS(t *testing.T) {
+	runTimestampWaiterTests(t, func(waiter *timestampWaiter) {
+		runOperatorTests(t,
+			func(
+				ctx context.Context,
+				tc *txnOperator,
+				_ *testTxnSender) {
+				tc.timestampWaiter = waiter
+				ts := int64(1000)
+				tc.mu.txn.SnapshotTS = newTestTimestamp(0)
+				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts)))
+				require.Equal(t, newTestTimestamp(ts), tc.Txn().SnapshotTS)
+
+				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts-1)))
+				require.Equal(t, newTestTimestamp(ts), tc.Txn().SnapshotTS)
+
+				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts+1)))
+				require.Equal(t, newTestTimestamp(ts+1), tc.Txn().SnapshotTS)
+			})
+	})
+}
+
+func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
+	runTimestampWaiterTests(t, func(waiter *timestampWaiter) {
+		runOperatorTests(t,
+			func(
+				ctx context.Context,
+				tc *txnOperator,
+				_ *testTxnSender) {
+				tc.timestampWaiter = waiter
+				tc.mu.txn.SnapshotTS = newTestTimestamp(10)
+
+				ts := int64(100)
+				c := make(chan struct{})
+				go func() {
+					defer close(c)
+					waiter.NotifyLatestCommitTS(newTestTimestamp(ts))
+				}()
+				<-c
+				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(0)))
+				require.Equal(t, newTestTimestamp(ts).Next(), tc.Txn().SnapshotTS)
+			})
+	})
+}
+
 func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	ts := newTestTxnSender()
-	c := NewTxnClient(ts)
-	txn, err := c.New(ctx, newTestTimestamp(0), options...)
-	assert.Nil(t, err)
-
-	tc(ctx, txn.(*txnOperator), ts)
+	RunTxnTests(func(
+		c TxnClient,
+		ts rpc.TxnSender) {
+		txn, err := c.New(ctx, newTestTimestamp(0), options...)
+		assert.Nil(t, err)
+		tc(ctx, txn.(*txnOperator), ts.(*testTxnSender))
+	})
 }
 
 func newDNRequest(op uint32, dn uint64) txn.TxnRequest {

@@ -322,7 +322,11 @@ func TestVector7(t *testing.T) {
 			if i >= vec.Length() {
 				assert.Equal(t, vec2.Get(i-vec.Length()), vec3.Get(i))
 			} else {
-				assert.Equal(t, vec.Get(i), vec3.Get(i))
+				if vec.IsNull(i) {
+					assert.Equal(t, true, vec3.IsNull(i))
+				} else {
+					assert.Equal(t, vec.Get(i), vec3.Get(i))
+				}
 			}
 		}
 

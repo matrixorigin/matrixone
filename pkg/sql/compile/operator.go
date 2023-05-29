@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
@@ -61,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
@@ -71,7 +73,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -354,7 +355,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 					Extern:          t.Es.Extern,
 				},
 				ExParam: external.ExParam{
-					Filter: t.Es.Filter,
+					Filter: &external.FilterParam{
+						FilterExpr: t.Es.Filter.FilterExpr,
+					},
 					Fileparam: &external.ExFileparam{
 						End:       t.Es.Fileparam.End,
 						FileCnt:   t.Es.Fileparam.FileCnt,
@@ -379,6 +382,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		if regMap != nil {
 			sourceArg := sourceIns.Arg.(*dispatch.Argument)
 			arg := &dispatch.Argument{
+				IsSink:     sourceArg.IsSink,
 				FuncId:     sourceArg.FuncId,
 				LocalRegs:  make([]*process.WaitRegister, len(sourceArg.LocalRegs)),
 				RemoteRegs: make([]colexec.ReceiveInfo, len(sourceArg.RemoteRegs)),
@@ -397,8 +401,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Insert:
 		t := sourceIns.Arg.(*insert.Argument)
 		res.Arg = &insert.Argument{
-			Affected:  t.Affected,
-			IsRemote:  t.IsRemote,
+			ToWriteS3: t.ToWriteS3,
 			InsertCtx: t.InsertCtx,
 		}
 	case vm.PreInsert:
@@ -406,7 +409,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		res.Arg = &preinsert.Argument{
 			SchemaName: t.SchemaName,
 			TableDef:   t.TableDef,
-			ParentIdx:  t.ParentIdx,
+			Attrs:      t.Attrs,
+			IsUpdate:   t.IsUpdate,
+			HasAutoCol: t.HasAutoCol,
 		}
 	case vm.Deletion:
 		t := sourceIns.Arg.(*deletion.Argument)
@@ -415,10 +420,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 			IBucket:      t.IBucket,
 			Nbucket:      t.Nbucket,
 			DeleteCtx:    t.DeleteCtx,
-			AffectedRows: t.AffectedRows,
 			RemoteDelete: t.RemoteDelete,
 			SegmentMap:   t.SegmentMap,
 		}
+	case vm.LockOp:
+		t := sourceIns.Arg.(*lockop.Argument)
+		arg := new(lockop.Argument)
+		*arg = *t
+		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -427,87 +436,36 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 
 func constructRestrict(n *plan.Node) *restrict.Argument {
 	return &restrict.Argument{
-		E: colexec.RewriteFilterExprList(n.FilterList),
+		E:     colexec.RewriteFilterExprList(n.FilterList),
+		IsEnd: n.IsEnd,
 	}
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*deletion.Argument, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
-		DelSource: make([]engine.Relation, len(oldCtx.Ref)),
-		DelRef:    oldCtx.Ref,
-		DelIdx:    make([][]int32, len(oldCtx.Idx)),
-
-		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
-		IdxIdx:    oldCtx.IdxIdx,
-
-		OnRestrictIdx: oldCtx.OnRestrictIdx,
-
-		OnCascadeIdx:    oldCtx.OnCascadeIdx,
-		OnCascadeSource: make([]engine.Relation, len(oldCtx.OnCascadeRef)),
-
-		OnSetSource:       make([]engine.Relation, len(oldCtx.OnSetRef)),
-		OnSetUniqueSource: make([][]engine.Relation, len(oldCtx.Ref)),
-		OnSetIdx:          make([][]int32, len(oldCtx.OnSetIdx)),
-		OnSetTableDef:     oldCtx.OnSetDef,
-		OnSetRef:          oldCtx.OnSetRef,
-		OnSetUpdateCol:    make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
-
-		CanTruncate: oldCtx.CanTruncate,
+		Ref:                   oldCtx.Ref,
+		RowIdIdx:              int(oldCtx.RowIdIdx),
+		CanTruncate:           oldCtx.CanTruncate,
+		AddAffectedRows:       oldCtx.AddAffectedRows,
+		PartitionTableIDs:     oldCtx.PartitionTableIds,
+		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
 	}
-
-	if delCtx.CanTruncate {
-		for i, ref := range oldCtx.Ref {
-			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
+	// get the relation instance of the original table
+	rel, _, err := getRel(proc.Ctx, proc, eg, oldCtx.Ref, nil)
+	if err != nil {
+		return nil, err
+	}
+	delCtx.Source = rel
+	if len(oldCtx.PartitionTableIds) > 0 {
+		delCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableIds))
+		// get the relation instances for each partition sub table
+		for i, pTableId := range oldCtx.PartitionTableIds {
+			_, _, pRel, err := eg.GetRelationById(proc.Ctx, proc.TxnOperator, pTableId)
 			if err != nil {
 				return nil, err
 			}
-			delCtx.DelSource[i] = rel
-		}
-	} else {
-		for i, list := range oldCtx.Idx {
-			delCtx.DelIdx[i] = make([]int32, len(list.List))
-			for j, id := range list.List {
-				delCtx.DelIdx[i][j] = int32(id)
-			}
-		}
-		for i, list := range oldCtx.OnSetIdx {
-			delCtx.OnSetIdx[i] = make([]int32, len(list.List))
-			for j, id := range list.List {
-				delCtx.OnSetIdx[i][j] = int32(id)
-			}
-		}
-		for i, ref := range oldCtx.Ref {
-			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
-			if err != nil {
-				return nil, err
-			}
-			delCtx.DelSource[i] = rel
-		}
-		for i, ref := range oldCtx.IdxRef {
-			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
-			if err != nil {
-				return nil, err
-			}
-			delCtx.IdxSource[i] = rel
-		}
-		for i, ref := range oldCtx.OnCascadeRef {
-			rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
-			if err != nil {
-				return nil, err
-			}
-			delCtx.OnCascadeSource[i] = rel
-		}
-		for i, ref := range oldCtx.OnSetRef {
-			rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.OnSetDef[i])
-			if err != nil {
-				return nil, err
-			}
-			delCtx.OnSetSource[i] = rel
-			delCtx.OnSetUniqueSource[i] = uniqueRels
-		}
-		for i, idxMap := range oldCtx.OnSetUpdateCol {
-			delCtx.OnSetUpdateCol[i] = idxMap.Map
+			delCtx.PartitionSources[i] = pRel
 		}
 	}
 
@@ -516,174 +474,108 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	}, nil
 }
 
-func constructOnduplicateKey(n *plan.Node, eg engine.Engine, proc *process.Process) (*onduplicatekey.Argument, error) {
-	oldCtx := n.InsertCtx
-	ctx := proc.Ctx
-	if oldCtx.GetClusterTable().GetIsClusterTable() {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	}
-	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
-	if err != nil {
-		return nil, err
-	}
-
+func constructOnduplicateKey(n *plan.Node, eg engine.Engine) (*onduplicatekey.Argument, error) {
+	oldCtx := n.OnDuplicateKey
 	return &onduplicatekey.Argument{
-		Engine:   eg,
-		Ref:      oldCtx.Ref,
-		TableDef: oldCtx.TableDef,
-
+		Engine:          eg,
 		OnDuplicateIdx:  oldCtx.OnDuplicateIdx,
 		OnDuplicateExpr: oldCtx.OnDuplicateExpr,
-		Source:          originRel,
-		UniqueSource:    indexRels,
-
-		IdxIdx: oldCtx.IdxIdx,
+		TableDef:        oldCtx.TableDef,
 	}, nil
 }
 
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
-	insertCtx := n.InsertCtx
-	schemaName := insertCtx.Ref.SchemaName
-	insertCtx.TableDef.TblId = uint64(insertCtx.Ref.Obj)
+	preCtx := n.PreInsertCtx
+	schemaName := preCtx.Ref.SchemaName
 
-	if insertCtx.Ref.SchemaName != "" {
-		dbSource, err := eg.Database(proc.Ctx, insertCtx.Ref.SchemaName, proc.TxnOperator)
+	//var attrs []string
+	attrs := make([]string, 0)
+	for _, col := range preCtx.TableDef.Cols {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+			continue
+		}
+		attrs = append(attrs, col.Name)
+	}
+
+	if preCtx.Ref.SchemaName != "" {
+		dbSource, err := eg.Database(proc.Ctx, preCtx.Ref.SchemaName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
-		if _, err = dbSource.Relation(proc.Ctx, insertCtx.Ref.ObjName); err != nil {
+		if _, err = dbSource.Relation(proc.Ctx, preCtx.Ref.ObjName); err != nil {
 			schemaName = defines.TEMPORARY_DBNAME
 		}
 	}
 
 	return &preinsert.Argument{
+		Ctx:        proc.Ctx,
+		HasAutoCol: preCtx.HasAutoCol,
 		SchemaName: schemaName,
-		TableDef:   insertCtx.TableDef,
-		ParentIdx:  insertCtx.ParentIdx,
+		TableDef:   preCtx.TableDef,
+		Attrs:      attrs,
+		IsUpdate:   preCtx.IsUpdate,
 	}, nil
+}
+
+func constructPreInsertUk(n *plan.Node, proc *process.Process) (*preinsertunique.Argument, error) {
+	preCtx := n.PreInsertUkCtx
+	return &preinsertunique.Argument{
+		Ctx:          proc.Ctx,
+		PreInsertCtx: preCtx,
+	}, nil
+}
+
+func constructLockOp(n *plan.Node, proc *process.Process) (*lockop.Argument, error) {
+	arg := lockop.NewArgument()
+	for _, target := range n.LockTargets {
+		typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
+		arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+	}
+	for _, target := range n.LockTargets {
+		if target.LockTable {
+			arg.LockTable(target.TableId)
+		}
+	}
+	return arg, nil
 }
 
 func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*insert.Argument, error) {
 	oldCtx := n.InsertCtx
 	ctx := proc.Ctx
-	if oldCtx.GetClusterTable().GetIsClusterTable() {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	}
-	newCtx := &insert.InsertCtx{
-		Ref:      oldCtx.Ref,
-		TableDef: oldCtx.TableDef,
 
-		ParentIdx: oldCtx.ParentIdx,
+	var attrs []string
+	for _, col := range oldCtx.TableDef.Cols {
+		if col.Name != catalog.Row_ID {
+			attrs = append(attrs, col.Name)
+		}
 	}
-
-	originRel, indexRels, err := getRel(ctx, proc, eg, oldCtx.Ref, oldCtx.TableDef)
+	originRel, _, err := getRel(ctx, proc, eg, oldCtx.Ref, nil)
 	if err != nil {
 		return nil, err
 	}
-	newCtx.Rels = append(newCtx.Rels, originRel)
-	newCtx.Rels = append(newCtx.Rels, indexRels...)
+	newCtx := &insert.InsertCtx{
+		Ref:                   oldCtx.Ref,
+		AddAffectedRows:       oldCtx.AddAffectedRows,
+		Rel:                   originRel,
+		Attrs:                 attrs,
+		PartitionTableIDs:     oldCtx.PartitionTableIds,
+		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
+		TableDef:              oldCtx.TableDef,
+	}
+	if len(oldCtx.PartitionTableIds) > 0 {
+		newCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableIds))
+		// get the relation instances for each partition sub table
+		for i, pTableId := range oldCtx.PartitionTableIds {
+			_, _, pRel, err := eg.GetRelationById(proc.Ctx, proc.TxnOperator, pTableId)
+			if err != nil {
+				return nil, err
+			}
+			newCtx.PartitionSources[i] = pRel
+		}
+	}
 
 	return &insert.Argument{
 		InsertCtx: newCtx,
-	}, nil
-}
-
-func constructUpdate(n *plan.Node, eg engine.Engine, proc *process.Process) (*update.Argument, error) {
-	oldCtx := n.UpdateCtx
-	updateCtx := &update.UpdateCtx{
-		Source:       make([]engine.Relation, len(oldCtx.Ref)),
-		Idxs:         make([][]int32, len(oldCtx.Idx)),
-		TableDefs:    oldCtx.TableDefs,
-		Ref:          oldCtx.Ref,
-		UpdateCol:    make([]map[string]int32, len(oldCtx.UpdateCol)),
-		UniqueSource: make([][]engine.Relation, len(oldCtx.Ref)),
-
-		IdxSource: make([]engine.Relation, len(oldCtx.IdxRef)),
-		IdxIdx:    oldCtx.IdxIdx,
-
-		OnRestrictIdx: oldCtx.OnRestrictIdx,
-
-		OnCascadeIdx:          make([][]int32, len(oldCtx.OnCascadeIdx)),
-		OnCascadeSource:       make([]engine.Relation, len(oldCtx.OnCascadeRef)),
-		OnCascadeUniqueSource: make([][]engine.Relation, len(oldCtx.OnCascadeRef)),
-		OnCascadeRef:          oldCtx.OnCascadeRef,
-		OnCascadeTableDef:     oldCtx.OnCascadeDef,
-		OnCascadeUpdateCol:    make([]map[string]int32, len(oldCtx.OnCascadeUpdateCol)),
-
-		OnSetSource:       make([]engine.Relation, len(oldCtx.OnSetRef)),
-		OnSetUniqueSource: make([][]engine.Relation, len(oldCtx.OnSetRef)),
-		OnSetIdx:          make([][]int32, len(oldCtx.OnSetIdx)),
-		OnSetRef:          oldCtx.OnSetRef,
-		OnSetTableDef:     oldCtx.OnSetDef,
-		OnSetUpdateCol:    make([]map[string]int32, len(oldCtx.OnSetUpdateCol)),
-
-		ParentIdx: make([]map[string]int32, len(oldCtx.ParentIdx)),
-	}
-
-	for i, idxMap := range oldCtx.UpdateCol {
-		updateCtx.UpdateCol[i] = idxMap.Map
-	}
-	for i, list := range oldCtx.Idx {
-		updateCtx.Idxs[i] = make([]int32, len(list.List))
-		for j, id := range list.List {
-			updateCtx.Idxs[i][j] = int32(id)
-		}
-	}
-	for i, list := range oldCtx.OnSetIdx {
-		updateCtx.OnSetIdx[i] = make([]int32, len(list.List))
-		for j, id := range list.List {
-			updateCtx.OnSetIdx[i][j] = int32(id)
-		}
-	}
-	for i, list := range oldCtx.OnCascadeIdx {
-		updateCtx.OnCascadeIdx[i] = make([]int32, len(list.List))
-		for j, id := range list.List {
-			updateCtx.OnCascadeIdx[i][j] = int32(id)
-		}
-	}
-	for i, ref := range oldCtx.Ref {
-		rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.TableDefs[i])
-		if err != nil {
-			return nil, err
-		}
-		updateCtx.Source[i] = rel
-		updateCtx.UniqueSource[i] = uniqueRels
-	}
-	for i, ref := range oldCtx.IdxRef {
-		rel, _, err := getRel(proc.Ctx, proc, eg, ref, nil)
-		if err != nil {
-			return nil, err
-		}
-		updateCtx.IdxSource[i] = rel
-	}
-	for i, ref := range oldCtx.OnCascadeRef {
-		rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.OnCascadeDef[i])
-		if err != nil {
-			return nil, err
-		}
-		updateCtx.OnCascadeSource[i] = rel
-		updateCtx.OnCascadeUniqueSource[i] = uniqueRels
-	}
-	for i, ref := range oldCtx.OnSetRef {
-		rel, uniqueRels, err := getRel(proc.Ctx, proc, eg, ref, oldCtx.OnSetDef[i])
-		if err != nil {
-			return nil, err
-		}
-		updateCtx.OnSetSource[i] = rel
-		updateCtx.OnSetUniqueSource[i] = uniqueRels
-	}
-	for i, idxMap := range oldCtx.OnCascadeUpdateCol {
-		updateCtx.OnCascadeUpdateCol[i] = idxMap.Map
-	}
-	for i, idxMap := range oldCtx.OnSetUpdateCol {
-		updateCtx.OnSetUpdateCol[i] = idxMap.Map
-	}
-	for i, idxMap := range oldCtx.ParentIdx {
-		updateCtx.ParentIdx[i] = idxMap.Map
-	}
-
-	return &update.Argument{
-		UpdateCtx: updateCtx,
 	}, nil
 }
 
@@ -1020,9 +912,10 @@ func constructIntersect(ibucket, nbucket int) *intersect.Argument {
 	}
 }
 
-func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Argument {
+func constructDispatchLocal(all bool, isSink bool, regs []*process.WaitRegister) *dispatch.Argument {
 	arg := new(dispatch.Argument)
 	arg.LocalRegs = regs
+	arg.IsSink = isSink
 	if all {
 		arg.FuncId = dispatch.SendToAllLocalFunc
 	} else {
@@ -1034,7 +927,12 @@ func constructDispatchLocal(all bool, regs []*process.WaitRegister) *dispatch.Ar
 // ss[currentIdx] means it's local scope the dispatch rule should be like below:
 // dispatch batch to all other cn and also put one into proc.MergeReciever[0] for
 // local deletion
-func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, uuids []uuid.UUID, c *Compile) {
+func constructDeleteDispatchAndLocal(
+	currentIdx int,
+	rs []*Scope,
+	ss []*Scope,
+	uuids []uuid.UUID,
+	c *Compile) {
 	arg := new(dispatch.Argument)
 	arg.RemoteRegs = make([]colexec.ReceiveInfo, 0, len(ss)-1)
 	// rs is used to get batch from dispatch operator (include
@@ -1063,20 +961,24 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 		if i != currentIdx {
 			// just use this uuid in dispatch, we need to
 			// use it in the prepare func (store the map [uuid -> proc.DispatchNotifyCh])
-			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
-				Uuid:     uuids[i],
-				NodeAddr: ss[i].NodeInfo.Addr,
-			})
+			arg.RemoteRegs = append(
+				arg.RemoteRegs,
+				colexec.ReceiveInfo{
+					Uuid:     uuids[i],
+					NodeAddr: ss[i].NodeInfo.Addr,
+				})
 			// let remote scope knows it need to recieve bacth from
 			// remote CN, it will use this to send PrepareDoneNotifyMessage
 			// and then to recieve batches from remote CNs
-			rs[currentIdx].RemoteReceivRegInfos = append(rs[currentIdx].RemoteReceivRegInfos, RemoteReceivRegInfo{
-				Uuid: uuids[currentIdx],
-				// I use i to tag, scope should send the batches (recieved from remote CNs)
-				// to process.MergeRecievers[i]
-				Idx:      i,
-				FromAddr: ss[i].NodeInfo.Addr,
-			})
+			rs[currentIdx].RemoteReceivRegInfos = append(
+				rs[currentIdx].RemoteReceivRegInfos,
+				RemoteReceivRegInfo{
+					Uuid: uuids[currentIdx],
+					// I use i to tag, scope should send the batches (recieved from remote CNs)
+					// to process.MergeRecievers[i]
+					Idx:      i,
+					FromAddr: ss[i].NodeInfo.Addr,
+				})
 		}
 	}
 	if len(arg.RemoteRegs) == 0 {
@@ -1084,7 +986,10 @@ func constructDeleteDispatchAndLocal(currentIdx int, rs []*Scope, ss []*Scope, u
 	} else {
 		arg.FuncId = dispatch.SendToAllFunc
 	}
-	arg.LocalRegs = append(arg.LocalRegs, rs[currentIdx].Proc.Reg.MergeReceivers[currentIdx])
+
+	arg.LocalRegs = append(
+		arg.LocalRegs,
+		rs[currentIdx].Proc.Reg.MergeReceivers[currentIdx])
 
 	ss[currentIdx].appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,

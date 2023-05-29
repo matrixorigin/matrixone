@@ -168,7 +168,7 @@ func TestDeadLock(t *testing.T) {
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 
 			txn1 := []byte("txn1")
@@ -201,6 +201,44 @@ func TestDeadLock(t *testing.T) {
 				maybeAddTestLockWithDeadlock(t, ctx, l, 1, txn3, [][]byte{row1},
 					pb.Granularity_Row)
 				require.NoError(t, l.Unlock(ctx, txn3, timestamp.Timestamp{}))
+			}()
+			wg.Wait()
+		},
+	)
+}
+
+func TestDeadLockWith2Txn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+			row2 := []byte{2}
+
+			mustAddTestLock(t, ctx, l1, 1, txn1, [][]byte{row1}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, l2, 1, txn2, [][]byte{row2}, pb.Granularity_Row)
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				maybeAddTestLockWithDeadlock(t, ctx, l1, 1, txn1, [][]byte{row2},
+					pb.Granularity_Row)
+				require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			}()
+			go func() {
+				defer wg.Done()
+				maybeAddTestLockWithDeadlock(t, ctx, l2, 1, txn2, [][]byte{row1},
+					pb.Granularity_Row)
+				require.NoError(t, l2.Unlock(ctx, txn2, timestamp.Timestamp{}))
 			}()
 			wg.Wait()
 		},
