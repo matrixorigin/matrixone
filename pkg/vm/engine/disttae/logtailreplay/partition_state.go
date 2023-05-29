@@ -48,7 +48,7 @@ type PartitionState struct {
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
-	dirtyBlks   *btree.BTreeG[BlockEntry]
+	dirtyBlocks *btree.BTreeG[BlockEntry]
 	checkpoints []string
 
 	// noData indicates whether to retain data batch
@@ -138,12 +138,12 @@ func NewPartitionState(noData bool) *PartitionState {
 		rows:         btree.NewBTreeGOptions((RowEntry).Less, opts),
 		blocks:       btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		primaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
-		dirtyBlks:    btree.NewBTreeGOptions((BlockEntry).Less, opts),
+		dirtyBlocks:  btree.NewBTreeGOptions((BlockEntry).Less, opts),
 	}
 }
 
 func (p *PartitionState) GetDirtyBlks() *btree.BTreeG[BlockEntry] {
-	return p.dirtyBlks
+	return p.dirtyBlocks
 }
 
 func (p *PartitionState) Copy() *PartitionState {
@@ -152,7 +152,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		blocks:       p.blocks.Copy(),
 		primaryIndex: p.primaryIndex.Copy(),
 		noData:       p.noData,
-		dirtyBlks:    p.dirtyBlks.Copy(),
+		dirtyBlocks:  p.dirtyBlocks.Copy(),
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -337,7 +337,7 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 			}
 			be, ok := p.blocks.Get(bPivot)
 			if ok && !be.EntryState {
-				p.dirtyBlks.Set(be)
+				p.dirtyBlocks.Set(be)
 			}
 		})
 	}
@@ -371,34 +371,34 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					BlockID: blockID,
 				},
 			}
-			be, ok := p.blocks.Get(pivot)
+			blockEntry, ok := p.blocks.Get(pivot)
 			if !ok {
-				be = pivot
+				blockEntry = pivot
 				numInserted++
 			}
 
 			if location := objectio.Location(metaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
-				be.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
+				blockEntry.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
 			if location := objectio.Location(deltaLocationVector.GetBytesAt(i)); !location.IsEmpty() {
-				be.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
+				blockEntry.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&location[0]))
 			}
 			if id := segmentIDVector[i]; objectio.IsEmptySegid(&id) {
-				be.SegmentID = id
+				blockEntry.SegmentID = id
 			}
-			be.Sorted = sortedStateVector[i]
+			blockEntry.Sorted = sortedStateVector[i]
 			if t := createTimeVector[i]; !t.IsEmpty() {
-				be.CreateTime = t
+				blockEntry.CreateTime = t
 			}
 			if t := commitTimeVector[i]; !t.IsEmpty() {
-				be.CommitTs = t
+				blockEntry.CommitTs = t
 			}
-			be.EntryState = entryStateVector[i]
+			blockEntry.EntryState = entryStateVector[i]
 
-			p.blocks.Set(be)
+			p.blocks.Set(blockEntry)
 
 			if entryStateVector[i] ||
-				(!entryStateVector[i] && len(be.DeltaLoc) != 0) {
+				(!entryStateVector[i] && len(blockEntry.DeltaLoc) != 0) {
 				iter := p.rows.Copy().Iter()
 				pivot := RowEntry{
 					BlockID: blockID,
@@ -411,9 +411,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					// delete row entry
 					p.rows.Delete(entry)
 
-					// detete dirty rows for nblk
+					// detete dirty blocks for nblk
+					//TODO::
 					if !entryStateVector[i] {
-						p.dirtyBlks.Delete(be)
+						p.dirtyBlocks.Delete(blockEntry)
 					}
 
 					numDeleted++
@@ -471,19 +472,6 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 		c.DistTAE.Logtail.Entries.Add(1)
 		c.DistTAE.Logtail.MetadataDeleteEntries.Add(1)
 	})
-}
-
-func (p *PartitionState) GetBlock(blockID types.Blockid) *BlockEntry {
-	pivot := BlockEntry{
-		BlockInfo: catalog.BlockInfo{
-			BlockID: blockID,
-		},
-	}
-	entry, ok := p.blocks.Get(pivot)
-	if !ok {
-		return nil
-	}
-	return &entry
 }
 
 func (p *PartitionState) BlockVisible(blockID types.Blockid, ts types.TS) bool {
