@@ -567,8 +567,8 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 
 func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err error) {
 	if tbl.schema.HasPK() {
-		skip := tbl.store.txn.GetPKDedupSkip()
-		if skip == txnif.PKDedupSkipNone {
+		dedupType := tbl.store.txn.GetDedupType()
+		if dedupType == txnif.FullDedup {
 			//do PK deduplication check against txn's work space.
 			if err = tbl.DedupWorkSpace(
 				data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
@@ -580,13 +580,13 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 				data.Vecs[tbl.schema.GetSingleSortKeyIdx()], false); err != nil {
 				return
 			}
-		} else if skip == txnif.PKDedupSkipWorkSpace {
+		} else if dedupType == txnif.FullSkipWorkSpaceDedup {
 			if err = tbl.DedupSnapByPK(
 				ctx,
 				data.Vecs[tbl.schema.GetSingleSortKeyIdx()], false); err != nil {
 				return
 			}
-		} else if skip == txnif.PKDedupSkipSnapshot {
+		} else if dedupType == txnif.IncrementalDedup {
 			if err = tbl.DedupSnapByPK(
 				ctx,
 				data.Vecs[tbl.schema.GetSingleSortKeyIdx()], true); err != nil {
@@ -608,8 +608,8 @@ func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error
 		}
 	}()
 	if tbl.schema.HasPK() {
-		skip := tbl.store.txn.GetPKDedupSkip()
-		if skip == txnif.PKDedupSkipNone {
+		dedupType := tbl.store.txn.GetDedupType()
+		if dedupType == txnif.FullDedup {
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
 				bat, err := blockio.LoadColumns(
@@ -636,12 +636,12 @@ func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error
 					return
 				}
 			}
-		} else if skip == txnif.PKDedupSkipWorkSpace {
+		} else if dedupType == txnif.FullSkipWorkSpaceDedup {
 			//do PK deduplication check against txn's snapshot data.
 			if err = tbl.DedupSnapByMetaLocs(context.Background(), metaLocs, false); err != nil {
 				return
 			}
-		} else if skip == txnif.PKDedupSkipSnapshot {
+		} else if dedupType == txnif.IncrementalDedup {
 			//do PK deduplication check against txn's snapshot data.
 			if err = tbl.DedupSnapByMetaLocs(context.Background(), metaLocs, true); err != nil {
 				return

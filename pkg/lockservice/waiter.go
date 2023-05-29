@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"go.uber.org/zap"
 )
@@ -93,6 +94,8 @@ type waiter struct {
 	waiters        waiterQueue
 	refCount       atomic.Int32
 	latestCommitTS timestamp.Timestamp
+	waitTxn        pb.WaitTxn
+	event          event
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -192,6 +195,7 @@ func (w *waiter) mustSendNotification(
 	} else {
 		value.ts = w.latestCommitTS
 	}
+	w.event.notified()
 	select {
 	case w.c <- value:
 		return
@@ -202,6 +206,7 @@ func (w *waiter) mustSendNotification(
 
 func (w *waiter) resetWait(serviceID string) {
 	if w.casStatus(serviceID, completed, waiting) {
+		w.event = event{}
 		return
 	}
 	panic("invalid reset wait")
@@ -301,11 +306,11 @@ func (w *waiter) fetchNextWaiter(
 	serviceID string,
 	value notifyValue) *waiter {
 	if w.waiters.len() == 0 {
-		logWaiterFetchNextWaiter(serviceID, w, nil)
+		logWaiterFetchNextWaiter(serviceID, w, nil, value)
 		return nil
 	}
 	next := w.awakeNextWaiter(serviceID)
-	logWaiterFetchNextWaiter(serviceID, w, next)
+	logWaiterFetchNextWaiter(serviceID, w, next, value)
 	for {
 		if next.notify(serviceID, value) {
 			next.unref(serviceID)
@@ -337,8 +342,10 @@ func (w *waiter) reset(serviceID string) {
 
 	logWaiterContactPool(serviceID, w, "put")
 	w.txnID = nil
+	w.event = event{}
 	w.latestCommitTS = timestamp.Timestamp{}
 	w.setStatus(serviceID, waiting)
+	w.waitTxn = pb.WaitTxn{}
 	w.waiters.reset()
 	waiterPool.Put(w)
 }

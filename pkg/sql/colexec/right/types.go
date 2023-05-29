@@ -58,9 +58,13 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
+	ufs []func(*vector.Vector, *vector.Vector, int64) error
+
 	mp *hashmap.JoinMap
 
 	matched *bitmap.Bitmap
+
+	constNullVecs []*vector.Vector
 }
 
 type Argument struct {

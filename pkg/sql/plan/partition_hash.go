@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -70,7 +71,7 @@ func (hpb *hashPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 	}
 
 	partitionDef.PartitionMsg = tree.String(partitionSyntaxDef, dialect.MYSQL)
-	tableDef.Partition = partitionDef
+	//tableDef.Partition = partitionDef
 	return nil
 }
 
@@ -98,7 +99,14 @@ func (hpb *hashPartitionBuilder) buildEvalPartitionExpression(ctx context.Contex
 	hashExpr := partitionType.Expr
 	partitionAst := genPartitionAst(tree.Exprs{hashExpr}, int64(partitionDef.PartitionNum))
 
-	partitionExpression, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
+	tempExpr, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
+	if err != nil {
+		return err
+	}
+	partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+		Id:          int32(types.T_int32),
+		NotNullable: true,
+	})
 	if err != nil {
 		return err
 	}

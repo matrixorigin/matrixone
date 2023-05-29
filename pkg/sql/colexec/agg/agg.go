@@ -125,6 +125,13 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) er
 		return nil
 	}
 	vec := vecs[0]
+
+	if vec.IsConstNull() {
+		var v T1
+		a.vs[i], a.es[i], a.err = a.fill(i, v, a.vs[i], z, a.es[i], true)
+		return nil
+	}
+
 	hasNull := vec.GetNulls().Contains(uint64(sel))
 	if vec.GetType().IsVarlen() {
 		a.vs[i], a.es[i], a.err = a.fill(i, (any)(vec.GetBytesAt(int(sel))).(T1), a.vs[i], z, a.es[i], hasNull)
@@ -160,14 +167,17 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 		return nil
 	}
 	vs := vector.MustFixedCol[T1](vec)
-	if a.batchFill != nil {
+	// I do these bad hack here because the batchFill method can't know the vector is const null or not.
+	if a.batchFill != nil && !constNull {
 		if a.err = a.batchFill(a.vs, vs, start, int64(len(os)), vps, zs, vec.GetNulls()); a.err != nil {
 			return a.err
 		}
+
 		nsp := vec.GetNulls()
 		if nsp.Any() {
 			for i := range os {
-				if !nsp.Contains(uint64(i) + uint64(start)) {
+				hasNull := nsp.Contains(uint64(i) + uint64(start))
+				if !hasNull {
 					if vps[i] == 0 {
 						continue
 					}
@@ -184,14 +194,28 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 		}
 		return nil
 	}
+
 	inc := 1
 	vi := start
 	if vec.IsConst() {
 		inc = 0
 		vi = 0
+
+		if vec.IsConstNull() {
+			var v T1
+			for i := range os {
+				if vps[i] == 0 {
+					continue
+				}
+				j := vps[i] - 1
+				a.vs[j], a.es[j], a.err = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], true)
+			}
+			return nil
+		}
 	}
+
 	for i := range os {
-		hasNull := constNull || vec.GetNulls().Contains(uint64(i)+uint64(start))
+		hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
 		if vps[i] == 0 {
 			continue
 		}
@@ -231,8 +255,8 @@ func (a *UnaryAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vector) 
 		}
 		return nil
 	} else if vec.GetType().IsVarlen() {
-		len := vec.Length()
-		for j := 0; j < len; j++ {
+		length := vec.Length()
+		for j := 0; j < length; j++ {
 			hasNull := vec.GetNulls().Contains(uint64(j))
 			if a.err != nil {
 				return nil

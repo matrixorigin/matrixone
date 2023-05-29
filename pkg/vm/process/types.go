@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -172,6 +174,7 @@ type Process struct {
 
 	FileService fileservice.FileService
 	LockService lockservice.LockService
+	IncrService incrservice.AutoIncrementService
 
 	LoadTag bool
 
@@ -190,6 +193,7 @@ type vectorPool struct {
 }
 
 type sqlHelper interface {
+	GetCompilerContext() any
 	ExecSql(string) ([]interface{}, error)
 }
 
@@ -210,13 +214,14 @@ func (proc *Process) InitSeq() {
 
 func (proc *Process) SetLastInsertID(num uint64) {
 	if proc.LastInsertID != nil {
-		*proc.LastInsertID = num
+		atomic.StoreUint64(proc.LastInsertID, num)
 	}
 }
 
 func (proc *Process) GetLastInsertID() uint64 {
 	if proc.LastInsertID != nil {
-		return *proc.LastInsertID
+		num := atomic.LoadUint64(proc.LastInsertID)
+		return num
 	}
 	return 0
 }

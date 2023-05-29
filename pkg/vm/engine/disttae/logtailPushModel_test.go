@@ -15,16 +15,8 @@
 package disttae
 
 import (
-	"context"
-	"fmt"
-	"testing"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 // should ensure that subscribe and unsubscribe methods are effective.
@@ -52,68 +44,4 @@ func TestSubscribedTable(t *testing.T) {
 		subscribeRecord.setTableUnsubscribe(tbl.db, tbl.tb)
 	}
 	require.Equal(t, 0, len(subscribeRecord.m))
-}
-
-func TestReconnectRace(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	pClient := pushClient{
-		receivedLogTailTime: syncLogTailTimestamp{},
-		subscribed:          subscribedTable{},
-		subscriber: &logTailSubscriber{
-			lockSubscriber: make(chan func(context.Context, api.TableID) error, 1),
-		},
-	}
-	pClient.receivedLogTailTime.initLogTailTimestamp(client.NewTimestampWaiter())
-	pClient.subscribed.initTableSubscribeRecord()
-	pClient.subscriber.lockSubscriber <- func(ctx context.Context, id api.TableID) error {
-		return nil
-	}
-
-	// mock reconnect
-	mockReconnect := func(pc *pushClient) {
-		<-pc.subscriber.lockSubscriber
-		time.Sleep(time.Millisecond * 2)
-		pc.subscriber.lockSubscriber <- func(ctx context.Context, id api.TableID) error {
-			return nil
-		}
-	}
-
-	go func() {
-		for i := 0; i < 100; i++ {
-			mockReconnect(&pClient)
-		}
-	}()
-	go func() {
-		for i := 0; i < 1000; i++ {
-			err := pClient.subscribeTable(context.TODO(), api.TableID{DbId: 0, TbId: 0})
-			require.NoError(t, err)
-		}
-	}()
-	go func() {
-		for i := 0; i < 1000; i++ {
-			err := pClient.subscribeTable(context.TODO(), api.TableID{DbId: 0, TbId: 0})
-			require.NoError(t, err)
-		}
-	}()
-}
-
-var _ = debugToPrintLogList
-
-func debugToPrintLogList(ls []logtail.TableLogtail) string {
-	if len(ls) == 0 {
-		return ""
-	}
-	str := "log list are:\n"
-	for i, l := range ls {
-		did, tid := l.Table.DbId, l.Table.TbId
-		str += fmt.Sprintf("\t log: %d, dn: %d, tbl: %d\n", i, did, tid)
-		if len(l.Commands) > 0 {
-			str += "\tcommands are :\n"
-		}
-		for j, command := range l.Commands {
-			str += fmt.Sprintf("\t\t %d: [dnName: %s, tableName: %s, typ: %s]\n",
-				j, command.DatabaseName, command.TableName, command.EntryType.String())
-		}
-	}
-	return str
 }

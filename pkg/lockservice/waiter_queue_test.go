@@ -67,8 +67,8 @@ func TestIterTxns(t *testing.T) {
 
 	var values [][]byte
 	v := 0
-	q.iter(func(b []byte) bool {
-		values = append(values, b)
+	q.iter(func(w *waiter) bool {
+		values = append(values, w.txnID)
 		v++
 		return v < 2
 	})
