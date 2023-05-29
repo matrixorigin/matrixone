@@ -41,7 +41,7 @@ func TestRowLock(t *testing.T) {
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
 			ctx := context.Background()
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -78,7 +78,7 @@ func TestRowLockWithMany(t *testing.T) {
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
 			ctx := context.Background()
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -103,7 +103,7 @@ func TestMultipleRowLocks(t *testing.T) {
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
 			ctx := context.Background()
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -297,7 +297,7 @@ func TestRowLockWithSameTxn(t *testing.T) {
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
 			ctx := context.Background()
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -341,7 +341,7 @@ func TestRangeLock(t *testing.T) {
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
 			ctx := context.Background()
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -378,7 +378,7 @@ func TestRangeLockWithMany(t *testing.T) {
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
 			ctx := context.Background()
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Range,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -405,7 +405,7 @@ func TestMultipleRangeLocks(t *testing.T) {
 			l := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Range,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -454,7 +454,7 @@ func TestLockResultWithNoConfict(t *testing.T) {
 				context.Background(),
 				time.Second*10)
 			defer cancel()
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -487,7 +487,7 @@ func TestLockResultWithConfictAndTxnCommitted(t *testing.T) {
 				context.Background(),
 				time.Second*10)
 			defer cancel()
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -538,7 +538,7 @@ func TestLockResultWithConfictAndTxnAborted(t *testing.T) {
 				context.Background(),
 				time.Second*10)
 			defer cancel()
-			option := LockOptions{
+			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -616,7 +616,7 @@ func runBenchmark(b *testing.B, name string, t uint64) {
 					table := getTableID()
 					// fmt.Printf("on table %d\n", table)
 					for p.Next() {
-						if _, err := l.Lock(ctx, table, row, txn, LockOptions{}); err != nil {
+						if _, err := l.Lock(ctx, table, row, txn, pb.LockOptions{}); err != nil {
 							panic(err)
 						}
 						if err := l.Unlock(ctx, txn, timestamp.Timestamp{}); err != nil {
@@ -639,7 +639,7 @@ func maybeAddTestLockWithDeadlock(
 	lock [][]byte,
 	granularity pb.Granularity) pb.Result {
 	t.Logf("%s try lock %+v", string(txnID), lock)
-	res, err := l.Lock(ctx, table, lock, txnID, LockOptions{
+	res, err := l.Lock(ctx, table, lock, txnID, pb.LockOptions{
 		Granularity: pb.Granularity_Row,
 		Mode:        pb.LockMode_Exclusive,
 		Policy:      pb.WaitPolicy_Wait,
