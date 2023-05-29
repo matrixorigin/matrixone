@@ -15,9 +15,12 @@
 package function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var supportedStringBuiltIns = []FuncNew{
@@ -4672,6 +4675,163 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return Version
+				},
+			},
+		},
+	},
+
+	// function `assert`
+	{
+		functionId: ASSERT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 {
+				return newCheckResultWithSuccess(1)
+			}
+			if len(inputs) != 2 {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			if inputs[0].Oid != types.T_bool {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			if inputs[1].Oid != types.T_varchar {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+						errMsg := parameters[1].GetStringAt(0)
+						res := vector.MustFunctionResult[bool](result)
+						for i := uint64(0); i < uint64(length); i++ {
+							flag, isNull := checkFlags.GetValue(i)
+							if isNull || !flag {
+								return moerr.NewInternalError(proc.Ctx, errMsg)
+							}
+							res.AppendMustValue(true)
+						}
+						return nil
+					}
+				},
+			},
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+						res := vector.MustFunctionResult[bool](result)
+						for i := uint64(0); i < uint64(length); i++ {
+							flag, isNull := checkFlags.GetValue(i)
+							if isNull || !flag {
+								if parameters[1].GetType().Oid == types.T_varchar && parameters[1].GetType().Width == types.MaxVarcharLen {
+									bytes := parameters[1].GetBytesAt(int(i))
+									tuples, _, err := types.DecodeTuple(bytes)
+									if err == nil {
+										errMsg := tuples.ErrString()
+										return moerr.NewDuplicateEntry(proc.Ctx, errMsg, parameters[2].GetStringAt(int(i)))
+									}
+								}
+								return moerr.NewDuplicateEntry(proc.Ctx, parameters[1].GetStringAt(int(i)), parameters[2].GetStringAt(int(i)))
+							}
+							res.AppendMustValue(true)
+						}
+						return nil
+					}
+				},
+			},
+		},
+	},
+
+	// function `isempty`
+	{
+		functionId: ISEMPTY,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 1 {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						isEmpty := parameters[0].Length() == 0
+						res := vector.MustFunctionResult[bool](result)
+						for i := uint64(0); i < uint64(length); i++ {
+							res.AppendMustValue(isEmpty)
+						}
+						return nil
+					}
+				},
+			},
+		},
+	},
+
+	// function `not_in_rows`
+	{
+		functionId: NOT_IN_ROWS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 2 {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			if inputs[0].Oid != types.T_Rowid || inputs[1].Oid != types.T_Rowid {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+						leftRow := vector.GenerateFunctionFixedTypeParameter[types.Rowid](parameters[0])
+						rightRow := vector.GenerateFunctionFixedTypeParameter[types.Rowid](parameters[1])
+						res := vector.MustFunctionResult[bool](result)
+						rightRowIdMap := make(map[types.Rowid]struct{})
+						for i := uint64(0); i < uint64(length); i++ {
+							rightRowId, isNull := rightRow.GetValue(i)
+							if !isNull {
+								rightRowIdMap[rightRowId] = struct{}{}
+							}
+						}
+
+						for i := uint64(0); i < uint64(length); i++ {
+							leftRowId, isNull := leftRow.GetValue(i)
+							notInRows := false
+							if !isNull {
+								if _, ok := rightRowIdMap[leftRowId]; !ok {
+									notInRows = true
+								}
+							}
+							res.AppendMustValue(notInRows)
+						}
+						return nil
+					}
 				},
 			},
 		},

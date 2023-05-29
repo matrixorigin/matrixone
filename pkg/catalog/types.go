@@ -42,10 +42,9 @@ const (
 	IndexTablePrimaryColName = "__mo_index_pri_col"
 	ExternalFilePath         = "__mo_filepath"
 	IndexTableNamePrefix     = "__mo_index_unique__"
-	AutoIncrTableName        = "%!%mo_increment_columns"
+	// MOAutoIncrTable mo auto increment table name
+	MOAutoIncrTable = "mo_increment_columns"
 )
-
-var AutoIncrColumnNames = []string{Row_ID, "name", "offset", "step"}
 
 func ContainExternalHidenCol(col string) bool {
 	return col == ExternalFilePath
@@ -55,7 +54,7 @@ func IsHiddenTable(name string) bool {
 	if strings.HasPrefix(name, IndexTableNamePrefix) {
 		return true
 	}
-	return strings.EqualFold(name, AutoIncrTableName)
+	return strings.EqualFold(name, MOAutoIncrTable)
 }
 
 const (
@@ -149,6 +148,7 @@ const (
 	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
 	BlockMeta_Type            = "%!%mo__meta_type"
 	BlockMeta_Deletes_Length  = "%!%mo__meta_deletes_length"
+	BlockMeta_Partition       = "%!%mo__meta_partition"
 	// BlockMetaOffset_Min       = "%!%mo__meta_offset_min"
 	// BlockMetaOffset_Max       = "%!%mo__meta_offset_max"
 	BlockMetaOffset    = "%!%mo__meta_offset"

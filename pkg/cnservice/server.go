@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -113,7 +114,12 @@ func NewService(
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
 	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
 
+	if _, err = srv.getHAKeeperClient(); err != nil {
+		return nil, err
+	}
 	srv.pu = pu
+	srv.pu.LockService = srv.lockService
+	srv.pu.HAKeeperClient = srv._hakeeperClient
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
@@ -471,9 +477,11 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			return
 		}
 		var opts []client.TxnClientCreateOption
+		opts = append(opts,
+			client.WithTimestampWaiter(s.timestampWaiter))
 		if s.cfg.Txn.EnableSacrificingFreshness {
 			opts = append(opts,
-				client.WithEnableSacrificingFreshness(s.timestampWaiter))
+				client.WithEnableSacrificingFreshness())
 		}
 		if s.cfg.Txn.EnableCNBasedConsistency {
 			opts = append(opts,
@@ -553,7 +561,27 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
 }
 
+func (s *service) initIncrService() {
+	rt := runtime.ProcessLevelRuntime()
+	v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic("missing internal sql executor")
+	}
+
+	store, err := incrservice.NewSQLStore(v.(executor.SQLExecutor))
+	if err != nil {
+		panic(err)
+	}
+	incrService := incrservice.NewIncrService(
+		store,
+		s.cfg.AutoIncrement)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(
+		runtime.AutoIncrmentService,
+		incrService)
+}
+
 func (s *service) bootstrap() error {
+	s.initIncrService()
 	return s.stopper.RunTask(func(ctx context.Context) {
 		rt := runtime.ProcessLevelRuntime()
 		v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)

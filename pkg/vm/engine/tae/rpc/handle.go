@@ -854,6 +854,7 @@ func (h *Handle) HandleWrite(
 				}
 				locations = append(locations, location)
 			}
+
 			err = tb.AddBlksWithMetaLoc(locations)
 			return
 		}

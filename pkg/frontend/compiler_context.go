@@ -351,7 +351,8 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (strin
 		}
 		goto handleFailed
 	} else {
-		return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+		err = moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+		goto handleFailed
 	}
 handleSuccess:
 	err = bh.Exec(ctx, "commit;")
@@ -370,7 +371,7 @@ handleFailed:
 	} else if expectInvalidArgErr {
 		return "", moerr.NewInvalidArg(ctx, name+" function have invalid input args", badValue)
 	}
-	return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
+	return "", err
 }
 
 func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Relation, dbName, tableName string, sub *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef) {
@@ -494,14 +495,14 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		})
 	}
 
-	rowIdCol := plan2.MakeRowIdColDef()
-	cols = append(cols, rowIdCol)
 	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
 		cols = append(cols, plan2.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
 	}
 	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
 		cols = append(cols, plan2.MakeHiddenColDefByName(clusterByDef.Name))
 	}
+	rowIdCol := plan2.MakeRowIdColDef()
+	cols = append(cols, rowIdCol)
 
 	//convert
 	obj := &plan2.ObjectRef{
@@ -608,7 +609,8 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) ([]uint3
 			}
 			accountIds = append(accountIds, uint32(targetAccountId))
 		} else {
-			return nil, moerr.NewInternalError(ctx, "there is no account %s", name)
+			err = moerr.NewInternalError(ctx, "there is no account %s", name)
+			goto handleFailed
 		}
 	}
 

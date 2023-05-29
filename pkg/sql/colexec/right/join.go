@@ -40,6 +40,16 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	for i, typ := range ap.RightTypes {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
+	ap.ctr.constNullVecs = make([]*vector.Vector, len(ap.Result))
+	ap.ctr.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(ap.Result))
+	for i, rp := range ap.Result {
+		if rp.Rel == 0 {
+			ap.ctr.constNullVecs[i] = vector.NewConstNull(ap.LeftTypes[rp.Pos], 1, proc.Mp())
+			ap.ctr.ufs[i] = vector.GetUnionOneFunction(ap.LeftTypes[rp.Pos], proc.Mp())
+		} else {
+			ap.ctr.ufs[i] = vector.GetUnionOneFunction(ap.RightTypes[rp.Pos], proc.Mp())
+		}
+	}
 
 	ap.ctr.evecs = make([]evalVector, len(ap.Conditions[0]))
 	for i := range ap.Conditions[0] {
@@ -175,14 +185,18 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 
 	for j, rp := range ap.Result {
 		if rp.Rel == 0 {
-			if err := vector.AppendMultiFixed(rbat.Vecs[j], 0, true, count, proc.Mp()); err != nil {
-				rbat.Clean(proc.Mp())
-				return false, err
+			for range sels {
+				if err := ap.ctr.ufs[j](rbat.Vecs[j], ap.ctr.constNullVecs[j], 0); err != nil {
+					rbat.Clean(proc.Mp())
+					return false, err
+				}
 			}
 		} else {
-			if err := rbat.Vecs[j].Union(ctr.bat.Vecs[rp.Pos], sels, proc.Mp()); err != nil {
-				rbat.Clean(proc.Mp())
-				return false, err
+			for _, sel := range sels {
+				if err := ap.ctr.ufs[j](rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], int64(sel)); err != nil {
+					rbat.Clean(proc.Mp())
+					return false, err
+				}
 			}
 		}
 

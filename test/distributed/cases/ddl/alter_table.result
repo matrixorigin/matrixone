@@ -307,7 +307,7 @@ show create table t5;
 Table    Create Table
 t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL\n) COMMENT='comment_3'
 alter table t5 add column a int;
-invalid input: Can't add 'a'; check that column/key exists
+invalid input: can't add 'a'; check that column/key exists
 alter table t5 add column b tinyint, add column c smallint, add column d int, add column e bigint, add column f tinyint unsigned;
 alter table t5 add column g smallint unsigned, add column h int unsigned, add column i bigint unsigned, add column j float, add column k double;
 alter table t5 add column l varchar(255), add column m Date, add column n DateTime, add column o timestamp, add column p bool;

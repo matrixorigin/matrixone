@@ -70,7 +70,7 @@ func checkIsDroppableColumn(tableDef *TableDef, colName string, ctx CompilerCont
 	// Check whether dropped column has existed.
 	col := FindColumn(tableDef.Cols, colName)
 	if col == nil {
-		return moerr.NewInvalidInput(ctx.GetContext(), "Can't DROP '%-.192s'; check that column/key exists", colName)
+		return moerr.NewInvalidInput(ctx.GetContext(), "can't DROP '%-.192s'; check that column/key exists", colName)
 	}
 
 	var colCnt int
@@ -81,6 +81,11 @@ func checkIsDroppableColumn(tableDef *TableDef, colName string, ctx CompilerCont
 	}
 	if colCnt == 1 {
 		return moerr.NewInvalidInput(ctx.GetContext(), "can't drop only column %s in table %s", colName, tableDef.Name)
+	}
+
+	// We don not support drop auto_incr col
+	if col.Typ.AutoIncr {
+		return moerr.NewInvalidInput(ctx.GetContext(), "can' t drop auto_incr col")
 	}
 
 	// We do not support drop column that contain primary key columns now.
@@ -117,7 +122,7 @@ func checkIsAddableColumn(tableDef *TableDef, colName string, colType *plan.Type
 	// Check whether added column has existed.
 	col := FindColumn(tableDef.Cols, colName)
 	if col != nil {
-		return moerr.NewInvalidInput(ctx.GetContext(), "Can't add '%-.192s'; check that column/key exists", colName)
+		return moerr.NewInvalidInput(ctx.GetContext(), "can't add '%-.192s'; check that column/key exists", colName)
 	}
 
 	// We don not support add auto_incr col
