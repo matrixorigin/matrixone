@@ -384,7 +384,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := motrace.StatementFromContext(ctx); stm != nil {
-		stm.SetSerializableExecPlan(NewMarshalPlanHandler(ctx, stm.StatementID, cwft.plan))
+		stm.SetSerializableExecPlan(NewJsonPlanHandler(ctx, stm.StatementID, cwft.plan))
 	}
 	return nil
 }

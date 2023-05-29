@@ -3733,6 +3733,32 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
+type jsonPlanHandler struct {
+	jsonBytes      []byte
+	statsJsonBytes []byte
+	stats          motrace.Statistic
+}
+
+func NewJsonPlanHandler(ctx context.Context, uuid uuid.UUID, plan *plan2.Plan) *jsonPlanHandler {
+	h := &marshalPlanHandler{
+		marshalPlan: explain.BuildJsonPlan(ctx, uuid, &explain.MarshalPlanOptions, plan.GetQuery()),
+	}
+	jsonBytes, statsJsonBytes, stats := h.Marshal(ctx)
+	return &jsonPlanHandler{
+		jsonBytes:      jsonBytes,
+		statsJsonBytes: statsJsonBytes,
+		stats:          stats,
+	}
+}
+
+func (h *jsonPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJsonBytes []byte, stats motrace.Statistic) {
+	return h.jsonBytes, h.statsJsonBytes, h.stats
+}
+
+func (h *jsonPlanHandler) Free() {
+
+}
+
 type marshalPlanHandler struct {
 	marshalPlan *explain.ExplainData
 	uuid        uuid.UUID
