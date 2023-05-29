@@ -36,7 +36,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultQueueSize = 1310 // queue mem cost = 10MB
+const defaultQueueSize = 1310720 // queue mem cost = 10MB
 
 const LoggerNameMOCollector = "MOCollector"
 
