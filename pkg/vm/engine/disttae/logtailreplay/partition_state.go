@@ -142,10 +142,6 @@ func NewPartitionState(noData bool) *PartitionState {
 	}
 }
 
-func (p *PartitionState) GetDirtyBlks() *btree.BTreeG[BlockEntry] {
-	return p.dirtyBlocks
-}
-
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
 		rows:         p.rows.Copy(),
@@ -410,13 +406,6 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					}
 					// delete row entry
 					p.rows.Delete(entry)
-
-					// detete dirty blocks for nblk
-					//TODO::
-					if !entryStateVector[i] {
-						p.dirtyBlocks.Delete(blockEntry)
-					}
-
 					numDeleted++
 					// delete primary index entry
 					if len(entry.PrimaryIndexBytes) > 0 {
@@ -427,6 +416,10 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					}
 				}
 				iter.Release()
+				//delete dirty non-appendable block
+				if !entryStateVector[i] {
+					p.dirtyBlocks.Delete(blockEntry)
+				}
 			}
 		})
 	}

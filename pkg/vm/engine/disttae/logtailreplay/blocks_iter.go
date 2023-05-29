@@ -75,3 +75,44 @@ func (b *blocksIter) Close() error {
 	b.iter.Release()
 	return nil
 }
+
+type dirtyBlocksIter struct {
+	iter        btree.IterG[BlockEntry]
+	firstCalled bool
+}
+
+func (p *PartitionState) NewDirtyBlocksIter() *blocksIter {
+	iter := p.dirtyBlocks.Copy().Iter()
+	ret := &blocksIter{
+		iter: iter,
+	}
+	return ret
+}
+
+var _ BlocksIter = new(dirtyBlocksIter)
+
+func (b *dirtyBlocksIter) Next() bool {
+	for {
+
+		if !b.firstCalled {
+			if !b.iter.First() {
+				return false
+			}
+			b.firstCalled = true
+		} else {
+			if !b.iter.Next() {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func (b *dirtyBlocksIter) Entry() BlockEntry {
+	return b.iter.Item()
+}
+
+func (b *dirtyBlocksIter) Close() error {
+	b.iter.Release()
+	return nil
+}

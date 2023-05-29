@@ -593,11 +593,18 @@ func (tbl *txnTable) rangesOnePart(
 		//	deletes[id] = append(deletes[id], int64(offset))
 		//}
 		//iter.Close()
+
 		//collect PartitionState.dirtyBlks into modifies.
-		state.GetDirtyBlks().Scan(func(entry logtailreplay.BlockEntry) bool {
+		//state.GetDirtyBlks().Scan(func(entry logtailreplay.BlockEntry) bool {
+		//	deletes[entry.BlockID] = []int64{}
+		//	return true
+		//})
+		iter := state.NewDirtyBlocksIter()
+		for iter.Next() {
+			entry := iter.Entry()
 			deletes[entry.BlockID] = []int64{}
-			return true
-		})
+		}
+		iter.Close()
 	}
 
 	//deletes on S3 written by txn maybe comes from PartitionState.rows or PartitionState.blocks,
