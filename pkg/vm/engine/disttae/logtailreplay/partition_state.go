@@ -49,9 +49,7 @@ type PartitionState struct {
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
 	dirtyBlocks *btree.BTreeG[BlockEntry]
-	dirtyRows   *btree.BTreeG[RowEntry]
 	checkpoints []string
-
 	// noData indicates whether to retain data batch
 	// for primary key dedup, reading data is not required
 	noData bool
@@ -140,7 +138,6 @@ func NewPartitionState(noData bool) *PartitionState {
 		blocks:       btree.NewBTreeGOptions((BlockEntry).Less, opts),
 		primaryIndex: btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 		dirtyBlocks:  btree.NewBTreeGOptions((BlockEntry).Less, opts),
-		dirtyRows:    btree.NewBTreeGOptions((RowEntry).Less, opts),
 	}
 }
 
@@ -151,7 +148,6 @@ func (p *PartitionState) Copy() *PartitionState {
 		primaryIndex: p.primaryIndex.Copy(),
 		noData:       p.noData,
 		dirtyBlocks:  p.dirtyBlocks.Copy(),
-		dirtyRows:    p.dirtyRows.Copy(),
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -325,24 +321,7 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 				entry.Batch = batch
 				entry.Offset = int64(i)
 			}
-
 			p.rows.Set(entry)
-
-			//handle memory deletes for non-appendable block.
-			//bPivot := BlockEntry{
-			//	BlockInfo: catalog.BlockInfo{
-			//		BlockID: blockID,
-			//	},
-			//}
-			//be, ok := p.blocks.Get(bPivot)
-			//if ok && !be.EntryState {
-			//	p.dirtyRows.Set(RowEntry{
-			//		BlockID: blockID,
-			//		RowID:   rowID,
-			//		Time:    timeVector[i],
-			//		Deleted: true,
-			//	})
-			//}
 
 			//handle memory deletes for non-appendable block.
 			bPivot := BlockEntry{
@@ -425,12 +404,6 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					}
 					// delete row entry
 					p.rows.Delete(entry)
-
-					// detete dirty rows for nblk
-					//if !entryStateVector[i] {
-					//	p.dirtyRows.Delete(entry)
-					//}
-
 					numDeleted++
 					// delete primary index entry
 					if len(entry.PrimaryIndexBytes) > 0 {
