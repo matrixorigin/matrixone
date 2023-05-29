@@ -81,9 +81,12 @@ func (r *Rank) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int6
 }
 
 func (r *Rank) MarshalBinary() ([]byte, error) {
-	return nil, nil
+	return types.EncodeSlice(r.Ps), nil
 }
 
 func (r *Rank) UnmarshalBinary(data []byte) error {
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	r.Ps = types.DecodeSlice[[]int64](copyData)
 	return nil
 }

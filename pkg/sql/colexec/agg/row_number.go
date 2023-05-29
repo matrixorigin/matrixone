@@ -63,9 +63,12 @@ func (r *RowNumber) BatchFill(rs, vs any, start, count int64, vps []uint64, zs [
 }
 
 func (r *RowNumber) MarshalBinary() ([]byte, error) {
-	return nil, nil
+	return types.EncodeSlice(r.Ps), nil
 }
 
 func (r *RowNumber) UnmarshalBinary(data []byte) error {
+	copyData := make([]byte, len(data))
+	copy(copyData, data)
+	r.Ps = types.DecodeSlice[[]int64](copyData)
 	return nil
 }
