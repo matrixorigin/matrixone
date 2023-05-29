@@ -86,7 +86,7 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 		sw.dumpBufferToCSV()
 	}
 	_, err = sw.csvWriter.FlushAndClose()
-	logutil.Debug("sqlWriter flushBuffer finished", zap.Int("cnt", cnt), zap.Error(err), zap.Duration("time", time.Since(now))
+	logutil.Debug("sqlWriter flushBuffer finished", zap.Int("cnt", cnt), zap.Error(err), zap.Duration("time", time.Since(now)))
 	return cnt, err
 }
 
