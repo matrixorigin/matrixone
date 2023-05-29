@@ -329,22 +329,6 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 			p.rows.Set(entry)
 
 			//handle memory deletes for non-appendable block.
-			bPivot := BlockEntry{
-				BlockInfo: catalog.BlockInfo{
-					BlockID: blockID,
-				},
-			}
-			be, ok := p.blocks.Get(bPivot)
-			if ok && !be.EntryState {
-				p.dirtyRows.Set(RowEntry{
-					BlockID: blockID,
-					RowID:   rowID,
-					Time:    timeVector[i],
-					Deleted: true,
-				})
-			}
-
-			//handle memory deletes for non-appendable block.
 			//bPivot := BlockEntry{
 			//	BlockInfo: catalog.BlockInfo{
 			//		BlockID: blockID,
@@ -352,8 +336,24 @@ func (p *PartitionState) HandleRowsDelete(ctx context.Context, input *api.Batch)
 			//}
 			//be, ok := p.blocks.Get(bPivot)
 			//if ok && !be.EntryState {
-			//	p.dirtyBlocks.Set(be)
+			//	p.dirtyRows.Set(RowEntry{
+			//		BlockID: blockID,
+			//		RowID:   rowID,
+			//		Time:    timeVector[i],
+			//		Deleted: true,
+			//	})
 			//}
+
+			//handle memory deletes for non-appendable block.
+			bPivot := BlockEntry{
+				BlockInfo: catalog.BlockInfo{
+					BlockID: blockID,
+				},
+			}
+			be, ok := p.blocks.Get(bPivot)
+			if ok && !be.EntryState {
+				p.dirtyBlocks.Set(be)
+			}
 		})
 	}
 
@@ -427,9 +427,9 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 					p.rows.Delete(entry)
 
 					// detete dirty rows for nblk
-					if !entryStateVector[i] {
-						p.dirtyRows.Delete(entry)
-					}
+					//if !entryStateVector[i] {
+					//	p.dirtyRows.Delete(entry)
+					//}
 
 					numDeleted++
 					// delete primary index entry
@@ -442,9 +442,9 @@ func (p *PartitionState) HandleMetadataInsert(ctx context.Context, input *api.Ba
 				}
 				iter.Release()
 				//delete dirty non-appendable block
-				//if !entryStateVector[i] {
-				//	p.dirtyBlocks.Delete(blockEntry)
-				//}
+				if !entryStateVector[i] {
+					p.dirtyBlocks.Delete(blockEntry)
+				}
 			}
 		})
 	}

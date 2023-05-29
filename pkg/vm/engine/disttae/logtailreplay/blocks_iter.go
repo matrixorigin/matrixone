@@ -81,9 +81,9 @@ type dirtyBlocksIter struct {
 	firstCalled bool
 }
 
-func (p *PartitionState) NewDirtyBlocksIter() *blocksIter {
+func (p *PartitionState) NewDirtyBlocksIter() *dirtyBlocksIter {
 	iter := p.dirtyBlocks.Copy().Iter()
-	ret := &blocksIter{
+	ret := &dirtyBlocksIter{
 		iter: iter,
 	}
 	return ret

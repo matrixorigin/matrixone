@@ -202,18 +202,18 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 				return nil, err
 			}
 		} else {
-			//state, err := r.table.getPartitionState(ctx)
-			//if err != nil {
-			//	return nil, err
-			//}
-			//ts := types.TimestampToTS(r.ts)
-			//iter := state.NewRowsIter(ts, &r.blks[0].meta.BlockID, true)
-			//for iter.Next() {
-			//	entry := iter.Entry()
-			//	_, offset := entry.RowID.Decode()
-			//	r.blks[0].deletes = append(r.blks[0].deletes, int64(offset))
-			//}
-			//iter.Close()
+			state, err := r.table.getPartitionState(ctx)
+			if err != nil {
+				return nil, err
+			}
+			ts := types.TimestampToTS(r.ts)
+			iter := state.NewRowsIter(ts, &r.blks[0].meta.BlockID, true)
+			for iter.Next() {
+				entry := iter.Entry()
+				_, offset := entry.RowID.Decode()
+				r.blks[0].deletes = append(r.blks[0].deletes, int64(offset))
+			}
+			iter.Close()
 		}
 
 	}
