@@ -133,9 +133,9 @@ import (
     clusterByOption *tree.ClusterByOption
     partitionBy *tree.PartitionBy
     windowSpec *tree.WindowSpec
-    windowFrame *tree.WindowFrame
-    windowFrameBound tree.WindowFrameBound
-    windowFrameUnit tree.WindowFrameUnits
+    frameClause *tree.FrameClause
+    frameBound *tree.FrameBound
+    frameType tree.FrameType
     partition *tree.Partition
     partitions []*tree.Partition
     values tree.Values
@@ -384,7 +384,7 @@ import (
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
-%token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK
+%token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -552,7 +552,7 @@ import (
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
-%type <expr> literal
+%type <expr> literal num_literal
 %type <expr> predicate
 %type <expr> bit_expr interval_expr
 %type <expr> simple_expr else_opt
@@ -605,9 +605,9 @@ import (
 %type <clusterByOption> cluster_by_opt
 %type <partitionBy> partition_method sub_partition_method sub_partition_opt
 %type <windowSpec> window_spec_opt window_spec
-%type <windowFrame> window_frame window_frame_opt
-%type <windowFrameBound> window_frame_bound
-%type <windowFrameUnit> window_frame_unit
+%type <frameClause> window_frame_clause window_frame_clause_opt
+%type <frameBound> frame_bound frame_bound_start
+%type <frameType> frame_type
 %type <str> fields_or_columns
 %type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt
 %type <boolVal> linear_opt
@@ -6915,6 +6915,14 @@ function_call_window:
             WindowSpec: $4,
         }
     }
+|	ROW_NUMBER '(' ')' window_spec
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            WindowSpec: $4,
+        }
+    }
 
 else_opt:
     {
@@ -7120,68 +7128,77 @@ integer_opt:
 |    INTEGER
 |    INT
 
-window_frame_bound:
-  CURRENT ROW
+frame_bound:
+	frame_bound_start
+|   UNBOUNDED FOLLOWING
     {
-        $$ = &tree.WindowFrameBoundCurrentRow{}
+        $$ = &tree.FrameBound{Type: tree.Following, UnBounded: true}
     }
-| UNBOUNDED PRECEDING
+|   num_literal FOLLOWING
     {
-        $$ = &tree.WindowFrameBoundPreceding{}
+        $$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
     }
-| expression PRECEDING
-    {
-        $$ = &tree.WindowFrameBoundPreceding{
-            Expr: $1,
-        }
-    }
-| UNBOUNDED FOLLOWING
-    {
-        $$ = &tree.WindowFrameBoundFollowing{}
-    }
-| expression FOLLOWING
-    {
-        $$ = &tree.WindowFrameBoundFollowing{
-            Expr: $1,
-        }
-    }
+|	interval_expr FOLLOWING
+	{
+		$$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
+	}
 
-window_frame_unit:
+frame_bound_start:
+    CURRENT ROW
+    {
+        $$ = &tree.FrameBound{Type: tree.CurrentRow}
+    }
+|   UNBOUNDED PRECEDING
+    {
+        $$ = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+    }
+|   num_literal PRECEDING
+    {
+        $$ = &tree.FrameBound{Type: tree.Preceding, Expr: $1}
+    }
+|	interval_expr PRECEDING
+	{
+		$$ = &tree.FrameBound{Type: tree.Preceding, Expr: $1}
+	}
+
+frame_type:
     ROWS
     {
-        $$ = tree.WIN_FRAME_UNIT_ROWS
+        $$ = tree.Rows
     }
 |   RANGE
     {
-        $$ = tree.WIN_FRAME_UNIT_RANGE
+        $$ = tree.Range
     }
 |   GROUPS
     {
-        $$ = tree.WIN_FRAME_UNIT_GROUPS
+        $$ = tree.Groups
     }
 
-window_frame:
-    window_frame_unit window_frame_bound
+window_frame_clause:
+    frame_type frame_bound_start
     {
-        $$ = &tree.WindowFrame{
-            Unit: $1,
-            StartBound: $2,
+        $$ = &tree.FrameClause{
+            Type: $1,
+            Start: $2,
+            End: &tree.FrameBound{Type: tree.CurrentRow},
         }
     }
-|   window_frame_unit BETWEEN window_frame_bound AND window_frame_bound
+|   frame_type BETWEEN frame_bound AND frame_bound
     {
-        $$ = &tree.WindowFrame{
-            Unit: $1,
-            StartBound: $3,
-            EndBound: $5,
+        $$ = &tree.FrameClause{
+            Type: $1,
+            HasEnd: true,
+            Start: $3,
+            End: $5,
         }
     }
 
-window_frame_opt:
+window_frame_clause_opt:
     {
         $$ = nil
     }
-|   window_frame
+|   window_frame_clause
     {
         $$ = $1
     }
@@ -7218,12 +7235,28 @@ window_spec_opt:
 |	window_spec
 
 window_spec:
-    OVER '(' window_partition_by_opt order_by_opt window_frame_opt ')'
+    OVER '(' window_partition_by_opt order_by_opt window_frame_clause_opt ')'
     {
+    	hasFrame := true
+    	var f *tree.FrameClause
+    	if $5 != nil {
+    		f = $5
+    	} else {
+    		hasFrame = false
+    		f = &tree.FrameClause{Type: tree.Range}
+    		if $4 == nil {
+				f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+                f.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
+    		} else {
+    			f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+            	f.End = &tree.FrameBound{Type: tree.CurrentRow}
+    		}
+    	}
         $$ = &tree.WindowSpec{
             PartitionBy: $3,
             OrderBy: $4,
-            WindowFrame: $5,
+            Frame: f,
+            HasFrame: hasFrame,
         }
     }
 
@@ -8094,6 +8127,30 @@ keys:
 |   KEY
     {
         $$ = tree.NewAttributeKey()
+    }
+
+num_literal:
+    INTEGRAL
+    {
+        str := fmt.Sprintf("%v", $1)
+        switch v := $1.(type) {
+        case uint64:
+            $$ = tree.NewNumValWithType(constant.MakeUint64(v), str, false, tree.P_uint64)
+        case int64:
+            $$ = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
+        default:
+            yylex.Error("parse integral fail")
+            return 1
+        }
+    }
+|   FLOAT
+    {
+        fval := $1.(float64)
+        $$ = tree.NewNumValWithType(constant.MakeFloat64(fval), yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
+    }
+|   DECIMAL_VALUE
+    {
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_decimal)
     }
 
 literal:
