@@ -78,6 +78,23 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 				return err
 			}
 		}
+	case *plan.Expr_W:
+		err := builder.remapColRefForExpr(ne.W.WindowFunc, colMap)
+		if err != nil {
+			return err
+		}
+		for _, arg := range ne.W.PartitionBy {
+			err = builder.remapColRefForExpr(arg, colMap)
+			if err != nil {
+				return err
+			}
+		}
+		for _, order := range ne.W.OrderBy {
+			err = builder.remapColRefForExpr(order.Expr, colMap)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -587,6 +604,66 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				})
 			}
+		}
+
+	case plan.Node_WINDOW:
+		for _, expr := range node.WinSpecList {
+			increaseRefCnt(expr, colRefCnt)
+		}
+
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		if err != nil {
+			return nil, err
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		i := 0
+		for _, globalRef := range childRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+			i++
+		}
+
+		windowTag := node.BindingTags[0]
+
+		for idx, expr := range node.WinSpecList {
+			decreaseRefCnt(expr, colRefCnt)
+			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+
+			globalRef := [2]int32{windowTag, int32(idx)}
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: -1,
+						ColPos: int32(idx + i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
 		}
 
 	case plan.Node_SORT:
@@ -1515,6 +1592,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		ctx.groupTag = builder.genNewTag()
 		ctx.aggregateTag = builder.genNewTag()
 		ctx.projectTag = builder.genNewTag()
+		ctx.windowTag = builder.genNewTag()
 
 		// bind GROUP BY clause
 		if clause.GroupBy != nil {
@@ -1698,6 +1776,20 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		for name, id := range ctx.aggregateByAst {
 			builder.nameByColRef[[2]int32{ctx.aggregateTag, id}] = name
+		}
+	}
+
+	// append WINDOW node
+	if len(ctx.windows) > 0 {
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_WINDOW,
+			Children:    []int32{nodeID},
+			WinSpecList: ctx.windows,
+			BindingTags: []int32{ctx.windowTag},
+		}, ctx)
+
+		for name, id := range ctx.windowByAst {
+			builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
 		}
 	}
 

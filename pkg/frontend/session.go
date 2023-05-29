@@ -136,8 +136,8 @@ type Session struct {
 
 	mu sync.Mutex
 
-	flag         bool
-	lastInsertID uint64
+	isNotBackgroundSession bool
+	lastInsertID           uint64
 
 	sqlSourceType []string
 
@@ -192,6 +192,9 @@ type Session struct {
 	// least the commit of the last transaction log of the previous transaction arrives.
 	lastCommitTS timestamp.Timestamp
 	upstream     *Session
+
+	// requestLabel is the CN label info requested from client.
+	requestLabel map[string]string
 }
 
 func (ses *Session) setRoutineManager(rm *RoutineManager) {
@@ -302,7 +305,7 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, flag bool, aicm *defines.AutoIncrCacheManager) *Session {
+func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, isNotBackgroundSession bool, aicm *defines.AutoIncrCacheManager) *Session {
 	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient)
 	ses := &Session{
 		protocol: proto,
@@ -335,7 +338,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		blockIdx:  0,
 		planCache: newPlanCache(100),
 	}
-	if flag {
+	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
 		ses.userDefinedVars = make(map[string]interface{})
 		ses.prepareStmts = make(map[string]*PrepareStmt)
@@ -344,8 +347,9 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		ses.seqCurValues = make(map[uint64]string)
 		ses.seqLastValue = ""
 	}
+
+	ses.isNotBackgroundSession = isNotBackgroundSession
 	ses.sqlHelper = &SqlHelper{ses: ses}
-	ses.flag = flag
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
@@ -374,7 +378,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 }
 
 func (ses *Session) Close() {
-	if ses.flag {
+	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
 		mpool.DeleteMPool(mp)
 		ses.SetMemPool(nil)
@@ -1716,8 +1720,7 @@ func (sh *SqlHelper) GetCompilerContext() any {
 }
 
 // Made for sequence func. nextval, setval.
-func (sh *SqlHelper) ExecSql(sql string) ([]interface{}, error) {
-	var err error
+func (sh *SqlHelper) ExecSql(sql string) (ret []interface{}, err error) {
 	var erArray []ExecResult
 
 	ctx := sh.ses.GetRequestContext()
@@ -1725,25 +1728,22 @@ func (sh *SqlHelper) ExecSql(sql string) ([]interface{}, error) {
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
 	if err != nil {
-		goto handleFailed
+		return nil, err
 	}
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		goto handleFailed
+		return nil, err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
-	}
-
-	// Success.
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
+		return nil, err
 	}
 
 	if len(erArray) == 0 {
@@ -1751,13 +1751,6 @@ func (sh *SqlHelper) ExecSql(sql string) ([]interface{}, error) {
 	}
 
 	return erArray[0].(*MysqlResultSet).Data[0], nil
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return nil, rbErr
-	}
-	return nil, err
 }
 
 func (ses *Session) updateLastCommitTS(lastCommitTS timestamp.Timestamp) {
@@ -1780,24 +1773,7 @@ func (ses *Session) getLastCommitTS() timestamp.Timestamp {
 	return minTS
 }
 
-// getCNLabels parse the session variable and returns map[string]string.
+// getCNLabels returns requested CN labels.
 func (ses *Session) getCNLabels() map[string]string {
-	label, ok := ses.sysVars["cn_label"]
-	if !ok {
-		return nil
-	}
-	labelStr, ok := label.(string)
-	if !ok {
-		return nil
-	}
-	labels := strings.Split(labelStr, ",")
-	res := make(map[string]string, len(labels))
-	for _, kvStr := range labels {
-		kvs := strings.Split(kvStr, "=")
-		if len(kvs) != 2 {
-			continue
-		}
-		res[kvs[0]] = kvs[1]
-	}
-	return res
+	return ses.requestLabel
 }

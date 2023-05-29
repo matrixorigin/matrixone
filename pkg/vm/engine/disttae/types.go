@@ -50,6 +50,7 @@ const (
 	DELETE
 	COMPACTION_CN
 	UPDATE
+	ALTER
 )
 
 const (

@@ -207,32 +207,25 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 
 	ch := make(chan error)
 	go func() {
+		var er error
 		for _, ti := range tableIds {
-			er := client.TryToSubscribeTable(ctx, databaseId, ti)
+			er = client.TryToSubscribeTable(ctx, databaseId, ti)
 			if er != nil {
-				ch <- er
-				return
+				break
 			}
 		}
-		ch <- nil
+		ch <- er
 	}()
 
-	select {
-	case <-ctx.Done():
-		// close the channel to avoid go-routine leak.
-		close(ch)
+	err = <-ch
+	close(ch)
 
+	if err != nil {
 		logutil.Errorf("connect to dn log tail server failed")
-		return ctx.Err()
-	case err = <-ch:
-		close(ch)
-
-		if err != nil {
-			return err
-		}
-		client.receivedLogTailTime.ready.Store(true)
-		return nil
+		return err
 	}
+	client.receivedLogTailTime.ready.Store(true)
+	return nil
 }
 
 func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
@@ -556,8 +549,12 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	} else {
 		<-s.requestLock
 	}
+
 	s.doSubscribe = clientIsPreparing
 	s.doUnSubscribe = clientIsPreparing
+	defer func() {
+		s.requestLock <- true
+	}()
 
 	// close the old stream
 	oldClient := s.logTailClient
@@ -578,7 +575,6 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	}
 	s.doSubscribe = s.subscribeTable
 	s.doUnSubscribe = s.unSubscribeTable
-	s.requestLock <- true
 
 	return nil
 }
