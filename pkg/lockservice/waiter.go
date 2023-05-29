@@ -195,9 +195,9 @@ func (w *waiter) mustSendNotification(
 	} else {
 		value.ts = w.latestCommitTS
 	}
+	w.event.notified()
 	select {
 	case w.c <- value:
-		w.event.notified()
 		return
 	default:
 	}
