@@ -171,9 +171,9 @@ func (client *pushClient) subscribeTable(
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case subscriber := <-client.subscriber.lockSubscriber:
-		err := subscriber(ctx, tblId)
-		client.subscriber.lockSubscriber <- subscriber
+	case b := <-client.subscriber.requestLock:
+		err := client.subscriber.doSubscribe(ctx, tblId)
+		client.subscriber.requestLock <- b
 		if err != nil {
 			return err
 		}
@@ -187,9 +187,9 @@ func (client *pushClient) unsubscribeTable(
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case unsubscriber := <-client.subscriber.lockUnSubscriber:
-		err := unsubscriber(ctx, tblId)
-		client.subscriber.lockUnSubscriber <- unsubscriber
+	case b := <-client.subscriber.requestLock:
+		err := client.subscriber.doUnSubscribe(ctx, tblId)
+		client.subscriber.requestLock <- b
 		if err != nil {
 			return err
 		}
@@ -219,9 +219,14 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 
 	select {
 	case <-ctx.Done():
+		// close the channel to avoid go-routine leak.
+		close(ch)
+
 		logutil.Errorf("connect to dn log tail server failed")
 		return ctx.Err()
 	case err = <-ch:
+		close(ch)
+
 		if err != nil {
 			return err
 		}
@@ -232,6 +237,12 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 
 func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
 	reconnectErr := make(chan error)
+
+	// init isLastReconnectRoutineClean as true.
+	// and once it was false, we should clean reconnectErr before we do reconnect action.
+	// it means the last reconnection failed but not because we get an error from this channel.
+	// if not clean, it will cause some go-routine hang up.
+	isLastReconnectRoutineClean := true
 
 	go func() {
 		for {
@@ -263,6 +274,8 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 
 				case err := <-reconnectErr:
 					cancel()
+					isLastReconnectRoutineClean = true
+
 					if err != nil {
 						logutil.Errorf("reconnect to dn log tail service failed, reason: %s", err)
 						goto cleanAndReconnect
@@ -314,6 +327,10 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			for _, r := range receiver {
 				r.close()
 			}
+			if !isLastReconnectRoutineClean {
+				<-reconnectErr
+			}
+
 			logutil.Infof("start to reconnect to dn log tail service")
 			for {
 				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
@@ -330,6 +347,8 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					err := client.firstTimeConnectToLogTailServer(ctx)
 					reconnectErr <- err
 				}()
+
+				isLastReconnectRoutineClean = false
 				break
 			}
 		}
@@ -484,10 +503,9 @@ type logTailSubscriber struct {
 	dnNodeID      int
 	logTailClient *service.LogtailClient
 
-	// return a table subscribe method.
-	lockSubscriber chan func(context.Context, api.TableID) error
-	// return a table unsubscribe method.
-	lockUnSubscriber chan func(ctx context.Context, id api.TableID) error
+	requestLock   chan bool
+	doSubscribe   func(context.Context, api.TableID) error
+	doUnSubscribe func(context.Context, api.TableID) error
 }
 
 func clientIsPreparing(context.Context, api.TableID) error {
@@ -530,28 +548,22 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	// XXX we assume that we have only 1 dn now.
 	s.dnNodeID = 0
 
+	// if channel is not nil here, it's most likely called by reconnect process.
+	// we need to take out the content of channel to ensure that
+	// the subscriber can't be used during the init process.
+	if s.requestLock == nil {
+		s.requestLock = make(chan bool, 1)
+	} else {
+		<-s.requestLock
+	}
+	s.doSubscribe = clientIsPreparing
+	s.doUnSubscribe = clientIsPreparing
+
 	// close the old stream
 	oldClient := s.logTailClient
 	if oldClient != nil {
 		_ = oldClient.Close()
 	}
-
-	// if channel is not nil here, it's most likely called by reconnect process.
-	// we need to take out the content of channel to ensure that
-	// the subscriber can't be used during the init process.
-	if s.lockSubscriber == nil {
-		s.lockSubscriber = make(chan func(context.Context, api.TableID) error, 1)
-	} else {
-		<-s.lockSubscriber
-	}
-	s.lockSubscriber <- clientIsPreparing
-
-	if s.lockUnSubscriber == nil {
-		s.lockUnSubscriber = make(chan func(context.Context, api.TableID) error, 1)
-	} else {
-		<-s.lockUnSubscriber
-	}
-	s.lockUnSubscriber <- clientIsPreparing
 
 	stream, err := newRpcStreamToDnLogTailService(serviceAddr)
 	if err != nil {
@@ -564,11 +576,10 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	if err != nil {
 		return err
 	}
-	<-s.lockSubscriber
-	<-s.lockUnSubscriber
+	s.doSubscribe = s.subscribeTable
+	s.doUnSubscribe = s.unSubscribeTable
+	s.requestLock <- true
 
-	s.lockSubscriber <- s.subscribeTable
-	s.lockUnSubscriber <- s.unSubscribeTable
 	return nil
 }
 
@@ -836,8 +847,7 @@ func updatePartitionOfPush(
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
-	partitions := e.getPartitions(dbId, tblId)
-	partition := partitions[dnId]
+	partition := e.getPartition(dbId, tblId)
 
 	select {
 	case <-partition.Lock():
