@@ -36,6 +36,7 @@ type service struct {
 	activeTxnHolder  activeTxnHolder
 	fsp              *fixedSlicePool
 	deadlockDetector *detector
+	events           *waiterEvents
 	clock            clock.Clock
 	stopper          *stopper.Stopper
 	stopOnce         sync.Once
@@ -51,8 +52,9 @@ type service struct {
 func NewLockService(cfg Config) LockService {
 	cfg.Validate()
 	s := &service{
-		cfg: cfg,
-		fsp: newFixedSlicePool(int(cfg.MaxFixedSliceSize)),
+		cfg:    cfg,
+		fsp:    newFixedSlicePool(int(cfg.MaxFixedSliceSize)),
+		events: newWaiterEvents(eventsWorkers),
 		stopper: stopper.NewStopper("lock-service",
 			stopper.WithLogger(getLogger().RawLogger())),
 	}
@@ -71,7 +73,7 @@ func (s *service) Lock(
 	tableID uint64,
 	rows [][]byte,
 	txnID []byte,
-	options LockOptions) (pb.Result, error) {
+	options pb.LockOptions) (pb.Result, error) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
 	defer span.End()
@@ -81,7 +83,13 @@ func (s *service) Lock(
 	if err != nil {
 		return pb.Result{}, err
 	}
-	return l.lock(ctx, txn, rows, options)
+
+	var result pb.Result
+	l.lock(ctx, txn, rows, LockOptions{LockOptions: options}, func(r pb.Result, e error) {
+		result = r
+		err = e
+	})
+	return result, err
 }
 
 func (s *service) Unlock(
@@ -131,6 +139,7 @@ func (s *service) Close() error {
 		if err = s.remote.server.Close(); err != nil {
 			return
 		}
+		s.events.close()
 	})
 	return err
 }
@@ -230,6 +239,7 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			bind,
 			s.fsp,
 			s.deadlockDetector,
+			s.events,
 			s.clock)
 	} else {
 		return newRemoteLockTable(

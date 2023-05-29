@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,7 +45,7 @@ func TestCloseLocalLockTable(t *testing.T) {
 				1,
 				[]byte{1},
 				[][]byte{{1}},
-				lock.Granularity_Row)
+				pb.Granularity_Row)
 			v, err := l.getLockTable(1)
 			require.NoError(t, err)
 			v.close()
@@ -74,7 +74,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 				1,
 				[]byte{1},
 				[][]byte{{1}},
-				lock.Granularity_Row)
+				pb.Granularity_Row)
 
 			var wg sync.WaitGroup
 			wg.Add(2)
@@ -86,7 +86,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 					1,
 					[][]byte{{1}},
 					[]byte{2},
-					LockOptions{Granularity: lock.Granularity_Row},
+					getRowOptions(),
 				)
 				require.Equal(t, ErrLockTableNotFound, err)
 			}()
@@ -99,7 +99,7 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 					1,
 					[][]byte{{1}},
 					[]byte{3},
-					LockOptions{Granularity: lock.Granularity_Row},
+					getRowOptions(),
 				)
 				require.Equal(t, ErrLockTableNotFound, err)
 			}()
@@ -350,9 +350,9 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 				lt := v.(*localLockTable)
 
 				for _, rows := range c.existsLock {
-					opts := LockOptions{}
+					opts := pb.LockOptions{}
 					if len(rows) > 1 {
-						opts.Granularity = lock.Granularity_Range
+						opts.Granularity = pb.Granularity_Range
 					}
 					_, err := l.Lock(ctx, table, rows, []byte(c.txnID), opts)
 					require.NoError(t, err)
@@ -377,8 +377,8 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					lt.mu.Unlock()
 				}
 
-				opts := LockOptions{}
-				opts.Granularity = lock.Granularity_Range
+				opts := pb.LockOptions{}
+				opts.Granularity = pb.Granularity_Range
 				_, err = l.Lock(ctx, table, c.newLock, []byte(c.txnID), opts)
 				require.NoError(t, err)
 
@@ -441,18 +441,18 @@ func TestMergeRangeWithConflict(t *testing.T) {
 				time.Second*10)
 			defer cancel()
 
-			_, err = l.Lock(ctx, 1, [][]byte{{1}}, []byte("txn1"), lock.LockOptions{})
+			_, err = l.Lock(ctx, 1, [][]byte{{1}}, []byte("txn1"), pb.LockOptions{})
 			require.NoError(t, err)
-			_, err = l.Lock(ctx, 1, [][]byte{{2}}, []byte("txn1"), lock.LockOptions{})
+			_, err = l.Lock(ctx, 1, [][]byte{{2}}, []byte("txn1"), pb.LockOptions{})
 			require.NoError(t, err)
-			_, err = l.Lock(ctx, 1, [][]byte{{3}}, []byte("txn2"), lock.LockOptions{})
+			_, err = l.Lock(ctx, 1, [][]byte{{3}}, []byte("txn2"), pb.LockOptions{})
 			require.NoError(t, err)
 			var wg sync.WaitGroup
 			wg.Add(3)
 
 			go func() {
 				defer wg.Done()
-				_, err = l.Lock(ctx, 1, [][]byte{{1}}, []byte("txn3"), lock.LockOptions{Granularity: lock.Granularity_Row})
+				_, err = l.Lock(ctx, 1, [][]byte{{1}}, []byte("txn3"), getRowOptions())
 				require.NoError(t, err)
 
 				defer func() {
@@ -463,7 +463,7 @@ func TestMergeRangeWithConflict(t *testing.T) {
 
 			go func() {
 				defer wg.Done()
-				_, err = l.Lock(ctx, 1, [][]byte{{2}}, []byte("txn4"), lock.LockOptions{Granularity: lock.Granularity_Row})
+				_, err = l.Lock(ctx, 1, [][]byte{{2}}, []byte("txn4"), getRowOptions())
 				require.NoError(t, err)
 
 				defer func() {
@@ -474,7 +474,7 @@ func TestMergeRangeWithConflict(t *testing.T) {
 
 			go func() {
 				defer wg.Done()
-				_, err = l.Lock(ctx, 1, [][]byte{{1}, {3}}, []byte("txn1"), lock.LockOptions{Granularity: lock.Granularity_Range})
+				_, err = l.Lock(ctx, 1, [][]byte{{1}, {3}}, []byte("txn1"), getRangeOptions())
 				require.NoError(t, err)
 
 				defer func() {
@@ -518,4 +518,12 @@ func TestMergeRangeWithConflict(t *testing.T) {
 			require.NoError(t, l.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
 			wg.Wait()
 		})
+}
+
+func getRowOptions() pb.LockOptions {
+	return pb.LockOptions{Granularity: pb.Granularity_Row}
+}
+
+func getRangeOptions() pb.LockOptions {
+	return pb.LockOptions{Granularity: pb.Granularity_Range}
 }
