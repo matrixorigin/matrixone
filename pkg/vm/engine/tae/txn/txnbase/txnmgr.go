@@ -16,8 +16,6 @@ package txnbase
 
 import (
 	"context"
-	"fmt"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -114,6 +112,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	prepareWALQueue := sm.NewSafeQueue(20000, 1000, mgr.onPrepareWAL)
 	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
+
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 	return mgr
 }
@@ -295,25 +294,11 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	mgr.CommitListener.OnBeginPrePrepare(op.Txn)
 	defer mgr.CommitListener.OnEndPrePrepare(op.Txn)
 	// If txn is trying committing, call txn.PrePrepare()
-	//now := time.Now()
+	now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare())
-	//common.DoIfDebugEnabled(func() {
-	//	logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
-	//})
-}
-
-func PrintMemUsage() {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	fmt.Printf("txnmgr.go Alloc = %v MiB", bToMb(m.Alloc))
-	fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
-	fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
-	fmt.Printf("\tNumGC = %v\n", m.NumGC)
-}
-
-func bToMb(b uint64) uint64 {
-	return b / 1024 / 1024
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
+	})
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
@@ -456,7 +441,6 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 // OPRollback:the rollback of 2PC or 1PC
 func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	now := time.Now()
-
 	for _, item := range items {
 		op := item.(*OpTxn)
 

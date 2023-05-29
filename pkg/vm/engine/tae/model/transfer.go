@@ -74,12 +74,10 @@ func (table *TransferTable[T]) executeTTL(items []*common.PinnedItem[T]) {
 		return
 	}
 	table.Lock()
-
 	for _, pinned := range items {
 		delete(table.pages, *pinned.Item().ID())
 	}
 	table.Unlock()
-
 	for _, pinned := range items {
 		pinned.Close()
 	}

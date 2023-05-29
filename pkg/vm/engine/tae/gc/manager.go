@@ -16,9 +16,7 @@ package gc
 
 import (
 	"context"
-	"fmt"
 	"math"
-	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -75,19 +73,7 @@ func (mgr *Manager) addJob(
 	mgr.nameIdx[name] = cj
 	mgr.jobs = append(mgr.jobs, cj)
 }
-func PrintMemUsage() {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	fmt.Printf("manager.go Alloc = %v MiB", bToMb(m.Alloc))
-	fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
-	fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
-	fmt.Printf("\tNumGC = %v\n", m.NumGC)
-}
 
-func bToMb(b uint64) uint64 {
-	return b / 1024 / 1024
-}
 func (mgr *Manager) process(jobs ...any) {
 	jobSet := make(map[string]bool)
 	var dedupJobs []*cronJob
@@ -104,11 +90,11 @@ func (mgr *Manager) process(jobs ...any) {
 		return
 	}
 	for _, cj := range dedupJobs {
+		logutil.Debugf("processing %s", cj.String())
 		if err := cj.job(context.Background()); err != nil {
-			logutil.Errorf("process gc job 100 %s: %v", cj.name, err)
+			logutil.Errorf("process gc job %s: %v", cj.name, err)
 		}
 	}
-
 }
 
 // main run loop
