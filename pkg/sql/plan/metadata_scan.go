@@ -28,67 +28,53 @@ var (
 )
 
 func init() {
+	// MAKE SURE THE TYPE ENUM BEGIN FROM 0 OR YOU WILL GET WRONG
+	// WHEN YOU FILL THE SLICE
 	mlen := len(plan.MetadataScanInfo_MetadataScanInfoType_name)
 	MetadataScanColTypes = make([]types.Type, mlen)
 	MetadataScanColDefs = make([]*plan.ColDef, mlen)
 	for i := range plan.MetadataScanInfo_MetadataScanInfoType_name {
-		colname := plan.MetadataScanInfo_MetadataScanInfoType_name[i]
 		var tp types.Type
-		switch colname {
-		case "COL_NAME":
+		switch plan.MetadataScanInfo_MetadataScanInfoType(i) {
+		case plan.MetadataScanInfo_COL_NAME:
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
-
-		case "BLOCK_ID":
+		case plan.MetadataScanInfo_BLOCK_ID:
 			tp = types.New(types.T_Blockid, types.MaxVarcharLen, 0)
-
-		case "ENTRY_STATE":
+		case plan.MetadataScanInfo_ENTRY_STATE:
 			tp = types.New(types.T_bool, 0, 0)
-
-		case "SORTED":
+		case plan.MetadataScanInfo_SORTED:
 			tp = types.New(types.T_bool, 0, 0)
-
-		case "IS_HIDDEN":
+		case plan.MetadataScanInfo_IS_HIDDEN:
 			tp = types.New(types.T_bool, 0, 0)
-
-		case "META_LOC":
+		case plan.MetadataScanInfo_META_LOC:
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
-
-		case "DELTA_LOC":
+		case plan.MetadataScanInfo_DELTA_LOC:
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
-
-		case "COMMIT_TS":
+		case plan.MetadataScanInfo_COMMIT_TS:
 			tp = types.New(types.T_TS, types.MaxVarcharLen, 0)
-
-		case "CREATE_TS":
+		case plan.MetadataScanInfo_CREATE_TS:
 			tp = types.New(types.T_TS, types.MaxVarcharLen, 0)
-
-		case "DELETE_TS":
+		case plan.MetadataScanInfo_DELETE_TS:
 			tp = types.New(types.T_TS, types.MaxVarcharLen, 0)
-
-		case "SEG_ID":
+		case plan.MetadataScanInfo_SEG_ID:
 			tp = types.New(types.T_uuid, types.MaxVarcharLen, 0)
-
-		case "ROWS_CNT":
+		case plan.MetadataScanInfo_ROWS_CNT:
 			tp = types.New(types.T_int64, 0, 0)
-
-		case "NULL_CNT":
+		case plan.MetadataScanInfo_NULL_CNT:
 			tp = types.New(types.T_int64, 0, 0)
-
-		case "COMPRESS_SIZE":
+		case plan.MetadataScanInfo_COMPRESS_SIZE:
 			tp = types.New(types.T_int64, 0, 0)
-
-		case "ORIGIN_SIZE":
+		case plan.MetadataScanInfo_ORIGIN_SIZE:
 			tp = types.New(types.T_int64, 0, 0)
-
-		case "MIN":
+		case plan.MetadataScanInfo_MIN: // TODO: find a way to show this info
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
-
-		case "MAX":
+		case plan.MetadataScanInfo_MAX: // TODO: find a way to show this info
 			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
 		default:
 			panic("unknow types when gen metadata scan info")
 		}
 
+		colname := plan.MetadataScanInfo_MetadataScanInfoType_name[i]
 		coldef := &plan.ColDef{
 			Name: strings.ToLower(colname),
 			Typ: &plan.Type{
