@@ -85,7 +85,7 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 		return fetchDecimal128Rows
 	case types.T_uuid:
 		return fetchUUIDRows
-	case types.T_char, types.T_varchar:
+	case types.T_char, types.T_varchar, types.T_binary:
 		return fetchVarlenaRows
 	default:
 		panic(fmt.Sprintf("not support for %s", t.String()))

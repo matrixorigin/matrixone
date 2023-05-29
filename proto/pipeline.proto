@@ -51,6 +51,7 @@ message Dispatch {
   int32 ShuffleColIdx=4;
   repeated int32 ShuffleRegIdxLocal=5;
   repeated int32 ShuffleRegIdxRemote=6;
+  bool  is_sink = 7;
 }
 
 message MultiArguemnt{
@@ -78,16 +79,15 @@ message Group {
 }
 
 message Insert{
-  uint64 affected   = 1;
-  bool IsRemote     = 2;
-
-  // InsertCtx
-  plan.ObjectRef ref              = 3;
-  plan.TableDef table_def         = 4;
-  map<string, int32> parent_idx   = 5;
-  plan.ClusterTable ClusterTable  = 6;
-	repeated int32 idx_idx 				  = 7;
-
+  uint64 affected              = 1;
+  bool ToWriteS3 = 2;
+  bool add_affected_rows       = 3;
+  plan.ObjectRef ref           = 4;
+  repeated string attrs        = 5;
+  // Align array index with the partition number
+  repeated uint64 partition_table_ids = 6;
+  int32 partition_idx = 7;
+  bool is_end         = 8;
 }
 
 message Array{
@@ -105,30 +105,47 @@ message Deletion{
   uint32 IBucket =4;
   uint32 NBucket = 5;
   // DeleteCtx
-  bool CanTruncate = 6;
-  repeated plan.ObjectRef DelRef = 7;
-  repeated int32 IdxIdx = 8;
-  repeated int32 OnRestrictIdx = 9;
-  repeated int32 OnCascadeIdx = 10;
-  repeated plan.ObjectRef OnSetRef = 11;
-  repeated plan.TableDef OnSetTableDef = 12;
-  repeated Map OnSetUpdateCol = 13;
-  repeated Array OnSetIdx = 14;
-  map<string,int32> SegmentMap = 15;
+
+  int32 row_id_idx                    = 6;
+  repeated uint64 partition_table_ids = 7;
+  int32 partition_index_in_batch      = 8;
+  plan.ObjectRef ref                  = 9;
+  bool add_affected_rows              = 10;
+  map<string,int32> SegmentMap        = 11;
+  bool can_truncate                   = 12;
+  bool is_end                         = 13;
 }
 
 message PreInsert {
-  string             schema_name = 1;
-  plan.TableDef      table_def = 2;
-  map<string, int32> parent_idx_pre_insert   = 3;
+  string schema_name      = 1;
+  plan.TableDef table_def = 2;
+  repeated int32 idx      = 3;
+  repeated string attrs   = 4;
+  bool has_auto_col       = 5;
+  bool is_update          = 6;
+}
+
+message LockTarget {
+  uint64 table_id           	  = 1;
+  int32 primary_col_idx_in_bat  = 2;
+  plan.Type primary_col_typ     = 3;
+  int32 refresh_ts_idx_in_bat   = 4;
+  int32 filter_col_idx_in_bat   = 5;
+  bool lock_table               = 6;
+}
+
+message LockOp {
+  repeated LockTarget targets = 1;
+}
+
+message PreInsertUnique {
+  plan.PreInsertUkCtx pre_insert_uk_ctx = 1;
 }
 
 message OnDuplicateKey{
-  uint64 affected   = 1;
+  plan.TableDef table_def                   = 1;
   repeated int32 on_duplicate_idx           = 2;
   map<string, plan.Expr> on_duplicate_expr  = 3;
-  plan.ObjectRef ref              = 4;
-  plan.TableDef table_def         = 5;
 }
 
 message Join {
@@ -302,9 +319,9 @@ message Instruction{
   HashBuild hash_build = 15;
   ExternalScan external_scan = 16;
   Insert insert = 17;
-  Deletion delete = 18;
-  OnDuplicateKey on_duplicate_key = 19;
-  PreInsert pre_insert               = 20;
+  OnDuplicateKey on_duplicate_key = 18;
+  PreInsert pre_insert               = 19;
+  PreInsertUnique pre_insert_unique  = 20;
   repeated plan.OrderBySpec order_by = 21;
   repeated plan.Expr    project_list = 22;
   plan.Expr    filter = 23;
@@ -319,6 +336,8 @@ message Instruction{
   RightSemiJoin right_semi_join = 29;
   RightAntiJoin right_anti_join = 30;
 
+  Deletion delete = 31;
+  LockOp lock_op = 32;
 }
 
 message AnalysisList {

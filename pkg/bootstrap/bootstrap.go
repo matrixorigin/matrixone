@@ -32,7 +32,7 @@ var (
 
 var (
 	bootstrappedCheckerDB = catalog.MOTaskDB
-	initSQLs              = []string{
+	step1InitSQLs         = []string{
 		fmt.Sprintf(`create table %s.%s(
 			id 			bigint unsigned not null,
 			table_id 	bigint unsigned not null,
@@ -49,10 +49,17 @@ var (
 			primary key(id, column_name)
 		);`, catalog.MO_CATALOG, catalog.MO_INDEXES),
 
-		fmt.Sprintf("create table `%s`.`%s`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);",
-			catalog.MO_CATALOG,
-			catalog.AutoIncrTableName),
+		fmt.Sprintf(`create table %s.%s (
+			table_id   bigint unsigned, 
+			col_name   varchar(770), 
+			col_index  int,
+			offset     bigint unsigned, 
+			step       bigint unsigned,  
+			primary key(table_id, col_name)
+		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable),
+	}
 
+	step2InitSQLs = []string{
 		fmt.Sprintf(`create database %s`,
 			catalog.MOTaskDB),
 
@@ -115,10 +122,28 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 	// current node get the bootstrap privilege
 	if ok {
 		opts := executor.Options{}
+		err := b.exec.ExecTxn(
+			ctx,
+			func(te executor.TxnExecutor) error {
+				for _, sql := range step1InitSQLs {
+					res, err := te.Exec(sql)
+					if err != nil {
+						return err
+					}
+					res.Close()
+				}
+				return nil
+			},
+			opts)
+		if err != nil {
+			return err
+		}
+		now, _ := b.clock.Now()
+		opts.WithMinCommittedTS(now)
 		return b.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
-				for _, sql := range initSQLs {
+				for _, sql := range step2InitSQLs {
 					res, err := te.Exec(sql)
 					if err != nil {
 						return err

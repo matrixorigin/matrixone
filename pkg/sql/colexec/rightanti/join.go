@@ -237,7 +237,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 	}
-	//proc.SetInputBatch(&batch.Batch{})
+
+	// proc.SetInputBatch(batch.EmptyBatch)
 	return nil
 }
 

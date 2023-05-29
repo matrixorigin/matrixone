@@ -103,7 +103,7 @@ func TestGroup(t *testing.T) {
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
 		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
+		tc.proc.Reg.InputBatch = batch.EmptyBatch
 		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
@@ -137,7 +137,7 @@ func BenchmarkGroup(b *testing.B) {
 			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
 			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = &batch.Batch{}
+			tc.proc.Reg.InputBatch = batch.EmptyBatch
 			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = nil
