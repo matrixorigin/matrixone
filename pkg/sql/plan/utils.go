@@ -1050,8 +1050,23 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
-	var err error
+	// If it is Expr_List, perform constant folding on its elements
+	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
+		exprList := exprImpl.List
+		for i, exprElem := range exprList.List {
+			_, ok2 := exprElem.Expr.(*plan.Expr_F)
+			if ok2 {
+				foldExpr, err := ConstantFold(bat, exprElem, proc)
+				if err != nil {
+					return e, nil
+				}
+				exprImpl.List.List[i] = foldExpr
+			}
+		}
+		return e, nil
+	}
 
+	var err error
 	if elist, ok := e.Expr.(*plan.Expr_List); ok {
 		for i, expr := range elist.List.List {
 			if elist.List.List[i], err = ConstantFold(bat, expr, proc); err != nil {
@@ -1065,6 +1080,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if !ok || proc == nil {
 		return e, nil
 	}
+
 	overloadID := ef.F.Func.GetObj()
 	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
@@ -1503,9 +1519,8 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 // if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
 // we get batch like [1,2,3,4, origin_a, origin_b, origin_c, origin_d, row_id ....]。
 // we get expr like:  []*Expr{ 1=origin_a ,  (2 = origin_b and 3 = origin_c) }
-func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int) ([]*Expr, error) {
+func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, colCount int) ([]*Expr, error) {
 	checkExpr := make([]*Expr, len(uniqueCols))
-	colCount := len(tableDef.Cols)
 
 	for i, uniqueColMap := range uniqueCols {
 		var condExpr *Expr

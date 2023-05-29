@@ -207,31 +207,35 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 
 	ch := make(chan error)
 	go func() {
+		var er error
 		for _, ti := range tableIds {
-			er := client.TryToSubscribeTable(ctx, databaseId, ti)
+			er = client.TryToSubscribeTable(ctx, databaseId, ti)
 			if er != nil {
-				ch <- er
-				return
+				break
 			}
 		}
-		ch <- nil
+		ch <- er
 	}()
 
-	select {
-	case <-ctx.Done():
+	err = <-ch
+	close(ch)
+
+	if err != nil {
 		logutil.Errorf("connect to dn log tail server failed")
-		return ctx.Err()
-	case err = <-ch:
-		if err != nil {
-			return err
-		}
-		client.receivedLogTailTime.ready.Store(true)
-		return nil
+		return err
 	}
+	client.receivedLogTailTime.ready.Store(true)
+	return nil
 }
 
 func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
 	reconnectErr := make(chan error)
+
+	// init isLastReconnectRoutineClean as true.
+	// and once it was false, we should clean reconnectErr before we do reconnect action.
+	// it means the last reconnection failed but not because we get an error from this channel.
+	// if not clean, it will cause some go-routine hang up.
+	isLastReconnectRoutineClean := true
 
 	go func() {
 		for {
@@ -263,6 +267,8 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 
 				case err := <-reconnectErr:
 					cancel()
+					isLastReconnectRoutineClean = true
+
 					if err != nil {
 						logutil.Errorf("reconnect to dn log tail service failed, reason: %s", err)
 						goto cleanAndReconnect
@@ -314,6 +320,10 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			for _, r := range receiver {
 				r.close()
 			}
+			if !isLastReconnectRoutineClean {
+				<-reconnectErr
+			}
+
 			logutil.Infof("start to reconnect to dn log tail service")
 			for {
 				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
@@ -330,6 +340,8 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					err := client.firstTimeConnectToLogTailServer(ctx)
 					reconnectErr <- err
 				}()
+
+				isLastReconnectRoutineClean = false
 				break
 			}
 		}

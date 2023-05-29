@@ -226,12 +226,12 @@ func ParseDateCast(s string) (Date, error) {
 			case SecondState:
 				if IsNumber(&s, i) {
 					ss = ss + string(s[i])
-					if len(d) >= 3 {
+					if len(ss) >= 3 {
 						return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 					}
 				} else {
 					if s[i] == '.' {
-						if d == "" {
+						if ss == "" {
 							return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 						}
 						state = MsState

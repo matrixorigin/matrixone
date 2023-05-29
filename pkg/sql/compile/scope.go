@@ -89,19 +89,24 @@ func (s *Scope) Run(c *Compile) (err error) {
 	return nil
 }
 
+func (s *Scope) SetContextRecursively(ctx context.Context) {
+	if s.Proc == nil {
+		return
+	}
+	newCtx := s.Proc.ResetContextFromParent(ctx)
+	for _, scope := range s.PreScopes {
+		scope.SetContextRecursively(newCtx)
+	}
+}
+
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
-
-	for _, scope := range s.PreScopes {
-		scope.Proc.ResetContextFromParent(s.Proc.Ctx)
-	}
-
 	for _, scope := range s.PreScopes {
 		switch scope.Magic {
 		case Normal:
 			go func(cs *Scope) { errChan <- cs.Run(c) }(scope)
-		case Merge:
+		case Merge, MergeInsert:
 			go func(cs *Scope) { errChan <- cs.MergeRun(c) }(scope)
 		case Remote:
 			go func(cs *Scope) { errChan <- cs.RemoteRun(c) }(scope)
@@ -293,6 +298,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
 	newScope := newParallelScope(s, ss)
+	newScope.SetContextRecursively(s.Proc.Ctx)
 	return newScope.MergeRun(c)
 }
 
@@ -683,6 +689,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	for i := range s.RemoteReceivRegInfos {
 		op := &s.RemoteReceivRegInfos[i]
 		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
+
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
 				close(reg.Ch)
@@ -691,7 +698,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			}
 			defer func(streamSender morpc.Stream) {
 				close(reg.Ch)
-				_ = streamSender.Close(false)
+				_ = streamSender.Close(true)
 			}(streamSender)
 
 			message := cnclient.AcquireMessage()
@@ -729,6 +736,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 	var val morpc.Message
 	var dataBuffer []byte
 	var ok bool
+	var m *pbpipeline.Message
 	for {
 		select {
 		case <-proc.Ctx.Done():
@@ -740,7 +748,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			}
 		}
 
-		m, ok := val.(*pbpipeline.Message)
+		m, ok = val.(*pbpipeline.Message)
 		if !ok {
 			panic("unexpected message type for cn-server")
 		}
@@ -764,7 +772,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
 			}
-			bat, err := decodeBatch(proc.Mp(), dataBuffer)
+			bat, err := decodeBatch(proc.Mp(), nil, dataBuffer)
 			if err != nil {
 				return err
 			}

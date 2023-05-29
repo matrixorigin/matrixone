@@ -2337,6 +2337,7 @@ reset_stmt:
 
 explainable_stmt:
     delete_stmt
+|   load_data_stmt
 |   insert_stmt
 |   replace_stmt
 |   update_stmt

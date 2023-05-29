@@ -20,11 +20,14 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -48,10 +51,12 @@ func String(v any, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, v any) error {
 	arg := v.(*Argument)
+	arg.fetchers = make([]FetchLockRowsFunc, 0, len(arg.targets))
 	for idx := range arg.targets {
-		arg.targets[idx].fetcher = GetFetchRowsFunc(arg.targets[idx].primaryColumnType)
+		arg.fetchers = append(arg.fetchers, GetFetchRowsFunc(arg.targets[idx].primaryColumnType))
 	}
 	arg.parker = types.NewPacker(proc.Mp())
+	arg.err = nil
 	return nil
 }
 
@@ -68,24 +73,31 @@ func Call(
 	v any,
 	_ bool,
 	_ bool) (bool, error) {
-	bat := proc.InputBatch()
-	if bat == nil {
-		return true, nil
-	}
-	if bat.Length() == 0 {
-		bat.Clean(proc.Mp())
-		return false, nil
-	}
-
 	arg, ok := v.(*Argument)
 	if !ok {
 		getLogger().Fatal("invalid argument",
 			zap.Any("argument", arg))
 	}
-	txnFeature := proc.TxnClient.(client.TxnClientWithFeature)
+
+	bat := proc.InputBatch()
+	if bat == nil {
+		// all lock added, reutrn retry errror if needed
+		return true, arg.err
+	}
+	if bat.Length() == 0 {
+		bat.Clean(proc.Mp())
+		proc.SetInputBatch(batch.EmptyBatch)
+		return false, nil
+	}
 	txnOp := proc.TxnOperator
+
+	if !txnOp.Txn().IsPessimistic() {
+		return false, nil
+	}
+
+	txnFeature := proc.TxnClient.(client.TxnClientWithFeature)
 	needRetry := false
-	for _, target := range arg.targets {
+	for idx, target := range arg.targets {
 		getLogger().Debug("lock",
 			zap.Uint64("table", target.tableID),
 			zap.Bool("filter", target.filter != nil),
@@ -96,7 +108,7 @@ func Call(
 		if target.filter != nil {
 			filterCols = vector.MustFixedCol[int](bat.GetVector(target.filterColIndexInBatch))
 		}
-		refreshTS, err := Lock(
+		refreshTS, err := doLock(
 			proc.Ctx,
 			target.tableID,
 			txnOp,
@@ -105,9 +117,10 @@ func Call(
 			target.primaryColumnType,
 			DefaultLockOptions(arg.parker).
 				WithLockMode(lock.LockMode_Exclusive).
-				WithFetchLockRowsFunc(target.fetcher).
+				WithFetchLockRowsFunc(arg.fetchers[idx]).
 				WithMaxBytesPerLock(int(proc.LockService.GetConfig().MaxLockRowBytes)).
-				WithFilterRows(target.filter, filterCols),
+				WithFilterRows(target.filter, filterCols).
+				WithLockTable(target.lockTable),
 		)
 		if getLogger().Enabled(zap.DebugLevel) {
 			getLogger().Debug("lock result",
@@ -120,7 +133,9 @@ func Call(
 			return false, err
 		}
 
-		if txnFeature.RefreshExpressionEnabled() {
+		// refreshTS is last commit ts + 1, because we need see the committed data.
+		if txnFeature.RefreshExpressionEnabled() &&
+			target.refreshTimestampIndexInBatch != -1 {
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
 			ts := types.BuildTS(refreshTS.PhysicalTime, refreshTS.LogicalTime)
 			n := priVec.Length()
@@ -136,17 +151,47 @@ func Call(
 			needRetry = true
 		}
 	}
-	if needRetry {
-		return true, moerr.NewTxnNeedRetry(proc.Ctx)
+	// when a transaction needs to operate on many data, there may be multiple conflicts on the
+	// data, and if you go to retry every time a conflict occurs, you will also encounter conflicts
+	// when you retry. We need to return the conflict after all the locks have been added successfully,
+	// so that the retry will definitely succeed because all the locks have been put.
+	if needRetry && arg.err == nil {
+		arg.err = moerr.NewTxnNeedRetry(proc.Ctx)
 	}
 	return false, nil
 }
 
-// Lock locks a set of data so that no other transaction can modify it.
+// LockTable lock table, all rows in the table will be locked, and wait current txn
+// closed.
+func LockTable(
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type) error {
+	if !proc.TxnOperator.Txn().IsPessimistic() {
+		return nil
+	}
+	parker := types.NewPacker(proc.Mp())
+	defer parker.FreeMem()
+
+	opts := DefaultLockOptions(parker).
+		WithLockTable(true).
+		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
+	_, err := doLock(
+		proc.Ctx,
+		tableID,
+		proc.TxnOperator,
+		proc.LockService,
+		nil,
+		pkType,
+		opts)
+	return err
+}
+
+// doLock locks a set of data so that no other transaction can modify it.
 // The data is described by the primary key. When the returned timestamp.IsEmpty
 // is false, it means there is a conflict with other transactions and the data to
 // be manipulated has been modified, you need to get the latest data at timestamp.
-func Lock(
+func doLock(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
@@ -216,10 +261,11 @@ func Lock(
 	}
 
 	// forward rc's snapshot ts
-	if err := txnOp.UpdateSnapshot(result.Timestamp); err != nil {
+	snapshotTS := result.Timestamp.Next()
+	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	return result.Timestamp.Next(), nil
+	return snapshotTS, nil
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to
@@ -240,8 +286,8 @@ func (opts LockOptions) WithLockMode(mode lock.LockMode) LockOptions {
 }
 
 // WithLockTable set lock all table
-func (opts LockOptions) WithLockTable() LockOptions {
-	opts.lockTable = true
+func (opts LockOptions) WithLockTable(lockTabel bool) LockOptions {
+	opts.lockTable = lockTabel
 	return opts
 }
 
@@ -276,6 +322,22 @@ func NewArgument() *Argument {
 }
 
 // AddLockTarget add lock targets
+func (arg *Argument) CopyToPipelineTarget() []*pipeline.LockTarget {
+	targets := make([]*pipeline.LockTarget, len(arg.targets))
+	for i, target := range arg.targets {
+		targets[i] = &pipeline.LockTarget{
+			TableId:            target.tableID,
+			PrimaryColIdxInBat: target.primaryColumnIndexInBatch,
+			PrimaryColTyp:      plan.MakePlan2Type(&target.primaryColumnType),
+			RefreshTsIdxInBat:  target.refreshTimestampIndexInBatch,
+			FilterColIdxInBat:  target.filterColIndexInBatch,
+			LockTable:          target.lockTable,
+		}
+	}
+	return targets
+}
+
+// AddLockTarget add lock targets
 func (arg *Argument) AddLockTarget(
 	tableID uint64,
 	primaryColumnIndexInBatch int32,
@@ -287,6 +349,17 @@ func (arg *Argument) AddLockTarget(
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 	})
+	return arg
+}
+
+// LockTable lock all table, used for delete, truncate and drop table
+func (arg *Argument) LockTable(tableID uint64) *Argument {
+	for idx := range arg.targets {
+		if arg.targets[idx].tableID == tableID {
+			arg.targets[idx].lockTable = true
+			break
+		}
+	}
 	return arg
 }
 
@@ -314,7 +387,8 @@ func (arg *Argument) AddLockTargetWithPartition(
 		return arg.AddLockTarget(tableIDs[0],
 			primaryColumnIndexInBatch,
 			primaryColumnType,
-			refreshTimestampIndexInBatch)
+			refreshTimestampIndexInBatch,
+		)
 	}
 
 	for _, tableID := range tableIDs {
@@ -337,6 +411,7 @@ func (arg *Argument) Free(
 	if arg.parker != nil {
 		arg.parker.FreeMem()
 	}
+	arg.err = nil
 }
 
 func getRowsFilter(

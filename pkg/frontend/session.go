@@ -343,8 +343,8 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysV
 		// For seq init values.
 		ses.seqCurValues = make(map[uint64]string)
 		ses.seqLastValue = ""
-		ses.sqlHelper = &SqlHelper{ses: ses}
 	}
+	ses.sqlHelper = &SqlHelper{ses: ses}
 	ses.flag = flag
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
@@ -832,21 +832,9 @@ func (ses *Session) SaveResultSet() {
 func (ses *Session) AppendResultBatch(bat *batch.Batch) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	// just copy
-	var err error
-	copied := &batch.Batch{
-		Cnt:   1,
-		Attrs: make([]string, len(bat.Attrs)),
-		Vecs:  make([]*vector.Vector, len(bat.Vecs)),
-		Zs:    make([]int64, len(bat.Zs)),
-	}
-	copy(copied.Attrs, bat.Attrs)
-	copy(copied.Zs, bat.Zs)
-	for i := range copied.Vecs {
-		copied.Vecs[i], err = bat.Vecs[i].Dup(ses.mp)
-		if err != nil {
-			return err
-		}
+	copied, err := bat.Dup(ses.mp)
+	if err != nil {
+		return err
 	}
 	ses.resultBatches = append(ses.resultBatches, copied)
 	return nil
@@ -929,9 +917,6 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 			mp = mpool.MustNewNoFixed("session-prepare-insert-values")
 		}
 		prepareStmt.mp = mp
-		emptyBatch := batch.NewWithSize(0)
-		emptyBatch.Zs = []int64{1}
-		prepareStmt.emptyBatch = emptyBatch
 		prepareStmt.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(bat.Vecs))
 		for i, vec := range bat.Vecs {
 			prepareStmt.ufs[i] = vector.GetUnionOneFunction(*vec.GetType(), mp)
@@ -1727,6 +1712,10 @@ func (bh *BackgroundHandler) GetExecResultBatches() []*batch.Batch {
 
 type SqlHelper struct {
 	ses *Session
+}
+
+func (sh *SqlHelper) GetCompilerContext() any {
+	return sh.ses.txnCompileCtx
 }
 
 // Made for sequence func. nextval, setval.

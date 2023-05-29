@@ -73,7 +73,9 @@ load data infile '$resources/external_table_file/pt_table_data.csv' into table  
 start transaction ;
 update  atomic_table_3 set col2=20;
 select  col1,col2 from atomic_table_3;
+-- @bvt:issue#8320
 show create table atomic_table_3;
+-- @bvt:issue
 rollback ;
 select  col1,col2 from atomic_table_3;
 
@@ -120,11 +122,13 @@ CREATE TABLE `t_code_rule` (
   KEY `code_no` (`code_no`),
   KEY `org_no` (`org_no`)
 );
+-- @bvt:issue#6949
 start transaction ;
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',10);
 insert into t_code_rule values (18373453,'aaaaaa','fffff','ccccc',20);
 commit ;
 select * from t_code_rule;
+-- @bvt:issue
 
 begin;
 -- @bvt:issue#7133
