@@ -37,36 +37,64 @@ func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
 
-func GetHashColumnIdx(expr *plan.Expr) int {
+func GetHashColumn(expr *plan.Expr) *plan.ColRef {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			idx := GetHashColumnIdx(arg)
-			if idx != -1 {
-				return idx
+			col := GetHashColumn(arg)
+			if col != nil {
+				return col
 			}
 		}
 	case *plan.Expr_Col:
-		return int(exprImpl.Col.ColPos)
+		return exprImpl.Col
 	}
-	return -1
+	return nil
 }
 
-// to judge if groupby need to go shuffle
-// if true, return index of which column to shuffle
-// else, return -1
-func determinShuffleForGroupBy(n *plan.Node) int32 {
+func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) {
+	// hash by default
+	n.Stats.ShuffleType = plan.ShuffleType_Hash
+	if builder == nil {
+		return
+	}
+	ctx := builder.ctxByNode[n.NodeId]
+	if ctx == nil {
+		return
+	}
+	if binding, ok := ctx.bindingByTag[col.RelPos]; ok {
+		tableDef := builder.qry.Nodes[binding.nodeId].TableDef
+		colName := tableDef.Cols[col.ColPos].Name
+		if getSortOrder(tableDef, colName) != 0 {
+			return
+		}
+		sc := builder.compCtx.GetStatsCache()
+		if sc == nil {
+			return
+		}
+		s := sc.GetStatsInfoMap(binding.tableID)
+		n.Stats.ShuffleType = plan.ShuffleType_Range
+		n.Stats.ShuffleColMin = int64(s.MinValMap[colName])
+		n.Stats.ShuffleColMax = int64(s.MaxValMap[colName])
+	}
+}
+
+// to determine if groupby need to go shuffle
+func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
+	// do not shuffle by default
+	n.Stats.ShuffleColIdx = -1
+
 	if n.NodeType != plan.Node_AGG {
-		return -1
+		return
 	}
 	if len(n.GroupBy) == 0 {
-		return -1
+		return
 	}
 	if n.Stats.HashmapSize < HashMapSizeForBucket {
-		return -1
+		return
 	}
 	if n.Stats.Outcnt/n.Stats.Cost < 0.1 {
-		return -1
+		return
 	}
 	//find the highest ndv
 	highestNDV := n.GroupBy[0].Ndv
@@ -78,20 +106,22 @@ func determinShuffleForGroupBy(n *plan.Node) int32 {
 		}
 	}
 	if highestNDV < ShuffleThreshHold {
-		return -1
+		return
 	}
 
-	if GetHashColumnIdx(n.GroupBy[idx]) == -1 {
-		return -1
+	hashCol := GetHashColumn(n.GroupBy[idx])
+	if hashCol == nil {
+		return
 	}
 	//for now ,only support integer and string type
 	switch types.T(n.GroupBy[idx].Typ.Id) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
-		return int32(idx)
+		n.Stats.ShuffleColIdx = int32(idx)
+		determinShuffleType(hashCol, n, builder)
 	case types.T_varchar, types.T_char, types.T_text:
-		return int32(idx)
+		n.Stats.ShuffleColIdx = int32(idx)
 	}
-	return -1
+	return
 }
 
 func GetShuffleDop() (dop int) {
@@ -107,7 +137,7 @@ func determinShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	}
 	switch node.NodeType {
 	case plan.Node_AGG:
-		node.Stats.ShuffleColIdx = determinShuffleForGroupBy(node)
+		determinShuffleForGroupBy(node, builder)
 	default:
 		node.Stats.ShuffleColIdx = -1
 	}

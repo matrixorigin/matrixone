@@ -1719,7 +1719,7 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node)
 	parent, children := c.newScopeListForGroup(validScopeCount(ss), dop)
 
 	j := 0
-	hashColumnIdx := plan2.GetHashColumnIdx(n.GroupBy[n.Stats.ShuffleColIdx])
+	hashColumnIdx := plan2.GetHashColumn(n.GroupBy[n.Stats.ShuffleColIdx])
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
 			isEnd := ss[i].IsEnd
@@ -1729,7 +1729,7 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node)
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, true, hashColumnIdx),
+				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, true, int(hashColumnIdx.ColPos)),
 			})
 			j++
 			ss[i].IsEnd = true

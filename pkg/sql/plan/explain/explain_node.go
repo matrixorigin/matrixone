@@ -415,11 +415,22 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 	}
 
 	idx := ndesc.Node.Stats.ShuffleColIdx
+	shuffleType := ndesc.Node.Stats.ShuffleType
 	if idx >= 0 {
-		buf.WriteString(" shuffle: ")
-		err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
-		if err != nil {
-			return "", err
+		if shuffleType == plan.ShuffleType_Hash {
+			buf.WriteString(" shuffle: hash(")
+			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
+		} else {
+			buf.WriteString(" shuffle: range(")
+			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
 		}
 	}
 	return buf.String(), nil
