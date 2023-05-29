@@ -107,7 +107,7 @@ func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, 
 }
 
 func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relation, error) {
-	logDebugf(db.txn.meta, "txnDatabase.Relation table %s", name)
+	logDebugf(*db.txn.meta, "txnDatabase.Relation table %s", name)
 	//check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(genTableKey(ctx, name, db.databaseId)); exist {
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)

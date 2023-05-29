@@ -223,7 +223,6 @@ index04    0    PRIMARY    1    col1    A    0    NULL    NULL                  
 index04    0    PRIMARY    2    col2    A    0    NULL    NULL                    YES    NULL
 index04    1    col1    1    col1    A    0    NULL    NULL                    YES    NULL
 drop table index04;
-ExpectedEOB
 drop table if exists index05;
 create table index05(col1 int, col2 bigint, col3 decimal);
 show index from index05;
