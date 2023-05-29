@@ -583,7 +583,7 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	deletes := make(map[types.Blockid][]int64)
 
-	//collect deletes from PartitionState.dirtyRows.
+	//collect deletes from PartitionState.dirtyBlocks.
 	{
 		//ts := types.TimestampToTS(ts)
 		//iter := state.NewDirtyRowsIter(ts, nil)

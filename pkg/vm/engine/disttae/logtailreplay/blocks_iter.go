@@ -92,20 +92,14 @@ func (p *PartitionState) NewDirtyBlocksIter() *blocksIter {
 var _ BlocksIter = new(dirtyBlocksIter)
 
 func (b *dirtyBlocksIter) Next() bool {
-	for {
-
-		if !b.firstCalled {
-			if !b.iter.First() {
-				return false
-			}
-			b.firstCalled = true
-		} else {
-			if !b.iter.Next() {
-				return false
-			}
+	if !b.firstCalled {
+		if !b.iter.First() {
+			return false
 		}
+		b.firstCalled = true
 		return true
 	}
+	return b.iter.Next()
 }
 
 func (b *dirtyBlocksIter) Entry() BlockEntry {

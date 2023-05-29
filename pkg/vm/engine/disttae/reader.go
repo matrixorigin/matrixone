@@ -48,6 +48,7 @@ func (r *blockReader) Close() error {
 func (r *blockReader) Read(ctx context.Context, cols []string,
 	_ *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if len(r.blks) == 0 {
+		logutil.Infof("block reader : no blocks to read")
 		return nil, nil
 	}
 	defer func() {
@@ -102,6 +103,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	if err != nil {
 		return nil, err
 	}
+	logutil.Infof("block read success, bat is %v", bat)
 	bat.SetAttributes(cols)
 
 	// if it's not sorted, just return
@@ -137,6 +139,7 @@ func (r *blockMergeReader) Close() error {
 func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
 	if len(r.blks) == 0 {
+		logutil.Infof("blockMergeReader : no blocks to read")
 		r.sels = nil
 		return nil, nil
 	}
@@ -184,8 +187,10 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	//}
 	bat, err := blockio.BlockRead(r.ctx, info, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
+		logutil.Infof("block read error: %v", err)
 		return nil, err
 	}
+	logutil.Infof("block read success, bat is %v", bat)
 	bat.SetAttributes(cols)
 
 	//start to load deletes, which maybe
@@ -249,20 +254,25 @@ func (r *mergeReader) Read(ctx context.Context, cols []string,
 		return nil, nil
 	}
 	for len(r.rds) > 0 {
+		logutil.Infof("merge reader : start to read")
 		bat, err := r.rds[0].Read(ctx, cols, expr, mp, vp)
 		if err != nil {
 			for _, rd := range r.rds {
 				rd.Close()
 			}
+			logutil.Infof("merge reader : rds[0].Read  error")
 			return nil, err
 		}
 		if bat == nil {
+			logutil.Infof("merge reader: read a nil batch")
 			r.rds = r.rds[1:]
 		}
 		if bat != nil {
-			logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
+			//logutil.Debug(testutil.OperatorCatchBatch("merge reader", bat))
+			logutil.Infof(testutil.OperatorCatchBatch("merge reader", bat))
 			return bat, nil
 		}
 	}
+	logutil.Infof("merge reader :  all readers finish reading")
 	return nil, nil
 }
