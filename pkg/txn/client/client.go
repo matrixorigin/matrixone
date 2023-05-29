@@ -62,10 +62,16 @@ func WithLockService(lockService lockservice.LockService) TxnClientCreateOption 
 //
 // If we need to ensure that all the transactions on a CN can read the writes of the previous committed
 // transaction, then we can use WithEenableCNBasedConsistency to turn on.
-func WithEnableSacrificingFreshness(timestampWaiter TimestampWaiter) TxnClientCreateOption {
+func WithEnableSacrificingFreshness() TxnClientCreateOption {
 	return func(tc *txnClient) {
-		tc.timestampWaiter = timestampWaiter
 		tc.enableSacrificingFreshness = true
+	}
+}
+
+// WithTimestampWaiter setup timestamp waiter to get the latest applied committed timestamp from logtail.
+func WithTimestampWaiter(waiter TimestampWaiter) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.timestampWaiter = waiter
 	}
 }
 
@@ -171,19 +177,26 @@ func (client *txnClient) New(
 
 	options = append(options,
 		WithTxnCNCoordinator(),
-		WithTxnClose(client),
-		WithUpdateLastCommitTSFunc(client.updateLastCommitTS),
 		WithTxnLockService(client.lockService))
 	op := newTxnOperator(
 		client.sender,
 		txnMeta,
 		options...)
+	op.timestampWaiter = client.timestampWaiter
+	op.AppendEventCallback(ClosedEvent,
+		client.updateLastCommitTS,
+		client.popTransaction)
 	client.addToLeakCheck(op)
 	return op, nil
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
-	return newTxnOperatorWithSnapshot(client.sender, snapshot)
+	op, err := newTxnOperatorWithSnapshot(client.sender, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	op.timestampWaiter = client.timestampWaiter
+	return op, nil
 }
 
 func (client *txnClient) Close() error {
@@ -213,11 +226,11 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 	return txn.TxnMode_Pessimistic
 }
 
-func (client *txnClient) updateLastCommitTS(ts timestamp.Timestamp) {
+func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if client.mu.latestCommitTS.Less(ts) {
-		client.mu.latestCommitTS = ts
+	if client.mu.latestCommitTS.Less(txn.CommitTS) {
+		client.mu.latestCommitTS = txn.CommitTS
 	}
 }
 
@@ -264,7 +277,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 }
 
 func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
-	client.updateLastCommitTS(ts)
+	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
 }
 
 func (client *txnClient) popTransaction(txn txn.TxnMeta) {

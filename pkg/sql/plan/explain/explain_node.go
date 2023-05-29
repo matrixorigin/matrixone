@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"strconv"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -100,8 +101,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Assert"
 	case plan.Node_INSERT:
 		pname = "Insert"
-	case plan.Node_UPDATE:
-		pname = "Update"
 	case plan.Node_DELETE:
 		pname = "Delete"
 	case plan.Node_INTERSECT:
@@ -114,6 +113,16 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Minus All"
 	case plan.Node_FUNCTION_SCAN:
 		pname = "Table Function"
+	case plan.Node_PRE_INSERT:
+		pname = "PreInsert"
+	case plan.Node_PRE_INSERT_UK:
+		pname = "PreInsert UniqueKey"
+	case plan.Node_PRE_DELETE:
+		pname = "PreDelete"
+	case plan.Node_ON_DUPLICATE_KEY:
+		pname = "On Duplicate Key"
+	case plan.Node_LOCK_OP:
+		pname = "Lock"
 	default:
 		panic("error node type")
 	}
@@ -136,33 +145,27 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
 				buf.WriteString(ndesc.Node.TableDef.TblFunc.Name)
 			}
-		case plan.Node_UPDATE:
-			buf.WriteString(" on ")
-			if ndesc.Node.UpdateCtx != nil {
-				first := true
-				for _, ctx := range ndesc.Node.UpdateCtx.Ref {
-					if !first {
-						buf.WriteString(", ")
-					}
-					buf.WriteString(ctx.SchemaName + "." + ctx.ObjName)
-					if first {
-						first = false
-					}
-				}
-			}
 		case plan.Node_DELETE:
 			buf.WriteString(" on ")
 			if ndesc.Node.DeleteCtx != nil {
-				first := true
-				for _, ctx := range ndesc.Node.DeleteCtx.Ref {
-					if !first {
-						buf.WriteString(", ")
-					}
-					buf.WriteString(ctx.SchemaName + "." + ctx.ObjName)
-					if first {
-						first = false
-					}
+				ctx := ndesc.Node.DeleteCtx.Ref
+				buf.WriteString(ctx.SchemaName + "." + ctx.ObjName)
+			}
+		case plan.Node_PRE_INSERT:
+			buf.WriteString(" on ")
+			if ndesc.Node.PreInsertCtx != nil {
+				if ndesc.Node.PreInsertCtx.Ref != nil {
+					buf.WriteString(ndesc.Node.PreInsertCtx.Ref.GetSchemaName() + "." + ndesc.Node.PreInsertCtx.Ref.GetObjName())
+				} else if ndesc.Node.PreInsertCtx.TableDef != nil {
+					buf.WriteString(ndesc.Node.TableDef.GetName())
 				}
+			}
+		case plan.Node_PRE_DELETE:
+			buf.WriteString(" on ")
+			if ndesc.Node.ObjRef != nil {
+				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
+			} else if ndesc.Node.TableDef != nil {
+				buf.WriteString(ndesc.Node.TableDef.GetName())
 			}
 		}
 	}
@@ -463,13 +466,12 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *Expl
 	return buf.String(), nil
 }
 
-var _ NodeElemDescribe = &CostDescribeImpl{}
-var _ NodeElemDescribe = &ExprListDescribeImpl{}
-var _ NodeElemDescribe = &OrderByDescribeImpl{}
-var _ NodeElemDescribe = &WinSpecDescribeImpl{}
-var _ NodeElemDescribe = &RowsetDataDescribeImpl{}
-var _ NodeElemDescribe = &UpdateCtxsDescribeImpl{}
-var _ NodeElemDescribe = &AnalyzeInfoDescribeImpl{}
+var _ NodeElemDescribe = (*CostDescribeImpl)(nil)
+var _ NodeElemDescribe = (*ExprListDescribeImpl)(nil)
+var _ NodeElemDescribe = (*OrderByDescribeImpl)(nil)
+var _ NodeElemDescribe = (*WinSpecDescribeImpl)(nil)
+var _ NodeElemDescribe = (*RowsetDataDescribeImpl)(nil)
+var _ NodeElemDescribe = (*AnalyzeInfoDescribeImpl)(nil)
 
 type AnalyzeInfoDescribeImpl struct {
 	AnalyzeInfo *plan.AnalyzeInfo
@@ -630,28 +632,6 @@ func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *Ex
 		}
 		first = false
 		buf.WriteString("\"*VALUES*\".column" + strconv.Itoa(index+1))
-	}
-	return nil
-}
-
-type UpdateCtxsDescribeImpl struct {
-	UpdateCtx *plan.UpdateCtx
-}
-
-func (u *UpdateCtxsDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
-	buf.WriteString("Update Columns: ")
-	first := true
-	for i, ctx := range u.UpdateCtx.Ref {
-		if u.UpdateCtx.UpdateCol[i] != nil {
-			for colName := range u.UpdateCtx.UpdateCol[i].Map {
-				if !first {
-					buf.WriteString(", ")
-				} else {
-					first = false
-				}
-				buf.WriteString(ctx.SchemaName + "." + ctx.ObjName + "." + colName)
-			}
-		}
 	}
 	return nil
 }
