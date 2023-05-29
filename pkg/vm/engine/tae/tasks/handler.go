@@ -15,6 +15,7 @@
 package tasks
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
@@ -30,7 +31,7 @@ type BaseTaskHandler struct {
 
 func NewBaseEventHandler(name string) *BaseTaskHandler {
 	h := &BaseTaskHandler{
-		OpWorker: *ops.NewOpWorker(name),
+		OpWorker: *ops.NewOpWorker(context.Background(), name),
 	}
 	return h
 }

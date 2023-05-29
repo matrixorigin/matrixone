@@ -44,7 +44,7 @@ func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
 		panic(fmt.Sprintf("bad param: %d io workers", ioWorkers))
 	}
 	s := &taskScheduler{
-		BaseScheduler: tasks.NewBaseScheduler("taskScheduler"),
+		BaseScheduler: tasks.NewBaseScheduler(db.Opts.Ctx, "taskScheduler"),
 		db:            db,
 	}
 	jobDispatcher := newAsyncJobDispatcher()
