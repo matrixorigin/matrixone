@@ -129,7 +129,13 @@ func (a *UnaryAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) er
 	}
 
 	hasNull := vec.GetNulls().Contains(uint64(sel))
-	if vec.GetType().IsVarlen() {
+	if vec.IsConst() {
+		sel = 0
+	}
+	if vec.IsConstNull() {
+		var v T1
+		a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], z, a.es[i], true)
+	} else if vec.GetType().IsVarlen() {
 		a.vs[i], a.es[i] = a.fill(i, (any)(vec.GetBytesAt(int(sel))).(T1), a.vs[i], z, a.es[i], hasNull)
 	} else {
 		a.vs[i], a.es[i] = a.fill(i, vector.MustFixedCol[T1](vec)[sel], a.vs[i], z, a.es[i], hasNull)

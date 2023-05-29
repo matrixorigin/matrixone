@@ -883,9 +883,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 	funcName := funcRef.Parts[0]
 
-	if function.GetFunctionIsAggregateByName(funcName) {
+	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 		return b.impl.BindAggFunc(funcName, astExpr, depth, isRoot)
-	} else if function.GetFunctionIsWinFunByName(funcName) {
+	} else if function.GetFunctionIsWinFunByName(funcName) && astExpr.WindowSpec != nil {
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
@@ -973,9 +973,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
-	// } else {
-	// 	return nil, err
-	// }
 
 	// not a builtin func, look to resolve udf
 	cmpCtx := b.builder.compCtx
