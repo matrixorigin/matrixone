@@ -79,7 +79,7 @@ func init() {
 			Name: strings.ToLower(colname),
 			Typ: &plan.Type{
 				Id:          int32(tp.Oid),
-				NotNullable: false,
+				NotNullable: true,
 			},
 		}
 
