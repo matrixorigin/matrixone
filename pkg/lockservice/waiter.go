@@ -209,7 +209,6 @@ func (w *waiter) mustSendNotification(
 		value.ts = w.latestCommitTS
 	}
 	w.event.notified()
-	w.notifySameTxn(serviceID, value)
 	select {
 	case w.c <- value:
 		return

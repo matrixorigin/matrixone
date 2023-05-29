@@ -168,11 +168,12 @@ func TestCloseLocalLockTableWithBlockedSameTxnWaiters(t *testing.T) {
 				lt.mu.RLock()
 				lock, ok := lt.mu.store.Get([]byte{1})
 				require.True(t, ok)
-				lt.mu.RUnlock()
 				if lock.waiter.waiters.len() == 1 &&
 					len(lock.waiter.waiters.all()[0].sameTxnWaiters) == n-1 {
+					lt.mu.RUnlock()
 					break
 				}
+				lt.mu.RUnlock()
 				time.Sleep(time.Millisecond * 10)
 			}
 
