@@ -457,12 +457,6 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 			codeAuthFailed)
 	}
 
-	// Set the label session variable.
-	if len(c.clientInfo.allLabels()) > 0 {
-		if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
-			return nil, err
-		}
-	}
 	// Set the use defined variables, including session variables and user variables.
 	for _, stmt := range c.setVarStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {

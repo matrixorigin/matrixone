@@ -592,7 +592,7 @@ type Engine interface {
 
 	// Nodes returns all nodes for worker jobs. isInternal, tenant, cnLabel are
 	// used to filter CN servers.
-	Nodes(isInternal bool, tenant string, cnLabel map[string]string) (cnNodes Nodes, err error)
+	Nodes(isInternal bool, tenant string, username string, cnLabel map[string]string) (cnNodes Nodes, err error)
 
 	// Hints returns hints of engine features
 	// return value should not be cached

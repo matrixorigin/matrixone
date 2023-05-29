@@ -306,6 +306,21 @@ func (mr *MockRelationMockRecorder) GetHideKeys(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHideKeys", reflect.TypeOf((*MockRelation)(nil).GetHideKeys), arg0)
 }
 
+// GetMetadataScanInfoBytes mocks base method.
+func (m *MockRelation) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMetadataScanInfoBytes", ctx, name)
+	ret0, _ := ret[0].([][]byte)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetMetadataScanInfoBytes indicates an expected call of GetMetadataScanInfoBytes.
+func (mr *MockRelationMockRecorder) GetMetadataScanInfoBytes(ctx, name interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMetadataScanInfoBytes", reflect.TypeOf((*MockRelation)(nil).GetMetadataScanInfoBytes), ctx, name)
+}
+
 // GetPrimaryKeys mocks base method.
 func (m *MockRelation) GetPrimaryKeys(arg0 context.Context) ([]*engine.Attribute, error) {
 	m.ctrl.T.Helper()
@@ -369,16 +384,21 @@ func (mr *MockRelationMockRecorder) NewReader(arg0, arg1, arg2, arg3 interface{}
 // Ranges mocks base method.
 func (m *MockRelation) Ranges(arg0 context.Context, arg1 ...*plan.Expr) ([][]byte, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Ranges", arg0, arg1)
+	varargs := []interface{}{arg0}
+	for _, a := range arg1 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "Ranges", varargs...)
 	ret0, _ := ret[0].([][]byte)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Ranges indicates an expected call of Ranges.
-func (mr *MockRelationMockRecorder) Ranges(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Ranges(arg0 interface{}, arg1 ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), arg0, arg1)
+	varargs := append([]interface{}{arg0}, arg1...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), varargs...)
 }
 
 // Rows mocks base method.
@@ -489,21 +509,6 @@ func (m *MockRelation) Write(arg0 context.Context, arg1 *batch.Batch) error {
 	ret := m.ctrl.Call(m, "Write", arg0, arg1)
 	ret0, _ := ret[0].(error)
 	return ret0
-}
-
-// MaxAndMinValues mocks base method.
-func (m *MockRelation) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetMetadataScanInfoBytes", ctx)
-	ret0, _ := ret[0].([][]byte)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// MaxAndMinValues indicates an expected call of MaxAndMinValues.
-func (mr *MockRelationMockRecorder) GetMetadataScanInfoBytes(ctx interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMetadataScanInfoBytes", reflect.TypeOf((*MockRelation)(nil).GetMetadataScanInfoBytes), ctx)
 }
 
 // Write indicates an expected call of Write.
@@ -889,18 +894,18 @@ func (mr *MockEngineMockRecorder) NewBlockReader(ctx, num, ts, expr, ranges, tbl
 }
 
 // Nodes mocks base method.
-func (m *MockEngine) Nodes(isInternal bool, tenant string, cnLabel map[string]string) (engine.Nodes, error) {
+func (m *MockEngine) Nodes(isInternal bool, tenant, username string, cnLabel map[string]string) (engine.Nodes, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Nodes", isInternal, tenant, cnLabel)
+	ret := m.ctrl.Call(m, "Nodes", isInternal, tenant, username, cnLabel)
 	ret0, _ := ret[0].(engine.Nodes)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Nodes indicates an expected call of Nodes.
-func (mr *MockEngineMockRecorder) Nodes(isInternal, tenant, cnLabel interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) Nodes(isInternal, tenant, username, cnLabel interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes), isInternal, tenant, cnLabel)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes), isInternal, tenant, username, cnLabel)
 }
 
 // Rollback mocks base method.

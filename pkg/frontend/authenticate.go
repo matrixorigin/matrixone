@@ -8258,3 +8258,9 @@ func doCheckRole(ctx context.Context, ses *Session) error {
 	}
 	return err
 }
+
+// isSuperUser returns true if the username is dump or root.
+func isSuperUser(username string) bool {
+	u := strings.ToLower(username)
+	return u == dumpName || u == rootName
+}

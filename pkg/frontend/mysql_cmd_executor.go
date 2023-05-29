@@ -50,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
 )
@@ -1385,39 +1386,38 @@ func doShowBackendServers(ses *Session) error {
 		return labels
 	}
 
-	tenant := ses.GetTenantInfo().GetTenant()
-	var se clusterservice.Selector
-	if !isSysTenant(tenant) {
-		labels := ses.GetMysqlProtocol().GetConnectAttrs()
-		labels["account"] = tenant
-		se = clusterservice.NewSelector().SelectByLabel(
-			filterLabels(labels), clusterservice.EQ)
-	}
-	cluster := clusterservice.GetMOCluster()
-	var notEmpty, empty bool
-	var rows [][]interface{}
-	cluster.GetCNService(se, func(s metadata.CNService) bool {
+	var appendFn = func(s *metadata.CNService) {
 		row := make([]interface{}, 3)
 		row[0] = s.ServiceID
 		row[1] = s.SQLAddress
 		var labelStr string
-		if len(s.Labels) > 0 {
-			notEmpty = true
-		} else {
-			empty = true
-		}
 		for key, value := range s.Labels {
 			labelStr += fmt.Sprintf("%s:%s;", key, strings.Join(value.Labels, ","))
 		}
 		row[2] = labelStr
-		rows = append(rows, row)
-		return true
-	})
-	for _, row := range rows {
-		if row[2] == "" && empty && notEmpty {
-			continue
-		}
 		mrs.AddRow(row)
+	}
+
+	tenant := ses.GetTenantInfo().GetTenant()
+	var se clusterservice.Selector
+	labels := ses.GetMysqlProtocol().GetConnectAttrs()
+	labels["account"] = tenant
+	se = clusterservice.NewSelector().SelectByLabel(
+		filterLabels(labels), clusterservice.EQ)
+	if isSysTenant(tenant) {
+		u := ses.GetUserName()
+		// For super use dump and root, we should list all servers.
+		if isSuperUser(u) {
+			clusterservice.GetMOCluster().GetCNService(
+				clusterservice.NewSelector(), func(s metadata.CNService) bool {
+					appendFn(&s)
+					return true
+				})
+		} else {
+			disttae.SelectForSuperTenant(se, u, nil, appendFn)
+		}
+	} else {
+		disttae.SelectForCommonTenant(se, nil, appendFn)
 	}
 	return nil
 }
