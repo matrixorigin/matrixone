@@ -258,7 +258,7 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		buffers:        make(map[string]*bufferHolder),
 		awakeCollect:   make(chan batchpipe.HasName, defaultQueueSize),
 		awakeGenerate:  make(chan generateReq, 16),
-		awakeBatch:     make(chan exportReq, 2),
+		awakeBatch:     make(chan exportReq, 5),
 		stopCh:         make(chan struct{}),
 		collectorCnt:   runtime.NumCPU(),
 		generatorCnt:   runtime.NumCPU(),
