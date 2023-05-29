@@ -23,10 +23,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var NilStmtID [16]byte
@@ -83,6 +84,9 @@ type StatementInfo struct {
 	reported bool
 	// mark exported
 	exported bool
+
+	// keep []byte as elem
+	jsonByte, statsJsonByte []byte
 }
 
 var stmtPool = sync.Pool{
@@ -133,6 +137,9 @@ func (s *StatementInfo) Free() {
 		s.end = false
 		s.reported = false
 		s.exported = false
+		// clean []byte
+		s.jsonByte = nil
+		s.statsJsonByte = nil
 		stmtPool.Put(s)
 	}
 }
@@ -197,7 +204,7 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
 		return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr),
 			`{"code":200,"message":"NO ExecPlan"}`
 	} else {
-		jsonByte, statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
+		s.jsonByte, s.statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
 		s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 		//	// get nil ExecPlan json-str
@@ -205,9 +212,9 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
 		//}
 	}
 	if len(statsJsonByte) == 0 {
-		statsJsonByte = []byte("{}")
+		s.statsJsonByte = []byte("{}")
 	}
-	return string(jsonByte), string(statsJsonByte)
+	return util.UnsafeBytesToString(jsonByte), util.UnsafeBytesToString(statsJsonByte)
 }
 
 type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
