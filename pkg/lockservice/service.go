@@ -285,13 +285,21 @@ func newMapBasedTxnHandler(
 	return h
 }
 
+func (h *mapBasedTxnHolder) getActiveLocked(txnKey string) *activeTxn {
+	if v, ok := h.mu.activeTxns[txnKey]; ok {
+		return v
+	}
+	return nil
+}
+
 func (h *mapBasedTxnHolder) getActiveTxn(
 	txnID []byte,
 	create bool,
 	remoteService string) *activeTxn {
 	txnKey := util.UnsafeBytesToString(txnID)
 	h.mu.RLock()
-	if v, ok := h.mu.activeTxns[txnKey]; ok {
+	v := h.getActiveLocked(txnKey)
+	if v != nil {
 		h.mu.RUnlock()
 		return v
 	}
@@ -302,6 +310,10 @@ func (h *mapBasedTxnHolder) getActiveTxn(
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if v := h.getActiveLocked(txnKey); v != nil {
+		return v
+	}
+
 	txn := newActiveTxn(txnID, txnKey, h.fsp, remoteService)
 	h.mu.activeTxns[txnKey] = txn
 
