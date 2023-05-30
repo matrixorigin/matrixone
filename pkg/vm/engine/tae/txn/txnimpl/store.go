@@ -498,9 +498,6 @@ func (store *txnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.S
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Segment.Create.Add(1)
-	})
 	return db.CreateSegment(tid, is1PC)
 }
 
@@ -509,9 +506,6 @@ func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) 
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Segment.CreateNonAppendable.Add(1)
-	})
 	return db.CreateNonAppendableSegment(tid, is1PC)
 }
 
