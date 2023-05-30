@@ -410,7 +410,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	}
 
 	v.sorted = types.DecodeBool(data[:1])
-	data = data[1:]
+	//data = data[1:]
 
 	v.cantFreeData = true
 	v.cantFreeArea = true
@@ -470,7 +470,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	}
 
 	v.sorted = types.DecodeBool(data[:1])
-	data = data[1:]
+	//data = data[1:]
 
 	return nil
 }
