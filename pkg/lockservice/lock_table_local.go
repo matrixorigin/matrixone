@@ -239,8 +239,13 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 			// current txn's lock
 			if bytes.Equal(c.txn.txnID, lock.txnID) {
 				if c.w != nil {
+					// txn1 hold lock
+					// txn2/op1 added into txn1's waiting list
+					// txn2/op2 added into txn2/op1's same txn list
+					// txn1 unlock, notify txn2/op1
+					// txn2/op3 get lock before txn2/op1 get notify
 					if len(c.w.sameTxnWaiters) > 0 {
-						panic("BUG: same txn waiters should be empty")
+						c.w.notifySameTxn(l.bind.ServiceID, notifyValue{})
 					}
 					str := c.w.String()
 					if v := c.w.close(l.bind.ServiceID, notifyValue{}); v != nil {
