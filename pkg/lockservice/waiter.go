@@ -92,9 +92,11 @@ type waiter struct {
 	status         atomic.Int32
 	c              chan notifyValue
 	waiters        waiterQueue
+	sameTxnWaiters []*waiter
 	refCount       atomic.Int32
 	latestCommitTS timestamp.Timestamp
 	waitTxn        pb.WaitTxn
+	event          event
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -183,6 +185,18 @@ func (w *waiter) mustRecvNotification(
 	}
 }
 
+func (w *waiter) notifySameTxn(
+	serviceID string,
+	value notifyValue) {
+	if len(w.sameTxnWaiters) == 0 {
+		return
+	}
+	for _, v := range w.sameTxnWaiters {
+		v.notify("", notifyValue{})
+	}
+	w.sameTxnWaiters = w.sameTxnWaiters[:0]
+}
+
 func (w *waiter) mustSendNotification(
 	serviceID string,
 	value notifyValue) {
@@ -194,6 +208,7 @@ func (w *waiter) mustSendNotification(
 	} else {
 		value.ts = w.latestCommitTS
 	}
+	w.event.notified()
 	select {
 	case w.c <- value:
 		return
@@ -204,6 +219,7 @@ func (w *waiter) mustSendNotification(
 
 func (w *waiter) resetWait(serviceID string) {
 	if w.casStatus(serviceID, completed, waiting) {
+		w.event = event{}
 		return
 	}
 	panic("invalid reset wait")
@@ -293,6 +309,7 @@ func (w *waiter) close(
 	if value.ts.Less(w.latestCommitTS) {
 		value.ts = w.latestCommitTS
 	}
+	w.notifySameTxn(serviceID, value)
 	nextWaiter := w.fetchNextWaiter(serviceID, value)
 	logWaiterClose(serviceID, w, value.err)
 	w.unref(serviceID)
@@ -339,10 +356,12 @@ func (w *waiter) reset(serviceID string) {
 
 	logWaiterContactPool(serviceID, w, "put")
 	w.txnID = nil
+	w.event = event{}
 	w.latestCommitTS = timestamp.Timestamp{}
 	w.setStatus(serviceID, waiting)
 	w.waitTxn = pb.WaitTxn{}
 	w.waiters.reset()
+	w.sameTxnWaiters = w.sameTxnWaiters[:0]
 	waiterPool.Put(w)
 }
 
