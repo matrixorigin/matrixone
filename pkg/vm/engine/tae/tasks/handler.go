@@ -29,9 +29,9 @@ type BaseTaskHandler struct {
 	ops.OpWorker
 }
 
-func NewBaseEventHandler(name string) *BaseTaskHandler {
+func NewBaseEventHandler(ctx context.Context, name string) *BaseTaskHandler {
 	h := &BaseTaskHandler{
-		OpWorker: *ops.NewOpWorker(context.Background(), name),
+		OpWorker: *ops.NewOpWorker(ctx, name),
 	}
 	return h
 }
@@ -59,9 +59,9 @@ type singleWorkerHandler struct {
 	BaseTaskHandler
 }
 
-func NewSingleWorkerHandler(name string) *singleWorkerHandler {
+func NewSingleWorkerHandler(ctx context.Context, name string) *singleWorkerHandler {
 	h := &singleWorkerHandler{
-		BaseTaskHandler: *NewBaseEventHandler(name),
+		BaseTaskHandler: *NewBaseEventHandler(ctx, name),
 	}
 	return h
 }
