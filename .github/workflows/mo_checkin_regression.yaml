@@ -245,18 +245,9 @@ jobs:
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
           mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP"|awk '{print $3}')
-          tp_cn_0_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -o wide | grep tp-cn-0 | awk '{print $6}')
-          tp_cn_1_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -o wide | grep tp-cn-1 | awk '{print $6}')
-          dn_0_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -o wide | grep dn-0 | awk '{print $6}')
           
           echo mo_svc_ip=$mo_svc_ip
-          echo tp_cn_0_ip=$tp_cn_0_ip
-          echo tp_cn_1_ip=$tp_cn_1_ip
-          echo dn_0_ip=$dn_0_ip
           echo "mo_svc_ip=${mo_svc_ip}" >> $GITHUB_OUTPUT
-          echo "tp_cn_0_ip=${tp_cn_0_ip}" >> $GITHUB_OUTPUT
-          echo "tp_cn_1_ip=${tp_cn_1_ip}" >> $GITHUB_OUTPUT
-          echo "dn_0_ip=${dn_0_ip}" >> $GITHUB_OUTPUT
           
       - name: Start Load SSB 10G Data And Test
         if: ${{ always() }}
@@ -401,14 +392,13 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tpcc
           mkdir -p report
           cp props.mo props_10.mo
-          sed -i '/.*profAddr=*/c\profAddr=${{ steps.get_mo_addr.outputs.tp_cn_0_ip }},${{ steps.get_mo_addr.outputs.tp_cn_1_ip }},${{ steps.get_mo_addr.outputs.dn_0_ip }}' props_10.mo
           sed -i '/.*terminals=*/c\terminals=10' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
-          ./runBenchmark.sh props_10.mo PROFILE | tee report/tpcc-benchmark-10-10.log
+          ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-10.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-10.log
           
           if [ -f benchmarksql-error.log ];then
@@ -426,14 +416,13 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tpcc
           mkdir -p report
           cp props.mo props_10.mo
-          sed -i '/.*profAddr=*/c\profAddr=${{ steps.get_mo_addr.outputs.tp_cn_0_ip }},${{ steps.get_mo_addr.outputs.tp_cn_1_ip }},${{ steps.get_mo_addr.outputs.dn_0_ip }}' props_10.mo
           sed -i '/.*terminals=*/c\terminals=50' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
-          ./runBenchmark.sh props_10.mo PROFILE | tee report/tpcc-benchmark-10-50.log
+          ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-50.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-50.log
           
           if [ -f benchmarksql-error.log ];then
@@ -450,14 +439,13 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tpcc
           mkdir -p report
           cp props.mo props_10.mo
-          sed -i '/.*profAddr=*/c\profAddr=${{ steps.get_mo_addr.outputs.tp_cn_0_ip }},${{ steps.get_mo_addr.outputs.tp_cn_1_ip }},${{ steps.get_mo_addr.outputs.dn_0_ip }}' props_10.mo
           sed -i '/.*terminals=*/c\terminals=100' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
-          ./runBenchmark.sh props_10.mo PROFILE | tee report/tpcc-benchmark-10-50.log
+          ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-50.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-100.log
           
           if [ -f benchmarksql-error.log ];then
