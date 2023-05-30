@@ -45,15 +45,6 @@ type clientInfo struct {
 	originIP net.IP
 }
 
-// isSuperUser returns true if the username is root or dump.
-func (c *clientInfo) isSuperUser() bool {
-	u := strings.ToLower(c.username)
-	return u == superUserRoot || u == superUserDump
-}
-
-// sessionVarName is the session variable name which defines the label info.
-var sesssionVarName = "cn_label"
-
 // reservedLabels are the labels not allowed in user labels.
 // Ref: https://dev.mysql.com/doc/refman/8.0/en/performance-schema-connection-attribute-tables.html
 var reservedLabels = map[string]struct{}{
@@ -111,27 +102,6 @@ func (l *labelInfo) isSuperTenant() bool {
 		return true
 	}
 	return false
-}
-
-// genSetVarStmt returns a statement of set session variable.
-func (l *labelInfo) genSetVarStmt() string {
-	var builder strings.Builder
-	builder.WriteString("SET SESSION ")
-	builder.WriteString(sesssionVarName)
-	builder.WriteString("='")
-	count := len(l.allLabels())
-	var i int
-	for k, v := range l.allLabels() {
-		i++
-		builder.WriteString(k)
-		builder.WriteString("=")
-		builder.WriteString(v)
-		if i != count {
-			builder.WriteString(",")
-		}
-	}
-	builder.WriteString("'")
-	return builder.String()
 }
 
 // genSelector generates the label selector according to labels in labelInfo.

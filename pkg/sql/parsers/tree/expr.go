@@ -673,45 +673,8 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	ctx.WriteByte(')')
 
 	if node.WindowSpec != nil {
-		ctx.WriteString(" over (")
-
-		if len(node.WindowSpec.PartitionBy) > 0 {
-			ctx.WriteString("partition by ")
-			node.WindowSpec.PartitionBy.Format(ctx)
-		}
-
-		if len(node.WindowSpec.OrderBy) > 0 {
-			if len(node.WindowSpec.PartitionBy) > 0 {
-				ctx.WriteByte(' ')
-			}
-			node.WindowSpec.OrderBy.Format(ctx)
-		}
-
-		if node.WindowSpec.WindowFrame != nil {
-			frame := node.WindowSpec.WindowFrame
-
-			switch frame.Unit {
-			case WIN_FRAME_UNIT_ROWS:
-				ctx.WriteString(" rows ")
-
-			case WIN_FRAME_UNIT_RANGE:
-				ctx.WriteString(" range ")
-
-			case WIN_FRAME_UNIT_GROUPS:
-				ctx.WriteString(" groups ")
-			}
-
-			if frame.EndBound == nil {
-				frame.StartBound.Format(ctx)
-			} else {
-				ctx.WriteString("between ")
-				frame.StartBound.Format(ctx)
-				ctx.WriteString(" and ")
-				frame.EndBound.Format(ctx)
-			}
-		}
-
-		ctx.WriteByte(')')
+		ctx.WriteString(" ")
+		node.WindowSpec.Format(ctx)
 	}
 }
 
@@ -739,72 +702,104 @@ func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
 	}
 }
 
-func NewFuncExpr(ft FuncType, name *UnresolvedName, e Exprs, order OrderBy) *FuncExpr {
-	return &FuncExpr{
-		Func:    FuncName2ResolvableFunctionReference(name),
-		Type:    ft,
-		Exprs:   e,
-		AggType: AGG_TYPE_GENERAL,
-	}
-}
-
 type WindowSpec struct {
 	PartitionBy Exprs
 	OrderBy     OrderBy
-	WindowFrame *WindowFrame
+	HasFrame    bool
+	Frame       *FrameClause
 }
 
-type WindowFrame struct {
-	Unit       WindowFrameUnits
-	StartBound WindowFrameBound
-	EndBound   WindowFrameBound
+func (node *WindowSpec) Format(ctx *FmtCtx) {
+	ctx.WriteString("over (")
+	flag := false
+	if len(node.PartitionBy) > 0 {
+		ctx.WriteString("partition by ")
+		node.PartitionBy.Format(ctx)
+		flag = true
+	}
+
+	if len(node.OrderBy) > 0 {
+		if flag {
+			ctx.WriteString(" ")
+		}
+		node.OrderBy.Format(ctx)
+		flag = true
+	}
+
+	if node.Frame != nil && node.HasFrame {
+		if flag {
+			ctx.WriteString(" ")
+		}
+		node.Frame.Format(ctx)
+	}
+
+	ctx.WriteByte(')')
 }
 
-type WindowFrameUnits int
+type FrameType int
 
 const (
-	WIN_FRAME_UNIT_ROWS WindowFrameUnits = iota
-	WIN_FRAME_UNIT_RANGE
-	WIN_FRAME_UNIT_GROUPS //MySQL don't support
+	Rows FrameType = iota
+	Range
+	Groups
 )
 
-type WindowFrameBound interface {
-	Format(ctx *FmtCtx)
+type FrameClause struct {
+	Type   FrameType
+	HasEnd bool
+	Start  *FrameBound
+	End    *FrameBound
 }
 
-type WindowFrameBoundCurrentRow struct {
-	WindowFrameBound
-}
-
-func (currentRow *WindowFrameBoundCurrentRow) Format(ctx *FmtCtx) {
-	ctx.WriteString("current row")
-}
-
-type WindowFrameBoundPreceding struct {
-	WindowFrameBound
-	Expr Expr
-}
-
-func (preceding *WindowFrameBoundPreceding) Format(ctx *FmtCtx) {
-	if preceding.Expr == nil {
-		ctx.WriteString("unbounded preceding")
-	} else {
-		preceding.Expr.Format(ctx)
-		ctx.WriteString(" preceding")
+func (node *FrameClause) Format(ctx *FmtCtx) {
+	switch node.Type {
+	case Rows:
+		ctx.WriteString("rows")
+	case Range:
+		ctx.WriteString("range")
+	case Groups:
+		ctx.WriteString("groups")
 	}
+	ctx.WriteString(" ")
+	if !node.HasEnd {
+		node.Start.Format(ctx)
+		return
+	}
+	ctx.WriteString("between ")
+	node.Start.Format(ctx)
+	ctx.WriteString(" and ")
+	node.End.Format(ctx)
 }
 
-type WindowFrameBoundFollowing struct {
-	WindowFrameBound
-	Expr Expr
+type BoundType int
+
+const (
+	Following BoundType = iota
+	Preceding
+	CurrentRow
+)
+
+type FrameBound struct {
+	Type      BoundType
+	UnBounded bool
+	Expr      Expr
 }
 
-func (following *WindowFrameBoundFollowing) Format(ctx *FmtCtx) {
-	if following.Expr == nil {
-		ctx.WriteString("unbounded following")
+func (node *FrameBound) Format(ctx *FmtCtx) {
+	if node.UnBounded {
+		ctx.WriteString("unbounded")
+	}
+	if node.Type == CurrentRow {
+		ctx.WriteString("current row")
 	} else {
-		following.Expr.Format(ctx)
-		ctx.WriteString(" following")
+		if node.Expr != nil {
+			node.Expr.Format(ctx)
+		}
+		if node.Type == Preceding {
+			ctx.WriteString(" preceding")
+		} else {
+			ctx.WriteString(" following")
+		}
 	}
 }
 
