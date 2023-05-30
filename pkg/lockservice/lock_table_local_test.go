@@ -579,6 +579,64 @@ func TestMergeRangeWithConflict(t *testing.T) {
 		})
 }
 
+func TestLocalLockTableMulitiRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				1,
+				[]byte{2},
+				[][]byte{{1}},
+				pb.Granularity_Row)
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				mustAddTestLock(
+					t,
+					ctx,
+					l,
+					1,
+					[]byte{1},
+					[][]byte{{1}},
+					pb.Granularity_Row)
+			}()
+			go func() {
+				defer wg.Done()
+				waitWaiters(t, l, 1, []byte{1}, 1)
+				mustAddTestLock(
+					t,
+					ctx,
+					l,
+					1,
+					[]byte{1},
+					[][]byte{{1}, {2}},
+					pb.Granularity_Row)
+			}()
+
+			waitWaiters(t, l, 1, []byte{1}, 1, 1)
+			require.NoError(t, l.Unlock(ctx, []byte{2}, timestamp.Timestamp{}))
+
+			wg.Wait()
+			v, err := l.getLockTable(1)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+			lt.mu.Lock()
+			defer lt.mu.Unlock()
+			require.Equal(t, 2, lt.mu.store.Len())
+		})
+}
+
 func getRowOptions() pb.LockOptions {
 	return pb.LockOptions{Granularity: pb.Granularity_Row}
 }
