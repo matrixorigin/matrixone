@@ -525,6 +525,9 @@ func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
 func (cs *clientSession) Write(
 	ctx context.Context,
 	response Message) error {
+	if ctx == nil {
+		panic("Write nil context")
+	}
 	return cs.WriteRPCMessage(RPCMessage{
 		Ctx:     ctx,
 		Message: response,
