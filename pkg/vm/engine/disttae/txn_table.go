@@ -785,6 +785,23 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	return nil
 }
 
+func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+	ct, err := c.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	bat, err := genTableAlterTuple(constraint, tbl.db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	if err = tbl.db.txn.WriteBatch(ALTER, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.dnStores[0], -1, false, false); err != nil {
+		return err
+	}
+	tbl.constraint = ct
+	return nil
+}
+
 func (tbl *txnTable) TableColumns(ctx context.Context) ([]*engine.Attribute, error) {
 	var attrs []*engine.Attribute
 	for _, def := range tbl.defs {
@@ -1078,6 +1095,10 @@ func (tbl *txnTable) DelTableDef(ctx context.Context, def engine.TableDef) error
 
 func (tbl *txnTable) GetTableID(ctx context.Context) uint64 {
 	return tbl.tableId
+}
+
+func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
+	return tbl.db.databaseId
 }
 
 func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {

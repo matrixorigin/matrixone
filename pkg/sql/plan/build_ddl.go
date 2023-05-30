@@ -1647,6 +1647,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 
 	alterTable.TableDef = tableDef
 
+	var primaryKeys []string
+	var indexs []string
+	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
+	secondaryIndexInfos := make([]*tree.Index, 0)
 	for i, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
@@ -1657,6 +1661,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			switch opt.Typ {
 			case tree.AlterTableDropColumn:
 				alterTableDrop.Typ = plan.AlterTableDrop_COLUMN
+				err := checkIsDroppableColumn(tableDef, constraintName, ctx)
+				if err != nil {
+					return nil, err
+				}
 				for _, col := range tableDef.Cols {
 					if col.Name == constraintName {
 						name_not_found = false
@@ -1818,7 +1826,150 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					AlterIndex: alterTableIndex,
 				},
 			}
+
+		case *tree.TableOptionComment:
+			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for field '%s' is too long", alterTable.TableDef.Name)
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterComment{
+					AlterComment: &plan.AlterTableComment{
+						NewComment: opt.Comment,
+					},
+				},
+			}
+		case *tree.AlterTableName:
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterName{
+					AlterName: &plan.AlterTableName{
+						OldName: tableDef.Name,
+						NewName: string(opt.Name.ToTableName().ObjectName),
+					},
+				},
+			}
+		case *tree.AlterAddCol:
+			colType, err := getTypeFromAst(ctx.GetContext(), opt.Column.Type)
+			if err != nil {
+				return nil, err
+			}
+			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
+				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
+				if colType.GetWidth() > types.MaxStringSize {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
+				}
+			}
+			var pks []string
+			var comment string
+			var auto_incr bool
+			for _, attr := range opt.Column.Attributes {
+				switch attribute := attr.(type) {
+				case *tree.AttributePrimaryKey, *tree.AttributeKey:
+					if colType.GetId() == int32(types.T_blob) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
+					}
+					if colType.GetId() == int32(types.T_text) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
+					}
+					if colType.GetId() == int32(types.T_json) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", opt.Column.Name.Parts[0]))
+					}
+					pks = append(pks, opt.Column.Name.Parts[0])
+				case *tree.AttributeComment:
+					comment = attribute.CMT.String()
+					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
+						return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", opt.Column.Name.Parts[0])
+					}
+				case *tree.AttributeAutoIncrement:
+					auto_incr = true
+					if !types.T(colType.GetId()).IsInteger() {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
+					}
+				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{
+							{
+								ColName: opt.Column.Name,
+							},
+						},
+						Name: opt.Column.Name.Parts[0],
+					})
+					indexs = append(indexs, opt.Column.Name.Parts[0])
+				}
+			}
+			if len(pks) > 0 {
+				if len(primaryKeys) > 0 {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
+				}
+				primaryKeys = pks
+			}
+
+			defaultValue, err := buildDefaultExpr(opt.Column, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			if auto_incr && defaultValue.Expr != nil {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", opt.Column.Name.Parts[0])
+			}
+
+			onUpdateExpr, err := buildOnUpdate(opt.Column, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+
+			if !checkTableColumnNameValid(opt.Column.Name.Parts[0]) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", opt.Column.Name.Parts[0])
+			}
+
+			colType.AutoIncr = auto_incr
+			col := &ColDef{
+				Name:     opt.Column.Name.Parts[0],
+				Alg:      plan.CompressType_Lz4,
+				Typ:      colType,
+				Default:  defaultValue,
+				OnUpdate: onUpdateExpr,
+				Comment:  comment,
+			}
+			colMap[col.Name] = col
+			preName := ""
+			if opt.Pos.PreColName != nil {
+				preName = opt.Pos.PreColName.Parts[0]
+			}
+			err = checkIsAddableColumn(tableDef, opt.Column.Name.Parts[0], colType, ctx)
+			if err != nil {
+				return nil, err
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AddCol{
+					AddCol: &plan.AlterAddCol{
+						Name:    opt.Column.Name.Parts[0],
+						PreName: preName,
+						Type:    colType,
+						Pos:     opt.Pos.Pos,
+					},
+				},
+			}
 		}
+	}
+
+	for _, str := range indexs {
+		if _, ok := colMap[str]; !ok {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", str)
+		}
+		if colMap[str].Typ.Id == int32(types.T_blob) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
+		}
+		if colMap[str].Typ.Id == int32(types.T_text) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
+		}
+		if colMap[str].Typ.Id == int32(types.T_json) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
+		}
+	}
+
+	// check Constraint Name (include index/ unique)
+	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	if err != nil {
+		return nil, err
 	}
 
 	return &Plan{
