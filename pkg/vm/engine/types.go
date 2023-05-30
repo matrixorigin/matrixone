@@ -552,7 +552,7 @@ type Relation interface {
 
 	GetEngineType() EngineType
 
-	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
+	GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error)
 }
 
 type Reader interface {
