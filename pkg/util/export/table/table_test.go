@@ -27,7 +27,6 @@ import (
 
 func init() {
 	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	ZeroTime = time.Unix(0, 0)
 }
 
 func TestNoopTableOptions_FormatDdl(t *testing.T) {
@@ -328,12 +327,12 @@ func TestColumnField_EncodedDatetime(t *testing.T) {
 		want   string
 	}{
 		{
-			name: "normal",
+			name: "zero",
 			fields: fields{
 				cf: TimeField(ZeroTime),
 			},
 			wantT: ZeroTime,
-			want:  "1970-01-01 00:00:00.000000",
+			want:  "0001-01-01 00:00:00.000000",
 		},
 		{
 			name: "empty",
@@ -342,6 +341,14 @@ func TestColumnField_EncodedDatetime(t *testing.T) {
 			},
 			wantT: time.Time{},
 			want:  "0001-01-01 00:00:00.000000",
+		},
+		{
+			name: "Unix_Zero",
+			fields: fields{
+				cf: TimeField(time.Unix(0, 0)),
+			},
+			wantT: time.Unix(0, 0),
+			want:  "1970-01-01 00:00:00.000000",
 		},
 	}
 	for _, tt := range tests {

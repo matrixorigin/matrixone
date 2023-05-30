@@ -824,7 +824,7 @@ func SetPathBuilder(ctx context.Context, pathBuilder string) error {
 	return nil
 }
 
-var ZeroTime = time.Unix(0, 0)
+var ZeroTime = time.Time{}
 
 const timestampFormatter = "2006-01-02 15:04:05.000000"
 
