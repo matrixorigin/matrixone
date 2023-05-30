@@ -108,10 +108,18 @@ func (s *StatementInfo) GetName() string {
 	return SingleStatementTable.GetName()
 }
 
+// deltaContentLength approximate value that may gen as table record
+// stmtID, txnID, sesID: 36 * 3
+// timestamp: 26 * 2
+// status: 7
+// spanInfo: 36+16
+const deltaStmtContentLength = int64(36*3 + 26*2 + 7 + 36 + 16)
+
 func (s *StatementInfo) Size() int64 {
-	return int64(unsafe.Sizeof(s)) + int64(
+	return int64(unsafe.Sizeof(s)) + deltaStmtContentLength + int64(
 		len(s.Account)+len(s.User)+len(s.Host)+
-			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag),
+			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag)+
+			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsJsonByte),
 	)
 }
 
