@@ -180,8 +180,6 @@ type Config struct {
 		DisableLeakCheck bool `toml:"enable-leak-check"`
 		// MaxActiveAges a txn max active duration
 		MaxActiveAges toml.Duration `toml:"max-active-ages"`
-		// PanicIfTxnLeakFound panic if leak found
-		PanicIfTxnLeakFound bool `toml:"panic-if-txn-leak-found"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
