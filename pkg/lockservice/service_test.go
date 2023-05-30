@@ -318,6 +318,95 @@ func TestRowLockWithSameTxn(t *testing.T) {
 	)
 }
 
+func TestRowLockWithSameTxnWithConflict(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx := context.Background()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			assert.NoError(t, err)
+
+			var wg sync.WaitGroup
+			n := 10
+			for i := 0; i < n; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := l.Lock(
+						ctx,
+						0,
+						[][]byte{{1}},
+						[]byte("txn2"),
+						option)
+					assert.NoError(t, err)
+				}()
+			}
+
+			waitWaiters(t, l, 0, []byte{1}, 1)
+			require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+			wg.Wait()
+		},
+	)
+}
+
+func TestRangeLockWithSameTxnWithConflict(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx := context.Background()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			assert.NoError(t, err)
+
+			var wg sync.WaitGroup
+			n := 10
+			option.Granularity = pb.Granularity_Range
+			for i := 0; i < n; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := l.Lock(
+						ctx,
+						0,
+						[][]byte{{1}, {3}},
+						[]byte("txn2"),
+						option)
+					assert.NoError(t, err)
+				}()
+			}
+
+			waitWaiters(t, l, 0, []byte{1}, 1)
+			require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+			wg.Wait()
+		},
+	)
+}
+
 func mustAddTestLock(t *testing.T,
 	ctx context.Context,
 	l *service,

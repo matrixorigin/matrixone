@@ -549,8 +549,12 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	} else {
 		<-s.requestLock
 	}
+
 	s.doSubscribe = clientIsPreparing
 	s.doUnSubscribe = clientIsPreparing
+	defer func() {
+		s.requestLock <- true
+	}()
 
 	// close the old stream
 	oldClient := s.logTailClient
@@ -571,7 +575,6 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	}
 	s.doSubscribe = s.subscribeTable
 	s.doUnSubscribe = s.unSubscribeTable
-	s.requestLock <- true
 
 	return nil
 }

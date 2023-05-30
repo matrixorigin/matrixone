@@ -272,6 +272,15 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, aggListInfo)
 	}
 
+	// Get Window function info
+	if ndesc.Node.NodeType == plan.Node_WINDOW {
+		windowSpecListInfo, err := ndesc.GetWindowSpectListInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, windowSpecListInfo)
+	}
+
 	// Get Filter list info
 	if len(ndesc.Node.FilterList) > 0 {
 		filterInfo, err := ndesc.GetFilterConditionInfo(ctx, options)
@@ -434,6 +443,29 @@ func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *
 		for _, v := range ndesc.Node.GetAggList() {
 			if !first {
 				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetWindowSpectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Window Function: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.GetWinSpecList() {
+			if !first {
+				buf.WriteString("\n")
 			}
 			first = false
 			err := describeExpr(ctx, v, options, buf)

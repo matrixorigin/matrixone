@@ -240,7 +240,15 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 			// current txn's lock
 			if bytes.Equal(c.txn.txnID, lock.txnID) {
 				if c.w != nil {
-					panic("BUG: can not has a waiter on self txn")
+					if len(c.w.sameTxnWaiters) > 0 {
+						panic("BUG: same txn waiters should be empty")
+					}
+					str := c.w.String()
+					if v := c.w.close(l.bind.ServiceID, notifyValue{}); v != nil {
+						panic("BUG: waiters should be empty, " + str + "," + v.String() + ", " + fmt.Sprintf("table(%d)  %+v", l.bind.Table, key))
+					}
+					c.w = nil
+					return c
 				}
 				continue
 			}
@@ -304,6 +312,9 @@ func (l *localLockTable) addRowLockLocked(
 	// lock can be read when the deadlock is detected.
 	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{row}, true)
 	l.mu.store.Add(row, lock)
+
+	// if has same txn's waiters on same key, there must be at wait status.
+	waiter.notifySameTxn(l.bind.ServiceID, notifyValue{})
 }
 
 func (l *localLockTable) handleLockConflictLocked(
@@ -341,8 +352,9 @@ func (l *localLockTable) addRangeLockLocked(
 	start, end []byte,
 	mode pb.LockMode) ([]byte, Lock) {
 	w = getWaiter(l.bind.ServiceID, w, txn.txnID)
-	mc := newMergeContext()
+	mc := newMergeContext(w)
 	defer mc.close()
+
 	var conflictWith Lock
 	var confilctKey []byte
 	var prevStartKey []byte
@@ -408,6 +420,7 @@ func (l *localLockTable) addRangeLockLocked(
 	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{start, end}, true)
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
+
 	return nil, Lock{}
 }
 
@@ -507,13 +520,17 @@ var (
 )
 
 type mergeContext struct {
+	origin         *waiter
+	waitOnSameKey  []*waiter
 	changedWaiters []*waiter
 	mergedWaiters  []*waiter
 	mergedLocks    map[string]struct{}
 }
 
-func newMergeContext() *mergeContext {
+func newMergeContext(w *waiter) *mergeContext {
 	c := mergePool.Get().(*mergeContext)
+	c.origin = w
+	c.waitOnSameKey = append(c.waitOnSameKey, w.sameTxnWaiters...)
 	return c
 }
 
@@ -523,6 +540,8 @@ func (c *mergeContext) close() {
 	}
 	c.changedWaiters = c.changedWaiters[:0]
 	c.mergedWaiters = c.mergedWaiters[:0]
+	c.waitOnSameKey = c.waitOnSameKey[:0]
+	c.origin = nil
 	mergePool.Put(c)
 }
 
@@ -558,6 +577,11 @@ func (c *mergeContext) commit(
 	for _, w := range c.mergedWaiters {
 		w.waiters.reset()
 		w.unref(bind.ServiceID)
+	}
+
+	// if has same txn's waiters on same key, there must be at wait status.
+	for _, v := range c.waitOnSameKey {
+		v.notify("", notifyValue{})
 	}
 }
 
