@@ -39,23 +39,23 @@ func NewCount[T1 types.OrderedT | Decimal128AndString](isStar bool) *Count[T1] {
 func (c *Count[T1]) Grows(_ int) {
 }
 
-func (c *Count[T1]) Eval(vs []int64) []int64 {
-	return vs
+func (c *Count[T1]) Eval(vs []int64, err error) ([]int64, error) {
+	return vs, nil
 }
 
-func (c *Count[T1]) Merge(_, _ int64, x, y int64, _ bool, _ bool, _ any) (int64, bool) {
-	return x + y, false
+func (c *Count[T1]) Merge(_, _ int64, x, y int64, _ bool, _ bool, _ any) (int64, bool, error) {
+	return x + y, false, nil
 }
 
-func (c *Count[T1]) Fill(_ int64, _ T1, v int64, z int64, _ bool, hasNull bool) (int64, bool) {
+func (c *Count[T1]) Fill(_ int64, _ T1, v int64, z int64, _ bool, hasNull bool) (int64, bool, error) {
 	if hasNull {
 		if !c.IsStar {
-			return v, false
+			return v, false, nil
 		} else {
-			return v + z, false
+			return v + z, false, nil
 		}
 	}
-	return v + z, false
+	return v + z, false, nil
 }
 
 func (c *Count[T1]) BatchFill(rs, _ any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
