@@ -456,8 +456,6 @@ loop:
 				select {
 				case c.awakeBatch <- exportReq:
 				case <-c.stopCh:
-					//default:
-					//	logutil.Debug("MOCollector Batch chan is full", zap.Int("chanSize", len(c.awakeBatch)))
 				}
 			}
 		case <-c.stopCh:
