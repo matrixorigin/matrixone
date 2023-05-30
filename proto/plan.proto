@@ -1149,3 +1149,42 @@ message LockTables {
 }
 
 message UnLockTables{}
+
+message MetadataScanInfo {
+	enum MetadataScanInfoType {
+		COL_NAME      = 0;
+		BLOCK_ID      = 1;
+		ENTRY_STATE   = 2;
+		SORTED        = 3;
+		IS_HIDDEN = 4;
+		META_LOC      = 5;
+		DELTA_LOC     = 6;
+		COMMIT_TS     = 7;
+		CREATE_TS     = 8;
+		DELETE_TS     = 9;
+		SEG_ID         = 10;
+		ROWS_CNT      = 11;
+		NULL_CNT      = 12;
+		COMPRESS_SIZE = 13;
+		ORIGIN_SIZE   = 14;
+		MIN           = 15;
+		MAX           = 16;	
+	} 
+	string ColName  =1;
+	bytes BlockId =2;
+	bool EntryState=3;
+	bool Sorted     =4;
+	bool IsHidden =5;
+	bytes MetaLoc     =6;
+	bytes DelLoc      =7;
+	bytes CommitTs    =8;
+	bytes CreateTs    =9;
+	bytes DeleteTs    = 10;
+	bytes SegId        = 11;
+	int64 RowCnt      = 12;
+	int64 NullCnt     = 13;
+	int64 CompressSize= 14;
+	int64 OriginSize  = 15;
+	bytes Min          = 16;
+	bytes Max          =17;
+}
