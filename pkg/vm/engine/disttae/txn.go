@@ -25,12 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func (txn *Transaction) getBlockInfos(
@@ -128,6 +130,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	if txn.proc != nil && txn.proc.Ctx != nil {
 		isMoLogger, ok := txn.proc.Ctx.Value(defines.IsMoLogger{}).(bool)
 		if ok && isMoLogger {
+			logutil.Info("DumpBatchS3", zap.Bool("isMoLogger", isMoLogger))
 			S3SizeThreshold = colexec.TagS3SizeForMOLogger
 		}
 	}
