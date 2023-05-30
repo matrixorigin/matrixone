@@ -354,6 +354,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 			Database:     proc.SessionInfo.GetDatabase(),
 			Version:      proc.SessionInfo.GetVersion(),
 			TimeZone:     timeBytes,
+			QueryId:      proc.SessionInfo.QueryId,
 		}
 	}
 	return procInfo.Marshal()
@@ -1468,6 +1469,7 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 		Database:     sei.Database,
 		Version:      sei.Version,
 		Account:      sei.Account,
+		QueryId:      sei.QueryId,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)

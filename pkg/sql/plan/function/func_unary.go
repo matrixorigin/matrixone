@@ -18,6 +18,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,10 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"io"
-	"strconv"
-	"strings"
-	"time"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
@@ -791,6 +792,7 @@ func LastQueryIDWithoutParam(_ []*vector.Vector, result vector.FunctionResultWra
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
+			continue
 		}
 		var idx int
 		idx, err = makeQueryIdIdx(-1, cnt, proc)

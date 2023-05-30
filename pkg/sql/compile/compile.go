@@ -1972,7 +1972,6 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scop
 			ss = append(ss, tmp)
 		}
 	*/
-
 	// Force right join to execute on one CN due to right join issue
 	// Will fix in future
 	maxCpuNum := 1
