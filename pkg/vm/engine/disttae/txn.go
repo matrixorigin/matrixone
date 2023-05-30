@@ -130,7 +130,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	if txn.proc != nil && txn.proc.Ctx != nil {
 		isMoLogger, ok := txn.proc.Ctx.Value(defines.IsMoLogger{}).(bool)
 		if ok && isMoLogger {
-			logutil.Info("DumpBatchS3", zap.Bool("isMoLogger", isMoLogger), zap.Bool("force", force))
+			logutil.Info("DumpBatchS3 isMoLogger", zap.Bool("isMoLogger", isMoLogger), zap.Bool("force", force))
 			S3SizeThreshold = colexec.TagS3SizeForMOLogger
 		}
 	}

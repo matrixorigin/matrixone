@@ -76,8 +76,8 @@ const (
 	// trigger write s3
 	WriteS3Threshold uint64 = 64 * mpool.MB
 
-	TagS3Size            uint64 = 10 * mpool.MB
-	TagS3SizeForMOLogger uint64 = 256 * mpool.KB
+	TagS3Size            uint64 = 1 * mpool.MB
+	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
 )
 
 func (w *S3Writer) Free(proc *process.Process) {
