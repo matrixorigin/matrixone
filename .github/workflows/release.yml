@@ -5,28 +5,37 @@ name: release
 on:
   release:
     types: [published]
-
+env: 
+   branch: main
 
 jobs:
   linux-amd64-build-job:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v1
-      - name: Use Golang
-        uses: actions/setup-go@v1
+        uses: actions/checkout@v3
         with:
-          go-version: "1.19"
+          repository: matrixorigin/matrixone
+          ref: ${{ env.branch }}
+          
+      - name: Use Golang
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.20"
       - name: Build normal
         run: |
           make build
           zip -r mo-linux-amd64.zip mo-service ./etc/launch-tae-CN-tae-DN
       - name: Get release
         id: get_release
-        uses: bruceadams/get-release@v1.2.3
+        uses: bruceadams/get-release@v1.3.2
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
-      - name: Upload Release normal linux
+      - name: Echo some info
+        run: |
+          echo ${{ steps.get_release.outputs.upload_url }}
+          echo ${{ steps.get_release.outputs.tag_name }}
+      - name: Upload Release normal linux amd64
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
@@ -40,26 +49,35 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v3
+        with:
+          repository: matrixorigin/matrixone
+          ref: ${{ env.branch }}
+          
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
-          go-version: "1.19"
+          go-version: "1.20"
       - name: Build normal
         run: |
           make build
           zip -r mo-linux-arm64.zip mo-service ./etc/launch-tae-CN-tae-DN
       - name: Get release
         id: get_release
-        uses: bruceadams/get-release@v1.2.3
+        uses: bruceadams/get-release@v1.3.2
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
-      - name: Upload Release normal linux
+          
+      - name: Echo some info
+        run: |
+          echo ${{ steps.get_release.outputs.upload_url }}
+          echo ${{ steps.get_release.outputs.tag_name }}
+      - name: Upload Release normal linux arm64
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
         with:
           upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./mo-linux-amd64.zip
+          asset_path: ./mo-linux-arm64.zip
           asset_name: mo-${{ steps.get_release.outputs.tag_name }}-linux-arm64.zip
           asset_content_type: application/zip
 
@@ -67,11 +85,14 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v1
-      - name: Use Golang
-        uses: actions/setup-go@v1
+        uses: actions/checkout@v3
         with:
-          go-version: "1.19"
+          repository: matrixorigin/matrixone
+          ref: ${{ env.branch }}
+      - name: Use Golang
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.20"
       - name: Build normal
         run: |
           make build
@@ -99,10 +120,10 @@ jobs:
           zip -r mo-darwin-x86_64.zip mo-service ./etc/launch-tae-CN-tae-DN
       - name: Get release
         id: get_release
-        uses: bruceadams/get-release@v1.2.3
+        uses: bruceadams/get-release@v1.3.2
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
-      - name: Upload Release normal linux
+      - name: Upload Release normal darwin x86_64
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
@@ -114,31 +135,29 @@ jobs:
 
 
   darwin-arm-build-job:
-    runs-on: mini-m1-macos12
+    runs-on: mac-arm64-mini
     steps:
       - name: Checkout source
         uses: actions/checkout@v3
-      - name: Use Golang
-        uses: actions/setup-go@v4
         with:
-          go-version: "1.19"
+          repository: matrixorigin/matrixone
+          ref: ${{ env.branch }}
+
+      - name: Check go Version
+        run: |
+          go version
       - name: Build normal
         run: |
           make build
-      - name: Import Code-Signing Certificates
-        uses: Apple-Actions/import-codesign-certs@v1
-        with:
-          # The certificates in a PKCS12 file encoded as a base64 string
-          p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
-          # The password used to import the PKCS12 file.
-          p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+      - name: Unlock Code-Signing Certificates
+        run: |
+          security unlock-keychain -p ${{ secrets.CERT_PASSWORD }} mo_sign.keychain
       - name: Install gon via HomeBrew for code signing and app notarization
         env:
           AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
         run: |
-          brew tap mitchellh/gon
-          brew install mitchellh/gon/gon
           cp ./optools/sign/gon.json ./gon.json
+          cat ./gon.json
           gon -log-json ./gon.json
           unzip -d ./mo-macos11 mo-macos11.zip
           mkdir -p ./mo-macos11/etc
@@ -149,10 +168,10 @@ jobs:
           zip -r mo-darwin-arm64.zip mo-service ./etc/launch-tae-CN-tae-DN
       - name: Get release
         id: get_release
-        uses: bruceadams/get-release@v1.2.3
+        uses: bruceadams/get-release@v1.3.2
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
-      - name: Upload Release normal linux
+      - name: Upload Release normal darwin arm64
         uses: actions/upload-release-asset@v1.0.1
         env:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
@@ -161,3 +180,6 @@ jobs:
           asset_path: ./mo-macos11/mo-darwin-arm64.zip
           asset_name: mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64.zip
           asset_content_type: application/zip
+      - name: Lock Code-Signing Certificates
+        run: |
+          security lock-keychain mo_sign.keychain
