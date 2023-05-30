@@ -33,6 +33,7 @@ const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 	procTimeout           = 10000 * time.Second
 	waitNotifyTimeout     = 45 * time.Second
+	shuffleBatchSize      = 1024 * 8 //8k
 
 	// send to all reg functions
 	SendToAllLocalFunc = iota
@@ -43,6 +44,9 @@ const (
 	SendToAnyLocalFunc
 	SendToAnyRemoteFunc
 	SendToAnyFunc
+
+	//shuffle to all reg functions
+	ShuffleToAllFunc
 )
 
 type WrapperClientSession struct {
@@ -68,17 +72,29 @@ type container struct {
 	aliveRegCnt   int
 	localRegsCnt  int
 	remoteRegsCnt int
+
+	// for shuffle reuse memory
+	sels         [][]int32
+	remoteToIdx  map[uuid.UUID]int
+	shuffledBats []*batch.Batch
+	batsCount    int
 }
 
 type Argument struct {
 	ctr *container
 
+	// IsSink means this is a Sink Node
+	IsSink bool
 	// FuncId means the sendFunc you want to call
 	FuncId int
 	// LocalRegs means the local register you need to send to.
 	LocalRegs []*process.WaitRegister
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
+	// for shuffle
+	ShuffleColIdx       int
+	ShuffleRegIdxLocal  []int
+	ShuffleRegIdxRemote []int
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
@@ -102,18 +118,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			}
 			r.cs.Write(timeoutCtx, message)
 			close(r.doneCh)
-		}
-	}
-
-	if pipelineFailed {
-		for i := range arg.LocalRegs {
-			for len(arg.LocalRegs[i].Ch) > 0 {
-				bat := <-arg.LocalRegs[i].Ch
-				if bat == nil {
-					break
-				}
-				bat.Clean(proc.Mp())
-			}
 		}
 	}
 

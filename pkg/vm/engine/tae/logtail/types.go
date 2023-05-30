@@ -35,20 +35,19 @@ const (
 )
 
 const (
-	SnapshotAttr_TID     = catalog.SnapshotAttr_TID
-	SnapshotAttr_DBID    = catalog.SnapshotAttr_DBID
-	SegmentAttr_ID       = catalog.SegmentAttr_ID
-	SegmentAttr_CreateAt = catalog.SegmentAttr_CreateAt
-	SegmentAttr_State    = catalog.SegmentAttr_State
-	SegmentAttr_Sorted   = catalog.SegmentAttr_Sorted
-	// TODO(aptend): add SortHint and replay ckp correctly, onReplayCreateSegment. Use bytes as one column.
-	// Low priority, because replay from ckp will keep the create order
+	SnapshotAttr_TID                       = catalog.SnapshotAttr_TID
+	SnapshotAttr_DBID                      = catalog.SnapshotAttr_DBID
+	SegmentAttr_ID                         = catalog.SegmentAttr_ID
+	SegmentAttr_CreateAt                   = catalog.SegmentAttr_CreateAt
+	SegmentAttr_SegNode                    = catalog.SegmentAttr_SegNode
 	SnapshotAttr_BlockMaxRow               = catalog.SnapshotAttr_BlockMaxRow
 	SnapshotAttr_SegmentMaxBlock           = catalog.SnapshotAttr_SegmentMaxBlock
 	SnapshotMetaAttr_BlockInsertBatchStart = "block_insert_batch_start"
 	SnapshotMetaAttr_BlockInsertBatchEnd   = "block_insert_batch_end"
 	SnapshotMetaAttr_BlockDeleteBatchStart = "block_delete_batch_start"
 	SnapshotMetaAttr_BlockDeleteBatchEnd   = "block_delete_batch_end"
+	SnapshotMetaAttr_SegDeleteBatchStart   = "seg_delete_batch_start"
+	SnapshotMetaAttr_SegDeleteBatchEnd     = "seg_delete_batch_end"
 
 	SnapshotAttr_SchemaExtra = catalog.SnapshotAttr_SchemaExtra
 )
@@ -70,14 +69,12 @@ var (
 	SegmentSchemaAttr = []string{
 		SegmentAttr_ID,
 		SegmentAttr_CreateAt,
-		SegmentAttr_State,
-		SegmentAttr_Sorted,
+		SegmentAttr_SegNode,
 	}
 	SegmentSchemaTypes = []types.Type{
 		types.New(types.T_uuid, 0, 0),
 		types.New(types.T_TS, 0, 0),
-		types.New(types.T_bool, 0, 0),
-		types.New(types.T_bool, 0, 0),
+		types.New(types.T_blob, 0, 0),
 	}
 	TxnNodeSchemaAttr = []string{
 		txnbase.SnapshotAttr_LogIndex_LSN,
@@ -191,9 +188,13 @@ var (
 		SnapshotMetaAttr_BlockInsertBatchEnd,
 		SnapshotMetaAttr_BlockDeleteBatchStart,
 		SnapshotMetaAttr_BlockDeleteBatchEnd,
+		SnapshotMetaAttr_SegDeleteBatchStart,
+		SnapshotMetaAttr_SegDeleteBatchEnd,
 	}
 	MetaShcemaTypes = []types.Type{
 		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_int32, 0, 0),
+		types.New(types.T_int32, 0, 0),
 		types.New(types.T_int32, 0, 0),
 		types.New(types.T_int32, 0, 0),
 		types.New(types.T_int32, 0, 0),

@@ -322,7 +322,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -763,7 +763,13 @@ func Test_handleShowVariables(t *testing.T) {
 		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
+
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -775,19 +781,44 @@ func Test_handleShowVariables(t *testing.T) {
 			t.Error(err)
 		}
 
+		pu.StorageEngine = eng
+		pu.TxnClient = txnClient
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, pu, &gSys, false, nil)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
+		tenant := &TenantInfo{
+			Tenant:   "sys",
+			TenantID: 0,
+			User:     DefaultTenantMoAdmin,
+		}
+		ses.SetTenantInfo(tenant)
 		ses.mrs = &MysqlResultSet{}
+		ses.SetDatabaseName("t")
 		mce := &MysqlCmdExecutor{}
-
 		mce.SetSession(ses)
 		proto.SetSession(ses)
 
-		sv := &tree.ShowVariables{Global: true}
+		sv := &tree.ShowVariables{Global: false}
+		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+		bh.init()
+		ses.mrs = &MysqlResultSet{}
+
+		sql := getSystemVariablesWithAccount(0)
+		rows := [][]interface{}{
+			{"syspublications", ""},
+		}
+
+		bh.sql2result[sql] = newMrsForSystemVariablesOfAccount(rows)
+		sv = &tree.ShowVariables{Global: true}
 		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
 	})
 }
@@ -1023,7 +1054,8 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		json, _, stats := serializePlanToJson(mock.CurrentContext().GetContext(), plan, uuid.New())
+		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), uuid.New(), plan)
+		json, _, stats := h.Marshal(mock.CurrentContext().GetContext())
 		require.Equal(t, int64(0), stats.RowsRead)
 		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
@@ -1260,6 +1292,10 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 							"account": {Labels: []string{"t2"}},
 						},
 					},
+					{
+						ServiceID:  "s3",
+						SQLAddress: "addr3",
+					},
 				},
 				nil,
 			),
@@ -1279,4 +1315,25 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 		require.Equal(t, "s1", row[0])
 		require.Equal(t, "addr1", row[1])
 	})
+}
+
+func Test_RecordParseErrorStatement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetRequestContext(context.TODO())
+
+	proc := &process.Process{
+		Ctx: context.TODO(),
+	}
+
+	motrace.GetTracerProvider().SetEnable(true)
+	ctx := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
+	si := motrace.StatementFromContext(ctx)
+	require.NotNil(t, si)
+
+	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{externSql, externSql}, moerr.NewInternalErrorNoCtx("test"))
+	si = motrace.StatementFromContext(ctx)
+	require.NotNil(t, si)
+
 }

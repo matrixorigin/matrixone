@@ -17,15 +17,15 @@ insert into use_db_1.use_table_1 values(34,'kelly',90.3);
 set role use_role_2;
 create table use_db_1.use_table_2(a int,b varchar(20),c double );
 insert into use_db_1.use_table_2 values(34,'kelly',90.3);
-internal error: do not have privilege to execute the statement
 select * from use_db_1.use_table_2;
-internal error: do not have privilege to execute the statement
+a    b    c
+34    kelly    90.3
 set secondary role none;
 create table use_db_1.use_table_3(a int,b varchar(20),c double );
 insert into use_db_1.use_table_3 values(34,'kelly',90.3);
-internal error: do not have privilege to execute the statement
 select * from use_db_1.use_table_3;
-internal error: do not have privilege to execute the statement
+a    b    c
+34    kelly    90.3
 drop table use_db_1.use_table_3;
 set role use_role_1;
 create table use_db_1.use_table_4(a int,b varchar(20),c double );
@@ -33,6 +33,7 @@ internal error: do not have privilege to execute the statement
 insert into use_db_1.use_table_2 values(10,'yellow',99.99);
 select * from use_db_1.use_table_2;
 a    b    c
+34    kelly    90.3
 10    yellow    99.99
 drop table use_db_1.use_table_2;
 internal error: do not have privilege to execute the statement
@@ -78,7 +79,6 @@ drop database use_db_test;
 internal error: do not have privilege to execute the statement
 set secondary role none;
 insert into use_db_1.use_table_6 values (10, 'yellow', 99.99);
-internal error: do not have privilege to execute the statement
 drop table use_db_1.use_table_6;
 internal error: do not have privilege to execute the statement
 create role if not exists use_role_test;

@@ -81,12 +81,15 @@ func TestProduct(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- bat
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 				break
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+		tc.arg.Free(tc.proc, false)
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
@@ -129,7 +132,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTe
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 4),
+		Ch:  make(chan *batch.Batch, 10),
 	}
 	return productTestCase{
 		types:  ts,
@@ -153,7 +156,7 @@ func hashBuild(t *testing.T, tc productTestCase) *batch.Batch {
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
 	ok, err := hashbuild.Call(0, tc.proc, tc.barg, false, false)
 	require.NoError(t, err)
-	require.Equal(t, true, ok)
+	require.Equal(t, false, ok)
 	return tc.proc.Reg.InputBatch
 }
 

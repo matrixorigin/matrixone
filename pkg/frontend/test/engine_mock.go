@@ -73,18 +73,17 @@ func (mr *MockStatisticsMockRecorder) Size(ctx, columnName interface{}) *gomock.
 }
 
 // Stats mocks base method.
-func (m *MockStatistics) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
+func (m *MockStatistics) Stats(ctx context.Context, statsInfoMap any) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", ctx, expr, statsInfoMap)
-	ret0, _ := ret[0].(*plan.Stats)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret := m.ctrl.Call(m, "Stats", ctx, statsInfoMap)
+	ret0, _ := ret[0].(bool)
+	return ret0
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockStatisticsMockRecorder) Stats(ctx, expr, statsInfoMap interface{}) *gomock.Call {
+func (mr *MockStatisticsMockRecorder) Stats(ctx, statsInfoMap interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockStatistics)(nil).Stats), ctx, expr, statsInfoMap)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockStatistics)(nil).Stats), ctx, statsInfoMap)
 }
 
 // MockTableDef is a mock of TableDef interface.
@@ -108,6 +107,20 @@ func NewMockTableDef(ctrl *gomock.Controller) *MockTableDef {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockTableDef) EXPECT() *MockTableDefMockRecorder {
 	return m.recorder
+}
+
+// ToPBVersion mocks base method.
+func (m *MockTableDef) ToPBVersion() engine.TableDefPB {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ToPBVersion")
+	ret0, _ := ret[0].(engine.TableDefPB)
+	return ret0
+}
+
+// ToPBVersion indicates an expected call of ToPBVersion.
+func (mr *MockTableDefMockRecorder) ToPBVersion() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ToPBVersion", reflect.TypeOf((*MockTableDef)(nil).ToPBVersion))
 }
 
 // tableDef mocks base method.
@@ -143,6 +156,20 @@ func NewMockConstraint(ctrl *gomock.Controller) *MockConstraint {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockConstraint) EXPECT() *MockConstraintMockRecorder {
 	return m.recorder
+}
+
+// ToPBVersion mocks base method.
+func (m *MockConstraint) ToPBVersion() engine.ConstraintPB {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ToPBVersion")
+	ret0, _ := ret[0].(engine.ConstraintPB)
+	return ret0
+}
+
+// ToPBVersion indicates an expected call of ToPBVersion.
+func (mr *MockConstraintMockRecorder) ToPBVersion() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ToPBVersion", reflect.TypeOf((*MockConstraint)(nil).ToPBVersion))
 }
 
 // constraint mocks base method.
@@ -194,6 +221,20 @@ func (mr *MockRelationMockRecorder) AddTableDef(arg0, arg1 interface{}) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddTableDef", reflect.TypeOf((*MockRelation)(nil).AddTableDef), arg0, arg1)
 }
 
+// AlterTable mocks base method.
+func (m *MockRelation) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AlterTable", ctx, c, constraint)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AlterTable indicates an expected call of AlterTable.
+func (mr *MockRelationMockRecorder) AlterTable(ctx, c, constraint interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AlterTable", reflect.TypeOf((*MockRelation)(nil).AlterTable), ctx, c, constraint)
+}
+
 // DelTableDef mocks base method.
 func (m *MockRelation) DelTableDef(arg0 context.Context, arg1 engine.TableDef) error {
 	m.ctrl.T.Helper()
@@ -220,6 +261,20 @@ func (m *MockRelation) Delete(arg0 context.Context, arg1 *batch.Batch, arg2 stri
 func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2)
+}
+
+// GetDBID mocks base method.
+func (m *MockRelation) GetDBID(arg0 context.Context) uint64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDBID", arg0)
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+// GetDBID indicates an expected call of GetDBID.
+func (mr *MockRelationMockRecorder) GetDBID(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDBID", reflect.TypeOf((*MockRelation)(nil).GetDBID), arg0)
 }
 
 // GetEngineType mocks base method.
@@ -249,6 +304,21 @@ func (m *MockRelation) GetHideKeys(arg0 context.Context) ([]*engine.Attribute, e
 func (mr *MockRelationMockRecorder) GetHideKeys(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHideKeys", reflect.TypeOf((*MockRelation)(nil).GetHideKeys), arg0)
+}
+
+// GetMetadataScanInfoBytes mocks base method.
+func (m *MockRelation) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMetadataScanInfoBytes", ctx, name)
+	ret0, _ := ret[0].([][]byte)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetMetadataScanInfoBytes indicates an expected call of GetMetadataScanInfoBytes.
+func (mr *MockRelationMockRecorder) GetMetadataScanInfoBytes(ctx, name interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMetadataScanInfoBytes", reflect.TypeOf((*MockRelation)(nil).GetMetadataScanInfoBytes), ctx, name)
 }
 
 // GetPrimaryKeys mocks base method.
@@ -312,18 +382,23 @@ func (mr *MockRelationMockRecorder) NewReader(arg0, arg1, arg2, arg3 interface{}
 }
 
 // Ranges mocks base method.
-func (m *MockRelation) Ranges(arg0 context.Context, arg1 *plan.Expr) ([][]byte, error) {
+func (m *MockRelation) Ranges(arg0 context.Context, arg1 ...*plan.Expr) ([][]byte, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Ranges", arg0, arg1)
+	varargs := []interface{}{arg0}
+	for _, a := range arg1 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "Ranges", varargs...)
 	ret0, _ := ret[0].([][]byte)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Ranges indicates an expected call of Ranges.
-func (mr *MockRelationMockRecorder) Ranges(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Ranges(arg0 interface{}, arg1 ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), arg0, arg1)
+	varargs := append([]interface{}{arg0}, arg1...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), varargs...)
 }
 
 // Rows mocks base method.
@@ -357,18 +432,17 @@ func (mr *MockRelationMockRecorder) Size(ctx, columnName interface{}) *gomock.Ca
 }
 
 // Stats mocks base method.
-func (m *MockRelation) Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error) {
+func (m *MockRelation) Stats(ctx context.Context, statsInfoMap any) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", ctx, expr, statsInfoMap)
-	ret0, _ := ret[0].(*plan.Stats)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret := m.ctrl.Call(m, "Stats", ctx, statsInfoMap)
+	ret0, _ := ret[0].(bool)
+	return ret0
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockRelationMockRecorder) Stats(ctx, expr, statsInfoMap interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Stats(ctx, statsInfoMap interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockRelation)(nil).Stats), ctx, expr, statsInfoMap)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockRelation)(nil).Stats), ctx, statsInfoMap)
 }
 
 // TableColumns mocks base method.
@@ -820,18 +894,18 @@ func (mr *MockEngineMockRecorder) NewBlockReader(ctx, num, ts, expr, ranges, tbl
 }
 
 // Nodes mocks base method.
-func (m *MockEngine) Nodes() (engine.Nodes, error) {
+func (m *MockEngine) Nodes(isInternal bool, tenant, username string, cnLabel map[string]string) (engine.Nodes, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Nodes")
+	ret := m.ctrl.Call(m, "Nodes", isInternal, tenant, username, cnLabel)
 	ret0, _ := ret[0].(engine.Nodes)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Nodes indicates an expected call of Nodes.
-func (mr *MockEngineMockRecorder) Nodes() *gomock.Call {
+func (mr *MockEngineMockRecorder) Nodes(isInternal, tenant, username, cnLabel interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes), isInternal, tenant, username, cnLabel)
 }
 
 // Rollback mocks base method.

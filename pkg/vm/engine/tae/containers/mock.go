@@ -19,7 +19,6 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -51,7 +50,6 @@ func (p *MockDataProvider) GetColumnProvider(colIdx int) Vector {
 }
 
 func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vector) {
-	rand.Seed(time.Now().UnixNano())
 	vec = MakeVector(t)
 	if provider != nil {
 		vec.Extend(provider)
@@ -310,33 +308,6 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 		types.T_varbinary, types.T_blob, types.T_text:
 		for i := 0; i < rows; i++ {
 			vec.Append([]byte(strconv.Itoa(i+offset)), false)
-		}
-	default:
-		panic("not support")
-	}
-	return vec
-}
-
-func MockVector3(typ types.Type, rows int) Vector {
-	vec := MakeVector(typ)
-	switch typ.Oid {
-	case types.T_int32:
-		for i := 0; i < rows; i++ {
-			vec.Append(int32(rows), false)
-		}
-	case types.T_int64:
-		for i := 0; i < rows; i++ {
-			vec.Append(int64(rows), false)
-		}
-	case types.T_uint32:
-		for i := 0; i < rows; i++ {
-			vec.Append(uint32(i), false)
-			vec.Append(uint32(i), false)
-			i++
-		}
-	case types.T_uint64:
-		for i := 0; i < rows; i++ {
-			vec.Append(uint64(rows), false)
 		}
 	default:
 		panic("not support")

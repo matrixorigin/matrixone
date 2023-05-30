@@ -64,6 +64,12 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 			n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
 		}
 	}
+	if len(n.BlockFilterList) > 0 {
+		for i := range n.BlockFilterList {
+			n.BlockFilterList[i] = r.constantFold(n.BlockFilterList[i], proc)
+		}
+	}
+
 	if len(n.ProjectList) > 0 {
 		for i := range n.ProjectList {
 			n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)
@@ -83,14 +89,14 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		return e
 	}
 	overloadID := ef.F.Func.GetObj()
-	f, exists := function.GetFunctionByIDWithoutError(overloadID)
+	f, exists := function.GetFunctionByIdWithoutError(overloadID)
 	if !exists {
 		return e
 	}
-	if f.Volatile { // function cannot be fold
+	if f.CannotFold() { // function cannot be fold
 		return e
 	}
-	if f.RealTimeRelated && r.isPrepared {
+	if f.IsRealTimeRelated() && r.isPrepared {
 		return e
 	}
 	for i := range ef.F.Args {
@@ -99,16 +105,19 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	if !IsConstant(e) {
 		return e
 	}
-	vec, err := colexec.EvalExpr(r.bat, proc, e)
+
+	vec, err := colexec.EvalExpressionOnce(proc, e, []*batch.Batch{r.bat})
 	if err != nil {
 		return e
 	}
+	defer vec.Free(proc.Mp())
+
 	c := GetConstantValue(vec, false)
 	if c == nil {
 		return e
 	}
 
-	if f.RealTimeRelated {
+	if f.IsRealTimeRelated() {
 		c.Src = &plan.Expr{
 			Typ: &plan.Type{
 				Id:          e.Typ.Id,
@@ -285,18 +294,12 @@ func GetConstantValue(vec *vector.Vector, transAll bool) *plan.Const {
 			},
 		}
 	case types.T_decimal64:
-		if !transAll {
-			return nil
-		}
 		return &plan.Const{
 			Value: &plan.Const_Decimal64Val{
 				Decimal64Val: &plan.Decimal64{A: int64(vector.MustFixedCol[types.Decimal64](vec)[0])},
 			},
 		}
 	case types.T_decimal128:
-		if !transAll {
-			return nil
-		}
 		decimalValue := &plan.Decimal128{}
 		decimalValue.A = int64(vector.MustFixedCol[types.Decimal128](vec)[0].B0_63)
 		decimalValue.B = int64(vector.MustFixedCol[types.Decimal128](vec)[0].B64_127)
@@ -312,11 +315,11 @@ func IsConstant(e *plan.Expr) bool {
 		return true
 	case *plan.Expr_F:
 		overloadID := ef.F.Func.GetObj()
-		f, exists := function.GetFunctionByIDWithoutError(overloadID)
+		f, exists := function.GetFunctionByIdWithoutError(overloadID)
 		if !exists {
 			return false
 		}
-		if f.Volatile { // function cannot be fold
+		if f.CannotFold() { // function cannot be fold
 			return false
 		}
 		for i := range ef.F.Args {

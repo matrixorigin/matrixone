@@ -44,10 +44,14 @@ func AcquireMessage() *pipeline.Message {
 }
 
 func IsCNClientReady() bool {
-	return client != nil && client.ready
+	client.Lock()
+	defer client.Unlock()
+	return client.ready
 }
 
 type CNClient struct {
+	sync.Mutex
+
 	localServiceAddress string
 	ready               bool
 	config              *ClientConfig
@@ -58,22 +62,28 @@ type CNClient struct {
 }
 
 func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
+	c.Lock()
+	defer c.Unlock()
 	return c.client.Send(ctx, backend, request)
 }
 
 func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
+	c.Lock()
+	defer c.Unlock()
 	return c.client.NewStream(backend, true)
 }
 
 func (c *CNClient) Close() error {
-	lock.Lock()
-	defer lock.Unlock()
-	if client == nil || !c.ready {
-		return nil
+	if c != nil {
+		c.Lock()
+		defer c.Unlock()
+		if !c.ready {
+			return nil
+		}
+		c.ready = false
+		return c.client.Close()
 	}
-
-	c.ready = false
-	return c.client.Close()
+	return nil
 }
 
 const (
@@ -96,16 +106,10 @@ type ClientConfig struct {
 	RPC rpc.Config
 }
 
-var (
-	lock sync.Mutex
-)
-
 // TODO: Here it needs to be refactored together with Runtime
 func NewCNClient(
 	localServiceAddress string,
 	cfg *ClientConfig) error {
-	lock.Lock()
-	defer lock.Unlock()
 	if client != nil {
 		return nil
 	}
@@ -114,10 +118,12 @@ func NewCNClient(
 
 	var err error
 	cfg.Fill()
-	client = &CNClient{config: cfg, localServiceAddress: localServiceAddress}
-	client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
-
-	codec := morpc.NewMessageCodec(client.acquireMessage,
+	cli := &CNClient{config: cfg, localServiceAddress: localServiceAddress}
+	cli.Lock()
+	defer cli.Unlock()
+	cli.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
+	client = cli
+	codec := morpc.NewMessageCodec(cli.acquireMessage,
 		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendGoettyOptions(
@@ -125,7 +131,7 @@ func NewCNClient(
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
 				m := v.(morpc.RPCMessage)
 				if !m.InternalMessage() {
-					client.releaseMessage(m.Message.(*pipeline.Message))
+					cli.releaseMessage(m.Message.(*pipeline.Message))
 				}
 			}),
 		),
@@ -133,12 +139,12 @@ func NewCNClient(
 		morpc.WithBackendLogger(logger),
 	)
 
-	client.client, err = morpc.NewClient(factory,
+	cli.client, err = morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
 		morpc.WithClientTag("cn-client"),
 		morpc.WithClientLogger(logger),
 	)
-	client.ready = true
+	cli.ready = true
 	return err
 }
 
@@ -174,5 +180,7 @@ func GetRPCClient() morpc.RPCClient {
 	if client == nil {
 		return nil
 	}
+	client.Lock()
+	defer client.Unlock()
 	return client.client
 }

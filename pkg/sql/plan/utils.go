@@ -22,8 +22,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -36,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -71,11 +71,46 @@ func hasCorrCol(expr *plan.Expr) bool {
 		return true
 
 	case *plan.Expr_F:
-		ret := false
 		for _, arg := range exprImpl.F.Args {
-			ret = ret || hasCorrCol(arg)
+			if hasCorrCol(arg) {
+				return true
+			}
 		}
-		return ret
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if hasCorrCol(arg) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return false
+	}
+}
+
+func hasSubquery(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		return true
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if hasSubquery(arg) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if hasSubquery(arg) {
+				return true
+			}
+		}
+		return false
 
 	default:
 		return false
@@ -176,6 +211,14 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 		colRef := exprImpl.Col
 		if colRef.RelPos == tag {
 			expr = DeepCopyExpr(projects[colRef.ColPos])
+		}
+	case *plan.Expr_W:
+		replaceColRefs(exprImpl.W.WindowFunc, tag, projects)
+		for _, arg := range exprImpl.W.PartitionBy {
+			replaceColRefs(arg, tag, projects)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			replaceColRefs(order.Expr, tag, projects)
 		}
 	}
 
@@ -483,6 +526,42 @@ func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
 	return false
 }
 
+// function filter means func(col) compared to const. for example year(col1)>1991
+func CheckFunctionFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, childFuncName string) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		funcName := exprImpl.F.Func.ObjName
+		switch funcName {
+		case "=", ">", "<", ">=", "<=":
+			switch child0 := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_F:
+				childFuncName = child0.F.Func.ObjName
+				switch childFuncName {
+				case "year":
+					switch child := child0.F.Args[0].Expr.(type) {
+					case *plan.Expr_Col:
+						col = child.Col
+					}
+				}
+			default:
+				return false, nil, nil, childFuncName
+			}
+			switch child1 := exprImpl.F.Args[1].Expr.(type) {
+			case *plan.Expr_C:
+				constExpr = child1.C
+				b = true
+				return
+			default:
+				return false, nil, nil, childFuncName
+			}
+		default:
+			return false, nil, nil, childFuncName
+		}
+	default:
+		return false, nil, nil, childFuncName
+	}
+}
+
 // strict filter means col compared to const. for example col1>1
 // func(col1)=1 is not strict
 func CheckStrictFilter(expr *plan.Expr) (b bool, col *ColRef, constExpr *Const, funcName string) {
@@ -705,6 +784,14 @@ func increaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
 		for _, arg := range exprImpl.F.Args {
 			increaseRefCnt(arg, colRefCnt)
 		}
+	case *plan.Expr_W:
+		increaseRefCnt(exprImpl.W.WindowFunc, colRefCnt)
+		for _, arg := range exprImpl.W.PartitionBy {
+			increaseRefCnt(arg, colRefCnt)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			increaseRefCnt(order.Expr, colRefCnt)
+		}
 	}
 }
 
@@ -716,6 +803,14 @@ func decreaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
 			decreaseRefCnt(arg, colRefCnt)
+		}
+	case *plan.Expr_W:
+		decreaseRefCnt(exprImpl.W.WindowFunc, colRefCnt)
+		for _, arg := range exprImpl.W.PartitionBy {
+			decreaseRefCnt(arg, colRefCnt)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			decreaseRefCnt(order.Expr, colRefCnt)
 		}
 	}
 }
@@ -799,27 +894,14 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	return nil
 }
 
-func containsParamRef(expr *plan.Expr) bool {
-	var ret bool
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			ret = ret || containsParamRef(arg)
-		}
-	case *plan.Expr_P:
-		return true
-	}
-	return ret
-}
-
-func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
 	if expr == nil {
 		return
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			getColumnMapByExpr(arg, tableDef, columnMap)
+			GetColumnMapByExpr(arg, tableDef, columnMap)
 		}
 
 	case *plan.Expr_Col:
@@ -828,7 +910,11 @@ func getColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 		dotIdx := strings.Index(colName, ".")
 		colName = colName[dotIdx+1:]
 		colIdx := tableDef.Name2ColIndex[colName]
-		(*columnMap)[int(idx)] = int(colIdx)
+		seqnum := int(colIdx) // for extenal scan case, tableDef has only Name2ColIndex, no Cols, leave seqnum as colIdx
+		if len(tableDef.Cols) > 0 {
+			seqnum = int(tableDef.Cols[colIdx].Seqnum)
+		}
+		(*columnMap)[int(idx)] = seqnum
 	}
 }
 
@@ -838,7 +924,7 @@ func GetColumnsByExpr(
 ) (columnMap map[int]int, defColumns, exprColumns []int, maxCol int) {
 	columnMap = make(map[int]int)
 	// key = expr's ColPos,  value = tableDef's ColPos
-	getColumnMapByExpr(expr, tableDef, &columnMap)
+	GetColumnMapByExpr(expr, tableDef, &columnMap)
 
 	if len(columnMap) == 0 {
 		return
@@ -875,7 +961,13 @@ func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc
 		}
 		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
 	} else {
-		vec, err := colexec.EvalExprByZonemapBat(ctx, bat, proc, expr)
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		if err != nil {
+			return false, err
+		}
+		defer executor.Free()
+
+		vec, err := executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
 			return false, err
 		}
@@ -941,59 +1033,101 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-// handle the filter list for zonemap. rewrite and constFold
-// return monotonic filters and number of nonMonotonic filters
-func HandleFiltersForZM(exprList []*plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
-	if proc == nil || proc.Ctx == nil {
-		return nil, nil
+func getSortOrder(tableDef *plan.TableDef, colName string) int {
+	if tableDef.Pkey != nil {
+		pkNames := tableDef.Pkey.Names
+		for i := range pkNames {
+			if pkNames[i] == colName {
+				return i
+			}
+		}
 	}
-	var monoExprList, nonMonoExprList []*plan.Expr
+	if tableDef.ClusterBy != nil {
+		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
+	}
+	return -1
+}
+
+// handle the filter list for Stats. rewrite and constFold
+func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
+	if proc == nil {
+		return nil
+	}
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	for _, expr := range exprList {
-		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(expr), proc)
-		if tmpexpr != nil {
-			expr = tmpexpr
-		}
-		if !containsParamRef(expr) && CheckExprIsMonotonic(proc.Ctx, expr) {
-			monoExprList = append(monoExprList, expr)
-		} else {
-			nonMonoExprList = append(nonMonoExprList, expr)
-		}
+	for i := range exprList {
+		tmpexpr, _ := ConstantFold(bat, DeepCopyExpr(exprList[i]), proc)
+		exprList[i] = tmpexpr
 	}
-	return colexec.RewriteFilterExprList(monoExprList), colexec.RewriteFilterExprList(nonMonoExprList)
+	return colexec.RewriteFilterExprList(exprList)
+}
+
+func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			fixColumnName(tableDef, arg)
+		}
+	case *plan.Expr_Col:
+		exprImpl.Col.Name = tableDef.Cols[exprImpl.Col.ColPos].Name
+	}
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	// If it is Expr_List, perform constant folding on its elements
+	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
+		exprList := exprImpl.List
+		for i, exprElem := range exprList.List {
+			_, ok2 := exprElem.Expr.(*plan.Expr_F)
+			if ok2 {
+				foldExpr, err := ConstantFold(bat, exprElem, proc)
+				if err != nil {
+					return e, nil
+				}
+				exprImpl.List.List[i] = foldExpr
+			}
+		}
+		return e, nil
+	}
+
 	var err error
+	if elist, ok := e.Expr.(*plan.Expr_List); ok {
+		for i, expr := range elist.List.List {
+			if elist.List.List[i], err = ConstantFold(bat, expr, proc); err != nil {
+				return nil, err
+			}
+		}
+		return e, nil
+	}
 
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok || proc == nil {
 		return e, nil
 	}
+
 	overloadID := ef.F.Func.GetObj()
-	f, err := function.GetFunctionByID(proc.Ctx, overloadID)
+	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
 		return nil, err
 	}
-	if f.Volatile { // function cannot be fold
+	if f.CannotFold() { // function cannot be fold
 		return e, nil
 	}
 	for i := range ef.F.Args {
-		ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc)
-		if err != nil {
+		if ef.F.Args[i], err = ConstantFold(bat, ef.F.Args[i], proc); err != nil {
 			return nil, err
 		}
 	}
 	if !rule.IsConstant(e) {
 		return e, nil
 	}
-	vec, err := colexec.EvalExpr(bat, proc, e)
+
+	vec, err := colexec.EvalExpressionOnce(proc, e, []*batch.Batch{bat})
 	if err != nil {
 		return nil, err
 	}
+	defer vec.Free(proc.Mp())
 	c := rule.GetConstantValue(vec, false)
-	vec.Free(proc.Mp())
 	if c == nil {
 		return e, nil
 	}
@@ -1243,7 +1377,10 @@ func GetForETLWithType(param *tree.ExternParam, prefix string) (res fileservice.
 		w := csv.NewWriter(buf)
 		opts := []string{"s3-opts", "endpoint=" + param.S3Param.Endpoint, "region=" + param.S3Param.Region, "key=" + param.S3Param.APIKey, "secret=" + param.S3Param.APISecret,
 			"bucket=" + param.S3Param.Bucket, "role-arn=" + param.S3Param.RoleArn, "external-id=" + param.S3Param.ExternalId}
-		if param.S3Param.Provider == "minio" {
+		if strings.ToLower(param.S3Param.Provider) != "" && strings.ToLower(param.S3Param.Provider) != "minio" {
+			return nil, "", moerr.NewBadConfig(param.Ctx, "the provider only support 'minio' now")
+		}
+		if strings.ToLower(param.S3Param.Provider) == "minio" {
 			opts = append(opts, "is-minio=true")
 		}
 		if err = w.Write(opts); err != nil {
@@ -1308,8 +1445,8 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 			l.Remove(l.Front())
 		}
 	}
-	len := l.Len()
-	for j := 0; j < len; j++ {
+	length := l.Len()
+	for j := 0; j < length; j++ {
 		fileList = append(fileList, l.Front().Value.(string))
 		l.Remove(l.Front())
 		fileSize = append(fileSize, l2.Front().Value.(int64))
@@ -1406,9 +1543,8 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 // if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
 // we get batch like [1,2,3,4, origin_a, origin_b, origin_c, origin_d, row_id ....]。
 // we get expr like:  []*Expr{ 1=origin_a ,  (2 = origin_b and 3 = origin_c) }
-func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int) ([]*Expr, error) {
+func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, colCount int) ([]*Expr, error) {
 	checkExpr := make([]*Expr, len(uniqueCols))
-	colCount := len(tableDef.Cols)
 
 	for i, uniqueColMap := range uniqueCols {
 		var condExpr *Expr
@@ -1466,5 +1602,28 @@ func onlyContainsTag(filter *Expr, tag int32) bool {
 		return true
 	default:
 		return true
+	}
+}
+
+func AssignAuxIdForExpr(expr *plan.Expr, start int32) int32 {
+	expr.AuxId = start
+	vertexCnt := int32(1)
+
+	if f, ok := expr.Expr.(*plan.Expr_F); ok {
+		for _, child := range f.F.Args {
+			vertexCnt += AssignAuxIdForExpr(child, start+vertexCnt)
+		}
+	}
+
+	return vertexCnt
+}
+
+func ResetAuxIdForExpr(expr *plan.Expr) {
+	expr.AuxId = 0
+
+	if f, ok := expr.Expr.(*plan.Expr_F); ok {
+		for _, child := range f.F.Args {
+			ResetAuxIdForExpr(child)
+		}
 	}
 }

@@ -50,10 +50,6 @@ func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
 	mgr.csn++
 }
 
-func (mgr *commandManager) MakeLogIndex(csn uint32) *wal.Index {
-	return &wal.Index{LSN: mgr.lsn, CSN: csn, Size: mgr.csn}
-}
-
 func (mgr *commandManager) ApplyTxnRecord(tid string, txn txnif.AsyncTxn) (logEntry entry.Entry, err error) {
 	if mgr.driver == nil {
 		return
@@ -73,7 +69,6 @@ func (mgr *commandManager) ApplyTxnRecord(tid string, txn txnif.AsyncTxn) (logEn
 	}
 	info := &entry.Info{
 		Group: wal.GroupPrepare,
-		TxnId: tid,
 	}
 	logEntry.SetInfo(info)
 	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupPrepare, logEntry)

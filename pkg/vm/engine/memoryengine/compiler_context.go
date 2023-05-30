@@ -77,8 +77,8 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	return []uint32{catalog.System_Account}, nil
 }
 
-func (*CompilerContext) Stats(obj *plan.ObjectRef, e *plan.Expr) *plan.Stats {
-	return plan.DefaultStats()
+func (*CompilerContext) Stats(obj *plan.ObjectRef) bool {
+	return false
 }
 
 func (*CompilerContext) GetStatsCache() *plan.StatsCache {
@@ -186,7 +186,6 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 	}
 
 	for i, attr := range attrs {
-
 		// return hidden columns for update or detete statement
 		//if attr.IsHidden {
 		//	switch e.stmt.(type) {
@@ -195,7 +194,14 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 		//		continue
 		//	}
 		//}
-
+		if attr.Primary {
+			tableDef.Pkey = &plan.PrimaryKeyDef{
+				Cols:        []uint64{uint64(i)},
+				PkeyColId:   uint64(i),
+				PkeyColName: attr.Name,
+				Names:       []string{attr.Name},
+			}
+		}
 		tableDef.Cols = append(tableDef.Cols, engineAttrToPlanColDef(i, attr))
 	}
 

@@ -17,6 +17,7 @@ package semi
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -25,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -95,12 +95,15 @@ func TestJoin(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- bat
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 				break
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
+		tc.arg.Free(tc.proc, false)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -175,9 +178,10 @@ func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs []
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *batch.Batch, 10),
 	}
-	fid := function.EncodeOverloadID(function.EQUAL, 4)
+	fr, _ := function.GetFunctionByName(ctx, "=", ts)
+	fid := fr.GetEncodedOverloadID()
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
 		Typ: &plan.Type{
@@ -238,7 +242,7 @@ func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
 	ok, err := hashbuild.Call(0, tc.proc, tc.barg, false, false)
 	require.NoError(t, err)
-	require.Equal(t, true, ok)
+	require.Equal(t, false, ok)
 	return tc.proc.Reg.InputBatch
 }
 

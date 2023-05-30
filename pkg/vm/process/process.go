@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -47,6 +48,7 @@ func New(
 		TxnClient:    txnClient,
 		TxnOperator:  txnOperator,
 		FileService:  fileService,
+		IncrService:  incrservice.GetAutoIncrementService(),
 		UnixTime:     time.Now().UnixNano(),
 		LastInsertID: new(uint64),
 		LockService:  lockService,
@@ -71,12 +73,14 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.Id = p.Id
 	proc.vp = p.vp
 	proc.mp = p.Mp()
+	proc.prepareBatch = p.prepareBatch
 	proc.Lim = p.Lim
 	proc.TxnClient = p.TxnClient
 	proc.TxnOperator = p.TxnOperator
 	proc.AnalInfos = p.AnalInfos
 	proc.SessionInfo = p.SessionInfo
 	proc.FileService = p.FileService
+	proc.IncrService = p.IncrService
 	proc.UnixTime = p.UnixTime
 	proc.LastInsertID = p.LastInsertID
 	proc.LockService = p.LockService
@@ -142,6 +146,14 @@ func (proc *Process) Mp() *mpool.MPool {
 	return proc.GetMPool()
 }
 
+func (proc *Process) SetPrepareBatch(bat *batch.Batch) {
+	proc.prepareBatch = bat
+}
+
+func (proc *Process) GetPrepareBatch() *batch.Batch {
+	return proc.prepareBatch
+}
+
 func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Mp().Cap() < size
 }
@@ -154,7 +166,7 @@ func (proc *Process) InputBatch() *batch.Batch {
 	return proc.Reg.InputBatch
 }
 
-func (proc *Process) ResetContextFromParent(parent context.Context) {
+func (proc *Process) ResetContextFromParent(parent context.Context) context.Context {
 	newctx, cancel := context.WithCancel(parent)
 
 	proc.Ctx = newctx
@@ -163,6 +175,7 @@ func (proc *Process) ResetContextFromParent(parent context.Context) {
 	for i := range proc.Reg.MergeReceivers {
 		proc.Reg.MergeReceivers[i].Ctx = newctx
 	}
+	return newctx
 }
 
 func (proc *Process) GetAnalyze(idx int) Analyze {
@@ -174,7 +187,10 @@ func (proc *Process) GetAnalyze(idx int) Analyze {
 
 func (proc *Process) AllocVectorOfRows(typ types.Type, nele int, nsp *nulls.Nulls) (*vector.Vector, error) {
 	vec := vector.NewVec(typ)
-	vec.PreExtend(nele, proc.Mp())
+	err := vec.PreExtend(nele, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
 	vec.SetLength(nele)
 	if nsp != nil {
 		nulls.Set(vec.GetNulls(), nsp)
@@ -187,28 +203,37 @@ func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 }
 
 func (proc *Process) PutBatch(bat *batch.Batch) {
-	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
+	if bat == batch.EmptyBatch {
+		return
+	}
+	if atomic.LoadInt64(&bat.Cnt) == 0 {
+		panic("put batch with zero cnt")
+	}
+	if atomic.AddInt64(&bat.Cnt, -1) > 0 {
 		return
 	}
 	for i := range bat.Vecs {
 		if bat.Vecs[i] != nil {
 			if !bat.Vecs[i].IsConst() {
-				proc.vp.putVector(bat.Vecs[i])
+				vec := bat.Vecs[i]
+				bat.ReplaceVector(vec, nil)
+				proc.vp.putVector(vec)
 			} else {
 				bat.Vecs[i].Free(proc.Mp())
 			}
 		}
 	}
-	bat.Vecs = nil
 	for _, agg := range bat.Aggs {
 		if agg != nil {
 			agg.Free(proc.Mp())
 		}
 	}
-	if len(bat.Zs) != 0 {
-		proc.Mp().PutSels(bat.Zs)
-		bat.Zs = nil
+	if bat.Zs != nil {
+		proc.GetMPool().PutSels(bat.Zs)
 	}
+	bat.Zs = nil
+	bat.Vecs = nil
+	bat.Attrs = nil
 }
 
 func (proc *Process) FreeVectors() {

@@ -48,12 +48,12 @@ const (
 // TxnStatusRollbacked
 )
 
-type PKDedupSkipScope uint8
+type DedupType uint8
 
 const (
-	PKDedupSkipNone PKDedupSkipScope = iota
-	PKDedupSkipWorkSpace
-	PKDedupSkipSnapshot
+	FullDedup DedupType = iota
+	FullSkipWorkSpaceDedup
+	IncrementalDedup
 )
 
 func TxnStrState(state TxnState) string {

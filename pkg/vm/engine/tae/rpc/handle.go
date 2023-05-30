@@ -33,7 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -97,11 +97,15 @@ func (h *Handle) HandleCommit(
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
-	logutil.Infof("HandleCommit start : %X\n",
-		string(meta.GetID()))
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("HandleCommit start : %X\n",
+			string(meta.GetID()))
+	})
 	defer func() {
-		logutil.Infof("HandleCommit end : %X, %s\n",
-			string(meta.GetID()), time.Since(start))
+		common.DoIfInfoEnabled(func() {
+			logutil.Infof("HandleCommit end : %X, %s\n",
+				string(meta.GetID()), time.Since(start))
+		})
 	}()
 	//Handle precommit-write command for 1PC
 	var txn txnif.AsyncTxn
@@ -136,7 +140,7 @@ func (h *Handle) HandleCommit(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case *apipb.AlterTableReq:
+			case *api.AlterTableReq:
 				err = h.HandleAlterTable(
 					ctx,
 					meta,
@@ -250,7 +254,7 @@ func (h *Handle) HandlePrepare(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case *apipb.AlterTableReq:
+			case *api.AlterTableReq:
 				err = h.HandleAlterTable(
 					ctx,
 					meta,
@@ -317,8 +321,8 @@ func (h *Handle) HandleDestroy(ctx context.Context) (err error) {
 func (h *Handle) HandleGetLogTail(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *apipb.SyncLogTailReq,
-	resp *apipb.SyncLogTailResp) (err error) {
+	req *api.SyncLogTailReq,
+	resp *api.SyncLogTailResp) (err error) {
 	res, err := logtail.HandleSyncLogTailReq(
 		ctx,
 		h.db.BGCheckpointRunner,
@@ -337,7 +341,7 @@ func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.FlushTable,
-	resp *apipb.SyncLogTailResp) (err error) {
+	resp *api.SyncLogTailResp) (err error) {
 
 	// We use current TS instead of transaction ts.
 	// Here, the point of this handle function is to trigger a flush
@@ -358,7 +362,7 @@ func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.Checkpoint,
-	resp *apipb.SyncLogTailResp) (err error) {
+	resp *api.SyncLogTailResp) (err error) {
 
 	timeout := req.FlushDuration
 
@@ -374,7 +378,9 @@ func (h *Handle) HandleInspectDN(
 	req *db.InspectDN,
 	resp *db.InspectResp) (err error) {
 	args, _ := shlex.Split(req.Operation)
-	logutil.Info("Inspect", zap.Strings("args", args))
+	common.DoIfInfoEnabled(func() {
+		logutil.Info("Inspect", zap.Strings("args", args))
+	})
 	b := &bytes.Buffer{}
 
 	inspectCtx := &inspectContext{
@@ -395,6 +401,20 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		return nil
 	}
 	//for loading deleted rowid.
+	db, err := h.db.Catalog.GetDatabaseByID(req.DatabaseId)
+	if err != nil {
+		return err
+	}
+	tbl, err := db.GetTableEntryByID(req.TableID)
+	if err != nil {
+		return err
+	}
+	var version uint32
+	if req.Schema != nil {
+		version = req.Schema.Version
+	}
+	schema := tbl.GetVersionSchema(version)
+	pkIdx := schema.GetPrimaryKey().Idx
 	columnIdx := 0
 	//start loading jobs asynchronously,should create a new root context.
 	loc, err := blockio.EncodeLocationFromString(req.DeltaLocs[0])
@@ -411,7 +431,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		pref.AddBlock([]uint16{uint16(columnIdx)}, []uint16{location.ID()})
+		pref.AddBlock([]uint16{uint16(columnIdx), uint16(pkIdx)}, []uint16{location.ID()})
 	}
 	return blockio.PrefetchWithMerged(pref)
 }
@@ -496,8 +516,8 @@ func (h *Handle) CacheTxnRequest(
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *apipb.PrecommitWriteCmd,
-	resp *apipb.SyncLogTailResp) (err error) {
+	req *api.PrecommitWriteCmd,
+	resp *api.SyncLogTailResp) (err error) {
 	var e any
 
 	es := req.EntryList
@@ -547,11 +567,17 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.UpdateConstraint:
 			for _, cmd := range cmds {
-				req := apipb.NewUpdateConstraintReq(
+				req := api.NewUpdateConstraintReq(
 					cmd.DatabaseId,
 					cmd.TableId,
 					string(cmd.Constraint))
 				if err = h.CacheTxnRequest(ctx, meta, req, nil); err != nil {
+					return err
+				}
+			}
+		case []*api.AlterTableReq:
+			for _, cmd := range cmds {
+				if err = h.CacheTxnRequest(ctx, meta, cmd, nil); err != nil {
 					return err
 				}
 			}
@@ -581,9 +607,9 @@ func (h *Handle) HandlePreCommitWrite(
 					return err
 				}
 			}
-		case *apipb.Entry:
+		case *api.Entry:
 			//Handle DML
-			pe := e.(*apipb.Entry)
+			pe := e.(*api.Entry)
 			moBat, err := batch.ProtoBatchToBatch(pe.GetBat())
 			if err != nil {
 				panic(err)
@@ -641,9 +667,13 @@ func (h *Handle) HandleCreateDatabase(
 		return err
 	}
 
-	logutil.Infof("[precommit] create database: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] create database: %+v\n txn: %s\n", req, txn.String())
+	})
 	defer func() {
-		logutil.Infof("[precommit] create database end txn: %s\n", txn.String())
+		common.DoIfInfoEnabled(func() {
+			logutil.Infof("[precommit] create database end txn: %s\n", txn.String())
+		})
 	}()
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
@@ -674,9 +704,13 @@ func (h *Handle) HandleDropDatabase(
 		return err
 	}
 
-	logutil.Infof("[precommit] drop database: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] drop database: %+v\n txn: %s\n", req, txn.String())
+	})
 	defer func() {
-		logutil.Infof("[precommit] drop database end: %s\n", txn.String())
+		common.DoIfInfoEnabled(func() {
+			logutil.Infof("[precommit] drop database end: %s\n", txn.String())
+		})
 	}()
 
 	if _, err = txn.DropDatabaseByID(req.ID); err != nil {
@@ -698,9 +732,13 @@ func (h *Handle) HandleCreateRelation(
 		return
 	}
 
-	logutil.Infof("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
+	})
 	defer func() {
-		logutil.Infof("[precommit] create relation end txn: %s\n", txn.String())
+		common.DoIfInfoEnabled(func() {
+			logutil.Infof("[precommit] create relation end txn: %s\n", txn.String())
+		})
 	}()
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
@@ -731,9 +769,13 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		return
 	}
 
-	logutil.Infof("[precommit] drop/truncate relation: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] drop/truncate relation: %+v\n txn: %s\n", req, txn.String())
+	})
 	defer func() {
-		logutil.Infof("[precommit] drop/truncate relation end txn: %s\n", txn.String())
+		common.DoIfInfoEnabled(func() {
+			logutil.Infof("[precommit] drop/truncate relation end txn: %s\n", txn.String())
+		})
 	}()
 
 	db, err := txn.GetDatabaseByID(req.DatabaseID)
@@ -765,17 +807,30 @@ func (h *Handle) HandleWrite(
 	if err != nil {
 		return
 	}
-	if req.PkCheck == db.PKCheckDisable {
-		txn.SetPKDedupSkip(txnif.PKDedupSkipWorkSpace)
+	switch req.PkCheck {
+	case db.FullDedup:
+		txn.SetDedupType(txnif.FullDedup)
+	case db.IncrementalDedup:
+		if h.db.Opts.IncrementalDedup {
+			txn.SetDedupType(txnif.IncrementalDedup)
+		} else {
+			txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+		}
+	case db.FullSkipWorkspaceDedup:
+		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 	}
-	logutil.Infof("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
-		req.Type, req.TableID,
-		req.TableName, req.DatabaseId, req.DatabaseName,
-		txn.String(),
-	)
-	logutil.Debugf("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
+			req.Type, req.TableID,
+			req.TableName, req.DatabaseId, req.DatabaseName,
+			txn.String(),
+		)
+		logutil.Debugf("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
+	})
 	defer func() {
-		logutil.Infof("[precommit] handle write end txn: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] handle write end txn: %s\n", txn.String())
+		})
 	}()
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
@@ -799,9 +854,8 @@ func (h *Handle) HandleWrite(
 				}
 				locations = append(locations, location)
 			}
-			err = tb.AddBlksWithMetaLoc(
-				nil,
-				locations)
+
+			err = tb.AddBlksWithMetaLoc(locations)
 			return
 		}
 		//check the input batch passed by cn is valid.
@@ -824,7 +878,7 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		//Appends a batch of data into table.
-		err = AppendDataToTable(tb, req.Batch)
+		err = AppendDataToTable(ctx, tb, req.Batch)
 		return
 	}
 	//handle delete
@@ -835,26 +889,19 @@ func (h *Handle) HandleWrite(
 			_, req.Cancel = context.WithTimeout(nctx, time.Until(deadline))
 		}
 		columnIdx := 0
-		var reader *blockio.BlockReader
 		for _, key := range req.DeltaLocs {
 			var location objectio.Location
 			location, err = blockio.EncodeLocationFromString(key)
 			if err != nil {
 				return err
 			}
-			if reader == nil {
-				reader, err = blockio.NewObjectReader(
-					h.db.Fs.Service, location)
-				if err != nil {
-					return
-				}
-			}
 			var bat *batch.Batch
-			bat, err = reader.LoadColumns(
+			bat, err = blockio.LoadColumns(
 				ctx,
 				[]uint16{uint16(columnIdx)},
 				nil,
-				location.ID(),
+				h.db.Fs.Service,
+				location,
 				nil,
 			)
 			if err != nil {
@@ -877,7 +924,7 @@ func (h *Handle) HandleWrite(
 func (h *Handle) HandleAlterTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *apipb.AlterTableReq,
+	req *api.AlterTableReq,
 	resp *db.WriteResp) (err error) {
 	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
@@ -885,7 +932,9 @@ func (h *Handle) HandleAlterTable(
 		return err
 	}
 
-	logutil.Infof("[precommit] alter table: %v txn: %s\n", req.String(), txn.String())
+	common.DoIfInfoEnabled(func() {
+		logutil.Infof("[precommit] alter table: %v txn: %s\n", req.String(), txn.String())
+	})
 
 	dbase, err := txn.GetDatabaseByID(req.DbId)
 	if err != nil {

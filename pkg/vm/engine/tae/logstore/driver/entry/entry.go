@@ -31,6 +31,9 @@ type Entry struct {
 	Ctx   any //for addr in batchstore
 	err   error
 	wg    *sync.WaitGroup
+
+	//for replay
+	isEnd bool
 }
 
 func NewEntry(e entry.Entry) *Entry {
@@ -49,6 +52,15 @@ func NewEmptyEntry() *Entry {
 	en.wg.Add(1)
 	return en
 }
+
+func NewEndEntry() *Entry {
+	return &Entry{
+		isEnd: true,
+	}
+}
+func (e *Entry) IsEnd() bool {
+	return e.isEnd
+}
 func (e *Entry) SetInfo() {
 	info := e.Entry.GetInfo()
 	if info != nil {
@@ -63,6 +75,18 @@ func (e *Entry) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		panic(err)
 	}
+	e.Info = e.Entry.GetInfo().(*entry.Info)
+	return
+}
+
+func (e *Entry) UnmarshalBinary(buf []byte) (n int64, err error) {
+	e.Lsn = types.DecodeUint64(buf[:8])
+	n += 8
+	n2, err := e.Entry.UnmarshalBinary(buf[n:])
+	if err != nil {
+		panic(err)
+	}
+	n += n2
 	e.Info = e.Entry.GetInfo().(*entry.Info)
 	return
 }

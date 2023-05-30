@@ -120,6 +120,11 @@ type Config struct {
 		// roll back the transaction.
 		ZombieTimeout toml.Duration `toml:"zombie-timeout"`
 
+		// If IncrementalDedup is true, it will enable the incremental dedup feature.
+		// If incremental dedup feature is disable,
+		// IncrementalDedup will be treated as FullSkipWorkspaceDedup.
+		IncrementalDedup bool `toml:"incremental-dedup"`
+
 		// Storage txn storage config
 		Storage struct {
 			// dataDir data dir used to store the data
@@ -229,6 +234,7 @@ func (c *Config) Validate() error {
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
+	c.RPC.Adjust()
 	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()

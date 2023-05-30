@@ -23,6 +23,14 @@ import (
 type BitAnd[T1 types.Ints | types.UInts | types.Floats] struct {
 }
 
+var BitAndSupported = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_decimal64, types.T_decimal128,
+	types.T_binary, types.T_varbinary,
+}
+
 func BitAndReturnType(typs []types.Type) types.Type {
 	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
 		return typs[0]
@@ -37,35 +45,35 @@ func NewBitAnd[T1 types.Ints | types.UInts | types.Floats]() *BitAnd[T1] {
 func (ba *BitAnd[T1]) Grows(_ int) {
 }
 
-func (ba *BitAnd[T1]) Eval(vs []uint64) []uint64 {
-	return vs
+func (ba *BitAnd[T1]) Eval(vs []uint64, err error) ([]uint64, error) {
+	return vs, nil
 }
 
-func (ba *BitAnd[T1]) Merge(groupIndex1, groupIndex2 int64, x, y uint64, isEmpty1 bool, isEmpty2 bool, agg any) (uint64, bool) {
+func (ba *BitAnd[T1]) Merge(groupIndex1, groupIndex2 int64, x, y uint64, isEmpty1 bool, isEmpty2 bool, agg any) (uint64, bool, error) {
 	if isEmpty1 {
 		x = ^uint64(0)
 	}
 	if isEmpty2 {
 		y = ^uint64(0)
 	}
-	return x & y, isEmpty1 && isEmpty2
+	return x & y, isEmpty1 && isEmpty2, nil
 }
 
-func (ba *BitAnd[T1]) Fill(groupIndex int64, v1 T1, v2 uint64, z int64, isEmpty bool, hasNull bool) (uint64, bool) {
+func (ba *BitAnd[T1]) Fill(groupIndex int64, v1 T1, v2 uint64, z int64, isEmpty bool, hasNull bool) (uint64, bool, error) {
 	if hasNull {
-		return v2, isEmpty
+		return v2, isEmpty, nil
 	}
 	if isEmpty {
 		v2 = ^uint64(0)
 	}
 
 	if float64(v1) > math.MaxUint64 {
-		return math.MaxInt64 & v2, false
+		return math.MaxInt64 & v2, false, nil
 	}
 	if float64(v1) < 0 {
-		return uint64(int64(v1)) & v2, false
+		return uint64(int64(v1)) & v2, false, nil
 	}
-	return uint64(v1) & v2, false
+	return uint64(v1) & v2, false, nil
 }
 
 func (ba *BitAnd[T1]) MarshalBinary() ([]byte, error) {
@@ -86,36 +94,36 @@ func NewBitAndBinary() *BitAndBinary {
 func (bab *BitAndBinary) Grows(_ int) {
 }
 
-func (bab *BitAndBinary) Eval(vs [][]byte) [][]byte {
-	return vs
+func (bab *BitAndBinary) Eval(vs [][]byte, err error) ([][]byte, error) {
+	return vs, nil
 }
 
-func (bab *BitAndBinary) Merge(gNum1, gNum2 int64, v1, v2 []byte, empty1, empty2 bool, _ any) ([]byte, bool) {
+func (bab *BitAndBinary) Merge(gNum1, gNum2 int64, v1, v2 []byte, empty1, empty2 bool, _ any) ([]byte, bool, error) {
 	if empty1 {
-		return v2, empty2
+		return v2, empty2, nil
 	}
 	if empty2 {
-		return v1, empty1
+		return v1, empty1, nil
 	}
 
 	result := make([]byte, len(v1))
 	types.BitAnd(result, v1, v2)
 
-	return result, false
+	return result, false, nil
 }
 
-func (bab *BitAndBinary) Fill(gNum int64, v1, v2 []byte, _ int64, isNew, isNull bool) ([]byte, bool) {
+func (bab *BitAndBinary) Fill(gNum int64, v1, v2 []byte, _ int64, isNew, isNull bool) ([]byte, bool, error) {
 	if isNull {
-		return v2, isNew
+		return v2, isNew, nil
 	}
 	if isNew {
-		return v1, !isNew
+		return v1, !isNew, nil
 	}
 
 	result := make([]byte, len(v1))
 	types.BitAnd(result, v1, v2)
 
-	return result, false
+	return result, false, nil
 }
 
 func (bab *BitAndBinary) MarshalBinary() ([]byte, error) {

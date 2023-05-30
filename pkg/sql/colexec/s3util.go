@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
@@ -53,6 +52,7 @@ type S3Writer struct {
 	// table or main table)
 	buffer *batch.Batch
 
+	//for memory multiplexing.
 	tableBatchBuffers []*batch.Batch
 
 	// tableBatches[i] used to store the batches of table_i
@@ -62,9 +62,7 @@ type S3Writer struct {
 
 	// tableBatchSizes are used to record the table_i's batches'
 	// size in tableBatches
-	Batsize uint64
-
-	sels []int64
+	batSize uint64
 
 	typs []types.Type
 	ufs  []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
@@ -112,117 +110,170 @@ func (w *S3Writer) SetMp(attrs []*engine.Attribute) {
 	}
 }
 
-func (w *S3Writer) Init() {
+func (w *S3Writer) Init(proc *process.Process) {
 	w.pk = make(map[string]struct{})
-	w.sels = make([]int64, options.DefaultBlockMaxRows)
-	for i := 0; i < int(options.DefaultBlockMaxRows); i++ {
-		w.sels[i] = int64(i)
-	}
-	w.ResetMetaLocBat()
+	w.ResetMetaLocBat(proc)
 }
 
 func (w *S3Writer) SetSortIdx(sortIdx int) {
 	w.sortIndex = sortIdx
 }
 
-// AllocS3Writers Alloc S3 writers for origin table.
-func AllocS3Writers(tableDef *plan.TableDef) ([]*S3Writer, error) {
-	uniqueNums := 0
-	for _, idx := range tableDef.Indexes {
-		if idx.Unique {
-			uniqueNums++
+func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, error) {
+	writer := &S3Writer{
+		sortIndex: -1,
+		pk:        make(map[string]struct{}),
+		idx:       0,
+	}
+	writer.ResetMetaLocBat(proc)
+
+	writer.schemaVersion = tableDef.Version
+	writer.seqnums = make([]uint16, 0)
+	for _, colDef := range tableDef.Cols {
+		if colDef.Name != catalog.Row_ID {
+			writer.seqnums = append(writer.seqnums, uint16(colDef.Seqnum))
 		}
 	}
 
-	writers := make([]*S3Writer, 1+uniqueNums)
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+		// the serialized cpk col is located in the last of the bat.vecs
+		writer.sortIndex = len(tableDef.Cols) - 1
+	} else {
+		// Get Single Col pk index
+		for idx, colDef := range tableDef.Cols {
+			if colDef.Primary && !colDef.Hidden {
+				writer.sortIndex = idx
+				break
+			}
+		}
+		if tableDef.ClusterBy != nil {
+			if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+				// the serialized clusterby col is located in the last of the bat.vecs
+				writer.sortIndex = len(tableDef.Cols) - 1
+			} else {
+				for idx, colDef := range tableDef.Cols {
+					if colDef.Name == tableDef.ClusterBy.Name {
+						writer.sortIndex = idx
+					}
+				}
+			}
+		}
+	}
+	// get Primary
+	for _, def := range tableDef.Cols {
+		if def.Primary {
+			writer.pk[def.Name] = struct{}{}
+		}
+	}
+
+	// Check whether the composite primary key column is included
+	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+		writer.pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
+	}
+	return writer, nil
+}
+
+// AllocPartitionS3Writer Alloc S3 writers for partitioned table.
+func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*S3Writer, error) {
+	partitionNum := len(tableDef.Partition.PartitionTableNames)
+	writers := make([]*S3Writer, partitionNum)
 	for i := range writers {
 		writers[i] = &S3Writer{
 			sortIndex: -1,
 			pk:        make(map[string]struct{}),
-			idx:       int16(i),
-			sels:      make([]int64, options.DefaultBlockMaxRows),
+			idx:       int16(i), // This value is aligned with the partition number
 		}
-		for j := 0; j < int(options.DefaultBlockMaxRows); j++ {
-			writers[i].sels[j] = int64(j)
+		writers[i].ResetMetaLocBat(proc)
+
+		writers[i].schemaVersion = tableDef.Version
+		writers[i].seqnums = make([]uint16, 0)
+		for _, colDef := range tableDef.Cols {
+			if colDef.Name != catalog.Row_ID {
+				writers[i].seqnums = append(writers[i].seqnums, uint16(colDef.Seqnum))
+			}
 		}
-		writers[i].ResetMetaLocBat()
-		//handle origin/main table's sort index.
-		if i == 0 {
-			writers[i].schemaVersion = tableDef.Version
-			writers[i].seqnums = make([]uint16, 0)
-			for _, colDef := range tableDef.Cols {
-				if colDef.Name != catalog.Row_ID {
-					writers[i].seqnums = append(writers[i].seqnums, uint16(colDef.Seqnum))
+
+		if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+			// the serialized cpk col is located in the last of the bat.vecs
+			writers[i].sortIndex = len(tableDef.Cols) - 1
+		} else {
+			// Get Single Col pk index
+			for idx, colDef := range tableDef.Cols {
+				if colDef.Primary {
+					writers[i].sortIndex = idx
+					break
 				}
 			}
-			logutil.Infof("allocate s3write tbl: %d-%s, seqnums: %v", tableDef.TblId, tableDef.Name, writers[i].seqnums)
-			if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-				// the serialized cpk col is located in the last of the bat.vecs
-				writers[i].sortIndex = len(tableDef.Cols)
-			} else {
-				// Get Single Col pk index
-				for idx, colDef := range tableDef.Cols {
-					if colDef.Primary &&
-						!colDef.Hidden {
-						writers[i].sortIndex = idx
-						break
-					}
-				}
-				if tableDef.ClusterBy != nil {
-					if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-						// the serialized clusterby col is located in the last of the bat.vecs
-						writers[i].sortIndex = len(tableDef.Cols)
-					} else {
-						for idx, colDef := range tableDef.Cols {
-							if colDef.Name == tableDef.ClusterBy.Name {
-								writers[i].sortIndex = idx
-							}
+			if tableDef.ClusterBy != nil {
+				if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+					// the serialized clusterby col is located in the last of the bat.vecs
+					writers[i].sortIndex = len(tableDef.Cols) - 1
+				} else {
+					for idx, colDef := range tableDef.Cols {
+						if colDef.Name == tableDef.ClusterBy.Name {
+							writers[i].sortIndex = idx
 						}
 					}
 				}
 			}
-			// get Primary
-			for _, def := range tableDef.Cols {
-				if def.Primary {
-					writers[i].pk[def.Name] = struct{}{}
-				}
-			}
-
-			// Check whether the composite primary key column is included
-			if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-				writers[i].pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
-			}
-			continue
 		}
-		//handle for unique index table.
-		writers[i].sortIndex = 0
-		writers[i].pk[catalog.IndexTableIndexColName] = struct{}{}
+		// get Primary
+		for _, def := range tableDef.Cols {
+			if def.Primary {
+				writers[i].pk[def.Name] = struct{}{}
+			}
+		}
+
+		// Check whether the composite primary key column is included
+		if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
+			writers[i].pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
+		}
 	}
 	return writers, nil
 }
 
-func (w *S3Writer) ResetMetaLocBat() {
+func (w *S3Writer) ResetMetaLocBat(proc *process.Process) {
 	// A simple explanation of the two vectors held by metaLocBat
 	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
 	// vecs[1] store relative block metadata
+	if w.metaLocBat != nil {
+		w.metaLocBat.Clean(proc.GetMPool())
+	}
 	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
-	metaLocBat := batch.New(true, attrs)
-	metaLocBat.Cnt = 1
-	metaLocBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-	metaLocBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	metaLocBat := batch.NewWithSize(len(attrs))
+	metaLocBat.Attrs = attrs
+	metaLocBat.Vecs[0] = proc.GetVector(types.T_int16.ToType())
+	metaLocBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
 	w.metaLocBat = metaLocBat
 }
 
-func (w *S3Writer) WriteEnd(proc *process.Process) {
-	if w.metaLocBat.Vecs[0].Length() > 0 {
-		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
-		proc.SetInputBatch(w.metaLocBat)
+//func (w *S3Writer) WriteEnd(proc *process.Process) {
+//	if w.metaLocBat.Vecs[0].Length() > 0 {
+//		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
+//		proc.SetInputBatch(w.metaLocBat)
+//	}
+//}
+
+func (w *S3Writer) Output(proc *process.Process) error {
+	bat := batch.NewWithSize(len(w.metaLocBat.Attrs))
+	bat.SetAttributes(w.metaLocBat.Attrs)
+
+	for i := range w.metaLocBat.Attrs {
+		vec := proc.GetVector(*w.metaLocBat.Vecs[i].GetType())
+		if err := vec.UnionBatch(w.metaLocBat.Vecs[i], 0, w.metaLocBat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+			return err
+		}
+		bat.SetVector(int32(i), vec)
 	}
+	bat.Zs = append(bat.Zs, w.metaLocBat.Zs...)
+	w.ResetMetaLocBat(proc)
+	proc.SetInputBatch(bat)
+	return nil
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
-	if w.Batsize >= TagS3Size {
-		if err := w.MergeBlock(len(w.Bats), proc, false); err != nil {
+	if w.batSize >= TagS3Size {
+		if err := w.SortAndFlush(proc); err != nil {
 			return err
 		}
 		w.metaLocBat.SetZs(w.metaLocBat.Vecs[0].Length(), proc.GetMPool())
@@ -248,16 +299,18 @@ func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
 	return nil
 }
 
-func (w *S3Writer) InitBuffers(bat *batch.Batch) {
+func (w *S3Writer) InitBuffers(proc *process.Process, bat *batch.Batch) {
 	if w.buffer == nil {
-		w.buffer = getNewBatch(bat)
+		w.buffer = getNewBatch(proc, bat)
 	}
 }
 
-// the return value can be -1, int(>0)
-// >0: the tableBatches[idx] is over threshold
-// -1: the tableBatches[idx] is less than threshold
-func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) int {
+// Put batch into w.bats , and make sure that each batch in w.bats
+//
+//	contains options.DefaultBlockMaxRows rows except for the last one.
+//	true: the tableBatches[idx] is over threshold
+//	false: the tableBatches[idx] is less than or equal threshold
+func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 	var rbat *batch.Batch
 
 	if len(w.typs) == 0 {
@@ -267,7 +320,7 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) int {
 			w.ufs = append(w.ufs, vector.GetUnionOneFunction(typ, proc.Mp()))
 		}
 	}
-	index := -1
+	res := false
 	start, end := 0, bat.Length()
 	for start < end {
 		n := len(w.Bats)
@@ -281,7 +334,7 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) int {
 				rbat = batch.NewWithSize(bat.VectorCount())
 				rbat.SetAttributes(bat.Attrs)
 				for i := range w.typs {
-					rbat.Vecs[i] = vector.NewVec(w.typs[i])
+					rbat.Vecs[i] = proc.GetVector(w.typs[i])
 				}
 			}
 			w.Bats = append(w.Bats, rbat)
@@ -305,11 +358,11 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) int {
 			rbat.Zs = append(rbat.Zs, bat.Zs[j+start])
 		}
 		start += rows
-		if w.Batsize = w.Batsize + uint64(rbat.Size()); w.Batsize > WriteS3Threshold {
-			index = len(w.Bats)
+		if w.batSize = w.batSize + uint64(rbat.Size()); w.batSize > WriteS3Threshold {
+			res = true
 		}
 	}
-	return index
+	return res
 }
 
 func getFixedCols[T types.FixedSizeT](bats []*batch.Batch, idx int) (cols [][]T) {
@@ -328,14 +381,17 @@ func getStrCols(bats []*batch.Batch, idx int) (cols [][]string) {
 	return
 }
 
-func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold bool) error {
-	bats := w.Bats[:length]
+func (w *S3Writer) SortAndFlush(proc *process.Process) error {
+	//bats := w.Bats[:length]
 	sortIdx := -1
-	for i := range bats {
+	for i := range w.Bats {
 		// sort bats firstly
 		// for main/orgin table and unique index table.
 		if w.sortIndex != -1 {
-			sortByKey(proc, bats[i], w.sortIndex, proc.GetMPool())
+			err := sortByKey(proc, w.Bats[i], w.sortIndex, proc.GetMPool())
+			if err != nil {
+				return err
+			}
 			sortIdx = w.sortIndex
 		}
 	}
@@ -345,8 +401,8 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 			return err
 		}
 
-		for i := range bats {
-			if err := w.WriteBlock(bats[i]); err != nil {
+		for i := range w.Bats {
+			if err := w.WriteBlock(w.Bats[i]); err != nil {
 				return err
 			}
 		}
@@ -356,62 +412,65 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 	} else {
 		var merge MergeInterface
 		var nulls []*nulls.Nulls
-		for i := 0; i < len(bats); i++ {
-			nulls = append(nulls, bats[i].Vecs[w.sortIndex].GetNulls())
+		for i := 0; i < len(w.Bats); i++ {
+			nulls = append(nulls, w.Bats[i].Vecs[w.sortIndex].GetNulls())
 		}
 		pos := w.sortIndex
-		switch bats[0].Vecs[sortIdx].GetType().Oid {
+		switch w.Bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
-			merge = NewMerge(len(bats), sort.NewBoolLess(), getFixedCols[bool](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewBoolLess(), getFixedCols[bool](w.Bats, pos), nulls)
 		case types.T_int8:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int8](), getFixedCols[int8](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int8](), getFixedCols[int8](w.Bats, pos), nulls)
 		case types.T_int16:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int16](), getFixedCols[int16](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int16](), getFixedCols[int16](w.Bats, pos), nulls)
 		case types.T_int32:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int32](), getFixedCols[int32](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int32](), getFixedCols[int32](w.Bats, pos), nulls)
 		case types.T_int64:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[int64](), getFixedCols[int64](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int64](), getFixedCols[int64](w.Bats, pos), nulls)
 		case types.T_uint8:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint8](), getFixedCols[uint8](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint8](), getFixedCols[uint8](w.Bats, pos), nulls)
 		case types.T_uint16:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint16](), getFixedCols[uint16](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint16](), getFixedCols[uint16](w.Bats, pos), nulls)
 		case types.T_uint32:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint32](), getFixedCols[uint32](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint32](), getFixedCols[uint32](w.Bats, pos), nulls)
 		case types.T_uint64:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[uint64](), getFixedCols[uint64](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint64](), getFixedCols[uint64](w.Bats, pos), nulls)
 		case types.T_float32:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[float32](), getFixedCols[float32](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[float32](), getFixedCols[float32](w.Bats, pos), nulls)
 		case types.T_float64:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[float64](), getFixedCols[float64](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[float64](), getFixedCols[float64](w.Bats, pos), nulls)
 		case types.T_date:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Date](), getFixedCols[types.Date](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Date](), getFixedCols[types.Date](w.Bats, pos), nulls)
 		case types.T_datetime:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Datetime](), getFixedCols[types.Datetime](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Datetime](), getFixedCols[types.Datetime](w.Bats, pos), nulls)
 		case types.T_time:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Time](), getFixedCols[types.Time](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Time](), getFixedCols[types.Time](w.Bats, pos), nulls)
 		case types.T_timestamp:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[types.Timestamp](), getFixedCols[types.Timestamp](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[types.Timestamp](), getFixedCols[types.Timestamp](w.Bats, pos), nulls)
 		case types.T_decimal64:
-			merge = NewMerge(len(bats), sort.NewDecimal64Less(), getFixedCols[types.Decimal64](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewDecimal64Less(), getFixedCols[types.Decimal64](w.Bats, pos), nulls)
 		case types.T_decimal128:
-			merge = NewMerge(len(bats), sort.NewDecimal128Less(), getFixedCols[types.Decimal128](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewDecimal128Less(), getFixedCols[types.Decimal128](w.Bats, pos), nulls)
 		case types.T_uuid:
-			merge = NewMerge(len(bats), sort.NewUuidCompLess(), getFixedCols[types.Uuid](bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewUuidCompLess(), getFixedCols[types.Uuid](w.Bats, pos), nulls)
 		case types.T_char, types.T_varchar, types.T_blob, types.T_text:
-			merge = NewMerge(len(bats), sort.NewGenericCompLess[string](), getStrCols(bats, pos), nulls)
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[string](), getStrCols(w.Bats, pos), nulls)
 		}
 		if _, err := w.generateWriter(proc); err != nil {
 			return err
 		}
 		lens := 0
-		size := len(bats)
+		size := len(w.Bats)
 		w.buffer.CleanOnlyData()
 		var batchIndex int
 		var rowIndex int
 		for size > 0 {
 			batchIndex, rowIndex, size = merge.GetNextPos()
 			for i := range w.buffer.Vecs {
-				w.buffer.Vecs[i].UnionOne(bats[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
+				err := w.buffer.Vecs[i].UnionOne(w.Bats[batchIndex].Vecs[i], int64(rowIndex), proc.GetMPool())
+				if err != nil {
+					return err
+				}
 			}
 			lens++
 			if lens == int(options.DefaultBlockMaxRows) {
@@ -435,15 +494,12 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 		// force clean
 		w.buffer.CleanOnlyData()
 	}
-	for i := 0; i < length; i++ {
+	for i := 0; i < len(w.Bats); i++ {
+		//recycle the batch
 		w.putBatch(w.Bats[i])
-		w.Batsize -= uint64(w.Bats[i].Size())
+		w.batSize -= uint64(w.Bats[i].Size())
 	}
-	if length == len(w.Bats) {
-		w.Bats = w.Bats[:0]
-	} else {
-		w.Bats = append(w.Bats[:length], w.Bats[length+1:]...)
-	}
+	w.Bats = w.Bats[:0]
 	return nil
 }
 
@@ -454,10 +510,10 @@ func (w *S3Writer) MergeBlock(length int, proc *process.Process, cacheOvershold 
 // s3, but not immediately. We continue to wait until
 // no more data or the data size reaches 64M, at that time
 // we will trigger write s3.
-func (w *S3Writer) WriteS3Batch(bat *batch.Batch, proc *process.Process) error {
-	w.InitBuffers(bat)
-	if index := w.Put(bat, proc); index > 0 {
-		w.MergeBlock(index, proc, true)
+func (w *S3Writer) WriteS3Batch(proc *process.Process, bat *batch.Batch) error {
+	w.InitBuffers(proc, bat)
+	if w.Put(bat, proc) {
+		w.SortAndFlush(proc)
 	}
 	return nil
 }
@@ -466,11 +522,11 @@ func (w *S3Writer) putBatch(bat *batch.Batch) {
 	w.tableBatchBuffers = append(w.tableBatchBuffers, bat)
 }
 
-func getNewBatch(bat *batch.Batch) *batch.Batch {
+func getNewBatch(proc *process.Process, bat *batch.Batch) *batch.Batch {
 	newBat := batch.NewWithSize(bat.VectorCount())
 	newBat.SetAttributes(bat.Attrs)
 	for i := range bat.Vecs {
-		newBat.Vecs[i] = vector.NewVec(*bat.Vecs[i].GetType())
+		newBat.Vecs[i] = proc.GetVector(*bat.Vecs[i].GetType())
 	}
 	return newBat
 }
@@ -563,7 +619,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 	return nil
 }
 
-// writeEndBlocks writes batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
+// WriteEndBlocks writes batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
 func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]string, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)

@@ -41,6 +41,7 @@ type Vector interface {
 	Get(i int) any
 	Append(v any, isNull bool)
 	CloneWindow(offset, length int, allocator ...*mpool.MPool) Vector
+	PreExtend(length int) error
 
 	WriteTo(w io.Writer) (int64, error)
 	ReadFrom(r io.Reader) (int64, error)
@@ -60,6 +61,7 @@ type Vector interface {
 
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
+	ExtendVec(o *cnVector.Vector) error
 
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
@@ -73,8 +75,6 @@ type Vector interface {
 	NullMask() *cnNulls.Nulls
 	// NullCount will consider ConstNull and Const vector
 	NullCount() int
-
-	Slice() any
 
 	Close()
 

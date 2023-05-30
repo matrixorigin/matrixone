@@ -23,9 +23,8 @@ import (
 )
 
 var (
-	Int64BatchHash     = wyhashInt64Batch
-	Int64CellBatchHash = wyhashInt64CellBatch
-
+	Int64BatchHash           = wyhashInt64Batch
+	Int64HashWithFixedSeed   = wyhash64WithFixedSeed
 	BytesBatchGenHashStates  = wyhashBytesBatch
 	Int192BatchGenHashStates = wyhashInt192Batch
 	Int256BatchGenHashStates = wyhashInt256Batch
@@ -100,6 +99,10 @@ func wyhash(p unsafe.Pointer, seed, s uint64) uint64 {
 	return mix(m5^s, mix(a^m2, b^seed))
 }
 
+func wyhash64WithFixedSeed(x uint64) uint64 {
+	return mix(m5^8, mix(x^m2, x^m3^m4^m1))
+}
+
 func wyhash64(x, seed uint64) uint64 {
 	return mix(m5^8, mix(x^m2, x^seed^hashkey[0]^m1))
 }
@@ -123,14 +126,6 @@ func wyhashInt64Batch(data unsafe.Pointer, hashes *uint64, length int) {
 
 	for i := 0; i < length; i++ {
 		hashSlice[i] = wyhash64(dataSlice[i], randseed)
-	}
-}
-
-func wyhashInt64CellBatch(data unsafe.Pointer, hashes *uint64, length int) {
-	dataSlice := unsafe.Slice((*Int64HashMapCell)(data), length)
-	hashSlice := unsafe.Slice(hashes, length)
-	for i := 0; i < length; i++ {
-		hashSlice[i] = wyhash64(dataSlice[i].Key, randseed)
 	}
 }
 

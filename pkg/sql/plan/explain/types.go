@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"bytes"
 	"context"
 	"strings"
 
@@ -39,7 +40,7 @@ type NodeDescribe interface {
 }
 
 type NodeElemDescribe interface {
-	GetDescription(ctx context.Context, options *ExplainOptions) (string, error)
+	GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error
 }
 
 type FormatSettings struct {
@@ -105,6 +106,16 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 	buf.CurrentLine++
 	buf.Lines = append(buf.Lines, prefix+line)
 	logutil.Debugf(buf.Lines[buf.CurrentLine])
+	buf.End++
+}
+
+func (buf *ExplainDataBuffer) PushPlanTitle(title string) {
+	if buf.Start == -1 {
+		buf.Start++
+	}
+	buf.CurrentLine++
+	buf.Lines = append(buf.Lines, title)
+	logutil.Infof(buf.Lines[buf.CurrentLine])
 	buf.End++
 }
 

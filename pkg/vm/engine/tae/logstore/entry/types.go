@@ -56,6 +56,7 @@ type Entry interface {
 	Unmarshal(buf []byte) error
 	Marshal() (buf []byte, err error)
 	ReadFrom(io.Reader) (int64, error)
+	UnmarshalBinary(buf []byte) (n int64, err error)
 	ReadAt(r *os.File, offset int) (int, error)
 	WriteTo(io.Writer) (int64, error)
 	PrepareWrite()

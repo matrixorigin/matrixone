@@ -84,7 +84,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
-	Stats(ctx context.Context, expr *plan.Expr, statsInfoMap any) (*plan.Stats, error)
+	Stats(ctx context.Context, statsInfoMap any) bool
 	Rows(ctx context.Context) (int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
 }
@@ -515,7 +515,7 @@ func (def *IndexDef) ToPBVersion() ConstraintPB {
 type Relation interface {
 	Statistics
 
-	Ranges(context.Context, *plan.Expr) ([][]byte, error)
+	Ranges(context.Context, ...*plan.Expr) ([][]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
@@ -536,7 +536,11 @@ type Relation interface {
 	// only ConstraintDef can be modified
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
+	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
+
 	GetTableID(context.Context) uint64
+
+	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
@@ -547,6 +551,8 @@ type Relation interface {
 	MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error)
 
 	GetEngineType() EngineType
+
+	GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error)
 }
 
 type Reader interface {
@@ -584,8 +590,9 @@ type Engine interface {
 	// Database creates a handle for a database
 	Database(ctx context.Context, databaseName string, op client.TxnOperator) (Database, error)
 
-	// Nodes returns all nodes for worker jobs
-	Nodes() (cnNodes Nodes, err error)
+	// Nodes returns all nodes for worker jobs. isInternal, tenant, cnLabel are
+	// used to filter CN servers.
+	Nodes(isInternal bool, tenant string, username string, cnLabel map[string]string) (cnNodes Nodes, err error)
 
 	// Hints returns hints of engine features
 	// return value should not be cached

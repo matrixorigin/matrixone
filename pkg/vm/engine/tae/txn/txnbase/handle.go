@@ -60,20 +60,20 @@ func (db *TxnDatabase) Relations() (rels []handle.Relation)                     
 func (db *TxnDatabase) MakeRelationIt() (it handle.RelationIt)                          { return }
 func (db *TxnDatabase) GetMeta() any                                                    { return nil }
 
-func (rel *TxnRelation) SimplePPString(_ common.PPLevel) string { return "" }
-func (rel *TxnRelation) String() string                         { return "" }
-func (rel *TxnRelation) Close() error                           { return nil }
-func (rel *TxnRelation) ID() uint64                             { return 0 }
-func (rel *TxnRelation) Rows() int64                            { return 0 }
-func (rel *TxnRelation) Size(attr string) int64                 { return 0 }
-func (rel *TxnRelation) GetCardinality(attr string) int64       { return 0 }
-func (rel *TxnRelation) Schema() any                            { return nil }
-func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt        { return nil }
-func (rel *TxnRelation) MakeSegmentItOnSnap() handle.SegmentIt  { return nil }
-func (rel *TxnRelation) MakeBlockIt() handle.BlockIt            { return nil }
-func (rel *TxnRelation) BatchDedup(col containers.Vector) error { return nil }
-func (rel *TxnRelation) Append(data *containers.Batch) error    { return nil }
-func (rel *TxnRelation) AddBlksWithMetaLoc([]objectio.ZoneMap, []objectio.Location) error {
+func (rel *TxnRelation) SimplePPString(_ common.PPLevel) string                   { return "" }
+func (rel *TxnRelation) String() string                                           { return "" }
+func (rel *TxnRelation) Close() error                                             { return nil }
+func (rel *TxnRelation) ID() uint64                                               { return 0 }
+func (rel *TxnRelation) Rows() int64                                              { return 0 }
+func (rel *TxnRelation) Size(attr string) int64                                   { return 0 }
+func (rel *TxnRelation) GetCardinality(attr string) int64                         { return 0 }
+func (rel *TxnRelation) Schema() any                                              { return nil }
+func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                          { return nil }
+func (rel *TxnRelation) MakeSegmentItOnSnap() handle.SegmentIt                    { return nil }
+func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                              { return nil }
+func (rel *TxnRelation) BatchDedup(col containers.Vector) error                   { return nil }
+func (rel *TxnRelation) Append(ctx context.Context, data *containers.Batch) error { return nil }
+func (rel *TxnRelation) AddBlksWithMetaLoc([]objectio.Location) error {
 	return nil
 }
 func (rel *TxnRelation) GetMeta() any                                                        { return nil }
@@ -103,6 +103,10 @@ func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (
 }
 func (rel *TxnRelation) AlterTable(context.Context, *apipb.AlterTableReq) (err error) { return }
 
+func (seg *TxnSegment) Reset() {
+	seg.Txn = nil
+	seg.Rel = nil
+}
 func (seg *TxnSegment) GetMeta() any                     { return nil }
 func (seg *TxnSegment) String() string                   { return "" }
 func (seg *TxnSegment) Close() error                     { return nil }
@@ -127,6 +131,10 @@ func (seg *TxnSegment) BatchDedup(containers.Vector) (err error)                
 
 // func (blk *TxnBlock) IsAppendable() bool                                   { return true }
 
+func (blk *TxnBlock) Reset() {
+	blk.Txn = nil
+	blk.Seg = nil
+}
 func (blk *TxnBlock) GetTotalChanges() int                                  { return 0 }
 func (blk *TxnBlock) IsAppendableBlock() bool                               { return true }
 func (blk *TxnBlock) Fingerprint() *common.ID                               { return &common.ID{} }

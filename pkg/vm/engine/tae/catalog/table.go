@@ -30,14 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type TableDataFactory = func(meta *TableEntry) data.Table
 
-func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn txnif.TxnReader) (visible, dropped bool) {
+func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], txn txnif.TxnReader) (visible, dropped bool, name string) {
 	table := n.GetPayload()
-	visible, dropped = table.GetVisibility(txn)
+	visible, dropped, name = table.GetVisibilityAndName(txn)
 	return
 }
 
@@ -352,39 +351,39 @@ func (entry *TableEntry) AsCommonID() *common.ID {
 }
 
 func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
+	defer func() {
+		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
+			err = nil
+		}
+	}()
 	segIt := entry.MakeSegmentIt(true)
 	for segIt.Valid() {
 		segment := segIt.Get().GetPayload()
-		if err = processor.OnSegment(segment); err != nil {
+		if err := processor.OnSegment(segment); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				err = nil
 				segIt.Next()
 				continue
 			}
-			break
+			return err
 		}
 		blkIt := segment.MakeBlockIt(true)
 		for blkIt.Valid() {
 			block := blkIt.Get().GetPayload()
-			if err = processor.OnBlock(block); err != nil {
+			if err := processor.OnBlock(block); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-					err = nil
 					blkIt.Next()
 					continue
 				}
-				break
+				return err
 			}
 			blkIt.Next()
 		}
-		if err = processor.OnPostSegment(segment); err != nil {
-			break
+		if err := processor.OnPostSegment(segment); err != nil {
+			return err
 		}
 		segIt.Next()
 	}
-	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-		err = nil
-	}
-	return err
+	return
 }
 
 func (entry *TableEntry) DropSegmentEntry(id *types.Segmentid, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
@@ -418,6 +417,12 @@ func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {
+	// Safety: in commit queue, that's ok without lock
+	t := entry.GetLatestNodeLocked()
+	if schema := t.BaseNode.Schema; schema.Extra.OldName != "" {
+		fullname := genTblFullName(schema.AcInfo.TenantID, schema.Name)
+		entry.GetDB().RollbackRenameTable(fullname, entry.ID)
+	}
 	var isEmpty bool
 	isEmpty, err = entry.BaseEntryImpl.PrepareRollback()
 	if err != nil {
@@ -448,8 +453,8 @@ Append Txn:
 	s-----------------------p---------c         Yes
 	           s----------------------p         No, schema at s is not same with schema at p
 */
-func (entry *TableEntry) ApplyCommit(index *wal.Index) (err error) {
-	err = entry.BaseEntryImpl.ApplyCommit(index)
+func (entry *TableEntry) ApplyCommit() (err error) {
+	err = entry.BaseEntryImpl.ApplyCommit()
 	if err != nil {
 		return
 	}
@@ -526,6 +531,13 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
 
 	newSchema = node.BaseNode.Schema
+	if isNewNode {
+		// Extra info(except seqnnum) is meaningful to the previous version schema
+		// reset in new Schema
+		newSchema.Extra = &apipb.SchemaExtra{
+			NextColSeqnum: newSchema.Extra.NextColSeqnum,
+		}
+	}
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return
 	}
@@ -546,4 +558,27 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 		},
 	}
 	entry.Insert(node)
+}
+
+func (entry *TableEntry) GetVisibilityAndName(txn txnif.TxnReader) (visible, dropped bool, name string) {
+	entry.RLock()
+	defer entry.RUnlock()
+	needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		entry.RUnlock()
+		txnToWait.GetTxnState(true)
+		entry.RLock()
+	}
+	un := entry.GetVisibleNode(txn)
+	if un == nil {
+		return
+	}
+	visible = true
+	if un.IsSameTxn(txn) {
+		dropped = un.HasDropIntent()
+	} else {
+		dropped = un.HasDropCommitted()
+	}
+	name = un.BaseNode.Schema.Name
+	return
 }

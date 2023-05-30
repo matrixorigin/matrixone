@@ -87,6 +87,12 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 			return genDropOrTruncateTables(GenRows(bat)), es[1:], nil
 		} else if e.EntryType == api.Entry_Update {
 			return genUpdateConstraint(GenRows(bat)), es[1:], nil
+		} else if e.EntryType == api.Entry_Alter {
+			e, err := genUpdateAltertable(GenRows(bat))
+			if err != nil {
+				return nil, nil, err
+			}
+			return e, es[1:], nil
 		}
 		cmds := genCreateTables(GenRows(bat))
 		idx := 0
@@ -204,6 +210,19 @@ func genUpdateConstraint(rows [][]any) []UpdateConstraint {
 		cmds[i].Constraint = row[MO_TABLES_UPDATE_CONSTRAINT].([]byte)
 	}
 	return cmds
+}
+
+func genUpdateAltertable(rows [][]any) ([]*api.AlterTableReq, error) {
+	cmds := make([]*api.AlterTableReq, len(rows))
+	for i, row := range rows {
+		req := &api.AlterTableReq{}
+		err := req.Unmarshal(row[MO_TABLES_ALTER_TABLE].([]byte))
+		if err != nil {
+			return nil, err
+		}
+		cmds[i] = req
+	}
+	return cmds, nil
 }
 
 func genDropOrTruncateTables(rows [][]any) []DropOrTruncateTable {
@@ -396,9 +415,8 @@ func GenRows(bat *batch.Batch) [][]any {
 				rows[j][i] = col[j]
 			}
 		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_json, types.T_text:
-			col := vector.MustBytesCol(vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
+				rows[j][i] = vec.GetBytesAt(j)
 			}
 		default:
 			panic(fmt.Sprintf("unspported type: %v", vec.GetType()))

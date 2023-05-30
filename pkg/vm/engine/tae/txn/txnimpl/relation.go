@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -136,6 +135,7 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	it := h.MakeBlockIt()
 	for it.Valid() {
 		block := it.GetBlock()
+		defer block.Close()
 		s = fmt.Sprintf("%s\n%s", s, block.String())
 		it.Next()
 	}
@@ -167,20 +167,17 @@ func (h *txnRelation) BatchDedup(col containers.Vector) error {
 	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), col)
 }
 
-func (h *txnRelation) Append(data *containers.Batch) error {
+func (h *txnRelation) Append(ctx context.Context, data *containers.Batch) error {
 	if !h.table.GetLocalSchema().IsSameColumns(h.table.GetMeta().GetLastestSchema()) {
 		return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 	}
-	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
+	return h.Txn.GetStore().Append(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
-func (h *txnRelation) AddBlksWithMetaLoc(
-	zm []objectio.ZoneMap,
-	metaLocs []objectio.Location) error {
+func (h *txnRelation) AddBlksWithMetaLoc(metaLocs []objectio.Location) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
-		zm,
 		metaLocs,
 	)
 }
@@ -260,7 +257,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 	if err = h.table.RangeDelete(id, row, row, handle.DT_Normal); err != nil {
 		return
 	}
-	err = h.Append(bat)
+	err = h.Append(context.Background(), bat)
 	// FIXME!: We need to revert previous delete if append fails.
 	return
 }
@@ -279,15 +276,17 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 	err = containers.ForeachVectorWindow(
 		keys, 0, keys.Length(),
 		func(rid types.Rowid, _ bool, _ int) (err error) {
-			id.BlockID, row = model.DecodePhyAddrKey(&rid)
+			id.BlockID, row = rid.Decode()
 			err = h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
 			return
-		}, nil)
+		}, nil, nil)
 	return
 }
 
+// Only used by test.
 func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
-	bid, row := model.DecodePhyAddrKeyFromValue(key)
+	rid := key.(types.Rowid)
+	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
 	id.BlockID = bid
 	return h.Txn.GetStore().RangeDelete(id, row, row, handle.DT_Normal)
@@ -297,8 +296,10 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.De
 	return h.Txn.GetStore().RangeDelete(id, start, end, dt)
 }
 
+// Only used by test.
 func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, bool, error) {
-	bid, row := model.DecodePhyAddrKeyFromValue(key)
+	rid := key.(types.Rowid)
+	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
 	id.BlockID = bid
 	return h.Txn.GetStore().GetValue(id, row, uint16(col))

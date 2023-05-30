@@ -33,7 +33,7 @@ import (
 type TxnCommitListener interface {
 	OnBeginPrePrepare(txnif.AsyncTxn)
 	OnEndPrePrepare(txnif.AsyncTxn)
-	OnEndPreApplyCommit(txnif.AsyncTxn)
+	OnEndPrepareWAL(txnif.AsyncTxn)
 }
 
 type NoopCommitListener struct{}
@@ -66,9 +66,9 @@ func (bl *batchTxnCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn) {
 		l.OnEndPrePrepare(txn)
 	}
 }
-func (bl *batchTxnCommitListener) OnEndPreApplyCommit(txn txnif.AsyncTxn) {
+func (bl *batchTxnCommitListener) OnEndPrepareWAL(txn txnif.AsyncTxn) {
 	for _, l := range bl.listeners {
-		l.OnEndPreApplyCommit(txn)
+		l.OnEndPrepareWAL(txn)
 	}
 }
 
@@ -79,6 +79,7 @@ type TxnManager struct {
 	sync.RWMutex
 	common.ClosedState
 	PreparingSM     sm.StateMachine
+	FlushQueue      sm.Queue
 	IDMap           map[string]txnif.AsyncTxn
 	IdAlloc         *common.TxnIDAllocator
 	TsAlloc         *types.TsAlloctor
@@ -108,8 +109,9 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	}
 	mgr.initMaxCommittedTS()
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
-	fqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
-	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, fqueue)
+	prepareWALQueue := sm.NewSafeQueue(20000, 1000, mgr.onPrepareWAL)
+	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
+	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
 
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
 	return mgr
@@ -130,6 +132,7 @@ func (mgr *TxnManager) Now() types.TS {
 }
 
 func (mgr *TxnManager) Init(prevTs types.TS) error {
+	logutil.Infof("init ts to %v", prevTs.ToString())
 	mgr.TsAlloc.SetStart(prevTs)
 	logutil.Info("[INIT]", TxnMgrField(mgr))
 	return nil
@@ -293,7 +296,9 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	// If txn is trying committing, call txn.PrePrepare()
 	now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare())
-	logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
+	})
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
@@ -301,7 +306,6 @@ func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
 }
 
 func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
-	defer mgr.CommitListener.OnEndPreApplyCommit(txn)
 	if err := txn.PreApplyCommit(); err != nil {
 		txn.SetError(err)
 		mgr.OnException(err)
@@ -466,10 +470,34 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 			panic(err)
 		}
 	}
-	logutil.Debug("[dequeuePreparing]",
-		common.NameSpaceField("txns"),
-		common.DurationField(time.Since(now)),
-		common.CountField(len(items)))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("[dequeuePreparing]",
+			common.NameSpaceField("txns"),
+			common.DurationField(time.Since(now)),
+			common.CountField(len(items)))
+	})
+}
+
+func (mgr *TxnManager) onPrepareWAL(items ...any) {
+	now := time.Now()
+	for _, item := range items {
+		op := item.(*OpTxn)
+		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
+			if err := op.Txn.PrepareWAL(); err != nil {
+				panic(err)
+			}
+			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+		}
+		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
+			panic(err)
+		}
+	}
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("[prepareWAL]",
+			common.NameSpaceField("txns"),
+			common.DurationField(time.Since(now)),
+			common.CountField(len(items)))
+	})
 }
 
 // 1PC and 2PC
@@ -490,10 +518,12 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 			mgr.on1PCPrepared(op)
 		}
 	}
-	logutil.Debug("[dequeuePrepared]",
-		common.NameSpaceField("txns"),
-		common.CountField(len(items)),
-		common.DurationField(time.Since(now)))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("[dequeuePrepared]",
+			common.NameSpaceField("txns"),
+			common.CountField(len(items)),
+			common.DurationField(time.Since(now)))
+	})
 }
 
 func (mgr *TxnManager) OnException(new error) {
@@ -522,6 +552,7 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 }
 
 func (mgr *TxnManager) Start() {
+	mgr.FlushQueue.Start()
 	mgr.PreparingSM.Start()
 	mgr.wg.Add(1)
 	go mgr.heartbeat()
@@ -531,6 +562,7 @@ func (mgr *TxnManager) Stop() {
 	mgr.cancel()
 	mgr.wg.Wait()
 	mgr.PreparingSM.Stop()
+	mgr.FlushQueue.Stop()
 	mgr.OnException(common.ErrClose)
 	logutil.Info("[Stop]", TxnMgrField(mgr))
 }

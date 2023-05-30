@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,9 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -58,19 +62,25 @@ func New(
 			return true
 		})
 
-	dnMap := make(map[string]int)
-	for i := range services {
-		dnMap[services[i].ServiceID] = i
+	var dnID string
+	if len(services) > 0 {
+		dnID = services[0].ServiceID
+	}
+
+	ls, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.LockService)
+	if !ok {
+		logutil.Fatalf("missing lock service")
 	}
 
 	e := &Engine{
 		mp:         mp,
 		fs:         fs,
+		ls:         ls.(lockservice.LockService),
 		cli:        cli,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
-		dnMap:      dnMap,
-		partitions: make(map[[2]uint64]logtailreplay.Partitions),
+		dnID:       dnID,
+		partitions: make(map[[2]uint64]*logtailreplay.Partition),
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -142,7 +152,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	}
 	key := &cache.DatabaseItem{
 		Name:      name,
-		AccountId: getAccountId(ctx),
+		AccountId: defines.GetAccountId(ctx),
 		Ts:        txn.meta.SnapshotTS,
 	}
 	if ok := e.catalog.GetDatabase(key); !ok {
@@ -164,7 +174,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 	if txn == nil {
 		return nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
-	accountId := getAccountId(ctx)
+	accountId := defines.GetAccountId(ctx)
 	txn.databaseMap.Range(func(k, _ any) bool {
 		key := k.(databaseKey)
 		if key.accountId == accountId {
@@ -172,7 +182,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 		}
 		return true
 	})
-	dbs = append(dbs, e.catalog.Databases(getAccountId(ctx), txn.meta.SnapshotTS)...)
+	dbs = append(dbs, e.catalog.Databases(defines.GetAccountId(ctx), txn.meta.SnapshotTS)...)
 	return dbs, nil
 }
 
@@ -181,7 +191,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 	if txn == nil {
 		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
-	accountId := getAccountId(ctx)
+	accountId := defines.GetAccountId(ctx)
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
 	txn.databaseMap.Range(func(k, _ any) bool {
@@ -229,7 +239,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	if txn == nil {
 		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
-	accountId := getAccountId(ctx)
+	accountId := defines.GetAccountId(ctx)
 	var db engine.Database
 	noRepCtx := errutil.ContextWithNoReport(ctx, true)
 	txn.databaseMap.Range(func(k, _ any) bool {
@@ -251,7 +261,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if rel == nil {
 		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
-		for _, dbName := range dbNames {
+		for _, dbName = range dbNames {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
 				return "", "", nil, err
@@ -288,7 +298,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	} else {
 		key := &cache.DatabaseItem{
 			Name:      name,
-			AccountId: getAccountId(ctx),
+			AccountId: defines.GetAccountId(ctx),
 			Ts:        txn.meta.SnapshotTS,
 		}
 		if ok := e.catalog.GetDatabase(key); !ok {
@@ -329,7 +339,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.cli,
 		op,
 		e.fs,
-		nil,
+		e.ls,
 		nil,
 	)
 
@@ -339,8 +349,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		op:              op,
 		proc:            proc,
 		engine:          e,
-		readOnly:        true,
-		meta:            op.Txn(),
+		meta:            op.TxnRef(),
 		idGen:           e.idGen,
 		dnStores:        e.getDNServices(),
 		tableMap:        new(sync.Map),
@@ -362,49 +371,16 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		cnBlkId_Pos:                     map[types.Blockid]Pos{},
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
+		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
-	// TxnWorkSpace SegmentName
+	txn.readOnly.Store(true)
+	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
-	if e.UsePushModelOrNot() {
-		if err := e.pClient.checkTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
-			e.delTransaction(txn)
-			return err
-		}
-	} else {
-		// update catalog's cache
-		table := &txnTable{
-			db: &txnDatabase{
-				txn: &Transaction{
-					engine: e,
-				},
-				databaseId: catalog.MO_CATALOG_ID,
-			},
-		}
-		table.tableId = catalog.MO_DATABASE_ID
-		table.tableName = catalog.MO_DATABASE
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_DATABASE_DAT_ID_IDX,
-			catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
-			e.delTransaction(txn)
-			return err
-		}
-
-		table.tableId = catalog.MO_TABLES_ID
-		table.tableName = catalog.MO_TABLES
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_TABLES_REL_ID_IDX,
-			catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
-			e.delTransaction(txn)
-			return err
-		}
-
-		table.tableId = catalog.MO_COLUMNS_ID
-		table.tableName = catalog.MO_COLUMNS
-		if err := e.UpdateOfPull(ctx, txn.dnStores[:1], table, op, catalog.MO_COLUMNS_ATT_UNIQ_NAME_IDX,
-			catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
-			e.delTransaction(txn)
-			return err
-		}
+	if err := e.pClient.checkTxnTimeIsLegal(ctx, txn.meta.SnapshotTS); err != nil {
+		e.delTransaction(txn)
+		return err
 	}
 
 	return nil
@@ -416,12 +392,13 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
+	txn.IncrStatemenetID(ctx)
 	defer e.delTransaction(txn)
-	if txn.readOnly {
+	if txn.readOnly.Load() {
 		return nil
 	}
+	txn.mergeTxnWorkspace()
 	err := txn.DumpBatch(true, 0)
-	txn.CleanNilBatch()
 	if err != nil {
 		return err
 	}
@@ -444,17 +421,44 @@ func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 	return nil
 }
 
-func (e *Engine) Nodes() (engine.Nodes, error) {
+func (e *Engine) Nodes(
+	isInternal bool, tenant string, username string, cnLabel map[string]string,
+) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetCNService(clusterservice.NewSelector(), func(c metadata.CNService) bool {
-		nodes = append(nodes, engine.Node{
-			Mcpu: runtime.NumCPU(),
-			Id:   c.ServiceID,
-			Addr: c.PipelineServiceAddress,
+	var selector clusterservice.Selector
+
+	// If the requested labels are empty, return all CN servers.
+	if len(cnLabel) == 0 {
+		cluster.GetCNService(selector, func(c metadata.CNService) bool {
+			nodes = append(nodes, engine.Node{
+				Mcpu: runtime.NumCPU(),
+				Id:   c.ServiceID,
+				Addr: c.PipelineServiceAddress,
+			})
+			return true
 		})
-		return true
-	})
+		return nodes, nil
+	}
+
+	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ)
+	if isInternal || strings.ToLower(tenant) == "sys" {
+		SelectForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
+			nodes = append(nodes, engine.Node{
+				Mcpu: runtime.NumCPU(),
+				Id:   s.ServiceID,
+				Addr: s.PipelineServiceAddress,
+			})
+		})
+	} else {
+		SelectForCommonTenant(selector, nil, func(s *metadata.CNService) {
+			nodes = append(nodes, engine.Node{
+				Mcpu: runtime.NumCPU(),
+				Id:   s.ServiceID,
+				Addr: s.PipelineServiceAddress,
+			})
+		})
+	}
 	return nodes, nil
 }
 
@@ -546,16 +550,16 @@ func (e *Engine) getDNServices() []DNStore {
 
 func (e *Engine) cleanMemoryTable() {
 	e.Lock()
-	e.partitions = make(map[[2]uint64]logtailreplay.Partitions)
-	e.Unlock()
+	defer e.Unlock()
+	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 }
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	e.Lock()
+	defer e.Unlock()
 	// XXX it's probably not a good way to do that.
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
-	e.Unlock()
 	logutil.Infof("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }

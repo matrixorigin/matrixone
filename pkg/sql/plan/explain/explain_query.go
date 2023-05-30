@@ -15,7 +15,9 @@
 package explain
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,6 +39,12 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 
 func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
 	nodes := e.QueryPlan.Nodes
+
+	isForest := false
+	if len(e.QueryPlan.Steps) > 1 {
+		isForest = true
+	}
+
 	for index, rootNodeID := range e.QueryPlan.Steps {
 		logutil.Debugf("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
@@ -45,6 +53,12 @@ func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataB
 			indent: 2,
 			level:  0,
 		}
+
+		if isForest {
+			title := fmt.Sprintf("Plan %v:", index)
+			settings.buffer.PushPlanTitle(title)
+		}
+
 		err := traversalPlan(ctx, nodes[rootNodeID], nodes, &settings, options)
 		if err != nil {
 			return err
@@ -53,11 +67,11 @@ func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataB
 	return nil
 }
 
-func (e *ExplainQueryImpl) BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions) *ExplainData {
-	nodes := e.QueryPlan.Nodes
+func BuildJsonPlan(ctx context.Context, uuid uuid.UUID, options *ExplainOptions, query *plan.Query) *ExplainData {
+	nodes := query.Nodes
 	expdata := NewExplainData(uuid)
-	for index, rootNodeId := range e.QueryPlan.Steps {
-		graphData := NewGraphData()
+	for index, rootNodeId := range query.Steps {
+		graphData := NewGraphData(len(nodes))
 		err := PreOrderPlan(ctx, nodes[rootNodeId], nodes, graphData, options)
 		if err != nil {
 			var errdata *ExplainData
@@ -99,6 +113,11 @@ func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings,
 		}
 		settings.buffer.PushNewLine(basicNodeInfo, true, settings.level)
 
+		if nodedescImpl.Node.NodeType == plan.Node_SINK_SCAN {
+			msg := "DataSource: " + fmt.Sprintf("Plan %v", nodedescImpl.Node.SourceStep)
+			settings.buffer.PushNewLine(msg, false, settings.level)
+		}
+
 		// Process verbose optioan information , "Output:"
 		if options.Verbose {
 			if nodedescImpl.Node.GetProjectList() != nil {
@@ -124,24 +143,13 @@ func explainStep(ctx context.Context, step *plan.Node, settings *FormatSettings,
 					rowsetDataDescImpl := &RowsetDataDescribeImpl{
 						RowsetData: nodedescImpl.Node.RowsetData,
 					}
-					rowsetInfo, err := rowsetDataDescImpl.GetDescription(ctx, options)
+					// Provide a relatively balanced initial capacity [360] for byte slice to prevent multiple memory requests
+					buf := bytes.NewBuffer(make([]byte, 0, 360))
+					err := rowsetDataDescImpl.GetDescription(ctx, options, buf)
 					if err != nil {
 						return err
 					}
-					settings.buffer.PushNewLine(rowsetInfo, false, settings.level)
-				}
-			}
-
-			if nodedescImpl.Node.NodeType == plan.Node_UPDATE {
-				if nodedescImpl.Node.UpdateCtx != nil {
-					updateCtxsDescImpl := &UpdateCtxsDescribeImpl{
-						UpdateCtx: nodedescImpl.Node.UpdateCtx,
-					}
-					updateCols, err := updateCtxsDescImpl.GetDescription(ctx, options)
-					if err != nil {
-						return err
-					}
-					settings.buffer.PushNewLine(updateCols, false, settings.level)
+					settings.buffer.PushNewLine(buf.String(), false, settings.level)
 				}
 			}
 		}

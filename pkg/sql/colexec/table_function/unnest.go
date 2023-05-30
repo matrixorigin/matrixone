@@ -83,7 +83,10 @@ func unnestPrepare(proc *process.Process, arg *Argument) error {
 		return err
 	}
 	arg.Params = dt
-	return nil
+
+	arg.ctr = new(container)
+	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+	return err
 }
 
 func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
@@ -117,21 +120,21 @@ func unnestCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	jsonVec, err = colexec.EvalExpr(bat, proc, arg.Args[0])
+	jsonVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{bat})
 	if err != nil {
 		return false, err
 	}
 	if jsonVec.GetType().Oid != types.T_json && jsonVec.GetType().Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: first argument must be json or string, but got %s", jsonVec.GetType().String()))
 	}
-	pathVec, err = colexec.EvalExpr(bat, proc, arg.Args[1])
+	pathVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{bat})
 	if err != nil {
 		return false, err
 	}
 	if pathVec.GetType().Oid != types.T_varchar {
 		return false, moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("unnest: second argument must be string, but got %s", pathVec.GetType().String()))
 	}
-	outerVec, err = colexec.EvalExpr(bat, proc, arg.Args[2])
+	outerVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{bat})
 	if err != nil {
 		return false, err
 	}
@@ -171,7 +174,8 @@ func handle(jsonVec *vector.Vector, path *bytejson.Path, outer bool, param *unne
 		ures []bytejson.UnnestResult
 	)
 
-	rbat = batch.New(false, arg.Attrs)
+	rbat = batch.NewWithSize(len(arg.Attrs))
+	rbat.Attrs = arg.Attrs
 	rbat.Cnt = 1
 	for i := range arg.retSchema {
 		rbat.Vecs[i] = vector.NewVec(arg.retSchema[i])

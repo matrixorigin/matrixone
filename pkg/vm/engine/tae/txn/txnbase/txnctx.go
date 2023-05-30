@@ -119,11 +119,12 @@ func (ctx *TxnCtx) CommitAfter(startTs types.TS) bool {
 	return ctx.GetCommitTS().Greater(startTs)
 }
 
-func (ctx *TxnCtx) String() string          { return ctx.Repr() }
-func (ctx *TxnCtx) GetID() string           { return ctx.ID }
-func (ctx *TxnCtx) HasSnapshotLag() bool    { return ctx.SnapshotTS.Less(ctx.StartTS) }
-func (ctx *TxnCtx) GetSnapshotTS() types.TS { return ctx.SnapshotTS }
-func (ctx *TxnCtx) GetStartTS() types.TS    { return ctx.StartTS }
+func (ctx *TxnCtx) String() string            { return ctx.Repr() }
+func (ctx *TxnCtx) GetID() string             { return ctx.ID }
+func (ctx *TxnCtx) HasSnapshotLag() bool      { return ctx.SnapshotTS.Less(ctx.StartTS) }
+func (ctx *TxnCtx) GetSnapshotTS() types.TS   { return ctx.SnapshotTS }
+func (ctx *TxnCtx) SetSnapshotTS(ts types.TS) { ctx.SnapshotTS = ts }
+func (ctx *TxnCtx) GetStartTS() types.TS      { return ctx.StartTS }
 func (ctx *TxnCtx) GetCommitTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()

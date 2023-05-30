@@ -21,12 +21,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -246,21 +244,13 @@ func (r *baseEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 		return 0, err
 	}
 	n += n1
-	payload := make([]byte, r.meta.payloadSize)
-	n2, err := reader.Read(payload)
-	if err != nil {
-		return 0, err
-	}
-	if n2 != int(r.meta.payloadSize) {
-		panic(moerr.NewInternalErrorNoCtx("logic err: err is %v, expect %d, get %d", err, r.meta.payloadSize, n2))
-	}
-	r.payload = payload
 	return
 }
 
 func (r *baseEntry) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
 	_, err := r.ReadFrom(bbuf)
+	r.payload = buf[len(buf)-int(r.payloadSize):]
 	return err
 }
 
@@ -282,25 +272,26 @@ func newRecordEntry() *recordEntry {
 }
 
 func newEmptyRecordEntry(r logservice.LogRecord) *recordEntry {
-	payload := make([]byte, len(r.Payload()))
-	copy(payload, r.Payload())
 	return &recordEntry{
-		payload: payload,
+		payload: r.Payload(),
 		baseEntry: &baseEntry{
 			meta: newMeta(),
 		},
 		mashalMu: sync.RWMutex{}}
 }
 
-func (r *recordEntry) replay(h driver.ApplyHandle) (addr *common.ClosedIntervals) {
-	bbuf := bytes.NewBuffer(r.baseEntry.payload)
+func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) {
 	lsns := make([]uint64, 0)
+	offset := int64(0)
 	for lsn := range r.meta.addr {
 		lsns = append(lsns, lsn)
 		e := entry.NewEmptyEntry()
-		e.ReadFrom(bbuf)
-		h(e)
-		e.Entry.Free()
+		n, err := e.UnmarshalBinary(r.baseEntry.payload[offset:])
+		if err != nil {
+			panic(err)
+		}
+		offset += n
+		replayer.recordChan <- e
 	}
 	intervals := common.NewClosedIntervalsBySlice(lsns)
 	return intervals

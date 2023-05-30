@@ -15,9 +15,11 @@
 package db
 
 import (
+	"context"
 	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -47,7 +49,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	bats := bat.Split(10)
 
 	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
-	err := rel.Append(bats[0])
+	err := rel.Append(context.Background(), bats[0])
 	{
 		offsets := make([]uint32, 0)
 		it := rel.MakeBlockIt()
@@ -58,7 +60,8 @@ func TestHiddenWithPK1(t *testing.T) {
 			defer view.Close()
 			fp := blk.Fingerprint()
 			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
-				bid, offset := model.DecodePhyAddrKeyFromValue(v)
+				rid := v.(types.Rowid)
+				bid, offset := rid.Decode()
 				t.Logf("bid=%s,offset=%d", bid.String(), offset)
 				assert.Equal(t, fp.BlockID, bid)
 				offsets = append(offsets, offset)
@@ -82,7 +85,8 @@ func TestHiddenWithPK1(t *testing.T) {
 		fp := blk.Fingerprint()
 		t.Log(fp.String())
 		_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
-			bid, offset := model.DecodePhyAddrKeyFromValue(v)
+			rid := v.(types.Rowid)
+			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
 			assert.Equal(t, fp.BlockID, bid)
 			offsets = append(offsets, offset)
@@ -96,15 +100,15 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
-	err = rel.Append(bats[1])
+	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	err = rel.Append(bats[2])
+	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
-	err = rel.Append(bats[3])
+	err = rel.Append(context.Background(), bats[3])
 	assert.NoError(t, err)
-	err = rel.Append(bats[4])
+	err = rel.Append(context.Background(), bats[4])
 	assert.NoError(t, err)
-	err = rel.Append(bats[5])
+	err = rel.Append(context.Background(), bats[5])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
@@ -123,7 +127,8 @@ func TestHiddenWithPK1(t *testing.T) {
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
 			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
-				bid, offset := model.DecodePhyAddrKeyFromValue(v)
+				rid := v.(types.Rowid)
+				bid, offset := rid.Decode()
 				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, meta.ID, bid)
 				offsets = append(offsets, offset)
@@ -164,7 +169,8 @@ func TestHiddenWithPK1(t *testing.T) {
 			t.Log(meta.String())
 			t.Log(meta.GetSegment().String())
 			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
-				bid, offset := model.DecodePhyAddrKeyFromValue(v)
+				rid := v.(types.Rowid)
+				bid, offset := rid.Decode()
 				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, meta.ID, bid)
 				offsets = append(offsets, offset)
@@ -200,7 +206,7 @@ func TestHidden2(t *testing.T) {
 	bats := bat.Split(10)
 
 	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
-	err := rel.Append(bats[0])
+	err := rel.Append(context.Background(), bats[0])
 	{
 		blk := getOneBlock(rel)
 		var hidden *model.ColumnView
@@ -214,7 +220,8 @@ func TestHidden2(t *testing.T) {
 			}
 		}
 		_ = hidden.GetData().Foreach(func(key any, _ bool, _ int) (err error) {
-			bid, offset := model.DecodePhyAddrKeyFromValue(key)
+			rid := key.(types.Rowid)
+			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
 			v, _, err := rel.GetValueByPhyAddrKey(key, schema.PhyAddrKey.Idx)
 			assert.NoError(t, err)
@@ -250,7 +257,8 @@ func TestHidden2(t *testing.T) {
 			}
 		}
 		_ = hidden.GetData().Foreach(func(key any, _ bool, _ int) (err error) {
-			bid, offset := model.DecodePhyAddrKeyFromValue(key)
+			rid := key.(types.Rowid)
+			bid, offset := rid.Decode()
 			t.Logf(",bid=%s,offset=%d", bid, offset)
 			v, _, err := rel.GetValueByPhyAddrKey(key, schema.PhyAddrKey.Idx)
 			assert.NoError(t, err)
@@ -262,17 +270,17 @@ func TestHidden2(t *testing.T) {
 			return
 		}, nil)
 	}
-	err = rel.Append(bats[1])
+	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	err = rel.Append(bats[1])
+	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	err = rel.Append(bats[1])
+	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	err = rel.Append(bats[2])
+	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
-	err = rel.Append(bats[2])
+	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
-	err = rel.Append(bats[2])
+	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 

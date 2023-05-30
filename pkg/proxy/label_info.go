@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"net"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -34,8 +35,15 @@ type labelInfo struct {
 	Labels map[string]string
 }
 
-// sessionVarName is the session variable name which defines the label info.
-var sesssionVarName = "cn_label"
+// clientInfo contains the information of client, e.g. Tenant of the client
+type clientInfo struct {
+	// labelInfo contains tenant and labels of the client
+	labelInfo
+	// username of the client, unique under each tenant
+	username string
+	// originIP that client used to communicate with server
+	originIP net.IP
+}
 
 // reservedLabels are the labels not allowed in user labels.
 // Ref: https://dev.mysql.com/doc/refman/8.0/en/performance-schema-connection-attribute-tables.html
@@ -90,31 +98,10 @@ func (l *labelInfo) tenantLabel() map[string]string {
 
 // isSuperTenant returns true if the tenant is sys or empty.
 func (l *labelInfo) isSuperTenant() bool {
-	if l.Tenant == "" || l.Tenant == "sys" {
+	if l.Tenant == "" || strings.ToLower(string(l.Tenant)) == superTenant {
 		return true
 	}
 	return false
-}
-
-// genSetVarStmt returns a statement of set session variable.
-func (l *labelInfo) genSetVarStmt() string {
-	var builder strings.Builder
-	builder.WriteString("SET SESSION ")
-	builder.WriteString(sesssionVarName)
-	builder.WriteString("='")
-	count := len(l.allLabels())
-	var i int
-	for k, v := range l.allLabels() {
-		i++
-		builder.WriteString(k)
-		builder.WriteString("=")
-		builder.WriteString(v)
-		if i != count {
-			builder.WriteString(",")
-		}
-	}
-	builder.WriteString("'")
-	return builder.String()
 }
 
 // genSelector generates the label selector according to labels in labelInfo.

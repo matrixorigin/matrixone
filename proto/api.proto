@@ -181,6 +181,7 @@ message Entry {
         Insert = 0;
         Delete = 1;
         Update = 2;
+        Alter = 3;
     }
     EntryType entry_type = 1;
     uint64 table_id      = 2;
@@ -284,6 +285,8 @@ message SchemaExtra {
     // sending mo_columns deletes according to this.
     repeated string dropped_attrs = 2;
     bool column_changed = 3; 
+    // sending mo_tables deletes by this.
+    string old_name = 4;
 }
 
 // Int64Map mainly used in unit test

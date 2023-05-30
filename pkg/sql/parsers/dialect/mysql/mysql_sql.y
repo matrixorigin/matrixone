@@ -39,6 +39,7 @@ import (
     alterTable tree.AlterTable
     alterTableOptions tree.AlterTableOptions
     alterTableOption tree.AlterTableOption
+    alterColpos *tree.AlterColPos
 
     tableDef tree.TableDef
     tableDefs tree.TableDefs
@@ -133,9 +134,9 @@ import (
     clusterByOption *tree.ClusterByOption
     partitionBy *tree.PartitionBy
     windowSpec *tree.WindowSpec
-    windowFrame *tree.WindowFrame
-    windowFrameBound tree.WindowFrameBound
-    windowFrameUnit tree.WindowFrameUnits
+    frameClause *tree.FrameClause
+    frameBound *tree.FrameBound
+    frameType tree.FrameType
     partition *tree.Partition
     partitions []*tree.Partition
     values tree.Values
@@ -233,7 +234,7 @@ import (
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
@@ -356,7 +357,7 @@ import (
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE
 
 // SET tokens
-%token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
+%token <str> NAMES GLOBAL PERSIST SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
 %token <str> LOCAL EVENTS PLUGINS
 
 // Functions
@@ -384,7 +385,7 @@ import (
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
-%token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK
+%token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -499,7 +500,7 @@ import (
 %type <procArgType> proc_arg_in_out_type
 
 %type <tableDefs> table_elem_list_opt table_elem_list
-%type <tableDef> table_elem constaint_def constraint_elem index_def
+%type <tableDef> table_elem constaint_def constraint_elem index_def table_elem_2
 %type <tableName> table_name table_name_opt_wild
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
@@ -517,7 +518,8 @@ import (
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
-%type <alterTableOption> alter_option alter_table_drop alter_table_alter
+%type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
+%type <alterColpos> pos_info
 %type <indexVisibility> visibility
 
 %type <tableOption> table_option
@@ -552,7 +554,7 @@ import (
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
-%type <expr> literal
+%type <expr> literal num_literal
 %type <expr> predicate
 %type <expr> bit_expr interval_expr
 %type <expr> simple_expr else_opt
@@ -605,9 +607,9 @@ import (
 %type <clusterByOption> cluster_by_opt
 %type <partitionBy> partition_method sub_partition_method sub_partition_opt
 %type <windowSpec> window_spec_opt window_spec
-%type <windowFrame> window_frame window_frame_opt
-%type <windowFrameBound> window_frame_bound
-%type <windowFrameUnit> window_frame_unit
+%type <frameClause> window_frame_clause window_frame_clause_opt
+%type <frameBound> frame_bound frame_bound_start
+%type <frameType> frame_type
 %type <str> fields_or_columns
 %type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt
 %type <boolVal> linear_opt
@@ -1918,6 +1920,15 @@ var_assignment:
             Value: $4,
         }
     }
+|   PERSIST var_name equal_or_assignment set_expr
+    {
+        $$ = &tree.VarAssignmentExpr{
+            System: true,
+            Global: true,
+            Name: $2,
+            Value: $4,
+        }
+    }
 |   SESSION var_name equal_or_assignment set_expr
     {
         $$ = &tree.VarAssignmentExpr{
@@ -2328,6 +2339,7 @@ reset_stmt:
 
 explainable_stmt:
     delete_stmt
+|   load_data_stmt
 |   insert_stmt
 |   replace_stmt
 |   update_stmt
@@ -2497,7 +2509,7 @@ alter_option
     }
 
 alter_option:
-ADD table_elem
+ADD table_elem_2
     {
         opt := &tree.AlterOptionAdd{
             Def:  $2,
@@ -2508,13 +2520,64 @@ ADD table_elem
     {
         $$ = tree.AlterTableOption($2)
     }
-|   ALTER alter_table_alter
+| ALTER alter_table_alter
     {
     	$$ = tree.AlterTableOption($2)
     }
 | table_option
     {
-        $$ =  tree.AlterTableOption($1)
+        $$ = tree.AlterTableOption($1)
+    }
+| RENAME TO alter_table_rename
+    {
+        $$ = tree.AlterTableOption($3)
+    }
+| ADD column_def pos_info
+    {
+        $$ = tree.AlterTableOption(
+            &tree.AlterAddCol{
+                Column: $2,
+                Pos: $3,
+            },
+        )
+    }
+| ADD COLUMN column_def pos_info
+    {
+        $$ = tree.AlterTableOption(
+            &tree.AlterAddCol{
+                Column: $3,
+                Pos: $4,
+            },
+        )
+    }
+
+pos_info:
+    {
+        $$ = &tree.AlterColPos{
+            Pos: -1,
+        }
+    }
+|   FIRST
+    {
+         $$ = &tree.AlterColPos{
+            Pos: 0,
+        }
+    }
+|   AFTER column_name
+    {
+         $$ = &tree.AlterColPos{
+            PreColName: $2,
+            Pos: -2,
+        }
+    }
+
+
+alter_table_rename:
+    table_name_unresolved
+    {
+        $$ = &tree.AlterTableName{
+            Name: $1,
+        }
     }
 
 alter_table_drop:
@@ -2530,6 +2593,13 @@ alter_table_drop:
         $$ = &tree.AlterOptionDrop{
             Typ:  tree.AlterTableDropKey,
             Name: tree.Identifier($2.Compare()),
+        }
+    }
+|   ident 
+    {
+        $$ = &tree.AlterOptionDrop{
+            Typ:  tree.AlterTableDropColumn,
+            Name: tree.Identifier($1.Compare()),
         }
     }
 |   COLUMN ident 
@@ -2586,22 +2656,34 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-     ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
-     {
+    ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
+    {
         $$ = &tree.AlterDataBaseConfig{
             DbName:$3,
             UpdateConfig: $7,
             IsAccountLevel: false,
         }
-     }
-|    ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
-     {
+    }
+|   ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
+    {
         $$ = &tree.AlterDataBaseConfig{
             AccountName:$4,
             UpdateConfig: $8,
             IsAccountLevel: true,
         }
-     }
+    }
+|   ALTER ACCOUNT CONFIG SET MYSQL_COMPATIBILITY_MODE  var_name equal_or_assignment set_expr
+    {
+        assignments := []*tree.VarAssignmentExpr{
+            &tree.VarAssignmentExpr{
+                System: true,
+                Global: true,
+                Name: $6,
+                Value: $8,
+            },
+        }
+        $$ = &tree.SetVar{Assignments: assignments} 
+    }
     
 alter_account_auth_option:
 {
@@ -6265,11 +6347,21 @@ table_elem_list:
     }
 
 table_elem:
-    column_def
+column_def
     {
         $$ = tree.TableDef($1)
     }
 |   constaint_def
+    {
+        $$ = $1
+    }
+|   index_def
+    {
+        $$ = $1
+    }
+
+table_elem_2:
+    constaint_def
     {
         $$ = $1
     }
@@ -6893,6 +6985,14 @@ function_call_window:
             WindowSpec: $4,
         }
     }
+|	ROW_NUMBER '(' ')' window_spec
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            WindowSpec: $4,
+        }
+    }
 
 else_opt:
     {
@@ -6934,9 +7034,15 @@ when_clause:
 mo_cast_type:
     column_type
 {
-   t := $$ 
-   if strings.ToLower(t.InternalType.FamilyString) == "binary" {
+   t := $$
+   str := strings.ToLower(t.InternalType.FamilyString)
+   if str == "binary" {
         t.InternalType.Scale = -1
+   } else if str == "char" {
+   	if t.InternalType.DisplayWith == -1 {
+   		t.InternalType.FamilyString = "varchar"
+   		t.InternalType.Oid = uint32(defines.MYSQL_TYPE_VARCHAR)
+   	}
    }
 }
 |   SIGNED integer_opt
@@ -7092,68 +7198,77 @@ integer_opt:
 |    INTEGER
 |    INT
 
-window_frame_bound:
-  CURRENT ROW
+frame_bound:
+	frame_bound_start
+|   UNBOUNDED FOLLOWING
     {
-        $$ = &tree.WindowFrameBoundCurrentRow{}
+        $$ = &tree.FrameBound{Type: tree.Following, UnBounded: true}
     }
-| UNBOUNDED PRECEDING
+|   num_literal FOLLOWING
     {
-        $$ = &tree.WindowFrameBoundPreceding{}
+        $$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
     }
-| expression PRECEDING
-    {
-        $$ = &tree.WindowFrameBoundPreceding{
-            Expr: $1,
-        }
-    }
-| UNBOUNDED FOLLOWING
-    {
-        $$ = &tree.WindowFrameBoundFollowing{}
-    }
-| expression FOLLOWING
-    {
-        $$ = &tree.WindowFrameBoundFollowing{
-            Expr: $1,
-        }
-    }
+|	interval_expr FOLLOWING
+	{
+		$$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
+	}
 
-window_frame_unit:
+frame_bound_start:
+    CURRENT ROW
+    {
+        $$ = &tree.FrameBound{Type: tree.CurrentRow}
+    }
+|   UNBOUNDED PRECEDING
+    {
+        $$ = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+    }
+|   num_literal PRECEDING
+    {
+        $$ = &tree.FrameBound{Type: tree.Preceding, Expr: $1}
+    }
+|	interval_expr PRECEDING
+	{
+		$$ = &tree.FrameBound{Type: tree.Preceding, Expr: $1}
+	}
+
+frame_type:
     ROWS
     {
-        $$ = tree.WIN_FRAME_UNIT_ROWS
+        $$ = tree.Rows
     }
 |   RANGE
     {
-        $$ = tree.WIN_FRAME_UNIT_RANGE
+        $$ = tree.Range
     }
 |   GROUPS
     {
-        $$ = tree.WIN_FRAME_UNIT_GROUPS
+        $$ = tree.Groups
     }
 
-window_frame:
-    window_frame_unit window_frame_bound
+window_frame_clause:
+    frame_type frame_bound_start
     {
-        $$ = &tree.WindowFrame{
-            Unit: $1,
-            StartBound: $2,
+        $$ = &tree.FrameClause{
+            Type: $1,
+            Start: $2,
+            End: &tree.FrameBound{Type: tree.CurrentRow},
         }
     }
-|   window_frame_unit BETWEEN window_frame_bound AND window_frame_bound
+|   frame_type BETWEEN frame_bound AND frame_bound
     {
-        $$ = &tree.WindowFrame{
-            Unit: $1,
-            StartBound: $3,
-            EndBound: $5,
+        $$ = &tree.FrameClause{
+            Type: $1,
+            HasEnd: true,
+            Start: $3,
+            End: $5,
         }
     }
 
-window_frame_opt:
+window_frame_clause_opt:
     {
         $$ = nil
     }
-|   window_frame
+|   window_frame_clause
     {
         $$ = $1
     }
@@ -7190,12 +7305,28 @@ window_spec_opt:
 |	window_spec
 
 window_spec:
-    OVER '(' window_partition_by_opt order_by_opt window_frame_opt ')'
+    OVER '(' window_partition_by_opt order_by_opt window_frame_clause_opt ')'
     {
+    	hasFrame := true
+    	var f *tree.FrameClause
+    	if $5 != nil {
+    		f = $5
+    	} else {
+    		hasFrame = false
+    		f = &tree.FrameClause{Type: tree.Range}
+    		if $4 == nil {
+				f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+                f.End = &tree.FrameBound{Type: tree.Following, UnBounded: true}
+    		} else {
+    			f.Start = &tree.FrameBound{Type: tree.Preceding, UnBounded: true}
+            	f.End = &tree.FrameBound{Type: tree.CurrentRow}
+    		}
+    	}
         $$ = &tree.WindowSpec{
             PartitionBy: $3,
             OrderBy: $4,
-            WindowFrame: $5,
+            Frame: f,
+            HasFrame: hasFrame,
         }
     }
 
@@ -8066,6 +8197,30 @@ keys:
 |   KEY
     {
         $$ = tree.NewAttributeKey()
+    }
+
+num_literal:
+    INTEGRAL
+    {
+        str := fmt.Sprintf("%v", $1)
+        switch v := $1.(type) {
+        case uint64:
+            $$ = tree.NewNumValWithType(constant.MakeUint64(v), str, false, tree.P_uint64)
+        case int64:
+            $$ = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
+        default:
+            yylex.Error("parse integral fail")
+            return 1
+        }
+    }
+|   FLOAT
+    {
+        fval := $1.(float64)
+        $$ = tree.NewNumValWithType(constant.MakeFloat64(fval), yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
+    }
+|   DECIMAL_VALUE
+    {
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_decimal)
     }
 
 literal:
@@ -8993,6 +9148,7 @@ equal_opt:
 //|   EXPLAIN
 //|   FALSE
 //|   FIRST
+//|   AFTER
 //|   FOR
 //|   FORCE
 //|   FROM
@@ -9181,6 +9337,7 @@ non_reserved_keyword:
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
 |   GLOBAL
+|   PERSIST
 |   GRANT
 |   INT
 |   INTEGER

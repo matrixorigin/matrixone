@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 func (bj ByteJson) String() string {
@@ -339,7 +340,7 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 					cur = bj.getObjectVal(i).query(cur, &nPath)
 				}
 			} else {
-				tmp := bj.queryValByKey(string2Slice(sub.key))
+				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
 				cur = tmp.query(cur, &nPath)
 			}
 		}
@@ -451,7 +452,7 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 					keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
 				}
 			} else {
-				tmp := bj.queryValByKey(string2Slice(sub.key))
+				tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
 				newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
 				keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
 			}
@@ -500,7 +501,7 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 	if !bj.canUnnest() {
 		index, key := genIndexOrKey(pathStr)
 		tmp := UnnestResult{}
-		genUnnestResult(tmp, index, key, string2Slice(pathStr), &bj, this, filterMap)
+		genUnnestResult(tmp, index, key, util.UnsafeStringToBytes(pathStr), &bj, this, filterMap)
 		out = append(out, tmp)
 		return out
 	}
@@ -511,7 +512,7 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			val := bj.getObjectVal(i)
 			newPathStr := fmt.Sprintf("%s.%s", pathStr, key)
 			tmp := UnnestResult{}
-			genUnnestResult(tmp, nil, key, string2Slice(newPathStr), &val, this, filterMap)
+			genUnnestResult(tmp, nil, key, util.UnsafeStringToBytes(newPathStr), &val, this, filterMap)
 			out = append(out, tmp)
 			if val.canUnnest() && recursive {
 				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filterMap)
@@ -524,7 +525,7 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			val := bj.getArrayElem(i)
 			newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
 			tmp := UnnestResult{}
-			genUnnestResult(tmp, string2Slice(strconv.Itoa(i)), nil, string2Slice(newPathStr), &val, this, filterMap)
+			genUnnestResult(tmp, util.UnsafeStringToBytes(strconv.Itoa(i)), nil, util.UnsafeStringToBytes(newPathStr), &val, this, filterMap)
 			out = append(out, tmp)
 			if val.canUnnest() && recursive {
 				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filterMap)
@@ -554,7 +555,7 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 		}
 		if _, ok := filterMap["path"]; ok {
 			for i := 0; i < len(keys); i++ {
-				out[i]["path"] = string2Slice(keys[i])
+				out[i]["path"] = util.UnsafeStringToBytes(keys[i])
 			}
 		}
 		if _, ok := filterMap["this"]; ok {
@@ -600,4 +601,75 @@ func genUnnestResult(res UnnestResult, index, key, path []byte, value, this *Byt
 		res["this"] = dt
 	}
 	return res
+}
+
+func ParseJsonByteFromString(s string) ([]byte, error) {
+	var decoder = json.NewDecoder(strings.NewReader(s))
+	decoder.UseNumber()
+	var in interface{}
+	err := decoder.Decode(&in)
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 1, len(s)+1)
+	switch x := in.(type) {
+	case nil:
+		buf[0] = byte(TpCodeLiteral)
+		buf = append(buf, LiteralNull)
+	case bool:
+		buf[0] = byte(TpCodeLiteral)
+		lit := LiteralFalse
+		if x {
+			lit = LiteralTrue
+		}
+		buf = append(buf, lit)
+	case int64:
+		buf[0] = byte(TpCodeInt64)
+		buf = addUint64(buf, uint64(x))
+	case uint64:
+		buf[0] = byte(TpCodeUint64)
+		buf = addUint64(buf, x)
+	case json.Number:
+		if strings.ContainsAny(string(x), "Ee.") {
+			val, err := x.Float64()
+			buf[0] = byte(TpCodeFloat64)
+			if err != nil {
+				return nil, moerr.NewInvalidInputNoCtx("json number %v", in)
+			}
+			if err = checkFloat64(val); err != nil {
+				return nil, err
+			}
+			return addFloat64(buf, val), nil
+		}
+		if val, err := x.Int64(); err == nil {
+			buf[0] = byte(TpCodeInt64)
+			return addInt64(buf, val), nil
+		}
+		if val, err := strconv.ParseUint(string(x), 10, 64); err == nil {
+			buf[0] = byte(TpCodeUint64)
+			return addUint64(buf, val), nil
+		}
+		if val, err := x.Float64(); err == nil {
+			buf[0] = byte(TpCodeFloat64)
+			if err = checkFloat64(val); err != nil {
+				return nil, err
+			}
+			return addFloat64(buf, val), nil
+		}
+	case string:
+		buf[0] = byte(TpCodeString)
+		buf = addString(buf, x)
+	case ByteJson:
+		buf[0] = byte(x.Type)
+		buf = append(buf, x.Data...)
+	case []interface{}:
+		buf[0] = byte(TpCodeArray)
+		buf, err = addArray(buf, x)
+	case map[string]interface{}:
+		buf[0] = byte(TpCodeObject)
+		buf, err = addObject(buf, x)
+	default:
+		return nil, moerr.NewInvalidInputNoCtx("json element %v", in)
+	}
+	return buf, err
 }

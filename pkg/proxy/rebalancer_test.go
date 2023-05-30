@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -180,7 +181,7 @@ func TestDoRebalance(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn11 := startTestCNServer(t, tp.ctx, addr1)
+	stopFn11 := startTestCNServer(t, tp.ctx, addr1, nil)
 	defer func() {
 		require.NoError(t, stopFn11())
 	}()
@@ -200,7 +201,7 @@ func TestDoRebalance(t *testing.T) {
 		"k1":           {Labels: []string{"v1"}},
 		"k2":           {Labels: []string{"v2"}},
 	})
-	stopFn12 := startTestCNServer(t, tp.ctx, addr2)
+	stopFn12 := startTestCNServer(t, tp.ctx, addr2, nil)
 	defer func() {
 		require.NoError(t, stopFn12())
 	}()
@@ -210,10 +211,15 @@ func TestDoRebalance(t *testing.T) {
 	ctx, cancel := context.WithTimeout(tp.ctx, 10*time.Second)
 	defer cancel()
 
+	ci := clientInfo{
+		labelInfo: li,
+		username:  "test",
+		originIP:  net.ParseIP("127.0.0.1"),
+	}
 	// There 2 servers cn11 and cn12. 4 connections are all on cn11, and the
 	// toleration is 0.3, so there will be 3 connections on cn11 and 1 connection
 	// on cn12 at last.
-	cleanup := testStartNClients(t, tp, li, cn11, 4)
+	cleanup := testStartNClients(t, tp, ci, cn11, 4)
 	defer cleanup()
 
 	tick := time.NewTicker(time.Millisecond * 200)

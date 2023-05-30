@@ -62,26 +62,50 @@ func (r Rowid) Less(than Rowid) bool {
 	return bytes.Compare(r[:], than[:]) < 0
 }
 
+func (r Rowid) Le(than Rowid) bool {
+	return r.Less(than) || r.Equal(than)
+}
+
 func (r Rowid) Equal(to Rowid) bool {
 	return bytes.Equal(r[:], to[:])
 }
 
-func (r Rowid) GetBlockid() *Blockid {
-	return (*Blockid)(r[:BlockidSize])
+func (r Rowid) NotEqual(to Rowid) bool {
+	return !r.Equal(to)
 }
 
-func (r Rowid) GetSegid() *Segmentid {
-	return (*Uuid)(r[:UuidSize])
+func (r Rowid) Great(than Rowid) bool {
+	return !r.Less(than)
+}
+
+func (r Rowid) Ge(than Rowid) bool {
+	return r.Great(than) || r.Equal(than)
+}
+
+// CloneBlockID clones the block id from row id.
+func (r *Rowid) CloneBlockID() Blockid {
+	return *(*Blockid)(unsafe.Pointer(&r[0]))
+}
+
+// BorrowBlockID borrows block id from row id.
+func (r *Rowid) BorrowBlockID() *Blockid {
+	return (*Blockid)(unsafe.Pointer(&r[0]))
+}
+
+// BorrowSegmentID borrows segment id from row id.
+func (r *Rowid) BorrowSegmentID() *Segmentid {
+	return (*Segmentid)(unsafe.Pointer(&r[0]))
+}
+
+// CloneSegmentID clones segment id from row id.
+func (r *Rowid) CloneSegmentID() Segmentid {
+	return *(*Segmentid)(unsafe.Pointer(&r[0]))
 }
 
 func (r Rowid) Decode() (Blockid, uint32) {
 	b := *(*Blockid)(r[:BlockidSize])
 	s := DecodeUint32(r[BlockidSize:])
 	return b, s
-}
-
-func (r *Rowid) GetBlockidUnsafe() *Blockid {
-	return (*Blockid)(unsafe.Pointer(&r[0]))
 }
 
 func (r Rowid) GetObject() ObjectBytes {

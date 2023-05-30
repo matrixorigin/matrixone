@@ -61,6 +61,7 @@ type processHelper struct {
 	id               string
 	lim              process.Limitation
 	unixTime         int64
+	accountId        uint32
 	txnOperator      client.TxnOperator
 	txnClient        client.TxnClient
 	sessionInfo      process.SessionInfo
@@ -100,8 +101,6 @@ func (sender *messageSenderOnClient) send(
 	scopeData, procData []byte, messageType uint64) error {
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-		_ = cancel
 		message := cnclient.AcquireMessage()
 		message.SetID(sender.streamSender.ID())
 		message.SetMessageType(pipeline.PipelineMessage)
@@ -109,15 +108,12 @@ func (sender *messageSenderOnClient) send(
 		message.SetProcData(procData)
 		message.SetSequence(0)
 		message.SetSid(pipeline.Last)
-		return sender.streamSender.Send(timeoutCtx, message)
+		return sender.streamSender.Send(sender.ctx, message)
 	}
 
 	start := 0
 	cnt := uint64(0)
 	for start < sdLen {
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-		_ = cancel
-
 		end := start + maxMessageSizeToMoRpc
 
 		message := cnclient.AcquireMessage()
@@ -133,7 +129,7 @@ func (sender *messageSenderOnClient) send(
 			message.SetSid(pipeline.WaitingNext)
 		}
 
-		if err := sender.streamSender.Send(timeoutCtx, message); err != nil {
+		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
 		}
 		cnt++
@@ -161,7 +157,7 @@ func (sender *messageSenderOnClient) close() {
 		sender.ctxCancel()
 	}
 	// XXX not a good way to deal it if close failed.
-	_ = sender.streamSender.Close(false)
+	_ = sender.streamSender.Close(true)
 }
 
 // messageReceiverOnServer is a structure
@@ -288,7 +284,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		addr: receiver.cnInformation.cnAddr,
 	}
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, &c.s3CounterSet)
-	c.ctx = c.proc.Ctx
+	c.ctx = context.WithValue(c.proc.Ctx, defines.TenantIDKey{}, pHelper.accountId)
 
 	c.fill = func(_ any, b *batch.Batch) error {
 		return receiver.sendBatch(b)
@@ -400,6 +396,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 		id:               procInfo.Id,
 		lim:              convertToProcessLimitation(procInfo.Lim),
 		unixTime:         procInfo.UnixTime,
+		accountId:        procInfo.AccountId,
 		txnClient:        cli,
 		analysisNodeList: procInfo.GetAnalysisNodeList(),
 	}

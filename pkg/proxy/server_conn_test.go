@@ -15,7 +15,9 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"os"
@@ -30,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -48,12 +51,12 @@ func testMakeCNServer(
 		addr = "unix://" + addr
 	}
 	return &CNServer{
-		connID:   connID,
-		addr:     addr,
-		uuid:     uuid,
-		salt:     testSlat,
-		hash:     hash,
-		reqLabel: reqLabel,
+		backendConnID: connID,
+		addr:          addr,
+		uuid:          uuid,
+		salt:          testSlat,
+		hash:          hash,
+		reqLabel:      reqLabel,
 	}
 }
 
@@ -75,9 +78,9 @@ func (s *mockServerConn) RawConn() net.Conn { return s.conn }
 func (s *mockServerConn) HandleHandshake(_ *frontend.Packet) (*frontend.Packet, error) {
 	return nil, nil
 }
-func (s *mockServerConn) ExecStmt(stmt string, resp chan<- []byte) error {
+func (s *mockServerConn) ExecStmt(stmt string, resp chan<- []byte) (bool, error) {
 	sendResp(makeOKPacket(), resp)
-	return nil
+	return true, nil
 }
 func (s *mockServerConn) Close() error {
 	if s.conn != nil {
@@ -88,6 +91,13 @@ func (s *mockServerConn) Close() error {
 
 var baseConnID atomic.Uint32
 
+type tlsConfig struct {
+	enabled  bool
+	caFile   string
+	certFile string
+	keyFile  string
+}
+
 type testCNServer struct {
 	sync.Mutex
 	ctx      context.Context
@@ -96,6 +106,10 @@ type testCNServer struct {
 	listener net.Listener
 	started  bool
 	quit     chan interface{}
+
+	globalVars map[string]string
+	tlsCfg     tlsConfig
+	tlsConfig  *tls.Config
 }
 
 type testHandler struct {
@@ -103,14 +117,20 @@ type testHandler struct {
 	connID      uint32
 	conn        goetty.IOSession
 	sessionVars map[string]string
+	labels      map[string]string
+	server      *testCNServer
 }
 
-func startTestCNServer(t *testing.T, ctx context.Context, addr string) func() error {
+func startTestCNServer(t *testing.T, ctx context.Context, addr string, cfg *tlsConfig) func() error {
 	b := &testCNServer{
-		ctx:    ctx,
-		scheme: "tcp",
-		addr:   addr,
-		quit:   make(chan interface{}),
+		ctx:        ctx,
+		scheme:     "tcp",
+		addr:       addr,
+		quit:       make(chan interface{}),
+		globalVars: make(map[string]string),
+	}
+	if cfg != nil {
+		b.tlsCfg = *cfg
 	}
 	if strings.Contains(addr, "sock") {
 		b.scheme = "unix"
@@ -151,6 +171,17 @@ func (s *testCNServer) waitCNServerReady() bool {
 
 func (s *testCNServer) Start() error {
 	var err error
+	if s.tlsCfg.enabled {
+		s.tlsConfig, err = frontend.ConstructTLSConfig(
+			context.TODO(),
+			s.tlsCfg.caFile,
+			s.tlsCfg.certFile,
+			s.tlsCfg.keyFile,
+		)
+		if err != nil {
+			return err
+		}
+	}
 	s.listener, err = net.Listen(s.scheme, s.addr)
 	if err != nil {
 		return err
@@ -176,7 +207,9 @@ func (s *testCNServer) Start() error {
 					return err
 				}
 			} else {
-				fp := config.FrontendParameters{}
+				fp := config.FrontendParameters{
+					EnableTls: s.tlsCfg.enabled,
+				}
 				fp.SetDefaultValues()
 				cid := baseConnID.Add(1)
 				c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()),
@@ -187,6 +220,8 @@ func (s *testCNServer) Start() error {
 					mysqlProto: frontend.NewMysqlClientProtocol(
 						cid, c, 0, &fp),
 					sessionVars: make(map[string]string),
+					labels:      make(map[string]string),
+					server:      s,
 				}
 				go func(h *testHandler) {
 					testHandle(h)
@@ -200,6 +235,12 @@ func testHandle(h *testHandler) {
 	// read salt from proxy.
 	data := make([]byte, 20)
 	_, _ = h.conn.RawConn().Read(data)
+	// read label info.
+	label := &proxy.RequestLabel{}
+	reader := bufio.NewReader(h.conn.RawConn())
+	if err := label.Decode(reader); err != nil {
+		h.labels = label.Labels
+	}
 	// server writes init handshake.
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeHandshakePayload())
 	// server reads auth information from client.
@@ -220,6 +261,10 @@ func testHandle(h *testHandler) {
 				h.handleSetVar(packet)
 			} else if string(packet.Payload[1:]) == "show session variables" {
 				h.handleShowVar()
+			} else if string(packet.Payload[1:]) == "show global variables" {
+				h.handleShowGlobalVar()
+			} else if strings.HasPrefix(string(packet.Payload[1:]), "kill connection") {
+				h.handleKillConn()
 			} else {
 				h.handleCommon()
 			}
@@ -239,6 +284,12 @@ func (h *testHandler) handleSetVar(packet *frontend.Packet) {
 	words := strings.Split(string(packet.Payload[1:]), " ")
 	v := strings.Split(words[2], "=")
 	h.sessionVars[v[0]] = strings.Trim(v[1], "'")
+	h.mysqlProto.SetSequenceID(1)
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
+}
+
+func (h *testHandler) handleKillConn() {
+	h.server.globalVars["killed"] = "yes"
 	h.mysqlProto.SetSequenceID(1)
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), 0, 0, ""))
 }
@@ -291,6 +342,54 @@ func (h *testHandler) handleShowVar() {
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
 }
 
+func (h *testHandler) handleShowGlobalVar() {
+	h.mysqlProto.SetSequenceID(1)
+	err := h.mysqlProto.SendColumnCountPacket(2)
+	if err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	cols := []*plan.ColDef{
+		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
+		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Value"},
+	}
+	columns := make([]interface{}, len(cols))
+	res := &frontend.MysqlResultSet{}
+	for i, col := range cols {
+		c := new(frontend.MysqlColumn)
+		c.SetName(col.Name)
+		c.SetOrgName(col.Name)
+		c.SetTable(col.Typ.Table)
+		c.SetOrgTable(col.Typ.Table)
+		c.SetAutoIncr(col.Typ.AutoIncr)
+		c.SetSchema("")
+		c.SetDecimal(col.Typ.Scale)
+		columns[i] = c
+		res.AddColumn(c)
+	}
+	for _, c := range columns {
+		if err := h.mysqlProto.SendColumnDefinitionPacket(context.TODO(), c.(frontend.Column), 3); err != nil {
+			_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+			return
+		}
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+	for k, v := range h.server.globalVars {
+		row := make([]interface{}, 2)
+		row[0] = k
+		row[1] = v
+		res.AddRow(row)
+	}
+	ses := &frontend.Session{}
+	ses.SetRequestContext(context.Background())
+	h.mysqlProto.SetSession(ses)
+	if err := h.mysqlProto.SendResultSetTextBatchRow(res, res.GetRowCount()); err != nil {
+		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", err.Error()))
+		return
+	}
+	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeEOFPayload(0, 0))
+}
+
 func (s *testCNServer) Stop() error {
 	close(s.quit)
 	_ = s.listener.Close()
@@ -316,7 +415,7 @@ func TestServerConn_Create(t *testing.T) {
 	// start server.
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
-	stopFn := startTestCNServer(t, tp.ctx, addr)
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
@@ -338,7 +437,7 @@ func TestServerConn_Connect(t *testing.T) {
 	})
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
-	stopFn := startTestCNServer(t, tp.ctx, addr)
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
@@ -362,7 +461,7 @@ func TestFakeCNServer(t *testing.T) {
 	temp := os.TempDir()
 	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr))
-	stopFn := startTestCNServer(t, tp.ctx, addr)
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
@@ -374,7 +473,7 @@ func TestFakeCNServer(t *testing.T) {
 		"k2": "v2",
 	})
 
-	cleanup := testStartClient(t, tp, li, cn1)
+	cleanup := testStartClient(t, tp, clientInfo{labelInfo: li}, cn1)
 	defer cleanup()
 }
 
@@ -391,7 +490,7 @@ func TestServerConn_ExecStmt(t *testing.T) {
 	})
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
-	stopFn := startTestCNServer(t, tp.ctx, addr)
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
@@ -403,7 +502,7 @@ func TestServerConn_ExecStmt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, 0, int(sc.ConnID()))
 	resp := make(chan []byte, 10)
-	err = sc.ExecStmt("kill query", resp)
+	_, err = sc.ExecStmt("kill query", resp)
 	require.NoError(t, err)
 	res := <-resp
 	ok := isOKPacket(res)

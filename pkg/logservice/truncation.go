@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
@@ -195,14 +196,30 @@ func (l *store) shouldDoExport(ctx context.Context, shardID uint64, replicaID ui
 }
 
 func (l *store) processShardTruncateLog(ctx context.Context, shardID uint64) error {
+	// Do NOT process before leader is OK.
+	leaderID, err := l.leaderID(shardID)
+	if err != nil {
+		l.runtime.Logger().Debug("cannot get leader ID, skip truncate",
+			zap.Uint64("shard ID", shardID))
+		return nil
+	}
+	if leaderID == 0 {
+		l.runtime.Logger().Debug("no leader yet, skip truncate",
+			zap.Uint64("shard ID", shardID))
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	lsnInSM, err := l.getTruncatedLsn(ctx, shardID)
 	if err != nil {
-		l.runtime.Logger().Error("get truncated lsn in state machine failed",
-			zap.Uint64("shard ID", shardID), zap.Error(err))
-		return err
+		if !errors.Is(err, dragonboat.ErrTimeout) && !errors.Is(err, dragonboat.ErrInvalidDeadline) {
+			l.runtime.Logger().Error("get truncated lsn in state machine failed",
+				zap.Uint64("shard ID", shardID), zap.Error(err))
+			return err
+		}
+		return nil
 	}
 
 	if !l.shouldProcess(shardID, lsnInSM) {

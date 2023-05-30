@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -27,9 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type MVCCHandle struct {
@@ -185,30 +184,6 @@ func (n *MVCCHandle) CollectUncommittedANodesPreparedBefore(
 	return
 }
 
-func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs types.TS) (indexes []*wal.Index, err error) {
-	if n.appends.IsEmpty() {
-		return
-	}
-	indexes = make([]*wal.Index, 0)
-	n.appends.ForEach(func(an *AppendNode) bool {
-		needWait, txn := an.NeedWaitCommitting(endTs.Next())
-		if needWait {
-			n.RUnlock()
-			txn.GetTxnState(true)
-			n.RLock()
-		}
-		if an.Prepare.Less(startTs) {
-			return true
-		}
-		if an.Prepare.Greater(endTs) {
-			return false
-		}
-		indexes = append(indexes, an.GetLogIndex())
-		return true
-	}, true)
-	return
-}
-
 func (n *MVCCHandle) GetVisibleRowLocked(txn txnif.TxnReader) (maxrow uint32, visible bool, holes *roaring.Bitmap, err error) {
 	anToWait := make([]*AppendNode, 0)
 	txnToWait := make([]txnif.TxnReader, 0)
@@ -306,7 +281,7 @@ func (n *MVCCHandle) CollectAppendLocked(
 	return
 }
 
-func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap *roaring.Bitmap) {
+func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap, deletes *roaring.Bitmap) {
 	n.RLock()
 	defer n.RUnlock()
 	if n.deletes.IsEmpty() {
@@ -320,7 +295,7 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 	commitTSVec = containers.MakeVector(types.T_TS.ToType())
 	abortVec = containers.MakeVector(types.T_bool.ToType())
 	abortedBitmap = roaring.NewBitmap()
-	prefix := n.meta.MakeKey()
+	id := n.meta.ID
 
 	n.deletes.LoopChain(
 		func(node *DeleteNode) bool {
@@ -338,7 +313,11 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 				}
 				for it.HasNext() {
 					row := it.Next()
-					rowIDVec.Append(model.EncodePhyAddrKeyWithPrefix(prefix, row), false)
+					if deletes == nil {
+						deletes = roaring.New()
+					}
+					deletes.Add(row)
+					rowIDVec.Append(*objectio.NewRowid(&id, row), false)
 					commitTSVec.Append(node.GetEnd(), false)
 					abortVec.Append(node.IsAborted(), false)
 				}
@@ -381,4 +360,15 @@ func (n *MVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
 }
 func (n *MVCCHandle) GetDeleteNodeByRow(row uint32) (an *DeleteNode) {
 	return n.deletes.GetDeleteNodeByRow(row)
+}
+
+func (n *MVCCHandle) LastAnodeCommittedBeforeLocked(ts types.TS) bool {
+	anode := n.appends.GetUpdateNodeLocked()
+	if anode == nil {
+		return false
+	}
+	if !anode.IsCommitted() {
+		return false
+	}
+	return anode.GetCommitTS().Less(ts)
 }

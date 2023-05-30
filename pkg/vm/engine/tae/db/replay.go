@@ -15,18 +15,18 @@
 package db
 
 import (
-
-	//"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -34,20 +34,23 @@ import (
 )
 
 type Replayer struct {
-	DataFactory  *tables.DataFactory
-	db           *DB
-	maxTs        types.TS
-	staleIndexes []*wal.Index
-	once         sync.Once
-	ckpedTS      types.TS
+	DataFactory   *tables.DataFactory
+	db            *DB
+	maxTs         types.TS
+	once          sync.Once
+	ckpedTS       types.TS
+	wg            sync.WaitGroup
+	applyDuration time.Duration
+	txnCmdChan    chan *txnbase.TxnCmd
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS) *Replayer {
 	return &Replayer{
-		DataFactory:  dataFactory,
-		db:           db,
-		staleIndexes: make([]*wal.Index, 0),
-		ckpedTS:      ckpedTS,
+		DataFactory: dataFactory,
+		db:          db,
+		ckpedTS:     ckpedTS,
+		wg:          sync.WaitGroup{},
+		txnCmdChan:  make(chan *txnbase.TxnCmd, 100),
 	}
 }
 
@@ -62,7 +65,7 @@ func (replayer *Replayer) PreReplayWal() {
 			return moerr.GetOkStopCurrRecur()
 		}
 		dropCommit := entry.TreeMaxDropCommitEntry()
-		if dropCommit != nil && dropCommit.GetLogIndex().LSN <= replayer.db.Wal.GetCheckpointed() {
+		if dropCommit != nil && dropCommit.DeleteBefore(replayer.ckpedTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
 		entry.InitData(replayer.DataFactory)
@@ -76,16 +79,17 @@ func (replayer *Replayer) PreReplayWal() {
 }
 
 func (replayer *Replayer) Replay() {
+	replayer.wg.Add(1)
+	go replayer.applyTxnCmds()
 	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry); err != nil {
 		panic(err)
 	}
-	if _, err := replayer.db.Wal.Checkpoint(replayer.staleIndexes); err != nil {
-		panic(err)
-	}
-}
-
-func (replayer *Replayer) OnStaleIndex(idx *wal.Index) {
-	replayer.staleIndexes = append(replayer.staleIndexes, idx)
+	replayer.txnCmdChan <- txnbase.NewLastTxnCmd()
+	close(replayer.txnCmdChan)
+	replayer.wg.Wait()
+	logutil.Info("open-tae", common.OperationField("replay"),
+		common.OperandField("wal"),
+		common.AnyField("apply logentries cost", replayer.applyDuration))
 }
 
 func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
@@ -93,21 +97,30 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 	if group != wal.GroupPrepare && group != wal.GroupC {
 		return
 	}
-	idxCtx := store.NewIndex(lsn, 0, 0)
 	head := objectio.DecodeIOEntryHeader(payload)
 	codec := objectio.GetIOEntryCodec(*head)
 	entry, err := codec.Decode(payload[4:])
 	txnCmd := entry.(*txnbase.TxnCmd)
+	txnCmd.Lsn = lsn
 	if err != nil {
 		panic(err)
 	}
-	defer txnCmd.Close()
-	replayer.OnReplayTxn(txnCmd, idxCtx, lsn)
-	if err != nil {
-		panic(err)
+	replayer.txnCmdChan <- txnCmd
+}
+func (replayer *Replayer) applyTxnCmds() {
+	defer replayer.wg.Done()
+	for {
+		txnCmd := <-replayer.txnCmdChan
+		if txnCmd.IsLastCmd() {
+			break
+		}
+		t0 := time.Now()
+		replayer.OnReplayTxn(txnCmd, txnCmd.Lsn)
+		txnCmd.Close()
+		replayer.applyDuration += time.Since(t0)
+
 	}
 }
-
 func (replayer *Replayer) GetMaxTS() types.TS {
 	return replayer.maxTs
 }
@@ -118,7 +131,7 @@ func (replayer *Replayer) OnTimeStamp(ts types.TS) {
 	}
 }
 
-func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, walIdx *wal.Index, lsn uint64) {
+func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	var err error
 	txnCmd := cmd.(*txnbase.TxnCmd)
 	if txnCmd.PrepareTS.LessEq(replayer.maxTs) {

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -215,13 +216,16 @@ func NewLogtailServer(
 
 // onMessage is the handler for morpc client session.
 func (s *LogtailServer) onMessage(
-	ctx context.Context, request morpc.Message, seq uint64, cs morpc.ClientSession,
+	ctx context.Context,
+	value morpc.RPCMessage,
+	seq uint64,
+	cs morpc.ClientSession,
 ) error {
 	ctx, span := trace.Debug(ctx, "LogtailServer.onMessage")
 	defer span.End()
 
 	logger := s.logger
-
+	request := value.Message
 	msg, ok := request.(*LogtailRequest)
 	if !ok {
 		logger.Fatal("receive invalid message", zap.Any("message", request))
@@ -236,6 +240,7 @@ func (s *LogtailServer) onMessage(
 
 	stream := morpcStream{
 		streamID: msg.RequestId,
+		remote:   cs.RemoteAddress(),
 		limit:    s.maxChunkSize,
 		logger:   s.logger,
 		cs:       cs,
@@ -367,6 +372,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 		return
 	}
 	s.waterline.Advance(e.to)
+	logutil.Infof("init waterline to %v", e.to.String())
 
 	for {
 		select {
@@ -452,7 +458,9 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				// publish incremental logtail for all subscribed tables
 				for _, session := range s.ssmgr.ListSession() {
 					if err := session.Publish(ctx, from, to, wraps...); err != nil {
-						logger.Error("fail to publish incremental logtail", zap.Error(err), zap.Uint64("stream-id", session.stream.streamID))
+						logger.Error("fail to publish incremental logtail", zap.Error(err),
+							zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
+						)
 						continue
 					}
 				}

@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -197,7 +196,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil {
-		cwft.ses.accountId = getAccountId(requestCtx)
+		cwft.ses.accountId = defines.GetAccountId(requestCtx)
 		err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
 	}
 	if err != nil {
@@ -229,21 +228,48 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		if len(executePlan.Args) != len(preparePlan.ParamTypes) {
 			return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 		}
-		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
+		if prepareStmt.IsInsertValues {
+			for _, node := range preparePlan.Plan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
+					tableDef := node.TableDef
+					colCount := len(tableDef.Cols)
+					colsData := node.RowsetData.Cols
+					rowCount := len(colsData[0].Data)
 
-		// replace ? and @var with their values
-		resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
-		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
-		constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
-		vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
-		err = vp.Visit(requestCtx)
-		if err != nil {
-			return nil, err
+					bat := prepareStmt.InsertBat
+					bat.CleanOnlyData()
+					for i := 0; i < colCount; i++ {
+						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
+							colsData[i].Data, bat.Vecs[i], executePlan.Args, prepareStmt.ufs[i]); err != nil {
+							return nil, err
+						}
+					}
+					bat.AddCnt(1)
+					for i := 0; i < rowCount; i++ {
+						bat.Zs = append(bat.Zs, 1)
+					}
+					cwft.proc.SetPrepareBatch(bat)
+					break
+				}
+			}
+			cwft.plan = preparePlan.Plan
+		} else {
+			newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
+
+			// replace ? and @var with their values
+			resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
+			resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
+			constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
+			vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
+			err = vp.Visit(requestCtx)
+			if err != nil {
+				return nil, err
+			}
+			cwft.plan = newPlan
 		}
 
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
-		cwft.plan = newPlan
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
 		case *tree.ShowTableStatus:
@@ -255,10 +281,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		//check privilege
 		/* prepare not need check privilege
-		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
-		if err != nil {
-			return nil, err
-		}
+		   err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
+		   if err != nil {
+		   	return nil, err
+		   }
 		*/
 	} else {
 		var vp *plan2.VisitPlan
@@ -285,7 +311,25 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	}
 	cwft.proc.Ctx = txnCtx
 	cwft.proc.FileService = cwft.ses.GetParameterUnit().FileService
-	cwft.compile = compile.New(addr, cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), txnCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+
+	var tenant string
+	tInfo := cwft.ses.GetTenantInfo()
+	if tInfo != nil {
+		tenant = tInfo.GetTenant()
+	}
+	cwft.compile = compile.New(
+		addr,
+		cwft.ses.GetDatabaseName(),
+		cwft.ses.GetSql(),
+		tenant,
+		cwft.ses.GetUserName(),
+		txnCtx,
+		cwft.ses.GetStorage(),
+		cwft.proc,
+		cwft.stmt,
+		cwft.ses.isInternal,
+		cwft.ses.getCNLabels(),
+	)
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
 		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
@@ -333,12 +377,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			return nil, err
 		}
 
-		// 4. add auto_IncrementTable fortemp-db
-		err = colexec.CreateAutoIncrTable(cwft.ses.GetStorage(), requestCtx, cwft.proc, defines.TEMPORARY_DBNAME)
-		if err != nil {
-			return nil, err
-		}
-
 		cwft.ses.EnableInitTempEngine()
 	}
 	return cwft.compile, err
@@ -346,7 +384,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := motrace.StatementFromContext(ctx); stm != nil {
-		stm.SetExecPlan(cwft.plan, SerializeExecPlan)
+		stm.SetSerializableExecPlan(NewMarshalPlanHandler(ctx, stm.StatementID, cwft.plan))
 	}
 	return nil
 }

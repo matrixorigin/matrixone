@@ -32,11 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type BlockT[T common.IRef] interface {
@@ -103,6 +103,18 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
+func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
+		blk.RLock()
+		defer blk.RUnlock()
+		return node.MustMNode().Foreach(colIdx, op, sels)
+	} else {
+		return node.MustPNode().Foreach(blk.meta.GetSchema(), colIdx, op, sels)
+	}
+}
+
 func (blk *baseBlock) TryUpgrade() (err error) {
 	node := blk.node.Load()
 	if node.IsPersisted() {
@@ -129,7 +141,7 @@ func (blk *baseBlock) FillInMemoryDeletesLocked(
 	view *model.BaseView,
 	rwlocker *sync.RWMutex) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
-	n, err := chain.CollectDeletesLocked(txn, false, rwlocker)
+	n, err := chain.CollectDeletesLocked(txn, rwlocker)
 	if err != nil {
 		return
 	}
@@ -152,15 +164,12 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 	if location.IsEmpty() {
 		return
 	}
-	reader, err := blockio.NewObjectReader(blk.fs.Service, location)
-	if err != nil {
-		return
-	}
-	bat, err := reader.LoadColumns(
+	bat, err := blockio.LoadColumns(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
-		location.ID(),
+		blk.fs.Service,
+		location,
 		nil,
 	)
 	if err != nil {
@@ -192,11 +201,12 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 // 	return
 // }
 
-func (blk *baseBlock) LoadPersistedColumnData(schema *catalog.Schema, colIdx int) (
+func (blk *baseBlock) LoadPersistedColumnData(ctx context.Context, schema *catalog.Schema, colIdx int) (
 	vec containers.Vector, err error) {
 	def := schema.ColDefs[colIdx]
 	location := blk.meta.GetMetaLoc()
 	return LoadPersistedColumnData(
+		ctx,
 		blk.fs,
 		blk.meta.AsCommonID(),
 		def,
@@ -208,7 +218,9 @@ func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) 
 	if location.IsEmpty() {
 		return
 	}
+	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
 	return LoadPersistedDeletes(
+		pkName,
 		blk.fs,
 		location)
 }
@@ -221,7 +233,7 @@ func (blk *baseBlock) FillPersistedDeletes(
 		return nil
 	}
 	for i := 0; i < deletes.Length(); i++ {
-		abort := deletes.Vecs[2].Get(i).(bool)
+		abort := deletes.Vecs[3].Get(i).(bool)
 		if abort {
 			continue
 		}
@@ -230,7 +242,7 @@ func (blk *baseBlock) FillPersistedDeletes(
 			continue
 		}
 		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
-		_, row := model.DecodePhyAddrKey(&rowid)
+		row := rowid.GetRowOffset()
 		if view.DeleteMask == nil {
 			view.DeleteMask = roaring.NewBitmap()
 		}
@@ -251,6 +263,7 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 }
 
 func (blk *baseBlock) ResolvePersistedColumnDatas(
+	ctx context.Context,
 	pnode *persistedNode,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
@@ -259,7 +272,7 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 
 	view = model.NewBlockView()
 	for _, colIdx := range colIdxs {
-		vec, err := blk.LoadPersistedColumnData(readSchema, colIdx)
+		vec, err := blk.LoadPersistedColumnData(ctx, readSchema, colIdx)
 		if err != nil {
 			return nil, err
 		}
@@ -294,13 +307,12 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 }
 
 func (blk *baseBlock) ResolvePersistedColumnData(
-	pnode *persistedNode,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdx int,
 	skipDeletes bool) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(colIdx)
-	vec, err := blk.LoadPersistedColumnData(readSchema, colIdx)
+	vec, err := blk.LoadPersistedColumnData(context.Background(), readSchema, colIdx)
 	if err != nil {
 		return
 	}
@@ -330,24 +342,16 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	return
 }
 
-func (blk *baseBlock) PersistedBatchDedup(
-	pnode *persistedNode,
+func (blk *baseBlock) dedupWithLoad(
 	txn txnif.TxnReader,
-	isCommitting bool,
 	keys containers.Vector,
+	sels *roaring.Bitmap,
 	rowmask *roaring.Bitmap,
-	isAblk bool) (err error) {
-	sels, err := pnode.BatchDedup(
-		keys,
-		nil,
-	)
-	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
-		return
-	}
+	isAblk bool,
+) (err error) {
 	schema := blk.meta.GetSchema()
 	def := schema.GetSingleSortKey()
 	view, err := blk.ResolvePersistedColumnData(
-		pnode,
 		txn,
 		schema,
 		def.Idx,
@@ -373,6 +377,37 @@ func (blk *baseBlock) PersistedBatchDedup(
 	return
 }
 
+func (blk *baseBlock) PersistedBatchDedup(
+	ctx context.Context,
+	txn txnif.TxnReader,
+	isCommitting bool,
+	keys containers.Vector,
+	keysZM index.ZM,
+	rowmask *roaring.Bitmap,
+	isAblk bool,
+	bf objectio.BloomFilter,
+) (err error) {
+	pkIndex, err := MakeImmuIndex(
+		ctx,
+		blk.meta,
+		bf,
+		blk.indexCache,
+		blk.fs.Service,
+	)
+	if err != nil {
+		return
+	}
+	sels, err := pkIndex.BatchDedup(
+		ctx,
+		keys,
+		keysZM,
+	)
+	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
+		return
+	}
+	return blk.dedupWithLoad(txn, keys, sels, rowmask, isAblk)
+}
+
 func (blk *baseBlock) getPersistedValue(
 	pnode *persistedNode,
 	txn txnif.TxnReader,
@@ -395,7 +430,7 @@ func (blk *baseBlock) getPersistedValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view2, err := blk.ResolvePersistedColumnData(pnode, txn, schema, col, true)
+	view2, err := blk.ResolvePersistedColumnData(txn, schema, col, true)
 	if err != nil {
 		return
 	}
@@ -444,18 +479,12 @@ func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool)
 	return
 }
 
-func (blk *baseBlock) CollectAppendLogIndexes(startTs, endTs types.TS) (indexes []*wal.Index, err error) {
-	blk.RLock()
-	defer blk.RUnlock()
-	return blk.mvcc.CollectAppendLogIndexesLocked(startTs, endTs)
-}
-
 func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *model.BlockView, err error) {
 	view = model.NewBlockView()
 	blk.RLock()
 	defer blk.RUnlock()
 	deleteChain := blk.mvcc.GetDeleteChain()
-	view.DeleteMask, view.DeleteLogIndexes, err =
+	view.DeleteMask, err =
 		deleteChain.CollectDeletesInRange(startTs, endTs, blk.RWMutex)
 	return
 }
@@ -463,13 +492,22 @@ func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 func (blk *baseBlock) CollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	rowID, ts, abort, abortedMap := blk.mvcc.CollectDelete(start, end)
+	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDelete(start, end)
 	if rowID == nil {
 		return
 	}
+	pkDef := blk.meta.GetSchema().GetPrimaryKey()
+	pkVec := containers.MakeVector(pkDef.Type)
+	pkIdx := pkDef.Idx
+	blk.Foreach(pkIdx, func(v any, isNull bool, row int) error {
+		pkVec.Append(v, false)
+		return nil
+	}, deletes)
+	// batch: rowID, ts, pkVec, abort
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)
 	bat.AddVector(catalog.AttrCommitTs, ts)
+	bat.AddVector(pkDef.Name, pkVec)
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abort)
 	} else {

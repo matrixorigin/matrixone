@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 const (
@@ -50,6 +51,7 @@ func (v *Varlena) OffsetLen() (uint32, uint32) {
 	s := v.U32Slice()
 	return s[1], s[2]
 }
+
 func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 	s := v.U32Slice()
 	s[0] = VarlenaBigHdr
@@ -101,7 +103,7 @@ func (v *Varlena) GetByteSlice(area []byte) []byte {
 
 // See the lifespan comment above.
 func (v *Varlena) GetString(area []byte) string {
-	return string(v.GetByteSlice(area))
+	return util.UnsafeBytesToString(v.GetByteSlice(area))
 }
 
 func (v *Varlena) Reset() {

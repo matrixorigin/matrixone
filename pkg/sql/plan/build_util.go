@@ -20,9 +20,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // func appendQueryNode(query *Query, node *Node) int32 {
@@ -265,11 +264,17 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Proce
 	// try to calculate on update value, return err if fails
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
-	v, err := colexec.EvalExpr(bat, proc, onUpdateExpr)
+
+	executor, err := colexec.NewExpressionExecutor(proc, onUpdateExpr)
 	if err != nil {
 		return nil, err
 	}
-	v.Free(proc.Mp())
+	_, err = executor.Eval(proc, []*batch.Batch{bat})
+	if err != nil {
+		return nil, err
+	}
+	executor.Free()
+
 	ret := &plan.OnUpdate{
 		Expr:         onUpdateExpr,
 		OriginString: tree.String(expr, dialect.MYSQL),

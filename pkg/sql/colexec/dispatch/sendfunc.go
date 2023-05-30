@@ -18,29 +18,134 @@ import (
 	"context"
 	"hash/crc32"
 	"sync/atomic"
-	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs uint64) [][]int32 {
+	sels := ap.getSels()
+	groupByVec := bat.Vecs[ap.ShuffleColIdx]
+	switch groupByVec.GetType().Oid {
+	case types.T_int64:
+		groupByCol := vector.MustFixedCol[int64](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_int32:
+		groupByCol := vector.MustFixedCol[int32](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_int16:
+		groupByCol := vector.MustFixedCol[int16](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint64:
+		groupByCol := vector.MustFixedCol[uint64](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(v, lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint32:
+		groupByCol := vector.MustFixedCol[uint32](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint16:
+		groupByCol := vector.MustFixedCol[uint16](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_char, types.T_varchar, types.T_text:
+		groupByCol := vector.MustFixedCol[types.Varlena](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleCharHashToRange(v.GetByteSlice(groupByVec.GetArea()), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	default:
+		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
+	}
+	return sels
+}
+
+func genShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process) error {
+	//release old bats
+	defer proc.PutBatch(bat)
+
+	lenVecs := len(bat.Vecs)
+	shuffledBats := ap.ctr.shuffledBats
+	if ap.ctr.batsCount == 0 {
+		//initialize shuffled bats
+		for regIndex := range shuffledBats {
+			shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
+			shuffledBats[regIndex].Zs = proc.Mp().GetSels()
+			for j := range shuffledBats[regIndex].Vecs {
+				shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
+			}
+		}
+	}
+
+	sels := getShuffledSels(ap, bat, uint64(ap.ctr.aliveRegCnt))
+
+	//generate new shuffled bats
+	for regIndex := range shuffledBats {
+		lenSels := len(sels[regIndex])
+		if lenSels > 0 {
+			b := shuffledBats[regIndex]
+			for vecIndex := range b.Vecs {
+				v := b.Vecs[vecIndex]
+				err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
+				if err != nil {
+					return err
+				}
+			}
+			for i := 0; i < lenSels; i++ {
+				b.Zs = append(b.Zs, bat.Zs[sels[regIndex][i]])
+			}
+		}
+	}
+
+	ap.ctr.batsCount++
+	return nil
+}
+
 // common sender: send to all LocalReceiver
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	refCountAdd := int64(len(ap.LocalRegs) - 1)
+	refCountAdd := int64(ap.ctr.localRegsCnt - 1)
 	atomic.AddInt64(&bat.Cnt, refCountAdd)
 	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
 		jm.IncRef(refCountAdd)
-		jm.SetDupCount(int64(len(ap.LocalRegs)))
+		jm.SetDupCount(int64(ap.ctr.localRegsCnt))
 	}
 
-	for _, reg := range ap.LocalRegs {
+	for i, reg := range ap.LocalRegs {
 		select {
+		case <-proc.Ctx.Done():
+			handleUnsent(proc, bat, refCountAdd, int64(i))
+			logutil.Infof("proc context done during dispatch to local")
+			return true, nil
 		case <-reg.Ctx.Done():
+			if ap.IsSink {
+				atomic.AddInt64(&bat.Cnt, -1)
+				continue
+			}
+			handleUnsent(proc, bat, refCountAdd, int64(i))
 			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
 		case reg.Ch <- bat:
 		}
@@ -76,19 +181,83 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	return false, nil
 }
 
-// send to all receiver (include LocalReceiver and RemoteReceiver)
-func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	_, remoteErr := sendToAllRemoteFunc(bat, ap, proc)
-	if remoteErr != nil {
-		return false, remoteErr
+func sendShuffledBats(ap *Argument, proc *process.Process) (bool, error) {
+	if ap.ctr.batsCount == 0 {
+		return false, nil
 	}
 
-	_, localErr := sendToAllLocalFunc(bat, ap, proc)
-	if localErr != nil {
-		return false, localErr
+	// send to remote regs
+	for _, r := range ap.ctr.remoteReceivers {
+		batIndex := ap.ctr.remoteToIdx[r.uuid]
+		batToSend := ap.ctr.shuffledBats[batIndex]
+		if batToSend != nil && batToSend.Length() != 0 {
+			encodeData, errEncode := types.Encode(batToSend)
+			if errEncode != nil {
+				return false, errEncode
+			}
+			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				return false, err
+			}
+		}
+	}
+
+	//send to all local regs
+	for i, reg := range ap.LocalRegs {
+		batIndex := ap.ShuffleRegIdxLocal[i]
+		batToSend := ap.ctr.shuffledBats[batIndex]
+		if batToSend != nil && batToSend.Length() != 0 {
+			select {
+			case <-reg.Ctx.Done():
+				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+			case reg.Ch <- batToSend:
+			}
+		}
+	}
+
+	ap.ctr.batsCount = 0
+	return false, nil
+}
+
+// shuffle to all receiver (include LocalReceiver and RemoteReceiver)
+func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+	if !ap.ctr.prepared {
+		end, err := ap.waitRemoteRegsReady(proc)
+		if err != nil {
+			return false, err
+		}
+		if end {
+			return true, nil
+		}
+	}
+
+	err := genShuffledBats(ap, bat, proc)
+	if err != nil {
+		return false, err
+	}
+
+	if ap.ctr.batsCount > 0 {
+		maxSize := 0
+		for i := range ap.ctr.shuffledBats {
+			if ap.ctr.shuffledBats[i].Length() > maxSize {
+				maxSize = ap.ctr.shuffledBats[i].Length()
+			}
+		}
+		if maxSize > shuffleBatchSize {
+			return sendShuffledBats(ap, proc)
+		}
 	}
 
 	return false, nil
+}
+
+// send to all receiver (include LocalReceiver and RemoteReceiver)
+func sendToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
+	end, remoteErr := sendToAllRemoteFunc(bat, ap, proc)
+	if remoteErr != nil || end {
+		return end, remoteErr
+	}
+
+	return sendToAllLocalFunc(bat, ap, proc)
 }
 
 // common sender: send to any LocalReceiver
@@ -99,17 +268,15 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		sendto := ap.ctr.sendCnt % ap.ctr.localRegsCnt
 		reg := ap.LocalRegs[sendto]
 		select {
+		case <-proc.Ctx.Done():
+			logutil.Infof("proc context done during dispatch to any")
+			return true, nil
 		case <-reg.Ctx.Done():
-			for len(reg.Ch) > 0 { // free memory
-				bat := <-reg.Ch
-				if bat == nil {
-					break
-				}
-				proc.PutBatch(bat)
-			}
+			logutil.Infof("reg.Ctx done during dispatch to any")
 			ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
 			ap.ctr.localRegsCnt--
 			ap.ctr.aliveRegCnt--
+			close(reg.Ch)
 			if ap.ctr.localRegsCnt == 0 {
 				return true, nil
 			}
@@ -133,6 +300,12 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 		if end || ap.ctr.remoteRegsCnt == 0 {
 			return true, nil
 		}
+	}
+	select {
+	case <-proc.Ctx.Done():
+		logutil.Infof("conctx done during dispatch")
+		return true, nil
+	default:
 	}
 
 	encodeData, errEncode := types.Encode(bat)
@@ -172,6 +345,7 @@ func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 			return false, nil
 		}
 		if allclosed { // all local reg closed, change sendFunc to send remote only
+			proc.PutBatch(bat)
 			ap.ctr.sendFunc = sendToAnyRemoteFunc
 			return ap.ctr.sendFunc(bat, ap, proc)
 		}
@@ -192,8 +366,6 @@ func sendToAnyFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool,
 func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *WrapperClientSession) error {
 	checksum := crc32.ChecksumIEEE(encodeBatData)
 	if len(encodeBatData) <= maxMessageSizeToMoRpc {
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-		_ = cancel
 		msg := cnclient.AcquireMessage()
 		{
 			msg.Id = wcs.msgId
@@ -202,7 +374,7 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *Wr
 			msg.Sid = pipeline.Last
 			msg.Checksum = checksum
 		}
-		if err := wcs.cs.Write(timeoutCtx, msg); err != nil {
+		if err := wcs.cs.Write(ctx, msg); err != nil {
 			return err
 		}
 		return nil
@@ -216,8 +388,6 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *Wr
 			end = len(encodeBatData)
 			sid = pipeline.Last
 		}
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
-		_ = cancel
 		msg := cnclient.AcquireMessage()
 		{
 			msg.Id = wcs.msgId
@@ -227,10 +397,22 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *Wr
 			msg.Checksum = checksum
 		}
 
-		if err := wcs.cs.Write(timeoutCtx, msg); err != nil {
+		if err := wcs.cs.Write(ctx, msg); err != nil {
 			return err
 		}
 		start = end
 	}
 	return nil
+}
+
+// success count is always no greater than refcnt
+func handleUnsent(proc *process.Process, bat *batch.Batch, refCnt int64, successCnt int64) {
+	diff := successCnt - refCnt
+	atomic.AddInt64(&bat.Cnt, diff)
+	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+		jm.IncRef(diff)
+		jm.SetDupCount(diff)
+	}
+
+	proc.PutBatch(bat)
 }

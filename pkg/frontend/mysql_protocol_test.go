@@ -61,7 +61,6 @@ type TestRoutineManager struct {
 
 func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
-	pro.SetSkipCheckUser(true)
 	exe := NewMysqlCmdExecutor()
 	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu.SV, rs)
 
@@ -101,13 +100,13 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
+	pu.SV.SkipCheckUser = true
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
 	aicm := &defines.AutoIncrCacheManager{}
 	rm, _ := NewRoutineManager(ctx, pu, aicm)
-	rm.SetSkipCheckUser(true)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -145,6 +144,22 @@ func newMrsForConnectionId(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForSleep(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("sleep")
+	col1.SetColumnType(defines.MYSQL_TYPE_TINY)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func TestKIll(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connect
@@ -163,16 +178,43 @@ func TestKIll(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
+	pu.SV.SkipCheckUser = true
 
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
+
 	noResultSet := make(map[string]bool)
-	resultSet := make(map[string]genMrs)
-	resultSet[sql1] = func(ses *Session) *MysqlResultSet {
-		mrs := newMrsForConnectionId([][]interface{}{
-			{ses.GetConnectionID()},
-		})
-		return mrs
+	resultSet := make(map[string]*result)
+	resultSet[sql1] = &result{
+		gen: func(ses *Session) *MysqlResultSet {
+			mrs := newMrsForConnectionId([][]interface{}{
+				{ses.GetConnectionID()},
+			})
+			return mrs
+		},
+		isSleepSql: false,
+	}
+
+	sql5 := "select sleep(30);"
+	resultSet[sql5] = &result{
+		gen: func(ses *Session) *MysqlResultSet {
+			return newMrsForSleep([][]interface{}{
+				{uint8(0)},
+			})
+		},
+		isSleepSql: true,
+		seconds:    30,
+	}
+
+	sql6 := "select sleep(30);"
+	resultSet[sql6] = &result{
+		gen: func(ses *Session) *MysqlResultSet {
+			return newMrsForSleep([][]interface{}{
+				{uint8(0)},
+			})
+		},
+		isSleepSql: true,
+		seconds:    30,
 	}
 
 	var wrapperStubFunc = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
@@ -206,7 +248,6 @@ func TestKIll(t *testing.T) {
 	// A mock autoincrcache manager.
 	aicm := &defines.AutoIncrCacheManager{}
 	rm, _ := NewRoutineManager(ctx, pu, aicm)
-	rm.SetSkipCheckUser(true)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -237,17 +278,67 @@ func TestKIll(t *testing.T) {
 	err = connIdRow.Scan(&conn2Id)
 	require.NoError(t, err)
 
+	wgSleep := sync.WaitGroup{}
+	wgSleep.Add(1)
+
+	//===================================
+	//connection 1 exec : select sleep(30);
+	go func() {
+		defer wgSleep.Done()
+		var resultId int
+		connIdRow = conn1.QueryRow(sql5)
+		err = connIdRow.Scan(&resultId)
+		require.NoError(t, err)
+	}()
+
+	//sleep before cancel
+	time.Sleep(time.Second * 2)
+
 	//conn2 kills the query
 	sql3 = fmt.Sprintf("kill query %d;", conn1Id)
 	noResultSet[sql3] = true
 	_, err = conn2.Exec(sql3)
 	require.NoError(t, err)
 
+	//check killed result
+	wgSleep.Wait()
+	res := resultSet[sql5]
+	require.Equal(t, res.resultX.Load(), contextCancel)
+
+	//================================
+
+	//connection 1 exec : select sleep(30);
+	wgSleep2 := sync.WaitGroup{}
+	wgSleep2.Add(1)
+	go func() {
+		defer wgSleep2.Done()
+		var resultId int
+		connIdRow = conn1.QueryRow(sql6)
+		err = connIdRow.Scan(&resultId)
+		require.NoError(t, err)
+	}()
+
+	//sleep before cancel
+	time.Sleep(time.Second * 2)
+
 	//conn2 kills the connection 1
 	sql2 = fmt.Sprintf("kill %d;", conn1Id)
 	noResultSet[sql2] = true
 	_, err = conn2.Exec(sql2)
 	require.NoError(t, err)
+
+	//check killed result
+	wgSleep2.Wait()
+	res = resultSet[sql6]
+	require.Equal(t, res.resultX.Load(), contextCancel)
+
+	//==============================
+	//conn 1 is killed by conn2
+	//check conn1 is disconnected or not
+	err = conn1.Ping()
+	require.Error(t, err)
+
+	//==============================
 
 	//conn2 kills itself
 	sql4 = fmt.Sprintf("kill %d;", conn2Id)
@@ -1176,7 +1267,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	if err != nil {
 		return err
 	}
-
+	pu.SV.SkipCheckUser = true
 	pro := routine.getProtocol().(*MysqlProtocolImpl)
 	packet, ok := msg.(*Packet)
 	pro.SetSequenceID(uint8(packet.SequenceID + 1))
@@ -1426,6 +1517,7 @@ func TestMysqlResultSet(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
+	pu.SV.SkipCheckUser = true
 
 	trm := NewTestRoutineManager(pu)
 
@@ -1560,6 +1652,12 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 		return
 	}
 	require.NoError(t, err)
+	defer func() {
+		err = rows.Close()
+		require.NoError(t, err)
+		err = rows.Err()
+		require.NoError(t, err)
+	}()
 
 	//column check
 	columns, err := rows.Columns()
@@ -1693,8 +1791,6 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 
 	require.True(t, rowIdx == mrs.GetRowCount())
 
-	err = rows.Err()
-	require.NoError(t, err)
 }
 
 func Test_writePackets(t *testing.T) {
@@ -2574,10 +2670,10 @@ func Test_handleHandshake(t *testing.T) {
 		ioses.EXPECT().Ref().AnyTimes()
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
+		SV.SkipCheckUser = true
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
-		mp.SetSkipCheckUser(true)
 		payload := []byte{'a'}
 		_, err := mp.HandleHandshake(ctx, payload)
 		convey.So(err, convey.ShouldNotBeNil)
@@ -2607,10 +2703,10 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	convey.Convey("handleHandshake succ", t, func() {
 		var IO IOPackageImpl
 		var SV = &config.FrontendParameters{}
+		SV.SkipCheckUser = true
 		mp := &MysqlProtocolImpl{SV: SV}
 		mp.io = &IO
 		mp.tcpConn = ioses
-		mp.SetSkipCheckUser(true)
 		var payload []byte
 		for i := 0; i < count; i++ {
 			f.Fuzz(&payload)

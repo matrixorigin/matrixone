@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
@@ -315,7 +316,8 @@ func (c *MOCollector) Register(name batchpipe.HasName, impl motrace.PipeImpl) {
 func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error {
 	select {
 	case <-c.stopCh:
-		return moerr.NewInternalError(ctx, "stopped")
+		ctx = errutil.ContextWithNoReport(ctx, true)
+		return moerr.NewInternalError(ctx, "MOCollector stopped")
 	case c.awakeCollect <- item:
 		return nil
 	}
@@ -488,6 +490,7 @@ loop:
 			fields := make([]zap.Field, 0, 16)
 			fields = append(fields, zap.Int32("MaxBufferCnt", c.maxBufferCnt))
 			fields = append(fields, zap.Int32("TotalBufferCnt", c.bufferTotal.Load()))
+			fields = append(fields, zap.Int("QueueLength", len(c.awakeCollect)))
 			for _, b := range c.buffers {
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sBufferCnt", b.name), b.bufferCnt.Load()))
 			}
@@ -505,7 +508,7 @@ func (c *MOCollector) Stop(graceful bool) error {
 	c.stopOnce.Do(func() {
 		for len(c.awakeCollect) > 0 && graceful {
 			c.logger.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)))
-			time.Sleep(250 * time.Second)
+			time.Sleep(250 * time.Millisecond)
 		}
 		c.mux.Lock()
 		for _, buffer := range c.buffers {

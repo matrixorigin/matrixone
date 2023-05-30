@@ -56,11 +56,8 @@ type CommandInfo struct {
 }
 type Info struct {
 	Group       uint32
-	TxnId       string
 	Checkpoints []*CkpRanges
-	Uncommits   string
-
-	GroupLSN uint64
+	GroupLSN    uint64
 
 	TargetLsn uint64
 	Info      any
@@ -78,15 +75,6 @@ func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 8
-	var sn int64
-	if sn, err = objectio.WriteString(info.TxnId, w); err != nil {
-		return
-	}
-	n += sn
-	if sn, err = objectio.WriteString(info.Uncommits, w); err != nil {
-		return
-	}
-	n += sn
 	if _, err = w.Write(types.EncodeUint64(&info.TargetLsn)); err != nil {
 		return
 	}
@@ -153,15 +141,6 @@ func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 8
-	var sn int64
-	if info.TxnId, sn, err = objectio.ReadString(r); err != nil {
-		return
-	}
-	n += sn
-	if info.Uncommits, sn, err = objectio.ReadString(r); err != nil {
-		return
-	}
-	n += sn
 	if _, err = r.Read(types.EncodeUint64(&info.TargetLsn)); err != nil {
 		return
 	}
@@ -236,7 +215,7 @@ func (info *Info) ToString() string {
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	default:
-		s := fmt.Sprintf("customized entry G%d<%d>{T%s}", info.Group, info.GroupLSN, info.TxnId)
+		s := fmt.Sprintf("customized entry G%d<%d>", info.Group, info.GroupLSN)
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	}
@@ -244,7 +223,6 @@ func (info *Info) ToString() string {
 
 type Base struct {
 	*descriptor
-	node      []byte
 	payload   []byte
 	info      any
 	infobuf   []byte
@@ -277,10 +255,6 @@ func (b *Base) IsPrintTime() bool {
 }
 func (b *Base) reset() {
 	b.descriptor.reset()
-	if b.node != nil {
-		common.LogAllocator.Free(b.node)
-		b.node = nil
-	}
 	b.payload = nil
 	b.info = nil
 	b.infobuf = nil
@@ -320,9 +294,6 @@ func (b *Base) Free() {
 }
 
 func (b *Base) GetPayload() []byte {
-	if b.node != nil {
-		return b.node[:b.GetPayloadSize()]
-	}
 	return b.payload
 }
 
@@ -335,13 +306,8 @@ func (b *Base) GetInfo() any {
 }
 
 func (b *Base) UnmarshalFromNode(n []byte, own bool) error {
-	if b.node != nil {
-		common.LogAllocator.Free(b.node)
-		b.node = nil
-	}
 	if own {
-		b.node = n
-		b.payload = b.node
+		b.payload = n
 	} else {
 		copy(b.payload, n)
 	}
@@ -350,10 +316,6 @@ func (b *Base) UnmarshalFromNode(n []byte, own bool) error {
 }
 
 func (b *Base) SetPayload(buf []byte) error {
-	if b.node != nil {
-		common.LogAllocator.Free(b.node)
-		b.node = nil
-	}
 	b.payload = buf
 	b.SetPayloadSize(len(buf))
 	return nil
@@ -390,13 +352,7 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 		return 0, err
 	}
 
-	if b.node == nil {
-		b.node, err = common.LogAllocator.Alloc(b.GetPayloadSize())
-		if err != nil {
-			panic(err)
-		}
-		b.payload = b.node[:b.GetPayloadSize()]
-	}
+	b.payload = make([]byte, b.GetPayloadSize())
 	n1 := 0
 	if b.GetInfoSize() != 0 {
 		infoBuf := make([]byte, b.GetInfoSize())
@@ -421,19 +377,36 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 	return int64(n1 + n2), nil
 }
 
+func (b *Base) UnmarshalBinary(buf []byte) (n int64, err error) {
+	copy(b.GetMetaBuf(), buf[:b.GetMetaSize()])
+	n += int64(b.GetMetaSize())
+
+	infoSize := b.GetInfoSize()
+	if infoSize != 0 {
+		head := objectio.DecodeIOEntryHeader(b.descBuf)
+		codec := objectio.GetIOEntryCodec(*head)
+		vinfo, err := codec.Decode(buf[n : n+int64(infoSize)])
+		info := vinfo.(*Info)
+		if err != nil {
+			return n, err
+		}
+		b.SetInfo(info)
+		n += int64(infoSize)
+	}
+
+	payloadSize := b.GetPayloadSize()
+	b.payload = buf[n : n+int64(payloadSize)]
+	n += int64(payloadSize)
+	return
+}
+
 func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	metaBuf := b.GetMetaBuf()
 	n, err := r.ReadAt(metaBuf, int64(offset))
 	if err != nil {
 		return n, err
 	}
-	if b.node == nil {
-		b.node, err = common.LogAllocator.Alloc(b.GetPayloadSize())
-		if err != nil {
-			panic(err)
-		}
-		b.payload = b.node[:b.GetPayloadSize()]
-	}
+	b.payload = make([]byte, b.GetPayloadSize())
 
 	offset += len(b.GetMetaBuf())
 	infoBuf := make([]byte, b.GetInfoSize())

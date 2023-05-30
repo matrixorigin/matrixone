@@ -15,6 +15,7 @@
 package defines
 
 import (
+	"context"
 	"math"
 	"sync"
 )
@@ -164,6 +165,13 @@ type TenantIDKey struct{}
 type UserIDKey struct{}
 type RoleIDKey struct{}
 
+func GetAccountId(ctx context.Context) uint32 {
+	if v := ctx.Value(TenantIDKey{}); v != nil {
+		return v.(uint32)
+	}
+	return 0
+}
+
 // EngineKey use EngineKey{} to get engine from Context
 type EngineKey struct{}
 
@@ -179,6 +187,12 @@ type TemporaryDN struct{}
 
 // Determine if now is a bg sql.
 type BgKey struct{}
+
+// Sp variable scope
+type VarScopeKey struct{}
+
+// Determine if it is a stored procedure
+type InSp struct{}
 
 // PkCheckByDN whether DN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByDN struct{}

@@ -1,0 +1,121 @@
+-- prepare
+drop account if exists bvt_result_count;
+create account bvt_result_count admin_name 'admin' identified by '111';
+
+-- case 1
+-- @session:id=2&user=bvt_result_count:admin&password=111
+-- transaction sql
+begin;
+rollback;
+commit;
+start transaction;
+commit;
+
+-- create db/table/view (insert,delete,update,select)
+create database db1;
+use db1;
+create table t1(a int, b varchar);
+insert into t1 values (1, 'a'),(1, 'b'),(3, 'c'),(4,'d'),(5,'e');
+update t1 set b='xx' where a=5;
+update t1 set b='yy' where a=1;
+select * from t1;
+select * from t1 limit 3;
+delete from t1 where a=5;
+delete from t1 where a=1;
+
+-- test create view
+create view v1 as select * from t1;
+create view v2 as select * from t1 limit 1;
+
+-- test prepare
+set @a=1;
+prepare s1 from "select * from t1 where a>?";
+prepare s2 from "select * from t1 where a=?";
+
+-- @bvt:issue#9525
+execute s1 using @a;
+execute s2 using @a;
+-- @bvt:issue
+
+deallocate prepare s2;
+deallocate prepare s2;
+
+-- test show
+show databases like 'mysql';
+show tables;
+show create database db1;
+show create view v1;
+show create table t1;
+show columns from t1;
+
+-- test drop table/database/view
+drop view v1;
+drop table t1;
+drop view v2;
+drop database db1;
+
+-- test DCL sql
+create role test_role;
+create user user_name identified by 'password';
+create database if not exists db1;
+grant create table,drop table on database *.* to test_role;
+revoke test_role from user_name;
+drop user user_name;
+drop role test_role;
+drop database db1;
+
+-- test transaction (insert/delete/update/select)
+create database db2;
+use db2;
+create table t2(a int, b varchar);
+begin;
+insert into t2 values (1, 'a'),(1, 'b'),(3, 'c'),(4,'d'),(5,'e');
+update t2 set b='xx' where a=5;
+update t2 set b='yy' where a=1;
+select * from t2;
+select * from t2 limit 3;
+delete from t2 where a=5;
+delete from t2 where a=1;
+commit;
+drop database db2;
+
+-- test cloud user execute
+/* cloud_user */ create database db2;
+/* cloud_user */ use db2;
+/* cloud_user */ create table t2(a int, b varchar);
+/* cloud_user */ insert into t2 values (1, 'a'),(1, 'b'),(3, 'c'),(4,'d'),(5,'e');
+/* cloud_user */ update t2 set b='xx' where a=5;
+/* cloud_user */ update t2 set b='yy' where a=1;
+/* cloud_user */ select * from t2;
+/* cloud_user */ select * from t2 limit 3;
+/* cloud_user */ delete from t2 where a=5;
+/* cloud_user */ delete from t2 where a=1;
+/* cloud_user */ drop database db2;
+
+-- test other
+select 1;
+select 1 union select 2;
+values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+select * from unnest('{"a":1}') as f;
+use system;
+-- @session
+-- case 1: END
+
+-- case 2: 通过dump 账号测试 create account/drop account
+-- test create/drop account
+/* cloud_user */create account test_tenant_1 admin_name 'test_account' identified by '111';
+/* cloud_user */drop account test_tenant_1;
+-- case 2: END
+
+-- result check
+select sleep(16);
+use system;
+-- check case 1
+select statement, result_count from statement_info where account="bvt_result_count" and statement not like '%mo_ctl%' and status != 'Running' order by request_at desc limit 70;
+-- check case 2
+select statement, result_count from statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != 'Running' order by request_at desc limit 2;
+
+-- cleanup
+drop account if exists bvt_result_count;
+

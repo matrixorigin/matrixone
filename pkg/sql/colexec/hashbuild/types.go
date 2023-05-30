@@ -27,11 +27,12 @@ import (
 
 const (
 	Build = iota
+	Eval
 	End
 )
 
 type evalVector struct {
-	needFree bool
+	executor colexec.ExpressionExecutor
 	vec      *vector.Vector
 }
 
@@ -72,6 +73,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
+		ctr.FreeAllReg()
 	}
 }
 
@@ -84,9 +86,8 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 
 func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
 	for i := range ctr.evecs {
-		if ctr.evecs[i].needFree && ctr.evecs[i].vec != nil {
-			ctr.evecs[i].vec.Free(mp)
-			ctr.evecs[i].vec = nil
+		if ctr.evecs[i].executor != nil {
+			ctr.evecs[i].executor.Free()
 		}
 	}
 }

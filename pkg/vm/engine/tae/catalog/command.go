@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 const (
@@ -186,13 +185,6 @@ func (cmd *EntryCommand[T, N]) Desc() string {
 	return s
 }
 
-func (cmd *EntryCommand[T, N]) GetLogIndex() *wal.Index {
-	if cmd.mvccNode == nil {
-		return nil
-	}
-	return cmd.mvccNode.GetLogIndex()
-}
-
 func (cmd *EntryCommand[T, N]) SetReplayTxn(txn txnif.AsyncTxn) {
 	cmd.mvccNode.Txn = txn
 }
@@ -201,7 +193,7 @@ func (cmd *EntryCommand[T, N]) ApplyCommit() {
 	if cmd.mvccNode.Is1PC() {
 		return
 	}
-	if err := cmd.mvccNode.ApplyCommit(nil); err != nil {
+	if err := cmd.mvccNode.ApplyCommit(); err != nil {
 		panic(err)
 	}
 }
@@ -210,7 +202,7 @@ func (cmd *EntryCommand[T, N]) ApplyRollback() {
 	if cmd.mvccNode.Is1PC() {
 		return
 	}
-	cmd.mvccNode.ApplyRollback(nil)
+	cmd.mvccNode.ApplyRollback()
 }
 
 func (cmd *EntryCommand[T, N]) GetTs() types.TS {

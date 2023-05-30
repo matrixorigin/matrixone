@@ -1963,7 +1963,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				rows := [][]interface{}{
 					{ses.GetTenantInfo().GetDefaultRoleID()},
@@ -2071,7 +2071,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 				if i == 0 {
 					rows = [][]interface{}{}
 				} else {
@@ -2156,7 +2156,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				rows := [][]interface{}{
 					{ses.GetTenantInfo().GetDefaultRoleID()},
@@ -2244,7 +2244,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				if i == 0 {
 					rows = [][]interface{}{}
@@ -2310,7 +2310,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 				rows := [][]interface{}{
 					{ses.GetTenantInfo().GetDefaultRoleID()},
 				}
@@ -2377,7 +2377,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				var privType PrivilegeType
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(context.TODO(), p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
-				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				sql = getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType)
 
 				if i == 0 {
 					rows = [][]interface{}{}
@@ -3439,7 +3439,7 @@ func Test_determineDML(t *testing.T) {
 						Nodes: []*plan2.Node{
 							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
 							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
-							{NodeType: plan.Node_UPDATE},
+							{NodeType: plan.Node_INSERT},
 						},
 					},
 				},
@@ -7262,6 +7262,27 @@ func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForSystemVariablesOfAccount(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("variable_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("variable_value")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func makeRowsOfWithGrantOptionPrivilege(sql2result map[string]ExecResult, sql string, rows [][]interface{}) {
 	sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
 }
@@ -7972,4 +7993,49 @@ func TestCheckSubscriptionValid(t *testing.T) {
 		require.Equal(t, kases[idx].err, err != nil)
 	}
 
+}
+
+func TestDoCheckRole(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+
+	ses.SetTenantInfo(tenant)
+	err := doCheckRole(ctx, ses)
+	require.NoError(t, err)
+
+	tenant = &TenantInfo{
+		Tenant:        "default_1",
+		User:          "admin",
+		DefaultRole:   accountAdminRoleName,
+		TenantID:      3001,
+		UserID:        2,
+		DefaultRoleID: accountAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+	err = doCheckRole(ctx, ses)
+	require.NoError(t, err)
+
+	tenant = &TenantInfo{
+		Tenant:        "default_1",
+		User:          "admin",
+		DefaultRole:   "role1",
+		TenantID:      3001,
+		UserID:        2,
+		DefaultRoleID: 10,
+	}
+	ses.SetTenantInfo(tenant)
+	err = doCheckRole(ctx, ses)
+	require.Error(t, err)
 }

@@ -29,6 +29,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		groupByAst:     make(map[string]int32),
 		aggregateByAst: make(map[string]int32),
 		projectByExpr:  make(map[string]int32),
+		windowByAst:    make(map[string]int32),
 		aliasMap:       make(map[string]int32),
 		bindingByTag:   make(map[int32]*Binding),
 		bindingByTable: make(map[string]*Binding),
@@ -312,6 +313,20 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, selectList tree.Sel
 			exprImpl.Exprs[i], err = bc.qualifyColumnNames(exprImpl.Exprs[i], selectList, expandAlias)
 			if err != nil {
 				return nil, err
+			}
+		}
+		if exprImpl.WindowSpec != nil {
+			for i := range exprImpl.WindowSpec.PartitionBy {
+				exprImpl.WindowSpec.PartitionBy[i], err = bc.qualifyColumnNames(exprImpl.WindowSpec.PartitionBy[i], selectList, expandAlias)
+				if err != nil {
+					return nil, err
+				}
+			}
+			for i := range exprImpl.WindowSpec.OrderBy {
+				exprImpl.WindowSpec.OrderBy[i].Expr, err = bc.qualifyColumnNames(exprImpl.WindowSpec.OrderBy[i].Expr, selectList, expandAlias)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 

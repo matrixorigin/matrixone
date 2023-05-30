@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha1"
@@ -26,7 +27,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -63,7 +64,7 @@ var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 
 var serverVersion atomic.Value
 
-const defaultSaltReadTimeout = time.Millisecond * 100
+const defaultSaltReadTimeout = time.Millisecond * 200
 
 func init() {
 	serverVersion.Store("0.5.0")
@@ -310,24 +311,13 @@ type MysqlProtocolImpl struct {
 
 	SV *config.FrontendParameters
 
-	m sync.Mutex
-
 	ses *Session
-
-	//skip checking the password of the user
-	skipCheckUser bool
 }
 
 func (mp *MysqlProtocolImpl) GetSession() *Session {
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	return mp.ses
-}
-
-func (mp *MysqlProtocolImpl) SetSkipCheckUser(b bool) {
-	mp.m.Lock()
-	defer mp.m.Unlock()
-	mp.skipCheckUser = b
 }
 
 func (mp *MysqlProtocolImpl) GetCapability() uint32 {
@@ -338,12 +328,6 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
 	mp.sequenceId.Add(uint32(a))
-}
-
-func (mp *MysqlProtocolImpl) GetSkipCheckUser() bool {
-	mp.m.Lock()
-	defer mp.m.Unlock()
-	return mp.skipCheckUser
 }
 
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
@@ -1077,7 +1061,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 	var tenant *TenantInfo
 
 	ses := mp.GetSession()
-	if !mp.GetSkipCheckUser() {
+	if !mp.SV.SkipCheckUser {
 		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 1")
 		psw, err = ses.AuthenticateUser(mp.GetUserName())
 		if err != nil {
@@ -1088,6 +1072,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 		//TO Check password
 		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
 			logInfof(mp.getDebugStringUnsafe(), "check password succeeded")
+			ses.InitGlobalSystemVariables()
 		} else {
 			return moerr.NewInternalError(ctx, "check password failed")
 		}
@@ -2166,8 +2151,8 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt 
 		return nil
 	}
 
-	mp.GetLock().Lock()
-	defer mp.GetLock().Unlock()
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	var err error = nil
 
 	for i := uint64(0); i < cnt; i++ {
@@ -2184,8 +2169,8 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 	}
 
 	cmd := mp.GetSession().GetCmd()
-	mp.GetLock().Lock()
-	defer mp.GetLock().Unlock()
+	mp.m.Lock()
+	defer mp.m.Unlock()
 	var err error = nil
 
 	binary := false
@@ -2435,8 +2420,8 @@ func (mp *MysqlProtocolImpl) appendDate(data []byte, value types.Date) []byte {
 // the server send every row of the result set as an independent packet
 // thread safe
 func (mp *MysqlProtocolImpl) SendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
-	mp.GetLock().Lock()
-	defer mp.GetLock().Unlock()
+	mp.m.Lock()
+	defer mp.m.Unlock()
 
 	return mp.sendResultSetTextRow(mrs, r)
 }
@@ -2591,9 +2576,10 @@ func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
 	return mp.makeEOFPayload(warnings, status)
 }
 
-// tryUpdateSalt tries to update salt with the value read from proxy module.
-func (mp *MysqlProtocolImpl) tryUpdateSalt(rs goetty.IOSession) {
+// receiveExtraInfo tries to receive salt and labels read from proxy module.
+func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 	saltLen := 20
+	// TODO(volgariver6): when proxy is stable, remove this deadline setting.
 	if err := rs.RawConn().SetReadDeadline(time.Now().Add(defaultSaltReadTimeout)); err != nil {
 		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
 		return
@@ -2613,6 +2599,16 @@ func (mp *MysqlProtocolImpl) tryUpdateSalt(rs goetty.IOSession) {
 		logErrorf(mp.GetDebugString(), "failed to get salt: %v", err)
 	} else {
 		mp.SetSalt(data)
+	}
+
+	// Read requested labels from proxy.
+	label := &proxy.RequestLabel{}
+	reader := bufio.NewReader(rs.RawConn())
+	if err = label.Decode(reader); err != nil {
+		logErrorf(mp.GetDebugString(), "failed to get CN labels: %v", err)
+	} else {
+		mp.GetSession().requestLabel = label.Labels
+		logDebugf(mp.GetDebugString(), "got requested CN labels: %v", *label)
 	}
 }
 
