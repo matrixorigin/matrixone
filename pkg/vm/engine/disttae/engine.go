@@ -374,7 +374,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
 	txn.readOnly.Store(true)
-	// TxnWorkSpace SegmentName
+	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
