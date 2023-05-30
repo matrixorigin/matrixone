@@ -322,7 +322,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -810,13 +810,14 @@ func Test_handleShowVariables(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 		bh.init()
+		ses.mrs = &MysqlResultSet{}
 
 		sql := getSystemVariablesWithAccount(0)
 		rows := [][]interface{}{
 			{"syspublications", ""},
 		}
 
-		bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
+		bh.sql2result[sql] = newMrsForSystemVariablesOfAccount(rows)
 		sv = &tree.ShowVariables{Global: true}
 		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
 	})

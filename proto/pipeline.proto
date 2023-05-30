@@ -390,6 +390,7 @@ message SessionInfo {
   string version = 6;
   bytes  time_zone = 7;
   string  account = 8;
+  repeated string query_id = 9;
 }
 
 message Pipeline {

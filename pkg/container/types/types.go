@@ -477,6 +477,27 @@ func (t Type) IsFloat() bool {
 	}
 }
 
+func (t Type) IsDecimal() bool {
+	switch t.Oid {
+	case T_decimal64, T_decimal128, T_decimal256:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t Type) IsTemporal() bool {
+	switch t.Oid {
+	case T_date, T_time, T_datetime, T_timestamp, T_interval:
+		return true
+	}
+	return false
+}
+
+func (t Type) IsNumericOrTemporal() bool {
+	return t.IsIntOrUint() || t.IsFloat() || t.IsDecimal() || t.IsTemporal()
+}
+
 func (t Type) String() string {
 	return t.Oid.String()
 }
