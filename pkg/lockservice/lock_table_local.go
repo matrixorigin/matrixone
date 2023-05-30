@@ -60,7 +60,6 @@ func newLocalLockTable(
 		events:   events,
 	}
 	l.mu.store = newBtreeBasedStorage()
-	l.events.start()
 	return l
 }
 

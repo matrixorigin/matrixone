@@ -176,8 +176,8 @@ type Config struct {
 		// feature was turned off in 0.8 and is not supported for now. The replacement solution is
 		// to return a retry error and let the whole computation re-execute.
 		EnableRefreshExpression bool `toml:"enable-refresh-expression"`
-		// DisableLeakCheck enable txn leak check
-		DisableLeakCheck bool `toml:"enable-leak-check"`
+		// EnableLeakCheck enable txn leak check
+		EnableLeakCheck bool `toml:"enable-leak-check"`
 		// MaxActiveAges a txn max active duration
 		MaxActiveAges toml.Duration `toml:"max-active-ages"`
 	} `toml:"txn"`
