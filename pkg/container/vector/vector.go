@@ -60,7 +60,7 @@ type Vector struct {
 	isBin bool
 }
 
-func (v *Vector) getSorted() bool {
+func (v *Vector) GetSorted() bool {
 	return v.sorted
 }
 
