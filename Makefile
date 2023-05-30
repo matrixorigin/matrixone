@@ -160,6 +160,23 @@ ci-clean:
 	@docker rmi matrixorigin/matrixone:local-ci
 	@docker image prune -f
 
+
+###############################################################################
+# docker compose bvt test
+###############################################################################
+
+COMPOSE_LAUNCH := "launch-tae-multi-CN-tae-DN"
+
+.PHONY: compose
+compose:
+	@cd optools/compose_bvt && ./compose_bvt.sh $(ROOT_DIR) $(COMPOSE_LAUNCH)
+
+.PHONY: compose-clean
+compose-clean:
+	@docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
+	@docker volume rm launch-tae-compose_minio_storage
+	@docker image prune -f
+
 ###############################################################################
 # clean
 ###############################################################################
@@ -183,7 +200,7 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.48.0
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.52.2
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 

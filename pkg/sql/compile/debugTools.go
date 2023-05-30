@@ -60,7 +60,6 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.Deletion:     "delete",
 	vm.Insert:       "insert",
 	vm.PreInsert:    "pre insert",
-	vm.Update:       "update",
 	vm.External:     "external",
 	vm.Minus:        "minus",
 	vm.Intersect:    "intersect",
@@ -82,9 +81,9 @@ var debugMagicNames = map[magicType]string{
 	DropIndex:      "DropIndex",
 	Deletion:       "Deletion",
 	Insert:         "Insert",
-	Update:         "Update",
 	InsertValues:   "InsertValues",
 	MergeDelete:    "MergeDelete",
+	MergeInsert:    "MergeInsert",
 }
 
 var _ = DebugShowScopes
@@ -201,7 +200,7 @@ func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) st
 					}
 				}
 				switch arg.FuncId {
-				case dispatch.ShuffleToAllFunc, dispatch.ShuffleToAllLocalFunc:
+				case dispatch.ShuffleToAllFunc:
 					str += fmt.Sprintf(" shuffle to all of MergeReceiver [%s].", chs)
 				case dispatch.SendToAllFunc, dispatch.SendToAllLocalFunc:
 					str += fmt.Sprintf(" to all of MergeReceiver [%s].", chs)

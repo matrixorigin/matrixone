@@ -123,11 +123,11 @@ type IncrValueStore interface {
 
 // AutoColumn model
 type AutoColumn struct {
-	TableID  uint64 `gorm:"column:table_id;primaryKey"`
-	ColName  string `gorm:"column:col_name;primaryKey"`
-	ColIndex int    `gorm:"column:col_index"`
-	Offset   uint64 `gorm:"column:offset"`
-	Step     uint64 `gorm:"column:step"`
+	TableID  uint64
+	ColName  string
+	ColIndex int
+	Offset   uint64
+	Step     uint64
 }
 
 // GetAutoColumnFromDef get auto columns from table def

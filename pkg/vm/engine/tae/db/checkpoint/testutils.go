@@ -140,7 +140,7 @@ func (r *runner) ForceFlush(ts types.TS, ctx context.Context, forceDuration time
 func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
 	prev := r.MaxCheckpoint()
 	if prev != nil && !prev.IsFinished() {
-		return moerr.NewInternalError(context.Background(), "prev checkpoint not finished")
+		return moerr.NewInternalError(r.ctx, "prev checkpoint not finished")
 	}
 	start := types.TS{}
 	if prev != nil {

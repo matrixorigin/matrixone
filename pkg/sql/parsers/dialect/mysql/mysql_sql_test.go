@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select 3+2",
-		output: "select 3 + 2",
+		input:  "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+		output: "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 	}
 )
 
@@ -78,6 +78,15 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select sum(a) over(partition by a range between interval 1 day preceding and interval 2 day following) from t1",
+		output: "select sum(a) over (partition by a range between interval(1, day) preceding and interval(2, day) following) from t1",
+	}, {
+		input:  "select rank() over(partition by a range between 1 preceding and current row) from t1",
+		output: "select rank() over (partition by a range between 1 preceding and current row) from t1",
+	}, {
+		input:  "select rank() over(partition by a) from t1",
+		output: "select rank() over (partition by a) from t1",
+	}, {
 		input:  "select rank() over(partition by a order by b desc) from t1",
 		output: "select rank() over (partition by a order by b desc) from t1",
 	}, {
@@ -498,7 +507,7 @@ var (
 		output: "create table t1 (a varchar)",
 	}, {
 		input:  "SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));",
-		output: "select (cast(0x7fffffffffffffff as char))",
+		output: "select (cast(0x7fffffffffffffff as varchar))",
 	}, {
 		input:  "select cast(-19999999999999999999 as signed);",
 		output: "select cast(-19999999999999999999 as signed)",
@@ -864,7 +873,7 @@ var (
 			input:  "SELECT t.a,u.a,t.b * u.b FROM sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b",
 			output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b",
 		}, {
-			input: "select avg(u.a), count(u.b), cast(u.c as char) from u",
+			input: "select avg(u.a), count(u.b), cast(u.c as varchar) from u",
 		}, {
 			input: "select avg(u.a), count(*) from u",
 		}, {
@@ -1184,6 +1193,12 @@ var (
 			output: "set global a = 1",
 		}, {
 			input: "set global a = 1",
+		}, {
+			input:  "set persist a = 1",
+			output: "set global a = 1",
+		}, {
+			input:  "alter account config set MYSQL_COMPATIBILITY_MODE a = 1",
+			output: "set global a = 1",
 		}, {
 			input: "set a = 1",
 		}, {
@@ -1815,23 +1830,28 @@ var (
 		},
 		//https://dev.mysql.com/doc/refman/8.0/en/window-functions-usage.html
 		{
-			input: `select avg(a) over () from t1`,
+			input:  `select avg(a) over () from t1`,
+			output: "select avg(a) over () from t1",
 		},
 		{
-			input: `select avg(a) over (partition by col1, col2) from t1`,
+			input:  `select avg(a) over (partition by col1, col2) from t1`,
+			output: "select avg(a) over (partition by col1, col2) from t1",
 		},
 		{
-			input: `select avg(a) over (partition by col1, col2 order by col3 desc) from t1`,
+			input:  `select avg(a) over (partition by col1, col2 order by col3 desc) from t1`,
+			output: "select avg(a) over (partition by col1, col2 order by col3 desc) from t1",
 		},
 		//https://dev.mysql.com/doc/refman/8.0/en/window-functions-frames.html
 		{
-			input: `select count(a) over (partition by col1, col2 order by col3 desc rows 1 preceding) from t1`,
+			input:  `select count(a) over (partition by col1, col2 order by col3 desc rows 1 preceding) from t1`,
+			output: "select count(a) over (partition by col1, col2 order by col3 desc rows 1 preceding) from t1",
 		},
 		{
 			input: `select sum(a) over (partition by col1, col2 order by col3 desc rows between 1 preceding and 20 following) from t1`,
 		},
 		{
-			input: `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
+			input:  `select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1`,
+			output: "select count(a) over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
 		},
 		{
 			input: "alter account if exists abc",
@@ -2093,6 +2113,19 @@ var (
 		{
 			input:  "alter table t1 add constraint foreign key (col4) references dept(deptno)",
 			output: "alter table t1 add foreign key (col4) references dept(deptno)",
+		},
+		{
+			input:  "alter table t1 comment 'abc'",
+			output: "alter table t1 comment = abc",
+		},
+		{
+			input: "alter table t1 rename to t2",
+		},
+		{
+			input: "alter table t1 add column a int, add column b int",
+		},
+		{
+			input: "alter table t1 drop column a, drop column b",
 		},
 		{
 			input: "create publication pub1 database db1",

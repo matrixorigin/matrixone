@@ -19,14 +19,15 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -108,9 +109,11 @@ func InsertIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Databa
 			hasIndex = true
 			break
 		}
-		if _, ok := constraint.(*engine.PrimaryKeyDef); ok {
-			hasIndex = true
-			break
+		if pkdef, ok := constraint.(*engine.PrimaryKeyDef); ok {
+			if pkdef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+				hasIndex = true
+				break
+			}
 		}
 	}
 
@@ -359,7 +362,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	}
 
 	// processing composite primary key
-	vec_prikey, err := multi.SerialWithSomeCols([]*vector.Vector{vec_id, vec_column_name}, proc)
+	vec_prikey, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID, []*vector.Vector{vec_id, vec_column_name}, vec_id.Length())
 	if err != nil {
 		return nil, err
 	}

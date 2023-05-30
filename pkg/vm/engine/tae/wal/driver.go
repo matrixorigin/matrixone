@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/batchstoredriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
-	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
 
@@ -41,14 +40,14 @@ type walDriver struct {
 	wg            sync.WaitGroup
 }
 
-func NewDriverWithLogservice(factory logservicedriver.LogServiceClientFactory) Driver {
+func NewDriverWithLogservice(ctx context.Context, factory logservicedriver.LogServiceClientFactory) Driver {
 	ckpDuration := time.Second * 5
 	impl := store.NewStoreWithLogserviceDriver(factory)
-	driver := NewDriverWithStore(impl, true, ckpDuration)
+	driver := NewDriverWithStore(ctx, impl, true, ckpDuration)
 	return driver
 }
 
-func NewDriverWithBatchStore(dir, name string, cfg *DriverConfig) Driver {
+func NewDriverWithBatchStore(ctx context.Context, dir, name string, cfg *DriverConfig) Driver {
 	var batchStoreCfg *batchstoredriver.StoreCfg
 	ckpDuration := time.Second * 5
 	if cfg != nil {
@@ -56,11 +55,11 @@ func NewDriverWithBatchStore(dir, name string, cfg *DriverConfig) Driver {
 		ckpDuration = cfg.CheckpointDuration
 	}
 	impl := store.NewStoreWithBatchStoreDriver(dir, name, batchStoreCfg)
-	driver := NewDriverWithStore(impl, true, ckpDuration)
+	driver := NewDriverWithStore(ctx, impl, true, ckpDuration)
 	return driver
 }
 
-func NewDriverWithStore(impl store.Store, own bool, ckpDuration time.Duration) Driver {
+func NewDriverWithStore(ctx context.Context, impl store.Store, own bool, ckpDuration time.Duration) Driver {
 	if ckpDuration == 0 {
 		ckpDuration = time.Second
 	}
@@ -70,7 +69,7 @@ func NewDriverWithStore(impl store.Store, own bool, ckpDuration time.Duration) D
 		wg:          sync.WaitGroup{},
 		ckpDuration: ckpDuration,
 	}
-	driver.cancelContext, driver.cancelfn = context.WithCancel(context.Background())
+	driver.cancelContext, driver.cancelfn = context.WithCancel(ctx)
 	driver.wg.Add(1)
 	return driver
 }
@@ -83,8 +82,8 @@ func (driver *walDriver) replayhandle(handle store.ApplyHandle) store.ApplyHandl
 		handle(group, commitId, payload, typ, nil)
 	}
 }
-func (driver *walDriver) Replay(handle store.ApplyHandle, allocator logstoreEntry.Allocator) error {
-	return driver.impl.Replay(driver.replayhandle(handle), allocator)
+func (driver *walDriver) Replay(handle store.ApplyHandle) error {
+	return driver.impl.Replay(driver.replayhandle(handle))
 }
 
 func (driver *walDriver) GetPenddingCnt() uint64 {

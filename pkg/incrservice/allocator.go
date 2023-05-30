@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"go.uber.org/zap"
 )
 
@@ -83,6 +84,7 @@ func (a *allocator) asyncAlloc(
 	case <-ctx.Done():
 		apply(0, 0, ctx.Err())
 	case a.c <- action{
+		accountID:     getAccountID(ctx),
 		actionType:    allocType,
 		tableID:       tableID,
 		col:           col,
@@ -106,6 +108,7 @@ func (a *allocator) updateMinValue(
 	case <-ctx.Done():
 		fn(ctx.Err())
 	case a.c <- action{
+		accountID:   getAccountID(ctx),
 		actionType:  updateType,
 		tableID:     tableID,
 		col:         col,
@@ -134,8 +137,10 @@ func (a *allocator) run(ctx context.Context) {
 }
 
 func (a *allocator) doAllocate(act action) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
+
 	from, to, err := a.store.Alloc(
 		ctx,
 		act.tableID,
@@ -154,7 +159,8 @@ func (a *allocator) doAllocate(act action) {
 }
 
 func (a *allocator) doUpdate(act action) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
 	err := a.store.UpdateMinValue(
@@ -184,6 +190,7 @@ var (
 )
 
 type action struct {
+	accountID     uint32
 	actionType    int
 	tableID       uint64
 	col           string
@@ -191,4 +198,12 @@ type action struct {
 	minValue      uint64
 	applyAllocate func(uint64, uint64, error)
 	applyUpdate   func(error)
+}
+
+func getAccountID(ctx context.Context) uint32 {
+	v := ctx.Value(defines.TenantIDKey{})
+	if v != nil {
+		return v.(uint32)
+	}
+	return 0
 }

@@ -96,6 +96,13 @@ func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	}
 }
 
+// WithTxnCreateBy set txn create by.Used to check leak txn
+func WithTxnCreateBy(createBy string) TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.createBy = createBy
+	}
+}
+
 // WithTxnCacheWrite Set cache write requests, after each Write call, the request will not be sent
 // to the DN node immediately, but stored in the Coordinator's memory, and the Coordinator will
 // choose the right time to send the cached requests. The following scenarios trigger the sending
@@ -142,6 +149,7 @@ type txnOperator struct {
 		enableCacheWrite bool
 		disable1PCOpt    bool
 		coordinator      bool
+		createBy         string
 		lockService      lockservice.LockService
 	}
 
@@ -153,7 +161,8 @@ type txnOperator struct {
 		lockTables   []lock.LockTable
 		callbacks    map[EventType][]func(txn.TxnMeta)
 	}
-	workspace Workspace
+	workspace       Workspace
+	timestampWaiter TimestampWaiter
 }
 
 func newTxnOperator(
@@ -219,6 +228,12 @@ func (tc *txnOperator) Txn() txn.TxnMeta {
 	return tc.getTxnMeta(false)
 }
 
+func (tc *txnOperator) TxnRef() *txn.TxnMeta {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return &tc.mu.txn
+}
+
 func (tc *txnOperator) Snapshot() ([]byte, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -237,12 +252,31 @@ func (tc *txnOperator) Snapshot() ([]byte, error) {
 	return snapshot.Marshal()
 }
 
-func (tc *txnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (tc *txnOperator) UpdateSnapshot(
+	ctx context.Context,
+	ts timestamp.Timestamp) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if err := tc.checkStatus(true); err != nil {
 		return err
 	}
+
+	// ony push model support RC isolation
+	if tc.timestampWaiter == nil {
+		return nil
+	}
+
+	// we need to waiter the latest snapshot ts which is greater than the current snapshot
+	if ts.IsEmpty() {
+		lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
+			ctx,
+			tc.mu.txn.SnapshotTS)
+		if err != nil {
+			return err
+		}
+		ts = lastSnapshotTS
+	}
+
 	if tc.mu.txn.SnapshotTS.Less(ts) {
 		tc.mu.txn.SnapshotTS = ts
 	}
@@ -352,12 +386,12 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 		tc.mu.Unlock()
 	}()
 
-	if len(tc.mu.txn.DNShards) == 0 {
-		return nil
-	}
-
 	if tc.needUnlockLocked() {
 		defer tc.unlock(ctx)
+	}
+
+	if len(tc.mu.txn.DNShards) == 0 {
+		return nil
 	}
 
 	result, err := tc.handleError(tc.doSend(ctx, []txn.TxnRequest{{

@@ -144,7 +144,20 @@ func genTableConstraintTuple(tblId, dbId uint64, tblName, dbName string, constra
 			return nil, err
 		}
 	}
+	return bat, nil
+}
 
+func genTableAlterTuple(constraint [][]byte, m *mpool.MPool) (*batch.Batch, error) {
+	bat := batch.NewWithSize(1)
+	bat.Attrs = append(bat.Attrs, catalog.SystemRelAttr_Constraint)
+	bat.SetZs(1, m)
+	idx := catalog.MO_TABLES_ALTER_TABLE
+	bat.Vecs[idx] = vector.NewVec(catalog.MoTablesTypes[catalog.MO_TABLES_CONSTRAINT_IDX]) // constraint
+	for i := 0; i < len(constraint); i++ {
+		if err := vector.AppendBytes(bat.Vecs[idx], constraint[i], false, m); err != nil {
+			return nil, err
+		}
+	}
 	return bat, nil
 }
 
@@ -800,6 +813,8 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		typ = api.Entry_Delete
 	} else if e.typ == UPDATE {
 		typ = api.Entry_Update
+	} else if e.typ == ALTER {
+		typ = api.Entry_Alter
 	}
 	bat, err := toPBBatch(ebat)
 	if err != nil {
@@ -1008,13 +1023,6 @@ func getTyp(ctx context.Context) string {
 	return ""
 }
 
-func getAccountId(ctx context.Context) uint32 {
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		return v.(uint32)
-	}
-	return 0
-}
-
 func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 	var accountId, userId, roleId uint32
 
@@ -1103,7 +1111,7 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 func genDatabaseKey(ctx context.Context, name string) databaseKey {
 	return databaseKey{
 		name:      name,
-		accountId: getAccountId(ctx),
+		accountId: defines.GetAccountId(ctx),
 	}
 }
 
@@ -1111,7 +1119,7 @@ func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
-		accountId:  getAccountId(ctx),
+		accountId:  defines.GetAccountId(ctx),
 	}
 }
 

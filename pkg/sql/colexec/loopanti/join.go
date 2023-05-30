@@ -29,10 +29,16 @@ func String(_ any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	var err error
+
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
-	return nil
+
+	if ap.Cond != nil {
+		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	}
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -94,11 +100,15 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	anal.Input(bat, isFirst)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = bat.Vecs[pos]
-		bat.Vecs[pos] = nil
+		// rbat.Vecs[i] = bat.Vecs[pos]
+		// bat.Vecs[pos] = nil
+		typ := *bat.Vecs[pos].GetType()
+		rbat.Vecs[i] = vector.NewVec(typ)
+		if err := vector.GetUnionAllFunction(typ, proc.Mp())(rbat.Vecs[i], bat.Vecs[pos]); err != nil {
+			return err
+		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -112,16 +122,26 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		rbat.Vecs[i] = proc.GetVector(*bat.Vecs[pos].GetType())
 	}
 	count := bat.Length()
+	if ctr.joinBat == nil {
+		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
+	}
 	for i := 0; i < count; i++ {
+		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
+			ctr.bat.Length(), ctr.cfs); err != nil {
+			rbat.Clean(proc.Mp())
+			return err
+		}
 		matched := false
-		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
+		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
 		if err != nil {
 			rbat.Clean(proc.Mp())
 			return err
 		}
-		bs := vector.MustFixedCol[bool](vec)
-		for _, b := range bs {
-			if b {
+
+		rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+		for k := uint64(0); k < uint64(vec.Length()); k++ {
+			b, null := rs.GetValue(k)
+			if !null && b {
 				matched = true
 				break
 			}
@@ -136,7 +156,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			rbat.Zs = append(rbat.Zs, bat.Zs[i])
 		}
-		vec.Free(proc.Mp())
 	}
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)

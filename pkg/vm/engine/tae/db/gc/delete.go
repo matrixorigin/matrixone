@@ -55,7 +55,7 @@ func (g *GCWorker) resetObjects() {
 	g.objects = make([]string, 0)
 }
 
-func (g *GCWorker) ExecDelete(names []string) error {
+func (g *GCWorker) ExecDelete(ctx context.Context, names []string) error {
 	g.Lock()
 	g.objects = append(g.objects, names...)
 	if len(g.objects) == 0 {
@@ -65,7 +65,7 @@ func (g *GCWorker) ExecDelete(names []string) error {
 	}
 	g.Unlock()
 
-	err := g.fs.DelFiles(context.Background(), g.objects)
+	err := g.fs.DelFiles(ctx, g.objects)
 	g.Lock()
 	defer g.Unlock()
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {

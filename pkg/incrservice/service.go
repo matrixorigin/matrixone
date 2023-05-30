@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -319,11 +320,14 @@ func (s *service) deleteTableCache(ctx context.Context) {
 				delete(s.mu.tables, tableID)
 			}
 			s.mu.Unlock()
+			ctx2, cancel := context.WithTimeout(ctx, time.Second*10)
 			for i := 0; i < 2; i++ {
-				if err := s.store.Delete(ctx, tableID); err == nil {
+				if err := s.store.Delete(ctx2, tableID); err == nil {
+					cancel()
 					break
 				}
 			}
+			cancel()
 		}
 	}
 }

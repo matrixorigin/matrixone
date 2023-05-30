@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -123,6 +124,8 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
+	opts = append(opts,
+		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)))
 	th.txnOperator, err = th.txnClient.New(
 		txnCtx,
 		th.ses.getLastCommitTS(),

@@ -683,7 +683,8 @@ func TestLockedStream(t *testing.T) {
 }
 
 func TestIssue7678(t *testing.T) {
-	s := &stream{lastReceivedSequence: 10}
+	s := &stream{}
+	s.lastReceivedSequence = 10
 	s.init(0, false)
 	assert.Equal(t, uint32(0), s.lastReceivedSequence)
 }

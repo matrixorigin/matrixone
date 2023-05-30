@@ -28,6 +28,8 @@ func String(_ any, buf *bytes.Buffer) {
 }
 
 func Prepare(proc *process.Process, arg any) error {
+	var err error
+
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ap.ctr.InitReceiver(proc, false)
@@ -36,7 +38,11 @@ func Prepare(proc *process.Process, arg any) error {
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.NewVec(typ)
 	}
-	return nil
+
+	if ap.Cond != nil {
+		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
+	}
+	return err
 }
 
 func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
@@ -100,14 +106,18 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = bat.Vecs[rp.Pos]
-			bat.Vecs[rp.Pos] = nil
+			// rbat.Vecs[i] = bat.Vecs[rp.Pos]
+			// bat.Vecs[rp.Pos] = nil
+			typ := *bat.Vecs[rp.Pos].GetType()
+			rbat.Vecs[i] = vector.NewVec(typ)
+			if err := vector.GetUnionAllFunction(typ, proc.Mp())(rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
+				return err
+			}
 		} else {
 			rbat.Vecs[i] = vector.NewConstNull(*ctr.bat.Vecs[rp.Pos].GetType(), bat.Length(), proc.Mp())
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -125,16 +135,26 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		}
 	}
 	count := bat.Length()
+	if ctr.joinBat == nil {
+		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
+	}
 	for i := 0; i < count; i++ {
 		matched := false
-		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
+		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
+			ctr.bat.Length(), ctr.cfs); err != nil {
+			rbat.Clean(proc.Mp())
+			return err
+		}
+		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
 		if err != nil {
 			rbat.Clean(proc.Mp())
 			return err
 		}
-		bs := vector.MustFixedCol[bool](vec)
-		if len(bs) == 1 {
-			if bs[0] {
+
+		rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+		if vec.IsConst() {
+			b, null := rs.GetValue(0)
+			if !null && b {
 				for j := 0; j < len(ctr.bat.Zs); j++ {
 					matched = true
 					for k, rp := range ap.Result {
@@ -157,8 +177,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 		} else {
-			for j, b := range bs {
-				if b {
+			l := vec.Length()
+			for j := uint64(0); j < uint64(l); j++ {
+				b, null := rs.GetValue(j)
+				if !null && b {
 					matched = true
 					for k, rp := range ap.Result {
 						if rp.Rel == 0 {
@@ -179,7 +201,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 		}
-		vec.Free(proc.Mp())
 		if !matched {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {

@@ -16,7 +16,6 @@ package proxy
 
 import (
 	"context"
-	"net"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -24,11 +23,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/proxy"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 )
 
 const (
 	tenantLabelKey        = "account"
+	superTenant           = "sys"
 	defaultConnectTimeout = 3 * time.Second
+)
+
+var (
+	// noCNServerErr indicates that there are no available CN servers.
+	noCNServerErr = moerr.NewInternalErrorNoCtx("no available CN server")
 )
 
 // Router is an interface to select CN server and connects to it.
@@ -37,7 +44,10 @@ type Router interface {
 	// This is the only method that allocate *CNServer, and other
 	// SelectXXX method in this interface select CNServer from the
 	// ones it allocated.
-	Route(ctx context.Context, client clientInfo) (*CNServer, error)
+	// filter is a function which is used to do more checks whether the
+	// CN server is a proper one. If it returns true, means that CN
+	// server is not a valid one.
+	Route(ctx context.Context, client clientInfo, filter func(string) bool) (*CNServer, error)
 
 	// SelectByConnID selects the CN server which has the connection ID.
 	SelectByConnID(connID uint32) (*CNServer, error)
@@ -72,26 +82,30 @@ type CNServer struct {
 	uuid string
 	// addr is the net address of CN server.
 	addr string
-	// conn for test.
-	conn net.Conn
 }
 
 // Connect connects to backend server and returns IOSession.
 func (s *CNServer) Connect() (goetty.IOSession, error) {
-	if s.conn != nil { // for test.
-		return goetty.NewIOSession(
-			goetty.WithSessionCodec(frontend.NewSqlCodec()),
-			goetty.WithSessionConn(0, s.conn),
-		), nil
-	}
 	c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()))
 	err := c.Connect(s.addr, defaultConnectTimeout)
 	if err != nil {
-		return nil, err
+		return nil, newConnectErr(err)
 	}
 	// When build connection with backend server, proxy send its salt
 	// to make sure the backend server uses the same salt to do authentication.
 	if err := c.Write(s.salt, goetty.WriteOptions{Flush: true}); err != nil {
+		return nil, err
+	}
+
+	// Send labels information.
+	reqLabel := &pb.RequestLabel{
+		Labels: s.reqLabel.allLabels(),
+	}
+	data, err := reqLabel.Encode()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Write(data, goetty.WriteOptions{Flush: true}); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -141,30 +155,48 @@ func (r *router) SelectByTenant(tenant Tenant) ([]*CNServer, error) {
 	return r.rebalancer.connManager.getCNServersByTenant(tenant), nil
 }
 
-// Route implements the Router interface.
-func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
+// selectForSuperTenant is used to select CN servers for sys tenant.
+// For more detail, see disttae.SelectForSuperTenant.
+func (r *router) selectForSuperTenant(c clientInfo, filter func(string) bool) []*CNServer {
 	var cns []*CNServer
-	var cnEmpty, cnNotEmpty bool
-	selector := c.labelInfo.genSelector()
-	if c.labelInfo.isSuperTenant() {
-		selector = clusterservice.NewSelector()
-	}
-	r.moCluster.GetCNService(selector, func(s metadata.CNService) bool {
+	disttae.SelectForSuperTenant(c.labelInfo.genSelector(), c.username, filter,
+		func(s *metadata.CNService) {
+			cns = append(cns, &CNServer{
+				reqLabel: c.labelInfo,
+				cnLabel:  s.Labels,
+				uuid:     s.ServiceID,
+				addr:     s.SQLAddress,
+			})
+		})
+	return cns
+}
+
+// selectForCommonTenant is used to select CN servers for common tenant.
+// For more detail, see disttae.SelectForCommonTenant.
+func (r *router) selectForCommonTenant(c clientInfo, filter func(string) bool) []*CNServer {
+	var cns []*CNServer
+	disttae.SelectForCommonTenant(c.labelInfo.genSelector(), filter, func(s *metadata.CNService) {
 		cns = append(cns, &CNServer{
 			reqLabel: c.labelInfo,
 			cnLabel:  s.Labels,
 			uuid:     s.ServiceID,
 			addr:     s.SQLAddress,
 		})
-		if len(s.Labels) > 0 {
-			cnNotEmpty = true
-		} else {
-			cnEmpty = true
-		}
-		return true
 	})
+	return cns
+}
+
+// Route implements the Router interface.
+func (r *router) Route(ctx context.Context, c clientInfo, filter func(string) bool) (*CNServer, error) {
+	var cns []*CNServer
+	if c.isSuperTenant() {
+		cns = r.selectForSuperTenant(c, filter)
+	} else {
+		cns = r.selectForCommonTenant(c, filter)
+	}
+
 	if len(cns) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("no available CN server.")
+		return nil, noCNServerErr
 	} else if len(cns) == 1 {
 		return cns[0], nil
 	}
@@ -175,7 +207,7 @@ func (r *router) Route(ctx context.Context, c clientInfo) (*CNServer, error) {
 		return nil, err
 	}
 
-	s := r.rebalancer.connManager.selectOne(hash, cns, cnEmpty && cnNotEmpty)
+	s := r.rebalancer.connManager.selectOne(hash, cns)
 	if s == nil {
 		return nil, ErrNoAvailableCNServers
 	}

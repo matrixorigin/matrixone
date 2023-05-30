@@ -75,6 +75,9 @@ type TxnClientWithFeature interface {
 type TxnOperator interface {
 	// Txn returns the current txn metadata
 	Txn() txn.TxnMeta
+	// TxnRef returns pointer of current txn metadata. In RC mode, txn's snapshot ts
+	// will updated before statement executed.
+	TxnRef() *txn.TxnMeta
 	// Snapshot a snapshot of the transaction handle that can be passed around the
 	// network. In some scenarios, operations of a transaction are executed on multiple
 	// CN nodes for performance acceleration. But with only one CN coordinator, Snapshot
@@ -83,8 +86,9 @@ type TxnOperator interface {
 	// after the non-CN coordinator completes the transaction operation.
 	Snapshot() ([]byte, error)
 	// UpdateSnapshot in some scenarios, we need to boost the snapshotTimestamp to eliminate
-	// the w-w conflict
-	UpdateSnapshot(ts timestamp.Timestamp) error
+	// the w-w conflict.
+	// If ts is empty, it will use the latest commit timestamp which is received from DN.
+	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
 	// operation information.
 	ApplySnapshot(data []byte) error
@@ -171,4 +175,10 @@ type TimestampWaiter interface {
 }
 
 type Workspace interface {
+	// IncrStatemenetID incr the execute statemenet id. It mantains the statement id, first statemenet is 1,
+	// second is 2, and so on. If in rc mode, snapshot will updated to latest applied commit ts from dn. And
+	// workspace will update snapshot data for later read request.
+	IncrStatemenetID(ctx context.Context) error
+	// RollbackLastStatement rollback the last statement.
+	RollbackLastStatement(ctx context.Context) error
 }

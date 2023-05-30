@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -181,6 +183,8 @@ type Process struct {
 	LoadLocalReader *io.PipeReader
 
 	DispatchNotifyCh chan WrapCs
+
+	Aicm *defines.AutoIncrCacheManager
 }
 
 type vectorPool struct {
@@ -189,6 +193,7 @@ type vectorPool struct {
 }
 
 type sqlHelper interface {
+	GetCompilerContext() any
 	ExecSql(string) ([]interface{}, error)
 }
 
@@ -208,16 +213,24 @@ func (proc *Process) InitSeq() {
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
-	if proc.LastInsertID != nil && num > 0 {
-		*proc.LastInsertID = num
+	if proc.LastInsertID != nil {
+		atomic.StoreUint64(proc.LastInsertID, num)
 	}
 }
 
 func (proc *Process) GetLastInsertID() uint64 {
 	if proc.LastInsertID != nil {
-		return *proc.LastInsertID
+		num := atomic.LoadUint64(proc.LastInsertID)
+		return num
 	}
 	return 0
+}
+
+func (proc *Process) SetCacheForAutoCol(name string) {
+	aicm := proc.Aicm
+	aicm.Mu.Lock()
+	defer aicm.Mu.Unlock()
+	aicm.AutoIncrCaches[name] = defines.AutoIncrCache{CurNum: 0, MaxNum: aicm.MaxSize, Step: 1}
 }
 
 type analyze struct {

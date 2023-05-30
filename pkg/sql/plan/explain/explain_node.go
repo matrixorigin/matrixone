@@ -18,13 +18,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"strconv"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
+
+const MB = 1024 * 1024
+const GB = MB * 1024
 
 type NodeDescribeImpl struct {
 	Node *plan.Node
@@ -97,8 +101,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Assert"
 	case plan.Node_INSERT:
 		pname = "Insert"
-	case plan.Node_UPDATE:
-		pname = "Update"
 	case plan.Node_DELETE:
 		pname = "Delete"
 	case plan.Node_INTERSECT:
@@ -110,7 +112,17 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 	case plan.Node_MINUS_ALL:
 		pname = "Minus All"
 	case plan.Node_FUNCTION_SCAN:
-		pname = ndesc.Node.TableDef.TblFunc.Name
+		pname = "Table Function"
+	case plan.Node_PRE_INSERT:
+		pname = "PreInsert"
+	case plan.Node_PRE_INSERT_UK:
+		pname = "PreInsert UniqueKey"
+	case plan.Node_PRE_DELETE:
+		pname = "PreDelete"
+	case plan.Node_ON_DUPLICATE_KEY:
+		pname = "On Duplicate Key"
+	case plan.Node_LOCK_OP:
+		pname = "Lock"
 	default:
 		panic("error node type")
 	}
@@ -121,40 +133,39 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			buf.WriteString(" \"*VALUES*\" ")
-		case plan.Node_TABLE_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
+		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
 				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
 			}
-		case plan.Node_UPDATE:
+		case plan.Node_FUNCTION_SCAN:
 			buf.WriteString(" on ")
-			if ndesc.Node.UpdateCtx != nil {
-				first := true
-				for _, ctx := range ndesc.Node.UpdateCtx.Ref {
-					if !first {
-						buf.WriteString(", ")
-					}
-					buf.WriteString(ctx.SchemaName + "." + ctx.ObjName)
-					if first {
-						first = false
-					}
-				}
+			if ndesc.Node.TableDef != nil && ndesc.Node.TableDef.TblFunc != nil {
+				buf.WriteString(ndesc.Node.TableDef.TblFunc.Name)
 			}
 		case plan.Node_DELETE:
 			buf.WriteString(" on ")
 			if ndesc.Node.DeleteCtx != nil {
-				first := true
-				for _, ctx := range ndesc.Node.DeleteCtx.Ref {
-					if !first {
-						buf.WriteString(", ")
-					}
-					buf.WriteString(ctx.SchemaName + "." + ctx.ObjName)
-					if first {
-						first = false
-					}
+				ctx := ndesc.Node.DeleteCtx.Ref
+				buf.WriteString(ctx.SchemaName + "." + ctx.ObjName)
+			}
+		case plan.Node_PRE_INSERT:
+			buf.WriteString(" on ")
+			if ndesc.Node.PreInsertCtx != nil {
+				if ndesc.Node.PreInsertCtx.Ref != nil {
+					buf.WriteString(ndesc.Node.PreInsertCtx.Ref.GetSchemaName() + "." + ndesc.Node.PreInsertCtx.Ref.GetObjName())
+				} else if ndesc.Node.PreInsertCtx.TableDef != nil {
+					buf.WriteString(ndesc.Node.TableDef.GetName())
 				}
+			}
+		case plan.Node_PRE_DELETE:
+			buf.WriteString(" on ")
+			if ndesc.Node.ObjRef != nil {
+				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
+			} else if ndesc.Node.TableDef != nil {
+				buf.WriteString(ndesc.Node.TableDef.GetName())
 			}
 		}
 	}
@@ -261,9 +272,27 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, aggListInfo)
 	}
 
+	// Get Window function info
+	if ndesc.Node.NodeType == plan.Node_WINDOW {
+		windowSpecListInfo, err := ndesc.GetWindowSpectListInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, windowSpecListInfo)
+	}
+
 	// Get Filter list info
 	if len(ndesc.Node.FilterList) > 0 {
 		filterInfo, err := ndesc.GetFilterConditionInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, filterInfo)
+	}
+
+	// Get Block Filter list info
+	if len(ndesc.Node.BlockFilterList) > 0 {
+		filterInfo, err := ndesc.GetBlockFilterConditionInfo(ctx, options)
 		if err != nil {
 			return nil, err
 		}
@@ -351,6 +380,29 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(ctx context.Context, optio
 	return buf.String(), nil
 }
 
+func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Block Filter Cond: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.BlockFilterList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
 func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Group Key: ")
@@ -372,8 +424,13 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 
-	if plan2.NeedShuffle(ndesc.Node) {
-		buf.WriteString(" shuffle: true ")
+	idx := plan2.GetShuffleIndexForGroupBy(ndesc.Node)
+	if idx >= 0 {
+		buf.WriteString(" shuffle: ")
+		err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+		if err != nil {
+			return "", err
+		}
 	}
 	return buf.String(), nil
 }
@@ -386,6 +443,29 @@ func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *
 		for _, v := range ndesc.Node.GetAggList() {
 			if !first {
 				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetWindowSpectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Window Function: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.GetWinSpecList() {
+			if !first {
+				buf.WriteString("\n")
 			}
 			first = false
 			err := describeExpr(ctx, v, options, buf)
@@ -418,13 +498,12 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(ctx context.Context, options *Expl
 	return buf.String(), nil
 }
 
-var _ NodeElemDescribe = &CostDescribeImpl{}
-var _ NodeElemDescribe = &ExprListDescribeImpl{}
-var _ NodeElemDescribe = &OrderByDescribeImpl{}
-var _ NodeElemDescribe = &WinSpecDescribeImpl{}
-var _ NodeElemDescribe = &RowsetDataDescribeImpl{}
-var _ NodeElemDescribe = &UpdateCtxsDescribeImpl{}
-var _ NodeElemDescribe = &AnalyzeInfoDescribeImpl{}
+var _ NodeElemDescribe = (*CostDescribeImpl)(nil)
+var _ NodeElemDescribe = (*ExprListDescribeImpl)(nil)
+var _ NodeElemDescribe = (*OrderByDescribeImpl)(nil)
+var _ NodeElemDescribe = (*WinSpecDescribeImpl)(nil)
+var _ NodeElemDescribe = (*RowsetDataDescribeImpl)(nil)
+var _ NodeElemDescribe = (*AnalyzeInfoDescribeImpl)(nil)
 
 type AnalyzeInfoDescribeImpl struct {
 	AnalyzeInfo *plan.AnalyzeInfo
@@ -441,9 +520,29 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	fmt.Fprintf(buf, " waitTime=%dms", a.AnalyzeInfo.WaitTimeConsumed/1000000)
 	fmt.Fprintf(buf, " inputRows=%d", a.AnalyzeInfo.InputRows)
 	fmt.Fprintf(buf, " outputRows=%d", a.AnalyzeInfo.OutputRows)
-	fmt.Fprintf(buf, " inputSize=%dbytes", a.AnalyzeInfo.InputSize)
-	fmt.Fprintf(buf, " outputSize=%dbytes", a.AnalyzeInfo.OutputSize)
-	fmt.Fprintf(buf, " memorySize=%dbytes", a.AnalyzeInfo.MemorySize)
+	if a.AnalyzeInfo.InputSize < MB {
+		fmt.Fprintf(buf, " InputSize=%dbytes", a.AnalyzeInfo.InputSize)
+	} else if a.AnalyzeInfo.InputSize < 10*GB {
+		fmt.Fprintf(buf, " InputSize=%dmb", a.AnalyzeInfo.InputSize/MB)
+	} else {
+		fmt.Fprintf(buf, " InputSize=%dgb", a.AnalyzeInfo.InputSize/GB)
+	}
+
+	if a.AnalyzeInfo.OutputSize < MB {
+		fmt.Fprintf(buf, " OutputSize=%dbytes", a.AnalyzeInfo.OutputSize)
+	} else if a.AnalyzeInfo.OutputSize < 10*GB {
+		fmt.Fprintf(buf, " OutputSize=%dmb", a.AnalyzeInfo.OutputSize/MB)
+	} else {
+		fmt.Fprintf(buf, " OutputSize=%dgb", a.AnalyzeInfo.OutputSize/GB)
+	}
+
+	if a.AnalyzeInfo.MemorySize < MB {
+		fmt.Fprintf(buf, " MemorySize=%dbytes", a.AnalyzeInfo.MemorySize)
+	} else if a.AnalyzeInfo.MemorySize < 10*GB {
+		fmt.Fprintf(buf, " MemorySize=%dmb", a.AnalyzeInfo.MemorySize/MB)
+	} else {
+		fmt.Fprintf(buf, " MemorySize=%dgb", a.AnalyzeInfo.MemorySize/GB)
+	}
 
 	return nil
 }
@@ -565,28 +664,6 @@ func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *Ex
 		}
 		first = false
 		buf.WriteString("\"*VALUES*\".column" + strconv.Itoa(index+1))
-	}
-	return nil
-}
-
-type UpdateCtxsDescribeImpl struct {
-	UpdateCtx *plan.UpdateCtx
-}
-
-func (u *UpdateCtxsDescribeImpl) GetDescription(ctx context.Context, options *ExplainOptions, buf *bytes.Buffer) error {
-	buf.WriteString("Update Columns: ")
-	first := true
-	for i, ctx := range u.UpdateCtx.Ref {
-		if u.UpdateCtx.UpdateCol[i] != nil {
-			for colName := range u.UpdateCtx.UpdateCol[i].Map {
-				if !first {
-					buf.WriteString(", ")
-				} else {
-					first = false
-				}
-				buf.WriteString(ctx.SchemaName + "." + ctx.ObjName + "." + colName)
-			}
-		}
 	}
 	return nil
 }

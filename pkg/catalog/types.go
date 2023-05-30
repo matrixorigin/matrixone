@@ -42,7 +42,8 @@ const (
 	IndexTablePrimaryColName = "__mo_index_pri_col"
 	ExternalFilePath         = "__mo_filepath"
 	IndexTableNamePrefix     = "__mo_index_unique__"
-	AutoIncrTableName        = "mo_increment_columns"
+	// MOAutoIncrTable mo auto increment table name
+	MOAutoIncrTable = "mo_increment_columns"
 )
 
 func ContainExternalHidenCol(col string) bool {
@@ -53,7 +54,7 @@ func IsHiddenTable(name string) bool {
 	if strings.HasPrefix(name, IndexTableNamePrefix) {
 		return true
 	}
-	return strings.EqualFold(name, AutoIncrTableName)
+	return strings.EqualFold(name, MOAutoIncrTable)
 }
 
 const (
@@ -69,6 +70,9 @@ const (
 const (
 	// Non-hard-coded data dictionary table
 	MO_INDEXES = "mo_indexes"
+
+	// MOTaskDB mo task db name
+	MOTaskDB = "mo_task"
 )
 
 const (
@@ -144,6 +148,7 @@ const (
 	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
 	BlockMeta_Type            = "%!%mo__meta_type"
 	BlockMeta_Deletes_Length  = "%!%mo__meta_deletes_length"
+	BlockMeta_Partition       = "%!%mo__meta_partition"
 	// BlockMetaOffset_Min       = "%!%mo__meta_offset_min"
 	// BlockMetaOffset_Max       = "%!%mo__meta_offset_max"
 	BlockMetaOffset    = "%!%mo__meta_offset"
@@ -182,6 +187,7 @@ const (
 
 // index use to update constraint
 const (
+	MO_TABLES_ALTER_TABLE       = 0
 	MO_TABLES_UPDATE_CONSTRAINT = 4
 )
 
@@ -321,6 +327,11 @@ func (b *BlockInfo) SetDeltaLocation(deltaLoc objectio.Location) {
 	b.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
 }
 
+// XXX info is passed in by value.   The use of unsafe here will cost
+// an allocation and copy.  BlockInfo is not small therefore this is
+// not exactly cheap.   However, caller of this function will keep a
+// reference to the buffer.  See txnTable.rangesOnePart.
+// ranges is *[][]byte.
 func EncodeBlockInfo(info BlockInfo) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
 }
@@ -512,6 +523,7 @@ var (
 		types.New(types.T_TS, 0, 0),                        // committs
 		types.New(types.T_uuid, 0, 0),                      // segment_id
 	}
+
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}
 	// used by memengine or tae

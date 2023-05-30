@@ -16,12 +16,12 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func MakePlan2Decimal64ExprWithType(v types.Decimal64, typ *Type) *plan.Expr {
@@ -262,7 +262,7 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr
 		expr.Typ = targetType
 		return expr, nil
 	}
-	id, _, _, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +277,7 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: id, ObjName: "cast"},
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
 				Args: []*Expr{expr, t},
 			},
 		},
@@ -323,15 +323,19 @@ func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	return types.New(oid, expr.Typ.Width, expr.Typ.Scale)
 }
 
+func makeHiddenColTyp() *Type {
+	return &Type{
+		Id:    int32(types.T_varchar),
+		Width: types.MaxVarcharLen,
+	}
+}
+
 // used for Compound primary key column name && clusterby column name
 func MakeHiddenColDefByName(name string) *ColDef {
 	return &ColDef{
 		Name:   name,
 		Hidden: true,
-		Typ: &Type{
-			Id:    int32(types.T_varchar),
-			Width: types.MaxVarcharLen,
-		},
+		Typ:    makeHiddenColTyp(),
 		Default: &plan.Default{
 			NullAbility:  false,
 			Expr:         nil,
@@ -353,4 +357,14 @@ func MakeRowIdColDef() *ColDef {
 			OriginString: "",
 		},
 	}
+}
+
+func isSameColumnType(t1 *Type, t2 *Type) bool {
+	if t1.Id != t2.Id {
+		return false
+	}
+	if t1.Width == t2.Width && t1.Scale == t2.Scale {
+		return true
+	}
+	return true
 }

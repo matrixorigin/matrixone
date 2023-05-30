@@ -48,7 +48,7 @@ type mockRouter struct {
 	mockRouteFn func(ctx context.Context, ci clientInfo) (*CNServer, error)
 }
 
-func (r *mockRouter) Route(ctx context.Context, ci clientInfo) (*CNServer, error) {
+func (r *mockRouter) Route(ctx context.Context, ci clientInfo, f func(string) bool) (*CNServer, error) {
 	if r.mockRouteFn != nil {
 		return r.mockRouteFn(ctx, ci)
 	}
@@ -140,7 +140,7 @@ func TestPluginRouter_Route(t *testing.T) {
 			p := &mockPlugin{mockRecommendCNFn: tt.mockRecommendCNFn}
 			r := &mockRouter{mockRouteFn: tt.mockRouteFn}
 			pr := newPluginRouter(r, p)
-			cn, err := pr.Route(context.TODO(), clientInfo{})
+			cn, err := pr.Route(context.TODO(), clientInfo{}, nil)
 			if tt.expectErr {
 				require.Error(t, err)
 				require.Nil(t, cn)
@@ -192,7 +192,8 @@ func TestRPCPlugin(t *testing.T) {
 				}),
 			)
 			require.NoError(t, err)
-			s.RegisterRequestHandler(func(ctx context.Context, request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
+			s.RegisterRequestHandler(func(ctx context.Context, msg morpc.RPCMessage, sequence uint64, cs morpc.ClientSession) error {
+				request := msg.Message
 				r, ok := request.(*plugin.Request)
 				require.True(t, ok)
 				return cs.Write(ctx, &plugin.Response{

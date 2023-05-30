@@ -135,8 +135,8 @@ func (mgr *Manager) Stop() {
 	mgr.waitCommitQueue.Stop()
 }
 func (mgr *Manager) Start() {
-	mgr.collectLogtailQueue.Start()
 	mgr.waitCommitQueue.Start()
+	mgr.collectLogtailQueue.Start()
 }
 
 func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
@@ -162,7 +162,7 @@ func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
 	}
 	mgr.table.AddTxn(txn)
 }
-func (mgr *Manager) OnEndPreApplyCommit(txn txnif.AsyncTxn) {
+func (mgr *Manager) OnEndPrepareWAL(txn txnif.AsyncTxn) {
 	txn.GetStore().AddWaitEvent(1)
 	mgr.collectLogtailQueue.Enqueue(txn)
 }

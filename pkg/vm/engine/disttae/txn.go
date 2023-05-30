@@ -35,44 +35,37 @@ import (
 func (txn *Transaction) getBlockInfos(
 	ctx context.Context,
 	tbl *txnTable,
-) (blocks [][]catalog.BlockInfo, err error) {
-	blocks = make([][]catalog.BlockInfo, len(txn.dnStores))
+) (blocks []catalog.BlockInfo, err error) {
 	ts := types.TimestampToTS(txn.meta.SnapshotTS)
-	states, err := tbl.getParts(ctx)
+	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for i := range txn.dnStores {
-		if i >= len(states) {
-			continue
-		}
-		var objectName objectio.ObjectNameShort
-		state := states[i]
-		iter := state.NewBlocksIter(ts)
-		for iter.Next() {
-			entry := iter.Entry()
-			location := entry.MetaLocation()
-			if !objectio.IsSameObjectLocVsShort(location, &objectName) {
-				// Prefetch object meta
-				if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
-					iter.Close()
-					return
-				}
-				objectName = *location.Name().Short()
+	var objectName objectio.ObjectNameShort
+	iter := state.NewBlocksIter(ts)
+	for iter.Next() {
+		entry := iter.Entry()
+		location := entry.MetaLocation()
+		if !objectio.IsSameObjectLocVsShort(location, &objectName) {
+			// Prefetch object meta
+			if err = blockio.PrefetchMeta(txn.proc.FileService, location); err != nil {
+				iter.Close()
+				return
 			}
-			blocks[i] = append(blocks[i], entry.BlockInfo)
+			objectName = *location.Name().Short()
 		}
-		iter.Close()
+		blocks = append(blocks, entry.BlockInfo)
 	}
+	iter.Close()
 	return
 }
 
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
-	return txn.readOnly
+	return txn.readOnly.Load()
 }
 
-// Write used to write data to the transaction buffer
+// WriteBatch used to write data to the transaction buffer
 // insert/delete/update all use this api
 // insertBatchHasRowId : it denotes the batch has Rowid when the typ is INSERT.
 // if typ is not INSERT, it is always false.
@@ -89,8 +82,10 @@ func (txn *Transaction) WriteBatch(
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
 	insertBatchHasRowId bool,
 	truncate bool) error {
-	txn.readOnly = false
+	txn.readOnly.Store(false)
 	bat.Cnt = 1
+	txn.Lock()
+	defer txn.Unlock()
 	if typ == INSERT {
 		if !insertBatchHasRowId {
 			txn.genBlock()
@@ -111,7 +106,6 @@ func (txn *Transaction) WriteBatch(
 		}
 		txn.workspaceSize += uint64(bat.Size())
 	}
-	txn.Lock()
 	txn.writes = append(txn.writes, Entry{
 		typ:          typ,
 		bat:          bat,
@@ -122,18 +116,17 @@ func (txn *Transaction) WriteBatch(
 		dnStore:      dnStore,
 		truncate:     truncate,
 	})
-	txn.Unlock()
 	return nil
 }
 
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var size uint64
-
+	txn.Lock()
+	defer txn.Unlock()
 	if !(offset > 0 || txn.workspaceSize >= colexec.WriteS3Threshold ||
 		(force && txn.workspaceSize >= colexec.TagS3Size)) {
 		return nil
 	}
-	txn.Lock()
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].bat == nil {
 			continue
@@ -143,7 +136,6 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 	}
 	if offset > 0 && size < txn.workspaceSize {
-		txn.Unlock()
 		return nil
 	}
 	mp := make(map[[2]string][]*batch.Batch)
@@ -167,13 +159,13 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			txn.writes[i].bat = nil
 		}
 	}
-	txn.Unlock()
+
 	for key := range mp {
 		s3Writer, tbl, err := txn.getS3Writer(key)
 		if err != nil {
 			return err
 		}
-		s3Writer.InitBuffers(mp[key][0])
+		s3Writer.InitBuffers(txn.proc, mp[key][0])
 		for i := 0; i < len(mp[key]); i++ {
 			s3Writer.Put(mp[key][i], txn.proc)
 		}
@@ -199,8 +191,50 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 	}
 	txn.workspaceSize -= size
+
 	return nil
 }
+
+// func (txn *Transaction) dumpWrites(offset int) (size uint64, mp map[[2]string][]*batch.Batch) {
+// 	txn.Lock()
+// 	defer txn.Unlock()
+
+// 	for i := offset; i < len(txn.writes); i++ {
+// 		if txn.writes[i].bat == nil {
+// 			continue
+// 		}
+// 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+// 			size += uint64(txn.writes[i].bat.Size())
+// 		}
+// 	}
+// 	if offset > 0 && size < txn.workspaceSize {
+// 		return 0, nil
+// 	}
+
+// 	mp = make(map[[2]string][]*batch.Batch)
+// 	for i := offset; i < len(txn.writes); i++ {
+// 		// TODO: after shrink, we should update workspace size
+// 		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
+// 			continue
+// 		}
+// 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+// 			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
+// 			bat := txn.writes[i].bat
+// 			// skip rowid
+// 			bat.Attrs = bat.Attrs[1:]
+// 			bat.Vecs = bat.Vecs[1:]
+// 			mp[key] = append(mp[key], bat)
+// 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
+// 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
+// 			// maybe this will cause that the log imcrements unlimitly
+// 			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
+// 			// i--
+// 			txn.writes[i].bat = nil
+// 		}
+// 	}
+
+// 	return
+// }
 
 func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Relation, error) {
 	sortIdx, attrs, tbl, err := txn.getSortIdx(key)
@@ -209,7 +243,7 @@ func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Re
 	}
 	s3Writer := &colexec.S3Writer{}
 	s3Writer.SetSortIdx(-1)
-	s3Writer.Init()
+	s3Writer.Init(txn.proc)
 	s3Writer.SetMp(attrs)
 	if sortIdx != -1 {
 		s3Writer.SetSortIdx(sortIdx)
@@ -267,7 +301,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	} else if typ == INSERT {
 		txn.updatePosForCNBlock(bat.GetVector(0), idx)
 	}
-	txn.readOnly = false
+	txn.readOnly.Store(false)
 	txn.writes = append(txn.writes, Entry{
 		typ:          typ,
 		tableId:      tableId,
@@ -278,7 +312,7 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 		bat:          bat,
 		dnStore:      dnStore,
 	})
-
+	//the first part of the file name is the segment id which generated by cn through writing S3.
 	if uid, err := types.ParseUuid(strings.Split(fileName, "_")[0]); err != nil {
 		panic("fileName parse Uuid error")
 	} else {
@@ -300,8 +334,8 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	cnRowIdOffsets := make([]int64, 0, len(rowids))
 	for i, rowid := range rowids {
 		// process cn block deletes
-		uid := rowid.GetSegid()
-		blkid := *rowid.GetBlockid()
+		uid := rowid.BorrowSegmentID()
+		blkid := rowid.CloneBlockID()
 		deleteBlkId[blkid] = true
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
@@ -325,7 +359,29 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()
+	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
+	sels = sels[:0]
+	for k, rowid := range rowids {
+		if mp[rowid] == 0 {
+			sels = append(sels, int64(k))
+		}
+	}
+	bat.Shrink(sels)
+	txn.proc.Mp().PutSels(sels)
+	return bat
+}
+
+func (txn *Transaction) deleteTableWrites(
+	databaseId uint64,
+	tableId uint64,
+	sels []int64,
+	deleteBlkId map[types.Blockid]bool,
+	min, max uint32,
+	mp map[types.Rowid]uint8,
+) {
 	txn.Lock()
+	defer txn.Unlock()
+
 	// txn worksapce will have four batch type:
 	// 1.RawBatch 2.DN Block RowId(mixed rowid from different block)
 	// 3.CN block Meta batch(record block meta generated by cn insert write s3)
@@ -346,16 +402,16 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 				continue
 			}
 			// skip 2 above
-			if !vs[0].GetSegid().Eq(txn.segId) {
+			if !vs[0].BorrowSegmentID().Eq(txn.segId) {
 				continue
 			}
 			// current batch is not be deleted
-			if !deleteBlkId[*vs[0].GetBlockid()] {
+			if !deleteBlkId[vs[0].CloneBlockID()] {
 				continue
 			}
 			min2 := vs[0].GetRowOffset()
 			max2 := vs[len(vs)-1].GetRowOffset()
-			if min1 > max2 || max1 < min2 {
+			if min > max2 || max < min2 {
 				continue
 			}
 			for k, v := range vs {
@@ -366,24 +422,11 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 				}
 			}
 			if len(sels) != len(vs) {
-				e.bat.Shrink(sels)
-				rowIds := vector.MustFixedCol[types.Rowid](e.bat.GetVector(0))
-				for i := range rowIds {
-					(&rowIds[i]).SetRowOffset(uint32(i))
-				}
+				txn.batchSelectList[e.bat] = append(txn.batchSelectList[e.bat], sels...)
+
 			}
 		}
 	}
-	txn.Unlock()
-	sels = sels[:0]
-	for k, rowid := range rowids {
-		if mp[rowid] == 0 {
-			sels = append(sels, int64(k))
-		}
-	}
-	bat.Shrink(sels)
-	txn.proc.Mp().PutSels(sels)
-	return bat
 }
 
 func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
@@ -399,7 +442,7 @@ func (txn *Transaction) genBlock() {
 
 func (txn *Transaction) getCurrentBlockId() *types.Blockid {
 	rowId := types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
-	return rowId.GetBlockid()
+	return rowId.BorrowBlockID()
 }
 
 func (txn *Transaction) genRowId() types.Rowid {
@@ -411,6 +454,17 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
+func (txn *Transaction) mergeTxnWorkspace() {
+	txn.Lock()
+	defer txn.Unlock()
+	for _, e := range txn.writes {
+		if sels, ok := txn.batchSelectList[e.bat]; ok {
+			e.bat.Shrink(sels)
+			delete(txn.batchSelectList, e.bat)
+		}
+	}
+}
+
 func evalFilterExprWithZonemap(
 	ctx context.Context,
 	meta objectio.ColumnMetaFetcher,
@@ -420,21 +474,7 @@ func evalFilterExprWithZonemap(
 	columnMap map[int]int,
 	proc *process.Process,
 ) (selected bool) {
-	if expr == nil {
-		selected = true
-		return
-	}
-	if len(columnMap) == 0 {
-		selected = evalNoColumnFilterExpr(ctx, expr, proc)
-		return
-	}
-	zm := colexec.EvalFilterByZonemap(ctx, meta, expr, zms, vecs, columnMap, proc)
-	if !zm.IsInited() || zm.GetType() != types.T_bool {
-		selected = true
-	} else {
-		selected = types.DecodeBool(zm.GetMaxBuf())
-	}
-	return
+	return colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
 }
 
 /* used by multi-dn
@@ -490,3 +530,18 @@ func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.Table
 	return []int{int(idx)}
 }
 */
+
+func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
+	txn.Lock()
+	defer txn.Unlock()
+	for _, entry := range txn.writes {
+		if entry.databaseId != databaseId {
+			continue
+		}
+		if entry.tableId != tableId {
+			continue
+		}
+		writes = append(writes, entry)
+	}
+	return writes
+}

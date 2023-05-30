@@ -24,7 +24,6 @@ import (
 	"math"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -32,6 +31,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -41,8 +41,8 @@ type RoutineManager struct {
 	ctx            context.Context
 	clients        map[goetty.IOSession]*Routine
 	pu             *config.ParameterUnit
-	skipCheckUser  atomic.Bool
 	tlsConfig      *tls.Config
+	aicm           *defines.AutoIncrCacheManager
 	accountRoutine *AccountRoutineManager
 }
 
@@ -129,12 +129,8 @@ func (ar *AccountRoutineManager) deepCopyRoutineMap() map[int64]map[*Routine]uin
 	return tempRoutineMap
 }
 
-func (rm *RoutineManager) SetSkipCheckUser(b bool) {
-	rm.skipCheckUser.Store(b)
-}
-
-func (rm *RoutineManager) GetSkipCheckUser() bool {
-	return rm.skipCheckUser.Load()
+func (rm *RoutineManager) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
+	return rm.aicm
 }
 
 func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
@@ -155,6 +151,18 @@ func (rm *RoutineManager) getRoutine(rs goetty.IOSession) *Routine {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return rm.clients[rs]
+}
+
+func (rm *RoutineManager) deleteRoutine(rs goetty.IOSession) *Routine {
+	var rt *Routine
+	var ok bool
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rt, ok = rm.clients[rs]
+	if ok {
+		delete(rm.clients, rs)
+	}
+	return rt
 }
 
 func (rm *RoutineManager) getTlsConfig() *tls.Config {
@@ -185,7 +193,6 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		return
 	}
 	pro := NewMysqlClientProtocol(connID, rs, int(pu.SV.MaxBytesInOutbufToFlush), pu.SV)
-	pro.SetSkipCheckUser(rm.GetSkipCheckUser())
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
 	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
@@ -195,11 +202,10 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true)
+	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm)
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetConnectContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
-	ses.setSkipCheckPrivilege(rm.GetSkipCheckUser())
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
 
@@ -208,12 +214,9 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	logDebugf(pro.GetDebugString(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
-	// With proxy module enabled, we try to update salt value from proxy.
-	// The MySQL protocol is broken a little: when connection is built, read
-	// the salt from proxy and update the salt, then go on with the handshake
-	// phase.
+	// With proxy module enabled, we try to update salt value and label info from proxy.
 	if rm.pu.SV.ProxyEnabled {
-		pro.tryUpdateSalt(rs)
+		pro.receiveExtraInfo(rs)
 	}
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
@@ -236,15 +239,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	defer func() {
 		logutil.Debugf("resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 	}()
-	var rt *Routine
-	var ok bool
-
-	rm.mu.Lock()
-	rt, ok = rm.clients[rs]
-	if ok {
-		delete(rm.clients, rs)
-	}
-	rm.mu.Unlock()
+	rt := rm.deleteRoutine(rs)
 
 	if rt != nil {
 		ses := rt.getSession()
@@ -264,21 +259,26 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 }
 
-/*
-kill a connection or query.
-if killConnection is true, the query will be canceled first, then the network will be closed.
-if killConnection is false, only the query will be canceled. the connection keeps intact.
-*/
-func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
+func (rm *RoutineManager) getRoutineById(id uint64) *Routine {
 	var rt *Routine = nil
 	rm.mu.RLock()
+	defer rm.mu.RUnlock()
 	for _, value := range rm.clients {
 		if uint64(value.getConnectionID()) == id {
 			rt = value
 			break
 		}
 	}
-	rm.mu.RUnlock()
+	return rt
+}
+
+/*
+kill a connection or query.
+if killConnection is true, the query will be canceled first, then the network will be closed.
+if killConnection is false, only the query will be canceled. the connection keeps intact.
+*/
+func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
+	rt := rm.getRoutineById(id)
 
 	killMyself := idThatKill == id
 	if rt != nil {
@@ -436,19 +436,20 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 func (rm *RoutineManager) clientCount() int {
 	var count int
 	rm.mu.RLock()
+	defer rm.mu.RUnlock()
 	count = len(rm.clients)
-	rm.mu.RUnlock()
 	return count
 }
 
-func (rm *RoutineManager) printDebug() {
-	type info struct {
-		id    uint32
-		peer  string
-		count []uint64
-	}
-	infos := list.New()
+type info struct {
+	id    uint32
+	peer  string
+	count []uint64
+}
+
+func (rm *RoutineManager) collectClientInfo(infos *list.List) {
 	rm.mu.RLock()
+	defer rm.mu.RUnlock()
 	for _, routine := range rm.clients {
 		proto := routine.getProtocol()
 		infos.PushBack(&info{
@@ -457,7 +458,11 @@ func (rm *RoutineManager) printDebug() {
 			proto.resetDebugCount(),
 		})
 	}
-	rm.mu.RUnlock()
+}
+
+func (rm *RoutineManager) printDebug() {
+	infos := list.New()
+	rm.collectClientInfo(infos)
 
 	bb := bytes.Buffer{}
 	bb.WriteString("Clients:")
@@ -474,6 +479,17 @@ func (rm *RoutineManager) printDebug() {
 		bb.WriteByte('\n')
 	}
 	logutil.Info(bb.String())
+}
+
+func (rm *RoutineManager) cleanKillQueue() {
+	ar := rm.accountRoutine
+	ar.killQueueMu.Lock()
+	defer ar.killQueueMu.Unlock()
+	for toKillAccount, killRecord := range ar.killIdQueue {
+		if time.Since(killRecord.killTime) > time.Duration(rm.pu.SV.CleanKillQueueInterval)*time.Minute {
+			delete(ar.killIdQueue, toKillAccount)
+		}
+	}
 }
 
 func (rm *RoutineManager) KillRoutineConnections() {
@@ -493,16 +509,10 @@ func (rm *RoutineManager) KillRoutineConnections() {
 		}
 	}
 
-	ar.killQueueMu.Lock()
-	for toKillAccount, killRecord := range ar.killIdQueue {
-		if time.Since(killRecord.killTime) > time.Duration(rm.pu.SV.CleanKillQueueInterval)*time.Minute {
-			delete(ar.killIdQueue, toKillAccount)
-		}
-	}
-	ar.killQueueMu.Unlock()
+	rm.cleanKillQueue()
 }
 
-func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineManager, error) {
+func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) (*RoutineManager, error) {
 	accountRoutine := &AccountRoutineManager{
 		killQueueMu:       sync.RWMutex{},
 		accountId2Routine: make(map[int64]map[*Routine]uint64),
@@ -517,6 +527,7 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineM
 		accountRoutine: accountRoutine,
 	}
 
+	rm.aicm = aicm
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)
 		if err != nil {
@@ -560,20 +571,33 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 		return moerr.NewInternalError(rm.ctx, "init TLS config error : cert file or key file is empty")
 	}
 
-	var tlsCert tls.Certificate
-	var err error
-	tlsCert, err = tls.LoadX509KeyPair(SV.TlsCertFile, SV.TlsKeyFile)
+	cfg, err := ConstructTLSConfig(rm.ctx, SV.TlsCaFile, SV.TlsCertFile, SV.TlsKeyFile)
 	if err != nil {
-		return moerr.NewInternalError(rm.ctx, "init TLS config error :load x509 failed")
+		return moerr.NewInternalError(rm.ctx, "init TLS config error: %v", err)
+	}
+
+	rm.tlsConfig = cfg
+	logutil.Info("init TLS config finished")
+	return nil
+}
+
+// ConstructTLSConfig creates the TLS config.
+func ConstructTLSConfig(ctx context.Context, caFile, certFile, keyFile string) (*tls.Config, error) {
+	var err error
+	var tlsCert tls.Certificate
+
+	tlsCert, err = tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, moerr.NewInternalError(ctx, "construct TLS config error: load x509 failed")
 	}
 
 	clientAuthPolicy := tls.NoClientCert
 	var certPool *x509.CertPool
-	if len(SV.TlsCaFile) > 0 {
+	if len(caFile) > 0 {
 		var caCert []byte
-		caCert, err = os.ReadFile(SV.TlsCaFile)
+		caCert, err = os.ReadFile(caFile)
 		if err != nil {
-			return moerr.NewInternalError(rm.ctx, "init TLS config error :read TlsCaFile failed")
+			return nil, moerr.NewInternalError(ctx, "construct TLS config error: read TLS ca failed")
 		}
 		certPool = x509.NewCertPool()
 		if certPool.AppendCertsFromPEM(caCert) {
@@ -581,29 +605,9 @@ func initTlsConfig(rm *RoutineManager, SV *config.FrontendParameters) error {
 		}
 	}
 
-	// This excludes ciphers listed in tls.InsecureCipherSuites() and can be used to filter out more
-	// var cipherSuites []uint16
-	// var cipherNames []string
-	// for _, sc := range tls.CipherSuites() {
-	// cipherSuites = append(cipherSuites, sc.ID)
-	// switch sc.ID {
-	// case tls.TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA, tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
-	// 	tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305, tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305:
-	// logutil.Info("Disabling weak cipherSuite", zap.String("cipherSuite", sc.Name))
-	// default:
-	// cipherNames = append(cipherNames, sc.Name)
-	// cipherSuites = append(cipherSuites, sc.ID)
-	// }
-	// }
-	// logutil.Info("Enabled ciphersuites", zap.Strings("cipherNames", cipherNames))
-
-	rm.tlsConfig = &tls.Config{
+	return &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		ClientCAs:    certPool,
 		ClientAuth:   clientAuthPolicy,
-		// MinVersion:   tls.VersionTLS13,
-		// CipherSuites: cipherSuites,
-	}
-	logutil.Info("init TLS config finished")
-	return nil
+	}, nil
 }

@@ -216,13 +216,16 @@ func NewLogtailServer(
 
 // onMessage is the handler for morpc client session.
 func (s *LogtailServer) onMessage(
-	ctx context.Context, request morpc.Message, seq uint64, cs morpc.ClientSession,
+	ctx context.Context,
+	value morpc.RPCMessage,
+	seq uint64,
+	cs morpc.ClientSession,
 ) error {
 	ctx, span := trace.Debug(ctx, "LogtailServer.onMessage")
 	defer span.End()
 
 	logger := s.logger
-
+	request := value.Message
 	msg, ok := request.(*LogtailRequest)
 	if !ok {
 		logger.Fatal("receive invalid message", zap.Any("message", request))

@@ -24,6 +24,19 @@ type Anyvalue[T any] struct {
 	NotSet []bool
 }
 
+var AnyValueSupported = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_date, types.T_datetime,
+	types.T_timestamp, types.T_time,
+	types.T_decimal64, types.T_decimal128,
+	types.T_bool,
+	types.T_varchar, types.T_char, types.T_blob, types.T_text,
+	types.T_uuid,
+	types.T_binary, types.T_varbinary,
+}
+
 func AnyValueReturnType(typs []types.Type) types.Type {
 	return typs[0]
 }
@@ -42,27 +55,27 @@ func (a *Anyvalue[T]) Grows(size int) {
 	}
 }
 
-func (a *Anyvalue[T]) Eval(vs []T) []T {
-	return vs
+func (a *Anyvalue[T]) Eval(vs []T, err error) ([]T, error) {
+	return vs, nil
 }
 
-func (a *Anyvalue[T]) Fill(i int64, value T, ov T, z int64, isEmpty bool, isNull bool) (T, bool) {
+func (a *Anyvalue[T]) Fill(i int64, value T, ov T, z int64, isEmpty bool, isNull bool) (T, bool, error) {
 	if !isNull && !a.NotSet[i] {
 		a.NotSet[i] = true
-		return value, false
+		return value, false, nil
 	}
-	return ov, isEmpty
+	return ov, isEmpty, nil
 }
 
-func (a *Anyvalue[T]) Merge(xIndex int64, yIndex int64, x T, y T, xEmpty bool, yEmpty bool, yAnyValue any) (T, bool) {
+func (a *Anyvalue[T]) Merge(xIndex int64, yIndex int64, x T, y T, xEmpty bool, yEmpty bool, yAnyValue any) (T, bool, error) {
 	if !yEmpty {
 		ya := yAnyValue.(*Anyvalue[T])
 		if ya.NotSet[yIndex] && !a.NotSet[xIndex] {
 			a.NotSet[xIndex] = true
-			return y, false
+			return y, false, nil
 		}
 	}
-	return x, xEmpty
+	return x, xEmpty, nil
 }
 
 func (a *Anyvalue[T]) MarshalBinary() ([]byte, error) {
@@ -91,29 +104,29 @@ func (a *StrAnyvalue) Grows(size int) {
 	}
 }
 
-func (a *StrAnyvalue) Eval(vs [][]byte) [][]byte {
-	return vs
+func (a *StrAnyvalue) Eval(vs [][]byte, err error) ([][]byte, error) {
+	return vs, nil
 }
 
-func (a *StrAnyvalue) Fill(i int64, value []byte, ov []byte, z int64, isEmpty bool, isNull bool) ([]byte, bool) {
+func (a *StrAnyvalue) Fill(i int64, value []byte, ov []byte, z int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
 	if !isNull && !a.NotSet[i] {
 		a.NotSet[i] = true
 		v := make([]byte, 0, len(value))
 		v = append(v, value...)
-		return v, false
+		return v, false, nil
 	}
-	return ov, isEmpty
+	return ov, isEmpty, nil
 }
 
-func (a *StrAnyvalue) Merge(xIndex int64, yIndex int64, x []byte, y []byte, xEmpty bool, yEmpty bool, yAnyValue any) ([]byte, bool) {
+func (a *StrAnyvalue) Merge(xIndex int64, yIndex int64, x []byte, y []byte, xEmpty bool, yEmpty bool, yAnyValue any) ([]byte, bool, error) {
 	if !yEmpty {
 		ya := yAnyValue.(*StrAnyvalue)
 		if ya.NotSet[yIndex] && !a.NotSet[xIndex] {
 			a.NotSet[xIndex] = true
-			return y, false
+			return y, false, nil
 		}
 	}
-	return x, xEmpty
+	return x, xEmpty, nil
 }
 
 func (a *StrAnyvalue) MarshalBinary() ([]byte, error) {

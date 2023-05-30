@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/ctlservice"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
@@ -46,9 +47,8 @@ import (
 var (
 	defaultListenAddress    = "127.0.0.1:6002"
 	defaultCtlListenAddress = "127.0.0.1:19958"
-	// TODO(fagongzi): make rc and pessimistic as default
-	defaultTxnIsolation = txn.TxnIsolation_SI
-	defaultTxnMode      = txn.TxnMode_Optimistic
+	defaultTxnIsolation     = txn.TxnIsolation_SI
+	defaultTxnMode          = txn.TxnMode_Optimistic
 )
 
 type Service interface {
@@ -146,9 +146,6 @@ type Config struct {
 	// RPC rpc config used to build txn sender
 	RPC rpc.Config `toml:"rpc"`
 
-	// Push Model configuration
-	TurnOnPushModel bool `toml:"turn-on-push-model"`
-
 	// Cluster configuration
 	Cluster struct {
 		// RefreshInterval refresh cluster info from hakeeper interval
@@ -179,6 +176,10 @@ type Config struct {
 		// feature was turned off in 0.8 and is not supported for now. The replacement solution is
 		// to return a retry error and let the whole computation re-execute.
 		EnableRefreshExpression bool `toml:"enable-refresh-expression"`
+		// DisableLeakCheck enable txn leak check
+		DisableLeakCheck bool `toml:"enable-leak-check"`
+		// MaxActiveAges a txn max active duration
+		MaxActiveAges toml.Duration `toml:"max-active-ages"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
@@ -258,6 +259,9 @@ func (c *Config) Validate() error {
 	if !txn.ValidTxnMode(c.Txn.Mode) {
 		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
 	}
+	if c.Txn.MaxActiveAges.Duration == 0 {
+		c.Txn.MaxActiveAges.Duration = time.Minute * 2
+	}
 	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
@@ -284,6 +288,7 @@ type service struct {
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
 		cli client.TxnClient,
+		aicm *defines.AutoIncrCacheManager,
 		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
@@ -304,6 +309,7 @@ type service struct {
 	ctlservice             ctlservice.CtlService
 
 	stopper *stopper.Stopper
+	aicm    *defines.AutoIncrCacheManager
 
 	task struct {
 		sync.RWMutex

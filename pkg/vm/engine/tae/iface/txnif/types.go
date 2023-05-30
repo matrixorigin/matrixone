@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 var (
@@ -42,6 +41,7 @@ type Txn2PC interface {
 	PrePrepare() error
 	PrepareCommit() error
 	PreApplyCommit() error
+	PrepareWAL() error
 	ApplyCommit() error
 }
 
@@ -50,7 +50,7 @@ type TxnReader interface {
 	RUnlock()
 	IsReplay() bool
 	Is2PC() bool
-	GetPKDedupSkip() PKDedupSkipScope
+	GetDedupType() DedupType
 	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
@@ -59,6 +59,7 @@ type TxnReader interface {
 	GetPrepareTS() types.TS
 	GetParticipants() []uint64
 	GetSnapshotTS() types.TS
+	SetSnapshotTS(types.TS)
 	HasSnapshotLag() bool
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState
@@ -107,7 +108,7 @@ type TxnChanger interface {
 	Commit() error
 	Rollback() error
 	SetCommitTS(cts types.TS) error
-	SetPKDedupSkip(skip PKDedupSkipScope)
+	SetDedupType(skip DedupType)
 	SetParticipants(ids []uint64) error
 	SetError(error)
 
@@ -161,7 +162,7 @@ type DeleteChain interface {
 
 	PrepareRangeDelete(start, end uint32, ts types.TS) error
 	DepthLocked() int
-	CollectDeletesLocked(txn TxnReader, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
+	CollectDeletesLocked(txn TxnReader, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
 type BaseNode[T any] interface {
 	Update(o T)
@@ -197,11 +198,9 @@ type BaseMVCCNode interface {
 	GetStart() types.TS
 	GetPrepare() types.TS
 	GetTxn() TxnReader
-	SetLogIndex(idx *wal.Index)
-	GetLogIndex() *wal.Index
 
-	ApplyCommit(index *wal.Index) (err error)
-	ApplyRollback(index *wal.Index) (err error)
+	ApplyCommit() (err error)
+	ApplyRollback() (err error)
 	PrepareCommit() (err error)
 	PrepareRollback() (err error)
 
@@ -238,9 +237,8 @@ type TxnStore interface {
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
-	Append(dbId, id uint64, data *containers.Batch) error
-	AddBlksWithMetaLoc(dbId, id uint64,
-		zm []objectio.ZoneMap, metaLocs []objectio.Location) error
+	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error
+	AddBlksWithMetaLoc(dbId, id uint64, metaLocs []objectio.Location) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error
 	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
@@ -304,8 +302,8 @@ type TxnEntryType int16
 type TxnEntry interface {
 	PrepareCommit() error
 	PrepareRollback() error
-	ApplyCommit(index *wal.Index) error
-	ApplyRollback(index *wal.Index) error
+	ApplyCommit() error
+	ApplyRollback() error
 	MakeCommand(uint32) (TxnCmd, error)
 	Is1PC() bool
 	Set1PC()

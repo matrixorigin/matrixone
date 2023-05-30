@@ -19,11 +19,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"os"
-	"strconv"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"golang.org/x/sync/errgroup"
+	"io"
+	"os"
+	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -379,6 +378,7 @@ func preCopyBat(obj interface{}, bat *batch.Batch) *batch.Batch {
 	for k := 0; k < bat.Vecs[0].Length(); k++ {
 		bat2.Zs[k] = 1
 	}
+	bat2.Cnt = 1
 	return bat2
 }
 

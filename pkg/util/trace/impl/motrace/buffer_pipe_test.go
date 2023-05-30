@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/google/gops/agent"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zapcore"
 )
@@ -644,9 +645,8 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						Statement:            "show tables",
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
-						ExecPlan:             nil,
+						ExecPlan:             NewDummySerializableExecPlan(nil, dummySerializeExecPlan, uuid.UUID(_1TraceID)),
 						Duration:             time.Second - time.Nanosecond,
-						SerializeExecPlan:    dummySerializeExecPlan,
 						ResultCount:          2,
 						RequestAt:            table.ZeroTime,
 						ResponseAt:           table.ZeroTime,
@@ -666,8 +666,7 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						Duration:             time.Second,
 						Status:               StatementStatusFailed,
 						Error:                moerr.NewInternalError(DefaultContext(), "test error"),
-						ExecPlan:             map[string]string{"key": "val"},
-						SerializeExecPlan:    dummySerializeExecPlan,
+						ExecPlan:             NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 						SqlSourceType:        "internal",
 						ResultCount:          3,
 					},

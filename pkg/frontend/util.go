@@ -291,11 +291,15 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 		bat.Zs = []int64{1}
 		// Here the evalExpr may execute some function that needs engine.Engine.
 		ses.txnCompileCtx.GetProcess().Ctx = context.WithValue(ses.txnCompileCtx.GetProcess().Ctx, defines.EngineKey{}, ses.storage)
-		vec, err := colexec.EvalExpr(bat, ses.txnCompileCtx.GetProcess(), planExpr)
+
+		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{bat})
 		if err != nil {
 			return nil, err
 		}
-		return getValueFromVector(vec, ses, planExpr)
+
+		value, err := getValueFromVector(vec, ses, planExpr)
+		vec.Free(ses.txnCompileCtx.GetProcess().Mp())
+		return value, err
 	}
 }
 
@@ -430,12 +434,6 @@ func logErrorf(info string, msg string, fields ...interface{}) {
 	logutil.Errorf(msg+" %s", fields...)
 }
 
-func isInvalidConfigInput(config string) bool {
-	// first verify if the input string can parse as a josn type data
-	_, err := types.ParseStringToByteJson(config)
-	return err != nil
-}
-
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
 func isCmdFieldListSql(sql string) bool {
 	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
@@ -463,15 +461,6 @@ func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, 
 	} else {
 		return nil, moerr.NewInternalError(ctx, "wrong format for COM_FIELD_LIST")
 	}
-}
-
-func getAccountId(ctx context.Context) uint32 {
-	var accountId uint32
-
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		accountId = v.(uint32)
-	}
-	return accountId
 }
 
 //func getAccount(ctx context.Context) (uint32, uint32, uint32) {
@@ -538,13 +527,12 @@ func rowsetDataToVector(
 	proc *process.Process,
 	compileCtx plan2.CompilerContext,
 	exprs []*plan.Expr,
-	targeVec *vector.Vector,
-	emptyBatch *batch.Batch,
+	tarVec *vector.Vector,
 	params []*plan.Expr,
 	uf func(*vector.Vector, *vector.Vector, int64) error,
 ) error {
 	var exprImpl *plan.Expr
-	var typ = plan2.MakePlan2Type(targeVec.GetType())
+	var typ = plan2.MakePlan2Type(tarVec.GetType())
 	var err error
 
 	for _, e := range exprs {
@@ -558,12 +546,12 @@ func rowsetDataToVector(
 		}
 
 		if expr, ok := e.Expr.(*plan.Expr_P); ok {
-			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, params[int(expr.P.Pos)])
+			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, batch.EmptyForConstFoldBatch, params[int(expr.P.Pos)])
 			if err != nil {
 				return err
 			}
 		} else if _, ok := e.Expr.(*plan.Expr_V); ok {
-			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, e)
+			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, batch.EmptyForConstFoldBatch, e)
 			if err != nil {
 				return err
 			}
@@ -571,7 +559,7 @@ func rowsetDataToVector(
 			exprImpl = e
 		} else {
 			exprImpl = plan2.DeepCopyExpr(e)
-			exprImpl, err = rewriteExpr(ctx, proc, compileCtx, emptyBatch, params, exprImpl)
+			exprImpl, err = rewriteExpr(ctx, proc, compileCtx, batch.EmptyForConstFoldBatch, params, exprImpl)
 			if err != nil {
 				return err
 			}
@@ -582,14 +570,37 @@ func rowsetDataToVector(
 			return err
 		}
 
-		vec, err := colexec.EvalExpr(emptyBatch, proc, exprImpl)
+		var vec *vector.Vector
+		vec, err = colexec.EvalExpressionOnce(proc, exprImpl, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
 			return err
 		}
-		if err = uf(targeVec, vec, 1); err != nil {
+
+		if err = uf(tarVec, vec, 0); err != nil {
+			vec.Free(proc.Mp())
 			return err
 		}
+		vec.Free(proc.Mp())
 	}
 
 	return nil
+}
+
+func getVariableValue(varDefault interface{}) string {
+	switch val := varDefault.(type) {
+	case int64:
+		return fmt.Sprintf("%d", val)
+	case uint64:
+		return fmt.Sprintf("%d", val)
+	case int8:
+		return fmt.Sprintf("%d", val)
+	case string:
+		return val
+	default:
+		return ""
+	}
+}
+
+func makeServerVersion(pu *mo_config.ParameterUnit, version string) string {
+	return pu.SV.ServerVersionPrefix + version
 }

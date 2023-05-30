@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -31,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
@@ -73,6 +74,23 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 	case *plan.Expr_F:
 		for _, arg := range ne.F.GetArgs() {
 			err := builder.remapColRefForExpr(arg, colMap)
+			if err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_W:
+		err := builder.remapColRefForExpr(ne.W.WindowFunc, colMap)
+		if err != nil {
+			return err
+		}
+		for _, arg := range ne.W.PartitionBy {
+			err = builder.remapColRefForExpr(arg, colMap)
+			if err != nil {
+				return err
+			}
+		}
+		for _, order := range ne.W.OrderBy {
+			err = builder.remapColRefForExpr(order.Expr, colMap)
 			if err != nil {
 				return err
 			}
@@ -226,6 +244,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				return nil, err
 			}
 		}
+
 	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
@@ -237,6 +256,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
+			TblId:         node.TableDef.TblId,
 			Name:          node.TableDef.Name,
 			Defs:          node.TableDef.Defs,
 			Name2ColIndex: node.TableDef.Name2ColIndex,
@@ -244,6 +264,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			TblFunc:       node.TableDef.TblFunc,
 			TableType:     node.TableDef.TableType,
 			Partition:     node.TableDef.Partition,
+			IsLocked:      node.TableDef.IsLocked,
+			IsTemporary:   node.TableDef.IsTemporary,
+			TableLockType: node.TableDef.TableLockType,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -583,6 +606,66 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
+	case plan.Node_WINDOW:
+		for _, expr := range node.WinSpecList {
+			increaseRefCnt(expr, colRefCnt)
+		}
+
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		if err != nil {
+			return nil, err
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		i := 0
+		for _, globalRef := range childRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+			i++
+		}
+
+		windowTag := node.BindingTags[0]
+
+		for idx, expr := range node.WinSpecList {
+			decreaseRefCnt(expr, colRefCnt)
+			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+
+			globalRef := [2]int32{windowTag, int32(idx)}
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: -1,
+						ColPos: int32(idx + i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
 	case plan.Node_SORT:
 		for _, orderBy := range node.OrderBy {
 			increaseRefCnt(orderBy.Expr, colRefCnt)
@@ -835,7 +918,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		builder.applySwapRuleByStats(rootID, true)
-		SortFilterListByStats(builder.GetContext(), rootID, builder)
+		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all join operators
@@ -958,10 +1041,11 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 		}
 
 		if len(tmpArgsType) > 0 {
-			_, _, argsCastType, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
+			fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 			if err != nil {
 				return 0, moerr.NewParseError(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
 			}
+			argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
 
 			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
 				for i := 0; i < len(argsCastType); i++ {
@@ -1331,10 +1415,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 
 			if len(tmpArgsType) > 0 {
-				_, _, argsCastType, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
+				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 				if err != nil {
 					return 0, err
 				}
+				argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
 				if len(argsCastType) > 0 {
 					colTyp = makePlan2Type(&argsCastType[0])
 					for j := 0; j < rowCount; j++ {
@@ -1507,6 +1592,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		ctx.groupTag = builder.genNewTag()
 		ctx.aggregateTag = builder.genNewTag()
 		ctx.projectTag = builder.genNewTag()
+		ctx.windowTag = builder.genNewTag()
 
 		// bind GROUP BY clause
 		if clause.GroupBy != nil {
@@ -1693,6 +1779,20 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 	}
 
+	// append WINDOW node
+	if len(ctx.windows) > 0 {
+		nodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_WINDOW,
+			Children:    []int32{nodeID},
+			WinSpecList: ctx.windows,
+			BindingTags: []int32{ctx.windowTag},
+		}, ctx)
+
+		for name, id := range ctx.windowByAst {
+			builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
+		}
+	}
+
 	// append PROJECT node
 	for i, proj := range ctx.projects {
 		nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx)
@@ -1765,6 +1865,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	return nodeID, nil
+}
+
+func (builder *QueryBuilder) appendStep(nodeID int32) int32 {
+	stepPos := len(builder.qry.Steps)
+	builder.qry.Steps = append(builder.qry.Steps, nodeID)
+	return int32(stepPos)
 }
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32 {
@@ -2370,6 +2476,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, childId)
 	case "current_account":
 		nodeId, err = builder.buildCurrentAccount(tbl, ctx, exprs, childId)
+	case "metadata_scan":
+		nodeId = builder.buildMetadataScan(tbl, ctx, exprs, childId)
 	default:
 		err = moerr.NewNotSupported(builder.GetContext(), "table function '%s' not supported", id)
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -30,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type compactBlockEntry struct {
@@ -52,7 +52,6 @@ func NewCompactBlockEntry(
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
 	if to != nil {
 		toId := to.Fingerprint()
-		prefix := toId.BlockID[:]
 		offsetMapping := compute.GetOffsetMapBeforeApplyDeletes(deletes)
 		if deletes != nil && !deletes.IsEmpty() {
 			delCnt := deletes.GetCardinality()
@@ -65,8 +64,8 @@ func NewCompactBlockEntry(
 			}
 		}
 		for i, idx := range sortIdx {
-			rowid := model.EncodePhyAddrKeyWithPrefix(prefix, uint32(i))
-			page.Train(idx, rowid)
+			rowid := objectio.NewRowid(&toId.BlockID, uint32(i))
+			page.Train(idx, *rowid)
 		}
 		_ = scheduler.AddTransferPage(page)
 	}
@@ -105,11 +104,11 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	})
 	return
 }
-func (entry *compactBlockEntry) ApplyRollback(index *wal.Index) (err error) {
+func (entry *compactBlockEntry) ApplyRollback() (err error) {
 	//TODO:?
 	return
 }
-func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
+func (entry *compactBlockEntry) ApplyCommit() (err error) {
 	_ = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().TryUpgrade()
 	return
 }

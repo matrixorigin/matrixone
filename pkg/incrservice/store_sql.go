@@ -18,122 +18,101 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-// FIXME: Due to the bootstrap system, the implementation here is very ugly. 0.9 needs to
-// be changed out.
 var (
-	name               = "mo_increment_columns"
-	createMoIndexesSql = `create table if not exists mo_indexes(
-		id 			bigint unsigned not null,
-		table_id 	bigint unsigned not null,
-		database_id bigint unsigned not null,
-		name 		varchar(64) not null,
-		type        varchar(11) not null,
-		is_visible  tinyint not null,
-		hidden      tinyint not null,
-		comment 	varchar(2048) not null,
-		column_name    varchar(256) not null,
-		ordinal_position  int unsigned  not null,
-		options     text,
-		index_table_name varchar(5000),
-		primary key(id, column_name)
-	);`
-	createAutoTableSql = fmt.Sprintf(`create table if not exists %s (
-		table_id   bigint unsigned, 
-		col_name     varchar(770), 
-		col_index      int,
-		offset     bigint unsigned, 
-		step       bigint unsigned,  
-		primary key(table_id, col_name)
-	);`, name)
+	database      = "mo_catalog"
+	incrTableName = "mo_increment_columns"
 )
 
-func (c AutoColumn) TableName() string {
-	return name
+func (c AutoColumn) getInsertSQL() string {
+	return fmt.Sprintf(`insert into %s(table_id, col_name, col_index, offset, step) 
+		values(%d, '%s', %d, %d, %d)`,
+		incrTableName,
+		c.TableID,
+		c.ColName,
+		c.ColIndex,
+		c.Offset,
+		c.Step)
 }
 
 type sqlStore struct {
-	db *gorm.DB
+	exec executor.SQLExecutor
 }
 
-func NewSQLStore(dsn string) (IncrValueStore, error) {
-	db, err := gorm.Open(
-		mysql.Open(dsn),
-		&gorm.Config{
-			PrepareStmt: false,
-			Logger:      gormlogger.Default.LogMode(gormlogger.Error),
-		})
-	if err != nil {
-		return nil, err
-	}
-	return &sqlStore{db: db}, nil
+func NewSQLStore(exec executor.SQLExecutor) (IncrValueStore, error) {
+	return &sqlStore{exec: exec}, nil
 }
 
 func (s *sqlStore) Create(
 	ctx context.Context,
 	tableID uint64,
 	cols []AutoColumn) error {
-	db, err := s.getSession(ctx)
-	if err != nil {
-		return err
-	}
-
-	if err := db.Exec(createMoIndexesSql).Error; err != nil {
-		return err
-	}
-	if err := db.Exec(createAutoTableSql).Error; err != nil {
-		return err
-	}
-	return db.Create(&cols).Error
+	opts := executor.Options{}.WithDatabase(database)
+	return s.exec.ExecTxn(
+		ctx,
+		func(te executor.TxnExecutor) error {
+			for _, col := range cols {
+				res, err := te.Exec(col.getInsertSQL())
+				if err != nil {
+					return err
+				}
+				res.Close()
+			}
+			return nil
+		},
+		opts)
 }
 
 func (s *sqlStore) Alloc(
 	ctx context.Context,
 	tableID uint64,
-	key string,
+	colName string,
 	count int) (uint64, uint64, error) {
-	db, err := s.getSession(ctx)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	var col AutoColumn
-	var curr, next uint64
+	var curr, next, step uint64
 	ok := false
+
+	fetchSQL := fmt.Sprintf(`select offset, step from %s where table_id = %d and col_name = '%s'`,
+		incrTableName,
+		tableID,
+		colName)
+	opts := executor.Options{}.WithDatabase(database)
 	for {
-		err := db.Transaction(func(tx *gorm.DB) error {
-			result := tx.First(
-				&col, "table_id = ? and col_name = ?",
-				tableID,
-				key)
-			if result.Error != nil {
-				return result.Error
-			}
+		err := s.exec.ExecTxn(
+			ctx,
+			func(te executor.TxnExecutor) error {
+				res, err := te.Exec(fetchSQL)
+				if err != nil {
+					return err
+				}
+				res.ReadRows(func(cols []*vector.Vector) bool {
+					curr = executor.GetFixedRows[uint64](cols[0])[0]
+					step = executor.GetFixedRows[uint64](cols[1])[0]
+					return true
+				})
+				res.Close()
 
-			curr = col.Offset
-			next = getNext(curr, count, int(col.Step))
-			result = tx.Model(&AutoColumn{}).
-				Where("table_id = ? and col_name = ? and offset = ?",
+				next = getNext(curr, count, int(step))
+				res, err = te.Exec(fmt.Sprintf(`update %s set offset = %d 
+					where table_id = %d and col_name = '%s' and offset = %d`,
+					incrTableName,
+					next,
 					tableID,
-					key,
-					curr).
-				Update("offset", next)
-			if result.Error != nil {
-				return result.Error
-			}
+					colName,
+					curr))
+				if err != nil {
+					return err
+				}
 
-			if result.RowsAffected == 1 {
-				ok = true
+				if res.AffectedRows == 1 {
+					ok = true
+				}
+				res.Close()
 				return nil
-			}
-			return nil
-		})
+			},
+			opts)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -142,7 +121,7 @@ func (s *sqlStore) Alloc(
 		}
 	}
 
-	from, to := getNextRange(curr, next, int(col.Step))
+	from, to := getNextRange(curr, next, int(step))
 	return from, to, nil
 }
 
@@ -151,65 +130,77 @@ func (s *sqlStore) UpdateMinValue(
 	tableID uint64,
 	col string,
 	minValue uint64) error {
-	db, err := s.getSession(ctx)
+	opts := executor.Options{}.WithDatabase(database)
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf("update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
+			incrTableName,
+			minValue,
+			tableID,
+			col,
+			minValue),
+		opts)
 	if err != nil {
 		return err
 	}
-
-	err = db.Model(&AutoColumn{}).
-		Where("table_id = ? and col_name = ? and offset < ?",
-			tableID,
-			col,
-			minValue).
-		Update("offset", minValue).Error
-	if err != nil {
-		logutil.Fatalf("2")
-	}
-	return err
+	defer res.Close()
+	return nil
 }
 
 func (s *sqlStore) Delete(
 	ctx context.Context,
 	tableID uint64) error {
-	db, err := s.getSession(ctx)
+	opts := executor.Options{}.WithDatabase(database)
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf("delete from %s where table_id = %d",
+			incrTableName, tableID),
+		opts)
 	if err != nil {
 		return err
 	}
-	err = db.Delete(&AutoColumn{}, "table_id = ?", tableID).Error
-	if err != nil {
-		return err
-	}
+	defer res.Close()
 	return nil
 }
 
 func (s *sqlStore) GetCloumns(
 	ctx context.Context,
 	tableID uint64) ([]AutoColumn, error) {
-	db, err := s.getSession(ctx)
+	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s where table_id = %d order by col_index`,
+		incrTableName,
+		tableID)
+	opts := executor.Options{}.WithDatabase(database)
+	res, err := s.exec.Exec(ctx, fetchSQL, opts)
 	if err != nil {
 		return nil, err
 	}
-	var cols []AutoColumn
-	if err := db.Order("col_index").
-		Find(&cols, "table_id = ?", tableID).Error; err != nil {
-		return nil, err
+	defer res.Close()
+
+	var colNames []string
+	var indexes []int32
+	var offsets []uint64
+	var steps []uint64
+	res.ReadRows(func(cols []*vector.Vector) bool {
+		colNames = append(colNames, executor.GetStringRows(cols[0])...)
+		indexes = append(indexes, executor.GetFixedRows[int32](cols[1])...)
+		offsets = append(offsets, executor.GetFixedRows[uint64](cols[2])...)
+		steps = append(steps, executor.GetFixedRows[uint64](cols[3])...)
+		return true
+	})
+
+	cols := make([]AutoColumn, len(colNames))
+	for idx, colName := range colNames {
+		cols[idx] = AutoColumn{
+			TableID:  tableID,
+			ColName:  colName,
+			ColIndex: int(indexes[idx]),
+			Offset:   offsets[idx],
+			Step:     steps[idx],
+		}
 	}
 	return cols, nil
 }
 
 func (s *sqlStore) Close() {
 
-}
-
-func (s *sqlStore) getSession(ctx context.Context) (*gorm.DB, error) {
-	db := s.db.Session(&gorm.Session{PrepareStmt: false})
-	v := ctx.Value(defines.TenantIDKey{})
-	if v == nil {
-		return db, nil
-	}
-	err := db.Exec(fmt.Sprintf("SET SESSION default_account = '%d'", v)).Error
-	if err != nil {
-		return nil, err
-	}
-	return db, nil
 }

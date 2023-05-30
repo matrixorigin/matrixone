@@ -36,10 +36,9 @@ const (
 
 // add unit tests for cases
 type groupTestCase struct {
-	arg   *Argument
-	flgs  []bool // flgs[i] == true: nullable
-	types []types.Type
-	proc  *process.Process
+	arg  *Argument
+	flgs []bool // flgs[i] == true: nullable
+	proc *process.Process
 }
 
 var (
@@ -98,13 +97,13 @@ func TestGroup(t *testing.T) {
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
 		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows)
 		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
+		tc.proc.Reg.InputBatch = batch.EmptyBatch
 		_, err = Call(0, tc.proc, tc.arg, false, false)
 		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
@@ -132,13 +131,13 @@ func BenchmarkGroup(b *testing.B) {
 		for _, tc := range tcs {
 			err := Prepare(tc.proc, tc.arg)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, BenchmarkRows)
+			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
 			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, BenchmarkRows)
+			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows)
 			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
-			tc.proc.Reg.InputBatch = &batch.Batch{}
+			tc.proc.Reg.InputBatch = batch.EmptyBatch
 			_, err = Call(0, tc.proc, tc.arg, false, false)
 			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = nil
@@ -152,13 +151,23 @@ func BenchmarkGroup(b *testing.B) {
 }
 
 func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Aggregate) groupTestCase {
+	for _, expr := range exprs {
+		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
+			idx := col.Col.ColPos
+			expr.Typ = &plan.Type{
+				Id:    int32(ts[idx].Oid),
+				Width: ts[idx].Width,
+				Scale: ts[idx].Scale,
+			}
+		}
+	}
 	return groupTestCase{
-		types: ts,
-		flgs:  flgs,
-		proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
+		flgs: flgs,
+		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		arg: &Argument{
-			Aggs:  aggs,
 			Exprs: exprs,
+			Types: ts,
+			Aggs:  aggs,
 		},
 	}
 }

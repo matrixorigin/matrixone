@@ -17,7 +17,6 @@ jobs:
         with:
           repository: matrixorigin/matrixone
           ref: ${{ env.branch }}
-          
       - name: Use Golang
         uses: actions/setup-go@v4
         with:
@@ -89,6 +88,7 @@ jobs:
         with:
           repository: matrixorigin/matrixone
           ref: ${{ env.branch }}
+          
       - name: Use Golang
         uses: actions/setup-go@v4
         with:

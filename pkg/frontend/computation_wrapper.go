@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,8 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -197,7 +196,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil {
-		cwft.ses.accountId = getAccountId(requestCtx)
+		cwft.ses.accountId = defines.GetAccountId(requestCtx)
 		err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
 	}
 	if err != nil {
@@ -231,7 +230,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 		if prepareStmt.IsInsertValues {
 			for _, node := range preparePlan.Plan.GetQuery().Nodes {
-				if node.RowsetData != nil {
+				if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
 					tableDef := node.TableDef
 					colCount := len(tableDef.Cols)
 					colsData := node.RowsetData.Cols
@@ -241,7 +240,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 					bat.CleanOnlyData()
 					for i := 0; i < colCount; i++ {
 						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
-							colsData[i].Data, bat.Vecs[i], prepareStmt.emptyBatch, executePlan.Args, prepareStmt.ufs[i]); err != nil {
+							colsData[i].Data, bat.Vecs[i], executePlan.Args, prepareStmt.ufs[i]); err != nil {
 							return nil, err
 						}
 					}
@@ -282,10 +281,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		//check privilege
 		/* prepare not need check privilege
-		err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
-		if err != nil {
-			return nil, err
-		}
+		   err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
+		   if err != nil {
+		   	return nil, err
+		   }
 		*/
 	} else {
 		var vp *plan2.VisitPlan
@@ -350,19 +349,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// temporary storage is passed through Ctx
 		requestCtx = context.WithValue(requestCtx, defines.TemporaryDN{}, cwft.ses.GetTempTableStorage())
 
-		v, ok := runtime.ProcessLevelRuntime().
-			GetGlobalVariables(runtime.HAKeeperClient)
-		if !ok {
-			panic("missing hakeeper client")
-		}
-
 		// 1. init memory-non-dist engine
 		tempEngine := memoryengine.New(
 			requestCtx,
 			memoryengine.NewDefaultShardPolicy(
 				mpool.MustNewZeroNoFixed(),
 			),
-			memoryengine.NewHakeeperIDGenerator(v.(logservice.CNHAKeeperClient)),
+			memoryengine.RandomIDGenerator,
 			clusterservice.NewMOCluster(
 				nil,
 				0,
@@ -391,7 +384,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := motrace.StatementFromContext(ctx); stm != nil {
-		stm.SetExecPlan(cwft.plan, SerializeExecPlan)
+		stm.SetSerializableExecPlan(NewMarshalPlanHandler(ctx, stm.StatementID, cwft.plan))
 	}
 	return nil
 }

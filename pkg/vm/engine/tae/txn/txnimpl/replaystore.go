@@ -69,20 +69,10 @@ func (store *replayTxnStore) prepareCommit(txn txnif.AsyncTxn) (err error) {
 	// PrepareCommit all commands
 	// Check idempotent of each command
 	// Record all idempotent error commands and skip apply|rollback later
-	idxCtx := &wal.Index{LSN: txn.GetLSN()}
-	idxCtx.Size = store.Cmd.CmdSize
-	internalCnt := uint32(0)
 	store.Observer.OnTimeStamp(txn.GetPrepareTS())
-	for i, command := range store.Cmd.Cmds {
+	for _, command := range store.Cmd.Cmds {
 		command.SetReplayTxn(txn)
-		if command.GetType() == IOET_WALTxnCommand_Append {
-			internalCnt++
-			store.prepareCmd(command, nil)
-		} else {
-			idx := idxCtx.Clone()
-			idx.CSN = uint32(i) - internalCnt
-			store.prepareCmd(command, idx)
-		}
+		store.prepareCmd(command)
 	}
 	return
 }
@@ -102,11 +92,10 @@ func (store *replayTxnStore) prepareRollback(txn txnif.AsyncTxn) (err error) {
 		txn.String()))
 }
 
-func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
-	if idxCtx != nil && idxCtx.Size > 0 {
+func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd) {
+	if txncmd.GetType() != txnbase.IOET_WALTxnEntry {
 		logutil.Debug("", common.OperationField("replay-cmd"),
-			common.OperandField(txncmd.Desc()),
-			common.AnyField("index", idxCtx.String()))
+			common.OperandField(txncmd.Desc()))
 	}
 	var err error
 	switch cmd := txncmd.(type) {
@@ -114,11 +103,11 @@ func (store *replayTxnStore) prepareCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) 
 		*catalog.EntryCommand[*catalog.TableMVCCNode, *catalog.TableNode],
 		*catalog.EntryCommand[*catalog.MetadataMVCCNode, *catalog.SegmentNode],
 		*catalog.EntryCommand[*catalog.MetadataMVCCNode, *catalog.BlockNode]:
-		store.catalog.ReplayCmd(txncmd, store.dataFactory, idxCtx, store.Observer)
+		store.catalog.ReplayCmd(txncmd, store.dataFactory, store.Observer)
 	case *AppendCmd:
 		store.replayAppendData(cmd, store.Observer)
 	case *updates.UpdateCmd:
-		store.replayDataCmds(cmd, idxCtx, store.Observer)
+		store.replayDataCmds(cmd, store.Observer)
 	}
 	if err != nil {
 		panic(err)
@@ -181,20 +170,19 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 	}
 }
 
-func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
+func (store *replayTxnStore) replayDataCmds(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {
 	switch cmd.GetType() {
 	case updates.IOET_WALTxnCommand_AppendNode:
-		store.replayAppend(cmd, idxCtx, observer)
+		store.replayAppend(cmd, observer)
 	case updates.IOET_WALTxnCommand_DeleteNode:
-		store.replayDelete(cmd, idxCtx, observer)
+		store.replayDelete(cmd, observer)
 	}
 }
 
-func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
+func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {
 	deleteNode := cmd.GetDeleteNode()
-	deleteNode.SetLogIndex(idxCtx)
 	if deleteNode.Is1PC() {
-		if _, err := deleteNode.TxnMVCCNode.ApplyCommit(nil); err != nil {
+		if _, err := deleteNode.TxnMVCCNode.ApplyCommit(); err != nil {
 			panic(err)
 		}
 	}
@@ -208,7 +196,6 @@ func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, idxCtx *wal.In
 		panic(err)
 	}
 	if !blk.IsActive() {
-		observer.OnStaleIndex(idxCtx)
 		return
 	}
 	blkData := blk.GetBlockData()
@@ -219,11 +206,10 @@ func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, idxCtx *wal.In
 
 }
 
-func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
+func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.ReplayObserver) {
 	appendNode := cmd.GetAppendNode()
-	appendNode.SetLogIndex(idxCtx)
 	if appendNode.Is1PC() {
-		if _, err := appendNode.TxnMVCCNode.ApplyCommit(nil); err != nil {
+		if _, err := appendNode.TxnMVCCNode.ApplyCommit(); err != nil {
 			panic(err)
 		}
 	}
@@ -237,11 +223,9 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, idxCtx *wal.In
 		panic(err)
 	}
 	if !blk.IsActive() {
-		observer.OnStaleIndex(idxCtx)
 		return
 	}
 	if !blk.GetMetaLoc().IsEmpty() {
-		observer.OnStaleIndex(idxCtx)
 		return
 	}
 	if err = blk.GetBlockData().OnReplayAppend(appendNode); err != nil {

@@ -178,7 +178,11 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		if rewrite {
 			argsType := make([]types.Type, 1)
 			argsType[0] = makeTypeByPlan2Expr(retExpr)
-			funcID, returnType, _, _ := function.GetFunctionByName(builder.GetContext(), "isnull", argsType)
+			fGet, err := function.GetFunctionByName(builder.GetContext(), "isnull", argsType)
+			if err != nil {
+				return nodeID, retExpr, err
+			}
+			funcID, returnType := fGet.GetEncodedOverloadID(), fGet.GetReturnType()
 			isNullExpr := &Expr{
 				Expr: &plan.Expr_F{
 					F: &plan.Function{
@@ -193,7 +197,11 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			argsType[0] = makeTypeByPlan2Expr(isNullExpr)
 			argsType[1] = makeTypeByPlan2Expr(zeroExpr)
 			argsType[2] = makeTypeByPlan2Expr(retExpr)
-			funcID, returnType, _, _ = function.GetFunctionByName(builder.GetContext(), "case", argsType)
+			fGet, err = function.GetFunctionByName(builder.GetContext(), "case", argsType)
+			if err != nil {
+				return nodeID, retExpr, nil
+			}
+			funcID, returnType = fGet.GetEncodedOverloadID(), fGet.GetReturnType()
 			retExpr = &Expr{
 				Expr: &plan.Expr_F{
 					F: &plan.Function{

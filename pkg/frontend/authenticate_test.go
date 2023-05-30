@@ -216,7 +216,10 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = InitSysTenant(ctx)
+		// A mock autoIncrCaches.
+		aicm := &defines.AutoIncrCacheManager{}
+
+		err = InitSysTenant(ctx, aicm)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -3436,7 +3439,7 @@ func Test_determineDML(t *testing.T) {
 						Nodes: []*plan2.Node{
 							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
 							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
-							{NodeType: plan.Node_UPDATE},
+							{NodeType: plan.Node_INSERT},
 						},
 					},
 				},
@@ -5852,7 +5855,8 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -5906,7 +5910,8 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -5956,7 +5961,8 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6014,7 +6020,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6067,7 +6074,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6120,7 +6128,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6169,7 +6178,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6219,7 +6229,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6265,7 +6276,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6318,7 +6330,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6361,7 +6374,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6408,7 +6422,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6455,7 +6470,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6512,7 +6528,8 @@ func Test_doDropAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6561,7 +6578,8 @@ func Test_doDropAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6604,7 +6622,8 @@ func Test_doDropAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		rm, _ := NewRoutineManager(ctx, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
 		ses.rm = rm
 
 		//no result set
@@ -6808,7 +6827,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Ref().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, GSysVariables, false)
+	ses := NewSession(proto, nil, pu, GSysVariables, false, nil)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
@@ -7235,6 +7254,27 @@ func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForSystemVariablesOfAccount(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("variable_name")
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("variable_value")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
@@ -7953,4 +7993,49 @@ func TestCheckSubscriptionValid(t *testing.T) {
 		require.Equal(t, kases[idx].err, err != nil)
 	}
 
+}
+
+func TestDoCheckRole(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+
+	ses.SetTenantInfo(tenant)
+	err := doCheckRole(ctx, ses)
+	require.NoError(t, err)
+
+	tenant = &TenantInfo{
+		Tenant:        "default_1",
+		User:          "admin",
+		DefaultRole:   accountAdminRoleName,
+		TenantID:      3001,
+		UserID:        2,
+		DefaultRoleID: accountAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+	err = doCheckRole(ctx, ses)
+	require.NoError(t, err)
+
+	tenant = &TenantInfo{
+		Tenant:        "default_1",
+		User:          "admin",
+		DefaultRole:   "role1",
+		TenantID:      3001,
+		UserID:        2,
+		DefaultRoleID: 10,
+	}
+	ses.SetTenantInfo(tenant)
+	err = doCheckRole(ctx, ses)
+	require.Error(t, err)
 }

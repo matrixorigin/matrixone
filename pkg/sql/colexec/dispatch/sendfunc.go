@@ -16,9 +16,11 @@ package dispatch
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"hash/crc32"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -30,78 +32,97 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func getShuffledBats(ap *Argument, bat *batch.Batch, lenRegs int, proc *process.Process) ([]*batch.Batch, error) {
-	//release old bats
-	defer proc.PutBatch(bat)
-
-	lenVecs := len(bat.Vecs)
-	shuffledBats := make([]*batch.Batch, lenRegs)
-	sels, lenShuffledSels := ap.getSels()
-
+func getShuffledSels(ap *Argument, bat *batch.Batch, lenRegs uint64) [][]int32 {
+	sels := ap.getSels()
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedCol[int64](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := v % int64(lenRegs)
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
-			lenShuffledSels[regIndex]++
 		}
 	case types.T_int32:
 		groupByCol := vector.MustFixedCol[int32](groupByVec)
 		for row, v := range groupByCol {
-			regIndex := v % int32(lenRegs)
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
 			sels[regIndex] = append(sels[regIndex], int32(row))
-			lenShuffledSels[regIndex]++
+		}
+	case types.T_int16:
+		groupByCol := vector.MustFixedCol[int16](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint64:
+		groupByCol := vector.MustFixedCol[uint64](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(v, lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint32:
+		groupByCol := vector.MustFixedCol[uint32](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_uint16:
+		groupByCol := vector.MustFixedCol[uint16](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(uint64(v), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
+	case types.T_char, types.T_varchar, types.T_text:
+		groupByCol := vector.MustFixedCol[types.Varlena](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleCharHashToRange(v.GetByteSlice(groupByVec.GetArea()), lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	default:
 		panic("unsupported shuffle type, wrong plan!") //something got wrong here!
 	}
+	return sels
+}
 
-	//generate new shuffled bats
-	for regIndex := range shuffledBats {
-		if lenShuffledSels[regIndex] > 0 {
+func genShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process) error {
+	//release old bats
+	defer proc.PutBatch(bat)
+
+	lenVecs := len(bat.Vecs)
+	shuffledBats := ap.ctr.shuffledBats
+	if ap.ctr.batsCount == 0 {
+		//initialize shuffled bats
+		for regIndex := range shuffledBats {
 			shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
+			shuffledBats[regIndex].Zs = proc.Mp().GetSels()
 			for j := range shuffledBats[regIndex].Vecs {
 				shuffledBats[regIndex].Vecs[j] = proc.GetVector(*bat.Vecs[j].GetType())
 			}
+		}
+	}
 
+	sels := getShuffledSels(ap, bat, uint64(ap.ctr.aliveRegCnt))
+
+	//generate new shuffled bats
+	for regIndex := range shuffledBats {
+		lenSels := len(sels[regIndex])
+		if lenSels > 0 {
 			b := shuffledBats[regIndex]
 			for vecIndex := range b.Vecs {
 				v := b.Vecs[vecIndex]
 				err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
-			b.Zs = proc.Mp().GetSels()
-			for i := 0; i < lenShuffledSels[regIndex]; i++ {
+			for i := 0; i < lenSels; i++ {
 				b.Zs = append(b.Zs, bat.Zs[sels[regIndex][i]])
 			}
 		}
 	}
 
-	return shuffledBats, nil
-}
-
-// common sender: shuffle to all LocalReceiver
-func shuffleToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	shuffledBats, err := getShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
-	if err != nil {
-		return false, err
-	}
-
-	for i, reg := range ap.LocalRegs {
-		if shuffledBats[i] != nil {
-			select {
-			case <-reg.Ctx.Done():
-				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
-			case reg.Ch <- shuffledBats[i]:
-			}
-		}
-	}
-
-	return false, nil
+	ap.ctr.batsCount++
+	return nil
 }
 
 // common sender: send to all LocalReceiver
@@ -120,44 +141,16 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 			logutil.Infof("proc context done during dispatch to local")
 			return true, nil
 		case <-reg.Ctx.Done():
+			if ap.IsSink {
+				atomic.AddInt64(&bat.Cnt, -1)
+				continue
+			}
 			handleUnsent(proc, bat, refCountAdd, int64(i))
 			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
 		case reg.Ch <- bat:
 		}
 	}
 
-	return false, nil
-}
-
-// common sender: shuffle to all RemoteReceiver
-func shuffleToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	if !ap.ctr.prepared {
-		end, err := ap.waitRemoteRegsReady(proc)
-		if err != nil {
-			return false, err
-		}
-		if end {
-			return true, nil
-		}
-	}
-
-	shuffledBats, err := getShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
-	if err != nil {
-		return false, err
-	}
-
-	// send to remote regs
-	for i, r := range ap.ctr.remoteReceivers {
-		if shuffledBats[i] != nil {
-			encodeData, errEncode := types.Encode(shuffledBats[i])
-			if errEncode != nil {
-				return false, errEncode
-			}
-			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
-				return false, err
-			}
-		}
-	}
 	return false, nil
 }
 
@@ -188,6 +181,43 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	return false, nil
 }
 
+func sendShuffledBats(ap *Argument, proc *process.Process) (bool, error) {
+	if ap.ctr.batsCount == 0 {
+		return false, nil
+	}
+
+	// send to remote regs
+	for _, r := range ap.ctr.remoteReceivers {
+		batIndex := ap.ctr.remoteToIdx[r.uuid]
+		batToSend := ap.ctr.shuffledBats[batIndex]
+		if batToSend != nil && batToSend.Length() != 0 {
+			encodeData, errEncode := types.Encode(batToSend)
+			if errEncode != nil {
+				return false, errEncode
+			}
+			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
+				return false, err
+			}
+		}
+	}
+
+	//send to all local regs
+	for i, reg := range ap.LocalRegs {
+		batIndex := ap.ShuffleRegIdxLocal[i]
+		batToSend := ap.ctr.shuffledBats[batIndex]
+		if batToSend != nil && batToSend.Length() != 0 {
+			select {
+			case <-reg.Ctx.Done():
+				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+			case reg.Ch <- batToSend:
+			}
+		}
+	}
+
+	ap.ctr.batsCount = 0
+	return false, nil
+}
+
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
 func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	if !ap.ctr.prepared {
@@ -200,35 +230,21 @@ func shuffleToAllFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bo
 		}
 	}
 
-	shuffledBats, err := getShuffledBats(ap, bat, ap.ctr.aliveRegCnt, proc)
+	err := genShuffledBats(ap, bat, proc)
 	if err != nil {
 		return false, err
 	}
-	regIdx := 0
-	// send to remote regs
-	for _, r := range ap.ctr.remoteReceivers {
-		if shuffledBats[regIdx] != nil {
-			encodeData, errEncode := types.Encode(shuffledBats[regIdx])
-			if errEncode != nil {
-				return false, errEncode
-			}
-			if err := sendBatchToClientSession(proc.Ctx, encodeData, r); err != nil {
-				return false, err
-			}
-		}
-		regIdx++
-	}
 
-	//send to all local regs
-	for _, reg := range ap.LocalRegs {
-		if shuffledBats[regIdx] != nil {
-			select {
-			case <-reg.Ctx.Done():
-				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
-			case reg.Ch <- shuffledBats[regIdx]:
+	if ap.ctr.batsCount > 0 {
+		maxSize := 0
+		for i := range ap.ctr.shuffledBats {
+			if ap.ctr.shuffledBats[i].Length() > maxSize {
+				maxSize = ap.ctr.shuffledBats[i].Length()
 			}
 		}
-		regIdx++
+		if maxSize > shuffleBatchSize {
+			return sendShuffledBats(ap, proc)
+		}
 	}
 
 	return false, nil

@@ -44,3 +44,17 @@ a
 100
 drop database if exists test_temporary;
 drop database if exists test_temporary2;
+drop database if exists test_tmp;
+create database test_tmp;
+use test_tmp;
+drop table if exists f1;
+drop table if exists t1;
+create table f1 (a int primary key);
+create temporary table  t1 (a int primary key);
+create temporary table c1(a int, constraint ck foreign key(a) REFERENCES f1(a));
+add foreign key for temporary table is not yet implemented
+create table c1(a int, constraint ck foreign key(a) REFERENCES t1(a));
+add foreign key for temporary table is not yet implemented
+drop table if exists f1;
+drop table if exists t1;
+drop database if exists test_tmp;
