@@ -161,7 +161,7 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			if err := bid.Unmarshal(info.BlockId); err != nil {
 				return err
 			}
-			vector.AppendAny(opBat.Vecs[i], bid, false, mp)
+			vector.AppendFixed(opBat.Vecs[i], bid, false, mp)
 
 		case plan.MetadataScanInfo_ENTRY_STATE:
 			vector.AppendFixed(opBat.Vecs[i], info.EntryState, false, mp)
@@ -183,28 +183,28 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			if err := ts.Unmarshal(info.CommitTs); err != nil {
 				return err
 			}
-			vector.AppendAny(opBat.Vecs[i], ts, false, mp)
+			vector.AppendFixed(opBat.Vecs[i], ts, false, mp)
 
 		case plan.MetadataScanInfo_CREATE_TS:
 			var ts types.TS
 			if err := ts.Unmarshal(info.CreateTs); err != nil {
 				return err
 			}
-			vector.AppendAny(opBat.Vecs[i], ts, false, mp)
+			vector.AppendFixed(opBat.Vecs[i], ts, false, mp)
 
 		case plan.MetadataScanInfo_DELETE_TS:
 			var ts types.TS
 			if err := ts.Unmarshal(info.DeleteTs); err != nil {
 				return err
 			}
-			vector.AppendAny(opBat.Vecs[i], ts, false, mp)
+			vector.AppendFixed(opBat.Vecs[i], ts, false, mp)
 
 		case plan.MetadataScanInfo_SEG_ID:
 			var sid types.Uuid
 			if err := sid.Unmarshal(info.SegId); err != nil {
 				return err
 			}
-			vector.AppendAny(opBat.Vecs[i], sid, false, mp)
+			vector.AppendFixed(opBat.Vecs[i], sid, false, mp)
 
 		case plan.MetadataScanInfo_ROWS_CNT:
 			vector.AppendFixed(opBat.Vecs[i], info.RowCnt, false, mp)
@@ -219,10 +219,10 @@ func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument
 			vector.AppendFixed(opBat.Vecs[i], info.OriginSize, false, mp)
 
 		case plan.MetadataScanInfo_MIN: // TODO: find a way to show this info
-			vector.AppendBytes(opBat.Vecs[i], []byte("min"), false, mp)
+			vector.AppendBytes(opBat.Vecs[i], info.Min, false, mp)
 
 		case plan.MetadataScanInfo_MAX: // TODO: find a way to show this info
-			vector.AppendBytes(opBat.Vecs[i], []byte("max"), false, mp)
+			vector.AppendBytes(opBat.Vecs[i], info.Max, false, mp)
 		default:
 		}
 		opBat.Zs = append(opBat.Zs, 1)

@@ -81,6 +81,11 @@ func init() {
 				Id:          int32(tp.Oid),
 				NotNullable: true,
 			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
 		}
 
 		MetadataScanColTypes[i] = tp

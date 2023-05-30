@@ -355,6 +355,10 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 			newInfo.CompressSize = int64(colmeta.Location().Length())
 			newInfo.OriginSize = int64(colmeta.Location().OriginSize())
 
+			zm := colmeta.ZoneMap()
+			newInfo.Max = zm.GetMaxBuf()
+			newInfo.Min = zm.GetMinBuf()
+
 			infoList = append(infoList, newInfo)
 		}
 
