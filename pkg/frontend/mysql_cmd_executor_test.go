@@ -810,13 +810,14 @@ func Test_handleShowVariables(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 		bh.init()
+		ses.mrs = &MysqlResultSet{}
 
 		sql := getSystemVariablesWithAccount(0)
 		rows := [][]interface{}{
 			{"syspublications", ""},
 		}
 
-		bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
+		bh.sql2result[sql] = newMrsForSystemVariablesOfAccount(rows)
 		sv = &tree.ShowVariables{Global: true}
 		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
 	})

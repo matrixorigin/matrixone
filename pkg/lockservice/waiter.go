@@ -92,6 +92,7 @@ type waiter struct {
 	status         atomic.Int32
 	c              chan notifyValue
 	waiters        waiterQueue
+	sameTxnWaiters []*waiter
 	refCount       atomic.Int32
 	latestCommitTS timestamp.Timestamp
 	waitTxn        pb.WaitTxn
@@ -182,6 +183,18 @@ func (w *waiter) mustRecvNotification(
 	case <-ctx.Done():
 		return notifyValue{err: ctx.Err()}
 	}
+}
+
+func (w *waiter) notifySameTxn(
+	serviceID string,
+	value notifyValue) {
+	if len(w.sameTxnWaiters) == 0 {
+		return
+	}
+	for _, v := range w.sameTxnWaiters {
+		v.notify("", notifyValue{})
+	}
+	w.sameTxnWaiters = w.sameTxnWaiters[:0]
 }
 
 func (w *waiter) mustSendNotification(
@@ -296,6 +309,7 @@ func (w *waiter) close(
 	if value.ts.Less(w.latestCommitTS) {
 		value.ts = w.latestCommitTS
 	}
+	w.notifySameTxn(serviceID, value)
 	nextWaiter := w.fetchNextWaiter(serviceID, value)
 	logWaiterClose(serviceID, w, value.err)
 	w.unref(serviceID)
@@ -347,6 +361,7 @@ func (w *waiter) reset(serviceID string) {
 	w.setStatus(serviceID, waiting)
 	w.waitTxn = pb.WaitTxn{}
 	w.waiters.reset()
+	w.sameTxnWaiters = w.sameTxnWaiters[:0]
 	waiterPool.Put(w)
 }
 

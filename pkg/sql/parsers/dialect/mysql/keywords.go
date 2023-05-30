@@ -158,6 +158,7 @@ func init() {
 		"false":                    FALSE,
 		"fetch":                    UNUSED,
 		"first":                    FIRST,
+		"after":                    AFTER,
 		"float":                    FLOAT_TYPE,
 		"float4":                   UNUSED,
 		"float8":                   UNUSED,
