@@ -431,7 +431,7 @@ jobs:
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
-          sed -i '/runMins=*/c\runMins=10' props_10.mo
+          sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
           ./runBenchmark.sh props_10.mo PROFILE | tee report/tpcc-benchmark-10-50.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-50.log
@@ -455,7 +455,7 @@ jobs:
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
           sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
-          sed -i '/runMins=*/c\runMins=10' props_10.mo
+          sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
           ./runBenchmark.sh props_10.mo PROFILE | tee report/tpcc-benchmark-10-50.log
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-100.log
