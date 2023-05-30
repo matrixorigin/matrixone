@@ -601,7 +601,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		if n.Stats.ShuffleColIdx >= 0 {
+		if n.Stats.Shuffle {
 			ss = c.compileBucketGroup(n, ss, ns)
 			return c.compileSort(n, ss), nil
 		} else {

@@ -150,11 +150,12 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	switch types.T(n.GroupBy[idx].Typ.Id) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
 		n.Stats.ShuffleColIdx = int32(idx)
+		n.Stats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
 	case types.T_varchar, types.T_char, types.T_text:
 		n.Stats.ShuffleColIdx = int32(idx)
+		n.Stats.Shuffle = true
 	}
-	return
 }
 
 func GetShuffleDop() (dop int) {

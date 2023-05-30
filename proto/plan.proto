@@ -450,14 +450,15 @@ message Stats {
 
 	// for group by and join node with big hashmap, use shuffle
 	// shuffle on which column. choose a column with max ndv
-	int32 shuffleColIdx = 8;
+	bool shuffle = 8;
+	int32 shuffleColIdx = 9;
 	// shuffle type
-	ShuffleType shuffleType = 9;
+	ShuffleType shuffleType = 10;
 	// for range shuffle on integer column, need to know its min and max value
-	int64 shuffleColMin = 10;
-	int64 shuffleColMax = 11;
+	int64 shuffleColMin = 11;
+	int64 shuffleColMax = 12;
 	//not used for now
-	int32   parallelism = 12;
+	int32   parallelism = 13;
 }
 
 message ColData {

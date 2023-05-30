@@ -1079,7 +1079,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 // and it will send same batch to all register
 func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node) *dispatch.Argument {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
-	if node.Stats.ShuffleColIdx != -1 {
+	if node.Stats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
 		arg.ShuffleColIdx = plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx]).ColPos
 		arg.ShuffleType = int32(node.Stats.ShuffleType)

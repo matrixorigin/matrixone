@@ -423,9 +423,9 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 
-	idx := ndesc.Node.Stats.ShuffleColIdx
-	shuffleType := ndesc.Node.Stats.ShuffleType
-	if idx >= 0 {
+	if ndesc.Node.Stats.Shuffle {
+		idx := ndesc.Node.Stats.ShuffleColIdx
+		shuffleType := ndesc.Node.Stats.ShuffleType
 		if shuffleType == plan.ShuffleType_Hash {
 			buf.WriteString(" shuffle: hash(")
 			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
