@@ -122,10 +122,10 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 	sb := strings.Builder{}
 	defer sb.Reset()
 
-	tx, err := sqlDb.Begin()
-	if err != nil {
-		return 0, err
-	}
+	//tx, err := sqlDb.Begin()
+	//if err != nil {
+	//	return 0, err
+	//}
 
 	for idx, row := range records {
 		if len(row) == 0 {
@@ -161,9 +161,9 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 			//}
 			//ctx, cancel := context.WithTimeout(context.Background(), time_limit)
 			//defer cancel() // it's important to ensure all paths call cancel to avoid resource leak
-			_, err := tx.Exec(stmt)
+			_, err := sqlDb.Exec(stmt)
 			if err != nil {
-				tx.Rollback()
+				//tx.Rollback()
 				return 0, err
 			}
 			sb.Reset()
@@ -172,15 +172,17 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
+	//if err := tx.Commit(); err != nil {
+	//	return 0, err
+	//}
 
 	return len(records), nil
 }
 
 func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error) {
-
+	if len(records) == 0 {
+		return 0, nil
+	}
 	var err error
 	var cnt int
 	dbConn, err := db_holder.InitOrRefreshDBConn(false)
