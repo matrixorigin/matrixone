@@ -37,6 +37,36 @@ func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
 
+func GetRangeShuffleIndexSigned(minVal, maxVal, currentVal int64, upplerLimit uint64) uint64 {
+	if currentVal <= minVal {
+		return 0
+	} else if currentVal >= maxVal {
+		return upplerLimit - 1
+	} else {
+		step := uint64(maxVal-minVal) / upplerLimit
+		ret := uint64(currentVal-minVal) / step
+		if ret >= upplerLimit {
+			return upplerLimit - 1
+		}
+		return ret
+	}
+}
+
+func GetRangeShuffleIndexUnsigned(minVal, maxVal, currentVal uint64, upplerLimit uint64) uint64 {
+	if currentVal <= minVal {
+		return 0
+	} else if currentVal >= maxVal {
+		return upplerLimit - 1
+	} else {
+		step := (maxVal - minVal) / upplerLimit
+		ret := (currentVal - minVal) / step
+		if ret >= upplerLimit {
+			return upplerLimit - 1
+		}
+		return ret
+	}
+}
+
 func GetHashColumn(expr *plan.Expr) *plan.ColRef {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -55,6 +85,9 @@ func GetHashColumn(expr *plan.Expr) *plan.ColRef {
 func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) {
 	// hash by default
 	n.Stats.ShuffleType = plan.ShuffleType_Hash
+	if builder.qry.Nodes[n.Children[0]].NodeType != plan.Node_TABLE_SCAN {
+		return
+	}
 	if builder == nil {
 		return
 	}
