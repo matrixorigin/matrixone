@@ -1244,6 +1244,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		default:
 			return false
 		}
+
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		val_u, valOk := constExpr.C.Value.(*plan.Const_U64Val)
 		if !valOk {
@@ -1278,6 +1279,10 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		default:
 			return false
 		}
+
+	case types.T_decimal64, types.T_decimal128:
+		return columnT.Oid == types.T_decimal64 || columnT.Oid == types.T_decimal128
+
 	default:
 		return false
 	}
