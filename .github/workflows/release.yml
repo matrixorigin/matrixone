@@ -151,7 +151,7 @@ jobs:
           make build
       - name: Unlock Code-Signing Certificates
         run: |
-          security unlock-keychain -p ${{ secrets.CERT_PASSWORD }} mo_sign.keychain
+          security unlock-keychain -p ${{ secrets.SIGN_KEYCHAIN_PASSWORD }} mo_sign.keychain
       - name: Install gon via HomeBrew for code signing and app notarization
         env:
           AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
@@ -181,5 +181,6 @@ jobs:
           asset_name: mo-${{ steps.get_release.outputs.tag_name }}-darwin-arm64.zip
           asset_content_type: application/zip
       - name: Lock Code-Signing Certificates
+        if: ${{ always() }}
         run: |
           security lock-keychain mo_sign.keychain
