@@ -73,6 +73,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -796,6 +797,37 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 func constructOrder(n *plan.Node) *order.Argument {
 	return &order.Argument{
 		Fs: n.OrderBy,
+	}
+}
+
+func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *window.Argument {
+	aggs := make([]agg.Aggregate, len(n.WinSpecList))
+	typs := make([]types.Type, len(n.WinSpecList))
+	for i, expr := range n.WinSpecList {
+		f := expr.Expr.(*plan.Expr_W).W.WindowFunc.Expr.(*plan.Expr_F)
+		distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+		obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+		fun, err := function.GetFunctionById(ctx, obj)
+		if err != nil {
+			panic(err)
+		}
+		var e *plan.Expr = nil
+		if len(f.F.Args) > 0 {
+			e = f.F.Args[0]
+		}
+		aggs[i] = agg.Aggregate{
+			E:    e,
+			Dist: distinct,
+			Op:   fun.GetSpecialId(),
+		}
+		if e != nil {
+			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
+		}
+	}
+	return &window.Argument{
+		Types:       typs,
+		Aggs:        aggs,
+		WinSpecList: n.WinSpecList,
 	}
 }
 
