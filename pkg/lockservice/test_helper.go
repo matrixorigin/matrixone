@@ -90,7 +90,8 @@ func WaitWaiters(
 	ls LockService,
 	table uint64,
 	key []byte,
-	waitersCount int) error {
+	waitersCount int,
+	sameTxnCounts ...int) error {
 	s := ls.(*service)
 	v, err := s.getLockTable(table)
 	if err != nil {
@@ -104,8 +105,16 @@ func WaitWaiters(
 		panic("missing lock")
 	}
 	lb.mu.Unlock()
+
+OUTER:
 	for {
 		if lock.waiter.waiters.len() == waitersCount {
+			waiters := lock.waiter.waiters.all()
+			for i, n := range sameTxnCounts {
+				if len(waiters[i].sameTxnWaiters) != n {
+					continue OUTER
+				}
+			}
 			return nil
 		}
 		time.Sleep(time.Millisecond * 10)
