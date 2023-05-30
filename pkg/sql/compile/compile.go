@@ -1158,7 +1158,6 @@ func (c *Compile) compileTableScanOld(n *plan.Node) ([]*Scope, error) {
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	if n.TableDef.Partition != nil {
 		ss := make([]*Scope, 0)
-		//isPartitionTable = true
 		partitionInfo := n.TableDef.Partition
 		partitionNum := int(partitionInfo.PartitionNum)
 		partitionTableNames := partitionInfo.PartitionTableNames
@@ -1167,6 +1166,7 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 			copyNode := plan2.DeepCopyNode(n)
 			copyNode.TableDef.Name = partTableName
 			copyNode.TableDef.Partition = nil
+			n.Stats.BlockNum = 50
 			nodes, err := c.generateNodes(copyNode)
 			if err != nil {
 				return nil, err
