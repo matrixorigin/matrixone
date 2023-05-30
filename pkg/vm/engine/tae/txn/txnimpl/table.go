@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime/trace"
 	"time"
 
@@ -385,10 +386,16 @@ func (tbl *txnTable) SoftDeleteSegment(id *types.Segmentid) (err error) {
 }
 
 func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
+	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.Create.Add(1)
+	})
 	return tbl.createSegment(catalog.ES_Appendable, is1PC, nil)
 }
 
 func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
+	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.CreateNonAppendable.Add(1)
+	})
 	return tbl.createSegment(catalog.ES_NotAppendable, is1PC, opts)
 }
 

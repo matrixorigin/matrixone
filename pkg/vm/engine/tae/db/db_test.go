@@ -601,7 +601,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 	db := initDB(t, opts)
 	defer db.Close()
 
-	worker := ops.NewOpWorker("xx")
+	worker := ops.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 	schema := catalog.MockSchemaAll(13, 2)
@@ -762,7 +762,7 @@ func TestCompactMemAlter(t *testing.T) {
 	db := initDB(t, opts)
 	defer db.Close()
 
-	worker := ops.NewOpWorker("xx")
+	worker := ops.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 	schema := catalog.MockSchemaAll(5, 2)
@@ -822,7 +822,7 @@ func TestCompactBlock2(t *testing.T) {
 	db := initDB(t, opts)
 	defer db.Close()
 
-	worker := ops.NewOpWorker("xx")
+	worker := ops.NewOpWorker(context.Background(), "xx")
 	worker.Start()
 	defer worker.Stop()
 	schema := catalog.MockSchemaAll(13, 2)
