@@ -122,10 +122,10 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 	sb := strings.Builder{}
 	defer sb.Reset()
 
-	//tx, err := sqlDb.Begin()
-	//if err != nil {
-	//	return 0, err
-	//}
+	tx, err := sqlDb.Begin()
+	if err != nil {
+		return 0, err
+	}
 
 	for idx, row := range records {
 		if len(row) == 0 {
@@ -155,15 +155,16 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 
 		if sb.Len() >= maxLen || idx == len(records)-1 {
 			stmt := baseStr + sb.String() + ";"
-			time_limit := 3000 * time.Second
+			timeLimit := 3000 * time.Second
 			if tbl.Table == "rawlog" {
-				time_limit = 5 * time.Second
+				timeLimit = 15 * time.Second
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), time_limit)
+			ctx, cancel := context.WithTimeout(context.Background(), timeLimit)
 			defer cancel() // it's important to ensure all paths call cancel to avoid resource leak
-			_, err := sqlDb.ExecContext(ctx, stmt)
+			_, err := tx.ExecContext(ctx, stmt)
 			if err != nil {
-				//tx.Rollback()
+				tx.Rollback()
+				sb.Reset()
 				return 0, err
 			}
 			sb.Reset()
@@ -172,9 +173,9 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 		}
 	}
 
-	//if err := tx.Commit(); err != nil {
-	//	return 0, err
-	//}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
 
 	return len(records), nil
 }
@@ -194,7 +195,7 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 	cnt, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
 		logutil.Error("sqlWriter bulk insert failed", zap.Error(err), zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table), zap.Int("record_count", len(records)))
-		if strings.Contains(err.Error(), "bad connection") {
+		if strings.Contains(err.Error(), "bad connection") || strings.Contains(err.Error(), "invalid connection") {
 			db_holder.InitOrRefreshDBConn(true)
 		}
 		return 0, err

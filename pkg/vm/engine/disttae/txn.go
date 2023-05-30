@@ -134,11 +134,12 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			S3SizeThreshold = colexec.TagS3SizeForMOLogger
 		}
 	}
-
+	logutil.Info("DumpBatchS3 skip or not", zap.Uint64("workspaceSize", txn.workspaceSize), zap.Int("offset", offset), zap.Bool("force", force), zap.Uint64("len", S3SizeThreshold))
 	if !(offset > 0 || txn.workspaceSize >= colexec.WriteS3Threshold ||
 		(force && txn.workspaceSize >= S3SizeThreshold)) {
 		return nil
 	}
+
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].bat == nil {
 			continue
@@ -165,7 +166,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			mp[key] = append(mp[key], bat)
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
-			// maybe this will cause that the log imcrements unlimitly
+			// maybe this will cause that the log increments unlimitedly
 			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
 			// i--
 			txn.writes[i].bat = nil
