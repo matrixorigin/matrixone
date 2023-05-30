@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions, buf *bytes.Buffer) error {
@@ -39,6 +39,7 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			buf.WriteString(strconv.Itoa(int(exprImpl.Col.ColPos)))
 			buf.WriteString("]")
 		}
+
 	case *plan.Expr_C:
 		if exprImpl.C.Isnull {
 			buf.WriteString("(null)")
@@ -66,6 +67,12 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			fmt.Fprintf(buf, "%v", strconv.FormatFloat(float64(val.Fval), 'f', -1, 32))
 		case *plan.Const_Dval:
 			fmt.Fprintf(buf, "%v", strconv.FormatFloat(val.Dval, 'f', -1, 64))
+		case *plan.Const_Dateval:
+			fmt.Fprintf(buf, "%s", types.Date(val.Dateval))
+		case *plan.Const_Datetimeval:
+			fmt.Fprintf(buf, "%s", types.Date(val.Datetimeval))
+		case *plan.Const_Timeval:
+			fmt.Fprintf(buf, "%s", types.Date(val.Timeval))
 		case *plan.Const_Sval:
 			buf.WriteString("'" + val.Sval + "'")
 		case *plan.Const_Bval:

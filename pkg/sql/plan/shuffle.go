@@ -65,9 +65,6 @@ func GetShuffleIndexForGroupBy(n *plan.Node) int {
 	if n.Stats.HashmapSize < HashMapSizeForBucket {
 		return -1
 	}
-	if n.Stats.Outcnt/n.Stats.Cost < 0.1 {
-		return -1
-	}
 	//find the highest ndv
 	highestNDV := n.GroupBy[0].Ndv
 	idx := 0
