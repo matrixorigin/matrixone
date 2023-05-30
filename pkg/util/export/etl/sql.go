@@ -194,6 +194,9 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 	cnt, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
 	if err != nil {
 		logutil.Error("sqlWriter bulk insert failed", zap.Error(err), zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table), zap.Int("record_count", len(records)))
+		if strings.Contains(err.Error(), "bad connection") {
+			db_holder.InitOrRefreshDBConn(true)
+		}
 		return 0, err
 	} else {
 		logutil.Debug("sqlWriter finished the bulk insert", zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table), zap.Int("record_count", len(records)))
