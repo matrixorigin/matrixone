@@ -26,6 +26,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -5834,7 +5836,7 @@ func Test_doDropUser(t *testing.T) {
 }
 
 func Test_doInterpretCall(t *testing.T) {
-	convey.Convey("call precedure fail", t, func() {
+	convey.Convey("call precedure (not exist)fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -5849,7 +5851,17 @@ func Test_doInterpretCall(t *testing.T) {
 
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
-		ses.SetDatabaseName("test_procedure")
+		proc := testutil.NewProcess()
+		proc.FileService = ses.pu.FileService
+		ses.GetTxnCompileCtx().SetProcess(proc)
+		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.SetDatabaseName("procedure_test")
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5861,11 +5873,11 @@ func Test_doInterpretCall(t *testing.T) {
 		mrs := newMrsForPasswordOfUser([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err = doInterpretCall(ses.GetConnectContext(), ses, call)
+		_, err = doInterpretCall(ctx, ses, call)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
-	convey.Convey("call precedure succ", t, func() {
+	convey.Convey("call precedure (not support)fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -5880,7 +5892,17 @@ func Test_doInterpretCall(t *testing.T) {
 
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
-		ses.SetDatabaseName("test_procedure")
+		proc := testutil.NewProcess()
+		proc.FileService = ses.pu.FileService
+		ses.GetTxnCompileCtx().SetProcess(proc)
+		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.SetDatabaseName("procedure_test")
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
 
 		//no result set
 		bh.sql2result["begin;"] = nil
@@ -5890,12 +5912,22 @@ func Test_doInterpretCall(t *testing.T) {
 		sql, err := getSqlForSpBody(ses.GetConnectContext(), string(call.Name.Name.ObjectName), ses.GetDatabaseName())
 		convey.So(err, convey.ShouldBeNil)
 		mrs := newMrsForPasswordOfUser([][]interface{}{
-			{"begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end", ""},
+			{"begin set sid = 1000; end", "{}"},
 		})
 		bh.sql2result[sql] = mrs
 
-		_, err = doInterpretCall(ses.GetConnectContext(), ses, call)
-		convey.So(err, convey.ShouldNotBeNil)
+		sql = getSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForGetSystemVariableValueWithDatabase("procedure_test", "version_compatibility")
+		mrs = newMrsForPasswordOfUser([][]interface{}{
+			{"0.7"},
+		})
+		bh.sql2result[sql] = mrs
+
+		_, err = doInterpretCall(ctx, ses, call)
+		convey.So(err, convey.ShouldBeNil)
 	})
 }
 
