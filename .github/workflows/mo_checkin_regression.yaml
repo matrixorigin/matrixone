@@ -407,6 +407,7 @@ jobs:
           
       - name: Start TPCC 10 Warehouses 50 terminals Test
         if: ${{ always() && !cancelled() }}
+        timeout-minutes: 15
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -430,6 +431,7 @@ jobs:
           fi
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() }}
+        timeout-minutes: 15
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
