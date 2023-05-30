@@ -114,13 +114,18 @@ func (s *StatementInfo) GetName() string {
 // status: 7
 // spanInfo: 36+16
 const deltaStmtContentLength = int64(36*3 + 26*2 + 7 + 36 + 16)
+const jsonByteLength = int64(4096)
 
 func (s *StatementInfo) Size() int64 {
-	return int64(unsafe.Sizeof(s)) + deltaStmtContentLength + int64(
+	num := int64(unsafe.Sizeof(s)) + deltaStmtContentLength + int64(
 		len(s.Account)+len(s.User)+len(s.Host)+
 			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag)+
 			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsJsonByte),
 	)
+	if s.jsonByte == nil {
+		return num + jsonByteLength
+	}
+	return num
 }
 
 func (s *StatementInfo) Free() {
@@ -203,11 +208,11 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 //
 // please used in s.mux.Lock()
 func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
-	var jsonByte []byte
-	var statsJsonByte []byte
 	var stats Statistic
 
-	if s.ExecPlan == nil {
+	if s.jsonByte != nil {
+		goto endL
+	} else if s.ExecPlan == nil {
 		uuidStr := uuid.UUID(s.StatementID).String()
 		return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr),
 			`{"code":200,"message":"NO ExecPlan"}`
@@ -219,10 +224,11 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
 		//	jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		//}
 	}
-	if len(statsJsonByte) == 0 {
+	if len(s.statsJsonByte) == 0 {
 		s.statsJsonByte = []byte("{}")
 	}
-	return util.UnsafeBytesToString(jsonByte), util.UnsafeBytesToString(statsJsonByte)
+endL:
+	return util.UnsafeBytesToString(s.jsonByte), util.UnsafeBytesToString(s.statsJsonByte)
 }
 
 type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
