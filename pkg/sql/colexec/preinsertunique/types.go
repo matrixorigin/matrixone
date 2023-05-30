@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,4 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package function
+package preinsertunique
+
+import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+type Argument struct {
+	Ctx          context.Context
+	PreInsertCtx *plan.PreInsertUkCtx
+}
+
+func (arg *Argument) Free(*process.Process, bool) {}

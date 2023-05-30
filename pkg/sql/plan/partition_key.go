@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -93,7 +94,7 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 	}
 
 	partitionDef.PartitionMsg = tree.String(partitionSyntaxDef, dialect.MYSQL)
-	tableDef.Partition = partitionDef
+	//tableDef.Partition = partitionDef
 	return nil
 }
 
@@ -118,7 +119,14 @@ func (kpb *keyPartitionBuilder) buildEvalPartitionExpression(ctx context.Context
 	}
 
 	partitionAst := genPartitionAst(astExprs, int64(partitionDef.PartitionNum))
-	partitionExpression, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
+	tempExpr, err := partitionBinder.baseBindExpr(partitionAst, 0, true)
+	if err != nil {
+		return err
+	}
+	partitionExpression, err := appendCastBeforeExpr(ctx, tempExpr, &plan.Type{
+		Id:          int32(types.T_int32),
+		NotNullable: true,
+	})
 	if err != nil {
 		return err
 	}
