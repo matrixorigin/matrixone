@@ -176,7 +176,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 	}
 
 	if bat.Length() == 0 {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return false, nil
 	}
 
@@ -250,7 +250,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	}
 
 	if bat.Length() == 0 {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return false, nil
 	}
 

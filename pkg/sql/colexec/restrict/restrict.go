@@ -48,7 +48,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		return true, nil
 	}
 	if bat.Length() == 0 {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
@@ -115,7 +115,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		proc.Mp().PutSels(sels)
 	}
 	if ap.IsEnd {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		proc.SetInputBatch(nil)
 	} else {
 		anal.Output(bat, isLast)

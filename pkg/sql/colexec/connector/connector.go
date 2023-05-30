@@ -37,7 +37,7 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 		return true, nil
 	}
 	if bat.Length() == 0 {
-		bat.Clean(proc.Mp())
+		proc.PutBatch(bat)
 		return false, nil
 	}
 	select {

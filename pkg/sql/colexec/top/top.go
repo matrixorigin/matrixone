@@ -75,7 +75,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				continue
 			}
 			if bat.Length() == 0 {
-				bat.Clean(proc.Mp())
+				proc.PutBatch(bat)
 				return false, nil
 			}
 			if ap.Limit == 0 {
@@ -152,7 +152,7 @@ func (ctr *container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 			ctr.cmps[i] = compare.New(*bat.Vecs[i].GetType(), desc, nullsLast)
 		}
 	}
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	proc.Reg.InputBatch = batch.EmptyBatch
 	return ctr.processBatch(ap.Limit, bat, proc)
 }
