@@ -27,11 +27,11 @@ count(*)
 1
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'c') g;
 invalid input: bad input column name c
-select column_name, rows_count, null_count, compress_size, origin_size from metadata_scan('table_func_metadata_scan.t', 'a') g;
-column_name    rows_count    null_count    compress_size    origin_size
+select col_name, rows_cnt, null_cnt, compress_size, origin_size from metadata_scan('table_func_metadata_scan.t', 'a') g;
+col_name    rows_cnt    null_cnt    compress_size    origin_size
 a    8192    0    5384    32805
-select column_name, rows_count, null_count, compress_size, origin_size from metadata_scan('table_func_metadata_scan.t', '*') g;
-column_name    rows_count    null_count    compress_size    origin_size
+select col_name, rows_cnt, null_cnt, compress_size, origin_size from metadata_scan('table_func_metadata_scan.t', '*') g;
+col_name    rows_cnt    null_cnt    compress_size    origin_size
 a    8192    0    5384    32805
 b    8192    4096    7254    197697
 select sum(compress_size) from metadata_scan('table_func_metadata_scan.t', '*') g;

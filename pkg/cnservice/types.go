@@ -176,6 +176,10 @@ type Config struct {
 		// feature was turned off in 0.8 and is not supported for now. The replacement solution is
 		// to return a retry error and let the whole computation re-execute.
 		EnableRefreshExpression bool `toml:"enable-refresh-expression"`
+		// DisableLeakCheck enable txn leak check
+		DisableLeakCheck bool `toml:"enable-leak-check"`
+		// MaxActiveAges a txn max active duration
+		MaxActiveAges toml.Duration `toml:"max-active-ages"`
 	} `toml:"txn"`
 
 	// Ctl ctl service config. CtlService is used to handle ctl request. See mo_ctl for detail.
@@ -254,6 +258,9 @@ func (c *Config) Validate() error {
 	}
 	if !txn.ValidTxnMode(c.Txn.Mode) {
 		return moerr.NewBadDBNoCtx("not support txn mode: " + c.Txn.Mode)
+	}
+	if c.Txn.MaxActiveAges.Duration == 0 {
+		c.Txn.MaxActiveAges.Duration = time.Minute * 2
 	}
 	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
