@@ -19,6 +19,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -94,6 +95,15 @@ func WithEnableRefreshExpression() TxnClientCreateOption {
 	}
 }
 
+// WithEnableLeakCheck enable txn leak check. Used to found any txn is not committed or rollbacked.
+func WithEnableLeakCheck(
+	maxActiveAges time.Duration,
+	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.leakChecker = newLeakCheck(maxActiveAges, leakHandleFunc)
+	}
+}
+
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
@@ -102,6 +112,7 @@ type txnClient struct {
 	generator                  TxnIDGenerator
 	lockService                lockservice.LockService
 	timestampWaiter            TimestampWaiter
+	leakChecker                *leakChecker
 	enableCNBasedConsistency   bool
 	enableSacrificingFreshness bool
 	enableRefreshExpression    bool
@@ -134,6 +145,7 @@ func NewTxnClient(
 		opt(c)
 	}
 	c.adjust()
+	c.startLeakChecker()
 	return c
 }
 
@@ -174,6 +186,7 @@ func (client *txnClient) New(
 	op.AppendEventCallback(ClosedEvent,
 		client.updateLastCommitTS,
 		client.popTransaction)
+	client.addToLeakCheck(op)
 	return op, nil
 }
 
@@ -187,6 +200,9 @@ func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
 }
 
 func (client *txnClient) Close() error {
+	if client.leakChecker != nil {
+		client.leakChecker.close()
+	}
 	return client.sender.Close()
 }
 
@@ -281,6 +297,8 @@ func (client *txnClient) popTransaction(txn txn.TxnMeta) {
 	case i == 0:
 		client.mu.minTS = client.mu.txns[i].SnapshotTS
 	}
+
+	client.removeFromLeakCheck(txn.ID)
 }
 
 func (client *txnClient) pushTransaction(txn txn.TxnMeta) {
@@ -297,5 +315,23 @@ func (client *txnClient) pushTransaction(txn txn.TxnMeta) {
 	}
 	if client.mu.minTS.IsEmpty() || txn.SnapshotTS.Less(client.mu.minTS) {
 		client.mu.minTS = txn.SnapshotTS
+	}
+}
+
+func (client *txnClient) startLeakChecker() {
+	if client.leakChecker != nil {
+		client.leakChecker.start()
+	}
+}
+
+func (client *txnClient) addToLeakCheck(op *txnOperator) {
+	if client.leakChecker != nil {
+		client.leakChecker.txnOpened(op.txnID, op.option.createBy)
+	}
+}
+
+func (client *txnClient) removeFromLeakCheck(id []byte) {
+	if client.leakChecker != nil {
+		client.leakChecker.txnClosed(id)
 	}
 }
