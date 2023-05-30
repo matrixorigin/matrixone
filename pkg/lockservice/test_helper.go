@@ -98,23 +98,30 @@ func WaitWaiters(
 		return err
 	}
 
-	lb := v.(*localLockTable)
-	lb.mu.Lock()
-	lock, ok := lb.mu.store.Get(key)
-	if !ok {
-		panic("missing lock")
-	}
-	lb.mu.Unlock()
+	fn := func() bool {
+		lb := v.(*localLockTable)
+		lb.mu.Lock()
+		defer lb.mu.Unlock()
 
-OUTER:
-	for {
+		lock, ok := lb.mu.store.Get(key)
+		if !ok {
+			panic("missing lock")
+		}
+
 		if lock.waiter.waiters.len() == waitersCount {
 			waiters := lock.waiter.waiters.all()
 			for i, n := range sameTxnCounts {
 				if len(waiters[i].sameTxnWaiters) != n {
-					continue OUTER
+					return false
 				}
 			}
+			return true
+		}
+		return false
+	}
+
+	for {
+		if fn() {
 			return nil
 		}
 		time.Sleep(time.Millisecond * 10)
