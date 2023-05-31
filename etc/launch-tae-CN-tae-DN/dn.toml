@@ -2,7 +2,7 @@ service-type = "DN"
 data-dir = "./mo-data"
 
 [log]
-level = "debug"
+level = "info"
 format = "console"
 max-size = 512
 
@@ -45,7 +45,7 @@ log-backend = "logservice"
 incremental-dedup = false
 
 [dn.Ckp]
-flush-interval = "6s"
+flush-interval = "60s"
 min-count = 100
 scan-interval = "5s"
 incremental-interval = "180s"
