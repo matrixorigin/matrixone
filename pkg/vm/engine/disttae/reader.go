@@ -55,7 +55,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 		r.currentStep++
 	}()
 
-	info := r.blks[0]
+	blockInfo := r.blks[0]
 
 	if len(cols) != len(r.seqnums) {
 		if len(r.seqnums) == 0 {
@@ -98,14 +98,18 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, info, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	bat, err := blockio.BlockRead(r.ctx, blockInfo, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
 	bat.SetAttributes(cols)
 
-	// if it's not sorted, just return
-	if !r.blks[0].Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
+	if blockInfo.Sorted && r.pkidxInColIdxs != -1 {
+		bat.GetVector(int32(r.pkidxInColIdxs)).SetSorted(true)
+	}
+
+	// if it's not sorted or no filter expr, just return
+	if !blockInfo.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
 		return bat, nil
 	}
 

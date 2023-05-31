@@ -100,12 +100,14 @@ func (blk *block) GetColumnDataByIds(
 // Notice that for non-appendable block, if it is visible to txn,
 // then all the block data pointed by meta location also be visible to txn;
 func (blk *block) GetColumnDataById(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
 ) (view *model.ColumnView, err error) {
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnData(
+		ctx,
 		txn,
 		schema,
 		col,
@@ -144,6 +146,7 @@ func (blk *block) BatchDedup(
 }
 
 func (blk *block) GetValue(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	row, col int) (v any, isNull bool, err error) {
@@ -151,6 +154,7 @@ func (blk *block) GetValue(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.getPersistedValue(
+		ctx,
 		node.MustPNode(),
 		txn,
 		schema,

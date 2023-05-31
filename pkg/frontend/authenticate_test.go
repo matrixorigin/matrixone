@@ -7533,7 +7533,7 @@ func TestGetSqlForInsertIntoMoPubs(t *testing.T) {
 		},
 	}
 	for _, k := range kases {
-		_, err := getSqlForInsertIntoMoPubs(ctx, k.pubName, k.databaseName, 0, false, true, "", "", 1, 1, "", true)
+		_, err := getSqlForInsertIntoMoPubs(ctx, k.pubName, k.databaseName, 0, false, "", "", 1, 1, "", true)
 		require.Equal(t, k.err, err != nil)
 	}
 }
@@ -7559,13 +7559,15 @@ func TestDoCreatePublication(t *testing.T) {
 		Name:     "pub1",
 		Database: "db1",
 		Comment:  "124",
-		Accounts: []tree.Identifier{"a1", "a2"},
+		AccountsSet: &tree.AccountsSetOption{
+			SetAccounts: tree.IdentifierList{"a1", "a2"},
+		},
 	}
 	sql1, err := getSqlForGetDbIdAndType(ctx, string(sa.Database), true, 0)
 	require.NoError(t, err)
 	bh := &backgroundExecTest{}
 	bh.init()
-	sql2, err := getSqlForInsertIntoMoPubs(ctx, string(sa.Name), string(sa.Database), 0, true, false, "", "a1, a2", tenant.GetDefaultRoleID(), tenant.GetUserID(), sa.Comment, true)
+	sql2, err := getSqlForInsertIntoMoPubs(ctx, string(sa.Name), string(sa.Database), 0, true, "", "a1, a2", tenant.GetDefaultRoleID(), tenant.GetUserID(), sa.Comment, true)
 	require.NoError(t, err)
 	bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 	defer bhStub.Reset()
@@ -7657,12 +7659,6 @@ func TestDoAlterPublication(t *testing.T) {
 	columns := []Column{
 		&MysqlColumn{
 			ColumnImpl: ColumnImpl{
-				name:       "all_account",
-				columnType: defines.MYSQL_TYPE_BOOL,
-			},
-		},
-		&MysqlColumn{
-			ColumnImpl: ColumnImpl{
 				name:       "account_list",
 				columnType: defines.MYSQL_TYPE_VARCHAR,
 			},
@@ -7679,7 +7675,6 @@ func TestDoAlterPublication(t *testing.T) {
 		comment     string
 		accountsSet *tree.AccountsSetOption
 		accountList string
-		allAccount  bool
 		data        [][]any
 		err         bool
 	}{
@@ -7690,8 +7685,7 @@ func TestDoAlterPublication(t *testing.T) {
 				All: true,
 			},
 			accountList: "121",
-			allAccount:  true,
-			data:        [][]any{{"true", "", "121"}},
+			data:        [][]any{{"all", "121"}},
 			err:         false,
 		},
 		{
@@ -7703,8 +7697,7 @@ func TestDoAlterPublication(t *testing.T) {
 				},
 			},
 			accountList: "a0",
-			allAccount:  false,
-			data:        [][]any{{"false", "a0", "121"}},
+			data:        [][]any{{"a0", "121"}},
 			err:         false,
 		},
 		{
@@ -7716,8 +7709,7 @@ func TestDoAlterPublication(t *testing.T) {
 				},
 			},
 			accountList: "a0",
-			allAccount:  false,
-			data:        [][]any{{"false", "a0", "121"}},
+			data:        [][]any{{"a0", "121"}},
 			err:         false,
 		},
 		{
@@ -7728,9 +7720,8 @@ func TestDoAlterPublication(t *testing.T) {
 					tree.Identifier("a1"),
 				},
 			},
-			allAccount:  true,
-			accountList: "",
-			data:        [][]any{{"true", "", "121"}},
+			accountList: "all",
+			data:        [][]any{{"all", "121"}},
 			err:         true,
 		},
 	}
@@ -7743,7 +7734,7 @@ func TestDoAlterPublication(t *testing.T) {
 		}
 		sql1, err := getSqlForGetPubInfo(ctx, string(sa.Name), true)
 		require.NoError(t, err)
-		sql2, err := getSqlForUpdatePubInfo(ctx, string(sa.Name), kase.allAccount, kase.accountList, sa.Comment, true)
+		sql2, err := getSqlForUpdatePubInfo(ctx, string(sa.Name), kase.accountList, sa.Comment, true)
 		require.NoError(t, err)
 
 		bh := &backgroundExecTest{}
@@ -7840,7 +7831,6 @@ func TestCheckSubscriptionValid(t *testing.T) {
 		accStatus string
 
 		databaseName string
-		allAccount   bool
 		accountList  string
 
 		sqls  []string
@@ -7876,8 +7866,7 @@ func TestCheckSubscriptionValid(t *testing.T) {
 			accStatus: "",
 
 			databaseName: "t1",
-			allAccount:   true,
-			accountList:  "",
+			accountList:  "all",
 
 			sqls: []string{},
 			err:  false,
@@ -7893,7 +7882,6 @@ func TestCheckSubscriptionValid(t *testing.T) {
 			accStatus: "",
 
 			databaseName: "t1",
-			allAccount:   false,
 			accountList:  "sys",
 
 			sqls: []string{},
@@ -7910,7 +7898,6 @@ func TestCheckSubscriptionValid(t *testing.T) {
 			accStatus: "",
 
 			databaseName: "t1",
-			allAccount:   false,
 			accountList:  "sys",
 
 			sqls: []string{},
@@ -7927,7 +7914,6 @@ func TestCheckSubscriptionValid(t *testing.T) {
 			accStatus: tree.AccountStatusSuspend.String(),
 
 			databaseName: "t1",
-			allAccount:   false,
 			accountList:  "sys",
 
 			sqls: []string{},
@@ -7944,7 +7930,6 @@ func TestCheckSubscriptionValid(t *testing.T) {
 			accStatus: tree.AccountStatusSuspend.String(),
 
 			databaseName: "t1",
-			allAccount:   false,
 			accountList:  "sys",
 
 			sqls: []string{},
@@ -7960,7 +7945,7 @@ func TestCheckSubscriptionValid(t *testing.T) {
 		}
 		kases[idx].datas = [][][]interface{}{
 			{{kases[idx].accId, kases[idx].accStatus}},
-			{{kases[idx].databaseName, kases[idx].allAccount, kases[idx].accountList}},
+			{{kases[idx].databaseName, kases[idx].accountList}},
 		}
 
 		if !kases[idx].accExists {
@@ -7990,7 +7975,11 @@ func TestCheckSubscriptionValid(t *testing.T) {
 		}
 
 		_, err := checkSubscriptionValid(ctx, ses, kases[idx].createSql)
-		require.Equal(t, kases[idx].err, err != nil)
+		if kases[idx].err {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
 	}
 
 }

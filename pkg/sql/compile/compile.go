@@ -1185,8 +1185,8 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
-		if n.ObjRef.PubAccountId != -1 {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
+		if n.ObjRef.PubInfo != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.TenantId))
 		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
@@ -1258,7 +1258,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			RelationName:           n.TableDef.Name,
 			PartitionRelationNames: partitionRelNames,
 			SchemaName:             n.ObjRef.SchemaName,
-			AccountId:              n.ObjRef.PubAccountId,
+			AccountId:              n.ObjRef.GetPubInfo(),
 			Expr:                   colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
@@ -1765,7 +1765,7 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node,
 	}
 
 	for i := range children {
-		children[i].Instructions = append(children[i].Instructions, vm.Instruction{
+		children[i].appendInstruction(vm.Instruction{
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: currentIsFirst,
@@ -1773,11 +1773,11 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node,
 		})
 	}
 
-	children = c.compileProjection(n, children)
+	children = c.compileProjection(n, c.compileRestrict(n, children))
 
 	// recovery the children's last operator
 	for i := range children {
-		children[i].Instructions = append(children[i].Instructions, lastOperator[i])
+		children[i].appendInstruction(lastOperator[i])
 	}
 
 	for i := range ss {
@@ -1972,6 +1972,7 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scop
 			ss = append(ss, tmp)
 		}
 	*/
+
 	// Force right join to execute on one CN due to right join issue
 	// Will fix in future
 	maxCpuNum := 1
@@ -2229,12 +2230,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
-	// Allow the general accounts to access statement_info
+	if n.ObjRef.PubInfo != nil {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.GetTenantId()))
+	}
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	}
-	if n.ObjRef.PubAccountId != -1 {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
