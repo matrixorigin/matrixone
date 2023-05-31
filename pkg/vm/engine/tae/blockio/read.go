@@ -74,6 +74,9 @@ func BlockCompactionRead(
 	if err != nil {
 		return nil, err
 	}
+	if len(deletes) == 0 {
+		return loaded, nil
+	}
 	result := batch.NewWithSize(len(loaded.Vecs))
 	for i, col := range loaded.Vecs {
 		typ := *col.GetType()
@@ -81,9 +84,7 @@ func BlockCompactionRead(
 		if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
 			break
 		}
-		if len(deletes) > 0 {
-			result.Vecs[i].Shrink(deletes, true)
-		}
+		result.Vecs[i].Shrink(deletes, true)
 	}
 
 	if err != nil {
