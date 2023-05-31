@@ -17,6 +17,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"time"
 	"unsafe"
 
@@ -175,7 +176,7 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 	return
 }
 
-func (task *mergeBlocksTask) Execute() (err error) {
+func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	logutil.Info("[Start] Mergeblocks", common.OperationField(task.Name()),
 		common.OperandField(task))
 	now := time.Now()
@@ -232,7 +233,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 
 	for i, block := range task.compacted {
-		if view, err = block.GetColumnDataById(sortColDef.Idx); err != nil {
+		if view, err = block.GetColumnDataById(ctx, sortColDef.Idx); err != nil {
 			return
 		}
 		defer view.Close()
@@ -312,7 +313,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		// If only one single sort key, it was processed before
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
-			if view, err = block.GetColumnDataById(def.Idx); err != nil {
+			if view, err = block.GetColumnDataById(ctx, def.Idx); err != nil {
 				return
 			}
 			defer view.Close()
@@ -348,7 +349,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return err
 		}
 	}
-	blocks, _, err := writer.Sync(context.Background())
+	blocks, _, err := writer.Sync(ctx)
 	if err != nil {
 		return err
 	}
@@ -400,5 +401,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		common.OperationField(task.Name()),
 		common.OperandField(task),
 		common.DurationField(time.Since(now)))
+
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.MergeBlocks.Add(1)
+	})
 	return err
 }

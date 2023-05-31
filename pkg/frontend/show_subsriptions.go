@@ -41,6 +41,21 @@ var (
 			},
 		},
 	}
+
+	showPublicationOutputColumns = [2]Column{
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "Name",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "Database",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+	}
 )
 
 func getSqlForShowSubscriptions(_ context.Context, accId uint32) (string, error) {

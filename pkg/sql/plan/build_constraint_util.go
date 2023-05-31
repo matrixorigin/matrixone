@@ -259,7 +259,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
 	}
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		return moerr.NewInternalError(ctx.GetContext(), "cannot insert/update/delete from public table")
 	}
 
@@ -281,10 +281,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	nowIdx := len(tblInfo.tableDefs)
 	tblInfo.isClusterTable = append(tblInfo.isClusterTable, isClusterTable)
 	tblInfo.objRef = append(tblInfo.objRef, &ObjectRef{
-		Obj:          int64(tableDef.TblId),
-		SchemaName:   dbName,
-		ObjName:      tblName,
-		PubAccountId: -1,
+		Obj:        int64(tableDef.TblId),
+		SchemaName: dbName,
+		ObjName:    tblName,
 	})
 	tblInfo.tableDefs = append(tblInfo.tableDefs, tableDef)
 	key := dbName + "." + tblName
