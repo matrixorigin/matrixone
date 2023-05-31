@@ -804,6 +804,7 @@ func waitWaiters(
 	s *service,
 	table uint64,
 	key []byte,
-	waitersCount int) {
-	require.NoError(t, WaitWaiters(s, table, key, waitersCount))
+	waitersCount int,
+	sameTxnCounts ...int) {
+	require.NoError(t, WaitWaiters(s, table, key, waitersCount, sameTxnCounts...))
 }

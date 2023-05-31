@@ -251,10 +251,16 @@ func (rb *remoteBackend) adjust() {
 }
 
 func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, error) {
+	if ctx == nil {
+		panic("remoteBackend Send nil context")
+	}
 	return rb.send(ctx, request, false)
 }
 
 func (rb *remoteBackend) SendInternal(ctx context.Context, request Message) (*Future, error) {
+	if ctx == nil {
+		panic("remoteBackend SendInternal nil context")
+	}
 	return rb.send(ctx, request, true)
 }
 
