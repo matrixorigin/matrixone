@@ -408,6 +408,11 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				moprobe.WithRegion(ctx, moprobe.SubscriptionPullLogTail, func() {
 					tail, closeCB, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
 				})
+				defer func() {
+					if closeCB != nil {
+						closeCB()
+					}
+				}()
 				if subErr != nil {
 					logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
 					if err := sub.session.SendErrorResponse(
@@ -423,9 +428,6 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				if subErr != nil {
 					logger.Error("fail to send subscription response", zap.Error(subErr))
 					return
-				}
-				if closeCB != nil {
-					closeCB()
 				}
 
 				// mark table as subscribed
