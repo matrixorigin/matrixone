@@ -905,7 +905,8 @@ func consumeLogTailOfPushWithoutLazyLoad(
 	tableName string,
 ) (err error) {
 	var entries []*api.Entry
-	if entries, err = taeLogtail.LoadCheckpointEntries(
+	var closeCBs []func()
+	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
 		ctx,
 		lt.CkpLocation,
 		tableId, tableName,
@@ -918,7 +919,11 @@ func consumeLogTailOfPushWithoutLazyLoad(
 			return
 		}
 	}
-
+	for _, cb := range closeCBs {
+		if cb != nil {
+			cb()
+		}
+	}
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, &lt.Commands[i]); err != nil {

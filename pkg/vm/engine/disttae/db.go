@@ -293,7 +293,7 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 		state, doneMutate := part.MutateState()
 
 		if err := state.ConsumeCheckpoints(func(checkpoint string) error {
-			entries, err := logtail.LoadCheckpointEntries(
+			entries, closeCBs, err := logtail.LoadCheckpointEntries(
 				ctx,
 				checkpoint,
 				tbl.tableId,
@@ -307,6 +307,11 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) error {
 			for _, entry := range entries {
 				if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
 					return err
+				}
+			}
+			for _, cb := range closeCBs {
+				if cb != nil {
+					cb()
 				}
 			}
 			return nil

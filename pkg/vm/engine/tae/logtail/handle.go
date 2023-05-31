@@ -659,9 +659,9 @@ func LoadCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	fs fileservice.FileService) ([]*api.Entry, error) {
+	fs fileservice.FileService) ([]*api.Entry, []func(), error) {
 	if metLoc == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	now := time.Now()
 	defer func() {
@@ -675,16 +675,16 @@ func LoadCheckpointEntries(
 	for i, key := range locations {
 		location, err := blockio.EncodeLocationFromString(key)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		reader, err := blockio.NewObjectReader(fs, location)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		readers[i] = reader
 		err = blockio.PrefetchMeta(fs, location)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		objectLocations[i] = location
 	}
@@ -692,7 +692,7 @@ func LoadCheckpointEntries(
 	for i := range locations {
 		pref, err := blockio.BuildPrefetchParams(fs, objectLocations[i])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for idx, item := range checkpointDataRefer {
 			idxes := make([]uint16, len(item.attrs))
@@ -703,7 +703,7 @@ func LoadCheckpointEntries(
 		}
 		err = blockio.PrefetchWithMerged(pref)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 	}
@@ -714,7 +714,7 @@ func LoadCheckpointEntries(
 			var bat *containers.Batch
 			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), readers[i])
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			data.bats[idx] = bat
 		}
@@ -722,11 +722,18 @@ func LoadCheckpointEntries(
 	}
 
 	entries := make([]*api.Entry, 0)
+	closeCBs := make([]func(), 0)
 	for i := range locations {
 		data := datas[i]
 		ins, del, cnIns, segDel, err := data.GetTableData(tableID)
+		closeCBs = append(closeCBs, data.Close)
 		if err != nil {
-			return nil, err
+			for _, cb := range closeCBs {
+				if cb != nil {
+					cb()
+				}
+			}
+			return nil, nil, err
 		}
 		if tableName != pkgcatalog.MO_DATABASE &&
 			tableName != pkgcatalog.MO_COLUMNS &&
@@ -778,5 +785,5 @@ func LoadCheckpointEntries(
 			entries = append(entries, entry)
 		}
 	}
-	return entries, nil
+	return entries, closeCBs, nil
 }

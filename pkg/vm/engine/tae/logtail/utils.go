@@ -288,13 +288,13 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *a
 		insTaeBat = data.bats[DBInsertIDX]
 		delTaeBat = data.bats[DBDeleteIDX]
 		if insTaeBat != nil {
-			ins, err = containersBatchToProtoBatch(insTaeBat)
+			ins, err = containersBatchToProtoBatchNoCopy(insTaeBat)
 			if err != nil {
 				return
 			}
 		}
 		if delTaeBat != nil {
-			del, err = containersBatchToProtoBatch(delTaeBat)
+			del, err = containersBatchToProtoBatchNoCopy(delTaeBat)
 			if err != nil {
 				return
 			}
@@ -304,13 +304,13 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *a
 		insTaeBat = data.bats[TBLInsertIDX]
 		delTaeBat = data.bats[TBLDeleteIDX]
 		if insTaeBat != nil {
-			ins, err = containersBatchToProtoBatch(insTaeBat)
+			ins, err = containersBatchToProtoBatchNoCopy(insTaeBat)
 			if err != nil {
 				return
 			}
 		}
 		if delTaeBat != nil {
-			del, err = containersBatchToProtoBatch(delTaeBat)
+			del, err = containersBatchToProtoBatchNoCopy(delTaeBat)
 			if err != nil {
 				return
 			}
@@ -320,13 +320,13 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *a
 		insTaeBat = data.bats[TBLColInsertIDX]
 		delTaeBat = data.bats[TBLColDeleteIDX]
 		if insTaeBat != nil {
-			ins, err = containersBatchToProtoBatch(insTaeBat)
+			ins, err = containersBatchToProtoBatchNoCopy(insTaeBat)
 			if err != nil {
 				return
 			}
 		}
 		if delTaeBat != nil {
-			del, err = containersBatchToProtoBatch(delTaeBat)
+			del, err = containersBatchToProtoBatchNoCopy(delTaeBat)
 			if err != nil {
 				return
 			}
@@ -352,7 +352,7 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *a
 		insOffset := insInterval.Start
 		insLength := insInterval.End - insInterval.Start
 		insTaeBat = data.bats[BLKMetaInsertIDX].Window(int(insOffset), int(insLength))
-		ins, err = containersBatchToProtoBatch(insTaeBat)
+		ins, err = containersBatchToProtoBatchNoCopy(insTaeBat)
 		if err != nil {
 			return
 		}
@@ -364,11 +364,11 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *a
 		delLength := delInterval.End - delInterval.Start
 		delTaeBat = data.bats[BLKMetaDeleteIDX].Window(int(delOffset), int(delLength))
 		cnInsTaeBat = data.bats[BLKCNMetaInsertIDX].Window(int(delOffset), int(delLength))
-		del, err = containersBatchToProtoBatch(delTaeBat)
+		del, err = containersBatchToProtoBatchNoCopy(delTaeBat)
 		if err != nil {
 			return
 		}
-		cnIns, err = containersBatchToProtoBatch(cnInsTaeBat)
+		cnIns, err = containersBatchToProtoBatchNoCopy(cnInsTaeBat)
 		if err != nil {
 			return
 		}
@@ -379,7 +379,7 @@ func (data *CheckpointData) GetTableData(tid uint64) (ins, del, cnIns, segDel *a
 		segDelOffset := segDelInterval.Start
 		segDelLength := segDelInterval.End - segDelInterval.Start
 		segDelTaeBat = data.bats[SEGDeleteIDX].Window(int(segDelOffset), int(segDelLength))
-		segDel, err = containersBatchToProtoBatch(segDelTaeBat)
+		segDel, err = containersBatchToProtoBatchNoCopy(segDelTaeBat)
 		if err != nil {
 			return
 		}
