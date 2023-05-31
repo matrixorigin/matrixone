@@ -1,0 +1,40 @@
+name:  Build Image
+
+on:
+  workflow_dispatch:
+
+jobs:
+  docker_image_build:
+    runs-on: arm64-runner 
+    timeout-minutes: 60
+    name: BUILD MO DOCKER IMAGE
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          repository: nnsgmsone/matrixone
+          path: ./matrixone
+
+      - name: Prepare And Build
+        id: prep
+        run: |
+          cd $GITHUB_WORKSPACE/matrixone
+          LAST_COMMIT_ID=$(git rev-parse --short HEAD)
+          DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/matrixone
+          VERSION=commit-$LAST_COMMIT_ID
+
+          TAGS="${DOCKER_IMAGE}:${VERSION}"
+
+
+          # Set output parameters.
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "docker_image=${DOCKER_IMAGE}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          
+          echo ${TAGS}
+          echo ${{ secrets.DOCKERHUB_TOKEN }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+
+          docker build -t $TAGS -f optools/images/Dockerfile .
+
+          docker push $TAGS
