@@ -37,14 +37,8 @@ import (
 	"math"
 )
 
-var MaxUint8digits = numOfDigits(math.MaxUint8)
-var MaxUint16digits = numOfDigits(math.MaxUint16)
-var MaxUint32digits = numOfDigits(math.MaxUint32)
 var MaxUint64digits = numOfDigits(math.MaxUint64) // 20
-var MaxInt8digits = numOfDigits(math.MaxInt8)
-var MaxInt16digits = numOfDigits(math.MaxInt16)
-var MaxInt32digits = numOfDigits(math.MaxInt32)
-var MaxInt64digits = numOfDigits(math.MaxInt64) // 19
+var MaxInt64digits = numOfDigits(math.MaxInt64)   // 19
 
 func numOfDigits(value uint64) int64 {
 	digits := int64(0)

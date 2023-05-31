@@ -32,8 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/json_quote"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/json_unquote"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -278,21 +276,38 @@ func Empty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 }
 
 func JsonQuote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, json_quote.Single)
+	single := func(str string) ([]byte, error) {
+		bj, err := types.ParseStringToByteJson(strconv.Quote(str))
+		if err != nil {
+			return nil, err
+		}
+		return bj.Marshal()
+	}
+
+	return opUnaryStrToBytesWithErrorCheck(ivecs, result, proc, length, single)
 }
 
 func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	fSingle := json_unquote.JsonSingle
+	jsonSingle := func(v []byte) (string, error) {
+		bj := types.DecodeJson(v)
+		return bj.Unquote()
+	}
+
+	stringSingle := func(v []byte) (string, error) {
+		bj, err := types.ParseSliceToByteJson(v)
+		if err != nil {
+			return "", err
+		}
+		return bj.Unquote()
+	}
+
+	fSingle := jsonSingle
 	if ivecs[0].GetType().Oid.IsMySQLString() {
-		fSingle = json_unquote.StringSingle
+		fSingle = stringSingle
 	}
 
 	return opUnaryBytesToStrWithErrorCheck(ivecs, result, proc, length, fSingle)
 }
-
-const (
-	blobsize = 65536 // 2^16-1
-)
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
 	fs, readPath, err := fileservice.GetForETL(fs, Filepath)
@@ -339,7 +354,7 @@ func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if err != nil {
 		return err
 	}
-	if len(ctx) > blobsize {
+	if len(ctx) > 65536 /*blob size*/ {
 		return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
 	}
 	if len(ctx) == 0 {
