@@ -63,34 +63,6 @@ func ToDNVector(v *movec.Vector) Vector {
 	return vec
 }
 
-// ### Deep copy Functions
-
-func CopyToCNVector(vec Vector) (mov *movec.Vector) {
-	//TODO: can be updated if Dup(nil) is supported by CN vector.
-	vecLen := vec.GetDownstreamVector().Length()
-	res, err := vec.GetDownstreamVector().CloneWindow(0, vecLen, nil)
-	if err != nil {
-		panic(err)
-	}
-	return res
-}
-
-func CopyToCNVectors(vecs []Vector) []*movec.Vector {
-	movecs := make([]*movec.Vector, len(vecs))
-	for i := range movecs {
-		movecs[i] = CopyToCNVector(vecs[i])
-	}
-	return movecs
-}
-
-func CopyToCNBatch(bat *Batch) *batch.Batch {
-	ret := batch.New(true, bat.Attrs)
-	for i := range bat.Vecs {
-		ret.Vecs[i] = CopyToCNVector(bat.Vecs[i])
-	}
-	return ret
-}
-
 // ### Get Functions
 
 // getNonNullValue Please don't merge it with GetValue(). Used in Vector for getting NonNullValue.
