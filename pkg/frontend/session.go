@@ -305,7 +305,9 @@ func (e *errInfo) length() int {
 	return len(e.codes)
 }
 
-func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit, gSysVars *GlobalSystemVariables, isNotBackgroundSession bool, aicm *defines.AutoIncrCacheManager, sharedTxnHandler *TxnHandler) *Session {
+func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
+	gSysVars *GlobalSystemVariables, isNotBackgroundSession bool,
+	aicm *defines.AutoIncrCacheManager, sharedTxnHandler *TxnHandler) *Session {
 	//if the sharedTxnHandler exists,we use its txnCtx and txnOperator in this session.
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnCtx context.Context
