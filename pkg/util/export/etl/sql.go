@@ -155,7 +155,7 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 
 		if sb.Len() >= maxLen || idx == len(records)-1 {
 			stmt := baseStr + sb.String() + ";"
-			timeLimit := 3000 * time.Second
+			timeLimit := 60 * time.Second
 			if tbl.Table == "rawlog" {
 				timeLimit = 15 * time.Second
 			}

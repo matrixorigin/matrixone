@@ -137,7 +137,7 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 	buf.Add(item)
 	b.mux.Unlock()
 	if buf.ShouldFlush() {
-		go b.signal(b)
+		b.signal(b)
 	}
 }
 
@@ -179,7 +179,7 @@ func (r *bufferExportReq) handle() error {
 
 func (r *bufferExportReq) callback(err error) {}
 
-// get req to do generate logic
+// getGenerateReq get req to do generate logic
 // return nil, if b.buffer is nil
 func (b *bufferHolder) getGenerateReq() generateReq {
 	b.mux.Lock()
@@ -258,7 +258,7 @@ func NewMOCollector(ctx context.Context, opts ...MOCollectorOption) *MOCollector
 		buffers:        make(map[string]*bufferHolder),
 		awakeCollect:   make(chan batchpipe.HasName, defaultQueueSize),
 		awakeGenerate:  make(chan generateReq, 16),
-		awakeBatch:     make(chan exportReq, 2),
+		awakeBatch:     make(chan exportReq),
 		stopCh:         make(chan struct{}),
 		collectorCnt:   runtime.NumCPU(),
 		generatorCnt:   runtime.NumCPU(),
@@ -320,9 +320,6 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 		return moerr.NewInternalError(ctx, "MOCollector stopped")
 	case c.awakeCollect <- item:
 		return nil
-	default:
-		logutil.Debug("MOCollector Collect chan is full", zap.String("name", item.GetName()), zap.Int("chanSize", len(c.awakeCollect)))
-		return nil
 	}
 }
 
@@ -361,7 +358,6 @@ func (c *MOCollector) Start() bool {
 func (c *MOCollector) allocBuffer() {
 	c.bufferCond.L.Lock()
 	for c.bufferTotal.Load() == c.maxBufferCnt {
-		logutil.Debug("allocBuffer: buffer is full, wait", zap.Int32("maxBufferCnt", c.maxBufferCnt))
 		c.bufferCond.Wait()
 	}
 	c.bufferTotal.Add(1)
@@ -410,7 +406,6 @@ loop:
 		case <-c.stopCh:
 			break loop
 		}
-
 	}
 	logutil.Debugf("doCollect %dth: Done.", idx)
 }
@@ -430,18 +425,13 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		req := holder.getGenerateReq()
 		if req != nil {
-			select {
-			case c.awakeGenerate <- req:
-				return
-				//default:
-				//	logutil.Debug("MOCollector Generate chan is full", zap.Int("chanSize", len(c.awakeGenerate)))
-				//	return
-			}
+			c.awakeGenerate <- req
 		}
 	}
 }
 
-// doGenerate handle buffer gen BatchRequest, which could be any goroutine worker
+// doGenerate handle buffer gen BatchRequest, which could be anything
+// goroutine worker
 func (c *MOCollector) doGenerate(idx int) {
 	defer c.stopWait.Done()
 	var buf = new(bytes.Buffer)
