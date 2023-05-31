@@ -137,7 +137,7 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 	buf.Add(item)
 	b.mux.Unlock()
 	if buf.ShouldFlush() {
-		b.signal(b)
+		go b.signal(b)
 	}
 }
 
@@ -433,9 +433,9 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 			select {
 			case c.awakeGenerate <- req:
 				return
-			default:
-				logutil.Debug("MOCollector Generate chan is full", zap.Int("chanSize", len(c.awakeGenerate)))
-				return
+				//default:
+				//	logutil.Debug("MOCollector Generate chan is full", zap.Int("chanSize", len(c.awakeGenerate)))
+				//	return
 			}
 		}
 	}
