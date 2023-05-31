@@ -139,7 +139,11 @@ message ObjectRef {
 	string schema_name	= 7;
 	string obj_name		= 8;
 	string subscription_name = 9;
-	int32 pub_account_id = 10;
+	PubInfo pub_info = 10;
+}
+
+message PubInfo {
+	int32 tenant_id = 1;
 }
 
 message SubscriptionMeta{

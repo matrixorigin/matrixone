@@ -98,7 +98,7 @@ func (l *localLockTable) doLock(
 			}
 			// no waiter, all locks are added
 			if c.w == nil {
-				c.txn.setBlocked(c.txn.txnID, nil, false)
+				c.txn.clearBlocked(c.txn.txnID, false)
 				logLocalLockAdded(l.bind.ServiceID, c.txn, l.bind.Table, c.rows, c.opts)
 				if c.result.Timestamp.IsEmpty() {
 					c.result.Timestamp = c.lockedTS
