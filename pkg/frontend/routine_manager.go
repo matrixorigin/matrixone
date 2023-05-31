@@ -214,12 +214,9 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	logDebugf(pro.GetDebugString(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
-	// With proxy module enabled, we try to update salt value from proxy.
-	// The MySQL protocol is broken a little: when connection is built, read
-	// the salt from proxy and update the salt, then go on with the handshake
-	// phase.
+	// With proxy module enabled, we try to update salt value and label info from proxy.
 	if rm.pu.SV.ProxyEnabled {
-		pro.tryUpdateSalt(rs)
+		pro.receiveExtraInfo(rs)
 	}
 
 	hsV10pkt := pro.makeHandshakeV10Payload()

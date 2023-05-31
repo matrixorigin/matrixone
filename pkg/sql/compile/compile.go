@@ -390,7 +390,7 @@ func (c *Compile) cnListStrategy() {
 
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
-	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.cnLabel)
+	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
 	if err != nil {
 		return nil, err
 	}
@@ -608,7 +608,16 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			ss = c.compileMergeGroup(n, ss, ns)
 			return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 		}
-
+	case plan.Node_WINDOW:
+		curr := c.anal.curr
+		c.setAnalyzeCurrent(nil, int(n.Children[0]))
+		ss, err := c.compilePlanScope(ctx, step, n.Children[0], ns)
+		if err != nil {
+			return nil, err
+		}
+		c.setAnalyzeCurrent(ss, curr)
+		ss = c.compileWin(n, ss)
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))
@@ -1644,6 +1653,16 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
+func (c *Compile) compileWin(n *plan.Node, ss []*Scope) []*Scope {
+	rs := c.newMergeScope(ss)
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.Window,
+		Idx: c.anal.curr,
+		Arg: constructWindow(c.ctx, n, c.proc),
+	}
+	return []*Scope{rs}
+}
+
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
@@ -1746,7 +1765,7 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node,
 	}
 
 	for i := range children {
-		children[i].Instructions = append(children[i].Instructions, vm.Instruction{
+		children[i].appendInstruction(vm.Instruction{
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: currentIsFirst,
@@ -1754,11 +1773,11 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node,
 		})
 	}
 
-	children = c.compileProjection(n, children)
+	children = c.compileProjection(n, c.compileRestrict(n, children))
 
 	// recovery the children's last operator
 	for i := range children {
-		children[i].Instructions = append(children[i].Instructions, lastOperator[i])
+		children[i].appendInstruction(lastOperator[i])
 	}
 
 	for i := range ss {

@@ -297,3 +297,111 @@ t5    0    wwwww    2    col4    A    0    NULL    NULL                    YES  
 t5    0    zxxxxx    1    col3    A    0    NULL    NULL                    YES    NULL
 t5    0    idx_6dotkott2kjsp8v    1    col3    A    0    NULL    NULL                    YES    NULL
 drop table t5;
+create table t5(a int);
+alter table t5 comment = "comment_1";
+show create table t5;
+Table    Create Table
+t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL\n) COMMENT='comment_1'
+alter table t5 comment = "comment_2", comment = "comment_3";
+show create table t5;
+Table    Create Table
+t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL\n) COMMENT='comment_3'
+alter table t5 add column a int;
+invalid input: can't add 'a'; check that column/key exists
+alter table t5 add column b tinyint, add column c smallint, add column d int, add column e bigint, add column f tinyint unsigned;
+alter table t5 add column g smallint unsigned, add column h int unsigned, add column i bigint unsigned, add column j float, add column k double;
+alter table t5 add column l varchar(255), add column m Date, add column n DateTime, add column o timestamp, add column p bool;
+alter table t5 add column q decimal(5,2), add column r text;
+show create table t5;
+Table    Create Table
+t5    CREATE TABLE `t5` (\n`a` INT DEFAULT NULL,\n`b` TINYINT DEFAULT NULL,\n`c` SMALLINT DEFAULT NULL,\n`d` INT DEFAULT NULL,\n`e` BIGINT DEFAULT NULL,\n`f` TINYINT UNSIGNED DEFAULT NULL,\n`g` SMALLINT UNSIGNED DEFAULT NULL,\n`h` INT UNSIGNED DEFAULT NULL,\n`i` BIGINT UNSIGNED DEFAULT NULL,\n`j` FLOAT DEFAULT NULL,\n`k` DOUBLE DEFAULT NULL,\n`l` VARCHAR(255) DEFAULT NULL,\n`m` DATE DEFAULT NULL,\n`n` DATETIME DEFAULT NULL,\n`o` TIMESTAMP DEFAULT NULL,\n`p` BOOL DEFAULT NULL,\n`q` DECIMAL(5,2) DEFAULT NULL,\n`r` TEXT DEFAULT NULL\n) COMMENT='comment_3'
+show columns from t5;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null
+b    TINYINT(8)    YES        null
+c    SMALLINT(16)    YES        null
+d    INT(32)    YES        null
+e    BIGINT(64)    YES        null
+f    TINYINT UNSIGNED(8)    YES        null
+g    SMALLINT UNSIGNED(16)    YES        null
+h    INT UNSIGNED(32)    YES        null
+i    BIGINT UNSIGNED(64)    YES        null
+j    FLOAT(0)    YES        null
+k    DOUBLE(0)    YES        null
+l    VARCHAR(255)    YES        null
+m    DATE(0)    YES        null
+n    DATETIME(0)    YES        null
+o    TIMESTAMP(0)    YES        null
+p    BOOL(0)    YES        null
+q    DECIMAL64(5)    YES        null
+r    TEXT(0)    YES        null
+alter table t5 drop column b, drop column c, drop column d, drop column e, drop column f, drop column g, drop column h;
+show columns from t5;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null
+i    BIGINT UNSIGNED(64)    YES        null
+j    FLOAT(0)    YES        null
+k    DOUBLE(0)    YES        null
+l    VARCHAR(255)    YES        null
+m    DATE(0)    YES        null
+n    DATETIME(0)    YES        null
+o    TIMESTAMP(0)    YES        null
+p    BOOL(0)    YES        null
+q    DECIMAL64(5)    YES        null
+r    TEXT(0)    YES        null
+alter table t5 drop column i, drop column j, drop column k, drop column l, drop column m, drop column n, drop column o;
+show columns from t5;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null
+p    BOOL(0)    YES        null
+q    DECIMAL64(5)    YES        null
+r    TEXT(0)    YES        null
+alter table t5 drop column p, drop column q, drop column r;
+show columns from t5;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null
+alter table t5 drop column a;
+invalid input: can't drop only column a in table t5
+alter table t5 add column b int first, add column c int after b, add column d int first, add column f int after b;
+show columns from t5;
+Field    Type    Null    Key    Default    Extra    Comment
+d    INT(32)    YES        null
+b    INT(32)    YES        null
+f    INT(32)    YES        null
+c    INT(32)    YES        null
+a    INT(32)    YES        null
+drop table t5;
+create table t5(a int primary key, b int, c int unique key);
+alter table t5 drop column a;
+invalid input: can't drop column a with primary key covered now
+alter table t5 drop column c;
+invalid input: can't drop column c with unique index covered now
+drop table t5;
+create table t5(a int, b int, primary key(a, b));
+alter table t5 drop column a;
+invalid input: can't drop column a with primary key covered now
+drop table t5;
+create table t5(a int primary key, b int);
+create table t6(b int, c int, foreign key(b) references t5(a));
+alter table t5 drop column b;
+invalid input: can't add/drop column for foreign key table now
+alter table t5 add column c int;
+invalid input: can't add/drop column for foreign key table now
+alter table t6 drop column b;
+invalid input: can't add/drop column for foreign key table now
+alter table t6 add column d int;
+invalid input: can't add/drop column for foreign key table now
+drop table t6;
+drop table t5;
+create table t5(a tinyint, b smallint, primary key(a))partition by hash(a) partitions 4;
+alter table t5 add column c int;
+invalid input: can't add/drop column for partition table now
+alter table t5 drop column a;
+invalid input: can't drop column a with primary key covered now
+drop table t5;
+create table t5(a int, b int) cluster by a;
+alter table t5 add column c int;
+invalid input: can't add/drop column for cluster table now
+alter table t5 drop column a;
+invalid input: can't add/drop column for cluster table now
+drop table t5;
