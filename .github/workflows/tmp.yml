@@ -20,6 +20,8 @@ jobs:
       - name: Prepare
         id: prep
         run: |
+          pwd
+          ls -al
           DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${GITHUB_REPOSITORY#*/}
           VERSION=nightly-${GITHUB_SHA::8}
           
