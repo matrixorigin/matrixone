@@ -17,7 +17,6 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -547,9 +546,6 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered
 func (v *Vector) Shrink(sels []int64, negate bool) {
-	if v.NeedDup() {
-		logutil.Infof("shrink on dup vector")
-	}
 	if v.IsConst() {
 		if negate {
 			v.length -= len(sels)
