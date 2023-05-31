@@ -73,7 +73,7 @@ func GetErrorLogger() *zap.Logger {
 func replaceGlobalLogger(logger *zap.Logger) {
 	_globalLogger.Store(logger)
 	_skip1Logger.Store(logger.WithOptions(zap.AddCallerSkip(1)))
-	_errorLogger.Store(logger.WithOptions(zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel)))
+	_errorLogger.Store(logger.WithOptions(zap.AddCallerSkip(1), zap.AddStacktrace(zap.DPanicLevel)))
 }
 
 type LogConfig struct {
