@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sort"
 
@@ -64,6 +65,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
 			r.pkidxInColIdxs = -1
+			r.indexOfFirstSortedColumn = -1
 			for i, column := range cols {
 				// sometimes Name2ColIndex have no row_id， sometimes have one
 				if column == catalog.Row_ID {
@@ -71,6 +73,9 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 					r.seqnums[i] = objectio.SEQNUM_ROWID
 					r.colTypes[i] = types.T_Rowid.ToType()
 				} else {
+					if plan2.GetSortOrder(r.tableDef, column) == 0 {
+						r.indexOfFirstSortedColumn = i
+					}
 					logicalIdx := r.tableDef.Name2ColIndex[column]
 					colDef := r.tableDef.Cols[logicalIdx]
 					r.seqnums[i] = uint16(colDef.Seqnum)
@@ -104,8 +109,8 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 	bat.SetAttributes(cols)
 
-	if blockInfo.Sorted && r.pkidxInColIdxs != -1 {
-		bat.GetVector(int32(r.pkidxInColIdxs)).SetSorted(true)
+	if blockInfo.Sorted && r.indexOfFirstSortedColumn != -1 {
+		bat.GetVector(int32(r.indexOfFirstSortedColumn)).SetSorted(true)
 	}
 
 	// if it's not sorted or no filter expr, just return
