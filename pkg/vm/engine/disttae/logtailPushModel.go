@@ -600,7 +600,7 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 
 	s.doSubscribe = s.subscribeTable
 	s.doUnSubscribe = s.unSubscribeTable
-	if s.requestLock != nil {
+	if s.requestLock == nil {
 		s.requestLock = make(chan bool, 1)
 		s.ready = false
 	}
