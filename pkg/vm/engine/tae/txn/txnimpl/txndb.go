@@ -178,7 +178,7 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, isNu
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	return table.GetValue(id, row, colIdx)
+	return table.GetValue(context.Background(), id, row, colIdx)
 }
 
 func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
