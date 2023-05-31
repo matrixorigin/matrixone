@@ -34,12 +34,12 @@ func SetupMOLogger(conf *LogConfig) {
 		panic(err)
 	}
 	replaceGlobalLogger(logger)
-	Infof("MO logger init, level=%s, log file=%s", conf.Level, conf.Filename)
+	Infof("MO logger init, level=%s, log file=%s, stackLevel=%s", conf.Level, conf.Filename, conf.StackLevel)
 }
 
 // initMOLogger initializes a zap Logger.
 func initMOLogger(cfg *LogConfig) (*zap.Logger, error) {
-	return GetLoggerWithOptions(cfg.getLevel(), cfg.getEncoder(), cfg.getSyncer()), nil
+	return GetLoggerWithOptions(cfg.getLevel(), cfg.getEncoder(), cfg.getSyncer(), cfg.getOptions()...), nil
 }
 
 // global zap logger for MO server.
@@ -50,7 +50,7 @@ var _errorLogger atomic.Value
 // init initializes a default zap logger before set up logger.
 func init() {
 	SetLogReporter(&TraceReporter{noopReportZap, noopContextField})
-	conf := &LogConfig{Level: "info", Format: "console"}
+	conf := &LogConfig{Level: "info", Format: "console", StackLevel: "panic"}
 	setGlobalLogConfig(conf)
 	logger, _ := initMOLogger(conf)
 	replaceGlobalLogger(logger)
@@ -73,7 +73,7 @@ func GetErrorLogger() *zap.Logger {
 func replaceGlobalLogger(logger *zap.Logger) {
 	_globalLogger.Store(logger)
 	_skip1Logger.Store(logger.WithOptions(zap.AddCallerSkip(1)))
-	_errorLogger.Store(logger.WithOptions(zap.AddCallerSkip(1), zap.AddStacktrace(zap.DPanicLevel)))
+	_errorLogger.Store(logger.WithOptions(zap.AddCallerSkip(1)))
 }
 
 type LogConfig struct {
@@ -85,6 +85,8 @@ type LogConfig struct {
 	MaxBackups int    `toml:"max-backups"`
 	// DisableStore ctrl store log into db
 	DisableStore bool `toml:"disable-store"`
+	// StackLevel
+	StackLevel string `toml:"stack-level"`
 }
 
 func (cfg *LogConfig) getSyncer() zapcore.WriteSyncer {
@@ -125,6 +127,14 @@ func (cfg *LogConfig) getLevel() zap.AtomicLevel {
 	return level
 }
 
+func (cfg *LogConfig) GetStackLevel() (level zapcore.Level) {
+	err := level.UnmarshalText([]byte(cfg.StackLevel))
+	if err != nil {
+		panic(err)
+	}
+	return level
+}
+
 func (cfg *LogConfig) getSinks() (sinks []ZapSink) {
 	encoder, syncer := cfg.getEncoder(), cfg.getSyncer()
 	sinks = append(sinks, ZapSink{encoder, syncer})
@@ -136,7 +146,7 @@ func (cfg *LogConfig) getSinks() (sinks []ZapSink) {
 }
 
 func (cfg *LogConfig) getOptions() []zap.Option {
-	return []zap.Option{zap.AddStacktrace(zapcore.FatalLevel), zap.AddCaller()}
+	return []zap.Option{zap.AddStacktrace(cfg.GetStackLevel()), zap.AddCaller()}
 }
 
 func getLoggerEncoder(format string) zapcore.Encoder {

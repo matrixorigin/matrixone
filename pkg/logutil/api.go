@@ -125,7 +125,6 @@ func GetLoggerWithOptions(
 	syncer zapcore.WriteSyncer,
 	options ...zap.Option) *zap.Logger {
 	var cores []zapcore.Core
-	options = append(options, zap.AddStacktrace(zapcore.FatalLevel), zap.AddCaller())
 	if syncer == nil {
 		syncer = getConsoleSyncer()
 	}

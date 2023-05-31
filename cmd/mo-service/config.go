@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 	"hash/fnv"
 	"math"
 	"net"
@@ -159,6 +160,9 @@ func (c *Config) validate() error {
 	}
 	if c.Limit.Memory == 0 {
 		c.Limit.Memory = tomlutil.ByteSize(defaultMemoryLimit)
+	}
+	if c.Log.StackLevel == "" {
+		c.Log.StackLevel = zap.PanicLevel.String()
 	}
 	return nil
 }
