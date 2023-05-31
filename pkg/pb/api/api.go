@@ -30,8 +30,8 @@ func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 
 func NewUpdateCommentReq(did, tid uint64, comment string) *AlterTableReq {
 	return &AlterTableReq{
-		TableId: did,
-		DbId:    tid,
+		DbId:    did,
+		TableId: tid,
 		Kind:    AlterKind_UpdateComment,
 		Operation: &AlterTableReq_UpdateComment{
 			&AlterTableComment{Comment: comment},
@@ -41,8 +41,8 @@ func NewUpdateCommentReq(did, tid uint64, comment string) *AlterTableReq {
 
 func NewRenameTableReq(did, tid uint64, old, new string) *AlterTableReq {
 	return &AlterTableReq{
-		TableId: did,
-		DbId:    tid,
+		DbId:    did,
+		TableId: tid,
 		Kind:    AlterKind_RenameTable,
 		Operation: &AlterTableReq_RenameTable{
 			&AlterTableRenameTable{OldName: old, NewName: new},
@@ -52,8 +52,8 @@ func NewRenameTableReq(did, tid uint64, old, new string) *AlterTableReq {
 
 func NewAddColumnReq(did, tid uint64, name string, typ *plan.Type, insertAt int32) *AlterTableReq {
 	return &AlterTableReq{
-		TableId: did,
-		DbId:    tid,
+		DbId:    did,
+		TableId: tid,
 		Kind:    AlterKind_AddColumn,
 		Operation: &AlterTableReq_AddColumn{
 			&AlterTableAddColumn{
@@ -74,8 +74,8 @@ func NewAddColumnReq(did, tid uint64, name string, typ *plan.Type, insertAt int3
 
 func NewRemoveColumnReq(did, tid uint64, idx, seqnum uint32) *AlterTableReq {
 	return &AlterTableReq{
-		TableId: did,
-		DbId:    tid,
+		DbId:    did,
+		TableId: tid,
 		Kind:    AlterKind_DropColumn,
 		Operation: &AlterTableReq_DropColumn{
 			&AlterTableDropColumn{
