@@ -1,4 +1,4 @@
-name:  Build Image
+name:  Build My Image
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ jobs:
   docker_image_build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    name: BUILD MO DOCKER IMAGE
+    name: BUILD MY MO DOCKER IMAGE
 
     steps:
       - name: Checkout
