@@ -52,6 +52,8 @@ func ReturnType(op int, typ types.Type) (types.Type, error) {
 		otyp = RankReturnType()
 	case WinRowNumber:
 		otyp = RowNumberReturnType()
+	case WinDenseRank:
+		otyp = DenseRankReturnType()
 	}
 	if otyp.Oid == types.T_any {
 		return typ, moerr.NewInternalErrorNoCtx("'%v' not support %s", typ, Names[op])
@@ -95,6 +97,9 @@ func New(op int, dist bool, typ types.Type) (Agg[any], error) {
 	case WinRowNumber:
 		r := NewRowNumber()
 		return NewUnaryAgg(WinRowNumber, r, false, typ, RowNumberReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
+	case WinDenseRank:
+		r := NewDenseRank()
+		return NewUnaryAgg(WinDenseRank, r, false, typ, DenseRankReturnType(), r.Grows, r.Eval, r.Merge, r.Fill, nil), nil
 	}
 	panic(moerr.NewInternalErrorNoCtx("unsupported type '%s' for aggregate %s", typ, Names[op]))
 }

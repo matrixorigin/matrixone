@@ -92,7 +92,7 @@ insert into t1 values(1, 'aaaa'),(2, 'bbbbbb'),(3, 'cccccccc');
 create view v1 as select (case when a>1 then 'NO' else 'YES' end) as IS_NULLABLE from t1;
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
-is_nullable    VARCHAR(3)    YES        null        
+is_nullable    VARCHAR(3)    NO        null        
 drop view v1;
 drop database if exists test;
 create database test;
@@ -104,4 +104,11 @@ SELECT relname, rel_createsql,relkind FROM mo_catalog.mo_tables WHERE reldatabas
 relname    rel_createsql    relkind
 t1    create table t1 (a int)    r
 v1    create view v1 as select * from t1;    v
+create table t2(a int not null, b varchar(20), c char(20));
+create view v2 as select * from t2;
+desc v2;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO        null        
+b    VARCHAR(20)    YES        null        
+c    CHAR(20)    YES        null        
 drop database test;
