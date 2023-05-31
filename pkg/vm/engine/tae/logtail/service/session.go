@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type TableState int
@@ -342,10 +343,11 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 
 // Publish publishes incremental logtail.
 func (ss *Session) Publish(
-	ctx context.Context, from, to timestamp.Timestamp, wraps ...wrapLogtail,
+	ctx context.Context, from, to timestamp.Timestamp, refHelper *common.RefHelper, wraps ...wrapLogtail,
 ) error {
 	// no need to send incremental logtail if no table subscribed
 	if atomic.LoadInt32(&ss.active) <= 0 {
+		refHelper.Unref()
 		return nil
 	}
 
@@ -361,6 +363,7 @@ func (ss *Session) Publish(
 		case <-ss.heartbeatTimer.C:
 			break
 		default:
+			refHelper.Unref()
 			return nil
 		}
 	}
@@ -368,7 +371,7 @@ func (ss *Session) Publish(
 	sendCtx, cancel := context.WithTimeout(ctx, ss.sendTimeout)
 	defer cancel()
 
-	err := ss.SendUpdateResponse(sendCtx, ss.exactFrom, to, qualified...)
+	err := ss.SendUpdateResponse(sendCtx, ss.exactFrom, to, refHelper, qualified...)
 	if err == nil {
 		ss.heartbeatTimer.Reset(ss.heartbeatInterval)
 		ss.exactFrom = to
@@ -402,11 +405,12 @@ func (ss *Session) SendErrorResponse(
 
 // SendSubscriptionResponse sends subscription response.
 func (ss *Session) SendSubscriptionResponse(
-	sendCtx context.Context, tail logtail.TableLogtail,
+	sendCtx context.Context, tail logtail.TableLogtail, refHelper *common.RefHelper,
 ) error {
 	ss.logger.Info("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
 
 	resp := ss.responses.Acquire()
+	resp.refHelper = refHelper
 	resp.Response = newSubscritpionResponse(tail)
 	err := ss.SendResponse(sendCtx, resp)
 	if err == nil {
@@ -432,11 +436,12 @@ func (ss *Session) SendUnsubscriptionResponse(
 
 // SendUpdateResponse sends publishment response.
 func (ss *Session) SendUpdateResponse(
-	sendCtx context.Context, from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
+	sendCtx context.Context, from, to timestamp.Timestamp, refHelper *common.RefHelper, tails ...logtail.TableLogtail,
 ) error {
 	ss.logger.Debug("send incremental logtail", zap.Any("From", from.String()), zap.String("To", to.String()), zap.Int("tables", len(tails)))
 
 	resp := ss.responses.Acquire()
+	resp.refHelper = refHelper
 	resp.Response = newUpdateResponse(from, to, tails...)
 	return ss.SendResponse(sendCtx, resp)
 }

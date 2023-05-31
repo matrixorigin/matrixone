@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -408,12 +409,11 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				moprobe.WithRegion(ctx, moprobe.SubscriptionPullLogTail, func() {
 					tail, closeCB, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
 				})
-				defer func() {
+
+				if subErr != nil {
 					if closeCB != nil {
 						closeCB()
 					}
-				}()
-				if subErr != nil {
 					logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
 					if err := sub.session.SendErrorResponse(
 						sendCtx, table, moerr.ErrInternal, "fail to fetch table total logtail",
@@ -423,8 +423,17 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					return
 				}
 
+				refHelper := &common.RefHelper{
+					OnZeroCB: func() {
+						if closeCB != nil {
+							closeCB()
+						}
+					},
+				}
+				refHelper.Ref()
+
 				// send subscription response
-				subErr = sub.session.SendSubscriptionResponse(sendCtx, tail)
+				subErr = sub.session.SendSubscriptionResponse(sendCtx, tail, refHelper)
 				if subErr != nil {
 					logger.Error("fail to send subscription response", zap.Error(subErr))
 					return
@@ -460,17 +469,23 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					})
 				}
 
+				refHelper := &common.RefHelper{
+					OnZeroCB: func() {
+						if e.closeCB != nil {
+							e.closeCB()
+						}
+					},
+				}
+
 				// publish incremental logtail for all subscribed tables
 				for _, session := range s.ssmgr.ListSession() {
-					if err := session.Publish(ctx, from, to, wraps...); err != nil {
+					refHelper.Ref()
+					if err := session.Publish(ctx, from, to, refHelper, wraps...); err != nil {
 						logger.Error("fail to publish incremental logtail", zap.Error(err),
 							zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
 						)
 						continue
 					}
-				}
-				if e.closeCB != nil {
-					e.closeCB()
 				}
 
 				// update waterline for all subscribed tables

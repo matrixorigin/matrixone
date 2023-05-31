@@ -111,6 +111,7 @@ func TestSessionError(t *testing.T) {
 		logtail.TableLogtail{
 			Table: &tableA,
 		},
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -123,6 +124,7 @@ func TestSessionError(t *testing.T) {
 		logtail.TableLogtail{
 			Table: &tableA,
 		},
+		nil,
 	)
 	require.Error(t, err)
 }
@@ -153,6 +155,7 @@ func TestPoisionSession(t *testing.T) {
 			context.Background(),
 			mockTimestamp(int64(i), 0),
 			mockTimestamp(int64(i+1), 0),
+			nil,
 			logtail.TableLogtail{
 				Table: &tableA,
 			},
@@ -246,6 +249,7 @@ func TestSession(t *testing.T) {
 		logtail.TableLogtail{
 			Table: &tableA,
 		},
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -264,6 +268,7 @@ func TestSession(t *testing.T) {
 			context.Background(),
 			from,
 			to,
+			nil,
 			mockLogtail(tableA, to),
 			mockLogtail(tableB, to),
 		)
@@ -275,6 +280,7 @@ func TestSession(t *testing.T) {
 		context.Background(),
 		mockTimestamp(2, 0),
 		mockTimestamp(3, 0),
+		nil,
 		mockWrapLogtail(tableA),
 		mockWrapLogtail(tableB),
 	)
