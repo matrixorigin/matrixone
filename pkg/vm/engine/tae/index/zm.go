@@ -1180,6 +1180,9 @@ func adjustBytes(bs []byte) {
 }
 
 func BatchUpdateZM(zm ZM, vs containers.Vector) (err error) {
+	if vs.GetDownstreamVector().IsConstNull() {
+		return
+	}
 	op := func(v []byte, isNull bool, _ int) (err error) {
 		if isNull {
 			return

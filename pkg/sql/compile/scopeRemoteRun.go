@@ -669,7 +669,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *dispatch.Argument:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, FuncId: int32(t.FuncId)}
-		in.Dispatch.ShuffleColIdx = int32(t.ShuffleColIdx)
+		in.Dispatch.ShuffleColIdx = t.ShuffleColIdx
+		in.Dispatch.ShuffleType = t.ShuffleType
+		in.Dispatch.ShuffleColMax = t.ShuffleColMax
+		in.Dispatch.ShuffleColMin = t.ShuffleColMin
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
 		for i := range t.ShuffleRegIdxLocal {
 			in.Dispatch.ShuffleRegIdxLocal[i] = int32(t.ShuffleRegIdxLocal[i])
@@ -1061,7 +1064,10 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			FuncId:              int(t.FuncId),
 			LocalRegs:           regs,
 			RemoteRegs:          rrs,
-			ShuffleColIdx:       int(t.ShuffleColIdx),
+			ShuffleColIdx:       t.ShuffleColIdx,
+			ShuffleType:         t.ShuffleType,
+			ShuffleColMin:       t.ShuffleColMin,
+			ShuffleColMax:       t.ShuffleColMax,
 			ShuffleRegIdxLocal:  shuffleRegIdxLocal,
 			ShuffleRegIdxRemote: shuffleRegIdxRemote,
 		}
