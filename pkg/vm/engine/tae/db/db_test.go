@@ -229,7 +229,6 @@ func TestAppend4(t *testing.T) {
 }
 
 func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
-	t.Skip("fsdfsdf")
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*(uint32(schema.SegmentMaxBlocks)+1)-1))
 	defer bat.Close()
 	bats := bat.Split(4)
