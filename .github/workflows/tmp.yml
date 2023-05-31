@@ -23,7 +23,7 @@ jobs:
           pwd
           ls -al
           echo ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKER_IMAGE='${{ secrets.DOCKERHUB_USERNAME }}/matrixone'
+          DOCKER_IMAGE='nnsmgsone/matrixone'
           VERSION=nightly-${GITHUB_SHA::8}
           
           TAGS="${DOCKER_IMAGE}:${VERSION}"
