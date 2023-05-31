@@ -37,33 +37,94 @@ func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
 
-func GetHashColumnIdx(expr *plan.Expr) int {
+func GetRangeShuffleIndexSigned(minVal, maxVal, currentVal int64, upplerLimit uint64) uint64 {
+	if currentVal <= minVal {
+		return 0
+	} else if currentVal >= maxVal {
+		return upplerLimit - 1
+	} else {
+		step := uint64(maxVal-minVal) / upplerLimit
+		ret := uint64(currentVal-minVal) / step
+		if ret >= upplerLimit {
+			return upplerLimit - 1
+		}
+		return ret
+	}
+}
+
+func GetRangeShuffleIndexUnsigned(minVal, maxVal, currentVal uint64, upplerLimit uint64) uint64 {
+	if currentVal <= minVal {
+		return 0
+	} else if currentVal >= maxVal {
+		return upplerLimit - 1
+	} else {
+		step := (maxVal - minVal) / upplerLimit
+		ret := (currentVal - minVal) / step
+		if ret >= upplerLimit {
+			return upplerLimit - 1
+		}
+		return ret
+	}
+}
+
+func GetHashColumn(expr *plan.Expr) *plan.ColRef {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			idx := GetHashColumnIdx(arg)
-			if idx != -1 {
-				return idx
+			col := GetHashColumn(arg)
+			if col != nil {
+				return col
 			}
 		}
 	case *plan.Expr_Col:
-		return int(exprImpl.Col.ColPos)
+		return exprImpl.Col
 	}
-	return -1
+	return nil
 }
 
-// to judge if groupby need to go shuffle
-// if true, return index of which column to shuffle
-// else, return -1
-func GetShuffleIndexForGroupBy(n *plan.Node) int {
+func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) {
+	// hash by default
+	n.Stats.ShuffleType = plan.ShuffleType_Hash
+	if builder.qry.Nodes[n.Children[0]].NodeType != plan.Node_TABLE_SCAN {
+		return
+	}
+	if builder == nil {
+		return
+	}
+	ctx := builder.ctxByNode[n.NodeId]
+	if ctx == nil {
+		return
+	}
+	if binding, ok := ctx.bindingByTag[col.RelPos]; ok {
+		tableDef := builder.qry.Nodes[binding.nodeId].TableDef
+		colName := tableDef.Cols[col.ColPos].Name
+		if GetSortOrder(tableDef, colName) != 0 {
+			return
+		}
+		sc := builder.compCtx.GetStatsCache()
+		if sc == nil {
+			return
+		}
+		s := sc.GetStatsInfoMap(binding.tableID)
+		n.Stats.ShuffleType = plan.ShuffleType_Range
+		n.Stats.ShuffleColMin = int64(s.MinValMap[colName])
+		n.Stats.ShuffleColMax = int64(s.MaxValMap[colName])
+	}
+}
+
+// to determine if groupby need to go shuffle
+func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
+	// do not shuffle by default
+	n.Stats.ShuffleColIdx = -1
+
 	if n.NodeType != plan.Node_AGG {
-		return -1
+		return
 	}
 	if len(n.GroupBy) == 0 {
-		return -1
+		return
 	}
 	if n.Stats.HashmapSize < HashMapSizeForBucket {
-		return -1
+		return
 	}
 	//find the highest ndv
 	highestNDV := n.GroupBy[0].Ndv
@@ -75,20 +136,40 @@ func GetShuffleIndexForGroupBy(n *plan.Node) int {
 		}
 	}
 	if highestNDV < ShuffleThreshHold {
-		return -1
+		return
 	}
 
-	if GetHashColumnIdx(n.GroupBy[idx]) == -1 {
-		return -1
+	hashCol := GetHashColumn(n.GroupBy[idx])
+	if hashCol == nil {
+		return
 	}
 	//for now ,only support integer and string type
 	switch types.T(n.GroupBy[idx].Typ.Id) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
-		return idx
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16:
+		n.Stats.ShuffleColIdx = int32(idx)
+		n.Stats.Shuffle = true
+		determinShuffleType(hashCol, n, builder)
+	case types.T_varchar, types.T_char, types.T_text:
+		n.Stats.ShuffleColIdx = int32(idx)
+		n.Stats.Shuffle = true
 	}
-	return -1
 }
 
 func GetShuffleDop() (dop int) {
 	return MAXShuffleDOP
+}
+
+func determinShuffleMethod(nodeID int32, builder *QueryBuilder) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			determinShuffleMethod(child, builder)
+		}
+	}
+	switch node.NodeType {
+	case plan.Node_AGG:
+		determinShuffleForGroupBy(node, builder)
+	default:
+		node.Stats.ShuffleColIdx = -1
+	}
 }

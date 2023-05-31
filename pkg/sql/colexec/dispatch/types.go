@@ -92,7 +92,10 @@ type Argument struct {
 	// RemoteRegs specific the remote reg you need to send to.
 	RemoteRegs []colexec.ReceiveInfo
 	// for shuffle
-	ShuffleColIdx       int
+	ShuffleColIdx       int32
+	ShuffleType         int32
+	ShuffleColMin       int64
+	ShuffleColMax       int64
 	ShuffleRegIdxLocal  []int
 	ShuffleRegIdxRemote []int
 }
