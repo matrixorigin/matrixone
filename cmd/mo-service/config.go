@@ -161,8 +161,8 @@ func (c *Config) validate() error {
 	if c.Limit.Memory == 0 {
 		c.Limit.Memory = tomlutil.ByteSize(defaultMemoryLimit)
 	}
-	if c.Log.StackLevel == "" {
-		c.Log.StackLevel = zap.PanicLevel.String()
+	if c.Log.StacktraceLevel == "" {
+		c.Log.StacktraceLevel = zap.PanicLevel.String()
 	}
 	return nil
 }

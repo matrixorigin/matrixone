@@ -108,8 +108,8 @@ func TestSetupMOLogger(t *testing.T) {
 				MaxDays:    0,
 				MaxBackups: 0,
 
-				DisableStore: true,
-				StackLevel:   "panic",
+				DisableStore:    true,
+				StacktraceLevel: "panic",
 			}},
 		},
 		{
@@ -122,8 +122,8 @@ func TestSetupMOLogger(t *testing.T) {
 				MaxDays:    0,
 				MaxBackups: 0,
 
-				DisableStore: true,
-				StackLevel:   "error",
+				DisableStore:    true,
+				StacktraceLevel: "error",
 			}},
 		},
 		/*{
