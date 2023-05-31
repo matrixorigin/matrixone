@@ -28,10 +28,12 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 )
@@ -724,4 +726,68 @@ func TestSetTempTableStorage(t *testing.T) {
 	dnStore, _ := ses.SetTempTableStorage(ck)
 
 	assert.Equal(t, defines.TEMPORARY_TABLE_DN_ADDR, dnStore.TxnServiceAddress)
+}
+
+func Test_doSelectGlobalSystemVariable(t *testing.T) {
+	convey.Convey("select global system variable fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.ShowVariables{
+			Global: true,
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForgetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "autocommit")
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		_, err := ses.resolveGlobalVar("autocommit")
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("select global system variable fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.ShowVariables{
+			Global: true,
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForgetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "autocommit")
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{
+			{"1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		_, err := ses.resolveGlobalVar("autocommit")
+		convey.So(err, convey.ShouldBeNil)
+	})
 }
