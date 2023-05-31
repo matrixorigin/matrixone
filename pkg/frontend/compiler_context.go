@@ -539,7 +539,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.GetSession().GetGlobalVar(varName)
+			return tcc.GetSession().resolveGlobalVar(varName)
 		} else {
 			return tcc.GetSession().GetSessionVar(varName)
 		}
