@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -115,6 +116,64 @@ func TestCloseLocalLockTableWithBlockedWaiter(t *testing.T) {
 				if lock.waiter.waiters.len() == 2 {
 					break
 				}
+				time.Sleep(time.Millisecond * 10)
+			}
+
+			v.close()
+			wg.Wait()
+		})
+}
+
+func TestCloseLocalLockTableWithBlockedSameTxnWaiters(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				1,
+				[]byte{1},
+				[][]byte{{1}},
+				pb.Granularity_Row)
+
+			var wg sync.WaitGroup
+			n := 10
+			for i := 0; i < n; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := l.Lock(
+						ctx,
+						1,
+						[][]byte{{1}},
+						[]byte{2},
+						getRowOptions(),
+					)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
+						moerr.IsMoErrCode(err, moerr.ErrInvalidState))
+				}()
+			}
+
+			v, err := l.getLockTable(1)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+			for {
+				lt.mu.RLock()
+				lock, ok := lt.mu.store.Get([]byte{1})
+				require.True(t, ok)
+				if lock.waiter.waiters.len() == 1 &&
+					len(lock.waiter.waiters.all()[0].sameTxnWaiters) == n-1 {
+					lt.mu.RUnlock()
+					break
+				}
+				lt.mu.RUnlock()
 				time.Sleep(time.Millisecond * 10)
 			}
 
@@ -366,6 +425,7 @@ func TestMergeRangeWithNoConflict(t *testing.T) {
 					var wg sync.WaitGroup
 					for _, txnID := range c.existsWaiters[i] {
 						w := acquireWaiter("", []byte(txnID))
+						w.setStatus("", blocking)
 						lock.waiter.add("", w)
 						wg.Add(1)
 						require.NoError(t, stopper.RunTask(func(ctx context.Context) {
@@ -517,6 +577,64 @@ func TestMergeRangeWithConflict(t *testing.T) {
 
 			require.NoError(t, l.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
 			wg.Wait()
+		})
+}
+
+func TestLocalLockTableMulitiRowLocksCannotMissIfFoundSelfTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			l := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			mustAddTestLock(
+				t,
+				ctx,
+				l,
+				1,
+				[]byte{2},
+				[][]byte{{1}},
+				pb.Granularity_Row)
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				mustAddTestLock(
+					t,
+					ctx,
+					l,
+					1,
+					[]byte{1},
+					[][]byte{{1}},
+					pb.Granularity_Row)
+			}()
+			go func() {
+				defer wg.Done()
+				waitWaiters(t, l, 1, []byte{1}, 1)
+				mustAddTestLock(
+					t,
+					ctx,
+					l,
+					1,
+					[]byte{1},
+					[][]byte{{1}, {2}},
+					pb.Granularity_Row)
+			}()
+
+			waitWaiters(t, l, 1, []byte{1}, 1, 1)
+			require.NoError(t, l.Unlock(ctx, []byte{2}, timestamp.Timestamp{}))
+
+			wg.Wait()
+			v, err := l.getLockTable(1)
+			require.NoError(t, err)
+			lt := v.(*localLockTable)
+			lt.mu.Lock()
+			defer lt.mu.Unlock()
+			require.Equal(t, 2, lt.mu.store.Len())
 		})
 }
 

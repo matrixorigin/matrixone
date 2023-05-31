@@ -389,6 +389,8 @@ var functionIdRegister = map[string]int32{
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
+	// count window
+	"rank": RANK,
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
@@ -488,12 +490,14 @@ var functionIdRegister = map[string]int32{
 	"last_uuid":                      LAST_QUERY_ID,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
+	"row_number":                     ROW_NUMBER,
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
 	"json_quote":                     JSON_QUOTE,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
+	"dense_rank":                     DENSE_RANK,
 	"add_fault_point":                ADD_FAULT_POINT,
 	"remove_fault_point":             REMOVE_FAULT_POINT,
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,

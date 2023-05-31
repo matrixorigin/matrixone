@@ -15,6 +15,7 @@
 package tasks
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -59,9 +60,9 @@ type BaseScheduler struct {
 	Dispatchers map[TaskType]Dispatcher
 }
 
-func NewBaseScheduler(name string) *BaseScheduler {
+func NewBaseScheduler(ctx context.Context, name string) *BaseScheduler {
 	scheduler := &BaseScheduler{
-		OpWorker:    *ops.NewOpWorker(name),
+		OpWorker:    *ops.NewOpWorker(ctx, name),
 		idAlloc:     common.NewIdAlloctor(1),
 		Dispatchers: make(map[TaskType]Dispatcher),
 	}
