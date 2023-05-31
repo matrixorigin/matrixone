@@ -60,6 +60,55 @@ func BlockRead(
 	return columnBatch, nil
 }
 
+func BlockCompactionRead(
+	ctx context.Context,
+	location objectio.Location,
+	deletes []int64,
+	seqnums []uint16,
+	colTypes []types.Type,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (*batch.Batch, error) {
+
+	loaded, err := LoadColumns(ctx, seqnums, colTypes, fs, location, mp)
+	if err != nil {
+		return nil, err
+	}
+	result := batch.NewWithSize(len(loaded.Vecs))
+	for i, col := range loaded.Vecs {
+		typ := *col.GetType()
+		if typ.Oid == types.T_Rowid {
+			result.Vecs[i] = col
+			// shrink the vector by deleted rows
+			if len(deletes) > 0 {
+				result.Vecs[i].Shrink(deletes, true)
+			}
+			continue
+		}
+		result.Vecs[i] = vector.NewVec(typ)
+		if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
+			break
+		}
+		// shrink the vector by deleted rows
+		if len(deletes) > 0 {
+			result.Vecs[i].Shrink(deletes, true)
+		}
+	}
+
+	if err != nil {
+		for _, col := range result.Vecs {
+			if col.GetType().Oid == types.T_Rowid {
+				continue
+			}
+			if col != nil {
+				col.Free(mp)
+			}
+		}
+	}
+	result.SetZs(result.Vecs[0].Length(), mp)
+	return result, nil
+}
+
 func mergeDeleteRows(d1, d2 []int64) []int64 {
 	if len(d1) == 0 {
 		return d2
