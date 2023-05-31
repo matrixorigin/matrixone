@@ -5927,6 +5927,69 @@ func Test_doInterpretCall(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		_, err = doInterpretCall(ctx, ses, call)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("call precedure (not support)fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+		call := &tree.CallStmt{
+			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
+		}
+
+		priv := determinePrivilegeSetOfStatement(call)
+		ses := newSes(priv, ctrl)
+		proc := testutil.NewProcess()
+		proc.FileService = ses.pu.FileService
+		ses.GetTxnCompileCtx().SetProcess(proc)
+		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.SetDatabaseName("procedure_test")
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForSpBody(ses.GetConnectContext(), string(call.Name.Name.ObjectName), ses.GetDatabaseName())
+		convey.So(err, convey.ShouldBeNil)
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{"begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end", "{}"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForGetSystemVariableValueWithDatabase("procedure_test", "version_compatibility")
+		mrs = newMrsForPasswordOfUser([][]interface{}{
+			{"0.7"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = "select v1 > 5"
+		mrs = newMrsForPasswordOfUser([][]interface{}{
+			{"1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from tbh1"
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		_, err = doInterpretCall(ctx, ses, call)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
