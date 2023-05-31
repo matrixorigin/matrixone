@@ -294,7 +294,7 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 	if bat == nil || bat.Length() == 0 {
 		return
 	}
-	apiBat, err := containersBatchToProtoBatchNoCopy(bat)
+	apiBat, err := containersBatchToProtoBatch(bat)
 	logutil.Debugf("[logtail] from table %d-%s, delete %v, batch length %d @%s", tid, tableName, delete, bat.Length(), b.txn.GetPrepareTS().ToString())
 	if err != nil {
 		panic(err)

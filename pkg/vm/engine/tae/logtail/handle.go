@@ -328,7 +328,7 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 
 	if b.insBatch.Length() > 0 {
-		bat, err := containersBatchToProtoBatchNoCopy(b.insBatch)
+		bat, err := containersBatchToProtoBatch(b.insBatch)
 		logutil.Debugf("[logtail] catalog insert to %d-%s, %s", tblID, tableName,
 			DebugBatchToString("catalog", b.insBatch, true, zap.DebugLevel))
 		if err != nil {
@@ -345,7 +345,7 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		entries = append(entries, insEntry)
 	}
 	if b.delBatch.Length() > 0 {
-		bat, err := containersBatchToProtoBatchNoCopy(b.delBatch)
+		bat, err := containersBatchToProtoBatch(b.delBatch)
 		logutil.Debugf("[logtail] catalog delete from %d-%s, %s", tblID, tableName,
 			DebugBatchToString("catalog", b.delBatch, false, zap.DebugLevel))
 		if err != nil {
@@ -589,7 +589,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		if batch.Length() == 0 {
 			return nil
 		}
-		bat, err := containersBatchToProtoBatchNoCopy(batch)
+		bat, err := containersBatchToProtoBatch(batch)
 		if err != nil {
 			return err
 		}
