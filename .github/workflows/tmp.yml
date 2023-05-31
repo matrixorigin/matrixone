@@ -13,8 +13,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          repository: nnsgmsone/matrixone
-          path: ./matrixone
+          fetch-depth: 0
           
       - name: Prepare
         id: prep
