@@ -54,8 +54,18 @@ type Vector struct {
 	cantFreeData bool
 	cantFreeArea bool
 
+	sorted bool // for some optimization
+
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
+}
+
+func (v *Vector) GetSorted() bool {
+	return v.sorted
+}
+
+func (v *Vector) SetSorted(b bool) {
+	v.sorted = b
 }
 
 func (v *Vector) Reset(typ types.Type) {
@@ -69,6 +79,7 @@ func (v *Vector) Reset(typ types.Type) {
 	v.length = 0
 	//v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.nsp.Reset()
+	v.sorted = false
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -152,6 +163,7 @@ func (v *Vector) CleanOnlyData() {
 		v.area = v.area[:0]
 	}
 	v.nsp.Reset()
+	v.sorted = false
 }
 
 func (v *Vector) GetStringAt(i int) string {
@@ -295,6 +307,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	types.PutTypeToPool(v.typ)
 
 	v.nsp.Reset()
+	v.sorted = false
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
@@ -349,6 +362,8 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 		buf.Write(nspData)
 	}
 
+	buf.Write(types.EncodeBool(&v.sorted))
+
 	return nil
 }
 
@@ -393,6 +408,9 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	} else {
 		v.nsp.Reset()
 	}
+
+	v.sorted = types.DecodeBool(data[:1])
+	//data = data[1:]
 
 	v.cantFreeData = true
 	v.cantFreeArea = true
@@ -451,6 +469,9 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 		v.nsp.Reset()
 	}
 
+	v.sorted = types.DecodeBool(data[:1])
+	//data = data[1:]
+
 	return nil
 }
 
@@ -497,6 +518,7 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 		class:  v.class,
 		typ:    v.typ,
 		length: v.length,
+		sorted: v.sorted,
 	}
 	w.GetNulls().InitWith(v.GetNulls())
 
