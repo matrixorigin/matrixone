@@ -15,7 +15,6 @@
 package json_quote
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
 )
@@ -26,18 +25,4 @@ func Single(str string) ([]byte, error) {
 		return nil, err
 	}
 	return bj.Marshal()
-}
-
-func Batch(xs []string, rs [][]byte, nsp *nulls.Nulls) ([][]byte, error) {
-	var err error
-	for i, x := range xs {
-		if nsp.Contains(uint64(i)) {
-			continue
-		}
-		rs[i], err = Single(x)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return rs, nil
 }

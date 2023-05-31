@@ -15,7 +15,6 @@
 package json_quote
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -24,13 +23,4 @@ func TestSingle(t *testing.T) {
 	dt, err := Single("hello")
 	require.NoError(t, err)
 	require.NotNil(t, dt)
-}
-
-func TestBatch(t *testing.T) {
-	nsp := nulls.NewWithSize(3)
-	nsp.Set(uint64(2))
-	rs := make([][]byte, 3)
-	rs, err := Batch([]string{"hello", "world", "matrix"}, rs, nil)
-	require.NoError(t, err)
-	require.NotNil(t, rs)
 }
