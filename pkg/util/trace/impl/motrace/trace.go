@@ -91,11 +91,6 @@ func Init(ctx context.Context, opts ...TracerProviderOption) error {
 	serviceCtx := context.Background()
 	SetDefaultContext(trace.ContextWithSpanContext(serviceCtx, sc))
 
-	go func() {
-		<-time.After(30 * time.Second)
-		logutil.Fatal("fatal")
-	}()
-
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {
 		return err
