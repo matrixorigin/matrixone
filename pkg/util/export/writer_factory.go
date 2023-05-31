@@ -24,10 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
-var _ table.RowWriter = (*writer)(nil)
-var _ table.AfterWrite = (*writer)(nil)
+var _ table.RowWriter = (*reactWriter)(nil)
+var _ table.AfterWrite = (*reactWriter)(nil)
 
-type writer struct {
+// reactWriter implement table.AfterWrite, it can react before/after FlushAndClose
+type reactWriter struct {
 	ctx context.Context
 	w   table.RowWriter
 
@@ -35,33 +36,33 @@ type writer struct {
 	afters []table.CheckWriteHook
 }
 
-func newWriter(ctx context.Context, w table.RowWriter) *writer {
-	return &writer{
+func newWriter(ctx context.Context, w table.RowWriter) *reactWriter {
+	return &reactWriter{
 		ctx: ctx,
 		w:   w,
 	}
 }
 
-func (w *writer) WriteRow(row *table.Row) error {
-	return w.w.WriteRow(row)
+func (rw *reactWriter) WriteRow(row *table.Row) error {
+	return rw.w.WriteRow(row)
 }
 
-func (w *writer) GetContent() string {
-	return w.w.GetContent()
+func (rw *reactWriter) GetContent() string {
+	return rw.w.GetContent()
 }
 
-func (w *writer) FlushAndClose() (int, error) {
-	n, err := w.w.FlushAndClose()
+func (rw *reactWriter) FlushAndClose() (int, error) {
+	n, err := rw.w.FlushAndClose()
 	if err == nil {
-		for _, hook := range w.afters {
-			hook(w.ctx)
+		for _, hook := range rw.afters {
+			hook(rw.ctx)
 		}
 	}
 	return n, err
 }
 
-func (w *writer) AddAfter(hook table.CheckWriteHook) {
-	w.afters = append(w.afters, hook)
+func (rw *reactWriter) AddAfter(hook table.CheckWriteHook) {
+	rw.afters = append(rw.afters, hook)
 }
 
 func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string) (factory table.WriterFactory) {
