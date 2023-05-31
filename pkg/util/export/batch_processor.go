@@ -320,6 +320,9 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 		return moerr.NewInternalError(ctx, "MOCollector stopped")
 	case c.awakeCollect <- item:
 		return nil
+	default:
+		fmt.Println("MOCollector Collect default")
+		return nil
 	}
 }
 
