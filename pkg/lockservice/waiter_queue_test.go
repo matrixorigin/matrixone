@@ -67,8 +67,8 @@ func TestIterTxns(t *testing.T) {
 
 	var values [][]byte
 	v := 0
-	q.iter(func(b []byte) bool {
-		values = append(values, b)
+	q.iter(func(w *waiter) bool {
+		values = append(values, w.txnID)
 		v++
 		return v < 2
 	})
@@ -88,4 +88,16 @@ func TestQueueChange(t *testing.T) {
 
 	q.rollbackChange()
 	assert.Equal(t, 1, q.len())
+}
+
+func TestAddSameTxnWaiter(t *testing.T) {
+	q := newWaiterQueue()
+	q.put(acquireWaiter("s1", []byte("w")), acquireWaiter("s1", []byte("w1")))
+	assert.Equal(t, 2, len(q.waiters))
+
+	q.put(acquireWaiter("s1", []byte("w")))
+	assert.Equal(t, 2, len(q.waiters))
+
+	w, _ := q.pop()
+	assert.Equal(t, 1, len(w.sameTxnWaiters))
 }

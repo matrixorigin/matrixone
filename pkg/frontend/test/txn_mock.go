@@ -477,18 +477,32 @@ func (mr *MockTxnOperatorMockRecorder) Txn() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Txn", reflect.TypeOf((*MockTxnOperator)(nil).Txn))
 }
 
-// UpdateSnapshot mocks base method.
-func (m *MockTxnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+// TxnRef mocks base method.
+func (m *MockTxnOperator) TxnRef() *txn.TxnMeta {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateSnapshot", ts)
+	ret := m.ctrl.Call(m, "TxnRef")
+	ret0, _ := ret[0].(*txn.TxnMeta)
+	return ret0
+}
+
+// TxnRef indicates an expected call of TxnRef.
+func (mr *MockTxnOperatorMockRecorder) TxnRef() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TxnRef", reflect.TypeOf((*MockTxnOperator)(nil).TxnRef))
+}
+
+// UpdateSnapshot mocks base method.
+func (m *MockTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateSnapshot", ctx, ts)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UpdateSnapshot indicates an expected call of UpdateSnapshot.
-func (mr *MockTxnOperatorMockRecorder) UpdateSnapshot(ts interface{}) *gomock.Call {
+func (mr *MockTxnOperatorMockRecorder) UpdateSnapshot(ctx, ts interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshot", reflect.TypeOf((*MockTxnOperator)(nil).UpdateSnapshot), ts)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshot", reflect.TypeOf((*MockTxnOperator)(nil).UpdateSnapshot), ctx, ts)
 }
 
 // Write mocks base method.
@@ -685,18 +699,32 @@ func (mr *MockDebugableTxnOperatorMockRecorder) Txn() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Txn", reflect.TypeOf((*MockDebugableTxnOperator)(nil).Txn))
 }
 
-// UpdateSnapshot mocks base method.
-func (m *MockDebugableTxnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+// TxnRef mocks base method.
+func (m *MockDebugableTxnOperator) TxnRef() *txn.TxnMeta {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateSnapshot", ts)
+	ret := m.ctrl.Call(m, "TxnRef")
+	ret0, _ := ret[0].(*txn.TxnMeta)
+	return ret0
+}
+
+// TxnRef indicates an expected call of TxnRef.
+func (mr *MockDebugableTxnOperatorMockRecorder) TxnRef() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TxnRef", reflect.TypeOf((*MockDebugableTxnOperator)(nil).TxnRef))
+}
+
+// UpdateSnapshot mocks base method.
+func (m *MockDebugableTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateSnapshot", ctx, ts)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // UpdateSnapshot indicates an expected call of UpdateSnapshot.
-func (mr *MockDebugableTxnOperatorMockRecorder) UpdateSnapshot(ts interface{}) *gomock.Call {
+func (mr *MockDebugableTxnOperatorMockRecorder) UpdateSnapshot(ctx, ts interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshot", reflect.TypeOf((*MockDebugableTxnOperator)(nil).UpdateSnapshot), ts)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshot", reflect.TypeOf((*MockDebugableTxnOperator)(nil).UpdateSnapshot), ctx, ts)
 }
 
 // Write mocks base method.
@@ -849,4 +877,32 @@ func NewMockWorkspace(ctrl *gomock.Controller) *MockWorkspace {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 	return m.recorder
+}
+
+// IncrStatemenetID mocks base method.
+func (m *MockWorkspace) IncrStatemenetID(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IncrStatemenetID", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// IncrStatemenetID indicates an expected call of IncrStatemenetID.
+func (mr *MockWorkspaceMockRecorder) IncrStatemenetID(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IncrStatemenetID", reflect.TypeOf((*MockWorkspace)(nil).IncrStatemenetID), ctx)
+}
+
+// RollbackLastStatement mocks base method.
+func (m *MockWorkspace) RollbackLastStatement(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RollbackLastStatement", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RollbackLastStatement indicates an expected call of RollbackLastStatement.
+func (mr *MockWorkspaceMockRecorder) RollbackLastStatement(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RollbackLastStatement", reflect.TypeOf((*MockWorkspace)(nil).RollbackLastStatement), ctx)
 }

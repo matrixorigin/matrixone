@@ -166,14 +166,41 @@ func (client *pushClient) TryToSubscribeTable(
 	return moerr.NewInternalError(ctx, "an error has occurred about table subscription, please try again.")
 }
 
+// this method will ignore lock check, subscribe a table and block until subscribe succeed.
+// developer should use this method carefully.
+// in most time, developer should use TryToSubscribeTable instead.
+func (client *pushClient) forcedSubscribeTable(
+	ctx context.Context,
+	dbId, tblId uint64) error {
+	s := client.subscriber
+
+	if err := s.doSubscribe(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(periodToCheckTableSubscribeSucceed)
+	defer ticker.Stop()
+
+	for i := 0; i < maxCheckRangeTableSubscribeSucceed; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if client.subscribed.getTableSubscribe(dbId, tblId) {
+				return nil
+			}
+		}
+	}
+	return moerr.NewInternalError(ctx, "forced subscribe table timeout")
+}
+
 func (client *pushClient) subscribeTable(
 	ctx context.Context, tblId api.TableID) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case subscriber := <-client.subscriber.lockSubscriber:
-		err := subscriber(ctx, tblId)
-		client.subscriber.lockSubscriber <- subscriber
+	case b := <-client.subscriber.requestLock:
+		err := client.subscriber.doSubscribe(ctx, tblId)
+		client.subscriber.requestLock <- b
 		if err != nil {
 			return err
 		}
@@ -187,9 +214,9 @@ func (client *pushClient) unsubscribeTable(
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case unsubscriber := <-client.subscriber.lockUnSubscriber:
-		err := unsubscriber(ctx, tblId)
-		client.subscriber.lockUnSubscriber <- unsubscriber
+	case b := <-client.subscriber.requestLock:
+		err := client.subscriber.doUnSubscribe(ctx, tblId)
+		client.subscriber.requestLock <- b
 		if err != nil {
 			return err
 		}
@@ -207,31 +234,33 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 
 	ch := make(chan error)
 	go func() {
+		var er error
 		for _, ti := range tableIds {
-			er := client.TryToSubscribeTable(ctx, databaseId, ti)
+			er = client.forcedSubscribeTable(ctx, databaseId, ti)
 			if er != nil {
-				ch <- er
-				return
+				break
 			}
 		}
-		ch <- nil
+		ch <- er
 	}()
 
-	select {
-	case <-ctx.Done():
+	err = <-ch
+	close(ch)
+
+	if err != nil {
 		logutil.Errorf("connect to dn log tail server failed")
-		return ctx.Err()
-	case err = <-ch:
-		if err != nil {
-			return err
-		}
-		client.receivedLogTailTime.ready.Store(true)
-		return nil
 	}
+	return err
 }
 
 func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
 	reconnectErr := make(chan error)
+
+	// init isLastReconnectRoutineClean as true.
+	// and once it was false, we should clean reconnectErr before we do reconnect action.
+	// it means the last reconnection failed but not because we get an error from this channel.
+	// if not clean, it will cause some go-routine hang up.
+	isLastReconnectRoutineClean := false
 
 	go func() {
 		for {
@@ -263,11 +292,14 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 
 				case err := <-reconnectErr:
 					cancel()
+					isLastReconnectRoutineClean = true
 					if err != nil {
-						logutil.Errorf("reconnect to dn log tail service failed, reason: %s", err)
+						logutil.Errorf("connect to dn log tail service failed, reason: %s", err)
 						goto cleanAndReconnect
 					}
-					logutil.Infof("reconnect to dn log tail service succeed")
+
+					client.receivedLogTailTime.ready.Store(true)
+					client.subscriber.setReady()
 					continue
 				}
 
@@ -314,6 +346,10 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			for _, r := range receiver {
 				r.close()
 			}
+			if !isLastReconnectRoutineClean {
+				<-reconnectErr
+			}
+
 			logutil.Infof("start to reconnect to dn log tail service")
 			for {
 				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
@@ -326,6 +362,8 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				// once we reconnect succeed, should clean partition here.
 				e.cleanMemoryTable()
 
+				isLastReconnectRoutineClean = false
+
 				go func() {
 					err := client.firstTimeConnectToLogTailServer(ctx)
 					reconnectErr <- err
@@ -334,6 +372,9 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			}
 		}
 	}()
+
+	err := client.firstTimeConnectToLogTailServer(ctx)
+	reconnectErr <- err
 }
 
 func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
@@ -484,10 +525,11 @@ type logTailSubscriber struct {
 	dnNodeID      int
 	logTailClient *service.LogtailClient
 
-	// return a table subscribe method.
-	lockSubscriber chan func(context.Context, api.TableID) error
-	// return a table unsubscribe method.
-	lockUnSubscriber chan func(ctx context.Context, id api.TableID) error
+	ready bool
+
+	requestLock   chan bool
+	doSubscribe   func(context.Context, api.TableID) error
+	doUnSubscribe func(context.Context, api.TableID) error
 }
 
 func clientIsPreparing(context.Context, api.TableID) error {
@@ -530,28 +572,20 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	// XXX we assume that we have only 1 dn now.
 	s.dnNodeID = 0
 
+	// if requestLock is not nil, it's most likely called by reconnect process.
+	// we need to set it not ready first to ensure that no one can subscribe or unsubscribe table during reconnect.
+	if s.requestLock != nil {
+		s.setNotReady()
+	}
+
+	s.doSubscribe = clientIsPreparing
+	s.doUnSubscribe = clientIsPreparing
+
 	// close the old stream
 	oldClient := s.logTailClient
 	if oldClient != nil {
 		_ = oldClient.Close()
 	}
-
-	// if channel is not nil here, it's most likely called by reconnect process.
-	// we need to take out the content of channel to ensure that
-	// the subscriber can't be used during the init process.
-	if s.lockSubscriber == nil {
-		s.lockSubscriber = make(chan func(context.Context, api.TableID) error, 1)
-	} else {
-		<-s.lockSubscriber
-	}
-	s.lockSubscriber <- clientIsPreparing
-
-	if s.lockUnSubscriber == nil {
-		s.lockUnSubscriber = make(chan func(context.Context, api.TableID) error, 1)
-	} else {
-		<-s.lockUnSubscriber
-	}
-	s.lockUnSubscriber <- clientIsPreparing
 
 	stream, err := newRpcStreamToDnLogTailService(serviceAddr)
 	if err != nil {
@@ -559,17 +593,32 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	}
 
 	// new the log tail client.
-	s.logTailClient, err = service.NewLogtailClient(stream,
-		service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
+	s.logTailClient, err = service.NewLogtailClient(stream, service.WithClientRequestPerSecond(maxSubscribeRequestPerSecond))
 	if err != nil {
 		return err
 	}
-	<-s.lockSubscriber
-	<-s.lockUnSubscriber
 
-	s.lockSubscriber <- s.subscribeTable
-	s.lockUnSubscriber <- s.unSubscribeTable
+	s.doSubscribe = s.subscribeTable
+	s.doUnSubscribe = s.unSubscribeTable
+	if s.requestLock == nil {
+		s.requestLock = make(chan bool, 1)
+		s.ready = false
+	}
 	return nil
+}
+
+func (s *logTailSubscriber) setReady() {
+	if !s.ready {
+		s.requestLock <- true
+		s.ready = true
+	}
+}
+
+func (s *logTailSubscriber) setNotReady() {
+	if s.ready {
+		<-s.requestLock
+		s.ready = false
+	}
 }
 
 // can't call this method directly.
@@ -608,20 +657,18 @@ func (e *Engine) InitLogTailPushModel(
 	ctx context.Context,
 	timestampWaiter client.TimestampWaiter) error {
 
-	// get log tail service address.
-	dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
-	if err := e.pClient.init(
-		dnLogTailServerBackend,
-		timestampWaiter); err != nil {
-		return err
+	// try to init log tail client. if failed, retry.
+	for {
+		// get log tail service address.
+		dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
+		if err := e.pClient.init(dnLogTailServerBackend, timestampWaiter); err != nil {
+			continue
+		}
+		break
 	}
+
 	e.pClient.receiveTableLogTailContinuously(ctx, e)
 	e.pClient.unusedTableGCTicker(ctx)
-
-	// first time connect to log tail server, should push subscription of some table on `mo_catalog` database.
-	if err := e.pClient.firstTimeConnectToLogTailServer(ctx); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -836,8 +883,7 @@ func updatePartitionOfPush(
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
-	partitions := e.getPartitions(dbId, tblId)
-	partition := partitions[dnId]
+	partition := e.getPartition(dbId, tblId)
 
 	select {
 	case <-partition.Lock():

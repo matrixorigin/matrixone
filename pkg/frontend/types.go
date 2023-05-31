@@ -91,10 +91,10 @@ type PrepareStmt struct {
 	PrepareStmt    tree.Statement
 	ParamTypes     []byte
 	IsInsertValues bool
-	mp             *mpool.MPool
-	InsertBat      *batch.Batch
-	emptyBatch     *batch.Batch                                        // use for expr eval
-	ufs            []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
+
+	mp        *mpool.MPool
+	InsertBat *batch.Batch
+	ufs       []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
 }
 
 /*

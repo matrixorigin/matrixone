@@ -2524,7 +2524,7 @@ type CreatePublication struct {
 	IfNotExists bool
 	Name        Identifier
 	Database    Identifier
-	Accounts    []Identifier
+	AccountsSet *AccountsSetOption
 	Comment     string
 }
 
@@ -2536,10 +2536,10 @@ func (node *CreatePublication) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
 	ctx.WriteString(" database ")
 	node.Database.Format(ctx)
-	if len(node.Accounts) > 0 {
+	if node.AccountsSet != nil && len(node.AccountsSet.SetAccounts) > 0 {
 		ctx.WriteString(" account ")
 		prefix := ""
-		for _, a := range node.Accounts {
+		for _, a := range node.AccountsSet.SetAccounts {
 			ctx.WriteString(prefix)
 			a.Format(ctx)
 			prefix = ", "

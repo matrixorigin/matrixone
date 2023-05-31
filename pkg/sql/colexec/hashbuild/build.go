@@ -66,14 +66,15 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
+				ctr.cleanHashMap()
 				return false, err
 			}
 			if ap.ctr.mp != nil {
 				anal.Alloc(ap.ctr.mp.Size())
 			}
-			ctr.state = End
-		default:
-			if ctr.bat != nil {
+			ctr.state = Eval
+		case Eval:
+			if ctr.bat != nil && ctr.bat.Length() != 0 {
 				if ap.NeedHashMap {
 					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
 				}
@@ -82,8 +83,13 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 				ctr.bat = nil
 				ctr.sels = nil
 			} else {
+				ctr.cleanHashMap()
 				proc.SetInputBatch(nil)
 			}
+			ctr.state = End
+			return false, nil
+		default:
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 	}

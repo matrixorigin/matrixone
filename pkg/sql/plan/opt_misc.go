@@ -131,6 +131,12 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_FUNCTION_SCAN || parentType == plan.Node_EXTERNAL_FUNCTION {
 		return false
 	}
+	if parentType == plan.Node_DELETE {
+		return false
+	}
+	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK {
+		return false
+	}
 
 	childType := builder.qry.Nodes[node.Children[0]].NodeType
 	if childType == plan.Node_VALUE_SCAN || childType == plan.Node_EXTERNAL_SCAN {
@@ -184,7 +190,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			if !containsTag(filter, aggregateTag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
-				cantPushdown = append(cantPushdown, filter)
+				node.FilterList = append(node.FilterList, filter)
 			}
 		}
 
@@ -575,6 +581,25 @@ func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 		if node.JoinType == plan.Node_LEFT {
 			node.JoinType = plan.Node_RIGHT
+		}
+	}
+}
+
+func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggregateTag int32, groupSize int32) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if exprImpl.Col.RelPos == groupTag {
+			exprImpl.Col.Name = builder.nameByColRef[[2]int32{groupTag, exprImpl.Col.ColPos}]
+			exprImpl.Col.RelPos = -1
+		} else {
+			exprImpl.Col.Name = builder.nameByColRef[[2]int32{aggregateTag, exprImpl.Col.ColPos}]
+			exprImpl.Col.RelPos = -2
+			exprImpl.Col.ColPos += groupSize
+		}
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			builder.remapHavingClause(arg, groupTag, aggregateTag, groupSize)
 		}
 	}
 }

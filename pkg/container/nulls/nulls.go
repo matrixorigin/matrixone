@@ -242,7 +242,7 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 				sel = sels[selIdx]
 			}
 		}
-		nsp.np = bm
+		nsp.np.InitWith(&bm)
 	} else {
 		var bm bitmap.Bitmap
 		bm.InitWithSize(len(sels))
@@ -255,7 +255,7 @@ func Filter(nsp *Nulls, sels []int64, negate bool) {
 				bm.Add(uint64(i))
 			}
 		}
-		nsp.np = bm
+		nsp.np.InitWith(&bm)
 	}
 }
 

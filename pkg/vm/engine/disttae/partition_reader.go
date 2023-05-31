@@ -127,7 +127,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	// dumpBatch or compaction will set some batches as nil
 	if len(p.inserts) > 0 && (p.inserts[0] == nil || p.inserts[0].Length() == 0) {
 		p.inserts = p.inserts[1:]
-		return &batch.Batch{}, nil
+		return batch.EmptyBatch, nil
 	}
 	if len(p.inserts) > 0 || p.blockBatch.hasRows() {
 		var bat *batch.Batch
@@ -215,6 +215,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				srcVec := bat.Vecs[i]
 				uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
 				for j := 0; j < bat.Length(); j++ {
+					//FIXME::it seems that redundant to check rowIds[j] in p.deletes.
 					if _, ok := p.deletes[rowIds[j]]; ok {
 						continue
 					}

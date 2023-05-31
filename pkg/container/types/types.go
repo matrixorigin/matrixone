@@ -17,12 +17,28 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )
 
 type T uint8
+
+var typesPool = sync.Pool{
+	New: func() any {
+		return &Type{}
+	},
+}
+
+func GetTypeFromPool() Type {
+	typ := typesPool.Get().(*Type)
+	return *typ
+}
+
+func PutTypeToPool(typ Type) {
+	typesPool.Put(&typ)
+}
 
 const (
 	// any family
@@ -370,13 +386,13 @@ var Types map[string]T = map[string]T{
 }
 
 func New(oid T, width, scale int32) Type {
-	return Type{
-		Oid:     oid,
-		Size:    int32(oid.TypeLen()),
-		Width:   width,
-		Scale:   scale,
-		Charset: CharsetType(oid),
-	}
+	typ := GetTypeFromPool()
+	typ.Oid = oid
+	typ.Size = int32(oid.TypeLen())
+	typ.Width = width
+	typ.Scale = scale
+	typ.Charset = CharsetType(oid)
+	return typ
 }
 
 func CharsetType(oid T) uint8 {
@@ -459,6 +475,27 @@ func (t Type) IsFloat() bool {
 	default:
 		return false
 	}
+}
+
+func (t Type) IsDecimal() bool {
+	switch t.Oid {
+	case T_decimal64, T_decimal128, T_decimal256:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t Type) IsTemporal() bool {
+	switch t.Oid {
+	case T_date, T_time, T_datetime, T_timestamp, T_interval:
+		return true
+	}
+	return false
+}
+
+func (t Type) IsNumericOrTemporal() bool {
+	return t.IsIntOrUint() || t.IsFloat() || t.IsDecimal() || t.IsTemporal()
 }
 
 func (t Type) String() string {

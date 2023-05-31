@@ -54,7 +54,8 @@ func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn c
 	if proc.TxnOperator != nil {
 		minSnapshotTS = proc.TxnOperator.Txn().SnapshotTS
 	}
-	txn, err = proc.TxnClient.New(proc.Ctx, minSnapshotTS)
+	txn, err = proc.TxnClient.New(proc.Ctx, minSnapshotTS,
+		client.WithTxnCreateBy("sqlfunc"))
 	if err != nil {
 		return nil, err
 	}

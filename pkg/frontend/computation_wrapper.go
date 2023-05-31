@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -231,7 +230,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		}
 		if prepareStmt.IsInsertValues {
 			for _, node := range preparePlan.Plan.GetQuery().Nodes {
-				if node.RowsetData != nil {
+				if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
 					tableDef := node.TableDef
 					colCount := len(tableDef.Cols)
 					colsData := node.RowsetData.Cols
@@ -241,7 +240,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 					bat.CleanOnlyData()
 					for i := 0; i < colCount; i++ {
 						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
-							colsData[i].Data, bat.Vecs[i], prepareStmt.emptyBatch, executePlan.Args, prepareStmt.ufs[i]); err != nil {
+							colsData[i].Data, bat.Vecs[i], executePlan.Args, prepareStmt.ufs[i]); err != nil {
 							return nil, err
 						}
 					}
@@ -378,12 +377,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			return nil, err
 		}
 
-		// 4. add auto_IncrementTable fortemp-db
-		err = colexec.CreateAutoIncrTable(cwft.ses.GetStorage(), requestCtx, cwft.proc, defines.TEMPORARY_DBNAME)
-		if err != nil {
-			return nil, err
-		}
-
 		cwft.ses.EnableInitTempEngine()
 	}
 	return cwft.compile, err
@@ -391,7 +384,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := motrace.StatementFromContext(ctx); stm != nil {
-		stm.SetExecPlan(cwft.plan, SerializeExecPlan)
+		stm.SetSerializableExecPlan(NewMarshalPlanHandler(ctx, stm.StatementID, cwft.plan))
 	}
 	return nil
 }

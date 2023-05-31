@@ -53,20 +53,22 @@ func NewTAEStorage(
 	logtailServerAddr string,
 	logtailServerCfg *options.LogtailServerCfg,
 	logStore options.LogstoreType,
+	incrementalDedup bool,
 ) (*taeStorage, error) {
 	opt := &options.Options{
-		Clock:         rt.Clock(),
-		Fs:            fs,
-		Lc:            logservicedriver.LogServiceClientFactory(factory),
-		Shard:         shard,
-		CheckpointCfg: ckpCfg,
-		LogStoreT:     logStore,
-		Ctx:           ctx,
+		Clock:            rt.Clock(),
+		Fs:               fs,
+		Lc:               logservicedriver.LogServiceClientFactory(factory),
+		Shard:            shard,
+		CheckpointCfg:    ckpCfg,
+		LogStoreT:        logStore,
+		IncrementalDedup: incrementalDedup,
+		Ctx:              ctx,
 	}
 
 	taeHandler := rpc.NewTAEHandle(dataDir, opt)
 	tae := taeHandler.GetDB()
-	logtailer := logtail.NewLogtailer(tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
+	logtailer := logtail.NewLogtailer(ctx, tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
 	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt)
 	if err != nil {
 		return nil, err
