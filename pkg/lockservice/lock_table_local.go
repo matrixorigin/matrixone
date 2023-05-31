@@ -252,7 +252,6 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 						panic("BUG: waiters should be empty, " + str + "," + v.String() + ", " + fmt.Sprintf("table(%d)  %+v", l.bind.Table, key))
 					}
 					c.w = nil
-					return c
 				}
 				continue
 			}

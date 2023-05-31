@@ -48,7 +48,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
 			Default: &plan.Default{
-				NullAbility:  true,
+				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
 				OriginString: "",
 			},
