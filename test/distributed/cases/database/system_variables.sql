@@ -167,3 +167,9 @@ set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 set @@sql_mode = default;
 select @@sql_mode;
+
+
+select @@sql_mode;
+set @@sql_mode ='';
+select @@sql_mode;
+set @@sql_mode = default;

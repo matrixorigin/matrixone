@@ -646,6 +646,11 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 		return "", errorValuesAreNotEnough
 	}
 
+	// set type system variable value equals ""
+	if bitCount == 0 {
+		return bld.String(), nil
+	}
+
 	for i := 0; i < bitCount; i++ {
 		mask := uint64(1 << uint64(i))
 		if mask&bits != 0 {
