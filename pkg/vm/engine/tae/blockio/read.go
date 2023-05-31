@@ -339,7 +339,7 @@ func BlockPrefetch(idxes []uint16, service fileservice.FileService, infos [][]*p
 		for _, info := range infos[i] {
 			pref.AddBlock(idxes, []uint16{info.MetaLocation().ID()})
 			if !info.DeltaLocation().IsEmpty() {
-				// NeedCheckWrite to read all delete
+				// Need to read all delete
 				err = Prefetch([]uint16{0, 1, 2}, []uint16{info.DeltaLocation().ID()}, service, info.DeltaLocation())
 				if err != nil {
 					return err

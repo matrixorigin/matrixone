@@ -157,7 +157,7 @@ func (h *Handle) HandleCommit(
 			default:
 				panic(moerr.NewNYI(ctx, "Pls implement me"))
 			}
-			//NeedCheckWrite to roll back the txn.
+			//Need to roll back the txn.
 			if err != nil {
 				txn, _ = h.db.GetTxnByID(meta.GetID())
 				txn.Rollback()
