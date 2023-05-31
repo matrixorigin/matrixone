@@ -258,7 +258,8 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) error {
 	var wg sync.WaitGroup
 	errC := make(chan error, len(c.scope))
-	// fmt.Printf("run sql %+v", DebugShowScopes(c.scope))
+	logutil.Infof("-------Comiple run sql %+v \n", DebugShowScopes(c.scope))
+	//fmt.Printf("-------Comiple run sql %+v \n", DebugShowScopes(c.scope))
 	// reset early for multi steps
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)

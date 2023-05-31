@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"hash/crc32"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 
@@ -182,6 +183,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
+	logutil.Infof("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
+	//fmt.Printf("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
+
 	var rds []engine.Reader
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
@@ -299,6 +303,13 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	}
 	newScope := newParallelScope(s, ss)
 	newScope.SetContextRecursively(s.Proc.Ctx)
+
+	start := time.Now()
+	defer func() {
+		interval := time.Since(start)
+		end := time.Now()
+		logutil.Infof("---------wuxiliang------------->table Scan[%s] time interval: %s, start[%s] -> end[%s]", s.DataSource.RelationName, interval.String(), start.String(), end.String())
+	}()
 	return newScope.MergeRun(c)
 }
 
