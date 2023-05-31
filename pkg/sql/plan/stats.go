@@ -360,7 +360,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	}
 	ret, col := CheckFilter(expr)
 	if ret && col != nil {
-		switch getSortOrder(tableDef, col.Name) {
+		switch GetSortOrder(tableDef, col.Name) {
 		case 0:
 			return math.Min(expr.Selectivity, 0.5)
 		case 1:

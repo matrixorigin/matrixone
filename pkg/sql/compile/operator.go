@@ -1077,11 +1077,14 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, shuffle bool, shuffleColIdx int) *dispatch.Argument {
+func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node) *dispatch.Argument {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
-	if shuffle {
+	if node.Stats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
-		arg.ShuffleColIdx = shuffleColIdx
+		arg.ShuffleColIdx = plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx]).ColPos
+		arg.ShuffleType = int32(node.Stats.ShuffleType)
+		arg.ShuffleColMin = node.Stats.ShuffleColMin
+		arg.ShuffleColMax = node.Stats.ShuffleColMax
 		return arg
 	}
 	if hasRemote {
