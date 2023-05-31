@@ -457,6 +457,8 @@ loop:
 				select {
 				case c.awakeBatch <- exportReq:
 				case <-c.stopCh:
+				default:
+					fmt.Println("doGenerate: awakeBatch chan is full")
 				}
 			}
 		case <-c.stopCh:
