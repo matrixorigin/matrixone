@@ -16,14 +16,13 @@ package motrace
 
 import (
 	"context"
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
@@ -96,58 +95,6 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(stackCol, table.StringField(m.Stack))
 }
 
-var _ batchpipe.HasName = (*MOLogSyncer)(nil)
-var _ IBuffer2SqlItem = (*MOLogSyncer)(nil)
-var _ table.RowField = (*MOLogSyncer)(nil)
-var _ table.NeedCheckWrite = (*MOLogSyncer)(nil)
-var _ table.NeedSyncWrite = (*MOLogSyncer)(nil)
-
-type MOLogSyncer struct {
-	log *MOZapLog
-	ch  chan struct{}
-}
-
-func NewMOLogSyncer(log *MOZapLog) *MOLogSyncer {
-	return &MOLogSyncer{
-		log: log,
-		ch:  make(chan struct{}),
-	}
-}
-
-func (s *MOLogSyncer) GetName() string { return s.log.GetName() }
-
-func (s *MOLogSyncer) GetTable() *table.Table { return s.log.GetTable() }
-
-func (s *MOLogSyncer) FillRow(ctx context.Context, row *table.Row) { s.log.FillRow(ctx, row) }
-
-func (s *MOLogSyncer) Size() int64 { return s.log.Size() }
-
-func (s *MOLogSyncer) Free() {
-	if s.log != nil {
-		s.log.Free()
-		s.log = nil
-	}
-}
-
-func (s *MOLogSyncer) NeedCheckWrite() bool { return true }
-
-func (s *MOLogSyncer) GetCheckWriteHook() table.CheckWriteHook {
-	return func(_ context.Context) {
-		close(s.ch)
-	}
-}
-
-func (s *MOLogSyncer) NeedSyncWrite() bool { return true }
-
-func (s *MOLogSyncer) Wait() {
-	select {
-	case t := <-time.After(time.Minute):
-		logutil.Warn(fmt.Sprintf("LogSyncer wait timeout at: %s", table.Time2DatetimeString(t)), logutil.NoReportFiled())
-	case <-s.ch:
-		logutil.Info("Wait fatal done.")
-	}
-}
-
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
 	var needReport = true
 	if !GetTracerProvider().IsEnable() {
@@ -187,9 +134,9 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	log.Extra = buffer.String()
 	switch entry.Level {
 	case zap.PanicLevel, zap.DPanicLevel, zap.FatalLevel:
-		logS := NewMOLogSyncer(log)
-		GetGlobalBatchProcessor().Collect(DefaultContext(), logS)
-		logS.Wait()
+		syncer := NewItemSyncer(log)
+		GetGlobalBatchProcessor().Collect(DefaultContext(), syncer)
+		syncer.Wait()
 	default:
 		GetGlobalBatchProcessor().Collect(DefaultContext(), log)
 	}
