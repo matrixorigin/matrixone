@@ -17,12 +17,14 @@ package table_function
 import (
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -30,6 +32,10 @@ import (
 func metadataScanPrepare(proc *process.Process, arg *Argument) (err error) {
 	arg.ctr = new(container)
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
+
+	for i := range arg.Attrs {
+		arg.Attrs[i] = strings.ToUpper(arg.Attrs[i])
+	}
 	return err
 }
 
@@ -81,7 +87,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument) (bool, error) {
 		return false, err
 	}
 
-	metaInfos, err := getMetadataScanInfos(rel, proc, colname)
+	metaInfos, err := rel.GetColumMetadataScanInfo(proc.Ctx, colname)
 	if err != nil {
 		return false, err
 	}
@@ -107,26 +113,8 @@ func handleDatasource(first []string, second []string) (string, string, string, 
 	return strs[0], strs[1], second[0], nil
 }
 
-func getMetadataScanInfos(rel engine.Relation, proc *process.Process, colname string) ([]*catalog.MetadataScanInfo, error) {
-	if _, err := rel.Ranges(proc.Ctx, nil); err != nil {
-		return nil, err
-	}
-
-	infobytes, err := rel.GetMetadataScanInfoBytes(proc.Ctx, colname)
-	if err != nil {
-		return nil, err
-	}
-
-	metaInfos := make([]*catalog.MetadataScanInfo, 0, len(infobytes))
-	for i := range infobytes {
-		metaInfos = append(metaInfos, catalog.DecodeMetadataScanInfo(infobytes[i]))
-	}
-
-	return metaInfos, nil
-}
-
-func genRetBatch(proc process.Process, arg *Argument, metaInfos []*catalog.MetadataScanInfo, colName string, rel engine.Relation) (*batch.Batch, error) {
-	retBat, err := genMetadataInfoBat(proc, arg)
+func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.MetadataScanInfo, colName string, rel engine.Relation) (*batch.Batch, error) {
+	retBat, err := initMetadataInfoBat(proc, arg)
 	if err != nil {
 		return nil, err
 	}
@@ -138,113 +126,107 @@ func genRetBatch(proc process.Process, arg *Argument, metaInfos []*catalog.Metad
 	return retBat, nil
 }
 
-func genMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, error) {
+func initMetadataInfoBat(proc process.Process, arg *Argument) (*batch.Batch, error) {
 	retBat := batch.New(false, arg.Attrs)
 	retBat.Cnt = 1
+
 	for i, a := range arg.Attrs {
-		switch a {
-		case catalog.MetadataScanInfoNames[catalog.COL_NAME]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.COL_NAME])
-
-		case catalog.MetadataScanInfoNames[catalog.BLOCK_ID]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.BLOCK_ID])
-
-		case catalog.MetadataScanInfoNames[catalog.ENTRY_STATE]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.ENTRY_STATE])
-
-		case catalog.MetadataScanInfoNames[catalog.SORTED]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.SORTED])
-
-		case catalog.MetadataScanInfoNames[catalog.META_LOC]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.META_LOC])
-
-		case catalog.MetadataScanInfoNames[catalog.DELTA_LOC]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.DELTA_LOC])
-
-		case catalog.MetadataScanInfoNames[catalog.COMMIT_TS]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.COMMIT_TS])
-
-		case catalog.MetadataScanInfoNames[catalog.SEG_ID]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.SEG_ID])
-
-		case catalog.MetadataScanInfoNames[catalog.ROWS_CNT]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.ROWS_CNT])
-
-		case catalog.MetadataScanInfoNames[catalog.NULL_CNT]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.NULL_CNT])
-
-		case catalog.MetadataScanInfoNames[catalog.COMPRESS_SIZE]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.COMPRESS_SIZE])
-
-		case catalog.MetadataScanInfoNames[catalog.ORIGIN_SIZE]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.ORIGIN_SIZE])
-
-		case catalog.MetadataScanInfoNames[catalog.MIN]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.MIN])
-
-		case catalog.MetadataScanInfoNames[catalog.MAX]:
-			retBat.Vecs[i] = vector.NewVec(catalog.MetadataScanInfoTypes[catalog.MAX])
-
-		default:
-			retBat.Clean(proc.GetMPool())
-			return nil, moerr.NewInvalidInput(proc.Ctx, "bad input select columns name %v", a)
+		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[a]
+		if !ok {
+			return nil, moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", a)
 		}
+
+		tp := plan2.MetadataScanColTypes[idx]
+		retBat.Vecs[i] = vector.NewVec(tp)
 	}
 
 	return retBat, nil
 }
 
-func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument, info *catalog.MetadataScanInfo) error {
+func fillMetadataInfoBat(opBat *batch.Batch, proc process.Process, arg *Argument, info *plan.MetadataScanInfo) error {
 	mp := proc.GetMPool()
-	for i, a := range arg.Attrs {
-		switch a {
-		case catalog.MetadataScanInfoNames[catalog.COL_NAME]:
+	for i, colname := range arg.Attrs {
+		idx, ok := plan.MetadataScanInfo_MetadataScanInfoType_value[colname]
+		if !ok {
+			opBat.Clean(proc.GetMPool())
+			return moerr.NewInternalError(proc.Ctx, "bad input select columns name %v", colname)
+		}
+
+		switch plan.MetadataScanInfo_MetadataScanInfoType(idx) {
+		case plan.MetadataScanInfo_COL_NAME:
 			vector.AppendBytes(opBat.Vecs[i], []byte(info.ColName), false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.BLOCK_ID]:
-			vector.AppendAny(opBat.Vecs[i], info.BlockId, false, mp)
+		case plan.MetadataScanInfo_BLOCK_ID:
+			var bid types.Blockid
+			if err := bid.Unmarshal(info.BlockId); err != nil {
+				return err
+			}
+			vector.AppendFixed(opBat.Vecs[i], bid, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.ENTRY_STATE]:
+		case plan.MetadataScanInfo_ENTRY_STATE:
 			vector.AppendFixed(opBat.Vecs[i], info.EntryState, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.SORTED]:
+		case plan.MetadataScanInfo_SORTED:
 			vector.AppendFixed(opBat.Vecs[i], info.Sorted, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.META_LOC]:
-			vector.AppendBytes(opBat.Vecs[i], info.MetaLoc[:], false, mp)
+		case plan.MetadataScanInfo_IS_HIDDEN:
+			vector.AppendFixed(opBat.Vecs[i], info.IsHidden, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.DELTA_LOC]:
-			vector.AppendBytes(opBat.Vecs[i], info.DelLoc[:], false, mp)
+		case plan.MetadataScanInfo_META_LOC:
+			vector.AppendBytes(opBat.Vecs[i], info.MetaLoc, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.COMMIT_TS]:
-			vector.AppendAny(opBat.Vecs[i], info.CommitTs, false, mp)
+		case plan.MetadataScanInfo_DELTA_LOC:
+			vector.AppendBytes(opBat.Vecs[i], info.DelLoc, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.SEG_ID]:
-			vector.AppendAny(opBat.Vecs[i], info.SegId, false, mp)
+		case plan.MetadataScanInfo_COMMIT_TS:
+			var ts types.TS
+			if err := ts.Unmarshal(info.CommitTs); err != nil {
+				return err
+			}
+			vector.AppendFixed(opBat.Vecs[i], ts, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.ROWS_CNT]:
+		case plan.MetadataScanInfo_CREATE_TS:
+			var ts types.TS
+			if err := ts.Unmarshal(info.CreateTs); err != nil {
+				return err
+			}
+			vector.AppendFixed(opBat.Vecs[i], ts, false, mp)
+
+		case plan.MetadataScanInfo_DELETE_TS:
+			var ts types.TS
+			if err := ts.Unmarshal(info.DeleteTs); err != nil {
+				return err
+			}
+			vector.AppendFixed(opBat.Vecs[i], ts, false, mp)
+
+		case plan.MetadataScanInfo_SEG_ID:
+			var sid types.Uuid
+			if err := sid.Unmarshal(info.SegId); err != nil {
+				return err
+			}
+			vector.AppendFixed(opBat.Vecs[i], sid, false, mp)
+
+		case plan.MetadataScanInfo_ROWS_CNT:
 			vector.AppendFixed(opBat.Vecs[i], info.RowCnt, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.NULL_CNT]:
+		case plan.MetadataScanInfo_NULL_CNT:
 			vector.AppendFixed(opBat.Vecs[i], info.NullCnt, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.COMPRESS_SIZE]:
+		case plan.MetadataScanInfo_COMPRESS_SIZE:
 			vector.AppendFixed(opBat.Vecs[i], info.CompressSize, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.ORIGIN_SIZE]:
+		case plan.MetadataScanInfo_ORIGIN_SIZE:
 			vector.AppendFixed(opBat.Vecs[i], info.OriginSize, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.MIN]: // TODO: find a way to show this info
-			vector.AppendBytes(opBat.Vecs[i], []byte("min"), false, mp)
+		case plan.MetadataScanInfo_MIN: // TODO: find a way to show this info
+			vector.AppendBytes(opBat.Vecs[i], info.Min, false, mp)
 
-		case catalog.MetadataScanInfoNames[catalog.MAX]: // TODO: find a way to show this info
-			vector.AppendBytes(opBat.Vecs[i], []byte("max"), false, mp)
-
+		case plan.MetadataScanInfo_MAX: // TODO: find a way to show this info
+			vector.AppendBytes(opBat.Vecs[i], info.Max, false, mp)
 		default:
-			opBat.Clean(proc.GetMPool())
-			return moerr.NewInvalidInput(proc.Ctx, "bad input select columns name %v", a)
 		}
+		opBat.Zs = append(opBat.Zs, 1)
 	}
-	opBat.Zs = append(opBat.Zs, 1)
+
 	return nil
 }
