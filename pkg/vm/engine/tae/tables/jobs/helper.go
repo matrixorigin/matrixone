@@ -15,6 +15,7 @@
 package jobs
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -47,7 +48,7 @@ func (t *delSegTask) String() string {
 	return segs
 }
 
-func (t *delSegTask) Execute() (err error) {
+func (t *delSegTask) Execute(ctx context.Context) (err error) {
 	tdesc := t.String()
 	logutil.Info("Mergeblocks delete merged segments [Start]", zap.String("task", tdesc))
 	dbId := t.delSegs[0].GetTable().GetDB().ID
