@@ -132,5 +132,11 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	buffer, err := jsonEncoder.EncodeEntry(entry, fields[:endIdx+1])
 	log.Extra = buffer.String()
 	GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+	switch entry.Level {
+	case zap.PanicLevel, zap.DPanicLevel:
+		// fixme: how to catch panic()'s log ?
+	case zap.FatalLevel:
+		Shutdown(nil)
+	}
 	return buffer, err
 }
