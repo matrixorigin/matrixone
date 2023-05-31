@@ -3810,6 +3810,7 @@ func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
 
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
 	if h.marshalPlan != nil {
+		var jsonBytesLen, statsJonsBytesLen = 0, 0
 		h.buffer.Reset()
 		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		// XXX, `buffer` can be used repeatedly as a global variable in the future
@@ -3821,7 +3822,7 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, sta
 			moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
 			jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
 		} else {
-			jsonBytes = h.buffer.Next(h.buffer.Len())
+			jsonBytesLen = h.buffer.Len()
 		}
 		// data transform Global to json
 		if len(h.marshalPlan.Steps) > 0 {
@@ -3834,8 +3835,17 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, sta
 			if err != nil {
 				statsJonsBytes = []byte(fmt.Sprintf(`{"code":200,"message":"%q"}`, err.Error()))
 			} else {
-				statsJonsBytes = h.buffer.Next(h.buffer.Len())
+				statsJonsBytesLen = h.buffer.Len()
 			}
+		}
+		// BG: bytes.Buffer maintain buf []byte.
+		// if buf[off:] not enough but len(buf) is enough place, then it will reset off = 0.
+		// So, in here, we need call Next(...) after all data has been written
+		if jsonBytesLen > 0 {
+			jsonBytes = h.buffer.Next(jsonBytesLen)
+		}
+		if statsJonsBytesLen > 0 {
+			statsJonsBytes = h.buffer.Next(statsJonsBytesLen - jsonBytesLen)
 		}
 	} else {
 		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query no record execution plan")
