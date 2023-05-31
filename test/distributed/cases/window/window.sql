@@ -54,6 +54,17 @@ select a, row_number() over (partition by a) from t1;
 select a, row_number() over () from t1;
 select a, b, c, row_number() over (partition by a, b order by c) from t1;
 select a, c, row_number() over(partition by a order by c rows current row) from t1;
+select a, dense_rank() over (partition by a) from t1 group by a, c;
+select a, c, dense_rank() over (partition by a order by c) from t1 group by a, c;
+select a, c, dense_rank() over (partition by a order by c) from t1 group by a, c;
+select a, c, b, dense_rank() over (partition by a, c, b) from t1;
+select a,  b, dense_rank() over (partition by a, b) from t1;
+select a, sum(b), dense_rank() over (partition by a +1), dense_rank() over (partition by c), c from t1 group by a, c;
+select a, dense_rank() over (partition by a) from t1;
+select a, dense_rank() over () from t1;
+select a, b, c, dense_rank() over (partition by a, b order by c) from t1;
+select a, c, dense_rank() over(partition by a order by c rows current row) from t1;
+select a, c, rank() over(order by a), row_number() over(order by a), dense_rank() over(order by a) from t1;
 
 drop table if exists t1;
 create table t1 (a int, b decimal(7, 2));

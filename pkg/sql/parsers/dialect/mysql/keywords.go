@@ -511,6 +511,7 @@ func init() {
 		"second_microsecond":       SECOND_MICROSECOND,
 		"prepare":                  PREPARE,
 		"deallocate":               DEALLOCATE,
+		"dense_rank":               DENSE_RANK,
 		"reset":                    RESET,
 		"intersect":                INTERSECT,
 		"minus":                    MINUS,
