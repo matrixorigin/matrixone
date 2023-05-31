@@ -44,6 +44,10 @@ const (
 	AggregateAnyValue
 	AggregateMedian
 	AggregateGroupConcat
+
+	WinRank
+	WinRowNumber
+	WinDenseRank
 )
 
 var Names = [...]string{
@@ -62,6 +66,10 @@ var Names = [...]string{
 	AggregateAnyValue:            "any",
 	AggregateMedian:              "median",
 	AggregateGroupConcat:         "group_concat",
+
+	WinRank:      "rank",
+	WinRowNumber: "row_number",
+	WinDenseRank: "dense_rank",
 }
 
 type Aggregate struct {
@@ -171,7 +179,7 @@ type UnaryAgg[T1, T2 any] struct {
 	// grows used for add groups
 	grows func(int)
 	// eval used to get final aggregated value
-	eval func([]T2) []T2
+	eval func([]T2, error) ([]T2, error)
 	// merge
 	// 	first argument is the group number to be merged
 	//  second argument is the group number used to merge
@@ -180,7 +188,7 @@ type UnaryAgg[T1, T2 any] struct {
 	//  fifth argument is whether the value corresponding to the first aggregate function is empty,
 	//  sixth argument is whether the value corresponding to the second aggregate function is empty
 	//  seventh value is the private data
-	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool)
+	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error)
 	// fill
 	//  first argument is the group number to be filled
 	// 	second parameter is the value to be fed
@@ -188,10 +196,12 @@ type UnaryAgg[T1, T2 any] struct {
 	// 	fourth is the number of times the first parameter needs to be fed
 	//  fifth represents whether it is a new group
 	//  sixth represents whether the value to be fed is null
-	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)
 
 	// Optional optimisation function for functions where cgo is used in a single pass.
 	batchFill func(any, any, int64, int64, []uint64, []int64, *nulls.Nulls) error
+
+	err error
 }
 
 // UnaryDistAgg generic aggregation function with one input vector and with distinct
@@ -225,7 +235,7 @@ type UnaryDistAgg[T1, T2 any] struct {
 	// grows used for add groups
 	grows func(int)
 	// eval used to get final aggregated value
-	eval func([]T2) []T2
+	eval func([]T2, error) ([]T2, error)
 	// merge
 	// 	first argument is the group number to be merged
 	//  second argument is the group number used to merge
@@ -234,7 +244,7 @@ type UnaryDistAgg[T1, T2 any] struct {
 	//  fifth argument is whether the value corresponding to the first aggregate function is empty,
 	//  sixth argument is whether the value corresponding to the second aggregate function is empty
 	//  seventh value is the private data
-	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool)
+	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error)
 	// fill
 	//  first argument is the group number to be filled
 	// 	second parameter is the value to be fed
@@ -242,7 +252,9 @@ type UnaryDistAgg[T1, T2 any] struct {
 	// 	fourth is the number of times the first parameter needs to be fed
 	//  fifth represents whether it is a new group
 	//  sixth represents whether the value to be fed is null
-	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)
+
+	err error
 }
 
 type EncodeAgg struct {

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -268,40 +269,48 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	return tcc.getTableDef(ctx, table, dbName, tableName, sub)
 }
 
-func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (string, error) {
+func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (body string, err error) {
 	var expectInvalidArgErr bool
 	var expectedInvalidArgLengthErr bool
 	var badValue string
 	var argstr string
-	var body string
 	var sql string
-	var err error
 	var erArray []ExecResult
 
 	ses := tcc.GetSession()
 	ctx := ses.GetRequestContext()
+
+	err = inputNameIsInvalid(ctx, name)
+	if err != nil {
+		return "", err
+	}
+
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+		if expectedInvalidArgLengthErr {
+			err = errors.Join(err, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args)))
+		} else if expectInvalidArgErr {
+			err = errors.Join(err, moerr.NewInvalidArg(ctx, name+" function have invalid input args", badValue))
+		}
+	}()
 	if err != nil {
-		goto handleFailed
+		return "", err
 	}
 
-	err = inputNameIsInvalid(ctx, name)
-	if err != nil {
-		goto handleFailed
-	}
 	sql = fmt.Sprintf(`select args, body from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		goto handleFailed
+		return "", err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		goto handleFailed
+		return "", err
 	}
 
 	if execResultArrayHasData(erArray) {
@@ -311,11 +320,11 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (strin
 			expectInvalidArgErr = false
 			argstr, err = erArray[0].GetString(ctx, i, 0)
 			if err != nil {
-				goto handleFailed
+				return "", err
 			}
 			body, err = erArray[0].GetString(ctx, i, 1)
 			if err != nil {
-				goto handleFailed
+				return "", err
 			}
 			// arg type check
 			argMap := make(map[string]string)
@@ -346,32 +355,13 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (strin
 				i++
 			}
 			if (!expectInvalidArgErr) && (!expectedInvalidArgLengthErr) {
-				goto handleSuccess
+				return body, err
 			}
 		}
-		goto handleFailed
+		return "", err
 	} else {
-		err = moerr.NewNotSupported(ctx, "function or operator '%s'", name)
-		goto handleFailed
+		return "", moerr.NewNotSupported(ctx, "function or operator '%s'", name)
 	}
-handleSuccess:
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
-	return body, nil
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return "", rbErr
-	}
-	if expectedInvalidArgLengthErr {
-		return "", moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
-	} else if expectInvalidArgErr {
-		return "", moerr.NewInvalidArg(ctx, name+" function have invalid input args", badValue)
-	}
-	return "", err
 }
 
 func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Relation, dbName, tableName string, sub *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef) {
@@ -393,14 +383,6 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	var primarykey *plan2.PrimaryKeyDef
 	var indexes []*plan2.IndexDef
 	var refChildTbls []uint64
-	var subscriptionName string
-	var pubAccountId int32 = -1
-	if sub != nil {
-		subscriptionName = sub.SubName
-		pubAccountId = sub.AccountId
-		dbName = sub.DbName
-	}
-	isTemporary := table.GetEngineType() == engine.Memory
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -505,11 +487,23 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 	cols = append(cols, rowIdCol)
 
 	//convert
+	var subscriptionName string
+	var pubAccountId int32 = -1
+	if sub != nil {
+		subscriptionName = sub.SubName
+		pubAccountId = sub.AccountId
+		dbName = sub.DbName
+	}
+
 	obj := &plan2.ObjectRef{
 		SchemaName:       dbName,
 		ObjName:          tableName,
 		SubscriptionName: subscriptionName,
-		PubAccountId:     pubAccountId,
+	}
+	if pubAccountId != -1 {
+		obj.PubInfo = &plan.PubInfo{
+			TenantId: pubAccountId,
+		}
 	}
 
 	tableDef := &plan2.TableDef{
@@ -528,7 +522,7 @@ func (tcc *TxnCompilerContext) getTableDef(ctx context.Context, table engine.Rel
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
 		Version:      schemaVersion,
-		IsTemporary:  isTemporary,
+		IsTemporary:  table.GetEngineType() == engine.Memory,
 	}
 	return obj, tableDef
 }
@@ -559,10 +553,8 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	}
 }
 
-func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
-	var err error
+func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {
 	var sql string
-	var accountIds []uint32
 	var erArray []ExecResult
 	var targetAccountId uint64
 	if len(accountNames) == 0 {
@@ -580,52 +572,42 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) ([]uint3
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
 	if err != nil {
-		goto handleFailed
+		return nil, err
 	}
 
 	for name := range dedup {
 		sql, err = getSqlForCheckTenant(ctx, name)
 		if err != nil {
-			goto handleFailed
+			return nil, err
 		}
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
-			goto handleFailed
+			return nil, err
 		}
 
 		erArray, err = getResultSet(ctx, bh)
 		if err != nil {
-			goto handleFailed
+			return nil, err
 		}
 
 		if execResultArrayHasData(erArray) {
 			for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
 				targetAccountId, err = erArray[0].GetUint64(ctx, i, 0)
 				if err != nil {
-					goto handleFailed
+					return nil, err
 				}
 			}
 			accountIds = append(accountIds, uint32(targetAccountId))
 		} else {
-			err = moerr.NewInternalError(ctx, "there is no account %s", name)
-			goto handleFailed
+			return nil, moerr.NewInternalError(ctx, "there is no account %s", name)
 		}
 	}
-
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		goto handleFailed
-	}
 	return accountIds, err
-handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return nil, rbErr
-	}
-	return nil, err
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
@@ -665,7 +647,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 
 	dbName := obj.GetSchemaName()
 	checkSub := true
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		checkSub = false
 	}
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub)
@@ -674,7 +656,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{
-			AccountId: obj.PubAccountId,
+			AccountId: obj.PubInfo.TenantId,
 			DbName:    dbName,
 		}
 	}

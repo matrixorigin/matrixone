@@ -536,7 +536,11 @@ type Relation interface {
 	// only ConstraintDef can be modified
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
+	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
+
 	GetTableID(context.Context) uint64
+
+	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
@@ -588,7 +592,7 @@ type Engine interface {
 
 	// Nodes returns all nodes for worker jobs. isInternal, tenant, cnLabel are
 	// used to filter CN servers.
-	Nodes(isInternal bool, tenant string, cnLabel map[string]string) (cnNodes Nodes, err error)
+	Nodes(isInternal bool, tenant string, username string, cnLabel map[string]string) (cnNodes Nodes, err error)
 
 	// Hints returns hints of engine features
 	// return value should not be cached

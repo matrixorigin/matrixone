@@ -212,6 +212,14 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 		if colRef.RelPos == tag {
 			expr = DeepCopyExpr(projects[colRef.ColPos])
 		}
+	case *plan.Expr_W:
+		replaceColRefs(exprImpl.W.WindowFunc, tag, projects)
+		for _, arg := range exprImpl.W.PartitionBy {
+			replaceColRefs(arg, tag, projects)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			replaceColRefs(order.Expr, tag, projects)
+		}
 	}
 
 	return expr
@@ -776,6 +784,14 @@ func increaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
 		for _, arg := range exprImpl.F.Args {
 			increaseRefCnt(arg, colRefCnt)
 		}
+	case *plan.Expr_W:
+		increaseRefCnt(exprImpl.W.WindowFunc, colRefCnt)
+		for _, arg := range exprImpl.W.PartitionBy {
+			increaseRefCnt(arg, colRefCnt)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			increaseRefCnt(order.Expr, colRefCnt)
+		}
 	}
 }
 
@@ -787,6 +803,14 @@ func decreaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
 			decreaseRefCnt(arg, colRefCnt)
+		}
+	case *plan.Expr_W:
+		decreaseRefCnt(exprImpl.W.WindowFunc, colRefCnt)
+		for _, arg := range exprImpl.W.PartitionBy {
+			decreaseRefCnt(arg, colRefCnt)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			decreaseRefCnt(order.Expr, colRefCnt)
 		}
 	}
 }
@@ -1009,7 +1033,7 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-func getSortOrder(tableDef *plan.TableDef, colName string) int {
+func GetSortOrder(tableDef *plan.TableDef, colName string) int {
 	if tableDef.Pkey != nil {
 		pkNames := tableDef.Pkey.Names
 		for i := range pkNames {
@@ -1220,6 +1244,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		default:
 			return false
 		}
+
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		val_u, valOk := constExpr.C.Value.(*plan.Const_U64Val)
 		if !valOk {
@@ -1254,6 +1279,10 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		default:
 			return false
 		}
+
+	case types.T_decimal64, types.T_decimal128:
+		return columnT.Oid == types.T_decimal64 || columnT.Oid == types.T_decimal128
+
 	default:
 		return false
 	}

@@ -43,24 +43,24 @@ func (a *ApproxCountDistic[T]) Grows(n int) {
 	}
 }
 
-func (a *ApproxCountDistic[T]) Eval(vs []uint64) []uint64 {
+func (a *ApproxCountDistic[T]) Eval(vs []uint64, err error) ([]uint64, error) {
 	for i := range vs {
 		vs[i] = a.Sk[i].Estimate()
 	}
 
-	return vs
+	return vs, nil
 }
 
-func (a *ApproxCountDistic[T]) Fill(n int64, v1 T, v2 uint64, _ int64, isEmpty bool, isNull bool) (uint64, bool) {
+func (a *ApproxCountDistic[T]) Fill(n int64, v1 T, v2 uint64, _ int64, isEmpty bool, isNull bool) (uint64, bool, error) {
 	if !isNull {
 		data := getTheBytes(v1)
 		a.Sk[n].Insert(data)
 		isEmpty = false
 	}
-	return v2, isEmpty
+	return v2, isEmpty, nil
 }
 
-func (a *ApproxCountDistic[T]) Merge(xIndex int64, yIndex int64, x uint64, _ uint64, xEmpty bool, yEmpty bool, yApxc any) (uint64, bool) {
+func (a *ApproxCountDistic[T]) Merge(xIndex int64, yIndex int64, x uint64, _ uint64, xEmpty bool, yEmpty bool, yApxc any) (uint64, bool, error) {
 	ret := true
 	if !yEmpty {
 		ya := yApxc.(*ApproxCountDistic[T])
@@ -73,7 +73,7 @@ func (a *ApproxCountDistic[T]) Merge(xIndex int64, yIndex int64, x uint64, _ uin
 		}
 		ret = false
 	}
-	return x, ret
+	return x, ret, nil
 }
 
 func getTheBytes(value any) []byte {

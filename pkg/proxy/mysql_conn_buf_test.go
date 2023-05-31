@@ -36,9 +36,9 @@ func TestMySQLConnPreRecv(t *testing.T) {
 		}()
 		sc := newMySQLConn("source", src, 10, nil, nil)
 		size, txn, err := sc.preRecv()
-		require.ErrorContains(t, err, "mysql protocol error")
+		require.NoError(t, err, "mysql protocol error")
 		require.Equal(t, txnOther, txn)
-		require.Equal(t, 0, size)
+		require.Equal(t, 4, size)
 	})
 
 	t.Run("protocol_error/length-max", func(t *testing.T) {

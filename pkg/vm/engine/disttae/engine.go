@@ -374,7 +374,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
 	txn.readOnly.Store(true)
-	// TxnWorkSpace SegmentName
+	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
@@ -421,26 +421,44 @@ func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 	return nil
 }
 
-func (e *Engine) Nodes(isInternal bool, tenant string, cnLabel map[string]string) (engine.Nodes, error) {
+func (e *Engine) Nodes(
+	isInternal bool, tenant string, username string, cnLabel map[string]string,
+) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	cluster := clusterservice.GetMOCluster()
 	var selector clusterservice.Selector
-	if isInternal || strings.ToLower(tenant) == "sys" {
-		selector = clusterservice.NewSelector()
-	} else {
-		selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ)
-	}
-	if len(cnLabel) > 0 {
-		selector = selector.SelectByLabel(cnLabel, clusterservice.EQ)
-	}
-	cluster.GetCNService(selector, func(c metadata.CNService) bool {
-		nodes = append(nodes, engine.Node{
-			Mcpu: runtime.NumCPU(),
-			Id:   c.ServiceID,
-			Addr: c.PipelineServiceAddress,
+
+	// If the requested labels are empty, return all CN servers.
+	if len(cnLabel) == 0 {
+		cluster.GetCNService(selector, func(c metadata.CNService) bool {
+			nodes = append(nodes, engine.Node{
+				Mcpu: runtime.NumCPU(),
+				Id:   c.ServiceID,
+				Addr: c.PipelineServiceAddress,
+			})
+			return true
 		})
-		return true
-	})
+		return nodes, nil
+	}
+
+	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ)
+	if isInternal || strings.ToLower(tenant) == "sys" {
+		SelectForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
+			nodes = append(nodes, engine.Node{
+				Mcpu: runtime.NumCPU(),
+				Id:   s.ServiceID,
+				Addr: s.PipelineServiceAddress,
+			})
+		})
+	} else {
+		SelectForCommonTenant(selector, nil, func(s *metadata.CNService) {
+			nodes = append(nodes, engine.Node{
+				Mcpu: runtime.NumCPU(),
+				Id:   s.ServiceID,
+				Addr: s.PipelineServiceAddress,
+			})
+		})
+	}
 	return nodes, nil
 }
 

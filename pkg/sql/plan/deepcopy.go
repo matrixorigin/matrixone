@@ -54,6 +54,7 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 		DbName:     ref.DbName,
 		SchemaName: ref.SchemaName,
 		ObjName:    ref.ObjName,
+		PubInfo:    ref.PubInfo,
 	}
 }
 
@@ -257,18 +258,10 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 
 	newNode.ObjRef = DeepCopyObjectRef(node.ObjRef)
 
-	if node.WinSpec != nil {
-		newNode.WinSpec = &plan.WindowSpec{
-			PartitionBy: make([]*plan.Expr, len(node.WinSpec.PartitionBy)),
-			OrderBy:     make([]*plan.OrderBySpec, len(node.WinSpec.OrderBy)),
-			Lead:        node.WinSpec.Lead,
-			Lag:         node.WinSpec.Lag,
-		}
-		for idx, pb := range node.WinSpec.PartitionBy {
-			newNode.WinSpec.PartitionBy[idx] = DeepCopyExpr(pb)
-		}
-		for idx, orderBy := range node.WinSpec.OrderBy {
-			newNode.WinSpec.OrderBy[idx] = DeepCopyOrderBy(orderBy)
+	if node.WinSpecList != nil {
+		newNode.WinSpecList = make([]*Expr, len(node.WinSpecList))
+		for i, w := range node.WinSpecList {
+			newNode.WinSpecList[i] = DeepCopyExpr(w)
 		}
 	}
 
@@ -864,6 +857,38 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			F: &plan.Function{
 				Func: DeepCopyObjectRef(item.F.Func),
 				Args: newArgs,
+			},
+		}
+
+	case *plan.Expr_W:
+		ps := make([]*Expr, len(item.W.PartitionBy))
+		for i, p := range item.W.PartitionBy {
+			ps[i] = DeepCopyExpr(p)
+		}
+		os := make([]*OrderBySpec, len(item.W.OrderBy))
+		for i, o := range item.W.OrderBy {
+			os[i] = DeepCopyOrderBy(o)
+		}
+		f := item.W.Frame
+		newExpr.Expr = &plan.Expr_W{
+			W: &plan.WindowSpec{
+				WindowFunc:  DeepCopyExpr(item.W.WindowFunc),
+				PartitionBy: ps,
+				OrderBy:     os,
+				Name:        item.W.Name,
+				Frame: &plan.FrameClause{
+					Type: f.Type,
+					Start: &plan.FrameBound{
+						Type:      f.Start.Type,
+						UnBounded: f.Start.UnBounded,
+						Val:       DeepCopyExpr(f.Start.Val),
+					},
+					End: &plan.FrameBound{
+						Type:      f.End.Type,
+						UnBounded: f.End.UnBounded,
+						Val:       DeepCopyExpr(f.End.Val),
+					},
+				},
 			},
 		}
 

@@ -17,6 +17,7 @@ package txnimpl
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime/trace"
 	"time"
 
@@ -385,10 +386,16 @@ func (tbl *txnTable) SoftDeleteSegment(id *types.Segmentid) (err error) {
 }
 
 func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
+	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.Create.Add(1)
+	})
 	return tbl.createSegment(catalog.ES_Appendable, is1PC, nil)
 }
 
 func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
+	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.CreateNonAppendable.Add(1)
+	})
 	return tbl.createSegment(catalog.ES_NotAppendable, is1PC, opts)
 }
 
@@ -772,7 +779,7 @@ func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, 
 	return tbl.localSegment.GetValue(row, col)
 }
 
-func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
+func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
 	if tbl.localSegment != nil && id.SegmentID().Eq(tbl.localSegment.entry.ID) {
 		return tbl.localSegment.GetValue(row, col)
 	}
@@ -785,7 +792,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isN
 		panic(err)
 	}
 	block := meta.GetBlockData()
-	return block.GetValue(tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col))
+	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col))
 }
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {

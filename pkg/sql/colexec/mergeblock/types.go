@@ -83,13 +83,13 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
 		} else {
 			idx := int(-(tblIdx[i] + 1))
-			bat := &batch.Batch{}
-			if err := bat.UnmarshalBinary([]byte(metaLocs[i])); err != nil {
+			newBat := &batch.Batch{}
+			if err := newBat.UnmarshalBinary([]byte(metaLocs[i])); err != nil {
 				return err
 			}
-			bat.Cnt = 1
-			arg.affectedRows += uint64(bat.Length())
-			arg.container.mp2[idx] = append(arg.container.mp2[idx], bat)
+			newBat.Cnt = 1
+			arg.affectedRows += uint64(newBat.Length())
+			arg.container.mp2[idx] = append(arg.container.mp2[idx], newBat)
 		}
 	}
 	for _, bat := range arg.container.mp {
