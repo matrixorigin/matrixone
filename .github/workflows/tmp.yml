@@ -22,6 +22,7 @@ jobs:
         run: |
           pwd
           ls -al
+          echo ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${GITHUB_REPOSITORY#*/}
           VERSION=nightly-${GITHUB_SHA::8}
           
