@@ -332,6 +332,7 @@ func (h *Handle) HandleGetLogTail(
 		*req,
 		true)
 	if err != nil {
+		return
 	}
 	*resp = res
 	return
