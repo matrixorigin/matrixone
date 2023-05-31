@@ -81,7 +81,6 @@ func BlockCompactionRead(
 		if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
 			break
 		}
-		// shrink the vector by deleted rows
 		if len(deletes) > 0 {
 			result.Vecs[i].Shrink(deletes, true)
 		}
@@ -89,13 +88,11 @@ func BlockCompactionRead(
 
 	if err != nil {
 		for _, col := range result.Vecs {
-			if col.GetType().Oid == types.T_Rowid {
-				continue
-			}
 			if col != nil {
 				col.Free(mp)
 			}
 		}
+		return nil, err
 	}
 	result.SetZs(result.Vecs[0].Length(), mp)
 	return result, nil
