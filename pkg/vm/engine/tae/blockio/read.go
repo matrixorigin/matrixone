@@ -77,14 +77,6 @@ func BlockCompactionRead(
 	result := batch.NewWithSize(len(loaded.Vecs))
 	for i, col := range loaded.Vecs {
 		typ := *col.GetType()
-		if typ.Oid == types.T_Rowid {
-			result.Vecs[i] = col
-			// shrink the vector by deleted rows
-			if len(deletes) > 0 {
-				result.Vecs[i].Shrink(deletes, true)
-			}
-			continue
-		}
 		result.Vecs[i] = vector.NewVec(typ)
 		if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
 			break
