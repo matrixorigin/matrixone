@@ -78,6 +78,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+		output: "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+	}, {
+		input:  "select dense_rank() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+		output: "select dense_rank() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+	}, {
 		input:  "select sum(a) over(partition by a range between interval 1 day preceding and interval 2 day following) from t1",
 		output: "select sum(a) over (partition by a range between interval(1, day) preceding and interval(2, day) following) from t1",
 	}, {
