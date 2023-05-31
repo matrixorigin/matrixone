@@ -425,7 +425,15 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		req := holder.getGenerateReq()
 		if req != nil {
-			c.awakeGenerate <- req
+			select {
+			case c.awakeGenerate <- req:
+			default:
+				fmt.Println("awakeBufferFactory: awakeGenerate chan is full")
+				//holder.mux.Lock()
+				//defer holder.mux.Unlock()
+				//holder.buffer = req.(*bufferGenerateReq).buffer
+				//req = nil
+			}
 		}
 	}
 }
