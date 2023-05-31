@@ -424,10 +424,13 @@ func genShuffledBatsByRange(ap *Argument, bat *batch.Batch, proc *process.Proces
 }
 
 func rangeShuffle(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
-	ok, regIndex := allBatchInOneRange(ap, bat)
-	if ok {
-		//send ap to regIndex
-		return sendBatToIndex(ap, proc, bat, regIndex)
+	groupByVec := bat.Vecs[ap.ShuffleColIdx]
+	if groupByVec.GetSorted() {
+		ok, regIndex := allBatchInOneRange(ap, bat)
+		if ok {
+			//send ap to regIndex
+			return sendBatToIndex(ap, proc, bat, regIndex)
+		}
 	}
 
 	err := genShuffledBatsByRange(ap, bat, proc)
