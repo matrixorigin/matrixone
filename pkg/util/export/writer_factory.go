@@ -24,6 +24,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
+var _ table.RowWriter = (*writer)(nil)
+var _ table.AfterWrite = (*writer)(nil)
+
+type writer struct {
+	ctx context.Context
+	w   table.RowWriter
+
+	// implement AfterWrite
+	afters []table.CheckWriteHook
+}
+
+func newWriter(ctx context.Context, w table.RowWriter) *writer {
+	return &writer{
+		ctx: ctx,
+		w:   w,
+	}
+}
+
+func (w *writer) WriteRow(row *table.Row) error {
+	return w.w.WriteRow(row)
+}
+
+func (w *writer) GetContent() string {
+	return w.w.GetContent()
+}
+
+func (w *writer) FlushAndClose() (int, error) {
+	n, err := w.w.FlushAndClose()
+	if err == nil {
+		for _, hook := range w.afters {
+			hook(w.ctx)
+		}
+	}
+	return n, err
+}
+
+func (w *writer) AddAfter(hook table.CheckWriteHook) {
+	w.afters = append(w.afters, hook)
+}
+
 func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string) (factory table.WriterFactory) {
 
 	var extension = table.GetExtension(ext)
@@ -35,7 +75,7 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext
 			options := []etl.FSWriterOption{
 				etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
 			}
-			return etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
+			return newWriter(ctx, etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...)))
 		}
 	case table.TaeExtension:
 		mp, err := mpool.NewMPool("etl_fs_writer", 0, mpool.NoFixed)
@@ -44,7 +84,7 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext
 		}
 		factory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 			filePath := cfg.LogsFilePathFactory(account, tbl, ts)
-			return etl.NewTAEWriter(ctx, tbl, mp, filePath, fs)
+			return newWriter(ctx, etl.NewTAEWriter(ctx, tbl, mp, filePath, fs))
 		}
 	}
 

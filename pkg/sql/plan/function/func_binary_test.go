@@ -2656,7 +2656,7 @@ func TestJsonExtract(t *testing.T) {
 
 func initSplitPart() []tcTemp {
 
-	//TODO: Need to validate testcases: https://github.com/m-schen/matrixone/blob/3b58fe39a4c233739a8d3b9cd4fcd562fa2a1568/pkg/sql/plan/function/builtin/multi/split_part_test.go#L50
+	//TODO: NeedCheckWrite to validate testcases: https://github.com/m-schen/matrixone/blob/3b58fe39a4c233739a8d3b9cd4fcd562fa2a1568/pkg/sql/plan/function/builtin/multi/split_part_test.go#L50
 	// I have skipped the scalar testcases. Please add if it is relevant.
 	return []tcTemp{
 		{
