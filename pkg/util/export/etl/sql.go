@@ -155,9 +155,9 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 
 		if sb.Len() >= maxLen || idx == len(records)-1 {
 			stmt := baseStr + sb.String() + ";"
-			timeLimit := 60 * time.Second
+			timeLimit := 10 * time.Second
 			if tbl.Table == "rawlog" {
-				timeLimit = 15 * time.Second
+				timeLimit = 10 * time.Second
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeLimit)
 			defer cancel() // it's important to ensure all paths call cancel to avoid resource leak
