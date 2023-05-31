@@ -9312,6 +9312,7 @@ non_reserved_keyword:
 |   COLUMN_FORMAT
 |   CASCADE
 |   DATA
+|	DAY
 |   DATETIME
 |   DECIMAL
 |   DYNAMIC
@@ -9477,6 +9478,7 @@ non_reserved_keyword:
 |   SUBSCRIPTIONS
 |   PUBLICATIONS
 |   PROPERTIES
+|	WEEK
 
 func_not_keyword:
     DATE_ADD
