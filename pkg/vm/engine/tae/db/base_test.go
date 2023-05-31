@@ -186,7 +186,7 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 	for it.Valid() {
 		blk := it.GetBlock()
 		defer blk.Close()
-		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName)
+		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 		assert.NoError(e.t, err)
 		defer view.Close()
 		view.ApplyDeletes()
@@ -428,7 +428,7 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 
 func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
 	forEachBlock(rel, func(blk handle.Block) (err error) {
-		view, err := blk.GetColumnDataById(colIdx)
+		view, err := blk.GetColumnDataById(context.Background(), colIdx)
 		if view == nil {
 			logutil.Warnf("blk %v", blk.String())
 			return
@@ -548,7 +548,7 @@ func compactBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *
 			continue
 		}
 		assert.NoError(t, err)
-		err = task.OnExec()
+		err = task.OnExec(context.Background())
 		if skipConflict {
 			if err != nil {
 				_ = txn.Rollback()
@@ -605,7 +605,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 			continue
 		}
 		assert.NoError(t, err)
-		err = task.OnExec()
+		err = task.OnExec(context.Background())
 		if skipConflict {
 			if err != nil {
 				_ = txn.Rollback()
