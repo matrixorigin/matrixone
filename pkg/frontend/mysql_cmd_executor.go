@@ -33,7 +33,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -3003,6 +3002,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				return err
 			}
 		}
+		// todo: add trace
 		if err = runner.Run(0); err != nil {
 			return err
 		}
