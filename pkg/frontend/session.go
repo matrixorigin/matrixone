@@ -1770,10 +1770,10 @@ func (sh *SqlHelper) ExecSql(sql string) (ret []interface{}, err error) {
 
 	ctx := sh.ses.GetRequestContext()
 	/*
-		if we run the transaction statement (BEGIN, etc) here , it creates an independent transaction.
-		if we do not run the transaction statement (BEGIN, etc) here, it runs the sql in the share transaction
+		if we run the transaction statement (BEGIN, ect) here , it creates an independent transaction.
+		if we do not run the transaction statement (BEGIN, ect) here, it runs the sql in the share transaction
 		and committed outside this function.
-		!!!NOTE: wen can not execute BEGIN,COMMIT,ROLLBACK,START TRANSACTION etc here.
+		!!!NOTE: wen can not execute the transaction statement(BEGIN,COMMIT,ROLLBACK,START TRANSACTION ect) here.
 	*/
 	bh := sh.ses.GetShareTxnBackgroundExec(ctx)
 	defer bh.Close()
