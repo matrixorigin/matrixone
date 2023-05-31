@@ -98,7 +98,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	if binding, ok := ctx.bindingByTag[col.RelPos]; ok {
 		tableDef := builder.qry.Nodes[binding.nodeId].TableDef
 		colName := tableDef.Cols[col.ColPos].Name
-		if getSortOrder(tableDef, colName) != 0 {
+		if GetSortOrder(tableDef, colName) != 0 {
 			return
 		}
 		sc := builder.compCtx.GetStatsCache()
