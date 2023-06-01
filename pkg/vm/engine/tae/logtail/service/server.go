@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	taelogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -423,17 +423,14 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					return
 				}
 
-				refHelper := &common.RefHelper{
-					OnZeroCB: func() {
-						if closeCB != nil {
-							closeCB()
-						}
-					},
+				cb := func() {
+					if closeCB != nil {
+						closeCB()
+					}
 				}
-				refHelper.Ref()
 
 				// send subscription response
-				subErr = sub.session.SendSubscriptionResponse(sendCtx, tail, refHelper)
+				subErr = sub.session.SendSubscriptionResponse(sendCtx, tail, cb)
 				if subErr != nil {
 					logger.Error("fail to send subscription response", zap.Error(subErr))
 					return
@@ -469,18 +466,21 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					})
 				}
 
-				refHelper := &common.RefHelper{
-					OnZeroCB: func() {
+				var refcount atomic.Int32
+				closeCB := func() {
+					refcount.Add(-1)
+					if refcount.Load() == 0 {
 						if e.closeCB != nil {
 							e.closeCB()
 						}
-					},
+					}
 				}
 
 				// publish incremental logtail for all subscribed tables
-				for _, session := range s.ssmgr.ListSession() {
-					refHelper.Ref()
-					if err := session.Publish(ctx, from, to, refHelper, wraps...); err != nil {
+				sessions := s.ssmgr.ListSession()
+				refcount.Add(int32(len(sessions)))
+				for _, session := range sessions {
+					if err := session.Publish(ctx, from, to, closeCB, wraps...); err != nil {
 						logger.Error("fail to publish incremental logtail", zap.Error(err),
 							zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
 						)

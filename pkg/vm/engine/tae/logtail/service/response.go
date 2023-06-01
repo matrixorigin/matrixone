@@ -21,13 +21,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 // LogtailResponse wraps logtail.LogtailResponse.
 type LogtailResponse struct {
 	logtail.LogtailResponse
-	refHelper *common.RefHelper
+	closeCB func()
 }
 
 var _ morpc.Message = (*LogtailResponse)(nil)
@@ -76,9 +75,9 @@ func (p *responsePool) Acquire() *LogtailResponse {
 }
 
 func (p *responsePool) Release(resp *LogtailResponse) {
-	if resp.refHelper != nil {
-		resp.refHelper.Unref()
-		resp.refHelper = nil
+	if resp.closeCB != nil {
+		resp.closeCB()
+		resp.closeCB = nil
 	}
 	resp.Reset()
 	p.pool.Put(resp)
