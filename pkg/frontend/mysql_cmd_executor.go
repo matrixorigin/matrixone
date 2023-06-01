@@ -3740,8 +3740,8 @@ type jsonPlanHandler struct {
 	buffer         *bytes.Buffer
 }
 
-func NewJsonPlanHandler(ctx context.Context, uuid uuid.UUID, plan *plan2.Plan) *jsonPlanHandler {
-	h := NewMarshalPlanHandler(ctx, uuid, plan)
+func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *jsonPlanHandler {
+	h := NewMarshalPlanHandler(ctx, stmt, plan)
 	jsonBytes, statsJsonBytes, stats := h.Marshal(ctx)
 	return &jsonPlanHandler{
 		jsonBytes:      jsonBytes,
@@ -3758,34 +3758,43 @@ func (h *jsonPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJ
 func (h *jsonPlanHandler) Free() {
 	if h.buffer != nil {
 		releaseMarshalPlanBufferPool(h.buffer)
+		h.buffer = nil
+		h.jsonBytes = nil
+		h.statsJsonBytes = nil
 	}
 }
 
 type marshalPlanHandler struct {
 	marshalPlan *explain.ExplainData
+	stmt        *motrace.StatementInfo
 	uuid        uuid.UUID
 	buffer      *bytes.Buffer
 }
 
-func NewMarshalPlanHandler(ctx context.Context, uuid uuid.UUID, plan *plan2.Plan) *marshalPlanHandler {
+func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *marshalPlanHandler {
 	// TODO: need mem improvement
+	uuid := uuid.UUID(stmt.StatementID)
 	if plan == nil || plan.GetQuery() == nil {
 		return &marshalPlanHandler{
 			marshalPlan: nil,
+			stmt:        stmt,
 			uuid:        uuid,
 			buffer:      getMarshalPlanBufferPool(),
 		}
 	}
 	return &marshalPlanHandler{
 		marshalPlan: explain.BuildJsonPlan(ctx, uuid, &explain.MarshalPlanOptions, plan.GetQuery()),
+		stmt:        stmt,
 		uuid:        uuid,
 		buffer:      getMarshalPlanBufferPool(),
 	}
 }
 
 func (h *marshalPlanHandler) Free() {
+	h.stmt = nil
 	if h.buffer != nil {
 		releaseMarshalPlanBufferPool(h.buffer)
+		h.buffer = nil
 	}
 }
 
@@ -3809,6 +3818,7 @@ func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
 }
 
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
+	var err error
 	if h.marshalPlan != nil {
 		var jsonBytesLen, statsJonsBytesLen = 0, 0
 		h.buffer.Reset()
@@ -3817,12 +3827,14 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, sta
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
 		encoder := json.NewEncoder(h.buffer)
 		encoder.SetEscapeHTML(false)
-		err := encoder.Encode(h.marshalPlan)
-		if err != nil {
-			moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
-			jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
-		} else {
-			jsonBytesLen = h.buffer.Len()
+		if time.Since(h.stmt.RequestAt) > motrace.GetLongQueryTime() {
+			err = encoder.Encode(h.marshalPlan)
+			if err != nil {
+				moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
+				jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
+			} else {
+				jsonBytesLen = h.buffer.Len()
+			}
 		}
 		// data transform Global to json
 		if len(h.marshalPlan.Steps) > 0 {

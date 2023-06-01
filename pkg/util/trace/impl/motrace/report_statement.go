@@ -231,6 +231,10 @@ endL:
 	return util.UnsafeBytesToString(s.jsonByte), util.UnsafeBytesToString(s.statsJsonByte)
 }
 
+func GetLongQueryTime() time.Duration {
+	return time.Duration(GetTracerProvider().longQueryTime)
+}
+
 type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
 
 type SerializableExecPlan interface {
