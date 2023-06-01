@@ -794,6 +794,20 @@ func (tbl *txnTable) getTableDef() *plan.TableDef {
 		}
 		tbl.tableDef.Version = tbl.version
 	}
+	// add Constraint
+	if len(tbl.constraint) != 0 {
+		c := new(engine.ConstraintDef)
+		err := c.UnmarshalBinary(tbl.constraint)
+		if err != nil {
+			return nil
+		}
+		for _, ct := range c.Cts {
+			switch k := ct.(type) {
+			case *engine.PrimaryKeyDef:
+				tbl.tableDef.Pkey = k.Pkey
+			}
+		}
+	}
 	return tbl.tableDef
 }
 
@@ -1050,13 +1064,11 @@ func (tbl *txnTable) compaction() error {
 			tbl.seqnums = idxs
 			tbl.typs = typs
 		}
-		bat, e := blockio.LoadColumns(tbl.db.txn.proc.Ctx, tbl.seqnums, tbl.typs, tbl.db.txn.engine.fs, location, tbl.db.txn.proc.GetMPool())
+		bat, e := blockio.BlockCompactionRead(tbl.db.txn.proc.Ctx, location, deleteOffsets, tbl.seqnums, tbl.typs, tbl.db.txn.engine.fs, tbl.db.txn.proc.GetMPool())
 		if e != nil {
 			err = e
 			return false
 		}
-		bat.SetZs(bat.GetVector(0).Length(), tbl.db.txn.proc.GetMPool())
-		bat.AntiShrink(deleteOffsets)
 		if bat.Length() == 0 {
 			return true
 		}
@@ -1065,6 +1077,9 @@ func (tbl *txnTable) compaction() error {
 		// if the batch is little we should not flush, improve this in next pr.
 		s3writer.WriteBlock(bat)
 		batchNums++
+		if len(deleteOffsets) > 0 {
+			bat.Clean(tbl.db.txn.proc.GetMPool())
+		}
 		return true
 	})
 	if err != nil {
