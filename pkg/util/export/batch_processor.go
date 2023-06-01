@@ -320,9 +320,6 @@ func (c *MOCollector) Collect(ctx context.Context, item batchpipe.HasName) error
 		return moerr.NewInternalError(ctx, "MOCollector stopped")
 	case c.awakeCollect <- item:
 		return nil
-	default:
-		fmt.Println("MOCollector Collect default")
-		return nil
 	}
 }
 
@@ -431,11 +428,10 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 			select {
 			case c.awakeGenerate <- req:
 			default:
-				fmt.Println("awakeBufferFactory: awakeGenerate chan is full")
-				//holder.mux.Lock()
-				//defer holder.mux.Unlock()
-				//holder.buffer = req.(*bufferGenerateReq).buffer
-				//req = nil
+				holder.mux.Lock()
+				defer holder.mux.Unlock()
+				holder.buffer = req.(*bufferGenerateReq).buffer
+				req = nil
 			}
 		}
 	}
@@ -457,8 +453,6 @@ loop:
 				select {
 				case c.awakeBatch <- exportReq:
 				case <-c.stopCh:
-				default:
-					fmt.Println("doGenerate: awakeBatch chan is full")
 				}
 			}
 		case <-c.stopCh:
