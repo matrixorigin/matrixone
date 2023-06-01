@@ -19,11 +19,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -287,16 +285,6 @@ func GetExtension(ext string) string {
 	default:
 		panic("unknown type of ext")
 	}
-}
-
-func String2Bytes(s string) (ret []byte) {
-	sliceHead := (*reflect.SliceHeader)(unsafe.Pointer(&ret))
-	strHead := (*reflect.StringHeader)(unsafe.Pointer(&s))
-
-	sliceHead.Data = strHead.Data
-	sliceHead.Len = strHead.Len
-	sliceHead.Cap = strHead.Len
-	return
 }
 
 // EncodeUUIDHex encode uuid to string

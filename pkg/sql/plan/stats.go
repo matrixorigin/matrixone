@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"sort"
 	"strings"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 const blockNDVThreshHold = 100
@@ -360,7 +360,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	}
 	ret, col := CheckFilter(expr)
 	if ret && col != nil {
-		switch getSortOrder(tableDef, col.Name) {
+		switch GetSortOrder(tableDef, col.Name) {
 		case 0:
 			return math.Min(expr.Selectivity, 0.5)
 		case 1:
@@ -514,23 +514,27 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	case plan.Node_AGG:
 		if len(node.GroupBy) > 0 {
-			input := childStats.Outcnt
-			output := 1.0
+			incnt := childStats.Outcnt
+			outcnt := 1.0
 			for _, groupby := range node.GroupBy {
 				ndv := getExprNdv(groupby, nil, node.NodeId, builder)
 				if ndv > 1 {
 					groupby.Ndv = ndv
-					output *= ndv
+					outcnt *= ndv
 				}
 			}
-			if output > input {
-				output = math.Min(input, output*math.Pow(childStats.Selectivity, 0.8))
+			if outcnt > incnt {
+				outcnt = math.Min(incnt, outcnt*math.Pow(childStats.Selectivity, 0.8))
 			}
 			node.Stats = &plan.Stats{
-				Outcnt:      output,
-				Cost:        input + output,
-				HashmapSize: output,
+				Outcnt:      outcnt,
+				Cost:        incnt + outcnt,
+				HashmapSize: outcnt,
 				Selectivity: 1,
+			}
+			if len(node.FilterList) > 0 {
+				node.Stats.Outcnt *= 0.05
+				node.Stats.Selectivity *= 0.05
 			}
 		} else {
 			node.Stats = &plan.Stats{
@@ -742,7 +746,7 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
+		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
 			node.BuildOnLeft = true
 		}
 	}
@@ -778,4 +782,16 @@ func orSelectivity(s1, s2 float64) float64 {
 	} else {
 		return s
 	}
+}
+
+const blockThresholdForTpQuery = 16
+
+func IsTpQuery(qry *plan.Query) bool {
+	for _, node := range qry.GetNodes() {
+		stats := node.Stats
+		if stats == nil || stats.BlockNum > blockThresholdForTpQuery {
+			return false
+		}
+	}
+	return true
 }

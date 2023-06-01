@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -101,7 +102,7 @@ func (db *txnDB) BatchDedup(id uint64, pk containers.Vector) (err error) {
 	return table.DoBatchDedup(pk)
 }
 
-func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
+func (db *txnDB) Append(ctx context.Context, id uint64, bat *containers.Batch) error {
 	table, err := db.getOrSetTable(id)
 	if err != nil {
 		return err
@@ -109,7 +110,7 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.Append(bat)
+	return table.Append(ctx, bat)
 }
 
 func (db *txnDB) AddBlksWithMetaLoc(
@@ -177,7 +178,7 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, isNu
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	return table.GetValue(id, row, colIdx)
+	return table.GetValue(context.Background(), id, row, colIdx)
 }
 
 func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
@@ -399,7 +400,7 @@ func (db *txnDB) NeedRollback() bool {
 }
 func (db *txnDB) ApplyRollback() (err error) {
 	if db.createEntry != nil {
-		if err = db.createEntry.ApplyRollback(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.createEntry.ApplyRollback(); err != nil {
 			return
 		}
 	}
@@ -409,7 +410,7 @@ func (db *txnDB) ApplyRollback() (err error) {
 		}
 	}
 	if db.dropEntry != nil {
-		if err = db.dropEntry.ApplyRollback(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.dropEntry.ApplyRollback(); err != nil {
 			return
 		}
 	}
@@ -424,7 +425,7 @@ func (db *txnDB) WaitPrepared() (err error) {
 }
 func (db *txnDB) Apply1PCCommit() (err error) {
 	if db.createEntry != nil && db.createEntry.Is1PC() {
-		if err = db.createEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.createEntry.ApplyCommit(); err != nil {
 			return
 		}
 	}
@@ -434,7 +435,7 @@ func (db *txnDB) Apply1PCCommit() (err error) {
 		}
 	}
 	if db.dropEntry != nil && db.dropEntry.Is1PC() {
-		if err = db.dropEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.dropEntry.ApplyCommit(); err != nil {
 			return
 		}
 	}
@@ -443,7 +444,7 @@ func (db *txnDB) Apply1PCCommit() (err error) {
 func (db *txnDB) ApplyCommit() (err error) {
 	now := time.Now()
 	if db.createEntry != nil && !db.createEntry.Is1PC() {
-		if err = db.createEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.createEntry.ApplyCommit(); err != nil {
 			return
 		}
 	}
@@ -453,7 +454,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 		}
 	}
 	if db.dropEntry != nil && !db.dropEntry.Is1PC() {
-		if err = db.dropEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+		if err = db.dropEntry.ApplyCommit(); err != nil {
 			return
 		}
 	}

@@ -28,7 +28,21 @@ func (s *service) GetWaitingList(
 		return false, nil, nil
 	}
 	v := txn.toWaitTxn(s.cfg.ServiceID, false)
-	waitingList, err := s.getTxnWaitingList(txnID, v.CreatedOn)
+	if v.CreatedOn == s.cfg.ServiceID {
+		values := make([]pb.WaitTxn, 0, 1)
+		txn.fetchWhoWaitingMe(
+			s.cfg.ServiceID,
+			txnID,
+			s.activeTxnHolder,
+			func(w pb.WaitTxn) bool {
+				values = append(values, w)
+				return true
+			},
+			s.getLockTable)
+		return true, values, nil
+	}
+
+	waitingList, err := s.getTxnWaitingListOnRemote(txnID, v.CreatedOn)
 	if err != nil {
 		return false, nil, nil
 	}

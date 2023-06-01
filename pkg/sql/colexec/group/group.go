@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -173,14 +174,15 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
-	defer proc.PutBatch(bat)
 
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
+
+	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
-	proc.SetInputBatch(&batch.Batch{})
+	proc.SetInputBatch(batch.EmptyBatch)
 
 	if err := ctr.evalAggVector(bat, proc); err != nil {
 		return false, err
@@ -246,13 +248,16 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
+
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
 		return false, nil
 	}
+
 	defer proc.PutBatch(bat)
 	anal.Input(bat, isFirst)
-	proc.SetInputBatch(&batch.Batch{})
+	proc.SetInputBatch(batch.EmptyBatch)
+
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
 	}
@@ -285,9 +290,10 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		// XXX I removed the old anal.alloc codes here.  should fix next day.
 		groupVecsNullable = groupVecsNullable || (!expr.Typ.NotNullable)
 	}
-	for _, typ := range ap.Types {
-		width := typ.TypeSize()
-		if typ.IsVarlen() {
+	for _, expr := range ap.Exprs {
+		typ := expr.Typ
+		width := types.T(typ.Id).TypeLen()
+		if types.T(typ.Id).FixedLength() < 0 {
 			if typ.Width == 0 {
 				width = 128
 			} else {

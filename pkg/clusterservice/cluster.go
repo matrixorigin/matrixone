@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"go.uber.org/zap"
@@ -66,7 +65,7 @@ func WithDisableRefresh() Option {
 type cluster struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
-	client          logservice.ClusterHAKeeperClient
+	client          ClusterClient
 	refreshInterval time.Duration
 	forceRefreshC   chan struct{}
 	readyOnce       sync.Once
@@ -87,7 +86,7 @@ type cluster struct {
 //
 // TODO(fagongzi): extend hakeeper to support event-driven original message changes
 func NewMOCluster(
-	client logservice.ClusterHAKeeperClient,
+	client ClusterClient,
 	refreshInterval time.Duration,
 	opts ...Option) MOCluster {
 	logger := runtime.ProcessLevelRuntime().Logger().Named("mo-cluster")
@@ -168,7 +167,7 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 		UUID:   uuid,
 		Labels: convert,
 	}
-	proxyClient := c.client.(logservice.ProxyHAKeeperClient)
+	proxyClient := c.client.(labelSupportedClient)
 	if err := proxyClient.UpdateCNLabel(ctx, label); err != nil {
 		return err
 	}

@@ -64,6 +64,12 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 			n.FilterList[i] = r.constantFold(n.FilterList[i], proc)
 		}
 	}
+	if len(n.BlockFilterList) > 0 {
+		for i := range n.BlockFilterList {
+			n.BlockFilterList[i] = r.constantFold(n.BlockFilterList[i], proc)
+		}
+	}
+
 	if len(n.ProjectList) > 0 {
 		for i := range n.ProjectList {
 			n.ProjectList[i] = r.constantFold(n.ProjectList[i], proc)

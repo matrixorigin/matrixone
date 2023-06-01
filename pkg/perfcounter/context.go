@@ -22,19 +22,34 @@ type ctxKeyCounters struct{}
 
 var CtxKeyCounters = ctxKeyCounters{}
 
-func WithCounterSet(ctx context.Context, set *CounterSet) context.Context {
+func WithCounterSet(ctx context.Context, sets ...*CounterSet) context.Context {
 	// check existed
 	v := ctx.Value(CtxKeyCounters)
 	if v == nil {
-		return context.WithValue(ctx, CtxKeyCounters, CounterSets{
-			set: struct{}{},
-		})
+		v := make(CounterSets)
+		for _, s := range sets {
+			v[s] = struct{}{}
+		}
+		return context.WithValue(ctx, CtxKeyCounters, v)
 	}
 	counters := v.(CounterSets)
 	newCounters := make(CounterSets, len(counters)+1)
 	for counter := range counters {
 		newCounters[counter] = struct{}{}
 	}
-	newCounters[set] = struct{}{}
+	for _, s := range sets {
+		newCounters[s] = struct{}{}
+	}
 	return context.WithValue(ctx, CtxKeyCounters, newCounters)
+}
+
+func WithCounterSetFrom(ctx context.Context, fromCtx context.Context) context.Context {
+	if v := fromCtx.Value(CtxKeyCounters); v != nil {
+		var sets []*CounterSet
+		for set := range v.(CounterSets) {
+			sets = append(sets, set)
+		}
+		return WithCounterSet(ctx, sets...)
+	}
+	return ctx
 }

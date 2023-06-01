@@ -16,10 +16,10 @@ package disttae
 
 import (
 	"context"
-	"sort"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -56,7 +56,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 		r.currentStep++
 	}()
 
-	info := r.blks[0]
+	blockInfo := r.blks[0]
 
 	if len(cols) != len(r.seqnums) {
 		if len(r.seqnums) == 0 {
@@ -65,6 +65,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
 			r.pkidxInColIdxs = -1
+			r.indexOfFirstSortedColumn = -1
 			for i, column := range cols {
 				// sometimes Name2ColIndex have no row_id， sometimes have one
 				if column == catalog.Row_ID {
@@ -72,6 +73,9 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 					r.seqnums[i] = objectio.SEQNUM_ROWID
 					r.colTypes[i] = types.T_Rowid.ToType()
 				} else {
+					if plan2.GetSortOrder(r.tableDef, column) == 0 {
+						r.indexOfFirstSortedColumn = i
+					}
 					logicalIdx := r.tableDef.Name2ColIndex[column]
 					colDef := r.tableDef.Cols[logicalIdx]
 					r.seqnums[i] = uint16(colDef.Seqnum)
@@ -99,14 +103,18 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	bat, err := blockio.BlockRead(r.ctx, blockInfo, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
 	bat.SetAttributes(cols)
 
-	// if it's not sorted, just return
-	if !r.blks[0].Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
+	if blockInfo.Sorted && r.indexOfFirstSortedColumn != -1 {
+		bat.GetVector(int32(r.indexOfFirstSortedColumn)).SetSorted(true)
+	}
+
+	// if it's not sorted or no filter expr, just return
+	if !blockInfo.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
 		return bat, nil
 	}
 
@@ -172,17 +180,59 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	}
 
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, info, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+
+	//TODO::there is a bug to fix.
+	//var deletes []int64
+	//if len(r.blks[0].deletes) > 0 {
+	//	deletes := make([]int64, len(r.blks[0].deletes))
+	//	copy(deletes, r.blks[0].deletes)
+	//	//FIXME::why sort deletes?  batch.Shrink need to shrink by the ordered sels.
+	//	sort.Slice(deletes, func(i, j int) bool {
+	//		return deletes[i] < deletes[j]
+	//	})
+	//}
+	bat, err := blockio.BlockRead(r.ctx, info, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
 	bat.SetAttributes(cols)
+
+	//start to load deletes, which maybe
+	//in txn.blockId_dn_delete_metaLoc_batch or in partitionState.
+	if _, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[r.blks[0].meta.BlockID]; ok {
+		deletes, err := r.table.LoadDeletesForBlock(r.blks[0].meta.BlockID)
+		if err != nil {
+			return nil, err
+		}
+		//TODO:: need to optimize .
+		r.blks[0].deletes = append(r.blks[0].deletes, deletes...)
+
+	}
+
+	{
+		state, err := r.table.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ts := types.TimestampToTS(r.ts)
+		iter := state.NewRowsIter(ts, &r.blks[0].meta.BlockID, true)
+		for iter.Next() {
+			entry := iter.Entry()
+			_, offset := entry.RowID.Decode()
+			r.blks[0].deletes = append(r.blks[0].deletes, int64(offset))
+		}
+		iter.Close()
+	}
+	//TODO::there is a bug to fix
 	r.sels = r.sels[:0]
-	deletes := make([]int, len(r.blks[0].deletes))
+	deletes := make([]int64, len(r.blks[0].deletes))
 	copy(deletes, r.blks[0].deletes)
-	sort.Ints(deletes)
+	//sort.Ints(deletes)
+	sort.Slice(deletes, func(i, j int) bool {
+		return deletes[i] < deletes[j]
+	})
 	for i := 0; i < bat.Length(); i++ {
-		if len(deletes) > 0 && i == deletes[0] {
+		if len(deletes) > 0 && i == int(deletes[0]) {
 			deletes = deletes[1:]
 			continue
 		}

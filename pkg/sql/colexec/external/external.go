@@ -214,6 +214,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 		Attrs: make([]string, num),
 		Vecs:  make([]*vector.Vector, num),
 		Zs:    make([]int64, len(fileList)),
+		Cnt:   1,
 	}
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name
@@ -285,15 +286,6 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 
 func FilterFileList(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
 	return filterByAccountAndFilename(ctx, node, proc, fileList, fileSize)
-}
-
-func IsSysTable(dbName string, tableName string) bool {
-	if dbName == "system" {
-		return tableName == "statement_info" || tableName == "rawlog"
-	} else if dbName == "system_metrics" {
-		return tableName == "metric"
-	}
-	return false
 }
 
 func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error) {

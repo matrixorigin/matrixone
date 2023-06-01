@@ -17,15 +17,29 @@ package fileservice
 import (
 	"errors"
 	"io"
+	"strings"
 )
 
 func isRetryableError(err error) bool {
+	// Is error
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
-	switch err.Error() {
+	str := err.Error()
+	// match exact string
+	switch str {
 	case "connection reset by peer",
 		"connection timed out":
+		return true
+	}
+	// match sub-string
+	if strings.Contains(str, "unexpected EOF") {
+		return true
+	}
+	if strings.Contains(str, "connection reset by peer") {
+		return true
+	}
+	if strings.Contains(str, "connection timed out") {
 		return true
 	}
 	return false

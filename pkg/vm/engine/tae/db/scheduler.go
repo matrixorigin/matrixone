@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 var (
@@ -45,28 +44,28 @@ func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
 		panic(fmt.Sprintf("bad param: %d io workers", ioWorkers))
 	}
 	s := &taskScheduler{
-		BaseScheduler: tasks.NewBaseScheduler("taskScheduler"),
+		BaseScheduler: tasks.NewBaseScheduler(db.Opts.Ctx, "taskScheduler"),
 		db:            db,
 	}
 	jobDispatcher := newAsyncJobDispatcher()
-	jobHandler := tasks.NewPoolHandler(asyncWorkers)
+	jobHandler := tasks.NewPoolHandler(db.Opts.Ctx, asyncWorkers)
 	jobHandler.Start()
 	jobDispatcher.RegisterHandler(tasks.DataCompactionTask, jobHandler)
 	// jobDispatcher.RegisterHandler(tasks.GCTask, jobHandler)
-	gcHandler := tasks.NewSingleWorkerHandler("gc")
+	gcHandler := tasks.NewSingleWorkerHandler(db.Opts.Ctx, "gc")
 	gcHandler.Start()
 	jobDispatcher.RegisterHandler(tasks.GCTask, gcHandler)
 
 	ckpDispatcher := tasks.NewBaseScopedDispatcher(tasks.DefaultScopeSharder)
 	for i := 0; i < 4; i++ {
-		handler := tasks.NewSingleWorkerHandler(fmt.Sprintf("[ckpworker-%d]", i))
+		handler := tasks.NewSingleWorkerHandler(db.Opts.Ctx, fmt.Sprintf("[ckpworker-%d]", i))
 		ckpDispatcher.AddHandle(handler)
 		handler.Start()
 	}
 
 	ioDispatcher := tasks.NewBaseScopedDispatcher(nil)
 	for i := 0; i < ioWorkers; i++ {
-		handler := tasks.NewSingleWorkerHandler(fmt.Sprintf("[ioworker-%d]", i))
+		handler := tasks.NewSingleWorkerHandler(db.Opts.Ctx, fmt.Sprintf("[ioworker-%d]", i))
 		ioDispatcher.AddHandle(handler)
 		handler.Start()
 	}
@@ -110,15 +109,6 @@ func (s *taskScheduler) ScheduleMultiScopedFn(
 	fn tasks.FuncT) (task tasks.Task, err error) {
 	task = tasks.NewMultiScopedFnTask(ctx, taskType, scopes, fn)
 	err = s.Schedule(task)
-	return
-}
-
-func (s *taskScheduler) Checkpoint(indexes []*wal.Index) (err error) {
-	entry, err := s.db.Wal.Checkpoint(indexes)
-	if err != nil {
-		return err
-	}
-	s.db.BGCheckpointRunner.EnqueueWait(entry)
 	return
 }
 

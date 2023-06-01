@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 func (p *Path) init(subs []subPath) {
@@ -312,7 +314,7 @@ func (pg *pathGenerator) generateKey(legs []subPath) ([]subPath, bool) {
 			})
 		}
 		key = "\"" + key + "\""
-		if !json.Valid(string2Slice(key)) {
+		if !json.Valid(util.UnsafeStringToBytes(key)) {
 			return nil, false
 		}
 		key, err := strconv.Unquote(key)

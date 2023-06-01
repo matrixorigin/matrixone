@@ -285,9 +285,10 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrResultFileNotFound:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "result file %s not found"},
 	ErrNoConfig:                     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no configure: %s"},
 	// Group 5: rpc timeout
-	ErrRPCTimeout:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
-	ErrClientClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
-	ErrBackendClosed:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "backend closed"},
+	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
+	ErrClientClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
+	ErrBackendClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState},
+		"the connection between CN and DN has been disconnected"},
 	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
 	ErrNoAvailableBackend:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
 	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend"},

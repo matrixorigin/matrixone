@@ -96,6 +96,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.BlockFilterList {
+		node.BlockFilterList[i], err = rule.ApplyExpr(node.BlockFilterList[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	applyAndResetType := func(e *Expr) (*Expr, error) {
 		oldType := DeepCopyType(e.Typ)
 		e, err = rule.ApplyExpr(e)

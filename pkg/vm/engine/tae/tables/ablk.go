@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"context"
 	"time"
 
 	"sync/atomic"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -129,11 +131,13 @@ func (blk *ablock) GetColumnDataByIds(
 }
 
 func (blk *ablock) GetColumnDataById(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
 ) (view *model.ColumnView, err error) {
 	return blk.resolveColumnData(
+		ctx,
 		txn,
 		readSchema.(*catalog.Schema),
 		col,
@@ -157,6 +161,7 @@ func (blk *ablock) resolveColumnDatas(
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnDatas(
+			context.Background(),
 			node.MustPNode(),
 			txn,
 			readSchema,
@@ -166,7 +171,17 @@ func (blk *ablock) resolveColumnDatas(
 	}
 }
 
+func (blk *ablock) DataCommittedBefore(ts types.TS) bool {
+	if !blk.IsAppendFrozen() {
+		return false
+	}
+	blk.RLock()
+	defer blk.RUnlock()
+	return blk.mvcc.LastAnodeCommittedBeforeLocked(ts)
+}
+
 func (blk *ablock) resolveColumnData(
+	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	col int,
@@ -183,7 +198,7 @@ func (blk *ablock) resolveColumnData(
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnData(
-			node.MustPNode(),
+			ctx,
 			txn,
 			readSchema,
 			col,
@@ -283,6 +298,7 @@ func (blk *ablock) resolveInMemoryColumnData(
 }
 
 func (blk *ablock) GetValue(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	row, col int) (v any, isNull bool, err error) {
@@ -293,6 +309,7 @@ func (blk *ablock) GetValue(
 		return blk.getInMemoryValue(node.MustMNode(), txn, schema, row, col)
 	} else {
 		return blk.getPersistedValue(
+			ctx,
 			node.MustPNode(),
 			txn,
 			schema,
@@ -335,6 +352,7 @@ func (blk *ablock) getInMemoryValue(
 
 // GetByFilter will read pk column, which seqnum will not change, no need to pass the read schema.
 func (blk *ablock) GetByFilter(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	filter *handle.Filter) (offset uint32, err error) {
 	if filter.Op != handle.FilterEq {
@@ -351,17 +369,18 @@ func (blk *ablock) GetByFilter(
 	if !node.IsPersisted() {
 		return blk.getInMemoryRowByFilter(node.MustMNode(), txn, filter)
 	} else {
-		return blk.getPersistedRowByFilter(node.MustPNode(), txn, filter)
+		return blk.getPersistedRowByFilter(ctx, node.MustPNode(), txn, filter)
 	}
 }
 
 // only used by tae only
 // not to optimize it
 func (blk *ablock) getPersistedRowByFilter(
+	ctx context.Context,
 	pnode *persistedNode,
 	txn txnif.TxnReader,
 	filter *handle.Filter) (row uint32, err error) {
-	ok, err := pnode.ContainsKey(filter.Val)
+	ok, err := pnode.ContainsKey(ctx, filter.Val)
 	if err != nil {
 		return
 	}
@@ -371,7 +390,7 @@ func (blk *ablock) getPersistedRowByFilter(
 	}
 	// Note: sort key do not change
 	schema := blk.meta.GetSchema()
-	sortKey, err := blk.LoadPersistedColumnData(schema, schema.GetSingleSortKeyIdx())
+	sortKey, err := blk.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx())
 	if err != nil {
 		return
 	}
@@ -402,7 +421,7 @@ func (blk *ablock) getPersistedRowByFilter(
 
 	// Load persisted deletes
 	view := model.NewColumnView(0)
-	if err = blk.FillPersistedDeletes(txn, view.BaseView); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
 		return
 	}
 
@@ -552,21 +571,23 @@ func (blk *ablock) checkConflictAndDupClosure(
 }
 
 func (blk *ablock) inMemoryBatchDedup(
+	ctx context.Context,
 	mnode *memoryNode,
 	txn txnif.TxnReader,
 	isCommitting bool,
 	keys containers.Vector,
+	keysZM index.ZM,
 	rowmask *roaring.Bitmap,
-	zm []byte,
 	bf objectio.BloomFilter,
 ) (err error) {
 	var dupRow uint32
 	blk.RLock()
 	defer blk.RUnlock()
 	_, err = mnode.BatchDedup(
+		ctx,
 		keys,
+		keysZM,
 		blk.checkConflictAndDupClosure(txn, isCommitting, &dupRow, rowmask),
-		zm,
 		bf)
 
 	// definitely no duplicate
@@ -580,11 +601,12 @@ func (blk *ablock) inMemoryBatchDedup(
 }
 
 func (blk *ablock) BatchDedup(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
+	keysZM index.ZM,
 	rowmask *roaring.Bitmap,
 	precommit bool,
-	zm []byte,
 	bf objectio.BloomFilter,
 ) (err error) {
 	defer func() {
@@ -595,16 +617,16 @@ func (blk *ablock) BatchDedup(
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		return blk.inMemoryBatchDedup(node.MustMNode(), txn, precommit, keys, rowmask, zm, bf)
+		return blk.inMemoryBatchDedup(ctx, node.MustMNode(), txn, precommit, keys, keysZM, rowmask, bf)
 	} else {
 		return blk.PersistedBatchDedup(
-			node.MustPNode(),
+			ctx,
 			txn,
 			precommit,
 			keys,
+			keysZM,
 			rowmask,
 			true,
-			zm,
 			bf,
 		)
 	}

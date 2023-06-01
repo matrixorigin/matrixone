@@ -1,4 +1,3 @@
--- @skip:issue#9194
 CREATE TABLE IF NOT EXISTS indup_00(
     `id` INT UNSIGNED,
     `act_name` VARCHAR(20) NOT NULL,
@@ -145,12 +144,10 @@ create table indup_fk1(col1 int primary key,col2 varchar(25),col3 tinyint);
 create table indup_fk2(col1 int,col2 varchar(25),col3 tinyint primary key,constraint ck foreign key(col1) REFERENCES indup_fk1(col1) on delete RESTRICT on update RESTRICT);
 insert into indup_fk1 values (2,'yellow',20),(10,'apple',50),(11,'opppo',51);
 insert into indup_fk2 values(2,'score',1),(2,'student',4),(10,'goods',2);
--- @bvt:issue#8711
 insert into indup_fk2 values(10,'food',1)on duplicate key update col1=50;
 insert into indup_fk2 values(50,'food',1)on duplicate key update col1=values(col1);
 select * from indup_fk1;
 select * from indup_fk2;
--- @bvt:issue
 drop table indup_fk2;
 drop table indup_fk1;
 
