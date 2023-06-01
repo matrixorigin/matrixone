@@ -16,10 +16,8 @@ package compile
 
 import (
 	"context"
-	"hash/crc32"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"hash/crc32"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -303,13 +301,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	}
 	newScope := newParallelScope(s, ss)
 	newScope.SetContextRecursively(s.Proc.Ctx)
-
-	start := time.Now()
-	defer func() {
-		interval := time.Since(start)
-		end := time.Now()
-		logutil.Infof("---------wuxiliang------------->table Scan[%s] time interval: %s, start[%s] -> end[%s]", s.DataSource.RelationName, interval.String(), start.String(), end.String())
-	}()
 	return newScope.MergeRun(c)
 }
 

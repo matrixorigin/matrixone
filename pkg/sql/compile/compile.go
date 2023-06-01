@@ -1153,7 +1153,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *Compile) compileTableScanOld(n *plan.Node) ([]*Scope, error) {
+func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	nodes, err := c.generateNodes(n)
 	if err != nil {
 		return nil, err
@@ -1163,45 +1163,6 @@ func (c *Compile) compileTableScanOld(n *plan.Node) ([]*Scope, error) {
 		ss = append(ss, c.compileTableScanWithNode(n, nodes[i]))
 	}
 	return ss, nil
-}
-
-func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
-	if n.TableDef.Partition != nil {
-		ss := make([]*Scope, 0)
-		partitionInfo := n.TableDef.Partition
-		partitionNum := int(partitionInfo.PartitionNum)
-		partitionTableNames := partitionInfo.PartitionTableNames
-		for idx := 0; idx < partitionNum; idx++ {
-			partTableName := partitionTableNames[idx]
-			copyNode := plan2.DeepCopyNode(n)
-			copyNode.TableDef.Name = partTableName
-			copyNode.TableDef.Partition = nil
-			n.Stats.BlockNum = 50
-			nodes, err := c.generateNodes(copyNode)
-			if err != nil {
-				return nil, err
-			}
-
-			for i := range nodes {
-				ss = append(ss, c.compileTableScanWithNode(copyNode, nodes[i]))
-			}
-		}
-		//scopeInfo := DebugShowScopes(ss)
-		//fmt.Printf("-----------------wuxiliang1, partition table------>scopeInfo:%s\n", scopeInfo)
-		return ss, nil
-	} else {
-		nodes, err := c.generateNodes(n)
-		if err != nil {
-			return nil, err
-		}
-		ss := make([]*Scope, 0, len(nodes))
-		for i := range nodes {
-			ss = append(ss, c.compileTableScanWithNode(n, nodes[i]))
-		}
-		//scopeInfo := DebugShowScopes(ss)
-		//fmt.Printf("-----------------wuxiliang2, genernal table------>scopeInfo:%s\n", scopeInfo)
-		return ss, nil
-	}
 }
 
 func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scope {
