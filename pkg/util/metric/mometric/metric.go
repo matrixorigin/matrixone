@@ -114,13 +114,13 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 				panic(fmt.Sprintf("status server error: %v", err))
 			}
 		}()
-		logutil.Infof("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
+		logutil.Debugf("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
 	}
 
 	metric.SetUpdateStorageUsageInterval(initOpts.updateInterval)
 	metric.SetStorageUsageCheckNewInterval(initOpts.checkNewInterval)
-	logutil.Infof("metric with ExportInterval: %v", initOpts.exportInterval)
-	logutil.Infof("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
+	logutil.Debugf("metric with ExportInterval: %v", initOpts.exportInterval)
+	logutil.Debugf("metric with UpdateStorageUsageInterval: %v", initOpts.updateInterval)
 }
 
 func StopMetricSync() {

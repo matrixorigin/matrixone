@@ -17,12 +17,13 @@ package metric
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"path"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -60,7 +61,7 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 	ctx, span := trace.Start(ctx, "MetricCreateCronTask")
 	defer span.End()
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerName)
-	logger.Info(fmt.Sprintf("init metric task with CronExpr: %s", StorageUsageTaskCronExpr))
+	logger.Debug(fmt.Sprintf("init metric task with CronExpr: %s", StorageUsageTaskCronExpr))
 	if err = taskService.CreateCronTask(ctx, TaskMetadata(StorageUsageCronTask, executorID), StorageUsageTaskCronExpr); err != nil {
 		return err
 	}
@@ -110,7 +111,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	defer span.End()
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx).Named(LoggerNameMetricStorage)
 	defer func() {
-		logger.Info("finished", zap.Error(err))
+		logger.Debug("finished", zap.Error(err))
 	}()
 
 	// start background task to check new account
@@ -121,12 +122,12 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("receive context signal", zap.Error(ctx.Err()))
+			logger.Debug("receive context signal", zap.Error(ctx.Err()))
 			StorageUsageFactory.Reset() // clean CN data for next cron task.
 			return ctx.Err()
 
 		case <-next.C:
-			logger.Info("start next round")
+			logger.Debug("start next round")
 		}
 
 		// mysql> show accounts;
@@ -137,7 +138,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		// | query_tae_table | admin      | 2023-01-17 09:56:26 | open   | NULL           |        6 |          34 |       792 | 0.036 |                |
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
 		executor := sqlExecutor()
-		logger.Info("query storage size")
+		logger.Debug("query storage size")
 		result := executor.Query(ctx, ShowAllAccountSQL, ie.NewOptsBuilder().Finish())
 		err = result.Error()
 		if err != nil {
@@ -150,7 +151,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 			logger.Warn("got empty account info, wait shortly")
 			continue
 		}
-		logger.Info("collect storage_usage cnt", zap.Uint64("cnt", cnt))
+		logger.Debug("collect storage_usage cnt", zap.Uint64("cnt", cnt))
 		StorageUsageFactory.Reset()
 		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
 
@@ -164,7 +165,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 				return err
 			}
 
-			logger.Info("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
+			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB))
 			StorageUsage(account).Set(sizeMB)
 		}
 
@@ -173,7 +174,7 @@ func CalculateStorageUsage(ctx context.Context, sqlExecutor func() ie.InternalEx
 		if err != nil {
 			return err
 		}
-		logger.Info("wait next round")
+		logger.Debug("wait next round")
 	}
 }
 
@@ -192,7 +193,7 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	ctx, span := trace.Start(ctx, "CheckNewAccountSize")
 	defer span.End()
 	defer func() {
-		logger.Info("CheckNewAccountSize exit", zap.Error(err))
+		logger.Debug("CheckNewAccountSize exit", zap.Error(err))
 	}()
 
 	opts := ie.NewOptsBuilder().Finish()
@@ -204,10 +205,10 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("receive context signal", zap.Error(ctx.Err()))
+			logger.Debug("receive context signal", zap.Error(ctx.Err()))
 			return
 		case now = <-next.C:
-			logger.Info("start check new account")
+			logger.Debug("start check new account")
 		}
 
 		// mysql> select * from mo_catalog.mo_account;
@@ -232,10 +233,10 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 
 		cnt := result.RowCount()
 		if cnt == 0 {
-			logger.Info("got empty new account info, wait next round")
+			logger.Debug("got empty new account info, wait next round")
 			continue
 		}
-		logger.Info("collect new account cnt", zap.Uint64("cnt", cnt))
+		logger.Debug("collect new account cnt", zap.Uint64("cnt", cnt))
 		for rowIdx := uint64(0); rowIdx < result.RowCount(); rowIdx++ {
 
 			account, err := result.StringValueByName(ctx, rowIdx, ColumnAccountName)
@@ -270,14 +271,14 @@ func CheckNewAccountSize(ctx context.Context, logger *log.MOLogger, sqlExecutor 
 			// done query.
 
 			// update new accounts metric
-			logger.Info("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
+			logger.Debug("storage_usage", zap.String("account", account), zap.Float64("sizeMB", sizeMB),
 				zap.String("created_time", createdTime))
 			StorageUsage(account).Set(sizeMB)
 		}
 
 		// reset next Round
 		next.Reset(GetStorageUsageCheckNewInterval())
-		logger.Info("wait next round, check new account")
+		logger.Debug("wait next round, check new account")
 	}
 
 }
