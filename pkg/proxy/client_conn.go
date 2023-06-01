@@ -16,6 +16,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
@@ -36,7 +37,7 @@ import (
 var clientBaseConnID uint32 = 1000
 
 // parse parses the account information from whole username.
-func (a *clientInfo) parse(full string) error {
+func (c *clientInfo) parse(full string) error {
 	var delimiter byte = ':'
 	if strings.IndexByte(full, '#') >= 0 {
 		delimiter = '#'
@@ -52,8 +53,11 @@ func (a *clientInfo) parse(full string) error {
 	if len(username) == 0 {
 		return moerr.NewInternalErrorNoCtx("invalid username '%s'", full)
 	}
-	a.labelInfo.Tenant = Tenant(tenant)
-	a.username = username
+	if tenant == "" {
+		tenant = superTenant
+	}
+	c.labelInfo.Tenant = Tenant(tenant)
+	c.username = username
 	return nil
 }
 
@@ -117,6 +121,8 @@ type clientConn struct {
 	// setVarStmts keeps all set user variable statements. When connection
 	// is transferred, set all these variables first.
 	setVarStmts []string
+	// tlsConfig is the config of TLS.
+	tlsConfig *tls.Config
 	// testHelper is used for testing.
 	testHelper struct {
 		connectToBackend func() (ServerConn, error)
@@ -128,6 +134,7 @@ var _ ClientConn = (*clientConn)(nil)
 // newClientConn creates a new client connection.
 func newClientConn(
 	ctx context.Context,
+	cfg *Config,
 	logger *log.MOLogger,
 	cs *counterSet,
 	conn goetty.IOSession,
@@ -158,9 +165,19 @@ func newClientConn(
 	if err != nil {
 		return nil, err
 	}
-	fp := config.FrontendParameters{}
+	fp := config.FrontendParameters{
+		EnableTls: cfg.TLSEnabled,
+	}
 	fp.SetDefaultValues()
 	c.mysqlProto = frontend.NewMysqlClientProtocol(c.connID, c.conn, 0, &fp)
+	if cfg.TLSEnabled {
+		tlsConfig, err := frontend.ConstructTLSConfig(
+			ctx, cfg.TLSCAFile, cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return nil, err
+		}
+		c.tlsConfig = tlsConfig
+	}
 	return c, nil
 }
 
@@ -244,10 +261,26 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 	return nil
 }
 
-func (c *clientConn) sendErr(errMsg string, resp chan<- []byte) {
-	fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+func (c *clientConn) sendErr(err error, resp chan<- []byte) {
+	var errCode uint16
+	var sqlState, errMsg string
+	switch myErr := err.(type) {
+	case *moerr.Error:
+		if myErr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
+			errCode = myErr.MySQLCode()
+		} else {
+			errCode = myErr.ErrorCode()
+		}
+		errMsg = myErr.Error()
+		sqlState = myErr.SqlState()
+	default:
+		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+		errCode = fail.ErrorCode
+		sqlState = fail.SqlStates[0]
+		errMsg = err.Error()
+	}
 	payload := c.mysqlProto.MakeErrPayload(
-		fail.ErrorCode, fail.SqlStates[0], errMsg)
+		errCode, sqlState, errMsg)
 	r := &frontend.Packet{
 		Length:     0,
 		SequenceID: 1,
@@ -261,7 +294,7 @@ func (c *clientConn) connAndExec(cn *CNServer, stmt string, resp chan<- []byte) 
 	if err != nil {
 		c.log.Error("failed to connect to backend server", zap.Error(err))
 		if resp != nil {
-			c.sendErr(err.Error(), resp)
+			c.sendErr(err, resp)
 		}
 		return err
 	}
@@ -293,7 +326,7 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 	cn, err := c.router.SelectByConnID(e.connID)
 	if err != nil {
 		c.log.Error("failed to select CN server", zap.Error(err))
-		c.sendErr(err.Error(), resp)
+		c.sendErr(err, resp)
 		return err
 	}
 	// Before connect to backend server, update the salt.
@@ -310,6 +343,10 @@ func (c *clientConn) handleSetVar(e *setVarEvent) error {
 
 // handleSuspendAccountEvent handles the suspend account event.
 func (c *clientConn) handleSuspendAccount(e *suspendAccountEvent) error {
+	// Ignore the sys tenant.
+	if strings.ToLower(string(e.account)) == superTenant {
+		return nil
+	}
 	// handle kill connection.
 	cns, err := c.router.SelectByTenant(e.account)
 	if err != nil {
@@ -364,22 +401,51 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 		return nil, moerr.NewInternalErrorNoCtx("no router available")
 	}
 
-	// Select the best CN server from backend.
-	//
-	// NB: The selected CNServer must have label hash in it.
-	cn, err := c.router.Route(c.ctx, c.clientInfo)
-	if err != nil {
-		return nil, err
+	badCNServers := make(map[string]struct{})
+	filterFn := func(uuid string) bool {
+		if _, ok := badCNServers[uuid]; ok {
+			return true
+		}
+		return false
 	}
-	// We have to set proxy connection ID after cn is returned.
-	cn.proxyConnID = c.connID
 
-	// Set the salt value of cn server.
-	cn.salt = c.mysqlProto.GetSalt()
-	sc, r, err := c.router.Connect(cn, c.handshakePack, c.tun)
-	if err != nil {
-		return nil, err
+	var err error
+	var cn *CNServer
+	var sc ServerConn
+	var r []byte
+	for {
+		// Select the best CN server from backend.
+		//
+		// NB: The selected CNServer must have label hash in it.
+		cn, err = c.router.Route(c.ctx, c.clientInfo, filterFn)
+		if err != nil {
+			return nil, err
+		}
+		// We have to set proxy connection ID after cn is returned.
+		cn.proxyConnID = c.connID
+
+		// Set the salt value of cn server.
+		cn.salt = c.mysqlProto.GetSalt()
+
+		// After select a CN server, we try to connect to it. If connect
+		// fails, and it is a retryable error, we reselect another CN server.
+		sc, r, err = c.router.Connect(cn, c.handshakePack, c.tun)
+		if err != nil {
+			if isRetryableErr(err) {
+				badCNServers[cn.uuid] = struct{}{}
+				c.log.Warn("failed to connect to CN server, will retry",
+					zap.String("current server uuid", cn.uuid),
+					zap.String("current server address", cn.addr),
+					zap.Any("bad backend servers", badCNServers))
+				continue
+			} else {
+				return nil, err
+			}
+		} else {
+			break
+		}
 	}
+
 	if sendToClient {
 		// r is the packet received from CN server, send r to client.
 		if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
@@ -391,10 +457,6 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 			codeAuthFailed)
 	}
 
-	// Set the label session variable.
-	if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
-		return nil, err
-	}
 	// Set the use defined variables, including session variables and user variables.
 	for _, stmt := range c.setVarStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {

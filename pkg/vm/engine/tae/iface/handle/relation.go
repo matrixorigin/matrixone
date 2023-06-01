@@ -52,8 +52,8 @@ type Relation interface {
 	DeleteByFilter(filter *Filter) error
 
 	BatchDedup(col containers.Vector) error
-	Append(data *containers.Batch) error
-	AddBlksWithMetaLoc(zm []objectio.ZoneMap, metaLcos []objectio.Location) error
+	Append(ctx context.Context, data *containers.Batch) error
+	AddBlksWithMetaLoc(metaLcos []objectio.Location) error
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)

@@ -167,20 +167,17 @@ func (h *txnRelation) BatchDedup(col containers.Vector) error {
 	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), col)
 }
 
-func (h *txnRelation) Append(data *containers.Batch) error {
+func (h *txnRelation) Append(ctx context.Context, data *containers.Batch) error {
 	if !h.table.GetLocalSchema().IsSameColumns(h.table.GetMeta().GetLastestSchema()) {
 		return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 	}
-	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
+	return h.Txn.GetStore().Append(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
-func (h *txnRelation) AddBlksWithMetaLoc(
-	zm []objectio.ZoneMap,
-	metaLocs []objectio.Location) error {
+func (h *txnRelation) AddBlksWithMetaLoc(metaLocs []objectio.Location) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
-		zm,
 		metaLocs,
 	)
 }
@@ -248,7 +245,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 			colVal = v
 			colValIsNull = isNull
 		} else {
-			colVal, colValIsNull, err = h.table.GetValue(id, row, uint16(def.Idx))
+			colVal, colValIsNull, err = h.table.GetValue(context.Background(), id, row, uint16(def.Idx))
 			if err != nil {
 				return err
 			}
@@ -260,7 +257,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 	if err = h.table.RangeDelete(id, row, row, handle.DT_Normal); err != nil {
 		return
 	}
-	err = h.Append(bat)
+	err = h.Append(context.Background(), bat)
 	// FIXME!: We need to revert previous delete if append fails.
 	return
 }

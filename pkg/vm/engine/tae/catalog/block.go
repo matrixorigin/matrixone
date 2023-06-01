@@ -15,14 +15,18 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
+	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -34,7 +38,8 @@ type BlockEntry struct {
 	*BlockNode
 	ID       types.Blockid
 	blkData  data.Block
-	Location objectio.Location
+	location objectio.Location
+	pkZM     atomic.Pointer[index.ZM]
 }
 
 func NewReplayBlockEntry() *BlockEntry {
@@ -293,12 +298,12 @@ func (entry *BlockEntry) HasPersistedData() bool {
 	return !entry.GetMetaLoc().IsEmpty()
 }
 func (entry *BlockEntry) FastGetMetaLoc() objectio.Location {
-	return entry.Location
+	return entry.location
 }
 
 func (entry *BlockEntry) GetMetaLoc() objectio.Location {
-	if len(entry.Location) > 0 {
-		return entry.Location
+	if len(entry.location) > 0 {
+		return entry.location
 	}
 	entry.RLock()
 	defer entry.RUnlock()
@@ -347,7 +352,7 @@ func (entry *BlockEntry) CreateWithLoc(ts types.TS, metaLoc objectio.Location, d
 		BaseNode:    baseNode.CloneAll(),
 	}
 	entry.Insert(node)
-	entry.Location = metaLoc
+	entry.location = metaLoc
 }
 
 func (entry *BlockEntry) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc objectio.Location, deltaLoc objectio.Location) {
@@ -363,7 +368,7 @@ func (entry *BlockEntry) CreateWithTxnAndMeta(txn txnif.AsyncTxn, metaLoc object
 		BaseNode:    baseNode.CloneAll(),
 	}
 	entry.Insert(node)
-	entry.Location = metaLoc
+	entry.location = metaLoc
 }
 func (entry *BlockEntry) UpdateMetaLoc(txn txnif.TxnReader, metaLoc objectio.Location) (isNewNode bool, err error) {
 	entry.Lock()
@@ -385,7 +390,7 @@ func (entry *BlockEntry) UpdateMetaLoc(txn txnif.TxnReader, metaLoc objectio.Loc
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
 	node.BaseNode.Update(baseNode)
 	if !entry.IsAppendable() {
-		entry.Location = metaLoc
+		entry.location = metaLoc
 	}
 	return
 }
@@ -409,5 +414,25 @@ func (entry *BlockEntry) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.L
 	var node *MVCCNode[*MetadataMVCCNode]
 	isNewNode, node = entry.getOrSetUpdateNode(txn)
 	node.BaseNode.Update(baseNode)
+	return
+}
+
+func (entry *BlockEntry) GetPKZoneMap(
+	ctx context.Context,
+	fs fileservice.FileService,
+) (zm *index.ZM, err error) {
+	zm = entry.pkZM.Load()
+	if zm != nil {
+		return
+	}
+	location := entry.GetMetaLoc()
+	var meta objectio.ObjectMeta
+	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, fs); err != nil {
+		return
+	}
+	seqnum := entry.GetSchema().GetSingleSortKeyIdx()
+	cloned := meta.GetBlockMeta(uint32(location.ID())).MustGetColumn(uint16(seqnum)).ZoneMap().Clone()
+	zm = &cloned
+	entry.pkZM.Store(zm)
 	return
 }

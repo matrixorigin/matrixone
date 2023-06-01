@@ -124,17 +124,13 @@ func (c *mockClientConn) RawConn() net.Conn                  { return c.conn }
 func (c *mockClientConn) GetTenant() Tenant                  { return c.tenant }
 func (c *mockClientConn) SendErrToClient(string)             {}
 func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
-	cn, err := c.router.Route(context.TODO(), c.clientInfo)
+	cn, err := c.router.Route(context.TODO(), c.clientInfo, nil)
 	if err != nil {
 		return nil, err
 	}
 	cn.salt = testSlat
 	sc, _, err := c.router.Connect(cn, testPacket, c.tun)
 	if err != nil {
-		return nil, err
-	}
-	// Set the label session variable.
-	if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
 		return nil, err
 	}
 	// Set the use defined variables, including session variables and user variables.
@@ -247,7 +243,7 @@ func TestAccountParser(t *testing.T) {
 	a = clientInfo{}
 	err = a.parse(":u1")
 	require.NoError(t, err)
-	require.Equal(t, string(a.labelInfo.Tenant), "")
+	require.Equal(t, superTenant, string(a.labelInfo.Tenant))
 	require.Equal(t, a.username, "u1")
 
 	a = clientInfo{}
@@ -259,7 +255,7 @@ func TestAccountParser(t *testing.T) {
 	a = clientInfo{}
 	err = a.parse("u1")
 	require.NoError(t, err)
-	require.Equal(t, string(a.labelInfo.Tenant), "")
+	require.Equal(t, string(a.labelInfo.Tenant), superTenant)
 	require.Equal(t, a.username, "u1")
 }
 
@@ -273,7 +269,7 @@ func createNewClientConn(t *testing.T) (ClientConn, func()) {
 	rt := runtime.DefaultRuntime()
 	logger := rt.Logger()
 	cs := newCounterSet()
-	cc, err := newClientConn(ctx, logger, cs, s, nil, nil, nil, nil)
+	cc, err := newClientConn(ctx, &Config{}, logger, cs, s, nil, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, cc)
 	return cc, func() {

@@ -17,6 +17,8 @@ package colexec
 import (
 	"context"
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 var (
@@ -77,6 +78,9 @@ func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs 
 	for i := range executors {
 		executors[i], err = NewExpressionExecutor(proc, planExprs[i])
 		if err != nil {
+			for j := 0; j < i; j++ {
+				executors[j].Free()
+			}
 			return nil, err
 		}
 	}
@@ -140,6 +144,9 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		for i := range executor.parameterExecutor {
 			subExecutor, paramErr := NewExpressionExecutor(proc, t.F.Args[i])
 			if paramErr != nil {
+				for j := 0; j < i; j++ {
+					executor.parameterExecutor[j].Free()
+				}
 				return nil, paramErr
 			}
 			executor.SetParameter(i, subExecutor)
@@ -193,16 +200,24 @@ func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*b
 	if err != nil {
 		return nil, err
 	}
+
+	// if memory reuse, we can get it directly because we do only one evaluate.
 	if e, ok := executor.(*FunctionExpressionExecutor); ok {
 		e.resultVector = nil
 		return vec, nil
-	} else {
-		nv, er := vec.Dup(proc.Mp())
-		if er != nil {
-			return nil, er
-		}
-		return nv, nil
 	}
+	if e, ok := executor.(*FixedVectorExpressionExecutor); ok {
+		e.resultVector = nil
+		return vec, nil
+	}
+
+	// I'm not sure if dup is good. but if not.
+	// we should check batch's cnt first, get if it's 1, dup if not.
+	nv, er := vec.Dup(proc.Mp())
+	if er != nil {
+		return nil, er
+	}
+	return nv, nil
 }
 
 func ifAllArgsAreConstant(executor *FunctionExpressionExecutor) bool {

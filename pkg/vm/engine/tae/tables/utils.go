@@ -18,6 +18,8 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -28,6 +30,7 @@ import (
 )
 
 func LoadPersistedColumnData(
+	ctx context.Context,
 	fs *objectio.ObjectFS,
 	id *common.ID,
 	def *catalog.ColDef,
@@ -36,7 +39,7 @@ func LoadPersistedColumnData(
 	if def.IsPhyAddr() {
 		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows())
 	}
-	bat, err := blockio.LoadColumns(context.Background(), []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, fs.Service, location, nil)
+	bat, err := blockio.LoadColumns(ctx, []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, fs.Service, location, nil)
 	if err != nil {
 		return
 	}
@@ -48,10 +51,11 @@ func ReadPersistedBlockRow(location objectio.Location) int {
 }
 
 func LoadPersistedDeletes(
+	ctx context.Context,
 	pkName string,
 	fs *objectio.ObjectFS,
 	location objectio.Location) (bat *containers.Batch, err error) {
-	movbat, err := blockio.LoadColumns(context.Background(), []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
+	movbat, err := blockio.LoadColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs.Service, location, nil)
 	if err != nil {
 		return
 	}
@@ -60,5 +64,40 @@ func LoadPersistedDeletes(
 	for i := 0; i < 4; i++ {
 		bat.AddVector(colNames[i], containers.ToDNVector(movbat.Vecs[i]))
 	}
+	return
+}
+
+// func MakeBFLoader(
+// 	meta *catalog.BlockEntry,
+// 	bf objectio.BloomFilter,
+// 	cache model.LRUCache,
+// 	fs fileservice.FileService,
+// ) indexwrapper.Loader {
+// 	return func(ctx context.Context) ([]byte, error) {
+// 		location := meta.GetMetaLoc()
+// 		var err error
+// 		if len(bf) == 0 {
+// 			if bf, err = LoadBF(ctx, location, cache, fs, false); err != nil {
+// 				return nil, err
+// 			}
+// 		}
+// 		return bf.GetBloomFilter(uint32(location.ID())), nil
+// 	}
+// }
+
+func MakeImmuIndex(
+	ctx context.Context,
+	meta *catalog.BlockEntry,
+	bf objectio.BloomFilter,
+	cache model.LRUCache,
+	fs fileservice.FileService,
+) (idx indexwrapper.ImmutIndex, err error) {
+	pkZM, err := meta.GetPKZoneMap(ctx, fs)
+	if err != nil {
+		return
+	}
+	idx = indexwrapper.NewImmutIndex(
+		*pkZM, bf, meta.GetMetaLoc(), cache, fs,
+	)
 	return
 }

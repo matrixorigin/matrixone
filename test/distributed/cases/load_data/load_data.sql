@@ -168,8 +168,10 @@ col3 int
 );
 
 -- echo duplicate
+-- @bvt:issue#3433
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6;
 select * from t6;
+-- @bvt:issue
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6 FIELDS ESCAPED BY '\\';
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6 LINES STARTING BY 'aaa';
 drop table t6;
@@ -192,3 +194,22 @@ load data infile {"filepath"="$resources/load_data/parallel.txt.gz", "compressio
 select * from t9;
 load data infile {"filepath"="$resources/load_data/parallel.txt.gz", "compression"="gzip"} into table t9 FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n' parallel 'true';
 select * from t9;
+
+create account if not exists `abc2` admin_name 'user' identified by '111';
+-- @session:id=1&user=abc2:user:accountadmin&password=111
+create database if not exists ssb;
+use ssb;
+create table test_table(
+col1 int,
+col2 float,
+col3 bool,
+col4 Date,
+col5 varchar(255),
+col6 text
+);
+load data infile '$resources/load_data/test_1.csv' into table test_table parallel 'true';
+select * from test_table;
+drop table test_table;
+drop database ssb;
+-- @session
+drop account `abc2`;

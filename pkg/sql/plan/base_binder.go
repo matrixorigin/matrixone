@@ -18,23 +18,21 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"go/constant"
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
@@ -883,9 +881,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 	funcName := funcRef.Parts[0]
 
-	if function.GetFunctionIsAggregateByName(funcName) {
+	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 		return b.impl.BindAggFunc(funcName, astExpr, depth, isRoot)
-	} else if function.GetFunctionIsWinFunByName(funcName) {
+	} else if function.GetFunctionIsWinFunByName(funcName) && astExpr.WindowSpec != nil {
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
@@ -937,7 +935,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					// rewrite count(*) to starcount(col_name)
 					name = "starcount"
 
-					astArgs[0] = tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)
+					astArgs = []tree.Expr{tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)}
 				}
 			}
 		}
@@ -973,9 +971,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
-	// } else {
-	// 	return nil, err
-	// }
 
 	// not a builtin func, look to resolve udf
 	cmpCtx := b.builder.compCtx
@@ -1029,7 +1024,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, sql string, args []tree.Exp
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
 	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args)
 	switch name {
-	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde":
+	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "in":
 		if err == nil && proc != nil {
 			bat := batch.NewWithSize(0)
 			bat.Zs = []int64{1}
@@ -1356,10 +1351,6 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		safe := true
 		if rightList, ok := args[1].Expr.(*plan.Expr_List); ok {
 			typLeft := makeTypeByPlan2Expr(args[0])
-			// for now ,decimal type can not fold constant
-			if typLeft.Oid == types.T_decimal64 || typLeft.Oid == types.T_decimal128 {
-				safe = false
-			}
 			lenList := len(rightList.List.List)
 
 			for i := 0; i < lenList && safe; i++ {

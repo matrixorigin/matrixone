@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
@@ -37,6 +38,7 @@ import (
 )
 
 type txnStore struct {
+	ctx context.Context
 	txnbase.NoopTxnStore
 	mu            sync.RWMutex
 	transferTable *model.HashPageTable
@@ -55,23 +57,26 @@ type txnStore struct {
 }
 
 var TxnStoreFactory = func(
+	ctx context.Context,
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
 	indexCache model.LRUCache,
 	dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(catalog, driver, transferTable, indexCache, dataFactory)
+		return newStore(ctx, catalog, driver, transferTable, indexCache, dataFactory)
 	}
 }
 
 func newStore(
+	ctx context.Context,
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
 	indexCache model.LRUCache,
 	dataFactory *tables.DataFactory) *txnStore {
 	return &txnStore{
+		ctx:           ctx,
 		transferTable: transferTable,
 		dbs:           make(map[uint64]*txnDB),
 		catalog:       catalog,
@@ -161,7 +166,7 @@ func (store *txnStore) BatchDedup(dbId, id uint64, pk containers.Vector) (err er
 	return db.BatchDedup(id, pk)
 }
 
-func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
+func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
@@ -170,12 +175,11 @@ func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
 	// if db.IsDeleted() {
 	// 	return txnbase.ErrNotFound
 	// }
-	return db.Append(id, data)
+	return db.Append(ctx, id, data)
 }
 
 func (store *txnStore) AddBlksWithMetaLoc(
 	dbId, tid uint64,
-	zm []objectio.ZoneMap,
 	metaLoc []objectio.Location,
 ) error {
 	store.IncreateWriteCnt()
@@ -183,7 +187,7 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(tid, zm, metaLoc)
+	return db.AddBlksWithMetaLoc(tid, metaLoc)
 }
 
 func (store *txnStore) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
@@ -392,7 +396,7 @@ func (store *txnStore) ObserveTxn(
 							Version:    schema.Version,
 							NextSeqnum: uint16(schema.Extra.NextColSeqnum),
 							Seqnums:    schema.AllSeqnums(),
-							Batch:      anode.storage.mnode.data,
+							Batch:      anode.data,
 						}
 						visitAppend(bat)
 					}
@@ -533,6 +537,9 @@ func (store *txnStore) CreateNonAppendableBlock(id *common.ID, opts *objectio.Cr
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Block.CreateNonAppendable.Add(1)
+	})
 	return db.CreateNonAppendableBlock(id, opts)
 }
 
@@ -549,6 +556,9 @@ func (store *txnStore) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block,
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Block.Create.Add(1)
+	})
 	return db.CreateBlock(id, is1PC)
 }
 
@@ -557,6 +567,9 @@ func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Block.SoftDelete.Add(1)
+	})
 	return db.SoftDeleteBlock(id)
 }
 
@@ -565,6 +578,9 @@ func (store *txnStore) SoftDeleteSegment(id *common.ID) (err error) {
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.SoftDelete.Add(1)
+	})
 	return db.SoftDeleteSegment(id)
 }
 

@@ -86,9 +86,9 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
-		db.Wal = wal.NewDriverWithBatchStore(dirname, WALDir, nil)
+		db.Wal = wal.NewDriverWithBatchStore(opts.Ctx, dirname, WALDir, nil)
 	case options.LogstoreLogservice:
-		db.Wal = wal.NewDriverWithLogservice(opts.Lc)
+		db.Wal = wal.NewDriverWithLogservice(opts.Ctx, opts.Lc)
 	}
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(
@@ -100,6 +100,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	// Init and start txn manager
 	db.TransferTable = model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	txnStoreFactory := txnimpl.TxnStoreFactory(
+		opts.Ctx,
 		db.Opts.Catalog,
 		db.Wal,
 		db.TransferTable,
@@ -115,6 +116,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TxnMgr.Start()
 	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
+		opts.Ctx,
 		db.Fs,
 		db.Catalog,
 		db.Scheduler,
@@ -158,7 +160,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	db.DiskCleaner = gc2.NewDiskCleaner(db.Fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, db.Fs, db.BGCheckpointRunner, db.Catalog)
 	db.DiskCleaner.Start()
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {

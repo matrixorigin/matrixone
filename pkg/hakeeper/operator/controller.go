@@ -21,6 +21,7 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -279,7 +280,7 @@ func createTaskService(st CreateTaskService) pb.ScheduleCommand {
 		ServiceType: st.StoreType,
 		CreateTaskService: &pb.CreateTaskService{
 			User:         st.TaskUser,
-			TaskDatabase: "mo_task",
+			TaskDatabase: catalog.MOTaskDB,
 		},
 	}
 }

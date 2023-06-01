@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 func mockTxn() *txnbase.Txn {
@@ -166,7 +165,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 		if n.IsMerged() && merged == nil {
 			return false
 		} else if n.IsMerged() && merged != nil {
-			merged.MergeLocked(n, true)
+			merged.MergeLocked(n)
 			return false
 		}
 		txn := n.GetTxn()
@@ -176,7 +175,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 		if merged == nil {
 			merged = NewMergedNode(n.GetCommitTSLocked())
 		}
-		merged.MergeLocked(n, true)
+		merged.MergeLocked(n)
 		return true
 	})
 	if merged != nil {
@@ -190,7 +189,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 // CollectDeletesInRange collects [startTs, endTs)
 func (chain *DeleteChain) CollectDeletesInRange(
 	startTs, endTs types.TS,
-	rwlocker *sync.RWMutex) (mask *roaring.Bitmap, indexes []*wal.Index, err error) {
+	rwlocker *sync.RWMutex) (mask *roaring.Bitmap, err error) {
 	var merged *DeleteNode
 	chain.LoopChain(func(n *DeleteNode) bool {
 		// Merged node is a loop breaker
@@ -201,7 +200,7 @@ func (chain *DeleteChain) CollectDeletesInRange(
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			merged.MergeLocked(n, true)
+			merged.MergeLocked(n)
 			return false
 		}
 		needWait, txnToWait := n.NeedWaitCommitting(endTs)
@@ -214,7 +213,7 @@ func (chain *DeleteChain) CollectDeletesInRange(
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			merged.MergeLocked(n, true)
+			merged.MergeLocked(n)
 		}
 		return true
 	})
@@ -222,7 +221,6 @@ func (chain *DeleteChain) CollectDeletesInRange(
 		return
 	}
 	mask = merged.mask
-	indexes = merged.logIndexes
 	return
 }
 
@@ -250,7 +248,6 @@ func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (f
 
 func (chain *DeleteChain) CollectDeletesLocked(
 	txn txnif.TxnReader,
-	collectIndex bool,
 	rwlocker *sync.RWMutex) (txnif.DeleteNode, error) {
 	var merged *DeleteNode
 	var err error
@@ -263,7 +260,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			merged.MergeLocked(n, collectIndex)
+			merged.MergeLocked(n)
 			return false
 		}
 		needWait, txnToWait := n.NeedWaitCommitting(txn.GetStartTS())
@@ -276,7 +273,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			merged.MergeLocked(n, collectIndex)
+			merged.MergeLocked(n)
 		}
 		return true
 	})

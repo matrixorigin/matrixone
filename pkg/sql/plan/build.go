@@ -163,6 +163,10 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildLockTables(stmt, ctx)
 	case *tree.UnLockTableStmt:
 		return buildUnLockTables(stmt, ctx)
+	case *tree.ShowPublications:
+		return buildShowPublication(stmt, ctx)
+	case *tree.ShowCreatePublications:
+		return buildShowCreatePublications(stmt, ctx)
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
@@ -176,19 +180,9 @@ func GetExecTypeFromPlan(pn *Plan) ExecInfo {
 		WithBigMem: false,
 		CnNumbers:  2,
 	}
-
-	tp := true
-	for _, node := range pn.GetQuery().GetNodes() {
-		stats := node.Stats
-		if stats == nil || stats.Outcnt >= 100 || stats.BlockNum >= 4 {
-			tp = false
-			break
-		}
-	}
-	if tp {
+	if IsTpQuery(pn.GetQuery()) {
 		defInfo.Typ = ExecTypeTP
 	}
-
 	return defInfo
 }
 

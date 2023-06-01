@@ -54,8 +54,18 @@ type Vector struct {
 	cantFreeData bool
 	cantFreeArea bool
 
+	sorted bool // for some optimization
+
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
+}
+
+func (v *Vector) GetSorted() bool {
+	return v.sorted
+}
+
+func (v *Vector) SetSorted(b bool) {
+	v.sorted = b
 }
 
 func (v *Vector) Reset(typ types.Type) {
@@ -69,6 +79,7 @@ func (v *Vector) Reset(typ types.Type) {
 	v.length = 0
 	//v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.nsp.Reset()
+	v.sorted = false
 }
 
 func (v *Vector) UnsafeGetRawData() []byte {
@@ -111,7 +122,7 @@ func (v *Vector) GetNulls() *nulls.Nulls {
 
 func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 	if nsp != nil {
-		v.nsp = *nsp
+		v.nsp.InitWith(nsp)
 	} else {
 		v.nsp.Reset()
 	}
@@ -152,6 +163,7 @@ func (v *Vector) CleanOnlyData() {
 		v.area = v.area[:0]
 	}
 	v.nsp.Reset()
+	v.sorted = false
 }
 
 func (v *Vector) GetStringAt(i int) string {
@@ -292,8 +304,10 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.length = 0
 	v.cantFreeData = false
 	v.cantFreeArea = false
+	types.PutTypeToPool(v.typ)
 
 	v.nsp.Reset()
+	v.sorted = false
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
@@ -348,6 +362,8 @@ func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
 		buf.Write(nspData)
 	}
 
+	buf.Write(types.EncodeBool(&v.sorted))
+
 	return nil
 }
 
@@ -392,6 +408,9 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 	} else {
 		v.nsp.Reset()
 	}
+
+	v.sorted = types.DecodeBool(data[:1])
+	//data = data[1:]
 
 	v.cantFreeData = true
 	v.cantFreeArea = true
@@ -450,6 +469,9 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 		v.nsp.Reset()
 	}
 
+	v.sorted = types.DecodeBool(data[:1])
+	//data = data[1:]
+
 	return nil
 }
 
@@ -496,6 +518,7 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 		class:  v.class,
 		typ:    v.typ,
 		length: v.length,
+		sorted: v.sorted,
 	}
 	w.GetNulls().InitWith(v.GetNulls())
 
@@ -1310,25 +1333,21 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 				}
 				v.area = area[:len(v.area)]
 			}
-			if w.nsp.Any() {
-				for i := 0; i < w.length; i++ {
-					if nulls.Contains(&w.nsp, uint64(i)) {
-						nulls.Add(&v.nsp, uint64(i+v.length))
+			vs := v.col.([]types.Varlena)
+			var va types.Varlena
+			var err error
+			for i := range ws {
+				if nulls.Contains(&w.nsp, uint64(i)) {
+					nulls.Add(&v.nsp, uint64(v.length))
+				} else {
+					va, v.area, err = types.BuildVarlena(ws[i].GetByteSlice(w.area), v.area, mp)
+					if err != nil {
+						return err
 					}
 				}
+				vs[v.length] = va
+				v.length++
 			}
-			sz := v.typ.TypeSize()
-			length := uint32(len(v.area))
-			v.area = append(v.area, w.area...)
-			copy(v.data[v.length*sz:], w.data[:w.length*sz])
-			vs := v.col.([]types.Varlena)
-			for i, j := v.length, v.length+w.length; i < j; i++ {
-				if vs[i][0] > types.VarlenaInlineSize {
-					s := vs[i].U32Slice()
-					s[1] += length
-				}
-			}
-			v.length += w.length
 			return nil
 		}
 	case types.T_Blockid:

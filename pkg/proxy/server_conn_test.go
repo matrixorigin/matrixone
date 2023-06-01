@@ -15,7 +15,9 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"os"
@@ -30,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -88,6 +91,13 @@ func (s *mockServerConn) Close() error {
 
 var baseConnID atomic.Uint32
 
+type tlsConfig struct {
+	enabled  bool
+	caFile   string
+	certFile string
+	keyFile  string
+}
+
 type testCNServer struct {
 	sync.Mutex
 	ctx      context.Context
@@ -98,6 +108,8 @@ type testCNServer struct {
 	quit     chan interface{}
 
 	globalVars map[string]string
+	tlsCfg     tlsConfig
+	tlsConfig  *tls.Config
 }
 
 type testHandler struct {
@@ -105,16 +117,20 @@ type testHandler struct {
 	connID      uint32
 	conn        goetty.IOSession
 	sessionVars map[string]string
+	labels      map[string]string
 	server      *testCNServer
 }
 
-func startTestCNServer(t *testing.T, ctx context.Context, addr string) func() error {
+func startTestCNServer(t *testing.T, ctx context.Context, addr string, cfg *tlsConfig) func() error {
 	b := &testCNServer{
 		ctx:        ctx,
 		scheme:     "tcp",
 		addr:       addr,
 		quit:       make(chan interface{}),
 		globalVars: make(map[string]string),
+	}
+	if cfg != nil {
+		b.tlsCfg = *cfg
 	}
 	if strings.Contains(addr, "sock") {
 		b.scheme = "unix"
@@ -155,6 +171,17 @@ func (s *testCNServer) waitCNServerReady() bool {
 
 func (s *testCNServer) Start() error {
 	var err error
+	if s.tlsCfg.enabled {
+		s.tlsConfig, err = frontend.ConstructTLSConfig(
+			context.TODO(),
+			s.tlsCfg.caFile,
+			s.tlsCfg.certFile,
+			s.tlsCfg.keyFile,
+		)
+		if err != nil {
+			return err
+		}
+	}
 	s.listener, err = net.Listen(s.scheme, s.addr)
 	if err != nil {
 		return err
@@ -180,7 +207,9 @@ func (s *testCNServer) Start() error {
 					return err
 				}
 			} else {
-				fp := config.FrontendParameters{}
+				fp := config.FrontendParameters{
+					EnableTls: s.tlsCfg.enabled,
+				}
 				fp.SetDefaultValues()
 				cid := baseConnID.Add(1)
 				c := goetty.NewIOSession(goetty.WithSessionCodec(frontend.NewSqlCodec()),
@@ -191,6 +220,7 @@ func (s *testCNServer) Start() error {
 					mysqlProto: frontend.NewMysqlClientProtocol(
 						cid, c, 0, &fp),
 					sessionVars: make(map[string]string),
+					labels:      make(map[string]string),
 					server:      s,
 				}
 				go func(h *testHandler) {
@@ -205,6 +235,12 @@ func testHandle(h *testHandler) {
 	// read salt from proxy.
 	data := make([]byte, 20)
 	_, _ = h.conn.RawConn().Read(data)
+	// read label info.
+	label := &proxy.RequestLabel{}
+	reader := bufio.NewReader(h.conn.RawConn())
+	if err := label.Decode(reader); err != nil {
+		h.labels = label.Labels
+	}
 	// server writes init handshake.
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeHandshakePayload())
 	// server reads auth information from client.
@@ -379,7 +415,7 @@ func TestServerConn_Create(t *testing.T) {
 	// start server.
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
-	stopFn := startTestCNServer(t, tp.ctx, addr)
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
@@ -401,7 +437,7 @@ func TestServerConn_Connect(t *testing.T) {
 	})
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
-	stopFn := startTestCNServer(t, tp.ctx, addr)
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
@@ -425,7 +461,7 @@ func TestFakeCNServer(t *testing.T) {
 	temp := os.TempDir()
 	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
 	require.NoError(t, os.RemoveAll(addr))
-	stopFn := startTestCNServer(t, tp.ctx, addr)
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
 	defer func() {
 		require.NoError(t, stopFn())
 	}()
@@ -454,7 +490,7 @@ func TestServerConn_ExecStmt(t *testing.T) {
 	})
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
-	stopFn := startTestCNServer(t, tp.ctx, addr)
+	stopFn := startTestCNServer(t, tp.ctx, addr, nil)
 	defer func() {
 		require.NoError(t, stopFn())
 	}()

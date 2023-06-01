@@ -38,16 +38,17 @@ import (
 func BlockRead(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
+	deletes []int64,
 	seqnums []uint16,
 	colTypes []types.Type,
 	ts timestamp.Timestamp,
 	fs fileservice.FileService,
 	mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		logutil.Infof("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debugf("read block %s, seqnums %v, typs %v", info.BlockID.String(), seqnums, colTypes)
 	}
 	columnBatch, err := BlockReadInner(
-		ctx, info, seqnums, colTypes,
+		ctx, info, deletes, seqnums, colTypes,
 		types.TimestampToTS(ts), fs, mp, vp,
 	)
 	if err != nil {
@@ -57,6 +58,45 @@ func BlockRead(
 	columnBatch.SetZs(columnBatch.Vecs[0].Length(), mp)
 
 	return columnBatch, nil
+}
+
+func BlockCompactionRead(
+	ctx context.Context,
+	location objectio.Location,
+	deletes []int64,
+	seqnums []uint16,
+	colTypes []types.Type,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (*batch.Batch, error) {
+
+	loaded, err := LoadColumns(ctx, seqnums, colTypes, fs, location, mp)
+	if err != nil {
+		return nil, err
+	}
+	if len(deletes) == 0 {
+		return loaded, nil
+	}
+	result := batch.NewWithSize(len(loaded.Vecs))
+	for i, col := range loaded.Vecs {
+		typ := *col.GetType()
+		result.Vecs[i] = vector.NewVec(typ)
+		if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
+			break
+		}
+		result.Vecs[i].Shrink(deletes, true)
+	}
+
+	if err != nil {
+		for _, col := range result.Vecs {
+			if col != nil {
+				col.Free(mp)
+			}
+		}
+		return nil, err
+	}
+	result.SetZs(result.Vecs[0].Length(), mp)
+	return result, nil
 }
 
 func mergeDeleteRows(d1, d2 []int64) []int64 {
@@ -93,6 +133,7 @@ func mergeDeleteRows(d1, d2 []int64) []int64 {
 func BlockReadInner(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
+	dels []int64,
 	seqnums []uint16,
 	colTypes []types.Type,
 	ts types.TS,
@@ -101,14 +142,14 @@ func BlockReadInner(
 	vp engine.VectorPool,
 ) (result *batch.Batch, err error) {
 	var (
-		rowid       *vector.Vector
+		//rowid       *vector.Vector
 		deletedRows []int64
 		loaded      *batch.Batch
 	)
 
 	// read block data from storage
-	if loaded, rowid, deletedRows, err = readBlockData(
-		ctx, seqnums, colTypes, info, ts, fs, mp,
+	if loaded, _, deletedRows, err = readBlockData(
+		ctx, seqnums, colTypes, info, ts, fs, mp, vp,
 	); err != nil {
 		return
 	}
@@ -128,9 +169,19 @@ func BlockReadInner(
 		}
 	}
 
+	deletedRows = mergeDeleteRows(deletedRows, dels)
+
 	result = batch.NewWithSize(len(loaded.Vecs))
 	for i, col := range loaded.Vecs {
 		typ := *col.GetType()
+		if typ.Oid == types.T_Rowid {
+			result.Vecs[i] = col
+			// shrink the vector by deleted rows
+			if len(deletedRows) > 0 {
+				result.Vecs[i].Shrink(deletedRows, true)
+			}
+			continue
+		}
 		if vp == nil {
 			result.Vecs[i] = vector.NewVec(typ)
 		} else {
@@ -145,12 +196,11 @@ func BlockReadInner(
 		}
 	}
 
-	if rowid != nil {
-		rowid.Free(mp)
-	}
-
 	if err != nil {
 		for _, col := range result.Vecs {
+			if col.GetType().Oid == types.T_Rowid {
+				continue
+			}
 			if col != nil {
 				col.Free(mp)
 			}
@@ -189,17 +239,23 @@ func readBlockData(
 	ts types.TS,
 	fs fileservice.FileService,
 	m *mpool.MPool,
+	vp engine.VectorPool,
 ) (bat *batch.Batch, rowid *vector.Vector, deletedRows []int64, err error) {
 
 	hasRowId, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 	if hasRowId {
 		// generate rowid
-		if rowid, err = objectio.ConstructRowidColumn(
+		if vp == nil {
+			rowid = vector.NewVec(objectio.RowidType)
+		} else {
+			rowid = vp.GetVector(objectio.RowidType)
+		}
+		if err = objectio.ConstructRowidColumnTo(
+			rowid,
 			&info.BlockID,
 			0,
 			info.MetaLocation().Rows(),
-			m,
-		); err != nil {
+			m); err != nil {
 			return
 		}
 		defer func() {

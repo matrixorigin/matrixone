@@ -280,3 +280,4 @@ drop table atomic_table_18;
 select * from atomic_table_18;
 commit;
 select * from atomic_table_18;
+set autocommit=1;

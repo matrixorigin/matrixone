@@ -15,6 +15,7 @@
 package tasks
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -23,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 var (
@@ -44,7 +44,6 @@ type TaskScheduler interface {
 	ScheduleMultiScopedFn(ctx *Context, taskType TaskType, scopes []common.ID, fn FuncT) (Task, error)
 	ScheduleFn(ctx *Context, taskType TaskType, fn func() error) (Task, error)
 	ScheduleScopedFn(ctx *Context, taskType TaskType, scope *common.ID, fn func() error) (Task, error)
-	Checkpoint(indexes []*wal.Index) error
 
 	AddTransferPage(*model.TransferHashPage) error
 	DeleteTransferPage(id *common.ID) error
@@ -61,9 +60,9 @@ type BaseScheduler struct {
 	Dispatchers map[TaskType]Dispatcher
 }
 
-func NewBaseScheduler(name string) *BaseScheduler {
+func NewBaseScheduler(ctx context.Context, name string) *BaseScheduler {
 	scheduler := &BaseScheduler{
-		OpWorker:    *ops.NewOpWorker(name),
+		OpWorker:    *ops.NewOpWorker(ctx, name),
 		idAlloc:     common.NewIdAlloctor(1),
 		Dispatchers: make(map[TaskType]Dispatcher),
 	}

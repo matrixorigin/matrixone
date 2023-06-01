@@ -42,10 +42,9 @@ const (
 	IndexTablePrimaryColName = "__mo_index_pri_col"
 	ExternalFilePath         = "__mo_filepath"
 	IndexTableNamePrefix     = "__mo_index_unique__"
-	AutoIncrTableName        = "%!%mo_increment_columns"
+	// MOAutoIncrTable mo auto increment table name
+	MOAutoIncrTable = "mo_increment_columns"
 )
-
-var AutoIncrColumnNames = []string{Row_ID, "name", "offset", "step"}
 
 func ContainExternalHidenCol(col string) bool {
 	return col == ExternalFilePath
@@ -55,7 +54,7 @@ func IsHiddenTable(name string) bool {
 	if strings.HasPrefix(name, IndexTableNamePrefix) {
 		return true
 	}
-	return strings.EqualFold(name, AutoIncrTableName)
+	return strings.EqualFold(name, MOAutoIncrTable)
 }
 
 const (
@@ -71,6 +70,9 @@ const (
 const (
 	// Non-hard-coded data dictionary table
 	MO_INDEXES = "mo_indexes"
+
+	// MOTaskDB mo task db name
+	MOTaskDB = "mo_task"
 )
 
 const (
@@ -146,6 +148,7 @@ const (
 	BlockMeta_TableIdx_Insert = "%!%mo__meta_tbl_index" // mark which table this metaLoc belongs to
 	BlockMeta_Type            = "%!%mo__meta_type"
 	BlockMeta_Deletes_Length  = "%!%mo__meta_deletes_length"
+	BlockMeta_Partition       = "%!%mo__meta_partition"
 	// BlockMetaOffset_Min       = "%!%mo__meta_offset_min"
 	// BlockMetaOffset_Max       = "%!%mo__meta_offset_max"
 	BlockMetaOffset    = "%!%mo__meta_offset"
@@ -184,6 +187,7 @@ const (
 
 // index use to update constraint
 const (
+	MO_TABLES_ALTER_TABLE       = 0
 	MO_TABLES_UPDATE_CONSTRAINT = 4
 )
 
@@ -323,6 +327,11 @@ func (b *BlockInfo) SetDeltaLocation(deltaLoc objectio.Location) {
 	b.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
 }
 
+// XXX info is passed in by value.   The use of unsafe here will cost
+// an allocation and copy.  BlockInfo is not small therefore this is
+// not exactly cheap.   However, caller of this function will keep a
+// reference to the buffer.  See txnTable.rangesOnePart.
+// ranges is *[][]byte.
 func EncodeBlockInfo(info BlockInfo) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
 }
@@ -514,6 +523,7 @@ var (
 		types.New(types.T_TS, 0, 0),                        // committs
 		types.New(types.T_uuid, 0, 0),                      // segment_id
 	}
+
 	// used by memengine or tae
 	MoDatabaseTableDefs = []engine.TableDef{}
 	// used by memengine or tae
@@ -608,3 +618,93 @@ const (
 	AST_IDX          = 12
 	COLUMN_MAP_IDX   = 13
 )
+
+type MetadataScanInfo struct {
+	ColName      string
+	BlockId      objectio.Blockid
+	EntryState   bool
+	Sorted       bool
+	MetaLoc      ObjectLocation
+	DelLoc       ObjectLocation
+	CommitTs     types.TS
+	SegId        types.Uuid
+	RowCnt       int64
+	NullCnt      int64
+	CompressSize int64
+	OriginSize   int64
+	Min          []byte
+	Max          []byte
+}
+
+var (
+	MetadataScanInfoTypes = []types.Type{
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // column_name
+		types.New(types.T_Blockid, types.MaxVarcharLen, 0), // block_id
+		types.New(types.T_bool, 0, 0),                      // entry_state
+		types.New(types.T_bool, 0, 0),                      // sorted
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // meta_loc
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // delta_loc
+		types.New(types.T_TS, 0, 0),                        // commit_ts
+		types.New(types.T_uuid, 0, 0),                      // meta_seg
+		types.New(types.T_int64, 0, 0),                     // row_count
+		types.New(types.T_int64, 0, 0),                     // null_count
+		types.New(types.T_int64, 0, 0),                     // compress_size
+		types.New(types.T_int64, 0, 0),                     // origin_size
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // min
+		types.New(types.T_varchar, types.MaxVarcharLen, 0), // max
+	}
+
+	MetadataScanInfoNames = []string{
+		"column_name",
+		"block_id",
+		"entry_state",
+		"sorted",
+		"meta_loc",
+		"delta_loc",
+		"commit_ts",
+		"meta_seg",
+		"rows_count",
+		"null_count",
+		"compress_size",
+		"origin_size",
+		"min",
+		"max",
+	}
+)
+
+const (
+	MetadataScanInfoSize = unsafe.Sizeof(MetadataScanInfo{})
+
+	COL_NAME      = 0
+	BLOCK_ID      = 1
+	ENTRY_STATE   = 2
+	SORTED        = 3
+	META_LOC      = 4
+	DELTA_LOC     = 5
+	COMMIT_TS     = 6
+	SEG_ID        = 7
+	ROWS_CNT      = 8
+	NULL_CNT      = 9
+	COMPRESS_SIZE = 10
+	ORIGIN_SIZE   = 11
+	MIN           = 12
+	MAX           = 13
+)
+
+func (m *MetadataScanInfo) FillBlockInfo(info *BlockInfo) {
+	m.BlockId = info.BlockID
+	m.EntryState = info.EntryState
+	m.Sorted = info.Sorted
+	m.MetaLoc = info.MetaLoc
+	m.DelLoc = info.DeltaLoc
+	m.CommitTs = info.CommitTs
+	m.SegId = info.SegmentID
+}
+
+func EncodeMetadataScanInfo(info *MetadataScanInfo) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(info)), MetadataScanInfoSize)
+}
+
+func DecodeMetadataScanInfo(buf []byte) *MetadataScanInfo {
+	return (*MetadataScanInfo)(unsafe.Pointer(&buf[0]))
+}

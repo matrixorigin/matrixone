@@ -62,6 +62,9 @@ func (c *mockHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) { r
 func (c *mockHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	return uint64(nextClientConnID()), nil
 }
+func (c *mockHAKeeperClient) AllocateIDByKeyWithBatch(ctx context.Context, key string, batch uint64) (uint64, error) {
+	return uint64(nextClientConnID()), nil
+}
 func (c *mockHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
 	c.RLock()
 	defer c.RUnlock()

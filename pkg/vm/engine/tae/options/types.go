@@ -15,6 +15,7 @@
 package options
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -73,9 +74,12 @@ type Options struct {
 
 	TransferTableTTL time.Duration
 
+	IncrementalDedup bool
+
 	Clock     clock.Clock
 	Fs        fileservice.FileService
 	Lc        logservicedriver.LogServiceClientFactory
 	Shard     metadata.DNShard
 	LogStoreT LogstoreType
+	Ctx       context.Context
 }

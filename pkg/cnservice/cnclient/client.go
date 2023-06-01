@@ -17,8 +17,9 @@ package cnclient
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -26,32 +27,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"go.uber.org/zap"
 )
 
 // client each node will hold only one client.
 // It is responsible for sending messages to other nodes. and messages were received
 // and handled by cn-server.
-var client atomic.Pointer[CNClient]
+var client *CNClient
 
 func CloseCNClient() error {
-	return client.Load().Close()
+	return client.Close()
 }
 
 func GetStreamSender(backend string) (morpc.Stream, error) {
-	return client.Load().NewStream(backend)
+	return client.NewStream(backend)
 }
 
 func AcquireMessage() *pipeline.Message {
-	return client.Load().acquireMessage().(*pipeline.Message)
+	return client.acquireMessage().(*pipeline.Message)
 }
 
 func IsCNClientReady() bool {
-	c := client.Load()
-	return c != nil && c.ready
+	client.Lock()
+	defer client.Unlock()
+	return client.ready
 }
 
 type CNClient struct {
+	sync.Mutex
+
 	localServiceAddress string
 	ready               bool
 	config              *ClientConfig
@@ -62,10 +65,14 @@ type CNClient struct {
 }
 
 func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
+	c.Lock()
+	defer c.Unlock()
 	return c.client.Send(ctx, backend, request)
 }
 
 func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
+	c.Lock()
+	defer c.Unlock()
 	if backend == c.localServiceAddress {
 		runtime.ProcessLevelRuntime().Logger().
 			Fatal("remote run pipeline in local",
@@ -76,15 +83,16 @@ func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 }
 
 func (c *CNClient) Close() error {
-	lock.Lock()
-	defer lock.Unlock()
-	cli := client.Load()
-	if cli == nil || !cli.ready {
-		return nil
+	if c != nil {
+		c.Lock()
+		defer c.Unlock()
+		if !c.ready {
+			return nil
+		}
+		c.ready = false
+		return c.client.Close()
 	}
-
-	c.ready = false
-	return c.client.Close()
+	return nil
 }
 
 const (
@@ -107,17 +115,11 @@ type ClientConfig struct {
 	RPC rpc.Config
 }
 
-var (
-	lock sync.Mutex
-)
-
 // TODO: Here it needs to be refactored together with Runtime
 func NewCNClient(
 	localServiceAddress string,
 	cfg *ClientConfig) error {
-	lock.Lock()
-	defer lock.Unlock()
-	if client.Load() != nil {
+	if client != nil {
 		return nil
 	}
 
@@ -126,9 +128,10 @@ func NewCNClient(
 	var err error
 	cfg.Fill()
 	cli := &CNClient{config: cfg, localServiceAddress: localServiceAddress}
-	client.Store(cli)
+	cli.Lock()
+	defer cli.Unlock()
 	cli.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
-
+	client = cli
 	codec := morpc.NewMessageCodec(cli.acquireMessage,
 		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)))
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
@@ -183,9 +186,10 @@ func (cfg *ClientConfig) Fill() {
 }
 
 func GetRPCClient() morpc.RPCClient {
-	cli := client.Load()
-	if cli == nil {
+	if client == nil {
 		return nil
 	}
-	return cli.client
+	client.Lock()
+	defer client.Unlock()
+	return client.client
 }
