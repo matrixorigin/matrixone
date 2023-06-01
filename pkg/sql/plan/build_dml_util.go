@@ -136,21 +136,26 @@ func buildInsertPlans(
 
 // buildUpdatePlans  build update plan.
 func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx) error {
+	var lastNodeId int32
+	var err error
 	// sink_scan -> project -> [agg] -> [filter] -> sink
-	nextSourceStep, err := makePreUpdateDeletePlan(ctx, builder, bindCtx, updatePlanCtx)
+	lastNodeId = appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
+	lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, bindCtx, updatePlanCtx, lastNodeId)
 	if err != nil {
 		return err
 	}
+	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	nextSourceStep := builder.appendStep(lastNodeId)
 	updatePlanCtx.sourceStep = nextSourceStep
 
 	// build delete plans
-	err = buildDeletePlans(ctx, builder, bindCtx, updatePlanCtx)
+	err = buildDeletePlans(ctx, builder, bindCtx, updatePlanCtx, lastNodeId)
 	if err != nil {
 		return err
 	}
 
 	// sink_scan -> project -> preinsert -> sink
-	lastNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
+	lastNodeId = appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
 	lastNode := builder.qry.Nodes[lastNodeId]
 	newCols := make([]*ColDef, 0, len(updatePlanCtx.tableDef.Cols))
 	oldRowIdPos := len(updatePlanCtx.tableDef.Cols) - 1
@@ -228,7 +233,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
    [o2]sink_scan -> project -> [agg] -> [filter] -> sink
         ...
 */
-func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
+func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, lastNodeId int32) error {
 	isUpdate := delCtx.updateColLength > 0
 
 	// delete unique table
@@ -328,7 +333,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 
 	// delete origin table
-	lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+	if delCtx.sourceStep != -1 {
+		lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+	}
 	partExprIdx := -1
 	if delCtx.tableDef.Partition != nil {
 		partExprIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
@@ -671,7 +678,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							upPlanCtx.beginIdx = 0
 							upPlanCtx.allDelTableIDs = allDelTableIDs
 
-							err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx)
+							err := buildDeletePlans(ctx, builder, bindCtx, upPlanCtx, lastNodeId)
 							putDmlPlanCtx(upPlanCtx)
 							if err != nil {
 								return err
@@ -1963,8 +1970,9 @@ func makePreUpdateDeletePlan(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 	delCtx *dmlPlanCtx,
+	lastNodeId int32,
 ) (int32, error) {
-	lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
+	// lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 	lastNode := builder.qry.Nodes[lastNodeId]
 
 	// append project Node to fetch the columns of this table
@@ -2113,10 +2121,10 @@ func makePreUpdateDeletePlan(
 		lastNodeId = builder.appendNode(filterNode, bindCtx)
 	}
 
-	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-	nextSourceStep := builder.appendStep(lastNodeId)
+	// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+	// nextSourceStep := builder.appendStep(lastNodeId)
 
-	return nextSourceStep, nil
+	return lastNodeId, nil
 }
 
 // func getColPos(expr *Expr, colPos map[int32]int32) {
