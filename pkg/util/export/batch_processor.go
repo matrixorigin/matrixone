@@ -424,13 +424,17 @@ type exportReq interface {
 var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		req := holder.getGenerateReq()
-		if req != nil {
+		if req != nil && holder.name != "rawlog" {
+			select {
+			case c.awakeGenerate <- req:
+			case <-time.After(time.Second * 3):
+				logutil.Info("awakeBufferFactory: timeout after 3 seconds")
+			}
+		} else {
 			select {
 			case c.awakeGenerate <- req:
 			default:
-				holder.mux.Lock()
-				defer holder.mux.Unlock()
-				holder.buffer = req.(*bufferGenerateReq).buffer
+				logutil.Info("awakeBufferFactory: awakeGenerate chan is full")
 			}
 		}
 	}
@@ -452,6 +456,8 @@ loop:
 				select {
 				case c.awakeBatch <- exportReq:
 				case <-c.stopCh:
+				case <-time.After(time.Second * 10):
+					logutil.Info("awakeBatch: timeout after 10 seconds")
 				}
 			}
 		case <-c.stopCh:
