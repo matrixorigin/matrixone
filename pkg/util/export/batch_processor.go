@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
@@ -137,6 +138,8 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 	buf.Add(item)
 	b.mux.Unlock()
 	if buf.ShouldFlush() {
+		b.signal(b)
+	} else if checker, is := item.(table.NeedSyncWrite); is && checker.NeedSyncWrite() {
 		b.signal(b)
 	}
 }
