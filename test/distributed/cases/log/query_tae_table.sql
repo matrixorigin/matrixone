@@ -37,7 +37,7 @@ select account, statement from system.statement_info where statement = 'insert i
 -- @session
 
 -- case: select span_kind issue #7571
-select sleep(16);
+select sleep(10);
 select span_kind from system.rawlog where `raw_item` = "log_info" limit 1;
 
 -- case: fix issue 8168, with syntax error
