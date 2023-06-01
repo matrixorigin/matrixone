@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLengthUTF8(t *testing.T) {
+func TestCountUTF8CodePoints(t *testing.T) {
 	cases := map[string]uint64{
 		"abc":   3,
 		"":      0,
@@ -32,17 +32,7 @@ func TestLengthUTF8(t *testing.T) {
 	}
 
 	for input, expected := range cases {
-		xs := []string{input}
-		re := make([]uint64, 1)
-		actual := StrLengthUTF8(xs, re)[0]
+		actual := CountUTF8CodePoints([]byte(input))
 		require.Equal(t, expected, actual)
 	}
-}
-
-func TestLengthUTF8WithMultiString(t *testing.T) {
-	xs := []string{"你好", "中国", "abc", " ", "", "abc😄哈"}
-	re := make([]uint64, 6)
-	expected := []uint64{2, 2, 3, 1, 0, 5}
-	actual := StrLengthUTF8(xs, re)
-	require.Equal(t, expected, actual)
 }

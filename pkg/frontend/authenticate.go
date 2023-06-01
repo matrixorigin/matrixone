@@ -3074,11 +3074,6 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 	}
 
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		return nil, err
-	}
-
 	subs = &plan.SubscriptionMeta{
 		Name:        pubName,
 		AccountId:   int32(accId),
