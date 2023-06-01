@@ -382,7 +382,7 @@ func TestTickerForTaskSchedule(t *testing.T) {
 		// schedule task that we created to CN node
 		time.Sleep(time.Millisecond * 100)
 
-		tasks, err := taskService.QueryTask(nil, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
+		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 	}
