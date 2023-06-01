@@ -162,6 +162,9 @@ var (
 
 	//defaultCleanKillQueueInterval default: 60 minutes
 	defaultCleanKillQueueInterval = 60
+
+	// defaultLongSpanTime default: 1 s
+	defaultLongSpanTime = time.Second
 )
 
 // FrontendParameters of the frontend
@@ -583,6 +586,12 @@ type ObservabilityParameters struct {
 	// MergedExtension default: tae. Support val in [csv, tae]
 	MergedExtension string `toml:"mergedExtension"`
 
+	// DisableSpan default: false. Disable span collection
+	DisableSpan bool `toml:"disableSpan"`
+
+	// LongSpanTime default: 500 ms. Only record span, which duration > LongSpanTime
+	LongSpanTime toml.Duration `toml:"longSpanTime"`
+
 	OBCollectorConfig
 }
 
@@ -641,6 +650,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.MergedExtension == "" {
 		op.MergedExtension = defaultMergedExtension
+	}
+
+	if op.LongSpanTime.Duration <= 0 {
+		op.LongSpanTime.Duration = defaultLongSpanTime
 	}
 }
 
