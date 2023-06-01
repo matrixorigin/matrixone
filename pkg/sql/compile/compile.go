@@ -259,16 +259,13 @@ func (c *Compile) run(s *Scope) error {
 func (c *Compile) Run(_ uint64) error {
 	if err := c.runOnce(); err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-			c.proc.TxnOperator.Txn().IsRCIsolation() {
-			if c.info.Typ == plan2.ExecTypeAP {
-				if err := c.Compile(c.ctx, c.pn, c.u, c.fill); err != nil {
-					return err
-				}
-			}
+			c.proc.TxnOperator.Txn().IsRCIsolation() &&
+			c.info.Typ == plan2.ExecTypeTP {
 			if err := c.runOnce(); err != nil {
 				return err
 			}
 		}
+		return err
 	}
 	return nil
 }
