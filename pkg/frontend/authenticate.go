@@ -1803,6 +1803,11 @@ func getSqlForGetRolesOfCurrentUser(userId int64) string {
 	return fmt.Sprintf(getRolesOfCurrentUserFormat, userId)
 }
 
+// getSqlForCheckProcedureExistence get the sql for check the procedure exist or not
+func getSqlForCheckProcedureExistence(pdName, dbName string) string {
+	return fmt.Sprintf(checkProcedureExistence, pdName, dbName)
+}
+
 func isBannedDatabase(dbName string) bool {
 	_, ok := bannedCatalogDatabases[dbName]
 	return ok
@@ -3073,11 +3078,6 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 			databaseName, accountList,
 			tenantInfo.GetTenant())
 		return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
-	}
-
-	err = bh.Exec(ctx, "commit;")
-	if err != nil {
-		return nil, err
 	}
 
 	subs = &plan.SubscriptionMeta{
@@ -7681,7 +7681,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 
 	// validate duplicate procedure declaration
 	bh.ClearExecResultSet()
-	checkExistence = fmt.Sprintf(checkProcedureExistence, string(cp.Name.Name.ObjectName), dbName)
+	checkExistence = getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), dbName)
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
 		return err
@@ -8062,7 +8062,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	argsMap = make(map[string]tree.Expr) // map arg to param
 
 	// build argsAttr and argsMap
-	logutil.Info("Nuo:" + strconv.Itoa(len(argList)))
+	logutil.Info("Interpret procedure call length:" + strconv.Itoa(len(argList)))
 	i := 0
 	for curName, v := range argList {
 		argsAttr[curName] = v.InOutType
