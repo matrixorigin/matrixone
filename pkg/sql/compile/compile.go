@@ -261,9 +261,7 @@ func (c *Compile) Run(_ uint64) error {
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 			c.proc.TxnOperator.Txn().IsRCIsolation() &&
 			c.info.Typ == plan2.ExecTypeTP {
-			if err := c.runOnce(); err != nil {
-				return err
-			}
+			return c.runOnce()
 		}
 		return err
 	}
