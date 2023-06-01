@@ -670,81 +670,57 @@ func LoadCheckpointEntries(
 	tableName string,
 	dbID uint64,
 	dbName string,
-	fs fileservice.FileService) ([]*api.Entry, []func(), error) {
+	fs fileservice.FileService) ([]*api.Entry, error) {
 	if metLoc == "" {
-		return nil, nil, nil
+		return nil, nil
 	}
 	now := time.Now()
 	defer func() {
 		logutil.Infof("LoadCheckpointEntries latency: %v", time.Since(now))
 	}()
 	locations := strings.Split(metLoc, ";")
-	datas := make([]*CheckpointData, len(locations))
+	datas := make([]*CNCheckpointData, len(locations))
 
 	readers := make([]*blockio.BlockReader, len(locations))
 	objectLocations := make([]objectio.Location, len(locations))
 	for i, key := range locations {
 		location, err := blockio.EncodeLocationFromString(key)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		reader, err := blockio.NewObjectReader(fs, location)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		readers[i] = reader
 		err = blockio.PrefetchMeta(fs, location)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		objectLocations[i] = location
 	}
 
 	for i := range locations {
-		pref, err := blockio.BuildPrefetchParams(fs, objectLocations[i])
+		data := NewCNCheckpointData()
+		err := data.PrefetchFrom(ctx, fs, objectLocations[i])
 		if err != nil {
-			return nil, nil, err
-		}
-		for idx, item := range checkpointDataRefer {
-			idxes := make([]uint16, len(item.attrs))
-			for col := range item.attrs {
-				idxes[col] = uint16(col)
-			}
-			pref.AddBlock(idxes, []uint16{uint16(idx)})
-		}
-		err = blockio.PrefetchWithMerged(pref)
-		if err != nil {
-			return nil, nil, err
-		}
-
-	}
-
-	for i := range locations {
-		data := NewCheckpointData()
-		for idx, item := range checkpointDataRefer {
-			var bat *containers.Batch
-			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), readers[i])
-			if err != nil {
-				return nil, nil, err
-			}
-			data.bats[idx] = bat
+			return nil, err
 		}
 		datas[i] = data
 	}
 
+	for i := range locations {
+		for _, data := range datas {
+			data.ReadFrom(ctx, readers[i], nil)
+		}
+	}
+
 	entries := make([]*api.Entry, 0)
-	closeCBs := make([]func(), 0)
 	for i := range locations {
 		data := datas[i]
 		ins, del, cnIns, segDel, err := data.GetTableData(tableID)
-		closeCBs = append(closeCBs, data.Close)
 		if err != nil {
-			for _, cb := range closeCBs {
-				if cb != nil {
-					cb()
-				}
-			}
-			return nil, nil, err
+			return nil, err
 		}
 		if tableName != pkgcatalog.MO_DATABASE &&
 			tableName != pkgcatalog.MO_COLUMNS &&
@@ -796,5 +772,5 @@ func LoadCheckpointEntries(
 			entries = append(entries, entry)
 		}
 	}
-	return entries, closeCBs, nil
+	return entries, nil
 }
