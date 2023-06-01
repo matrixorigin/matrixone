@@ -35,6 +35,8 @@ const MAX_CHUNK_SIZE = 1024 * 1024 * 4
 
 const MAX_INSERT_TIME_LIMIT = 20 * time.Second
 
+const MAX_INSERT_TIME = 5 * time.Second
+
 var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
 // DefaultSqlWriter SqlWriter is a writer that writes data to a SQL database.
@@ -155,11 +157,7 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 
 		if sb.Len() >= maxLen || idx == len(records)-1 {
 			stmt := baseStr + sb.String() + ";"
-			timeLimit := 5 * time.Second
-			if tbl.Table == "rawlog" {
-				timeLimit = 5 * time.Second
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), timeLimit)
+			ctx, cancel := context.WithTimeout(context.Background(), MAX_INSERT_TIME)
 			defer cancel() // it's important to ensure all paths call cancel to avoid resource leak
 			_, err := tx.ExecContext(ctx, stmt)
 			if err != nil {
