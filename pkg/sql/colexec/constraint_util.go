@@ -28,25 +28,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
+func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch.Batch, error) {
+	retBatch := batch.New(true, []string{catalog.Row_ID})
 	var retVec *vector.Vector
-	var rowIdList []types.Rowid
-	if bat.Vecs[idx].GetNulls().IsEmpty() {
-		return bat
+	var err error
+	vectorNulls := bat.Vecs[idx].GetNulls()
+	vec := bat.Vecs[idx]
+	length := vec.Length()
+	if vectorNulls.IsEmpty() {
+		retVec, err = vec.Window(0, length)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		retVec = vector.NewVec(types.T_Rowid.ToType())
-		rowIdList = make([]types.Rowid, 0)
+		retVec.PreExtend(length-vectorNulls.Count(), proc.Mp())
+		row := 0
 		for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
 			if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
-				rowIdList = append(rowIdList, r)
+				vector.SetFixedAt(retVec, row, r)
+				row++
 			}
 		}
 	}
-	vector.AppendFixedList(retVec, rowIdList, nil, proc.Mp())
-	retBatch := batch.New(true, []string{catalog.Row_ID})
 	retBatch.SetZs(retVec.Length(), proc.Mp())
 	retBatch.SetVector(0, retVec)
-	return retBatch
+	return retBatch, nil
 }
 
 // GroupByPartitionForDelete: Group data based on partition and return batch array with the same length as the number of partitions.
