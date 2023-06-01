@@ -83,6 +83,7 @@ type dmlPlanCtx struct {
 	beginIdx          int
 	sourceStep        int32
 	isMulti           bool
+	needAggFilter     bool
 	updateColLength   int
 	rowIdPos          int
 	insertColPos      []int
@@ -116,13 +117,21 @@ func buildInsertPlans(
 
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
-	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-	sourceStep := builder.appendStep(lastNodeId)
 
-	// make insert plans
-	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, pkFilterExpr)
-	return err
+	pkPos, _ := getPkPos(tableDef, true)
+	if pkPos == -1 && !haveUniqueKey(tableDef) && len(tableDef.Fkeys) == 0 {
+		lastNodeId = appendInsertNode(ctx, builder, bindCtx, objRef, tableDef, lastNodeId, true)
+		builder.appendStep(lastNodeId)
+		return nil
+	} else {
+		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+		sourceStep := builder.appendStep(lastNodeId)
+
+		// make insert plans
+		insertBindCtx := NewBindContext(builder, nil)
+		err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, pkFilterExpr)
+		return err
+	}
 }
 
 // buildUpdatePlans  build update plan.
@@ -2000,7 +2009,8 @@ func makePreUpdateDeletePlan(
 
 	//when update multi table. we append agg node:
 	//eg: update t1, t2 set t1.a= t1.a+1 where t2.b >10
-	if delCtx.isMulti {
+	//eg: update t2, (select a from t2) as tt set t2.a= t2.a+1 where t2.b >10
+	if delCtx.needAggFilter {
 		lastNode := builder.qry.Nodes[lastNodeId]
 		groupByExprs := make([]*Expr, len(delCtx.tableDef.Cols))
 		aggNodeProjection := make([]*Expr, len(lastNode.ProjectList))
@@ -2131,3 +2141,58 @@ func makePreUpdateDeletePlan(
 // 	}
 
 // }
+
+func appendInsertNode(
+	ctx CompilerContext,
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	objRef *ObjectRef,
+	tableDef *TableDef,
+	lastNodeId int32,
+	addAffectedRows bool) int32 {
+
+	// Get table partition information
+	partitionIdx, paritionTableIds := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
+	// append project node
+	projectProjection := getProjectionByLastNode(builder, lastNodeId)
+	if len(projectProjection) > len(tableDef.Cols) || tableDef.Partition != nil {
+		if len(projectProjection) > len(tableDef.Cols) {
+			projectProjection = projectProjection[:len(tableDef.Cols)]
+		}
+		if tableDef.Partition != nil {
+			partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
+			projectProjection = append(projectProjection, partitionExpr)
+		}
+
+		projectNode := &Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeId},
+			ProjectList: projectProjection,
+		}
+		lastNodeId = builder.appendNode(projectNode, bindCtx)
+	}
+
+	// append insert node
+	insertProjection := getProjectionByLastNode(builder, lastNodeId)
+	// in this case. insert columns in front of batch
+	if len(insertProjection) > len(tableDef.Cols) {
+		insertProjection = insertProjection[:len(tableDef.Cols)]
+	}
+
+	insertNode := &Node{
+		NodeType: plan.Node_INSERT,
+		Children: []int32{lastNodeId},
+		ObjRef:   objRef,
+		InsertCtx: &plan.InsertCtx{
+			Ref:               objRef,
+			AddAffectedRows:   addAffectedRows,
+			IsClusterTable:    tableDef.TableType == catalog.SystemClusterRel,
+			TableDef:          tableDef,
+			PartitionTableIds: paritionTableIds,
+			PartitionIdx:      int32(partitionIdx),
+		},
+		ProjectList: insertProjection,
+	}
+	lastNodeId = builder.appendNode(insertNode, bindCtx)
+	return lastNodeId
+}

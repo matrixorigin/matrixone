@@ -197,6 +197,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		upPlanCtx.tableDef = tableDef
 		upPlanCtx.updateColLength = len(updateKeys)
 		upPlanCtx.isMulti = tableInfo.isMulti
+		upPlanCtx.needAggFilter = tableInfo.needAggFilter
 		upPlanCtx.rowIdPos = rowIdPos
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
