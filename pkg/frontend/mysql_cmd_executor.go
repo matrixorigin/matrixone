@@ -3835,6 +3835,8 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, sta
 			} else {
 				jsonBytesLen = h.buffer.Len()
 			}
+		} else {
+			jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
 		}
 		// data transform Global to json
 		if len(h.marshalPlan.Steps) > 0 {
