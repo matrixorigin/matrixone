@@ -106,7 +106,7 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan.TableDef, s *StatsInfoMap) {
-	logutil.Infof("need to update statsCache for table %v", tableDef.Name)
+	logutil.Debugf("need to update statsCache for table %v", tableDef.Name)
 	s.BlockNumber = blockNumTotal
 	s.TableCnt = info.TableCnt
 	s.tableName = tableDef.Name

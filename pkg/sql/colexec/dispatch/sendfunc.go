@@ -16,9 +16,10 @@ package dispatch
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"hash/crc32"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -140,7 +141,7 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		select {
 		case <-proc.Ctx.Done():
 			handleUnsent(proc, bat, refCountAdd, int64(i))
-			logutil.Infof("proc context done during dispatch to local")
+			logutil.Debugf("proc context done during dispatch to local")
 			return true, nil
 		case <-reg.Ctx.Done():
 			if ap.IsSink {
@@ -348,7 +349,7 @@ func getShuffledSelsByRange(ap *Argument, bat *batch.Batch) [][]int32 {
 		for row, v := range groupByCol {
 			regIndex := plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), lenRegs)
 			if regIndex >= lenRegs {
-				logutil.Infof("fail")
+				logutil.Warnf("fail")
 			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
@@ -481,10 +482,10 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		reg := ap.LocalRegs[sendto]
 		select {
 		case <-proc.Ctx.Done():
-			logutil.Infof("proc context done during dispatch to any")
+			logutil.Debugf("proc context done during dispatch to any")
 			return true, nil
 		case <-reg.Ctx.Done():
-			logutil.Infof("reg.Ctx done during dispatch to any")
+			logutil.Debugf("reg.Ctx done during dispatch to any")
 			ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
 			ap.ctr.localRegsCnt--
 			ap.ctr.aliveRegCnt--
@@ -515,7 +516,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	}
 	select {
 	case <-proc.Ctx.Done():
-		logutil.Infof("conctx done during dispatch")
+		logutil.Debugf("conctx done during dispatch")
 		return true, nil
 	default:
 	}

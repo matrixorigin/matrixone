@@ -394,8 +394,7 @@ func LogTxnStart1PCCommitFailed(
 	logger := getSkipLogger()
 
 	logger.Error("txn commit with 1 PC failed",
-		TxnField(txnMeta),
-		zap.Error(err))
+		TxnField(txnMeta))
 }
 
 // LogTxnStart2PCCommit log Txn start 2pc commit

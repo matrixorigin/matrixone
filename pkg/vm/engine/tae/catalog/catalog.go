@@ -519,7 +519,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
 	if err != nil {
-		logutil.Infof("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
+		logutil.Debugf("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
 		logutil.Info(catalog.SimplePPString(3))
 		panic(err)
 	}

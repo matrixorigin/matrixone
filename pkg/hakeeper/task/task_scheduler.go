@@ -81,7 +81,7 @@ func (s *scheduler) Create(ctx context.Context, tasks []task.TaskMetadata) error
 		return moerr.NewInternalError(ctx, "failed to get task service")
 	}
 	if err := ts.CreateBatch(ctx, tasks); err != nil {
-		runtime.ProcessLevelRuntime().Logger().Error("failed to create new tasks", zap.Error(err))
+		runtime.ProcessLevelRuntime().Logger().Error("failed to create new tasks")
 		return err
 	}
 	runtime.ProcessLevelRuntime().Logger().Debug("new tasks created", zap.Int("created", len(tasks)))
@@ -116,8 +116,7 @@ func (s *scheduler) queryTasks(status task.TaskStatus) []task.Task {
 	tasks, err := ts.QueryTask(ctx, taskservice.WithTaskStatusCond(taskservice.EQ, status))
 	if err != nil {
 		runtime.ProcessLevelRuntime().Logger().Error("failed to query tasks",
-			zap.String("status", status.String()),
-			zap.Error(err))
+			zap.String("status", status.String()))
 		return nil
 	}
 	return tasks
@@ -147,8 +146,7 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.Task, ordere
 		runtime.ProcessLevelRuntime().Logger().Error("failed to allocate task",
 			zap.Uint64("task-id", t.ID),
 			zap.String("task-metadata-id", t.Metadata.ID),
-			zap.String("task-runner", runner),
-			zap.Error(err))
+			zap.String("task-runner", runner))
 		return
 	}
 	orderedCN.inc(t.TaskRunner)

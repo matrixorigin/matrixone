@@ -356,7 +356,7 @@ func (c *client) triggerGCInactive(remote string) {
 }
 
 func (c *client) gcInactiveTask(ctx context.Context) {
-	c.logger.Info("gc inactive backends task started")
+	c.logger.Debug("gc inactive backends task started")
 	defer c.logger.Error("gc inactive backends task stopped")
 
 	for {

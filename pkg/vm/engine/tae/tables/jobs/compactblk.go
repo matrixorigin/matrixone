@@ -17,8 +17,9 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -184,7 +185,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				// we can't create appendable seg here because compaction can be rollbacked.
 				// so just wait until the new appendable seg is available.
 				// actually this log can barely be printed.
-				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
+				logutil.Debugf("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
 				return moerr.GetOkExpectedEOB()
 			}
 			createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID)
@@ -335,7 +336,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	if err != nil {
 		return
 	}
-	logutil.Infof("update metaloc for %s", id.String())
+	logutil.Debugf("update metaloc for %s", id.String())
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
 	}

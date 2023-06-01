@@ -380,8 +380,8 @@ func (h *Handle) HandleInspectDN(
 	req *db.InspectDN,
 	resp *db.InspectResp) (err error) {
 	args, _ := shlex.Split(req.Operation)
-	common.DoIfInfoEnabled(func() {
-		logutil.Info("Inspect", zap.Strings("args", args))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("Inspect", zap.Strings("args", args))
 	})
 	b := &bytes.Buffer{}
 
@@ -669,8 +669,8 @@ func (h *Handle) HandleCreateDatabase(
 		return err
 	}
 
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] create database: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("[precommit] create database: %+v\n txn: %s\n", req, txn.String())
 	})
 	defer func() {
 		common.DoIfInfoEnabled(func() {
@@ -706,8 +706,8 @@ func (h *Handle) HandleDropDatabase(
 		return err
 	}
 
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] drop database: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("[precommit] drop database: %+v\n txn: %s\n", req, txn.String())
 	})
 	defer func() {
 		common.DoIfInfoEnabled(func() {
@@ -734,8 +734,8 @@ func (h *Handle) HandleCreateRelation(
 		return
 	}
 
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
 	})
 	defer func() {
 		common.DoIfInfoEnabled(func() {
@@ -958,13 +958,13 @@ func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 		mask := syscall.Umask(0)
 		if err := os.MkdirAll(targetDir, os.FileMode(0755)); err != nil {
 			syscall.Umask(mask)
-			logutil.Infof("Recreate dir error:%v\n", err)
+			logutil.Debugf("Recreate dir error:%v\n", err)
 			return nil, err
 		}
 		syscall.Umask(mask)
 		tae, err = db.Open(targetDir+"/tae", opt)
 		if err != nil {
-			logutil.Infof("Open tae failed. error:%v", err)
+			logutil.Warnf("Open tae failed. error:%v", err)
 			return nil, err
 		}
 		return tae, nil

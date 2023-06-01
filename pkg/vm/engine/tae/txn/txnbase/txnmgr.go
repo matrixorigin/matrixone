@@ -134,7 +134,7 @@ func (mgr *TxnManager) Now() types.TS {
 func (mgr *TxnManager) Init(prevTs types.TS) error {
 	logutil.Infof("init ts to %v", prevTs.ToString())
 	mgr.TsAlloc.SetStart(prevTs)
-	logutil.Info("[INIT]", TxnMgrField(mgr))
+	logutil.Debug("[INIT]", TxnMgrField(mgr))
 	return nil
 }
 

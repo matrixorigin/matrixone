@@ -250,8 +250,7 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 			if txnID, err := req.exec(); err != nil {
 				if s.rt.Logger().Enabled(zap.DebugLevel) {
 					s.rt.Logger().Error("handle txn request failed",
-						zap.String("txn-id", hex.EncodeToString(txnID)),
-						zap.Error(err))
+						zap.String("txn-id", hex.EncodeToString(txnID)))
 				}
 			}
 		}
