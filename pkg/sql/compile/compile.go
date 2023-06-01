@@ -136,6 +136,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	c.u = u
 	c.fill = fill
 
+	c.pn = pn
 	// get execute related information
 	// about ap or tp, what and how many compute resource we can use.
 	c.info = plan2.GetExecTypeFromPlan(pn)
@@ -262,10 +263,32 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) error {
+	if err := c.runOnce(); err != nil {
+		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
+		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+			c.proc.TxnOperator.Txn().IsRCIsolation() &&
+			c.info.Typ == plan2.ExecTypeTP {
+			// clear the workspace of the failed statement
+			if err = c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); err != nil {
+				return err
+			}
+			//  increase the statement id
+			if err = c.proc.TxnOperator.GetWorkspace().IncrStatemenetID(c.ctx); err != nil {
+				return err
+			}
+			//  retry
+			return c.runOnce()
+		}
+		return err
+	}
+	return nil
+}
+
+// run once
+func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
+
 	errC := make(chan error, len(c.scope))
-	// fmt.Printf("run sql %+v", DebugShowScopes(c.scope))
-	// reset early for multi steps
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
@@ -283,7 +306,6 @@ func (c *Compile) Run(_ uint64) error {
 	close(errC)
 	for e := range errC {
 		if e != nil {
-			// c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.proc.Ctx)
 			return e
 		}
 	}
