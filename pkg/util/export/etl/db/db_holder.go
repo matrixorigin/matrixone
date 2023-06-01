@@ -41,6 +41,7 @@ var (
 )
 
 const MOLoggerUser = "mo_logger"
+const MaxConnectionNumber = 1
 
 type DBUser struct {
 	UserName string
@@ -105,8 +106,8 @@ func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 			logutil.Info("sqlWriter db initialized failed", zap.String("address", dbAddress), zap.Error(err))
 			return err
 		}
-		newDBConn.SetMaxOpenConns(1)
-		newDBConn.SetMaxIdleConns(1)
+		newDBConn.SetMaxOpenConns(MaxConnectionNumber)
+		newDBConn.SetMaxIdleConns(MaxConnectionNumber)
 		SetDBConn(newDBConn)
 		return nil
 	}

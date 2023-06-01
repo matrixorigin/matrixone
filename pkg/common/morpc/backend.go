@@ -209,9 +209,11 @@ func NewRemoteBackend(
 		return nil, err
 	}
 	rb.activeReadLoop(false)
+
 	if err := rb.stopper.RunTask(rb.writeLoop); err != nil {
 		return nil, err
 	}
+
 	rb.active()
 	return rb, nil
 }
@@ -472,7 +474,6 @@ func (rb *remoteBackend) doWrite(ctx context.Context, id uint64, f *Future) time
 	if _, ok := f.send.Message.(PayloadMessage); ok && conn != nil {
 		conn.SetWriteDeadline(time.Now().Add(v))
 	}
-
 	if ce := rb.logger.Check(zap.DebugLevel, "write request"); ce != nil {
 		ce.Write(zap.Uint64("request-id", id),
 			zap.String("request", f.send.Message.DebugString()))
