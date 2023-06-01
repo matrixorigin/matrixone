@@ -17,11 +17,12 @@ package rpc
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -770,12 +771,12 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		return
 	}
 
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] drop/truncate relation: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("[precommit] drop/truncate relation: %+v\n txn: %s\n", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] drop/truncate relation end txn: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] drop/truncate relation end txn: %s\n", txn.String())
 		})
 	}()
 

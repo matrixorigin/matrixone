@@ -204,7 +204,7 @@ func (client *pushClient) subscribeTable(
 		if err != nil {
 			return err
 		}
-		logutil.Infof("send subscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
+		logutil.Debugf("send subscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
 		return nil
 	}
 }
@@ -220,7 +220,7 @@ func (client *pushClient) unsubscribeTable(
 		if err != nil {
 			return err
 		}
-		logutil.Infof("send unsubscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
+		logutil.Debugf("send unsubscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
 		return nil
 	}
 }
@@ -350,7 +350,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				<-reconnectErr
 			}
 
-			logutil.Infof("start to reconnect to dn log tail service")
+			logutil.Debugf("start to reconnect to dn log tail service")
 			for {
 				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
 				if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
@@ -396,7 +396,7 @@ func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 					}
 					if !v.isDeleting && !v.latestTime.After(shouldClean) {
 						if err := client.unsubscribeTable(ctx, api.TableID{DbId: k.db, TbId: k.tbl}); err == nil {
-							logutil.Infof("sign tbl[dbId: %d, tblId: %d] unsubscribing", k.db, k.tbl)
+							logutil.Debugf("sign tbl[dbId: %d, tblId: %d] unsubscribing", k.db, k.tbl)
 							client.subscribed.m[k] = tableSubscribeStatus{
 								isDeleting: true,
 								latestTime: v.latestTime,
@@ -461,14 +461,14 @@ func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
 		isDeleting: false,
 		latestTime: time.Now(),
 	}
-	logutil.Infof("subscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
+	logutil.Debugf("subscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	delete(s.m, subscribeID{dbId, tblId})
-	logutil.Infof("unsubscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
+	logutil.Debugf("unsubscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
 }
 
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.

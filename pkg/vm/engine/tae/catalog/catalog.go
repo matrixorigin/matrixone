@@ -305,8 +305,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	catalog.OnReplayDBID(dbid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
-		logutil.Infof("delete %d", dbid)
-		logutil.Info(catalog.SimplePPString(common.PPL3))
+		logutil.Infof("delete %d", dbid, catalog.SimplePPString(common.PPL3))
 		panic(err)
 	}
 	dbDeleteAt := db.GetDeleteAt()
