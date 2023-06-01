@@ -244,9 +244,9 @@ func (svbt SystemVariableBoolType) Zero() interface{} {
 
 func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{}, error) {
 	if value == "on" {
-		return 1, nil
+		return int8(1), nil
 	} else if value == "off" {
-		return 0, nil
+		return int8(0), nil
 	} else {
 		convertVal, err := strconv.ParseInt(value, 10, 8)
 		if err != nil {
