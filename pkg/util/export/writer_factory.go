@@ -24,9 +24,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
-func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, enableSqlWriter bool) (factory table.WriterFactory) {
-	//Todo : Retire the TAEWriter and old configuration
-	var extension = table.CsvExtension
+var _ table.RowWriter = (*reactWriter)(nil)
+var _ table.AfterWrite = (*reactWriter)(nil)
+
+// reactWriter implement table.AfterWrite, it can react before/after FlushAndClose
+type reactWriter struct {
+	ctx context.Context
+	w   table.RowWriter
+
+	// implement AfterWrite
+	afters []table.CheckWriteHook
+}
+
+func newWriter(ctx context.Context, w table.RowWriter) *reactWriter {
+	return &reactWriter{
+		ctx: ctx,
+		w:   w,
+	}
+}
+
+func (rw *reactWriter) WriteRow(row *table.Row) error {
+	return rw.w.WriteRow(row)
+}
+
+func (rw *reactWriter) GetContent() string {
+	return rw.w.GetContent()
+}
+
+func (rw *reactWriter) FlushAndClose() (int, error) {
+	n, err := rw.w.FlushAndClose()
+	if err == nil {
+		for _, hook := range rw.afters {
+			hook(rw.ctx)
+		}
+	}
+	return n, err
+}
+
+func (rw *reactWriter) AddAfter(hook table.CheckWriteHook) {
+	rw.afters = append(rw.afters, hook)
+}
+
+func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string, enableSqlWriter bool) (factory table.WriterFactory) {
+
+	var extension = table.GetExtension(ext)
 	var cfg = table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
 
 	switch extension {
@@ -39,7 +80,7 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ena
 			if enableSqlWriter {
 				return etl.NewSqlWriter(ctx, tbl, cw)
 			} else {
-				return cw
+				return newWriter(ctx, etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...)))
 			}
 		}
 	case table.TaeExtension:
@@ -49,7 +90,7 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ena
 		}
 		factory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 			filePath := cfg.LogsFilePathFactory(account, tbl, ts)
-			return etl.NewTAEWriter(ctx, tbl, mp, filePath, fs)
+			return newWriter(ctx, etl.NewTAEWriter(ctx, tbl, mp, filePath, fs))
 		}
 	}
 

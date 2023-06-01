@@ -258,10 +258,36 @@ func (c *Compile) run(s *Scope) error {
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) error {
 	if err := c.runOnce(); err != nil {
+		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 			c.proc.TxnOperator.Txn().IsRCIsolation() &&
 			c.info.Typ == plan2.ExecTypeTP {
-			return c.runOnce()
+			// clear the workspace of the failed statement
+			if err = c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); err != nil {
+				return err
+			}
+			//  increase the statement id
+			if err = c.proc.TxnOperator.GetWorkspace().IncrStatemenetID(c.ctx); err != nil {
+				return err
+			}
+
+			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
+			// improved to refresh expression in the future.
+			cc := New(
+				c.addr,
+				c.db,
+				c.sql,
+				c.tenant,
+				c.uid,
+				c.proc.Ctx,
+				c.e, c.proc,
+				c.stmt,
+				c.isInternal,
+				c.cnLabel)
+			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
+				return err
+			}
+			return cc.runOnce()
 		}
 		return err
 	}
