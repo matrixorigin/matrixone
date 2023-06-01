@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -39,6 +40,15 @@ type columnCache struct {
 	allocating  bool
 	allocatingC chan struct{}
 	overflow    bool
+	// For the load scenario, if the machine is good enough, there will be very many goroutines to
+	// concurrently fetch the value of the self-increasing column, which will immediately trigger
+	// the cache of the self-increasing column to be insufficient and thus go to the store to allocate
+	// a new cache, which causes the load to block all due to this allocation being slow. The idea of
+	// our optimization here is to reduce the number of allocations as much as possible, add an atomic
+	// counter, check how many concurrent requests are waiting when allocating (of course this is
+	// imprecise, but it doesn't matter), and then allocate more than one at a time.
+	concurrencyApply atomic.Uint64
+	allocateCount    atomic.Uint64
 }
 
 func newColumnCache(
@@ -243,6 +253,8 @@ func (col *columnCache) applyAutoValues(
 	skipped *ranges,
 	filter func(i int) bool,
 	apply func(int, uint64) error) error {
+	cul := col.concurrencyApply.Load()
+	col.concurrencyApply.Add(1)
 	col.Lock()
 	defer col.Unlock()
 
@@ -256,7 +268,7 @@ func (col *columnCache) applyAutoValues(
 		}
 
 		if col.ranges.empty() {
-			if err := col.allocateLocked(ctx, tableID, rows); err != nil {
+			if err := col.allocateLocked(ctx, tableID, rows, cul); err != nil {
 				return false, err
 			}
 		}
@@ -324,7 +336,8 @@ func (col *columnCache) preAllocate(
 func (col *columnCache) allocateLocked(
 	ctx context.Context,
 	tableID uint64,
-	count int) error {
+	count int,
+	beforeApplyCount uint64) error {
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
 	}
@@ -334,13 +347,18 @@ func (col *columnCache) allocateLocked(
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
+	n := int(col.concurrencyApply.Load() - beforeApplyCount)
+	if n == 0 {
+		n = 1
+	}
 	for {
 		from, to, err := col.allocator.alloc(
 			ctx,
 			tableID,
 			col.col.ColName,
-			count)
+			count*n)
 		if err == nil {
+			col.allocateCount.Add(1)
 			col.applyAllocateLocked(from, to)
 			return nil
 		}
