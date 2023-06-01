@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sort"
 
@@ -64,6 +65,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 			r.colTypes = make([]types.Type, len(cols))
 			r.colNulls = make([]bool, len(cols))
 			r.pkidxInColIdxs = -1
+			r.indexOfFirstSortedColumn = -1
 			for i, column := range cols {
 				// sometimes Name2ColIndex have no row_id， sometimes have one
 				if column == catalog.Row_ID {
@@ -71,6 +73,9 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 					r.seqnums[i] = objectio.SEQNUM_ROWID
 					r.colTypes[i] = types.T_Rowid.ToType()
 				} else {
+					if plan2.GetSortOrder(r.tableDef, column) == 0 {
+						r.indexOfFirstSortedColumn = i
+					}
 					logicalIdx := r.tableDef.Name2ColIndex[column]
 					colDef := r.tableDef.Cols[logicalIdx]
 					r.seqnums[i] = uint16(colDef.Seqnum)
@@ -104,8 +109,8 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 	bat.SetAttributes(cols)
 
-	if blockInfo.Sorted && r.pkidxInColIdxs != -1 {
-		bat.GetVector(int32(r.pkidxInColIdxs)).SetSorted(true)
+	if blockInfo.Sorted && r.indexOfFirstSortedColumn != -1 {
+		bat.GetVector(int32(r.indexOfFirstSortedColumn)).SetSorted(true)
 	}
 
 	// if it's not sorted or no filter expr, just return
@@ -194,27 +199,29 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 
 	//start to load deletes, which maybe
 	//in txn.blockId_dn_delete_metaLoc_batch or in partitionState.
-	if len(r.blks[0].deletes) == 0 {
-		if _, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[r.blks[0].meta.BlockID]; ok {
-			r.blks[0].deletes, err = r.table.LoadDeletesForBlock(r.blks[0].meta.BlockID)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			state, err := r.table.getPartitionState(ctx)
-			if err != nil {
-				return nil, err
-			}
-			ts := types.TimestampToTS(r.ts)
-			iter := state.NewRowsIter(ts, &r.blks[0].meta.BlockID, true)
-			for iter.Next() {
-				entry := iter.Entry()
-				_, offset := entry.RowID.Decode()
-				r.blks[0].deletes = append(r.blks[0].deletes, int64(offset))
-			}
-			iter.Close()
+	if _, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[r.blks[0].meta.BlockID]; ok {
+		deletes, err := r.table.LoadDeletesForBlock(r.blks[0].meta.BlockID)
+		if err != nil {
+			return nil, err
 		}
+		//TODO:: need to optimize .
+		r.blks[0].deletes = append(r.blks[0].deletes, deletes...)
 
+	}
+
+	{
+		state, err := r.table.getPartitionState(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ts := types.TimestampToTS(r.ts)
+		iter := state.NewRowsIter(ts, &r.blks[0].meta.BlockID, true)
+		for iter.Next() {
+			entry := iter.Entry()
+			_, offset := entry.RowID.Decode()
+			r.blks[0].deletes = append(r.blks[0].deletes, int64(offset))
+		}
+		iter.Close()
 	}
 	//TODO::there is a bug to fix
 	r.sels = r.sels[:0]

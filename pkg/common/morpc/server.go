@@ -368,6 +368,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						if ce != nil {
 							ce.Write(fields...)
 						}
+						if err != nil {
+							return
+						}
 					}
 
 					for _, f := range responses {

@@ -83,7 +83,7 @@ type Source struct {
 	Expr                   *plan.Expr
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
-	AccountId              int32
+	AccountId              *plan.PubInfo
 }
 
 // Col is the information of attribute
@@ -167,6 +167,7 @@ func (a *anaylze) Nodes() []*process.AnalyzeInfo {
 type Compile struct {
 	scope []*Scope
 
+	pn   *plan.Plan
 	info plan2.ExecInfo
 
 	u any
