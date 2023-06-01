@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 
 	// "time"
 
@@ -139,7 +140,7 @@ func (catalog *Catalog) InitSystemDB() {
 	}
 }
 func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
-	logutil.Infof("GC Catalog %v", ts.ToString())
+	logutil.Debugf("GC Catalog %v", ts.ToString())
 	processor := LoopProcessor{}
 	processor.DatabaseFn = func(d *DBEntry) error {
 		d.RLock()
@@ -305,7 +306,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	catalog.OnReplayDBID(dbid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
-		logutil.Infof("delete %d", dbid, catalog.SimplePPString(common.PPL3))
+		logutil.Info("delete %d", zap.Uint64("dbid", dbid), zap.String("catalog pp", catalog.SimplePPString(common.PPL3)))
 		panic(err)
 	}
 	dbDeleteAt := db.GetDeleteAt()
