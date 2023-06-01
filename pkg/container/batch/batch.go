@@ -352,7 +352,7 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 }
 
 func (bat *Batch) AntiShrink(sels []int64) {
-	selsMp := make(map[int64]bool)
+	/*selsMp := make(map[int64]bool)
 	for _, sel := range sels {
 		selsMp[sel] = true
 	}
@@ -374,5 +374,11 @@ func (bat *Batch) AntiShrink(sels []int64) {
 	for i, sel := range newSels {
 		vs[i] = vs[sel]
 	}
-	bat.Zs = bat.Zs[:len(newSels)]
+	bat.Zs = bat.Zs[:len(newSels)]*/
+
+	length := len(bat.Zs)
+	for _, vec := range bat.Vecs {
+		vec.Shrink(sels, true)
+	}
+	bat.Zs = bat.Zs[:length-len(sels)]
 }
