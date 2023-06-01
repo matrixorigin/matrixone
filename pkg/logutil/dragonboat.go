@@ -76,7 +76,7 @@ func DragonboatFactory(name string) logger.ILogger {
 		cores = append(cores, zapcore.NewCore(sink.enc, sink.out, atom))
 	}
 	options := cfg.getOptions()
-	options = append(options, zap.AddCallerSkip(2), zap.AddStacktrace(zap.ErrorLevel))
+	options = append(options, zap.AddCallerSkip(2))
 	return &DragonboatAdaptLogger{
 		logger:  zap.New(zapcore.NewTee(cores...), options...).Named(name).Sugar(),
 		atom:    &atom,
