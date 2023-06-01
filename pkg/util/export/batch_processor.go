@@ -431,7 +431,6 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 				holder.mux.Lock()
 				defer holder.mux.Unlock()
 				holder.buffer = req.(*bufferGenerateReq).buffer
-				req = nil
 			}
 		}
 	}
