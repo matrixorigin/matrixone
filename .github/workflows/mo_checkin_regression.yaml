@@ -532,12 +532,16 @@ jobs:
           grep TPCC config.yml
           python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} TPCC
           python Checker.py TPCC
+      
+      - uses: actions/upload-artifact@v3
+        if: ${{ failure() || cancelled()}}
+        continue-on-error: true
+        with:
+          name: mo-checkin-regression-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: |
+             ${{ github.workspace }}/reports
+          retention-days: 7
 
-      - name: Test Plugin Result export
-        if: ${{ failure() || cancelled() }}
-        run: | 
-          aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/reports --recursive
-          aws s3 cp $GITHUB_WORKSPACE/reports s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/reports --recursive
       - name : ISSUE Notice
         if: ${{ failure() || cancelled() }}
         uses: chf007/action-wechat-work@master
@@ -608,7 +612,7 @@ jobs:
 
 
           # move result to s3://mo-checkin-regression/result/ only test fail
-          if [ '${{ needs.test.result }}'x == 'failure'x ]; then aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; aws s3 mv s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; fi
+          #if [ '${{ needs.test.result }}'x == 'failure'x ]; then aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; aws s3 mv s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; fi
           kubectl get bucket -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
 
           kubectl delete namespace mo-checkin-regression-${{ github.event.pull_request.number }}
