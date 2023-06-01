@@ -16,6 +16,7 @@ package logutil
 
 import (
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -47,15 +48,23 @@ func Fatal(msg string, fields ...zap.Field) {
 
 // Debugf only use in develop mode
 func Debugf(msg string, fields ...interface{}) {
+	st := time.Now()
 	logger := GetSkip1Logger()
 	if logger.Core().Enabled(zap.DebugLevel) {
 		logger.Debug(fmt.Sprintf(msg, fields...))
+	}
+	if (time.Since(st)) > time.Millisecond*100 {
+		fmt.Println("Debugf logging cost too much:", time.Since(st))
 	}
 }
 
 // Infof only use in develop mode
 func Infof(msg string, fields ...interface{}) {
+	st := time.Now()
 	GetSkip1Logger().Info(fmt.Sprintf(msg, fields...))
+	if (time.Since(st)) > time.Millisecond*100 {
+		fmt.Println("Infof: logging cost too much:", time.Since(st))
+	}
 }
 
 // Warnf only use in develop mode
