@@ -140,9 +140,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 	case plan.SubqueryRef_SCALAR:
 		var rewrite bool
 		// Uncorrelated subquery
-		if len(joinPreds) == 0 {
-			joinPreds = append(joinPreds, constTrue)
-		} else if builder.findAggrCount(subCtx.aggregates) {
+		if len(joinPreds) > 0 && builder.findAggrCount(subCtx.aggregates) {
 			rewrite = true
 		}
 
