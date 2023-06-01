@@ -129,7 +129,12 @@ func (cfg *LogConfig) getLevel() zap.AtomicLevel {
 	return level
 }
 
+// getStacktraceLevel return stacktrace level.
+// If cfg.StacktraceLevel == "", then return zap.PanicLevel
 func (cfg *LogConfig) getStacktraceLevel() (level zapcore.Level) {
+	if len(cfg.StacktraceLevel) == 0 {
+		return zap.PanicLevel
+	}
 	err := level.UnmarshalText([]byte(cfg.StacktraceLevel))
 	if err != nil {
 		panic(err)
