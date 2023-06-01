@@ -57,6 +57,8 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithBatchProcessMode(SV.BatchProcessor),
 		WithExportInterval(SV.TraceExportInterval),
 		WithLongQueryTime(SV.LongQueryTime),
+		WithLongSpanTime(SV.LongSpanTime.Duration),
+		WithSpanDisable(SV.DisableSpan),
 		DebugMode(SV.EnableTraceDebug),
 		WithBufferSizeThreshold(SV.BufferSize),
 	)
@@ -73,11 +75,13 @@ func Init(ctx context.Context, opts ...TracerProviderOption) error {
 	SetTracerProvider(newMOTracerProvider(opts...))
 	config := &GetTracerProvider().tracerProviderConfig
 
-	// init Tracer
-	gTracer = GetTracerProvider().Tracer("MatrixOne")
-	_, span := gTracer.Start(ctx, "TraceInit")
-	defer span.End()
-	defer trace.SetDefaultTracer(gTracer)
+	if !config.disableSpan {
+		// init Tracer
+		gTracer = GetTracerProvider().Tracer("MatrixOne")
+		_, span := gTracer.Start(ctx, "TraceInit")
+		defer span.End()
+		defer trace.SetDefaultTracer(gTracer)
+	}
 
 	// init DefaultContext / DefaultSpanContext
 	var spanId trace.SpanID
@@ -98,6 +102,8 @@ func Init(ctx context.Context, opts ...TracerProviderOption) error {
 	errutil.SetErrorReporter(ReportError)
 
 	logutil.Infof("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
+	logutil.Infof("trace with LongSpanTime: %v", GetTracerProvider().longSpanTime)
+	logutil.Infof("trace with DisableSpan: %v", GetTracerProvider().disableSpan)
 
 	return nil
 }
