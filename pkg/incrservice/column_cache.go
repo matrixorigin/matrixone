@@ -387,6 +387,9 @@ func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
 			return nil
 		}
 		c := col.allocatingC
+		// we must unlock here, becase we may wait for a long time. And Lock will added
+		// before return, because the caller holds the lock and call this method and use
+		// defer to unlock.
 		col.Unlock()
 		select {
 		case <-ctx.Done():
