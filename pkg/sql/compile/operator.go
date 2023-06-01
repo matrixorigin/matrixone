@@ -219,7 +219,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Order:
 		t := sourceIns.Arg.(*order.Argument)
 		res.Arg = &order.Argument{
-			Fs: t.Fs,
+			SortDirections: t.SortDirections,
 		}
 	case vm.Product:
 		t := sourceIns.Arg.(*product.Argument)
@@ -796,7 +796,7 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 
 func constructOrder(n *plan.Node) *order.Argument {
 	return &order.Argument{
-		Fs: n.OrderBy,
+		SortDirections: n.OrderBy,
 	}
 }
 

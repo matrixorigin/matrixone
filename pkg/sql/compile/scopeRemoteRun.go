@@ -821,7 +821,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *offset.Argument:
 		in.Offset = t.Offset
 	case *order.Argument:
-		in.OrderBy = t.Fs
+		in.OrderBy = t.SortDirections
 	case *product.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -1180,7 +1180,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Offset:
 		v.Arg = &offset.Argument{Offset: opr.Offset}
 	case vm.Order:
-		v.Arg = &order.Argument{Fs: opr.OrderBy}
+		v.Arg = &order.Argument{SortDirections: opr.OrderBy}
 	case vm.Product:
 		t := opr.GetProduct()
 		v.Arg = &product.Argument{

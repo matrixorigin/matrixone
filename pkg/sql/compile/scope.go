@@ -449,7 +449,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 				Op:  vm.MergeOrder,
 				Idx: in.Idx,
 				Arg: &mergeorder.Argument{
-					Fs: arg.Fs,
+					Fs: arg.SortDirections,
 				},
 			}
 			for i := range ss {
@@ -458,7 +458,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: &order.Argument{
-						Fs: arg.Fs,
+						SortDirections: arg.SortDirections,
 					},
 				})
 			}

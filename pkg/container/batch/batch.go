@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
 
@@ -301,10 +300,6 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 	if len(bat.Vecs) == 0 {
 		return bat, nil
 	}
-
-	// XXX Here is a good place to trigger an panic for fault injection.
-	// fault.AddFaultPoint("panic_in_batch_append", ":::", "PANIC", 0, "")
-	fault.TriggerFault("panic_in_batch_append")
 
 	for i := range bat.Vecs {
 		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {

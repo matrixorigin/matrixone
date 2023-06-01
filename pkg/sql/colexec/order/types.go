@@ -14,40 +14,32 @@
 
 package order
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
-
-type evalVector struct {
-	vec      *vector.Vector
-	executor colexec.ExpressionExecutor
-}
-
-type container struct {
-	desc      []bool // ds[i] == true: the attrs[i] are in descending order
-	nullsLast []bool
-	vecs      []evalVector // sorted list of attributes
-}
-
-type Argument struct {
-	ctr *container
-	Fs  []*plan.OrderBySpec
-}
-
-func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	ctr := arg.ctr
-	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanEvalVectors(mp)
-	}
-}
-
-func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
-	for i := range ctr.vecs {
-		ctr.vecs[i].executor.Free()
-	}
-}
+//type evalVector struct {
+//	vec      *vector.Vector
+//	executor colexec.ExpressionExecutor
+//}
+//
+//type container struct {
+//	desc      []bool // ds[i] == true: the attrs[i] are in descending order
+//	nullsLast []bool
+//	vecs      []evalVector // sorted list of attributes
+//}
+//
+//type Argument struct {
+//	ctr *container
+//	Fs  []*plan.OrderBySpec
+//}
+//
+//func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
+//	ctr := arg.ctr
+//	if ctr != nil {
+//		mp := proc.Mp()
+//		ctr.cleanEvalVectors(mp)
+//	}
+//}
+//
+//func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
+//	for i := range ctr.vecs {
+//		ctr.vecs[i].executor.Free()
+//	}
+//}
