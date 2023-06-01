@@ -23,6 +23,7 @@ const (
 	Limit
 	Order
 	Group
+	Window
 	Output
 	Offset
 	Product
@@ -117,6 +118,8 @@ func (ins *Instruction) IsBrokenNode() bool {
 	case Group, MergeGroup:
 		return true
 	case Top, MergeTop:
+		return true
+	case Window:
 		return true
 	}
 	return false

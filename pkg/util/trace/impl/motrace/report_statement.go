@@ -23,13 +23,16 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-var nilTxnID [16]byte
+var NilStmtID [16]byte
+var NilTxnID [16]byte
+var NilSesID [16]byte
 
 // StatementInfo implement export.IBuffer2SqlItem and export.CsvFields
 type StatementInfo struct {
@@ -81,6 +84,19 @@ type StatementInfo struct {
 	reported bool
 	// mark exported
 	exported bool
+
+	// keep []byte as elem
+	jsonByte, statsJsonByte []byte
+}
+
+var stmtPool = sync.Pool{
+	New: func() any {
+		return &StatementInfo{}
+	},
+}
+
+func NewStatementInfo() *StatementInfo {
+	return stmtPool.Get().(*StatementInfo)
 }
 
 type Statistic struct {
@@ -92,25 +108,52 @@ func (s *StatementInfo) GetName() string {
 	return SingleStatementTable.GetName()
 }
 
+// deltaContentLength approximate value that may gen as table record
+// stmtID, txnID, sesID: 36 * 3
+// timestamp: 26 * 2
+// status: 7
+// spanInfo: 36+16
+const deltaStmtContentLength = int64(36*3 + 26*2 + 7 + 36 + 16)
+const jsonByteLength = int64(4096)
+
 func (s *StatementInfo) Size() int64 {
-	return int64(unsafe.Sizeof(s)) + int64(
+	num := int64(unsafe.Sizeof(s)) + deltaStmtContentLength + int64(
 		len(s.Account)+len(s.User)+len(s.Host)+
-			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag),
+			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag)+
+			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsJsonByte),
 	)
+	if s.jsonByte == nil {
+		return num + jsonByteLength
+	}
+	return num
 }
 
 func (s *StatementInfo) Free() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if s.end && s.exported { // cooperate with s.mux
+		s.RoleId = 0
 		s.Statement = ""
 		s.StatementFingerprint = ""
 		s.StatementTag = ""
 		if s.ExecPlan != nil {
 			s.ExecPlan.Free()
 		}
+		s.RequestAt = time.Time{}
+		s.ResponseAt = time.Time{}
 		s.ExecPlan = nil
+		s.Status = StatementStatusRunning
 		s.Error = nil
+		s.RowsRead = 0
+		s.BytesScan = 0
+		s.ResultCount = 0
+		s.end = false
+		s.reported = false
+		s.exported = false
+		// clean []byte
+		s.jsonByte = nil
+		s.statsJsonByte = nil
+		stmtPool.Put(s)
 	}
 }
 
@@ -165,26 +208,31 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 //
 // please used in s.mux.Lock()
 func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
-	var jsonByte []byte
-	var statsJsonByte []byte
 	var stats Statistic
 
-	if s.ExecPlan == nil {
+	if s.jsonByte != nil {
+		goto endL
+	} else if s.ExecPlan == nil {
 		uuidStr := uuid.UUID(s.StatementID).String()
 		return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr),
 			`{"code":200,"message":"NO ExecPlan"}`
 	} else {
-		jsonByte, statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
+		s.jsonByte, s.statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
 		s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 		//	// get nil ExecPlan json-str
 		//	jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		//}
 	}
-	if len(statsJsonByte) == 0 {
-		statsJsonByte = []byte("{}")
+	if len(s.statsJsonByte) == 0 {
+		s.statsJsonByte = []byte("{}")
 	}
-	return string(jsonByte), string(statsJsonByte)
+endL:
+	return util.UnsafeBytesToString(s.jsonByte), util.UnsafeBytesToString(s.statsJsonByte)
+}
+
+func GetLongQueryTime() time.Duration {
+	return time.Duration(GetTracerProvider().longQueryTime)
 }
 
 type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
@@ -205,7 +253,7 @@ func (s *StatementInfo) SetTxnID(id []byte) {
 }
 
 func (s *StatementInfo) IsZeroTxnID() bool {
-	return bytes.Equal(s.TransactionID[:], nilTxnID[:])
+	return bytes.Equal(s.TransactionID[:], NilTxnID[:])
 }
 
 func (s *StatementInfo) Report(ctx context.Context) {

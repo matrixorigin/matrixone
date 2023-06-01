@@ -34,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -141,7 +141,7 @@ func (h *Handle) HandleCommit(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case *apipb.AlterTableReq:
+			case *api.AlterTableReq:
 				err = h.HandleAlterTable(
 					ctx,
 					meta,
@@ -255,7 +255,7 @@ func (h *Handle) HandlePrepare(
 					req,
 					&db.DropOrTruncateRelationResp{},
 				)
-			case *apipb.AlterTableReq:
+			case *api.AlterTableReq:
 				err = h.HandleAlterTable(
 					ctx,
 					meta,
@@ -322,8 +322,8 @@ func (h *Handle) HandleDestroy(ctx context.Context) (err error) {
 func (h *Handle) HandleGetLogTail(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *apipb.SyncLogTailReq,
-	resp *apipb.SyncLogTailResp) (err error) {
+	req *api.SyncLogTailReq,
+	resp *api.SyncLogTailResp) (err error) {
 	res, err := logtail.HandleSyncLogTailReq(
 		ctx,
 		h.db.BGCheckpointRunner,
@@ -342,7 +342,7 @@ func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.FlushTable,
-	resp *apipb.SyncLogTailResp) (err error) {
+	resp *api.SyncLogTailResp) (err error) {
 
 	// We use current TS instead of transaction ts.
 	// Here, the point of this handle function is to trigger a flush
@@ -363,7 +363,7 @@ func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.Checkpoint,
-	resp *apipb.SyncLogTailResp) (err error) {
+	resp *api.SyncLogTailResp) (err error) {
 
 	timeout := req.FlushDuration
 
@@ -517,8 +517,8 @@ func (h *Handle) CacheTxnRequest(
 func (h *Handle) HandlePreCommitWrite(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *apipb.PrecommitWriteCmd,
-	resp *apipb.SyncLogTailResp) (err error) {
+	req *api.PrecommitWriteCmd,
+	resp *api.SyncLogTailResp) (err error) {
 	var e any
 
 	es := req.EntryList
@@ -568,11 +568,17 @@ func (h *Handle) HandlePreCommitWrite(
 			}
 		case []catalog.UpdateConstraint:
 			for _, cmd := range cmds {
-				req := apipb.NewUpdateConstraintReq(
+				req := api.NewUpdateConstraintReq(
 					cmd.DatabaseId,
 					cmd.TableId,
 					string(cmd.Constraint))
 				if err = h.CacheTxnRequest(ctx, meta, req, nil); err != nil {
+					return err
+				}
+			}
+		case []*api.AlterTableReq:
+			for _, cmd := range cmds {
+				if err = h.CacheTxnRequest(ctx, meta, cmd, nil); err != nil {
 					return err
 				}
 			}
@@ -602,9 +608,9 @@ func (h *Handle) HandlePreCommitWrite(
 					return err
 				}
 			}
-		case *apipb.Entry:
+		case *api.Entry:
 			//Handle DML
-			pe := e.(*apipb.Entry)
+			pe := e.(*api.Entry)
 			moBat, err := batch.ProtoBatchToBatch(pe.GetBat())
 			if err != nil {
 				panic(err)
@@ -920,7 +926,7 @@ func (h *Handle) HandleWrite(
 func (h *Handle) HandleAlterTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *apipb.AlterTableReq,
+	req *api.AlterTableReq,
 	resp *db.WriteResp) (err error) {
 	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))

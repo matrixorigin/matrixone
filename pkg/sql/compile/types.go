@@ -83,7 +83,7 @@ type Source struct {
 	Expr                   *plan.Expr
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
-	AccountId              int32
+	AccountId              *plan.PubInfo
 }
 
 // Col is the information of attribute
@@ -167,6 +167,7 @@ func (a *anaylze) Nodes() []*process.AnalyzeInfo {
 type Compile struct {
 	scope []*Scope
 
+	pn   *plan.Plan
 	info plan2.ExecInfo
 
 	u any
@@ -202,7 +203,7 @@ type Compile struct {
 	stepRegs map[int32][]*process.WaitRegister
 
 	isInternal bool
-	// cnLabel is the CN labels which is parsed from session variable "cn_label".
+	// cnLabel is the CN labels which is received from proxy when build connection.
 	cnLabel map[string]string
 }
 

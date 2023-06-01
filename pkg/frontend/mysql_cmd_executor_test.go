@@ -234,7 +234,7 @@ func Test_mce(t *testing.T) {
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
-		ses := NewSession(proto, nil, pu, &gSys, true, nil)
+		ses := NewSession(proto, nil, pu, &gSys, true, nil, nil)
 		ses.txnHandler = &TxnHandler{
 			storage:   &engine.EntireEngine{Engine: pu.StorageEngine},
 			txnClient: pu.TxnClient,
@@ -322,7 +322,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -337,7 +337,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, true, nil)
+		ses := NewSession(proto, nil, pu, &gSys, true, nil, nil)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 
@@ -380,7 +380,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
-		ses := NewSession(proto, nil, pu, &gSys, true, nil)
+		ses := NewSession(proto, nil, pu, &gSys, true, nil, nil)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
@@ -487,7 +487,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
-		ses := NewSession(proto, nil, pu, &gSys, false, nil)
+		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
@@ -565,7 +565,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
-		ses := NewSession(proto, nil, pu, &gSys, false, nil)
+		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
@@ -731,7 +731,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil)
+		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
@@ -786,7 +786,7 @@ func Test_handleShowVariables(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil)
+		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		tenant := &TenantInfo{
@@ -810,13 +810,14 @@ func Test_handleShowVariables(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 		bh.init()
+		ses.mrs = &MysqlResultSet{}
 
 		sql := getSystemVariablesWithAccount(0)
 		rows := [][]interface{}{
 			{"syspublications", ""},
 		}
 
-		bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
+		bh.sql2result[sql] = newMrsForSystemVariablesOfAccount(rows)
 		sv = &tree.ShowVariables{Global: true}
 		convey.So(mce.handleShowVariables(sv, nil, 0, 1), convey.ShouldBeNil)
 	})
@@ -870,7 +871,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, true, nil)
+		ses := NewSession(proto, nil, pu, &gSys, true, nil, nil)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
@@ -968,7 +969,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, pu, &gSys, false, nil)
+		ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
@@ -1053,7 +1054,8 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), uuid.New(), plan)
+		stm := &motrace.StatementInfo{StatementID: uuid.New(), Statement: sql, RequestAt: time.Now()}
+		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
 		json, _, stats := h.Marshal(mock.CurrentContext().GetContext())
 		require.Equal(t, int64(0), stats.RowsRead)
 		require.Equal(t, int64(0), stats.BytesScan)
@@ -1226,7 +1228,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 	var gSys GlobalSystemVariables
 	InitGlobalSystemVariables(&gSys)
-	ses := NewSession(proto, nil, pu, &gSys, false, nil)
+	ses := NewSession(proto, nil, pu, &gSys, false, nil, nil)
 	ses.SetRequestContext(ctx)
 	ses.SetConnectContext(ctx)
 	ses.GetMysqlProtocol()

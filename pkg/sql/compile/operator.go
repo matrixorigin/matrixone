@@ -73,6 +73,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -799,6 +800,37 @@ func constructOrder(n *plan.Node) *order.Argument {
 	}
 }
 
+func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *window.Argument {
+	aggs := make([]agg.Aggregate, len(n.WinSpecList))
+	typs := make([]types.Type, len(n.WinSpecList))
+	for i, expr := range n.WinSpecList {
+		f := expr.Expr.(*plan.Expr_W).W.WindowFunc.Expr.(*plan.Expr_F)
+		distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+		obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+		fun, err := function.GetFunctionById(ctx, obj)
+		if err != nil {
+			panic(err)
+		}
+		var e *plan.Expr = nil
+		if len(f.F.Args) > 0 {
+			e = f.F.Args[0]
+		}
+		aggs[i] = agg.Aggregate{
+			E:    e,
+			Dist: distinct,
+			Op:   fun.GetSpecialId(),
+		}
+		if e != nil {
+			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
+		}
+	}
+	return &window.Argument{
+		Types:       typs,
+		Aggs:        aggs,
+		WinSpecList: n.WinSpecList,
+	}
+}
+
 /*
 func constructOffset(n *plan.Node, proc *process.Process) *offset.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Offset)
@@ -1045,11 +1077,14 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 
 // ShuffleJoinDispatch is a cross-cn dispath
 // and it will send same batch to all register
-func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, shuffle bool, shuffleColIdx int) *dispatch.Argument {
+func constructBroadcastDispatch(idx int, ss []*Scope, currentCNAddr string, node *plan.Node) *dispatch.Argument {
 	hasRemote, arg := constructDispatchLocalAndRemote(idx, ss, currentCNAddr)
-	if shuffle {
+	if node.Stats.Shuffle {
 		arg.FuncId = dispatch.ShuffleToAllFunc
-		arg.ShuffleColIdx = shuffleColIdx
+		arg.ShuffleColIdx = plan2.GetHashColumn(node.GroupBy[node.Stats.ShuffleColIdx]).ColPos
+		arg.ShuffleType = int32(node.Stats.ShuffleType)
+		arg.ShuffleColMin = node.Stats.ShuffleColMin
+		arg.ShuffleColMax = node.Stats.ShuffleColMax
 		return arg
 	}
 	if hasRemote {

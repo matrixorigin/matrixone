@@ -15,7 +15,6 @@
 package function
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -25,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -43,72 +40,7 @@ import (
 // seq function tests are not ported.  mock table and txn are simply too much.
 // we rely on bvt for sequence function tests.
 
-var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called", catalog.Row_ID}
 var setEdge = true
-
-func NewTxn(eg engine.Engine, proc *process.Process, ctx context.Context) (txn client.TxnOperator, err error) {
-	if proc.TxnClient == nil {
-		return nil, moerr.NewInternalError(ctx, "must set txn client")
-	}
-	var minSnapshotTS timestamp.Timestamp
-	if proc.TxnOperator != nil {
-		minSnapshotTS = proc.TxnOperator.Txn().SnapshotTS
-	}
-	txn, err = proc.TxnClient.New(proc.Ctx, minSnapshotTS)
-	if err != nil {
-		return nil, err
-	}
-	if ctx == nil {
-		return nil, moerr.NewInternalError(ctx, "context should not be nil")
-	}
-	if err = eg.New(ctx, txn); err != nil {
-		return nil, err
-	}
-	return txn, nil
-}
-
-func CommitTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) error {
-	if txn == nil {
-		return nil
-	}
-	if ctx == nil {
-		return moerr.NewInternalError(ctx, "context should not be nil")
-	}
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		eg.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
-	if err := eg.Commit(ctx, txn); err != nil {
-		if err2 := RollbackTxn(eg, txn, ctx); err2 != nil {
-			logutil.Errorf("CommitTxn: txn operator rollback failed. error:%v", err2)
-		}
-		return err
-	}
-	err := txn.Commit(ctx)
-	txn = nil
-	return err
-}
-
-func RollbackTxn(eg engine.Engine, txn client.TxnOperator, ctx context.Context) error {
-	if txn == nil {
-		return nil
-	}
-	if ctx == nil {
-		return moerr.NewInternalError(ctx, "context should not be nil")
-	}
-	ctx, cancel := context.WithTimeout(
-		ctx,
-		eg.Hints().CommitOrRollbackTimeout,
-	)
-	defer cancel()
-	if err := eg.Rollback(ctx, txn); err != nil {
-		return err
-	}
-	err := txn.Rollback(ctx)
-	txn = nil
-	return err
-}
 
 // Retrieve values of this sequence.
 // Set curval,lastval of current session.
@@ -121,19 +53,10 @@ func Nextval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 	// Here is the transaction
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := NewTxn(e, proc, proc.Ctx)
-	if err != nil {
-		return err
+	txn := proc.TxnOperator
+	if txn == nil {
+		return moerr.NewInternalError(proc.Ctx, "Nextval: txn operator is nil")
 	}
-
-	defer func() {
-		if err != nil {
-			RollbackTxn(e, txn, proc.Ctx)
-		} else {
-			// commit still may fail, return err
-			err = CommitTxn(e, txn, proc.Ctx)
-		}
-	}()
 
 	// nextval is the real implementation of nextval function.
 	for i := uint64(0); i < uint64(length); i++ {
@@ -358,18 +281,10 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 
 	// Txn
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := NewTxn(e, proc, proc.Ctx)
-	if err != nil {
-		return err
+	txn := proc.TxnOperator
+	if txn == nil {
+		return moerr.NewInternalError(proc.Ctx, "Setval: txn operator is nil")
 	}
-	defer func() {
-		if err != nil {
-			RollbackTxn(e, txn, proc.Ctx)
-		} else {
-			// commit still may fail, return err
-			err = CommitTxn(e, txn, proc.Ctx)
-		}
-	}()
 
 	for i := uint64(0); i < uint64(length); i++ {
 		tn, tnNull := tblnames.GetStrValue(i)
@@ -516,20 +431,10 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 
 	// Here is the transaction
 	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
-	txn, err := NewTxn(e, proc, proc.Ctx)
-	if err != nil {
-		return err
+	txn := proc.TxnOperator
+	if txn == nil {
+		return moerr.NewInternalError(proc.Ctx, "Currval: txn operator is nil")
 	}
-
-	defer func() {
-		// XXX old code always rollback, why ...
-		if err != nil {
-			RollbackTxn(e, txn, proc.Ctx)
-		} else {
-			// commit still may fail, return err
-			err = CommitTxn(e, txn, proc.Ctx)
-		}
-	}()
 
 	dbHandler, err := e.Database(proc.Ctx, proc.SessionInfo.Database, txn)
 	if err != nil {

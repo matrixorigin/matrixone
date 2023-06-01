@@ -139,7 +139,11 @@ message ObjectRef {
 	string schema_name	= 7;
 	string obj_name		= 8;
 	string subscription_name = 9;
-	int32 pub_account_id = 10;
+	PubInfo pub_info = 10;
+}
+
+message PubInfo {
+	int32 tenant_id = 1;
 }
 
 message SubscriptionMeta{
@@ -172,10 +176,11 @@ message Function {
 
 		// Window and Agg
 		AGG        = 128;
-		WIN        = 256;
+		WIN_VALUE				= 256;
+		WIN_ORDER				= 512;
 
 		// Monotonic function can filter by zonemap
-		MONOTONIC = 512;
+		MONOTONIC = 1024;
 	}
 
 	ObjectRef func		= 1;
@@ -191,16 +196,17 @@ message Expr {
 		ColRef		col 	= 5;
 		RawColRef	raw		= 6;
 		Function	f		= 7;
-		SubqueryRef	sub		= 8;
-		CorrColRef	corr	= 9;
-		TargetType  t		= 10;
-		ExprList	list	= 11;
-		MaxValue	max		= 12;
+		WindowSpec w = 8;
+		SubqueryRef	sub		= 9;
+		CorrColRef	corr	= 10;
+		TargetType  t		= 11;
+		ExprList	list	= 12;
+		MaxValue	max		= 13;
 	}
 
-	int32 aux_id = 13;
-	double ndv = 14;
-	double selectivity = 15;
+	int32 aux_id = 14;
+	double ndv = 15;
+	double selectivity = 16;
 }
 
 enum CompressType {
@@ -424,10 +430,13 @@ message TableFunction{
 	bytes param = 2;
 }
 
+enum ShuffleType {
+	Hash = 0;
+	Range = 1;
+}
 
 message Stats {
 	//for scan, number of blocks to read from S3
-	//for other nodes, it's meaningless
 	int32  block_num        = 1;
 	//for scan, cost of reading from S3, basically the read lines
 	//for other nodes, it means the estimated cost of current node
@@ -437,14 +446,23 @@ message Stats {
 	// average size of one row, currently not used
 	double rowsize	        = 4;
 	// hashmap size for nodes which build a hashmap
-	//for other nodes, it's meaningless
 	double hashmap_size		= 5;
 	//for scan, this means total count of all table, before filtering
-	//for other nodes, this is meanlingless
 	double table_cnt = 6;
 	//for scan, selectivity means outcnt divide total count
-	//for other node, currently be 0. will change in the future
 	double selectivity = 7;
+
+	// for group by and join node with big hashmap, use shuffle
+	// shuffle on which column. choose a column with max ndv
+	bool shuffle = 8;
+	int32 shuffleColIdx = 9;
+	// shuffle type
+	ShuffleType shuffleType = 10;
+	// for range shuffle on integer column, need to know its min and max value
+	int64 shuffleColMin = 11;
+	int64 shuffleColMax = 12;
+	//not used for now
+	int32   parallelism = 13;
 }
 
 message ColData {
@@ -471,10 +489,32 @@ message OrderBySpec {
 }
 
 message WindowSpec {
-	repeated Expr partition_by = 1;
-	repeated OrderBySpec order_by = 2;
-	int32 lead = 3;
-	int32 lag  = 4;
+	Expr window_func = 1;
+	repeated Expr partition_by = 2;
+	repeated OrderBySpec order_by = 3;
+	FrameClause frame = 4;
+	string name = 5;
+}
+
+message FrameClause {
+	enum FrameType {
+		ROWS = 0;
+		RANGE = 1;
+	}
+	FrameType type = 1;
+	FrameBound start = 2;
+	FrameBound end = 3;
+}
+
+message FrameBound {
+	enum BoundType {
+		FOLLOWING = 0;
+		PRECEDING = 1;
+		CURRENT_ROW = 2;
+	}
+	BoundType type = 1;
+	bool unBounded = 2;
+	Expr val = 3;
 }
 
 message OnDuplicateKeyCtx {
@@ -613,7 +653,7 @@ message Node {
 	repeated Expr agg_list = 12;
 
 	// WINDOW
-	WindowSpec win_spec = 13;
+	repeated Expr win_spec_list = 13;
 
 	// SORT
 	repeated OrderBySpec order_by = 14;
@@ -635,10 +675,6 @@ message Node {
     AnalyzeInfo analyze_info = 25;
 
 	repeated Expr tbl_func_expr_list = 26;
-
-    // The pipeline will determine the parallelism by traversing the plan
-    // when it is received. Then the build is built based on this information.
-    int32   parallelism = 27;
 
 	ClusterTable cluster_table = 28;
 	bool not_cacheable = 29;
@@ -963,6 +999,27 @@ message AlterTableAlterIndex {
 	bool visible = 4;
 }
 
+message AlterTableComment {
+	string new_comment = 1;
+}
+
+message AlterTableName {
+	string old_name = 1;
+	string new_name = 2;
+}
+
+message AlterAddCol {
+	string name = 1;
+	string pre_name = 2;
+	Type type = 3;
+	int32 pos = 4;
+}
+
+message AlterDropCol {
+	uint32 idx = 1;
+	uint32 seq = 2;
+}
+
 message AlterTable {
 	message Action {
 		oneof action {
@@ -970,6 +1027,10 @@ message AlterTable {
 			AlterTableAddFk add_fk 	= 2;
 			AlterTableAddIndex add_index = 3;
 			AlterTableAlterIndex alter_index = 4;
+			AlterTableComment alter_comment = 5;
+			AlterTableName alter_name = 6;
+			AlterAddCol add_col = 7;
+			AlterDropCol drop_col = 8;
 		};
 	}
 	string database			= 1;

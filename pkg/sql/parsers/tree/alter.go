@@ -14,7 +14,9 @@
 
 package tree
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type AlterUser struct {
 	statementImpl
@@ -264,6 +266,30 @@ func (node *AlterOptionDrop) Format(ctx *FmtCtx) {
 		ctx.WriteString("foreign key ")
 		node.Name.Format(ctx)
 	}
+}
+
+type AlterTableName struct {
+	Name *UnresolvedObjectName
+}
+
+func (node *AlterTableName) Format(ctx *FmtCtx) {
+	ctx.WriteString("rename to ")
+	node.Name.ToTableName().Format(ctx)
+}
+
+type AlterColPos struct {
+	PreColName *UnresolvedName
+	Pos        int32
+}
+
+type AlterAddCol struct {
+	Column *ColumnTableDef
+	Pos    *AlterColPos
+}
+
+func (node *AlterAddCol) Format(ctx *FmtCtx) {
+	ctx.WriteString("add column ")
+	node.Column.Format(ctx)
 }
 
 type AccountsSetOption struct {

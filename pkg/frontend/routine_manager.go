@@ -202,7 +202,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
 	// this mpool will be deleted.  Maybe in the following Closed method.
-	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm)
+	ses := NewSession(routine.getProtocol(), nil, pu, GSysVariables, true, rm.aicm, nil)
 	ses.SetRequestContext(routine.getCancelRoutineCtx())
 	ses.SetConnectContext(routine.getCancelRoutineCtx())
 	ses.SetFromRealUser(true)
@@ -214,12 +214,9 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	logDebugf(pro.GetDebugString(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
-	// With proxy module enabled, we try to update salt value from proxy.
-	// The MySQL protocol is broken a little: when connection is built, read
-	// the salt from proxy and update the salt, then go on with the handshake
-	// phase.
+	// With proxy module enabled, we try to update salt value and label info from proxy.
 	if rm.pu.SV.ProxyEnabled {
-		pro.tryUpdateSalt(rs)
+		pro.receiveExtraInfo(rs)
 	}
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
@@ -323,6 +320,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
+	routine.updateGoroutineId()
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	protocol := routine.getProtocol()
