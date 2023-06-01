@@ -167,6 +167,7 @@ func (a *anaylze) Nodes() []*process.AnalyzeInfo {
 type Compile struct {
 	scope []*Scope
 
+	pn   *plan.Plan
 	info plan2.ExecInfo
 
 	u any
