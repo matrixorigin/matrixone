@@ -398,7 +398,7 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
 		motrace.EndStatement(ctx, nil, ses.sentRows.Load())
-		logInfo(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
+		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
 		motrace.EndStatement(ctx, err, ses.sentRows.Load())
 		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
@@ -413,10 +413,13 @@ func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
 	logutil.Info(msg, fields...)
 }
 
-//func logDebug(info string, msg string, fields ...zap.Field) {
-//	fields = append(fields, zap.String("session_info", info))
-//	logutil.Debug(msg, fields...)
-//}
+func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Debug(msg, fields...)
+}
 
 func logError(ses *Session, info string, msg string, fields ...zap.Field) {
 	//if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
