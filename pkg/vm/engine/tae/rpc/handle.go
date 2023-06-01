@@ -51,6 +51,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 50
+
 // TODO::GC the abandoned txn.
 type Handle struct {
 	db *db.DB
@@ -105,9 +107,9 @@ func (h *Handle) HandleCommit(
 	})
 	defer func() {
 		common.DoIfInfoEnabled(func() {
-			if time.Since(start) > time.Millisecond*20 {
-				logutil.Infof("HandleCommit end : %X, %s",
-					string(meta.GetID()), time.Since(start))
+			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
+				logutil.Info("Commit with long latency",
+					zap.String("id", string(meta.GetID())), zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
 			}
 		})
 	}()
@@ -675,8 +677,8 @@ func (h *Handle) HandleCreateDatabase(
 		logutil.Debugf("[precommit] create database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] create database end txn: %s", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] create database end txn: %s", txn.String())
 		})
 	}()
 
@@ -712,8 +714,8 @@ func (h *Handle) HandleDropDatabase(
 		logutil.Debugf("[precommit] drop database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] drop database end: %s", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] drop database end: %s", txn.String())
 		})
 	}()
 
@@ -939,7 +941,7 @@ func (h *Handle) HandleAlterTable(
 	}
 
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] alter table: %v txn: %s", req.String(), txn.String())
+		logutil.Debugf("[precommit] alter table: %v txn: %s", req.String(), txn.String())
 	})
 
 	dbase, err := txn.GetDatabaseByID(req.DbId)
@@ -975,7 +977,7 @@ func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 
 	tae, err = db.Open(targetDir, opt)
 	if err != nil {
-		logutil.Infof("Open tae failed. error:%v", err)
+		logutil.Warnf("Open tae failed. error:%v", err)
 		return nil, err
 	}
 	return
