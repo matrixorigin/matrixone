@@ -1727,7 +1727,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 			}
 		}
 	}
-	logInfo(bh.mce.GetSession(), bh.ses.GetDebugString(), "query trace(backgroundExecSql)",
+	logDebug(bh.mce.GetSession(), bh.ses.GetDebugString(), "query trace(backgroundExecSql)",
 		logutil.ConnectionIdField(bh.ses.GetConnectionID()),
 		logutil.QueryField(SubStringFromBegin(sql, int(bh.ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
 	err = bh.mce.GetDoQueryFunc()(ctx, sql)

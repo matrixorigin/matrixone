@@ -105,7 +105,7 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 			}
 
 			s.crons.Lock()
-			s.rt.Logger().Info("new cron tasks fetched",
+			s.rt.Logger().Debug("new cron tasks fetched",
 				zap.Int("current-count", len(s.crons.jobs)),
 				zap.Int("fetch-count", len(tasks)))
 
@@ -273,7 +273,7 @@ func (j *cronJob) run() {
 			WithTaskExecutorCond(EQ, j.task.Metadata.Executor))
 		if err != nil ||
 			uint32(len(queryTask)) >= j.task.Metadata.Options.Concurrency {
-			j.s.rt.Logger().Info("cron task not triggered",
+			j.s.rt.Logger().Debug("cron task not triggered",
 				zap.String("cause", "reach max concurrency"),
 				zap.String("task", j.task.DebugString()))
 			return

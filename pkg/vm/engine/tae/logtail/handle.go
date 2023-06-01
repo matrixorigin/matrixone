@@ -70,10 +70,11 @@ Main workflow:
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -609,15 +610,15 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		switch kind {
 		case TableRespKind_Data:
 			tableName = b.tname
-			logutil.Infof("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
+			logutil.Debugf("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
 				DebugBatchToString("data", batch, false, zap.InfoLevel))
 		case TableRespKind_Blk:
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
-			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
 		case TableRespKind_Seg:
 			tableName = fmt.Sprintf("_%d_seg", b.tid)
-			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("segmeta", batch, false, zap.InfoLevel))
 		}
 
@@ -676,7 +677,7 @@ func LoadCheckpointEntries(
 	}
 	now := time.Now()
 	defer func() {
-		logutil.Infof("LoadCheckpointEntries latency: %v", time.Since(now))
+		logutil.Debugf("LoadCheckpointEntries latency: %v", time.Since(now))
 	}()
 	locations := strings.Split(metLoc, ";")
 	datas := make([]*CheckpointData, len(locations))

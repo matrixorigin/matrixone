@@ -99,8 +99,8 @@ func (h *Handle) HandleCommit(
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("HandleCommit start : %X\n",
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("HandleCommit start : %X\n",
 			string(meta.GetID()))
 	})
 	defer func() {

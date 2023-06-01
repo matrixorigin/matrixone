@@ -422,9 +422,9 @@ func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
 }
 
 func logError(ses *Session, info string, msg string, fields ...zap.Field) {
-	//if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
-	//	return
-	//}
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
 	fields = append(fields, zap.String("session_info", info))
 	logutil.Error(msg, fields...)
 }
