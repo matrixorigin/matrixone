@@ -427,7 +427,7 @@ type exportReq interface {
 var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		req := holder.getGenerateReq()
-		if req != nil && holder.name != "rawlog" {
+		if req != nil && holder.name != motrace.RawLogTbl {
 			select {
 			case c.awakeGenerate <- req:
 			case <-time.After(time.Second * 3):
@@ -480,10 +480,11 @@ loop:
 	for {
 		select {
 		case req := <-c.awakeBatch:
-			if err := req.handle(); err != nil {
+			if req == nil {
+				logutil.Warn("export req is nil")
+			} else if err := req.handle(); err != nil {
 				req.callback(err)
 			}
-			//c.handleBatch(holder)
 		case <-c.stopCh:
 			c.mux.Lock()
 			for len(c.awakeBatch) > 0 {

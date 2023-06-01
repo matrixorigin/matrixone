@@ -32,7 +32,7 @@ const (
 const (
 	// statementInfoTbl is an EXTERNAL table
 	statementInfoTbl = "statement_info"
-	rawLogTbl        = "rawlog"
+	RawLogTbl        = "rawlog"
 
 	// spanInfoTbl is a view
 	spanInfoTbl  = "span_info"
@@ -131,7 +131,7 @@ var (
 	SingleRowLogTable = &table.Table{
 		Account:  table.AccountAll,
 		Database: StatsDatabase,
-		Table:    rawLogTbl,
+		Table:    RawLogTbl,
 		Columns: []table.Column{
 			rawItemCol,
 			nodeUUIDCol,
