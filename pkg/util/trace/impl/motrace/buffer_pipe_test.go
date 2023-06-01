@@ -319,6 +319,7 @@ func Test_genCsvData(t *testing.T) {
 						Name:       "span1",
 						StartTime:  dummyBaseTime,
 						EndTime:    dummyBaseTime.Add(time.Microsecond),
+						Duration:   time.Microsecond,
 						tracer:     gTracer.(*MOTracer),
 					},
 				},
@@ -336,6 +337,7 @@ func Test_genCsvData(t *testing.T) {
 						Name:       "span1",
 						StartTime:  dummyBaseTime,
 						EndTime:    dummyBaseTime.Add(time.Microsecond),
+						Duration:   time.Microsecond,
 						tracer:     gTracer.(*MOTracer),
 					},
 					&MOSpan{
@@ -343,12 +345,14 @@ func Test_genCsvData(t *testing.T) {
 						Name:       "span2",
 						StartTime:  dummyBaseTime.Add(time.Microsecond),
 						EndTime:    dummyBaseTime.Add(time.Millisecond),
+						Duration:   time.Millisecond - time.Microsecond,
 						tracer:     gTracer.(*MOTracer),
 					},
 					&MOSpan{
 						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _2SpanID, Kind: trace.SpanKindRemote}, Parent: trace.NoopSpan{}},
 						Name:       "empty_end",
 						StartTime:  dummyBaseTime.Add(time.Microsecond),
+						Duration:   0,
 						tracer:     gTracer.(*MOTracer),
 						//EndTime:    table.ZeroTime,
 					},
@@ -357,7 +361,7 @@ func Test_genCsvData(t *testing.T) {
 			},
 			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",statement
 span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span2,0,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
-span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,empty_end,0,1970-01-01 00:00:00.000001,0001-01-01 00:00:00.000000,9223372036854775808,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
+span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,empty_end,0,1970-01-01 00:00:00.000001,0001-01-01 00:00:00.000000,0,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
 `,
 		},
 		{
