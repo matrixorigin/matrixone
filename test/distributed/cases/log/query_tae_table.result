@@ -35,6 +35,9 @@ select 1
 select account, statement from system.statement_info where statement = 'insert into query_tae_table values (1)' and statement_id = @uuid_insert_table limit 1;
 account    statement
 query_tae_table    insert into query_tae_table values (1)
+select sleep(16);
+sleep(16)
+0
 select span_kind from system.rawlog where `raw_item` = "log_info" limit 1;
 span_kind
 internal
