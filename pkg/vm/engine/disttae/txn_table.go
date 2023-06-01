@@ -588,50 +588,16 @@ func (tbl *txnTable) rangesOnePart(
 
 	//collect deletes from PartitionState.dirtyBlocks.
 	{
-		//ts := types.TimestampToTS(ts)
-		//iter := state.NewDirtyRowsIter(ts, nil)
-		//for iter.Next() {
-		//	entry := iter.Entry()
-		//	id, offset := entry.RowID.Decode()
-		//	deletes[id] = append(deletes[id], int64(offset))
-		//}
-		//iter.Close()
-
-		//iter := state.NewDirtyBlocksIter()
-		//for iter.Next() {
-		//	entry := iter.Entry()
-		//	rowIt := state.NewRowsIter(types.TimestampToTS(ts), &entry.BlockID, true)
-		//	for rowIt.Next() {
-		//		rowEntry := rowIt.Entry()
-		//		_, offset := rowEntry.RowID.Decode()
-		//		deletes[entry.BlockID] = append(deletes[entry.BlockID], int64(offset))
-		//	}
-		//	rowIt.Close()
-		//}
-		//iter.Close()
-
 		iter := state.NewDirtyBlocksIter()
 		for iter.Next() {
 			entry := iter.Entry()
 			//lazy load deletes for block.
 			deletes[entry.BlockID] = []int64{}
-			//rowIt := state.NewRowsIter(types.TimestampToTS(ts), &entry.BlockID, true)
-			//for rowIt.Next() {
-			//	rowEntry := rowIt.Entry()
-			//	_, offset := rowEntry.RowID.Decode()
-			//	deletes[entry.BlockID] = append(deletes[entry.BlockID], int64(offset))
-			//}
-			//rowIt.Close()
 		}
 		iter.Close()
 
 	}
 
-	//deletes on S3 written by txn maybe comes from PartitionState.rows or PartitionState.blocks,
-	// here only collect deletes from PartitionState.blocks.
-	//if err = tbl.LoadDeletesForBlockIn(state, true, deletes, nil); err != nil {
-	//	return
-	//}
 	//only collect dirty blocks in PartitionState.blocks into modifies.
 	for _, bid := range tbl.GetDirtyBlksIn(state, true) {
 		deletes[bid] = []int64{}
@@ -717,7 +683,7 @@ func (tbl *txnTable) rangesOnePart(
 				// here we only eval expr on the object meta if it has more than 2 blocks
 				if objMeta.BlockCount() > 2 {
 					for i, expr := range exprs {
-						if isMono[i] && !evalFilterExprWithZonemap(errCtx, objMeta, expr, zms, vecs, columnMap, proc) {
+						if isMono[i] && !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objMeta, columnMap, zms, vecs) {
 							skipObj = true
 							break
 						}
@@ -732,7 +698,7 @@ func (tbl *txnTable) rangesOnePart(
 			// eval filter expr on the block
 			blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
 			for i, expr := range exprs {
-				if isMono[i] && !evalFilterExprWithZonemap(errCtx, blkMeta, expr, zms, vecs, columnMap, proc) {
+				if isMono[i] && !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
 					skipBlk = true
 					break
 				}

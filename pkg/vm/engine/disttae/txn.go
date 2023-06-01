@@ -25,11 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (txn *Transaction) getBlockInfos(
@@ -463,18 +461,6 @@ func (txn *Transaction) mergeTxnWorkspace() {
 			delete(txn.batchSelectList, e.bat)
 		}
 	}
-}
-
-func evalFilterExprWithZonemap(
-	ctx context.Context,
-	meta objectio.ColumnMetaFetcher,
-	expr *plan.Expr,
-	zms []objectio.ZoneMap,
-	vecs []*vector.Vector,
-	columnMap map[int]int,
-	proc *process.Process,
-) (selected bool) {
-	return colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
 }
 
 /* used by multi-dn
