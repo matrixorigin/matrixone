@@ -143,13 +143,13 @@ func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, gl
 		return err
 	}
 
-	etlFS, err := fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
-	if err != nil {
-		return err
-	}
-	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, uuid); err != nil {
-		return err
-	}
+	//etlFS, err := fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
+	//if err != nil {
+	//	return err
+	//}
+	//if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, uuid); err != nil {
+	//	return err
+	//}
 
 	switch st {
 	case metadata.ServiceType_CN:
