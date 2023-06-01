@@ -390,6 +390,7 @@ func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
 		col.Unlock()
 		select {
 		case <-ctx.Done():
+			col.Lock()
 			return ctx.Err()
 		case <-c:
 		}
