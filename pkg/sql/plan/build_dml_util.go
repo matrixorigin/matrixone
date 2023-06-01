@@ -119,7 +119,7 @@ func buildInsertPlans(
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
 
 	pkPos, _ := getPkPos(tableDef, true)
-	if pkPos == -1 && !haveUniqueKey(tableDef) && len(tableDef.Fkeys) == 0 {
+	if pkPos == -1 && len(tableDef.Fkeys) == 0 && !haveUniqueKey(tableDef) {
 		lastNodeId = appendInsertNode(ctx, builder, bindCtx, objRef, tableDef, lastNodeId, true)
 		builder.appendStep(lastNodeId)
 		return nil
@@ -135,11 +135,12 @@ func buildInsertPlans(
 }
 
 // buildUpdatePlans  build update plan.
-func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx) error {
-	var lastNodeId int32
+func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, lastNodeId int32) error {
 	var err error
 	// sink_scan -> project -> [agg] -> [filter] -> sink
-	lastNodeId = appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
+	if updatePlanCtx.sourceStep != -1 {
+		lastNodeId = appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
+	}
 	lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, bindCtx, updatePlanCtx, lastNodeId)
 	if err != nil {
 		return err
@@ -202,16 +203,24 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 	//append preinsert node
 	lastNodeId = appendPreInsertNode(builder, bindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, lastNodeId, true)
-	//append sink node
-	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-	sourceStep := builder.appendStep(lastNodeId)
 
-	// build insert plan.
-	insertBindCtx := NewBindContext(builder, nil)
-	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.pkFilterExpr)
+	pkPos, _ := getPkPos(updatePlanCtx.tableDef, true)
+	if pkPos == -1 && len(updatePlanCtx.tableDef.Fkeys) == 0 && !haveUniqueKey(updatePlanCtx.tableDef) {
+		lastNodeId = appendInsertNode(ctx, builder, bindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, lastNodeId, false)
+		builder.appendStep(lastNodeId)
+		return nil
+	} else {
+		//append sink node
+		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+		sourceStep := builder.appendStep(lastNodeId)
 
-	return err
+		// build insert plan.
+		insertBindCtx := NewBindContext(builder, nil)
+		err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
+			sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.pkFilterExpr)
+
+		return err
+	}
 }
 
 // buildDeletePlans  build preinsert plan.
@@ -590,23 +599,22 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							Children:    []int32{lastNodeId},
 							ProjectList: projectProjection,
 						}, bindCtx)
-						lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-
-						newSourceStep := builder.appendStep(lastNodeId)
+						// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+						// newSourceStep := builder.appendStep(lastNodeId)
 						upPlanCtx := getDmlPlanCtx()
 						upPlanCtx.objRef = childObjRef
 						upPlanCtx.tableDef = childTableDef
 						upPlanCtx.updateColLength = len(rightConds)
 						upPlanCtx.isMulti = false
 						upPlanCtx.rowIdPos = childRowIdPos
-						upPlanCtx.sourceStep = newSourceStep
+						upPlanCtx.sourceStep = -1
 						upPlanCtx.beginIdx = 0
 						upPlanCtx.updateColPosMap = updateChildColPosMap
 						upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 
-						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx)
+						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, lastNodeId)
 						putDmlPlanCtx(upPlanCtx)
 						if err != nil {
 							return err
@@ -632,8 +640,8 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								OnList:      joinConds,
 								ProjectList: joinProjection,
 							}, bindCtx)
-							lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-							newSourceStep := builder.appendStep(lastNodeId)
+							// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+							// newSourceStep := builder.appendStep(lastNodeId)
 
 							upPlanCtx := getDmlPlanCtx()
 							upPlanCtx.objRef = childObjRef
@@ -641,14 +649,14 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							upPlanCtx.updateColLength = len(rightConds)
 							upPlanCtx.isMulti = false
 							upPlanCtx.rowIdPos = childRowIdPos
-							upPlanCtx.sourceStep = newSourceStep
+							upPlanCtx.sourceStep = -1
 							upPlanCtx.beginIdx = 0
 							upPlanCtx.updateColPosMap = updateChildColPosMap
 							upPlanCtx.insertColPos = insertColPos
 							upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 							upPlanCtx.isFkRecursionCall = true
 
-							err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx)
+							err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, lastNodeId)
 							putDmlPlanCtx(upPlanCtx)
 							if err != nil {
 								return err

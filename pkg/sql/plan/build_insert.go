@@ -138,8 +138,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 
 		// append sink node
-		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-		sourceStep = builder.appendStep(lastNodeId)
+		// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+		// sourceStep = builder.appendStep(lastNodeId)
 
 		// append plans like update
 		updateBindCtx := NewBindContext(builder, nil)
@@ -147,7 +147,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		upPlanCtx.objRef = objRef
 		upPlanCtx.tableDef = tableDef
 		upPlanCtx.beginIdx = 0
-		upPlanCtx.sourceStep = sourceStep
+		upPlanCtx.sourceStep = -1
 		upPlanCtx.isMulti = false
 		upPlanCtx.updateColLength = updateColLength
 		upPlanCtx.rowIdPos = rowIdPos
@@ -155,7 +155,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.checkInsertPkDup = checkInsertPkDup
 
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, lastNodeId)
 		if err != nil {
 			return nil, err
 		}
