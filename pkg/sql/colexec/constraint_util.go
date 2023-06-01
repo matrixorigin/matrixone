@@ -29,18 +29,18 @@ import (
 )
 
 func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
-	retVec := vector.NewVec(types.T_Rowid.ToType())
-	rowIdMap := make(map[types.Rowid]struct{})
-	for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
-		if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
-			rowIdMap[r] = struct{}{}
+	var retVec *vector.Vector
+	var rowIdList []types.Rowid
+	if bat.Vecs[idx].GetNulls().IsEmpty() {
+		return bat
+	} else {
+		retVec = vector.NewVec(types.T_Rowid.ToType())
+		rowIdList = make([]types.Rowid, 0)
+		for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
+			if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
+				rowIdList = append(rowIdList, r)
+			}
 		}
-	}
-	rowIdList := make([]types.Rowid, len(rowIdMap))
-	i := 0
-	for rowId := range rowIdMap {
-		rowIdList[i] = rowId
-		i++
 	}
 	vector.AppendFixedList(retVec, rowIdList, nil, proc.Mp())
 	retBatch := batch.New(true, []string{catalog.Row_ID})
