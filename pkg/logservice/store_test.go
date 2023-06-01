@@ -311,7 +311,7 @@ func proceedHAKeeperToRunning(t *testing.T, store *store) {
 	defer cancel()
 
 	hb := store.getHeartbeatMessage()
-	cmd, err := store.addLogStoreHeartbeat(ctx, hb)
+	_, err = store.addLogStoreHeartbeat(ctx, hb)
 	assert.NoError(t, err)
 
 	state, err = store.getCheckerState()
@@ -327,7 +327,7 @@ func proceedHAKeeperToRunning(t *testing.T, store *store) {
 	assert.NoError(t, err)
 	assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
 
-	cmd, err = store.getCommandBatch(ctx, store.id())
+	cmd, err := store.getCommandBatch(ctx, store.id())
 	require.NoError(t, err)
 	require.Equal(t, 1, len(cmd.Commands))
 	assert.True(t, cmd.Commands[0].Bootstrapping)
@@ -383,6 +383,7 @@ func TestTickerForTaskSchedule(t *testing.T) {
 		time.Sleep(time.Millisecond * 100)
 
 		tasks, err := taskService.QueryTask(nil, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
+		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 	}
 
