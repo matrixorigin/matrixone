@@ -176,6 +176,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				return false, err
 			}
 		}
+		delBatch.Clean(proc.GetMPool())
 	}
 
 	proc.SetInputBatch(batch.EmptyBatch)
