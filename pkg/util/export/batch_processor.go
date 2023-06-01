@@ -453,7 +453,9 @@ loop:
 	for {
 		select {
 		case req := <-c.awakeGenerate:
-			if exportReq, err := req.handle(buf); err != nil {
+			if req == nil {
+				logutil.Warn("generate req is nil")
+			} else if exportReq, err := req.handle(buf); err != nil {
 				req.callback(err)
 			} else {
 				select {
