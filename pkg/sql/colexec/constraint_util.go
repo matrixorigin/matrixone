@@ -17,8 +17,6 @@ package colexec
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -57,7 +55,6 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch
 				row++
 			}
 		}
-		logutil.Infof("retVec length: %d, length: %d, null count: %d", retVec.Length(), length, vecNulls.Count())
 	}
 	retBatch.SetZs(retVec.Length(), proc.Mp())
 	retBatch.SetVector(0, retVec)
