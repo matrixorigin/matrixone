@@ -16,11 +16,12 @@ package checkpoint
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -689,7 +690,7 @@ func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, for
 	}
 
 	factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
-	if err != nil || factory == nil {
+	if err != nil && factory == nil {
 		logutil.Warnf("%s: %v", blkData.MutationInfo(), err)
 		return nil
 	}

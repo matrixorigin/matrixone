@@ -201,7 +201,7 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		if coldef.IsAutoIncrement() || coldef.IsClusterBy() || coldef.IsPrimary() || coldef.IsPhyAddr() {
 			return moerr.NewInternalErrorNoCtx("drop a column with constraint")
 		}
-		logutil.Infof("[Alter] drop column %s %d %d", coldef.Name, coldef.Idx, coldef.SeqNum)
+		logutil.Debugf("[Alter] drop column %s %d %d", coldef.Name, coldef.Idx, coldef.SeqNum)
 		delete(s.NameMap, coldef.Name)
 		delete(s.SeqnumMap, coldef.SeqNum)
 		fixed, pending := s.ColDefs[:coldef.Idx], s.ColDefs[coldef.Idx+1:]

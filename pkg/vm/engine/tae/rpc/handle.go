@@ -51,7 +51,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 50
+const MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 100
 
 // TODO::GC the abandoned txn.
 type Handle struct {
@@ -108,8 +108,7 @@ func (h *Handle) HandleCommit(
 	defer func() {
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
-				logutil.Info("Commit with long latency",
-					zap.String("id", string(meta.GetID())), zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
+				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
 			}
 		})
 	}()
