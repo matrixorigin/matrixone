@@ -55,6 +55,9 @@ type Routine struct {
 	connectionBeCounted atomic.Bool
 
 	mu sync.Mutex
+
+	// the id of goroutine that executes the request
+	goroutineID uint64
 }
 
 func (rt *Routine) increaseCount(counter func()) {
@@ -128,6 +131,16 @@ func (rt *Routine) getCmdExecutor() CmdExecutor {
 
 func (rt *Routine) getConnectionID() uint32 {
 	return rt.getProtocol().ConnectionID()
+}
+
+func (rt *Routine) updateGoroutineId() {
+	if rt.goroutineID == 0 {
+		rt.goroutineID = GetRoutineId()
+	}
+}
+
+func (rt *Routine) getGoroutineId() uint64 {
+	return rt.goroutineID
 }
 
 func (rt *Routine) getParameters() *config.FrontendParameters {
