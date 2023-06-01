@@ -105,7 +105,7 @@ func (h *Handle) HandleCommit(
 	})
 	defer func() {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof("HandleCommit end : %X, %s\n",
+			logutil.Infof("HandleCommit end : %X, %s",
 				string(meta.GetID()), time.Since(start))
 		})
 	}()
