@@ -921,6 +921,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false)
 		builder.applySwapRuleByStats(rootID, true)
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
+		determinShuffleMethod(rootID, builder)
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all join operators
@@ -2087,7 +2088,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 				}
 				defaultDatabase := viewData.DefaultDatabase
-				if obj.PubAccountId != -1 {
+				if obj.PubInfo != nil {
 					defaultDatabase = obj.SubscriptionName
 				}
 				ctx.cteByName[string(viewName)] = &CTERef{

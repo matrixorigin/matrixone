@@ -213,22 +213,24 @@ func (blk *baseBlock) LoadPersistedColumnData(ctx context.Context, schema *catal
 		location)
 }
 
-func (blk *baseBlock) LoadPersistedDeletes() (bat *containers.Batch, err error) {
+func (blk *baseBlock) LoadPersistedDeletes(ctx context.Context) (bat *containers.Batch, err error) {
 	location := blk.meta.GetDeltaLoc()
 	if location.IsEmpty() {
 		return
 	}
 	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
 	return LoadPersistedDeletes(
+		ctx,
 		pkName,
 		blk.fs,
 		location)
 }
 
 func (blk *baseBlock) FillPersistedDeletes(
+	ctx context.Context,
 	txn txnif.TxnReader,
 	view *model.BaseView) (err error) {
-	deletes, err := blk.LoadPersistedDeletes()
+	deletes, err := blk.LoadPersistedDeletes(ctx)
 	if deletes == nil || err != nil {
 		return nil
 	}
@@ -289,7 +291,7 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 		}
 	}()
 
-	if err = blk.FillPersistedDeletes(txn, view.BaseView); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
 		return
 	}
 
@@ -307,6 +309,7 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 }
 
 func (blk *baseBlock) ResolvePersistedColumnData(
+	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdx int,
@@ -328,7 +331,7 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 		}
 	}()
 
-	if err = blk.FillPersistedDeletes(txn, view.BaseView); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
 		return
 	}
 
@@ -343,6 +346,7 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 }
 
 func (blk *baseBlock) dedupWithLoad(
+	ctx context.Context,
 	txn txnif.TxnReader,
 	keys containers.Vector,
 	sels *roaring.Bitmap,
@@ -352,6 +356,7 @@ func (blk *baseBlock) dedupWithLoad(
 	schema := blk.meta.GetSchema()
 	def := schema.GetSingleSortKey()
 	view, err := blk.ResolvePersistedColumnData(
+		ctx,
 		txn,
 		schema,
 		def.Idx,
@@ -405,17 +410,18 @@ func (blk *baseBlock) PersistedBatchDedup(
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return
 	}
-	return blk.dedupWithLoad(txn, keys, sels, rowmask, isAblk)
+	return blk.dedupWithLoad(ctx, txn, keys, sels, rowmask, isAblk)
 }
 
 func (blk *baseBlock) getPersistedValue(
+	ctx context.Context,
 	pnode *persistedNode,
 	txn txnif.TxnReader,
 	schema *catalog.Schema,
 	row, col int,
 	skipMemory bool) (v any, isNull bool, err error) {
 	view := model.NewColumnView(col)
-	if err = blk.FillPersistedDeletes(txn, view.BaseView); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
 		return
 	}
 	if !skipMemory {
@@ -430,7 +436,7 @@ func (blk *baseBlock) getPersistedValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view2, err := blk.ResolvePersistedColumnData(txn, schema, col, true)
+	view2, err := blk.ResolvePersistedColumnData(ctx, txn, schema, col, true)
 	if err != nil {
 		return
 	}
