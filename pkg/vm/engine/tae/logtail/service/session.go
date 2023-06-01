@@ -346,7 +346,9 @@ func (ss *Session) Publish(
 ) error {
 	// no need to send incremental logtail if no table subscribed
 	if atomic.LoadInt32(&ss.active) <= 0 {
-		closeCB()
+		if closeCB != nil {
+			closeCB()
+		}
 		return nil
 	}
 
@@ -362,7 +364,9 @@ func (ss *Session) Publish(
 		case <-ss.heartbeatTimer.C:
 			break
 		default:
-			closeCB()
+			if closeCB != nil {
+				closeCB()
+			}
 			return nil
 		}
 	}

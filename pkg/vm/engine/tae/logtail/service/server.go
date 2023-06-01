@@ -468,8 +468,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 				var refcount atomic.Int32
 				closeCB := func() {
-					refcount.Add(-1)
-					if refcount.Load() == 0 {
+					if refcount.Add(-1) == 0 {
 						if e.closeCB != nil {
 							e.closeCB()
 						}
