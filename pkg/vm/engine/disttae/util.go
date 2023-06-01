@@ -691,14 +691,25 @@ func getBinarySearchFuncByPkValue[T compareT](typ types.T, v T) func(*vector.Vec
 		types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
 		return func(vec *vector.Vector) int {
 			rows := vector.MustFixedCol[T](vec)
-			return sort.Search(vec.Length(), func(idx int) bool {
+			i := sort.Search(vec.Length(), func(idx int) bool {
 				return rows[idx] >= v
 			})
+			if i < vec.Length() && rows[i] == v {
+				return i
+			}
+			return -1
 		}
 	default:
 		return nil
 	}
 }
+
+// func binarySearchOffset[T any](
+// 	v T,
+// 	vec *vector.Vector,
+// ) (offset) {
+
+// }
 
 func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
