@@ -735,11 +735,11 @@ func (h *Handle) HandleCreateRelation(
 	}
 
 	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
+		logutil.Debugf("[precommit] create relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] create relation end txn: %s\n", txn.String())
+			logutil.Infof("[precommit] create relation end txn: %s", txn.String())
 		})
 	}()
 
