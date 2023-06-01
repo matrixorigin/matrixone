@@ -29,31 +29,25 @@ import (
 
 func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch.Batch, error) {
 	retBatch := batch.New(true, []string{catalog.Row_ID})
-	var retVec *vector.Vector
-	var err error
+	rowIdMap := make(map[types.Rowid]bool)
 	vecNulls := bat.Vecs[idx].GetNulls()
-	vec := bat.Vecs[idx]
-	length := vec.Length()
-	if vecNulls.IsEmpty() {
-		retVec, err = vec.Window(0, length)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		retVec = vector.NewVec(types.T_Rowid.ToType())
-		err = retVec.PreExtend(length-vecNulls.Count(), proc.Mp())
-		if err != nil {
-			return nil, err
-		}
-		row := 0
-		for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
-			if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
-				if err = vector.AppendFixed(vec, r, false, proc.Mp()); err != nil {
-					retVec.Free(proc.Mp())
-					return nil, err
-				}
-				row++
+	retVec := vector.NewVec(types.T_Rowid.ToType())
+	err := retVec.PreExtend(bat.Vecs[idx].Length()-vecNulls.Count(), proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	row := 0
+	for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
+		if !vecNulls.Contains(uint64(i)) {
+			if rowIdMap[r] {
+				continue
 			}
+			rowIdMap[r] = true
+			if err = vector.AppendFixed(retVec, r, false, proc.Mp()); err != nil {
+				retVec.Free(proc.Mp())
+				return nil, err
+			}
+			row++
 		}
 	}
 	retBatch.SetZs(retVec.Length(), proc.Mp())
