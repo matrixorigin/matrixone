@@ -287,7 +287,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	if task.created != nil {
 		createdStr = task.created.Fingerprint().BlockString()
 	}
-	logutil.Info("[Done]",
+	logutil.Debug("[Done]",
 		common.AnyField("txn-start-ts", task.txn.GetStartTS().ToString()),
 		common.OperationField(task.Name()),
 		common.AnyField("compacted", task.meta.Repr()),
