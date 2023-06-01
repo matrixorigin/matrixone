@@ -16,6 +16,7 @@ package motrace
 
 import (
 	"context"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -42,8 +43,14 @@ type MOZapLog struct {
 	Stack       string `json:"stack"`
 }
 
+var logPool = sync.Pool{
+	New: func() any {
+		return &MOZapLog{}
+	},
+}
+
 func newMOZap() *MOZapLog {
-	return &MOZapLog{}
+	return logPool.Get().(*MOZapLog)
 }
 
 func (m *MOZapLog) GetName() string {
@@ -70,6 +77,7 @@ func (m *MOZapLog) Free() {
 	m.Caller = ""
 	m.Message = ""
 	m.Extra = ""
+	logPool.Put(m)
 }
 
 func (m *MOZapLog) GetTable() *table.Table { return logView.OriginTable }

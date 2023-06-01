@@ -85,6 +85,8 @@ type LogConfig struct {
 	MaxBackups int    `toml:"max-backups"`
 	// DisableStore ctrl store log into db
 	DisableStore bool `toml:"disable-store"`
+	// DisableLog ctrl log into console
+	DisableLog bool `toml:"disable-log"`
 	// StacktraceLevel
 	StacktraceLevel string `toml:"stacktrace-level"`
 }
@@ -136,8 +138,10 @@ func (cfg *LogConfig) getStacktraceLevel() (level zapcore.Level) {
 }
 
 func (cfg *LogConfig) getSinks() (sinks []ZapSink) {
-	encoder, syncer := cfg.getEncoder(), cfg.getSyncer()
-	sinks = append(sinks, ZapSink{encoder, syncer})
+	if !cfg.DisableLog {
+		encoder, syncer := cfg.getEncoder(), cfg.getSyncer()
+		sinks = append(sinks, ZapSink{encoder, syncer})
+	}
 	if !cfg.DisableStore {
 		encoder, syncer := getTraceLogSinks()
 		sinks = append(sinks, ZapSink{encoder, syncer})
