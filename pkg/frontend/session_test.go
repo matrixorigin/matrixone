@@ -331,7 +331,7 @@ func TestVariables(t *testing.T) {
 		v4_val, err := ses.GetGlobalVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(saneSesGlobalWant4, convey.ShouldEqual, v4_val)
-		v4_ctx_val, err := ses.GetTxnCompileCtx().ResolveVariable(v, true, true)
+		v4_ctx_val, err := ses.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v4_ctx_val, convey.ShouldEqual, v4_val)
 
@@ -339,7 +339,7 @@ func TestVariables(t *testing.T) {
 		v5_val, err := existSes.GetGlobalVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(existSesGlobalWant5, convey.ShouldEqual, v5_val)
-		v5_ctx_val, err := existSes.GetTxnCompileCtx().ResolveVariable(v, true, true)
+		v5_ctx_val, err := existSes.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v5_ctx_val, convey.ShouldEqual, v5_val)
 
@@ -347,7 +347,7 @@ func TestVariables(t *testing.T) {
 		v6_val, err := newSesAfterSession.GetGlobalVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(newSesAfterSesGlobalWant6, convey.ShouldEqual, v6_val)
-		v6_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, true)
+		v6_ctx_val, err := newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(v6_ctx_val, convey.ShouldEqual, v6_val)
 	}
@@ -384,15 +384,14 @@ func TestVariables(t *testing.T) {
 		_, err = ses.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
-		_, err = ses.GetTxnCompileCtx().ResolveVariable(v, true, true)
-		convey.So(err, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
+		_, err = ses.GetTxnCompileCtx().ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
 
 		//exist session global
 		_, err = existSes.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
-		_, err = existSes.GetTxnCompileCtx().ResolveVariable(v, true, true)
+		_, err = existSes.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 
@@ -400,7 +399,7 @@ func TestVariables(t *testing.T) {
 		_, err = newSesAfterSession.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
-		_, err = newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, true)
+		_, err = newSesAfterSession.GetTxnCompileCtx().ResolveVariable(v, true, false)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, moerr.NewInternalError(context.TODO(), errorSystemVariableSessionEmpty()))
 	}
