@@ -38,6 +38,3 @@ test/distributed/resources/json/export_*.csv
 
 # docker compose bvt generate files
 docker-compose-log/
-
-# tmp.yml
-.github/workflows/tmp.yml
