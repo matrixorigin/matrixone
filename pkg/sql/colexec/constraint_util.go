@@ -42,11 +42,18 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch
 		}
 	} else {
 		retVec = vector.NewVec(types.T_Rowid.ToType())
-		retVec.PreExtend(length-vectorNulls.Count(), proc.Mp())
+		err = retVec.PreExtend(length-vectorNulls.Count(), proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 		row := 0
 		for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
 			if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
-				vector.SetFixedAt(retVec, row, r)
+				err = vector.SetFixedAt(retVec, row, r)
+				if err != nil {
+					retVec.Free(proc.Mp())
+					return nil, err
+				}
 				row++
 			}
 		}
