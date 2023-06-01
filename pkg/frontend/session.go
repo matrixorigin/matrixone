@@ -1781,8 +1781,8 @@ func (ses *Session) getCNLabels() map[string]string {
 	return ses.requestLabel
 }
 
-// resolveGlobalVar get the system vaiables value from the mo_mysql_compatibility_mode table
-func (ses *Session) resolveGlobalVar(varName string) (interface{}, error) {
+// getSystemVariableValue get the system vaiables value from the mo_mysql_compatibility_mode table
+func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, error) {
 	var sql string
 	var err error
 	var erArray []ExecResult
@@ -1811,7 +1811,7 @@ func (ses *Session) resolveGlobalVar(varName string) (interface{}, error) {
 	}
 
 	accountId = tenantInfo.GetTenantID()
-	sql = getSqlForgetSystemVariableValueWithAccount(uint64(accountId), varName)
+	sql = getSqlForGetSystemVariableValueWithAccount(uint64(accountId), varName)
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)

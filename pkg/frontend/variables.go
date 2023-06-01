@@ -247,16 +247,17 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 		return int8(1), nil
 	} else if value == "off" {
 		return int8(0), nil
-	} else {
-		convertVal, err := strconv.ParseInt(value, 10, 8)
-		if err != nil {
-			return nil, errorConvertFromStringToBoolFailed
-		}
-		if convertVal != 1 && convertVal != 0 {
-			return nil, errorConvertFromStringToBoolFailed
-		}
-		return int8(convertVal), nil
 	}
+
+	convertVal, err := strconv.ParseInt(value, 10, 8)
+	if err != nil {
+		return nil, errorConvertFromStringToBoolFailed
+	}
+	if convertVal != 1 && convertVal != 0 {
+		return nil, errorConvertFromStringToBoolFailed
+	}
+	return int8(convertVal), nil
+
 }
 
 type SystemVariableIntType struct {

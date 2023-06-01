@@ -1733,10 +1733,12 @@ func getSystemVariablesWithAccount(accountId uint64) string {
 	return fmt.Sprintf(getSystemVariablesWithAccountFromat, accountId)
 }
 
-func getSqlForgetSystemVariableValueWithAccount(accountId uint64, varName string) string {
+// getSqlForGetSystemVariableValueWithAccount will get sql for get variable value with specific account
+func getSqlForGetSystemVariableValueWithAccount(accountId uint64, varName string) string {
 	return fmt.Sprintf(getSystemVariableValueWithAccountFromat, accountId, varName)
 }
 
+// getSqlForUpdateSystemVariableValue returns a SQL query to update the value of a system variable for a given account.
 func getSqlForUpdateSystemVariableValue(varValue string, accountId uint64, varName string) string {
 	return fmt.Sprintf(updateSystemVariableValueFormat, varValue, accountId, varName)
 }

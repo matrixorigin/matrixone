@@ -732,11 +732,11 @@ func Test_doSelectGlobalSystemVariable(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForgetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "autocommit")
+		sql := getSqlForGetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "autocommit")
 		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		_, err := ses.resolveGlobalVar("autocommit")
+		_, err := ses.getGlobalSystemVariableValue("autocommit")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -762,13 +762,13 @@ func Test_doSelectGlobalSystemVariable(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql := getSqlForgetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "autocommit")
+		sql := getSqlForGetSystemVariableValueWithAccount(uint64(ses.GetTenantInfo().GetTenantID()), "autocommit")
 		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{
 			{"1"},
 		})
 		bh.sql2result[sql] = mrs
 
-		_, err := ses.resolveGlobalVar("autocommit")
+		_, err := ses.getGlobalSystemVariableValue("autocommit")
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
