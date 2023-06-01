@@ -92,7 +92,6 @@ func NewManager(blockSize int, now func() types.TS) *Manager {
 		),
 		now: now,
 	}
-	mgr.previousSaveTS = now()
 	mgr.collectLogtailQueue = sm.NewSafeQueue(10000, 100, mgr.onCollectTxnLogtails)
 	mgr.waitCommitQueue = sm.NewSafeQueue(10000, 100, mgr.onWaitTxnCommit)
 
@@ -143,7 +142,12 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 	callback := mgr.logtailCallback.Load()
 	if callback != nil {
 		to := txn.txn.GetPrepareTS()
-		from := mgr.previousSaveTS
+		var from types.TS
+		if mgr.previousSaveTS.IsEmpty() {
+			from = to
+		} else {
+			from = mgr.previousSaveTS
+		}
 		mgr.previousSaveTS = to
 		// Send ts in order to initialize waterline of logtail service
 		mgr.eventOnce.Do(func() {
