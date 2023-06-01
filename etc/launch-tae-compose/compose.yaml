@@ -17,6 +17,7 @@ x-mo-common: &mo-common
     restart: on-failure
     tty: true
 
+
 services:
   cn-0:
     container_name: cn-0
@@ -70,7 +71,6 @@ services:
       - logservice
     ports:
       - "41010"
-      - "32345:12345"
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
