@@ -17,6 +17,7 @@ package colexec
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,17 +33,17 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch
 	retBatch := batch.New(true, []string{catalog.Row_ID})
 	var retVec *vector.Vector
 	var err error
-	vectorNulls := bat.Vecs[idx].GetNulls()
+	vecNulls := bat.Vecs[idx].GetNulls()
 	vec := bat.Vecs[idx]
 	length := vec.Length()
-	if vectorNulls.IsEmpty() {
+	if vecNulls.IsEmpty() {
 		retVec, err = vec.Window(0, length)
 		if err != nil {
 			return nil, err
 		}
 	} else {
 		retVec = vector.NewVec(types.T_Rowid.ToType())
-		err = retVec.PreExtend(length-vectorNulls.Count(), proc.Mp())
+		err = retVec.PreExtend(length-vecNulls.Count(), proc.Mp())
 		if err != nil {
 			return nil, err
 		}
@@ -57,6 +58,7 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch
 				row++
 			}
 		}
+		logutil.Infof("retVec length: %d, length: %d, null count: %d", retVec.Length(), length, vecNulls.Count())
 	}
 	retBatch.SetZs(retVec.Length(), proc.Mp())
 	retBatch.SetVector(0, retVec)
