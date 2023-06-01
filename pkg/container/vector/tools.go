@@ -17,6 +17,7 @@ package vector
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -123,28 +124,6 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 	area = v.area
 	return
 }
-
-//func FromDNVector(typ types.Type, header []types.Varlena, storage []byte, cantFree bool) (vec *Vector, err error) {
-//	vec = NewVec(typ)
-//	vec.cantFreeData = cantFree
-//	vec.cantFreeArea = cantFree
-//	if typ.IsString() {
-//		if len(header) > 0 {
-//			vec.col = header
-//			vec.data = unsafe.Slice((*byte)(unsafe.Pointer(&header[0])), typ.TypeSize()*cap(header))
-//			vec.area = storage
-//			vec.capacity = cap(header)
-//			vec.length = len(header)
-//		}
-//	} else {
-//		if len(storage) > 0 {
-//			vec.data = storage
-//			vec.length = len(storage) / typ.TypeSize()
-//			vec.setupColFromData()
-//		}
-//	}
-//	return
-//}
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
@@ -507,11 +486,6 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 	return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 }
 
-// type any interface {
-// 	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 |
-// 		types.Date | types.Time | types.Datetime | types.Timestamp | types.Uuid | string
-// }
-
 type compFn[T any] func(T, T) bool
 
 func compareNumber[T types.OrderedT](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
@@ -636,4 +610,20 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Blockid](vec)
 	}
 	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
+}
+
+func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](t types.T, v T) func(*Vector) int {
+	if !t.IsOrdered() {
+		return nil
+	}
+	return func(vec *Vector) int {
+		rows := MustFixedCol[T](vec)
+		offset := sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= v
+		})
+		if offset < vec.Length() && rows[offset] == v {
+			return offset
+		}
+		return -1
+	}
 }
