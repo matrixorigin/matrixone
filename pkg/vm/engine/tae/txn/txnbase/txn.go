@@ -367,8 +367,8 @@ func (txn *Txn) ApplyRollback() (err error) {
 	return
 }
 
-func (txn *Txn) PrePrepare() error {
-	return txn.Store.PrePrepare()
+func (txn *Txn) PrePrepare(ctx context.Context) error {
+	return txn.Store.PrePrepare(ctx)
 }
 
 func (txn *Txn) PrepareRollback() (err error) {

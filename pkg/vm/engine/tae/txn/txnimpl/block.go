@@ -223,7 +223,7 @@ func (blk *txnBlock) GetColumnDataByName(ctx context.Context, attr string) (*mod
 	schema := blk.table.GetLocalSchema()
 	colIdx := schema.GetColIdx(attr)
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx)
+		return blk.table.localSegment.GetColumnDataById(ctx, blk.entry, colIdx)
 	}
 	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, schema, colIdx)
 }
@@ -242,7 +242,7 @@ func (blk *txnBlock) GetColumnDataByNames(attrs []string) (*model.BlockView, err
 
 func (blk *txnBlock) GetColumnDataById(ctx context.Context, colIdx int) (*model.ColumnView, error) {
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx)
+		return blk.table.localSegment.GetColumnDataById(ctx, blk.entry, colIdx)
 	}
 	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdx)
 }

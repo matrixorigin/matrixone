@@ -38,7 +38,7 @@ var (
 type Txn2PC interface {
 	PrepareRollback() error
 	ApplyRollback() error
-	PrePrepare() error
+	PrePrepare(ctx context.Context) error
 	PrepareCommit() error
 	PreApplyCommit() error
 	PrepareWAL() error

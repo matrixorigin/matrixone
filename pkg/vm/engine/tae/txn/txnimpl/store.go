@@ -624,7 +624,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 	return
 }
 
-func (store *txnStore) PrePrepare() (err error) {
+func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 	for _, db := range store.dbs {
 		if db.NeedRollback() {
 			if err = db.PrepareRollback(); err != nil {
@@ -632,7 +632,7 @@ func (store *txnStore) PrePrepare() (err error) {
 			}
 			delete(store.dbs, db.entry.GetID())
 		}
-		if err = db.PrePrepare(); err != nil {
+		if err = db.PrePrepare(ctx); err != nil {
 			return
 		}
 	}

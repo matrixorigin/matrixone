@@ -464,7 +464,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 	return
 }
 
-func (db *txnDB) PrePrepare() (err error) {
+func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 	for _, table := range db.tables {
 		if table.NeedRollback() {
 			if err = table.PrepareRollback(); err != nil {
@@ -479,7 +479,7 @@ func (db *txnDB) PrePrepare() (err error) {
 		}
 	}
 	for _, table := range db.tables {
-		if err = table.PrePrepareDedup(); err != nil {
+		if err = table.PrePrepareDedup(ctx); err != nil {
 			return
 		}
 	}
