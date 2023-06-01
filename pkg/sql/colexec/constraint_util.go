@@ -50,8 +50,7 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch
 		row := 0
 		for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
 			if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
-				err = vector.SetFixedAt(retVec, row, r)
-				if err != nil {
+				if err = vector.AppendFixed(vec, r, false, proc.Mp()); err != nil {
 					retVec.Free(proc.Mp())
 					return nil, err
 				}
