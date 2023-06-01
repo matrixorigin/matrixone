@@ -345,13 +345,13 @@ func checkStrIntersect(v1, v2 *Vector, gtFun compFn[string], ltFun compFn[string
 	return checkIntersect(cols1, cols2, gtFun, ltFun)
 }
 
-func checkGeneralIntersect[T compT](v1, v2 *Vector, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
+func checkGeneralIntersect[T any](v1, v2 *Vector, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
 	cols1 := MustFixedCol[T](v1)
 	cols2 := MustFixedCol[T](v2)
 	return checkIntersect(cols1, cols2, gtFun, ltFun)
 }
 
-func checkIntersect[T compT](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
+func checkIntersect[T any](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
 	// get v1's min/max
 	colLength := len(cols1)
 	min := cols1[0]
@@ -507,17 +507,14 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 	return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 }
 
-type compT interface {
-	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 |
-		types.Date | types.Time | types.Datetime | types.Timestamp | types.Uuid | string
-}
+// type any interface {
+// 	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 |
+// 		types.Date | types.Time | types.Datetime | types.Timestamp | types.Uuid | string
+// }
 
-type compFn[T compT] func(T, T) bool
-type numberType interface {
-	constraints.Integer | constraints.Float | types.Date | types.Time | types.Datetime | types.Timestamp
-}
+type compFn[T any] func(T, T) bool
 
-func compareNumber[T numberType](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
+func compareNumber[T types.OrderedT](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
 	switch fnName {
 	case ">":
 		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
@@ -540,7 +537,7 @@ func compareNumber[T numberType](ctx context.Context, v1, v2 *Vector, fnName str
 	}
 }
 
-func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) bool {
+func runCompareCheckAnyResultIsTrue[T any](vec1, vec2 *Vector, fn compFn[T]) bool {
 	// column_a operator column_b  -> return true
 	// that means we don't known the return, just readBlock
 	if vec1.IsConstNull() || vec2.IsConstNull() {
@@ -569,7 +566,7 @@ func runStrCompareCheckAnyResultIsTrue(vec1, vec2 *Vector, fn compFn[string]) bo
 	return compareCheckAnyResultIsTrue(cols1, cols2, fn)
 }
 
-func compareCheckAnyResultIsTrue[T compT](cols1, cols2 []T, fn compFn[T]) bool {
+func compareCheckAnyResultIsTrue[T any](cols1, cols2 []T, fn compFn[T]) bool {
 	for i := 0; i < len(cols1); i++ {
 		for j := 0; j < len(cols2); j++ {
 			if fn(cols1[i], cols2[j]) {

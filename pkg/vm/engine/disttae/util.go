@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -132,85 +131,85 @@ func getBinarySearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T) (boo
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(int8))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(int8))
 	case *plan.Const_I16Val:
 		ok, v := transferIval(val.I16Val, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(int16))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(int16))
 	case *plan.Const_I32Val:
 		ok, v := transferIval(val.I32Val, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(int32))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(int32))
 	case *plan.Const_I64Val:
 		ok, v := transferIval(val.I64Val, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(int64))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(int64))
 	case *plan.Const_Dval:
 		ok, v := transferDval(val.Dval, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(float32))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(float32))
 	case *plan.Const_U8Val:
 		ok, v := transferUval(val.U8Val, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(uint8))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(uint8))
 	case *plan.Const_U16Val:
 		ok, v := transferUval(val.U16Val, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(uint16))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(uint16))
 	case *plan.Const_U32Val:
 		ok, v := transferUval(val.U32Val, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(uint32))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(uint32))
 	case *plan.Const_U64Val:
 		ok, v := transferUval(val.U64Val, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(uint64))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(uint64))
 	case *plan.Const_Fval:
 		ok, v := transferFval(val.Fval, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(float32))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(float32))
 	case *plan.Const_Dateval:
 		ok, v := transferDateval(val.Dateval, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(types.Date))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(types.Date))
 	case *plan.Const_Timeval:
 		ok, v := transferTimeval(val.Timeval, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(types.Time))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(types.Time))
 	case *plan.Const_Datetimeval:
 		ok, v := transferDatetimeval(val.Datetimeval, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(types.Datetime))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(types.Datetime))
 	case *plan.Const_Timestampval:
 		ok, v := transferTimestampval(val.Timestampval, oid)
 		if !ok {
 			return false, nil
 		}
-		return true, getBinarySearchFuncByPkValue(oid, v.(types.Timestamp))
+		return true, orderedBinarySearchOffsetByVal(oid, v.(types.Timestamp))
 	}
 	return false, nil
 }
@@ -678,38 +677,21 @@ func getListByItems[T DNStore](list []T, items []int64) []int {
 // 	return dnList
 // }
 
-type compareT interface {
-	constraints.Integer | constraints.Float |
-		types.Date | types.Time | types.Datetime | types.Timestamp
-}
-
-func getBinarySearchFuncByPkValue[T compareT](typ types.T, v T) func(*vector.Vector) int {
-	switch typ {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64,
-		types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
-		return func(vec *vector.Vector) int {
-			rows := vector.MustFixedCol[T](vec)
-			i := sort.Search(vec.Length(), func(idx int) bool {
-				return rows[idx] >= v
-			})
-			if i < vec.Length() && rows[i] == v {
-				return i
-			}
-			return -1
-		}
-	default:
+func orderedBinarySearchOffsetByVal[T types.OrderedT](typ types.T, v T) func(*vector.Vector) int {
+	if !typ.IsOrdered() {
 		return nil
 	}
+	return func(vec *vector.Vector) int {
+		rows := vector.MustFixedCol[T](vec)
+		offset := sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= v
+		})
+		if offset < vec.Length() && rows[offset] == v {
+			return offset
+		}
+		return -1
+	}
 }
-
-// func binarySearchOffset[T any](
-// 	v T,
-// 	vec *vector.Vector,
-// ) (offset) {
-
-// }
 
 func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
