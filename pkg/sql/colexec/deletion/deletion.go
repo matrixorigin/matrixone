@@ -143,7 +143,6 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	}
 
 	var affectedRows uint64
-	var err error
 	delCtx := p.DeleteCtx
 
 	if len(delCtx.PartitionTableIDs) > 0 {
@@ -165,7 +164,10 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 			}
 		}
 	} else {
-		delBatch := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
+		delBatch, err := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
+		if err != nil {
+			return false, err
+		}
 		affectedRows = uint64(delBatch.Length())
 		if affectedRows > 0 {
 			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
@@ -174,6 +176,7 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 				return false, err
 			}
 		}
+		delBatch.Clean(proc.GetMPool())
 	}
 
 	proc.SetInputBatch(batch.EmptyBatch)
