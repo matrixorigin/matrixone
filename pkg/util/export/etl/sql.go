@@ -31,9 +31,9 @@ import (
 )
 
 // MAX_CHUNK_SIZE is the maximum size of a chunk of records to be inserted in a single insert.
-const MAX_CHUNK_SIZE = 1024 * 1024 * 10
+const MAX_CHUNK_SIZE = 1024 * 1024 * 4
 
-const MAX_INSERT_TIME = 5 * time.Second
+const MAX_INSERT_TIME = 3 * time.Second
 
 var _ SqlWriter = (*DefaultSqlWriter)(nil)
 
@@ -75,11 +75,10 @@ func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	logutil.Debug("sqlWriter flushBuffer started", zap.Int("buffer size", len(sw.buffer)), zap.Bool("force", force))
 	now := time.Now()
-	sw.mux.Lock()
-	defer sw.mux.Unlock()
 
 	var err error
 	var cnt int
+
 	cnt, err = sw.WriteRowRecords(sw.buffer, sw.tbl, false)
 
 	if err != nil {
@@ -187,16 +186,28 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 		logutil.Error("sqlWriter db init failed", zap.Error(err))
 		return 0, err
 	}
-	now := time.Now()
-	cnt, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
-	if err != nil {
-		logutil.Error("sqlWriter bulk insert failed", zap.Error(err), zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table), zap.Int("record_count", len(records)))
-		if strings.Contains(err.Error(), "bad connection") || strings.Contains(err.Error(), "invalid connection") {
-			db_holder.InitOrRefreshDBConn(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		_, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
+		if err != nil {
+			logutil.Error("sqlWriter bulk insert failed", zap.Error(err), zap.String("table", tbl.Table))
+			if strings.Contains(err.Error(), "bad connection") || strings.Contains(err.Error(), "invalid connection") {
+				db_holder.InitOrRefreshDBConn(true)
+			}
 		}
-		return 0, err
-	} else {
-		logutil.Debug("sqlWriter finished the bulk insert", zap.Duration("duration", time.Since(now)), zap.String("table", tbl.Table), zap.Int("record_count", len(records)))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		fmt.Println("Function completed successfully")
+	case <-ctx.Done():
+		fmt.Println("insert timed out")
+		db_holder.InitOrRefreshDBConn(true)
 	}
+
 	return cnt, nil
 }
