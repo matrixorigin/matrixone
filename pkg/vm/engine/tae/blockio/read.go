@@ -161,7 +161,8 @@ func BlockReadInner(
 			return
 		}
 
-		deleteMask.Merge(evalDeleteRowsByTimestamp(deletes, ts))
+		rows := evalDeleteRowsByTimestamp(deletes, ts)
+		deleteMask.Merge(rows)
 
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debugf(
@@ -339,11 +340,12 @@ func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 	return bat, nil
 }
 
-func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows nulls.Bitmap) {
+func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows *nulls.Bitmap) {
 	if deletes == nil {
 		return
 	}
 	// record visible delete rows
+	rows = nulls.NewWithSize(0)
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
 	aborts := vector.MustFixedCol[bool](deletes.Vecs[3])
