@@ -110,7 +110,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = bat.Vecs[rp.Pos]
 			bat.Vecs[rp.Pos] = nil
 		} else {
-			rbat.Vecs[i] = vector.NewConstNull(*ctr.bat.Vecs[rp.Pos].GetType(), bat.Length(), proc.Mp())
+			rbat.Vecs[i] = vector.NewConstNull(ap.Typs[rp.Pos], bat.Length(), proc.Mp())
 		}
 	}
 	rbat.Zs = append(rbat.Zs, bat.Zs...)
@@ -124,72 +124,97 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
 		if rp.Rel != 0 {
-			rbat.Vecs[i] = vector.NewVec(*ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = vector.NewVec(ap.Typs[rp.Pos])
 		}
 	}
 	count := bat.Length()
-	if ctr.joinBat == nil {
-		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
-	}
-	for i := 0; i < count; i++ {
-		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
-			ctr.bat.Length(), ctr.cfs); err != nil {
-			rbat.Clean(proc.Mp())
-			return err
-		}
-		unmatched := true
-		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
-		if err != nil {
-			rbat.Clean(proc.Mp())
-			return err
-		}
-
-		rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
-		if vec.IsConst() {
-			b, null := rs.GetValue(0)
-			if !null && b {
-				if len(ctr.bat.Zs) > 1 {
-					return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
-				}
-				unmatched = false
-				for k, rp := range ap.Result {
-					if rp.Rel != 0 {
-						if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
-							vec.Free(proc.Mp())
-							rbat.Clean(proc.Mp())
-							return err
-						}
+	if ctr.expr == nil {
+		switch ctr.bat.Length() {
+		case 0:
+			for i, rp := range ap.Result {
+				if rp.Rel != 0 {
+					err := vector.AppendMultiFixed(rbat.Vecs[i], 0, true, count, proc.Mp())
+					if err != nil {
+						rbat.Clean(proc.Mp())
+						return err
 					}
 				}
 			}
-		} else {
-			l := vec.Length()
-			for j := uint64(0); j < uint64(l); j++ {
-				b, null := rs.GetValue(j)
+		case 1:
+			for i, rp := range ap.Result {
+				if rp.Rel != 0 {
+					err := rbat.Vecs[i].UnionMulti(ctr.bat.Vecs[rp.Pos], 0, count, proc.Mp())
+					if err != nil {
+						rbat.Clean(proc.Mp())
+						return err
+					}
+				}
+			}
+		default:
+			return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+		}
+	} else {
+		if ctr.joinBat == nil {
+			ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
+		}
+		for i := 0; i < count; i++ {
+			if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
+				ctr.bat.Length(), ctr.cfs); err != nil {
+				rbat.Clean(proc.Mp())
+				return err
+			}
+			unmatched := true
+			vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
+			if err != nil {
+				rbat.Clean(proc.Mp())
+				return err
+			}
+			defer vec.Free(proc.Mp())
+
+			rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+			if vec.IsConst() {
+				b, null := rs.GetValue(0)
 				if !null && b {
-					if !unmatched {
+					if ctr.bat.Length() > 1 {
 						return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
 					}
 					unmatched = false
 					for k, rp := range ap.Result {
 						if rp.Rel != 0 {
-							if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-								vec.Free(proc.Mp())
+							if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], 0, proc.Mp()); err != nil {
 								rbat.Clean(proc.Mp())
 								return err
 							}
 						}
 					}
 				}
+			} else {
+				l := vec.Length()
+				for j := uint64(0); j < uint64(l); j++ {
+					b, null := rs.GetValue(j)
+					if !null && b {
+						if !unmatched {
+							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						}
+						unmatched = false
+						for k, rp := range ap.Result {
+							if rp.Rel != 0 {
+								if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
+									rbat.Clean(proc.Mp())
+									return err
+								}
+							}
+						}
+					}
+				}
 			}
-		}
-		if unmatched {
-			for k, rp := range ap.Result {
-				if rp.Rel != 0 {
-					if err := rbat.Vecs[k].UnionNull(proc.Mp()); err != nil {
-						vec.Free(proc.Mp())
-						rbat.Clean(proc.Mp())
-						return err
+			if unmatched {
+				for k, rp := range ap.Result {
+					if rp.Rel != 0 {
+						if err := rbat.Vecs[k].UnionNull(proc.Mp()); err != nil {
+							rbat.Clean(proc.Mp())
+							return err
+						}
 					}
 				}
 			}
