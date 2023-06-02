@@ -488,6 +488,7 @@ func (tbl *txnTable) LoadDeletesForBlockIn(
 						panic("Load Block Deletes Error")
 					}
 				}
+				rowIdBat.Clean(tbl.db.txn.proc.GetMPool())
 			}
 		}
 
