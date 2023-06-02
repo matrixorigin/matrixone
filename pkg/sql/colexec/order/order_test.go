@@ -121,7 +121,7 @@ func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 		types: ts,
 		proc:  testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		arg: &Argument{
-			SortDirections: fs,
+			OrderInformation: fs,
 		},
 	}
 }
