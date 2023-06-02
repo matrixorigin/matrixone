@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -37,6 +38,19 @@ type MOErrorHolder struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+var errorPool = sync.Pool{
+	New: func() any {
+		return &MOErrorHolder{}
+	},
+}
+
+func newMOErrorHolder(err error, t time.Time) *MOErrorHolder {
+	h := errorPool.Get().(*MOErrorHolder)
+	h.Error = err
+	h.Timestamp = t
+	return h
+}
+
 func (h *MOErrorHolder) GetName() string {
 	return errorView.OriginTable.GetName()
 }
@@ -46,6 +60,7 @@ func (h *MOErrorHolder) Size() int64 {
 }
 func (h *MOErrorHolder) Free() {
 	h.Error = nil
+	errorPool.Put(h)
 }
 
 func (h *MOErrorHolder) GetTable() *table.Table { return errorView.OriginTable }
@@ -103,6 +118,6 @@ func ReportError(ctx context.Context, err error, depth int) {
 	if ctx == nil {
 		ctx = DefaultContext()
 	}
-	e := &MOErrorHolder{Error: err, Timestamp: time.Now()}
+	e := newMOErrorHolder(err, time.Now())
 	GetGlobalBatchProcessor().Collect(ctx, e)
 }

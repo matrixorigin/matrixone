@@ -662,7 +662,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	}
 	tableName := obj.GetObjName()
 	ctx, table, _ := tcc.getRelation(dbName, tableName, sub)
-	//-------------------------------------------------------------------------------------------
+
 	engineDefs, err := table.TableDefs(ctx)
 	var partitionInfo *plan2.PartitionByDef
 	for _, def := range engineDefs {
@@ -686,7 +686,6 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 		}
 	}
 	return table.Stats(ctx, ptables, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
-	//-------------------------------------------------------------------------------------------
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
