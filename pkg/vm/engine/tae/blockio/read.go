@@ -224,6 +224,10 @@ func BlockReadInner(
 		// TODO: avoid this transformation
 		if !deleteMask.IsEmpty() {
 			deletedRows = deleteMask.ToI64Arrary()
+			// logutil.Debugf("deleted/length: %d/%d=%f",
+			// 	loaded.Vecs[0].Length(),
+			// 	len(deletedRows),
+			// 	float64(len(deletedRows))/float64(loaded.Vecs[0].Length()))
 		}
 
 		// assemble result batch
