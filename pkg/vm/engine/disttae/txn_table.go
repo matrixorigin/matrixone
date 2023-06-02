@@ -44,22 +44,50 @@ const (
 
 var _ engine.Relation = new(txnTable)
 
-func (tbl *txnTable) Stats(ctx context.Context, statsInfoMap any) bool {
+func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
 	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
 	if !ok {
 		return false
 	}
-	if len(tbl.blockInfos) == 0 || !tbl.blockInfosUpdated {
-		err := tbl.updateBlockInfos(ctx)
-		if err != nil {
+
+	if partitionTables != nil {
+		sumBlockInfos := make([]catalog.BlockInfo, 0)
+		for _, partitionTable := range partitionTables {
+			if ptable, ok2 := partitionTable.(*txnTable); ok2 {
+				if len(ptable.blockInfos) == 0 || !ptable.blockInfosUpdated {
+					err := ptable.updateBlockInfos(ctx)
+					if err != nil {
+						return false
+					}
+				}
+
+				if len(ptable.blockInfos) > 0 {
+					sumBlockInfos = append(sumBlockInfos, ptable.blockInfos...)
+				}
+			} else {
+				panic("partition Table type is not txnTable")
+			}
+		}
+
+		if len(sumBlockInfos) > 0 {
+			return CalcStats(ctx, sumBlockInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
+		} else {
+			// no meta means not flushed yet, very small table
 			return false
 		}
-	}
-	if len(tbl.blockInfos) > 0 {
-		return CalcStats(ctx, tbl.blockInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
 	} else {
-		// no meta means not flushed yet, very small table
-		return false
+		if len(tbl.blockInfos) == 0 || !tbl.blockInfosUpdated {
+			err := tbl.updateBlockInfos(ctx)
+			if err != nil {
+				return false
+			}
+		}
+		if len(tbl.blockInfos) > 0 {
+			return CalcStats(ctx, tbl.blockInfos, tbl.getTableDef(), tbl.db.txn.proc, s)
+		} else {
+			// no meta means not flushed yet, very small table
+			return false
+		}
 	}
 }
 
