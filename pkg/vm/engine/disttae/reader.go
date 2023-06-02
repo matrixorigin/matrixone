@@ -105,7 +105,7 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, blockInfo, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	bat, err := blockio.BlockRead(r.ctx, blockInfo, nil, r.seqnums, r.colTypes, r.ts, nil, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 	//		return deletes[i] < deletes[j]
 	//	})
 	//}
-	bat, err := blockio.BlockRead(r.ctx, info, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	bat, err := blockio.BlockRead(r.ctx, info, nil, r.seqnums, r.colTypes, r.ts, nil, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
