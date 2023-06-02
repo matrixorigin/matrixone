@@ -94,7 +94,7 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 	}
 
 	partitionDef.PartitionMsg = tree.String(partitionSyntaxDef, dialect.MYSQL)
-	//tableDef.Partition = partitionDef
+	tableDef.Partition = partitionDef
 	return nil
 }
 
