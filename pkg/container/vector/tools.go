@@ -15,8 +15,10 @@
 package vector
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -123,28 +125,6 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 	area = v.area
 	return
 }
-
-//func FromDNVector(typ types.Type, header []types.Varlena, storage []byte, cantFree bool) (vec *Vector, err error) {
-//	vec = NewVec(typ)
-//	vec.cantFreeData = cantFree
-//	vec.cantFreeArea = cantFree
-//	if typ.IsString() {
-//		if len(header) > 0 {
-//			vec.col = header
-//			vec.data = unsafe.Slice((*byte)(unsafe.Pointer(&header[0])), typ.TypeSize()*cap(header))
-//			vec.area = storage
-//			vec.capacity = cap(header)
-//			vec.length = len(header)
-//		}
-//	} else {
-//		if len(storage) > 0 {
-//			vec.data = storage
-//			vec.length = len(storage) / typ.TypeSize()
-//			vec.setupColFromData()
-//		}
-//	}
-//	return
-//}
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
@@ -345,13 +325,13 @@ func checkStrIntersect(v1, v2 *Vector, gtFun compFn[string], ltFun compFn[string
 	return checkIntersect(cols1, cols2, gtFun, ltFun)
 }
 
-func checkGeneralIntersect[T compT](v1, v2 *Vector, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
+func checkGeneralIntersect[T any](v1, v2 *Vector, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
 	cols1 := MustFixedCol[T](v1)
 	cols2 := MustFixedCol[T](v2)
 	return checkIntersect(cols1, cols2, gtFun, ltFun)
 }
 
-func checkIntersect[T compT](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
+func checkIntersect[T any](cols1, cols2 []T, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
 	// get v1's min/max
 	colLength := len(cols1)
 	min := cols1[0]
@@ -507,17 +487,9 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(ctx context.Context, vec *Vector
 	return false, moerr.NewInternalErrorNoCtx("unsupport compare function")
 }
 
-type compT interface {
-	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 |
-		types.Date | types.Time | types.Datetime | types.Timestamp | types.Uuid | string
-}
+type compFn[T any] func(T, T) bool
 
-type compFn[T compT] func(T, T) bool
-type numberType interface {
-	constraints.Integer | constraints.Float | types.Date | types.Time | types.Datetime | types.Timestamp
-}
-
-func compareNumber[T numberType](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
+func compareNumber[T types.OrderedT](ctx context.Context, v1, v2 *Vector, fnName string) (bool, error) {
 	switch fnName {
 	case ">":
 		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
@@ -540,7 +512,7 @@ func compareNumber[T numberType](ctx context.Context, v1, v2 *Vector, fnName str
 	}
 }
 
-func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) bool {
+func runCompareCheckAnyResultIsTrue[T any](vec1, vec2 *Vector, fn compFn[T]) bool {
 	// column_a operator column_b  -> return true
 	// that means we don't known the return, just readBlock
 	if vec1.IsConstNull() || vec2.IsConstNull() {
@@ -569,7 +541,7 @@ func runStrCompareCheckAnyResultIsTrue(vec1, vec2 *Vector, fn compFn[string]) bo
 	return compareCheckAnyResultIsTrue(cols1, cols2, fn)
 }
 
-func compareCheckAnyResultIsTrue[T compT](cols1, cols2 []T, fn compFn[T]) bool {
+func compareCheckAnyResultIsTrue[T any](cols1, cols2 []T, fn compFn[T]) bool {
 	for i := 0; i < len(cols1); i++ {
 		for j := 0; j < len(cols2); j++ {
 			if fn(cols1[i], cols2[j]) {
@@ -639,4 +611,113 @@ func MakeAppendBytesFunc(vec *Vector) func([]byte, bool, *mpool.MPool) error {
 		return appendBytesToFixSized[types.Blockid](vec)
 	}
 	panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
+}
+
+func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](v T) func(*Vector) int {
+	return func(vec *Vector) int {
+		rows := MustFixedCol[T](vec)
+		offset := sort.Search(vec.Length(), func(idx int) bool {
+			return rows[idx] >= v
+		})
+		if offset < vec.Length() && rows[offset] == v {
+			return offset
+		}
+		return -1
+	}
+}
+
+func VarlenBinarySearchOffsetByValFactory(val []byte) func(*Vector) int {
+	return func(data *Vector) int {
+		offset := -1
+		start, end := 0, data.Length()-1
+		var mid int
+		for start <= end {
+			mid = (start + end) / 2
+			res := bytes.Compare(data.GetBytesAt(mid), val)
+			if res > 0 {
+				end = mid - 1
+			} else if res < 0 {
+				start = mid + 1
+			} else {
+				offset = mid
+				break
+			}
+		}
+		return offset
+	}
+}
+
+func BinarySearchOffsetByValFactory(t types.T, v any) func(*Vector) int {
+	if !t.IsFixedLen() {
+		val := v.([]byte)
+		return VarlenBinarySearchOffsetByValFactory(val)
+	}
+	switch t {
+	case types.T_int8:
+		return OrderedBinarySearchOffsetByValFactory[int8](v.(int8))
+	case types.T_int16:
+		return OrderedBinarySearchOffsetByValFactory[int16](v.(int16))
+	case types.T_int32:
+		return OrderedBinarySearchOffsetByValFactory[int32](v.(int32))
+	case types.T_int64:
+		return OrderedBinarySearchOffsetByValFactory[int64](v.(int64))
+	case types.T_uint8:
+		return OrderedBinarySearchOffsetByValFactory[uint8](v.(uint8))
+	case types.T_uint16:
+		return OrderedBinarySearchOffsetByValFactory[uint16](v.(uint16))
+	case types.T_uint32:
+		return OrderedBinarySearchOffsetByValFactory[uint32](v.(uint32))
+	case types.T_uint64:
+		return OrderedBinarySearchOffsetByValFactory[uint64](v.(uint64))
+	case types.T_float32:
+		return OrderedBinarySearchOffsetByValFactory[float32](v.(float32))
+	case types.T_float64:
+		return OrderedBinarySearchOffsetByValFactory[float64](v.(float64))
+	case types.T_date:
+		return OrderedBinarySearchOffsetByValFactory[types.Date](v.(types.Date))
+	case types.T_datetime:
+		return OrderedBinarySearchOffsetByValFactory[types.Datetime](v.(types.Datetime))
+	case types.T_time:
+		return OrderedBinarySearchOffsetByValFactory[types.Time](v.(types.Time))
+	case types.T_timestamp:
+		return OrderedBinarySearchOffsetByValFactory[types.Timestamp](v.(types.Timestamp))
+	case types.T_decimal64:
+		return FixSizedBinarySearchOffsetByValFactory[types.Decimal64](v.(types.Decimal64), types.CompareDecimal64)
+	case types.T_decimal128:
+		return FixSizedBinarySearchOffsetByValFactory[types.Decimal128](v.(types.Decimal128), types.CompareDecimal128)
+	case types.T_decimal256:
+		return FixSizedBinarySearchOffsetByValFactory[types.Decimal256](v.(types.Decimal256), types.CompareDecimal256)
+	case types.T_Rowid:
+		return FixSizedBinarySearchOffsetByValFactory[types.Rowid](v.(types.Rowid), types.CompareRowidRowidAligned)
+	case types.T_Blockid:
+		return FixSizedBinarySearchOffsetByValFactory[types.Blockid](v.(types.Blockid), types.CompareBlockidBlockidAligned)
+	case types.T_TS:
+		return FixSizedBinarySearchOffsetByValFactory[types.TS](v.(types.TS), types.CompareTSTSAligned)
+	case types.T_uuid:
+		return FixSizedBinarySearchOffsetByValFactory[types.Uuid](v.(types.Uuid), types.CompareUuid)
+	default:
+		return nil
+	}
+}
+
+func FixSizedBinarySearchOffsetByValFactory[T any](v T, comp func(T, T) int64) func(*Vector) int {
+	return func(data *Vector) int {
+		offset := -1
+		vals := MustFixedCol[T](data)
+		start, end := 0, len(vals)-1
+		var mid int
+		for start <= end {
+			mid = (start + end) / 2
+			res := comp(vals[mid], v)
+			if res > 0 {
+				end = mid - 1
+			} else if res < 0 {
+				start = mid + 1
+			} else {
+				offset = mid
+				break
+			}
+		}
+		return offset
+	}
 }
