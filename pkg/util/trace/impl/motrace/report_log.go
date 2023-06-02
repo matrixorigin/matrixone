@@ -16,6 +16,7 @@ package motrace
 
 import (
 	"context"
+	"encoding/hex"
 	"sync"
 	"time"
 	"unsafe"
@@ -89,7 +90,7 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(traceIDCol, table.UuidField(m.SpanContext.TraceID[:]))
 	}
 	if m.SpanContext.SpanID != trace.NilSpanID {
-		row.SetColumnVal(spanIDCol, table.BytesField(m.SpanContext.SpanID[:]))
+		row.SetColumnVal(spanIDCol, table.StringField(hex.EncodeToString(m.SpanContext.SpanID[:])))
 	}
 	row.SetColumnVal(spanKindCol, table.StringField(m.SpanContext.Kind.String()))
 	row.SetColumnVal(nodeUUIDCol, table.StringField(GetNodeResource().NodeUuid))

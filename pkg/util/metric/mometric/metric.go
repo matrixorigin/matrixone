@@ -353,17 +353,20 @@ var (
 )
 
 var SingleMetricTable = &table.Table{
-	Account:          table.AccountAll,
+	Account:          table.AccountSys,
 	Database:         MetricDBConst,
 	Table:            `metric`,
 	Columns:          []table.Column{metricNameColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, metricAccountColumn, metricTypeColumn},
 	PrimaryKeyColumn: []table.Column{},
+	ClusterBy:        []table.Column{metricCollectTimeColumn, metricNameColumn, metricAccountColumn},
 	Engine:           table.NormalTableEngine,
 	Comment:          `metric data`,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
 	// SupportUserAccess
 	SupportUserAccess: true,
+	// SupportConstAccess
+	SupportConstAccess: true,
 }
 
 func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {

@@ -78,9 +78,9 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext
 			}
 			cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
 			if enableSqlWriter {
-				return etl.NewSqlWriter(ctx, tbl, cw)
+				return newWriter(ctx, etl.NewSqlWriter(ctx, tbl, cw))
 			} else {
-				return newWriter(ctx, etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...)))
+				return newWriter(ctx, cw)
 			}
 		}
 	case table.TaeExtension:

@@ -218,8 +218,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 					return err
 				}
 			case table.TBytes:
-				dst := field.EncodeBytes()
-				err := vector.SetStringAt(vec, rowIdx, dst, mp)
+				err := vector.SetBytesAt(vec, rowIdx, field.Bytes, mp)
 				if err != nil {
 					return err
 				}

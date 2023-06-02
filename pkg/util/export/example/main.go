@@ -108,6 +108,8 @@ func main() {
 		panic(err)
 	}
 
+	mergeAll(ctx, fs)
+
 	mergeTable(ctx, fs, motrace.SingleStatementTable)
 	mergeTable(ctx, fs, motrace.SingleRowLogTable)
 	mergeTable(ctx, fs, mometric.SingleMetricTable)
@@ -115,6 +117,21 @@ func main() {
 	logutil.Infof("all done, run sleep(5)")
 	time.Sleep(5 * time.Second)
 	cancel()
+}
+
+func mergeAll(ctx context.Context, fs *fileservice.LocalETLFS) {
+	ctx, span := trace.Start(ctx, "mergeTable")
+	defer span.End()
+	merge, err := export.NewMerge(ctx, export.WithTable(motrace.SingleStatementTable), export.WithFileService(fs))
+	err = merge.ListRange(ctx)
+	if err != nil {
+		logutil.Infof("[%v] failed to merge: %v", "All", err)
+	} else {
+		logutil.Infof("[%v] merge succeed.", "All")
+	}
+
+	writeAllocsProfile("All")
+
 }
 
 func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Table) {

@@ -57,6 +57,7 @@ type bufferHolder struct {
 	// bufferPool
 	bufferPool *sync.Pool
 	bufferCnt  atomic.Int32
+	discardCnt atomic.Int32
 	// reminder
 	reminder batchpipe.Reminder
 	// signal send signal to Collector
@@ -124,6 +125,11 @@ func (b *bufferHolder) putBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, 
 	logutil.Debugf("release buffer for %s, cnt: %d, using: %d", b.name, b.bufferCnt.Load(), b.c.bufferTotal.Load())
 }
 
+func (b *bufferHolder) discardBuffer(buffer batchpipe.ItemBuffer[batchpipe.HasName, any]) {
+	b.discardCnt.Add(1)
+	b.putBuffer(buffer)
+}
+
 // Add call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
 	b.mux.Lock()
@@ -188,7 +194,7 @@ func (b *bufferHolder) getGenerateReq() generateReq {
 	b.mux.Lock()
 	defer b.mux.Unlock()
 	defer b.resetTrigger()
-	if b.buffer == nil {
+	if b.buffer == nil || b.buffer.IsEmpty() {
 		return nil
 	}
 	req := &bufferGenerateReq{
@@ -427,18 +433,28 @@ type exportReq interface {
 var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		req := holder.getGenerateReq()
-		if req != nil && holder.name != motrace.RawLogTbl {
+		if req == nil {
+			return
+		}
+		if holder.name != motrace.RawLogTbl {
 			select {
 			case c.awakeGenerate <- req:
 			case <-time.After(time.Second * 3):
 				logutil.Warn("awakeBufferFactory: timeout after 3 seconds")
+				goto discardL
 			}
 		} else {
 			select {
 			case c.awakeGenerate <- req:
 			default:
 				logutil.Warn("awakeBufferFactory: awakeGenerate chan is full")
+				goto discardL
 			}
+		}
+		return
+	discardL:
+		if r, ok := req.(*bufferGenerateReq); ok {
+			r.b.discardBuffer(r.buffer)
 		}
 	}
 }
@@ -511,6 +527,7 @@ loop:
 			fields = append(fields, zap.Int("QueueLength", len(c.awakeCollect)))
 			for _, b := range c.buffers {
 				fields = append(fields, zap.Int32(fmt.Sprintf("%sBufferCnt", b.name), b.bufferCnt.Load()))
+				fields = append(fields, zap.Int32(fmt.Sprintf("%sDiscardCnt", b.name), b.discardCnt.Load()))
 			}
 			c.logger.Info("stats", fields...)
 		case <-c.stopCh:

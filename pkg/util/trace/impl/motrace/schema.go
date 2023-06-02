@@ -59,7 +59,7 @@ var (
 	durationCol  = table.UInt64Column("duration", "exec time, unit: ns")
 	statusCol    = table.StringColumn("status", "sql statement running status, enum: Running, Success, Failed")
 	errorCol     = table.TextColumn("error", "error message")
-	execPlanCol  = table.JsonColumn("exec_plan", "statement execution plan")
+	execPlanCol  = table.StringColumn("exec_plan", "statement execution plan")
 	rowsReadCol  = table.Int64Column("rows_read", "rows read total")
 	bytesScanCol = table.Int64Column("bytes_scan", "bytes scan total")
 	statsCol     = table.JsonColumn("stats", "global stats info in exec_plan")
@@ -69,7 +69,7 @@ var (
 	resultCntCol = table.Int64Column("result_count", "the number of rows of sql execution results")
 
 	SingleStatementTable = &table.Table{
-		Account:  table.AccountAll,
+		Account:  table.AccountSys,
 		Database: StatsDatabase,
 		Table:    statementInfoTbl,
 		Columns: []table.Column{
@@ -101,13 +101,17 @@ var (
 			sqlTypeCol,
 			resultCntCol,
 		},
-		//PrimaryKeyColumn: []table.Column{stmtIDCol},
+		PrimaryKeyColumn: nil,
+		ClusterBy:        []table.Column{reqAtCol, accountCol},
+		// Engine
 		Engine:        table.NormalTableEngine,
 		Comment:       "record each statement and stats info",
 		PathBuilder:   table.NewAccountDatePathBuilder(),
 		AccountColumn: &accountCol,
 		// SupportUserAccess
 		SupportUserAccess: true,
+		// SupportConstAccess
+		SupportConstAccess: true,
 	}
 
 	rawItemCol      = table.StringColumn("raw_item", "raw log item")
@@ -116,7 +120,7 @@ var (
 	levelCol        = table.StringColumn("level", "log level, enum: debug, info, warn, error, panic, fatal")
 	callerCol       = table.StringColumn("caller", "where it log, like: package/file.go:123")
 	messageCol      = table.TextColumn("message", "log message")
-	extraCol        = table.JsonColumn("extra", "log dynamic fields")
+	extraCol        = table.StringColumn("extra", "log dynamic fields")
 	errCodeCol      = table.StringDefaultColumn("err_code", `0`, "error code info")
 	stackCol        = table.StringWithScale("stack", 2048, "stack info")
 	traceIDCol      = table.UuidStringColumn("trace_id", "trace uniq id")
@@ -126,10 +130,10 @@ var (
 	spanNameCol     = table.StringColumn("span_name", "span name, for example: step name of execution plan, function name in code, ...")
 	startTimeCol    = table.DatetimeColumn("start_time", "start time")
 	endTimeCol      = table.DatetimeColumn("end_time", "end time")
-	resourceCol     = table.JsonColumn("resource", "static resource information")
+	resourceCol     = table.StringColumn("resource", "static resource information")
 
 	SingleRowLogTable = &table.Table{
-		Account:  table.AccountAll,
+		Account:  table.AccountSys,
 		Database: StatsDatabase,
 		Table:    RawLogTbl,
 		Columns: []table.Column{
@@ -156,12 +160,15 @@ var (
 			spanKindCol,
 		},
 		PrimaryKeyColumn: nil,
+		ClusterBy:        []table.Column{timestampCol, rawItemCol},
 		Engine:           table.NormalTableEngine,
 		Comment:          "read merge data from log, error, span",
 		PathBuilder:      table.NewAccountDatePathBuilder(),
 		AccountColumn:    nil,
 		// SupportUserAccess
 		SupportUserAccess: false,
+		// SupportConstAccess
+		SupportConstAccess: true,
 	}
 
 	logView = &table.View{

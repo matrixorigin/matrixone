@@ -247,6 +247,7 @@ type Table struct {
 	Table            string
 	Columns          []Column
 	PrimaryKeyColumn []Column
+	ClusterBy        []Column
 	Engine           string
 	Comment          string
 	// PathBuilder help to desc param 'infile'
@@ -257,7 +258,7 @@ type Table struct {
 	TableOptions TableOptions
 	// SupportUserAccess default false. if true, user account can access.
 	SupportUserAccess bool
-	// SupportConstAccess default false. if true, use Table.Account
+	// SupportConstAccess default false. if true, use Table.Account first
 	SupportConstAccess bool
 
 	// name2ColumnIdx used in Row
@@ -335,6 +336,17 @@ func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 		sb.WriteString(`)`)
 	}
 	sb.WriteString("\n)")
+	// cluster by
+	if len(tbl.ClusterBy) > 0 && tbl.Engine != ExternalTableEngine {
+		sb.WriteString(" cluster by (")
+		for idx, col := range tbl.ClusterBy {
+			if idx > 0 {
+				sb.WriteString(`, `)
+			}
+			sb.WriteString(fmt.Sprintf("`%s`", col.Name))
+		}
+		sb.WriteString(`)`)
+	}
 	sb.WriteString(TableOptions.GetTableOptions(tbl.PathBuilder))
 
 	return sb.String()
@@ -599,16 +611,18 @@ func (r *Row) Reset() {
 	}
 }
 
-// GetAccount return r.Columns[r.AccountIdx] if r.AccountIdx >= 0 and r.Table.PathBuilder.SupportAccountStrategy,
+// GetAccount
+// return r.Table.Account if r.Table.SupportConstAccess
+// else return r.Columns[r.AccountIdx] if r.AccountIdx >= 0 and r.Table.PathBuilder.SupportAccountStrategy,
 // else return "sys"
 func (r *Row) GetAccount() string {
-	if r.Table.PathBuilder.SupportAccountStrategy() && r.Table.accountIdx >= 0 {
-		return r.Columns[r.Table.accountIdx].String
-	}
 	if r.Table.SupportConstAccess && len(r.Table.Account) > 0 {
 		return r.Table.Account
 	}
-	return "sys"
+	if r.Table.PathBuilder.SupportAccountStrategy() && r.Table.accountIdx >= 0 {
+		return r.Columns[r.Table.accountIdx].String
+	}
+	return AccountSys
 }
 
 func (r *Row) SetVal(col string, cf ColumnField) {
@@ -641,7 +655,8 @@ func (r *Row) ToStrings() []string {
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			switch r.Columns[idx].Type {
 			case TBytes:
-				col[idx] = r.Columns[idx].EncodeBytes()
+				// hack way for json column, avoid early copy. pls see more in BytesTIPs
+				col[idx] = string(r.Columns[idx].Bytes)
 			case TUuid:
 				dst := r.Columns[idx].EncodeUuid()
 				col[idx] = string(dst[:])
@@ -659,6 +674,12 @@ func (r *Row) ToStrings() []string {
 					val = typ.Default
 				}
 				col[idx] = val
+			case TBytes:
+				// BytesTIPs: hack way for json column, avoid early copy.
+				// Data-safety depends on Writer call Row.ToStrings() before IBuffer2SqlItem.Free()
+				// important:
+				// StatementInfo's execPlanCol / statsCol, this two column will be free by StatementInfo.Free()
+				col[idx] = string(r.Columns[idx].Bytes)
 			}
 		case types.T_datetime:
 			col[idx] = Time2DatetimeString(r.Columns[idx].GetTime())
