@@ -83,6 +83,9 @@
 # pkg/hakeeper
 /pkg/hakeeper @zhangxu19830126 @w-zr
 
+# pkg/incrservice
+/pkg/incrservice @zhangxu19830126
+
 # pkg/lockservice 
 /pkg/lockservice @zhangxu19830126 @w-zr
 
