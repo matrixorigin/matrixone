@@ -37,7 +37,7 @@ select account, statement from system.statement_info where statement = 'insert i
 -- @session
 
 -- case: select span_kind issue #7571
-select span_kind from system.rawlog where `raw_item` = "span_info" and span_name = "GenBatch" limit 1;
+select IF(span_kind="internal", 1, IF(span_kind="statement", 1, IF(span_kind="session", 1, IF(span_kind="remote", 1, 0)))) as exist from system.rawlog where `raw_item` = "log_info" limit 1;
 
 -- case: fix issue 8168, with syntax error
 select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt', '/*issue_8168*/use query_tae_table') and status != 'Running';

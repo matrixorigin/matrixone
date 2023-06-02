@@ -26,6 +26,11 @@ import (
 
 var gLogConfigs atomic.Value
 
+// EnableLog to get log config's !DisableLog
+func EnableLog() bool {
+	return !gLogConfigs.Load().(*LogConfig).DisableLog
+}
+
 func EnableStoreDB() bool {
 	return !gLogConfigs.Load().(*LogConfig).DisableStore
 }
