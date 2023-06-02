@@ -390,7 +390,7 @@ func (app1 *APP1) GetGoods() *APP1Goods {
 func (app1 *APP1) Init(factor int) {
 	txn, _ := app1.Mgr.StartTxn(nil)
 	defer func() {
-		err := txn.Commit()
+		err := txn.Commit(context.Background())
 		if err != nil {
 			panic(err)
 		}
@@ -506,10 +506,10 @@ func TestApp1(t *testing.T) {
 		err := client.BuyGood(goods.ID, uint64(rand.Intn(2)+10))
 		if err != nil {
 			// t.Log(err)
-			err := txn.Rollback()
+			err := txn.Rollback(context.Background())
 			assert.Nil(t, err)
 		} else {
-			err := txn.Commit()
+			err := txn.Commit(context.Background())
 			assert.Nil(t, err)
 		}
 		if txn.GetTxnState(true) == txnif.TxnStateRollbacked {
@@ -540,7 +540,7 @@ func TestWarehouse(t *testing.T) {
 	txn, _ := db.StartTxn(nil)
 	err := MockWarehouses("test", 20, txn)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	{
@@ -553,7 +553,7 @@ func TestWarehouse(t *testing.T) {
 		t.Log(view.GetData().String())
 		defer view.Close()
 		checkAllColRowsByScan(t, rel, 20, false)
-		_ = txn.Commit()
+		_ = txn.Commit(context.Background())
 	}
 }
 
@@ -574,7 +574,7 @@ func TestTxn7(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = db.CreateRelation(schema)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
@@ -587,9 +587,9 @@ func TestTxn7(t *testing.T) {
 		rel, _ := db.GetRelationByName(schema.Name)
 		err := rel.Append(context.Background(), bat)
 		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit())
+		assert.NoError(t, txn.Commit(context.Background()))
 	}
-	err = txn.Commit()
+	err = txn.Commit(context.Background())
 	t.Log(err)
 	assert.Error(t, err)
 	t.Log(txn.String())
@@ -612,7 +612,7 @@ func TestTxn8(t *testing.T) {
 	rel, _ := db.CreateRelation(schema)
 	err := rel.Append(context.Background(), bats[0])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase(pkgcatalog.MO_CATALOG)
@@ -636,7 +636,7 @@ func TestTxn8(t *testing.T) {
 	_, err = tae.StartTxn(nil)
 	assert.Error(t, err)
 
-	err = txn.Commit()
+	err = txn.Commit(context.Background())
 	t.Log(err)
 }
 
@@ -658,7 +658,7 @@ func TestTxn9(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db", "", "")
 	_, _ = db.CreateRelation(schema)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	var wg sync.WaitGroup
 
@@ -678,7 +678,7 @@ func TestTxn9(t *testing.T) {
 		// Use max commit ts as start ts
 		// 2nd relation is not visible
 		assert.Equal(t, 1, cnt)
-		assert.NoError(t, txn.Commit())
+		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
 	scanCol := func() {
@@ -699,7 +699,7 @@ func TestTxn9(t *testing.T) {
 		}
 		val.Store(2)
 		// assert.Equal(t, int(expectRows/5*2), rows)
-		assert.NoError(t, txn.Commit())
+		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
 	txn, _ = tae.StartTxn(nil)
@@ -717,7 +717,7 @@ func TestTxn9(t *testing.T) {
 	rel, _ := db.GetRelationByName(schema.Name)
 	err := rel.Append(context.Background(), bats[0])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	wg.Wait()
 	// Use max commit ts as start ts
 	// When reading snapshot, it's not necessary to wait commit.
@@ -738,7 +738,7 @@ func TestTxn9(t *testing.T) {
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	wg.Wait()
 
 	txn, _ = tae.StartTxn(nil)
@@ -751,7 +751,7 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	wg.Wait()
 
 	txn, _ = tae.StartTxn(nil)
@@ -762,7 +762,7 @@ func TestTxn9(t *testing.T) {
 	filter = handle.NewEQFilter(v)
 	err = rel.UpdateByFilter(filter, 2, int32(9999), false)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	wg.Wait()
 }
 
@@ -793,14 +793,14 @@ func TestTxn9(t *testing.T) {
 // 		txn, rel := tae.getRelation()
 // 		err := rel.Append(context.Background(), bat.Window(2, 1))
 // 		assert.NoError(t, err)
-// 		assert.NoError(t, txn.Commit())
+// 		assert.NoError(t, txn.Commit(context.Background()))
 // 		txn, rel = tae.getRelation()
 // 		blk := getOneBlock(rel)
 // 		view, err := blk.GetColumnDataById(context.Background(), 2, nil, nil)
 // 		assert.NoError(t, err)
 // 		defer view.Close()
 // 		t.Log(view.String())
-// 		assert.NoError(t, txn.Commit())
+// 		assert.NoError(t, txn.Commit(context.Background()))
 // 	}
 
 // 	// filter := handle.NewEQFilter(int32(99))
@@ -814,10 +814,10 @@ func TestTxn9(t *testing.T) {
 // 		// txn, rel := tae.getRelation()
 // 		// err = rel1.UpdateByFilter(filter, 2, int32(88))
 // 		// assert.NoError(t, err)
-// 		// assert.NoError(t, txn.Commit())
+// 		// assert.NoError(t, txn.Commit(context.Background()))
 // 	}
 // 	return
-// 	assert.NoError(t, txn1.Commit())
+// 	assert.NoError(t, txn1.Commit(context.Background()))
 // }
 
 // func TestTxn11(t *testing.T) {
@@ -882,8 +882,8 @@ func TestTxn9(t *testing.T) {
 // 			it.Next()
 // 		}
 
-// 		assert.NoError(t, txn.Commit())
+// 		assert.NoError(t, txn.Commit(context.Background()))
 // 	}
 
-// 	txn.Commit()
+// 	txn.Commit(context.Background())
 // }

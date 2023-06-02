@@ -143,11 +143,11 @@ func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 		panic(err)
 	}
 	if txn.Is2PC() {
-		if _, err = txn.Prepare(); err != nil {
+		if _, err = txn.Prepare(replayer.db.Opts.Ctx); err != nil {
 			panic(err)
 		}
 	} else {
-		if err = txn.Commit(); err != nil {
+		if err = txn.Commit(replayer.db.Opts.Ctx); err != nil {
 			panic(err)
 		}
 	}

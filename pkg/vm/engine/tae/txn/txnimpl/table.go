@@ -878,7 +878,7 @@ func (tbl *txnTable) NeedRollback() bool {
 }
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
-func (tbl *txnTable) PrePrepareDedup() (err error) {
+func (tbl *txnTable) PrePrepareDedup(ctx context.Context) (err error) {
 	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
@@ -886,7 +886,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	pkColPos := tbl.schema.GetSingleSortKeyIdx()
 	for _, node := range tbl.localSegment.nodes {
 		if node.IsPersisted() {
-			err = tbl.DoPrecommitDedupByNode(node)
+			err = tbl.DoPrecommitDedupByNode(ctx, node)
 			if err != nil {
 				return
 			}
@@ -1221,7 +1221,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 	return
 }
 
-func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
+func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	var pks containers.Vector
 	//loaded := false
@@ -1247,7 +1247,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 
 		//TODO::load ZM/BF index first, then load PK column if necessary.
 		if pks == nil {
-			colV, err := node.GetColumnDataById(tbl.schema.GetSingleSortKeyIdx())
+			colV, err := node.GetColumnDataById(ctx, tbl.schema.GetSingleSortKeyIdx())
 			if err != nil {
 				return err
 			}

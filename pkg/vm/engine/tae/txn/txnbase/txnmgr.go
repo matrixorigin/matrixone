@@ -242,7 +242,7 @@ func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
 	return
 }
 
-func (mgr *TxnManager) heartbeat() {
+func (mgr *TxnManager) heartbeat(ctx context.Context) {
 	defer mgr.wg.Done()
 	heartbeatTicker := time.NewTicker(time.Millisecond * 2)
 	for {
@@ -250,7 +250,7 @@ func (mgr *TxnManager) heartbeat() {
 		case <-mgr.ctx.Done():
 			return
 		case <-heartbeatTicker.C:
-			op := mgr.newHeartbeatOpTxn()
+			op := mgr.newHeartbeatOpTxn(ctx)
 			op.Txn.(*Txn).Add(1)
 			_, err := mgr.PreparingSM.EnqueueRecevied(op)
 			if err != nil {
@@ -260,7 +260,7 @@ func (mgr *TxnManager) heartbeat() {
 	}
 }
 
-func (mgr *TxnManager) newHeartbeatOpTxn() *OpTxn {
+func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err := exp.(error)
 		logutil.Warnf("StartTxn: %v", err)
@@ -275,6 +275,7 @@ func (mgr *TxnManager) newHeartbeatOpTxn() *OpTxn {
 	txn := DefaultTxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
 	return &OpTxn{
+		ctx: ctx,
 		Txn: txn,
 		Op:  OpCommit,
 	}
@@ -295,7 +296,7 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	defer mgr.CommitListener.OnEndPrePrepare(op.Txn)
 	// If txn is trying committing, call txn.PrePrepare()
 	now := time.Now()
-	op.Txn.SetError(op.Txn.PrePrepare())
+	op.Txn.SetError(op.Txn.PrePrepare(op.ctx))
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
 	})
@@ -551,11 +552,11 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 	return minTS
 }
 
-func (mgr *TxnManager) Start() {
+func (mgr *TxnManager) Start(ctx context.Context) {
 	mgr.FlushQueue.Start()
 	mgr.PreparingSM.Start()
 	mgr.wg.Add(1)
-	go mgr.heartbeat()
+	go mgr.heartbeat(ctx)
 }
 
 func (mgr *TxnManager) Stop() {

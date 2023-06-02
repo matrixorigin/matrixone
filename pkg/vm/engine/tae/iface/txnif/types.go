@@ -38,7 +38,7 @@ var (
 type Txn2PC interface {
 	PrepareRollback() error
 	ApplyRollback() error
-	PrePrepare() error
+	PrePrepare(ctx context.Context) error
 	PrepareCommit() error
 	PreApplyCommit() error
 	PrepareWAL() error
@@ -103,17 +103,17 @@ type TxnChanger interface {
 	ToRollbacking(ts types.TS) error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
-	Prepare() (types.TS, error)
+	Prepare(ctx context.Context) (types.TS, error)
 	Committing() error
-	Commit() error
-	Rollback() error
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
 	SetCommitTS(cts types.TS) error
 	SetDedupType(skip DedupType)
 	SetParticipants(ids []uint64) error
 	SetError(error)
 
 	CommittingInRecovery() error
-	CommitInRecovery() error
+	CommitInRecovery(ctx context.Context) error
 }
 
 type TxnWriter interface {

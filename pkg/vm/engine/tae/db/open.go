@@ -113,7 +113,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		db.TxnMgr.Now,
 	)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
-	db.TxnMgr.Start()
+	db.TxnMgr.Start(opts.Ctx)
 	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		opts.Ctx,

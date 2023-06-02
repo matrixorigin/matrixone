@@ -42,14 +42,14 @@ func (store *NoopTxnStore) AddBlksWithMetaLoc(
 ) error {
 	return nil
 }
-func (store *NoopTxnStore) PrepareRollback() error { return nil }
-func (store *NoopTxnStore) PrePrepare() error      { return nil }
-func (store *NoopTxnStore) PrepareCommit() error   { return nil }
-func (store *NoopTxnStore) ApplyRollback() error   { return nil }
-func (store *NoopTxnStore) PreApplyCommit() error  { return nil }
-func (store *NoopTxnStore) ApplyCommit() error     { return nil }
-func (store *NoopTxnStore) Apply2PCPrepare() error { return nil }
-func (store *NoopTxnStore) PrepareWAL() error      { return nil }
+func (store *NoopTxnStore) PrepareRollback() error               { return nil }
+func (store *NoopTxnStore) PrePrepare(ctx context.Context) error { return nil }
+func (store *NoopTxnStore) PrepareCommit() error                 { return nil }
+func (store *NoopTxnStore) ApplyRollback() error                 { return nil }
+func (store *NoopTxnStore) PreApplyCommit() error                { return nil }
+func (store *NoopTxnStore) ApplyCommit() error                   { return nil }
+func (store *NoopTxnStore) Apply2PCPrepare() error               { return nil }
+func (store *NoopTxnStore) PrepareWAL() error                    { return nil }
 
 func (store *NoopTxnStore) DoneWaitEvent(cnt int)                                  {}
 func (store *NoopTxnStore) AddWaitEvent(cnt int)                                   {}
