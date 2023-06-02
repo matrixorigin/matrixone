@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -111,9 +112,10 @@ func (sw *DefaultSqlWriter) FlushAndClose() (int, error) {
 	return cnt, err
 }
 
-func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int) (int, error) {
+func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int) {
 	if len(records) == 0 {
-		return 0, nil
+		done <- nil
+		return
 	}
 
 	baseStr := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
@@ -123,7 +125,8 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 
 	tx, err := sqlDb.Begin()
 	if err != nil {
-		return 0, err
+		done <- err
+		return
 	}
 
 	for idx, row := range records {
@@ -138,8 +141,8 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 			}
 			if tbl.Columns[i].ColType == table.TJson {
 				var js interface{}
-				_ = json.Unmarshal([]byte(field), &js)
 				escapedJSON, _ := json.Marshal(js)
+				_ = json.Unmarshal([]byte(field), &js)
 				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
 			} else {
 				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
@@ -154,25 +157,31 @@ func bulkInsert(sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int)
 
 		if sb.Len() >= maxLen || idx == len(records)-1 {
 			stmt := baseStr + sb.String() + ";"
-			ctx, cancel := context.WithTimeout(context.Background(), MAX_INSERT_TIME)
-			defer cancel() // it's important to ensure all paths call cancel to avoid resource leak
 			_, err := tx.ExecContext(ctx, stmt)
 			if err != nil {
 				tx.Rollback()
 				sb.Reset()
-				return 0, err
+				done <- err
+				return
+			}
+			select {
+			case <-ctx.Done():
+				// If context deadline is exceeded, rollback the transaction
+				tx.Rollback()
+				done <- errors.New("execution cancelled: context deadline exceeded")
+				return
+			default:
 			}
 			sb.Reset()
 		} else {
 			sb.WriteString(",")
 		}
 	}
-
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		done <- err
+		return
 	}
-
-	return len(records), nil
+	done <- nil
 }
 
 func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table, is_merge bool) (int, error) {
@@ -180,34 +189,27 @@ func (sw *DefaultSqlWriter) WriteRowRecords(records [][]string, tbl *table.Table
 		return 0, nil
 	}
 	var err error
-	var cnt int
 	dbConn, err := db_holder.InitOrRefreshDBConn(false)
 	if err != nil {
 		logutil.Error("sqlWriter db init failed", zap.Error(err))
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), MAX_INSERT_TIME)
 	defer cancel()
 
-	done := make(chan struct{})
-	go func() {
-		_, err = bulkInsert(dbConn, records, tbl, MAX_CHUNK_SIZE)
-		if err != nil {
-			logutil.Error("sqlWriter bulk insert failed", zap.Error(err), zap.String("table", tbl.Table))
-			if strings.Contains(err.Error(), "bad connection") || strings.Contains(err.Error(), "invalid connection") {
-				db_holder.InitOrRefreshDBConn(true)
-			}
-		}
-		close(done)
-	}()
+	done := make(chan error)
+	go bulkInsert(ctx, done, dbConn, records, tbl, MAX_CHUNK_SIZE)
 
 	select {
-	case <-done:
-		fmt.Println("Function completed successfully")
+	case err := <-done:
+		if err != nil {
+			return 0, err
+		} else {
+			logutil.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
+			return len(records), nil
+		}
 	case <-ctx.Done():
-		fmt.Println("insert timed out")
-		db_holder.InitOrRefreshDBConn(true)
+		logutil.Warn("sqlWriter WriteRowRecords cancelled", zap.Error(ctx.Err()))
+		return 0, ctx.Err()
 	}
-
-	return cnt, nil
 }
