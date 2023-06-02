@@ -235,7 +235,7 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 	}
 	for i := 0; i < len(attrs); i++ {
 		if attrs[i].ClusterBy ||
-			(attrs[i].Primary && !attrs[i].IsHidden) {
+			(attrs[i].Primary && attrs[i].Name != catalog.FakePrimaryKeyColName) {
 			return i, attrs, tbl, err
 		}
 	}

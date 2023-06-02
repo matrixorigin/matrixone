@@ -1,4 +1,3 @@
--- @bvt:issue#8320
 -- 1.test KEY Partition
 drop table if exists t1;
 CREATE TABLE t1 (
@@ -449,4 +448,3 @@ select * from `%!%pweek_3%!%customers` order by first_name;
 select * from `%!%pweek_4%!%customers` order by first_name;
 
 drop table customers;
--- @bvt:issue

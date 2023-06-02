@@ -662,7 +662,33 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	}
 	tableName := obj.GetObjName()
 	ctx, table, _ := tcc.getRelation(dbName, tableName, sub)
-	return table.Stats(ctx, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
+
+	var partitionInfo *plan2.PartitionByDef
+	engineDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return false
+	}
+	for _, def := range engineDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan2.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return false
+				}
+				partitionInfo = p
+			}
+		}
+	}
+	var ptables []any
+	if partitionInfo != nil {
+		ptables = make([]any, len(partitionInfo.PartitionTableNames))
+		for i, PartitionTableName := range partitionInfo.PartitionTableNames {
+			_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil)
+			ptables[i] = ptable
+		}
+	}
+	return table.Stats(ctx, ptables, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
