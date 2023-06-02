@@ -16,12 +16,14 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
@@ -41,8 +43,14 @@ type MOZapLog struct {
 	Stack       string `json:"stack"`
 }
 
+var logPool = sync.Pool{
+	New: func() any {
+		return &MOZapLog{}
+	},
+}
+
 func newMOZap() *MOZapLog {
-	return &MOZapLog{}
+	return logPool.Get().(*MOZapLog)
 }
 
 func (m *MOZapLog) GetName() string {
@@ -69,6 +77,7 @@ func (m *MOZapLog) Free() {
 	m.Caller = ""
 	m.Message = ""
 	m.Extra = ""
+	logPool.Put(m)
 }
 
 func (m *MOZapLog) GetTable() *table.Table { return logView.OriginTable }
@@ -131,6 +140,13 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	}
 	buffer, err := jsonEncoder.EncodeEntry(entry, fields[:endIdx+1])
 	log.Extra = buffer.String()
-	GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+	switch entry.Level {
+	case zap.PanicLevel, zap.DPanicLevel, zap.FatalLevel:
+		syncer := NewItemSyncer(log)
+		GetGlobalBatchProcessor().Collect(DefaultContext(), syncer)
+		syncer.Wait()
+	default:
+		GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+	}
 	return buffer, err
 }
