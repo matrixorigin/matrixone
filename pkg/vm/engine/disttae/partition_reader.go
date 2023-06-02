@@ -160,16 +160,22 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			if err != nil {
 				return nil, err
 			}
-			rbat := bat
-			for i, vec := range rbat.Vecs {
-				rbat.Vecs[i], err = vec.Dup(p.procMPool)
-				if err != nil {
+			rbat := batch.NewWithSize(bat.VectorCount())
+			rbat.SetAttributes(colNames)
+			for i, vec := range bat.Vecs {
+				typ := *vec.GetType()
+				if vp == nil {
+					rbat.Vecs[i] = vector.NewVec(typ)
+				} else {
+					rbat.Vecs[i] = vp.GetVector(typ)
+				}
+				if err := vector.GetUnionAllFunction(typ, mp)(rbat.Vecs[i], vec); err != nil {
+					bat.Clean(p.procMPool)
+					rbat.Clean(p.procMPool)
 					return nil, err
 				}
 			}
-			rbat.SetAttributes(colNames)
-			rbat.Cnt = 1
-			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
+			bat.Clean(p.procMPool)
 
 			var hasRowId bool
 			// note: if there is rowId colName, it must be the last one
@@ -225,11 +231,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 			}
 			logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
-			/*
-				CORNER CASE:
-				if some rowIds[j] is in p.deletes above, then some rows has been filtered.
-				the bat.Length() is not always the right value for the result batch b.
-			*/
+			//		CORNER CASE:
+			//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
+			//		the bat.Length() is not always the right value for the result batch b.
 			b.SetZs(b.Vecs[0].Length(), mp)
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
 			return b, nil
