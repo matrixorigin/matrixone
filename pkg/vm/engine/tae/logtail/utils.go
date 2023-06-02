@@ -248,13 +248,13 @@ func (data *CheckpointData) ApplyReplayTo(
 }
 
 const (
-	Checkpoint_Meta_TID_IDX                = 0
-	Checkpoint_Meta_Insert_Block_Start_IDX = 1
-	Checkpoint_Meta_Insert_Block_End_IDX   = 2
-	Checkpoint_Meta_Delete_Block_Start_IDX = 3
-	Checkpoint_Meta_Delete_Block_End_IDX   = 4
-	Checkpoint_Meta_Segment_Start_IDX      = 5
-	Checkpoint_Meta_Segment_End_IDX        = 6
+	Checkpoint_Meta_TID_IDX                = 2
+	Checkpoint_Meta_Insert_Block_Start_IDX = 3
+	Checkpoint_Meta_Insert_Block_End_IDX   = 4
+	Checkpoint_Meta_Delete_Block_Start_IDX = 5
+	Checkpoint_Meta_Delete_Block_End_IDX   = 6
+	Checkpoint_Meta_Segment_Start_IDX      = 7
+	Checkpoint_Meta_Segment_End_IDX        = 8
 )
 
 type CNCheckpointData struct {
@@ -321,7 +321,7 @@ func (data *CNCheckpointData) ReadFrom(
 
 	for idx, item := range checkpointDataRefer {
 		var bat *batch.Batch
-		bat, err = LoadCNBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader)
+		bat, err = LoadCNBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), reader, m)
 		if err != nil {
 			return
 		}
@@ -574,7 +574,7 @@ func LoadBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames [
 	return bat, nil
 }
 
-func LoadCNBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint16, reader *blockio.BlockReader) (*batch.Batch, error) {
+func LoadCNBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames []string, id uint16, reader *blockio.BlockReader, m *mpool.MPool) (*batch.Batch, error) {
 	idxs := make([]uint16, len(colNames))
 	for i := range colNames {
 		idxs[i] = uint16(i)
@@ -582,6 +582,23 @@ func LoadCNBlkColumnsByMeta(cxt context.Context, colTypes []types.Type, colNames
 	ioResult, err := reader.LoadColumns(cxt, idxs, nil, id, nil)
 	if err != nil {
 		return nil, err
+	}
+	ioResult.Attrs = make([]string, len(colNames))
+	copy(ioResult.Attrs, colNames)
+	maxLength := 0
+	for _, vec := range ioResult.Vecs {
+		length := vec.Length()
+		if maxLength < length {
+			maxLength = length
+		}
+	}
+	if m == nil {
+		ioResult.Zs = make([]int64, maxLength)
+		for i := range ioResult.Zs {
+			ioResult.Zs[i] = 1
+		}
+	} else {
+		ioResult.SetZs(maxLength, m)
 	}
 	return ioResult, nil
 }
