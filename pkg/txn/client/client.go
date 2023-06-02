@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"go.uber.org/zap"
 )
 
 // WithTxnIDGenerator setup txn id generator
@@ -278,6 +279,14 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 
 func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
 	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
+	if client.timestampWaiter != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		defer cancel()
+		_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
+		if err != nil {
+			util.GetLogger().Fatal("wait latest commit ts failed", zap.Error(err))
+		}
+	}
 }
 
 func (client *txnClient) popTransaction(txn txn.TxnMeta) {
