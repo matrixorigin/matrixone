@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -156,9 +155,9 @@ type Transaction struct {
 
 	batchSelectList map[*batch.Batch][]int64
 
-	statementID int
-
-	statements []int
+	rollbackCount int
+	statementID   int
+	statements    []int
 }
 
 type Pos struct {
@@ -233,11 +232,11 @@ func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
 	}
 	txn.statements = append(txn.statements, len(txn.writes))
 	txn.statementID++
-	if txn.statementID > 1 && txn.meta.IsRCIsolation() {
+	if txn.meta.IsRCIsolation() &&
+		(txn.statementID > 1 || txn.rollbackCount > 0) {
 		if err := txn.op.UpdateSnapshot(
 			ctx,
 			timestamp.Timestamp{}); err != nil {
-			logutil.Fatalf(err.Error())
 			return err
 		}
 		txn.resetSnapshot()
@@ -246,6 +245,10 @@ func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
 }
 
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
+	txn.Lock()
+	defer txn.Unlock()
+
+	txn.rollbackCount++
 	if txn.statementID > 0 {
 		txn.statementID--
 		end := txn.statements[txn.statementID]

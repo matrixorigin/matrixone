@@ -17,6 +17,7 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -280,7 +281,7 @@ func TestEvalZonemapFilter(t *testing.T) {
 			cnt := plan2.AssignAuxIdForExpr(expr, 0)
 			zms := make([]objectio.ZoneMap, cnt)
 			vecs := make([]*vector.Vector, cnt)
-			zm := evalFilterExprWithZonemap(context.Background(), tc.meta, expr, zms, vecs, columnMap, proc)
+			zm := colexec.EvaluateFilterByZoneMap(context.Background(), proc, expr, tc.meta, columnMap, zms, vecs)
 			require.Equal(t, tc.expect[i], zm, tc.desc[i])
 		}
 	}
