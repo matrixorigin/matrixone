@@ -135,12 +135,10 @@ func getBinarySearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T) (boo
 		return true, vector.OrderedBinarySearchOffsetByValFactory(int32(val.I32Val))
 	case *plan.Const_I64Val:
 		return true, vector.OrderedBinarySearchOffsetByValFactory(int64(val.I64Val))
+	case *plan.Const_Fval:
+		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Fval)
 	case *plan.Const_Dval:
-		if oid == types.T_float32 {
-			return true, vector.OrderedBinarySearchOffsetByValFactory(float32(val.Dval))
-		} else {
-			return true, vector.OrderedBinarySearchOffsetByValFactory(val.Dval)
-		}
+		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Dval)
 	case *plan.Const_U8Val:
 		return true, vector.OrderedBinarySearchOffsetByValFactory(uint8(val.U8Val))
 	case *plan.Const_U16Val:
@@ -149,12 +147,6 @@ func getBinarySearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T) (boo
 		return true, vector.OrderedBinarySearchOffsetByValFactory(uint32(val.U32Val))
 	case *plan.Const_U64Val:
 		return true, vector.OrderedBinarySearchOffsetByValFactory(val.U64Val)
-	case *plan.Const_Fval:
-		if oid == types.T_float32 {
-			return true, vector.OrderedBinarySearchOffsetByValFactory(float32(val.Fval))
-		} else {
-			return true, vector.OrderedBinarySearchOffsetByValFactory(val.Fval)
-		}
 	case *plan.Const_Dateval:
 		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Dateval)
 	case *plan.Const_Timeval:
@@ -170,6 +162,8 @@ func getBinarySearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T) (boo
 		return true, vector.FixSizedBinarySearchOffsetByValFactory(v, types.CompareDecimal128)
 	case *plan.Const_Sval:
 		return true, vector.VarlenBinarySearchOffsetByValFactory(util.UnsafeStringToBytes(val.Sval))
+	case *plan.Const_Jsonval:
+		return true, vector.VarlenBinarySearchOffsetByValFactory(util.UnsafeStringToBytes(val.Jsonval))
 	}
 	return false, nil
 }

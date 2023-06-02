@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -136,7 +137,9 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 		}
 	}
 
-	logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
+	}
 	return bat, nil
 }
 
