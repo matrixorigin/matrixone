@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,11 +36,6 @@ import (
 )
 
 const (
-	// each periodToCheckTxnTimestamp, we check if we have received enough log for a new txn.
-	// If still not within maxBlockTimeToNewTransaction, the transaction creation fails.
-	maxBlockTimeToNewTransaction = 1 * time.Minute
-	periodToCheckTxnTimestamp    = 1 * time.Millisecond
-
 	// if we didn't receive response from dn log tail server within time maxTimeToWaitServerResponse.
 	// we assume that client has lost connect to server and will start a reconnect.
 	maxTimeToWaitServerResponse = 60 * time.Second
@@ -116,26 +112,22 @@ func (client *pushClient) init(
 	return nil
 }
 
-func (client *pushClient) checkTxnTimeIsLegal(
-	ctx context.Context, txnTime timestamp.Timestamp) error {
-	if client.receivedLogTailTime.greatEq(txnTime) {
-		return nil
+func (client *pushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
+	// At the time of transaction creation, a ts is obtained as the start timestamp of the transaction.
+	// To ensure that the complete data is visible at the start of the transaction, the logtail of
+	// all < snapshot ts is waited until it is applied when the transaction is created inside the txn client.
+	//
+	// Inside the txn client, there is a waiter waiting for the LogTail to be applied, which will continuously
+	// receive the ts applied by the pushClient, and then the transaction will use the maximum applied LogTail
+	// ts currently received + 1 as the transaction's snapshot ts to ensure that the transaction can see the
+	// log tails corresponding to the max(applied log tail ts in txn client).
+	//
+	// So here we need to use snapshotTS.Prev() to check.
+	if client.receivedLogTailTime.greatEq(snapshotTS.Prev()) {
+		return
 	}
-	ticker := time.NewTicker(periodToCheckTxnTimestamp)
-	defer ticker.Stop()
-
-	for i := maxBlockTimeToNewTransaction; i > 0; i -= periodToCheckTxnTimestamp {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if client.receivedLogTailTime.greatEq(txnTime) {
-				return nil
-			}
-		}
-	}
-	logutil.Errorf("new txn failed because lack of enough log tail. txn time is [%s]", txnTime.String())
-	return moerr.NewTxnError(ctx, "new txn failed. please retry")
+	panic(fmt.Sprintf("BUG: all log tail must be applied before %s",
+		snapshotTS.DebugString()))
 }
 
 // TryToSubscribeTable subscribe a table and block until subscribe succeed.
