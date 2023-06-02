@@ -178,6 +178,11 @@ func BlockReadInner(
 			selectRows = rows
 		}
 
+		// logutil.Debugf("sels/length: %d/%d=%f",
+		// 	len(selectRows),
+		// 	loaded.Vecs[0].Length(),
+		// 	float64(len(deletedRows))/float64(loaded.Vecs[0].Length()))
+
 		// no rows selected, return empty batch
 		if len(selectRows) == 0 {
 			for i, col := range loaded.Vecs {
