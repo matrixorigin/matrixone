@@ -394,7 +394,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	}()
 
 	defer func() {
-		rb.makeAllWritesDoneWithClosed(ctx)
+		rb.makeAllWritesDoneWithClosed()
 		close(rb.writeC)
 	}()
 
@@ -409,18 +409,23 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	messages := make([]*Future, 0, rb.options.batchSendSize)
 	stopped := false
 	for {
-		messages, stopped = rb.fetch(ctx, messages, rb.options.batchSendSize)
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
 		if len(messages) > 0 {
 			written := 0
 			writeTimeout := time.Duration(0)
 			for _, f := range messages {
 				id := f.getSendMessageID()
 				if stopped {
-					f.messageSended(backendClosed)
+					f.messageSent(backendClosed)
 					continue
 				}
 
-				if v := rb.doWrite(ctx, id, f); v > 0 {
+				if v := rb.doWrite(id, f); v > 0 {
 					writeTimeout += v
 					written++
 				}
@@ -434,14 +439,14 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 							rb.logger.Error("write request failed",
 								zap.Uint64("request-id", id),
 								zap.Error(err))
-							f.messageSended(err)
+							f.messageSent(err)
 						}
 					}
 				}
 			}
 
 			for _, m := range messages {
-				m.messageSended(nil)
+				m.messageSent(nil)
 			}
 		}
 		if stopped {
@@ -450,20 +455,20 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	}
 }
 
-func (rb *remoteBackend) doWrite(ctx context.Context, id uint64, f *Future) time.Duration {
+func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 	if !rb.options.filter(f.send.Message, rb.remote) {
-		f.messageSended(messageSkipped)
+		f.messageSent(messageSkipped)
 		return 0
 	}
 	// already timeout in future, and future will get a ctx timeout
 	if f.send.Timeout() {
-		f.messageSended(f.send.Ctx.Err())
+		f.messageSent(f.send.Ctx.Err())
 		return 0
 	}
 
 	v, err := f.send.GetTimeoutFromContext()
 	if err != nil {
-		f.messageSended(err)
+		f.messageSent(err)
 		return 0
 	}
 
@@ -482,7 +487,7 @@ func (rb *remoteBackend) doWrite(ctx context.Context, id uint64, f *Future) time
 		rb.logger.Error("write request failed",
 			zap.Uint64("request-id", id),
 			zap.Error(err))
-		f.messageSended(err)
+		f.messageSent(err)
 		return 0
 	}
 	return v
@@ -536,10 +541,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 	}
 }
 
-func (rb *remoteBackend) fetch(
-	ctx context.Context,
-	messages []*Future,
-	maxFetchCount int) ([]*Future, bool) {
+func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future, bool) {
 	n := len(messages)
 	for i := 0; i < n; i++ {
 		messages[i] = nil
@@ -573,11 +575,11 @@ func (rb *remoteBackend) fetch(
 	return messages, false
 }
 
-func (rb *remoteBackend) makeAllWritesDoneWithClosed(ctx context.Context) {
+func (rb *remoteBackend) makeAllWritesDoneWithClosed() {
 	for {
 		select {
 		case m := <-rb.writeC:
-			m.messageSended(backendClosed)
+			m.messageSent(backendClosed)
 		default:
 			return
 		}
@@ -723,6 +725,7 @@ func (rb *remoteBackend) resetConn() error {
 		}
 		rb.logger.Error("init remote connection failed, retry later",
 			zap.Error(err))
+		rb.notifyAllWaitWritesFailed(moerr.NewInternalErrorNoCtx("init remote connection failed, retry later"))
 
 		duration := time.Duration(0)
 		for {
@@ -751,7 +754,7 @@ func (rb *remoteBackend) notifyAllWaitWritesFailed(err error) {
 	for {
 		select {
 		case f := <-rb.writeC:
-			f.messageSended(err)
+			f.messageSent(err)
 		default:
 			return
 		}

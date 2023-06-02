@@ -437,21 +437,21 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		if client := cnclient.GetRPCClient(); client != nil {
 			i := 0
 			for _, cn := range c.cnList {
-				if isSameCN(c.addr, cn.Addr) {
+				if cn.Addr == "" || isSameCN(c.addr, cn.Addr) {
 					continue
 				}
 				_, _, err := net.SplitHostPort(cn.Addr)
 				if err != nil {
-					logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
+					logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", cn.Addr)
 					continue
 				}
 				logutil.Infof("ping %s start", cn.Addr)
-				ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 				err = client.Ping(ctx, cn.Addr)
 				cancel()
 				// ping failed
 				if err != nil {
-					logutil.Infof("ping err %+v\n", err)
+					logutil.Infof("ping %s err %+v\n", cn.Addr, err)
 					continue
 				}
 				c.cnList[i] = cn
