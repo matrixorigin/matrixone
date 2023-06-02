@@ -663,8 +663,11 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	tableName := obj.GetObjName()
 	ctx, table, _ := tcc.getRelation(dbName, tableName, sub)
 
-	engineDefs, err := table.TableDefs(ctx)
 	var partitionInfo *plan2.PartitionByDef
+	engineDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return false
+	}
 	for _, def := range engineDefs {
 		if partitionDef, ok := def.(*engine.PartitionDef); ok {
 			if partitionDef.Partitioned > 0 {
