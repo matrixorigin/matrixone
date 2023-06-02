@@ -550,8 +550,10 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, m *mpool.
 }
 
 func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
-	pkIdx := uint16(w.pk)
-	w.writer.SetPrimaryKey(pkIdx)
+	if w.sortIndex > -1 { // that means we get a fake primary key, and we do not need to set primary key for write s3
+		pkIdx := uint16(w.pk)
+		w.writer.SetPrimaryKey(pkIdx)
+	}
 	_, err := w.writer.WriteBatch(bat)
 	if err != nil {
 		return err
