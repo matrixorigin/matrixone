@@ -964,6 +964,7 @@ func consumeLogTailOfPushWithoutLazyLoad(
 			return
 		}
 	}
+
 	for i := 0; i < len(lt.Commands); i++ {
 		if err = consumeEntry(ctx, primarySeqnum,
 			engine, state, &lt.Commands[i]); err != nil {
