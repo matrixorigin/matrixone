@@ -690,7 +690,7 @@ func (r *runner) tryCompactBlock(dbID, tableID uint64, id *objectio.Blockid, for
 	}
 
 	factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
-	if err != nil && factory == nil {
+	if err != nil || factory == nil {
 		logutil.Warnf("%s: %v", blkData.MutationInfo(), err)
 		return nil
 	}
