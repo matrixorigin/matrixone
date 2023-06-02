@@ -294,7 +294,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 			}
 		}
 
-		defer cs.cleanSend()
 		for {
 			select {
 			case <-ctx.Done():
@@ -500,27 +499,35 @@ func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
 		return err
 	}
 
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
+	send := func() (*Future, error) {
+		cs.mu.RLock()
+		defer cs.mu.RUnlock()
 
-	if cs.mu.closed {
-		return moerr.NewClientClosedNoCtx()
+		if cs.mu.closed {
+			return nil, moerr.NewClientClosedNoCtx()
+		}
+
+		id := response.GetID()
+		if v, ok := cs.sentStreamSequences.Load(id); ok {
+			seq := v.(uint32) + 1
+			cs.sentStreamSequences.Store(id, seq)
+			msg.stream = true
+			msg.streamSequence = seq
+		}
+
+		f := cs.newFutureFunc()
+		f.ref()
+		f.init(msg)
+		cs.c <- f
+		return f, nil
 	}
 
-	id := response.GetID()
-	if v, ok := cs.sentStreamSequences.Load(id); ok {
-		seq := v.(uint32) + 1
-		cs.sentStreamSequences.Store(id, seq)
-		msg.stream = true
-		msg.streamSequence = seq
+	f, err := send()
+	if err != nil {
+		return err
 	}
-
-	f := cs.newFutureFunc()
-	f.ref()
-	f.init(msg)
 	defer f.Close()
 
-	cs.c <- f
 	// stream only wait send completed
 	return f.waitSendCompleted()
 }
