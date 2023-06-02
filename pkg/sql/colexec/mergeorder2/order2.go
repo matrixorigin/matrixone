@@ -16,6 +16,7 @@ package mergeorder2
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -36,34 +37,43 @@ type container struct {
 	receiveOver bool
 	sendOver    bool
 
-	// batch list and order list to store the intermediate data.
+	// batchList is the data structure to store the all the received batches
 	batchList []*batch.Batch
-	orderList []itemPosition
+	orderCols [][]*vector.Vector
+	indexList []uint64
 
 	// expression executors for order columns.
 	executors []colexec.ExpressionExecutor
 }
 
-type itemPosition struct {
-	batIdx int
-	rowIdx int
-}
-
-func (ctr *container) mergeAndSort(bat *batch.Batch) error {
+func (ctr *container) mergeAndEvaluateOrderColumn(proc *process.Process, bat *batch.Batch) error {
 	ctr.batchList = append(ctr.batchList, bat)
-	// IF ONLY ONE BATCH, DO NOT SORT.
+	ctr.orderCols = append(ctr.orderCols, nil)
+	// if only one batch, no need to evaluate the order column.
 	if len(ctr.batchList) == 1 {
-
 		return nil
 	}
 
+	index := len(ctr.orderCols) - 1
+	return ctr.evaluateOrderColumn(proc, index)
+}
+
+func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) error {
+	inputs := []*batch.Batch{ctr.batchList[index]}
+
+	ctr.orderCols[index] = make([]*vector.Vector, len(ctr.executors))
+	for i := 0; i < len(ctr.executors); i++ {
+		vec, err := ctr.executors[i].Eval(proc, inputs)
+		if err != nil {
+			return err
+		}
+		ctr.orderCols[index][i] = vec
+	}
 	return nil
 }
 
 func (ctr *container) pickAndSend(proc *process.Process) error {
-	proc.SetInputBatch(batch.EmptyBatch)
-
-	if len(ctr.orderList) == 0 {
+	if len(ctr.indexList) == 0 {
 		ctr.sendOver = true
 	}
 	return nil
@@ -90,10 +100,21 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 			if end {
+				// If only one batch, no need to sort. just send it.
+				if len(ctr.batchList) == 1 {
+					proc.SetInputBatch(ctr.batchList[0])
+					ctr.batchList[0] = nil
+					return true, nil
+				}
+
+				// evaluate the first batch's order column.
+				if err = ctr.evaluateOrderColumn(proc, 0); err != nil {
+					return false, err
+				}
 				ctr.receiveOver = true
 				break
 			}
-			if err = ctr.mergeAndSort(bat); err != nil {
+			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
 				return false, err
 			}
 		}
