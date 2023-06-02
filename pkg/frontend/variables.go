@@ -648,7 +648,7 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 
 	// set type system variable value equals ""
 	if bitCount == 0 {
-		return bld.String(), nil
+		return "", nil
 	}
 
 	for i := 0; i < bitCount; i++ {
