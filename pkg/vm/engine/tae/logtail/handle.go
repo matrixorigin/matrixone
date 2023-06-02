@@ -791,3 +791,25 @@ func LoadCheckpointEntries(
 	}
 	return entries, nil
 }
+
+func DiffCheckPoints(ckpd1, ckpd2 *CheckpointData) (diff []objectio.ObjectName) {
+	m := make(map[string]bool)
+
+	ins2, _, _, _ := ckpd2.GetBlkBatchs()
+	for i := 0; i < ins2.Length(); i++ {
+		metaLoc := objectio.Location(ins2.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		s := metaLoc.Name().String()
+		m[s] = true
+	}
+
+	ins1, _, _, _ := ckpd1.GetBlkBatchs()
+	for i := 0; i < ins1.Length(); i++ {
+		metaLoc := objectio.Location(ins1.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Get(i).([]byte))
+		s := metaLoc.Name().String()
+		if !m[s] {
+			diff = append(diff, metaLoc.Name())
+		}
+	}
+
+	return
+}
