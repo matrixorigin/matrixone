@@ -65,6 +65,8 @@ func GetSkip1Logger() *zap.Logger {
 	return _skip1Logger.Load().(*zap.Logger)
 }
 
+// GetErrorLogger return logger which stacktrace is zap.ErrorLevel forever.
+// Make sure you need the stacktrace which you do error-log.
 func GetErrorLogger() *zap.Logger {
 	return _errorLogger.Load().(*zap.Logger)
 }
@@ -73,7 +75,8 @@ func GetErrorLogger() *zap.Logger {
 func replaceGlobalLogger(logger *zap.Logger) {
 	_globalLogger.Store(logger)
 	_skip1Logger.Store(logger.WithOptions(zap.AddCallerSkip(1)))
-	_errorLogger.Store(logger.WithOptions(zap.AddCallerSkip(1)))
+	// PS: _errorLogger must have error-level stacktrace.
+	_errorLogger.Store(logger.WithOptions(zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel)))
 }
 
 type LogConfig struct {

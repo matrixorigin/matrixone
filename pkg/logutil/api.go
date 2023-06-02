@@ -34,7 +34,7 @@ func Warn(msg string, fields ...zap.Field) {
 }
 
 func Error(msg string, fields ...zap.Field) {
-	GetErrorLogger().Error(msg, fields...)
+	GetSkip1Logger().Error(msg, fields...)
 }
 
 func Panic(msg string, fields ...zap.Field) {
@@ -66,9 +66,9 @@ func Warnf(msg string, fields ...interface{}) {
 // Errorf only use in develop mode
 func Errorf(msg string, fields ...interface{}) {
 	if len(fields) == 0 {
-		GetErrorLogger().Error(msg)
+		GetSkip1Logger().Error(msg)
 	} else {
-		GetErrorLogger().Error(fmt.Sprintf(msg, fields...))
+		GetSkip1Logger().Error(fmt.Sprintf(msg, fields...))
 	}
 }
 
