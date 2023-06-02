@@ -133,10 +133,6 @@ func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Set the label session variable.
-	if _, err := sc.ExecStmt(c.clientInfo.genSetVarStmt(), nil); err != nil {
-		return nil, err
-	}
 	// Set the use defined variables, including session variables and user variables.
 	for _, stmt := range c.setVarStmts {
 		if _, err := sc.ExecStmt(stmt, nil); err != nil {

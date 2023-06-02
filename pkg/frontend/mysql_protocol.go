@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha1"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -62,7 +64,7 @@ var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 
 var serverVersion atomic.Value
 
-const defaultSaltReadTimeout = time.Millisecond * 100
+const defaultSaltReadTimeout = time.Millisecond * 200
 
 func init() {
 	serverVersion.Store("0.5.0")
@@ -2574,9 +2576,10 @@ func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
 	return mp.makeEOFPayload(warnings, status)
 }
 
-// tryUpdateSalt tries to update salt with the value read from proxy module.
-func (mp *MysqlProtocolImpl) tryUpdateSalt(rs goetty.IOSession) {
+// receiveExtraInfo tries to receive salt and labels read from proxy module.
+func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 	saltLen := 20
+	// TODO(volgariver6): when proxy is stable, remove this deadline setting.
 	if err := rs.RawConn().SetReadDeadline(time.Now().Add(defaultSaltReadTimeout)); err != nil {
 		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
 		return
@@ -2596,6 +2599,16 @@ func (mp *MysqlProtocolImpl) tryUpdateSalt(rs goetty.IOSession) {
 		logErrorf(mp.GetDebugString(), "failed to get salt: %v", err)
 	} else {
 		mp.SetSalt(data)
+	}
+
+	// Read requested labels from proxy.
+	label := &proxy.RequestLabel{}
+	reader := bufio.NewReader(rs.RawConn())
+	if err = label.Decode(reader); err != nil {
+		logErrorf(mp.GetDebugString(), "failed to get CN labels: %v", err)
+	} else {
+		mp.GetSession().requestLabel = label.Labels
+		logDebugf(mp.GetDebugString(), "got requested CN labels: %v", *label)
 	}
 }
 

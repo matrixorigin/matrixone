@@ -139,12 +139,15 @@ func (b *msgBuf) writeAvail() int {
 func (b *msgBuf) preRecv() (int, txnTag, error) {
 	// First we try to receive at least preRecvLen data and put it into
 	// the buffer.
-	if err := b.receiveAtLeast(preRecvLen); err != nil {
+	if err := b.receiveAtLeast(mysqlHeadLen); err != nil {
 		return 0, 0, err
 	}
 
-	cmd := b.buf[b.begin+mysqlHeadLen]
 	bodyLen := int(uint32(b.buf[b.begin]) | uint32(b.buf[b.begin+1])<<8 | uint32(b.buf[b.begin+2])<<16)
+	if bodyLen == 0 {
+		return mysqlHeadLen, txnOther, nil
+	}
+	cmd := b.buf[b.begin+mysqlHeadLen]
 
 	// Max length is 3 bytes.
 	if bodyLen < 1 || bodyLen >= 1<<24-1 {
@@ -203,8 +206,8 @@ func (b *msgBuf) sendTo(dst io.Writer) (int, error) {
 		writePos = b.end
 	}
 	b.begin = writePos
-	if writePos-readPos < preRecvLen {
-		panic(fmt.Sprintf("%d bytes have to been read", preRecvLen))
+	if writePos-readPos < mysqlHeadLen {
+		panic(fmt.Sprintf("%d bytes have to be read", mysqlHeadLen))
 	}
 
 	// Try to consume the message synchronously.

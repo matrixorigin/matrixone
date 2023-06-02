@@ -125,14 +125,16 @@ func GetLoggerWithOptions(
 	syncer zapcore.WriteSyncer,
 	options ...zap.Option) *zap.Logger {
 	var cores []zapcore.Core
-	options = append(options, zap.AddStacktrace(zapcore.FatalLevel), zap.AddCaller())
-	if syncer == nil {
-		syncer = getConsoleSyncer()
+	if EnableLog() {
+		options = append(options, zap.AddStacktrace(zapcore.FatalLevel), zap.AddCaller())
+		if syncer == nil {
+			syncer = getConsoleSyncer()
+		}
+		if encoder == nil {
+			encoder = getLoggerEncoder("console")
+		}
+		cores = append(cores, zapcore.NewCore(encoder, syncer, level))
 	}
-	if encoder == nil {
-		encoder = getLoggerEncoder("console")
-	}
-	cores = append(cores, zapcore.NewCore(encoder, syncer, level))
 
 	if EnableStoreDB() {
 		encoder, syncer := getTraceLogSinks()

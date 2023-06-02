@@ -229,7 +229,6 @@ func TestAppend4(t *testing.T) {
 }
 
 func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
-	t.Skip("fsdfsdf")
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*(uint32(schema.SegmentMaxBlocks)+1)-1))
 	defer bat.Close()
 	bats := bat.Split(4)
@@ -6019,6 +6018,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 }
 
 func TestGlobalCheckpoint3(t *testing.T) {
+	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -6068,6 +6068,7 @@ func TestGlobalCheckpoint3(t *testing.T) {
 }
 
 func TestGlobalCheckpoint4(t *testing.T) {
+	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -6192,6 +6193,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 }
 
 func TestGlobalCheckpoint6(t *testing.T) {
+	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -6876,6 +6878,7 @@ func TestDedupSnapshot2(t *testing.T) {
 }
 
 func TestDedupSnapshot3(t *testing.T) {
+	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)

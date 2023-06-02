@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
@@ -35,21 +36,29 @@ func TestKeeper(t *testing.T) {
 			c2 := make(chan struct{})
 			s.RegisterMethodHandler(
 				pb.Method_KeepLockTableBind,
-				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+				func(
+					ctx context.Context,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
 					n1++
 					if n1 == 10 {
 						close(c1)
 					}
-					return nil
+					writeResponse(ctx, resp, nil, cs)
 				})
 			s.RegisterMethodHandler(
 				pb.Method_KeepRemoteLock,
-				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
+				func(
+					ctx context.Context,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
 					n2++
 					if n2 == 10 {
 						close(c2)
 					}
-					return nil
+					writeResponse(ctx, resp, nil, cs)
 				})
 			m := &sync.Map{}
 			m.Store(0,
@@ -77,17 +86,28 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 	runRPCTests(
 		t,
 		func(c Client, s Server) {
+			events := newWaiterEvents(1)
+			defer events.close()
+
 			s.RegisterMethodHandler(
 				pb.Method_KeepLockTableBind,
-				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
-					r2.KeepLockTableBind.OK = false
-					return nil
+				func(
+					ctx context.Context,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					resp.KeepLockTableBind.OK = false
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			s.RegisterMethodHandler(
 				pb.Method_KeepRemoteLock,
-				func(ctx context.Context, r1 *pb.Request, r2 *pb.Response) error {
-					return nil
+				func(
+					ctx context.Context,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			m := &sync.Map{}
@@ -96,12 +116,14 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 					pb.LockTable{ServiceID: "s1"},
 					nil,
 					nil,
+					events,
 					runtime.DefaultRuntime().Clock()))
 			m.Store(2,
 				newLocalLockTable(
 					pb.LockTable{ServiceID: "s1"},
 					nil,
 					nil,
+					events,
 					runtime.DefaultRuntime().Clock()))
 			m.Store(3,
 				newRemoteLockTable(

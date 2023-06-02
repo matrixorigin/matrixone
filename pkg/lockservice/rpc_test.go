@@ -41,8 +41,9 @@ func TestRPCSend(t *testing.T) {
 				func(
 					ctx context.Context,
 					req *lock.Request,
-					resp *lock.Response) error {
-					return nil
+					resp *lock.Response,
+					cs morpc.ClientSession) {
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -66,8 +67,9 @@ func TestMOErrorCanHandled(t *testing.T) {
 				func(
 					ctx context.Context,
 					req *lock.Request,
-					resp *lock.Response) error {
-					return moerr.NewDeadLockDetectedNoCtx()
+					resp *lock.Response,
+					cs morpc.ClientSession) {
+					writeResponse(ctx, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -91,8 +93,9 @@ func TestRequestCanBeFilter(t *testing.T) {
 				func(
 					ctx context.Context,
 					req *lock.Request,
-					resp *lock.Response) error {
-					return nil
+					resp *lock.Response,
+					cs morpc.ClientSession) {
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -117,9 +120,10 @@ func TestLockTableBindChanged(t *testing.T) {
 				func(
 					ctx context.Context,
 					req *lock.Request,
-					resp *lock.Response) error {
+					resp *lock.Response,
+					cs morpc.ClientSession) {
 					resp.NewBind = &lock.LockTable{ServiceID: "s1"}
-					return nil
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)

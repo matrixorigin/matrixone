@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -78,6 +79,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Limit:       limit.String,
 	Order:       order.String,
 	Group:       group.String,
+	Window:      window.String,
 	Merge:       merge.String,
 	Output:      output.String,
 	Offset:      offset.String,
@@ -133,6 +135,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Limit:       limit.Prepare,
 	Order:       order.Prepare,
 	Group:       group.Prepare,
+	Window:      window.Prepare,
 	Merge:       merge.Prepare,
 	Output:      output.Prepare,
 	Offset:      offset.Prepare,
@@ -188,6 +191,7 @@ var execFunc = [...]func(int, *process.Process, any, bool, bool) (bool, error){
 	Limit:       limit.Call,
 	Order:       order.Call,
 	Group:       group.Call,
+	Window:      window.Call,
 	Merge:       merge.Call,
 	Output:      output.Call,
 	Offset:      offset.Call,

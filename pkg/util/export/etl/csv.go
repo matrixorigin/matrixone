@@ -66,7 +66,7 @@ func (w *CSVWriter) GetContent() string {
 }
 
 func (w *CSVWriter) FlushAndClose() (int, error) {
-	n, err := w.writer.WriteString(w.buf.String())
+	n, err := w.writer.WriteString(util.UnsafeBytesToString(w.buf.Bytes()))
 	if err != nil {
 		return 0, err
 	}

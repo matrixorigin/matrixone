@@ -124,6 +124,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 			// Normal non partition table
 			s3Writer := ap.ctr.s3Writer
 			// write to s3.
+			bat.Attrs = append(bat.Attrs[:0], ap.InsertCtx.Attrs...)
 			if err := s3Writer.WriteS3Batch(proc, bat); err != nil {
 				ap.ctr.state = End
 				return false, err

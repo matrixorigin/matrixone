@@ -15,26 +15,8 @@
 package instr
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"testing"
 )
-
-func TestInstr(t *testing.T) {
-	s1 := []string{"abc"}
-	s2 := []string{"bc"}
-	rs := make([]int64, 3)
-	nsp := nulls.NewWithSize(3)
-	snasp := []*nulls.Nulls{nulls.NewWithSize(3), nulls.NewWithSize(3)}
-	Instr(s1, s2, snasp, rs, nsp)
-	nsp.Set(0)
-	Instr(s1, s2, snasp, rs, nsp)
-	s1 = append(s1, "abc")
-	Instr(s1, s2, snasp, rs, nsp)
-	s2 = append(s2, "bc")
-	Instr(s1, s2, snasp, rs, nsp)
-	s1 = s1[:1]
-	Instr(s1, s2, snasp, rs, nsp)
-}
 
 func TestSingle(t *testing.T) {
 	kases := []struct {

@@ -645,10 +645,11 @@ func fetchVarlenaRows(
 				max = v
 			}
 		}
-		return [][]byte{
-				fn(min),
-				fn(max)},
-			lock.Granularity_Range
+		rows := [][]byte{fn(min), fn(max)}
+		if bytes.Equal(rows[0], rows[1]) {
+			return rows[:1], lock.Granularity_Row
+		}
+		return rows, lock.Granularity_Range
 	}
 	rows := make([][]byte, 0, n)
 	for idx := range data {
@@ -720,10 +721,11 @@ func fetchFixedRowsWithCompare[T any](
 				max = v
 			}
 		}
-		return [][]byte{
-				fn(min),
-				fn(max)},
-			lock.Granularity_Range
+		rows := [][]byte{fn(min), fn(max)}
+		if bytes.Equal(rows[0], rows[1]) {
+			return rows[:1], lock.Granularity_Row
+		}
+		return rows, lock.Granularity_Range
 	}
 	rows := make([][]byte, 0, n)
 	for row, v := range values {

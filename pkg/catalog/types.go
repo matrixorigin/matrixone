@@ -187,6 +187,7 @@ const (
 
 // index use to update constraint
 const (
+	MO_TABLES_ALTER_TABLE       = 0
 	MO_TABLES_UPDATE_CONSTRAINT = 4
 )
 

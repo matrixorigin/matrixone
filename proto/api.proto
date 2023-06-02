@@ -181,6 +181,7 @@ message Entry {
         Insert = 0;
         Delete = 1;
         Update = 2;
+        Alter = 3;
     }
     EntryType entry_type = 1;
     uint64 table_id      = 2;

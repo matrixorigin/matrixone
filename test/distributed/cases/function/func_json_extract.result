@@ -137,7 +137,7 @@ json_extract({"a":"a1","b":"b1"}, $.*)
 create view v1 as select json_extract('{"a":1}','$.a');
 desc v1;
 Field    Type    Null    Key    Default    Extra    Comment
-json_extract({"a":1}, $.a)    JSON(0)    YES        null
+json_extract({"a":1}, $.a)    JSON(0)    NO        null
 select json_extract('{"a":1}',null);
 json_extract({"a":1}, null)
 null

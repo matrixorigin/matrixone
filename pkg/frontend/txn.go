@@ -16,6 +16,9 @@ package frontend
 
 import (
 	"context"
+	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -25,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"sync"
 )
 
 type TxnHandler struct {
@@ -42,14 +44,18 @@ type TxnHandler struct {
 	// default 24 hours.
 	txnCtx       context.Context
 	txnCtxCancel context.CancelFunc
+	shareTxn     bool
 	mu           sync.Mutex
 	entryMu      sync.Mutex
 }
 
-func InitTxnHandler(storage engine.Engine, txnClient TxnClient) *TxnHandler {
+func InitTxnHandler(storage engine.Engine, txnClient TxnClient, txnCtx context.Context, txnOp TxnOperator) *TxnHandler {
 	h := &TxnHandler{
-		storage:   &engine.EntireEngine{Engine: storage},
-		txnClient: txnClient,
+		storage:     &engine.EntireEngine{Engine: storage},
+		txnClient:   txnClient,
+		txnCtx:      txnCtx,
+		txnOperator: txnOp,
+		shareTxn:    txnCtx != nil && txnOp != nil,
 	}
 	return h
 }
@@ -110,6 +116,10 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 		panic("must set txn client")
 	}
 
+	if th.shareTxn {
+		return nil, nil, moerr.NewInternalError(th.ses.GetRequestContext(), "NewTxnOperator: the share txn is not allowed to create new txn")
+	}
+
 	var opts []client.TxnOption
 	rt := moruntime.ProcessLevelRuntime()
 	if rt != nil {
@@ -122,6 +132,8 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
+	opts = append(opts,
+		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)))
 	th.txnOperator, err = th.txnClient.New(
 		txnCtx,
 		th.ses.getLastCommitTS(),
@@ -141,6 +153,9 @@ func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
 	var err error
 	var txnCtx context.Context
 	var txnOp TxnOperator
+	if th.IsShareTxn() {
+		return nil, nil, moerr.NewInternalError(th.GetSession().GetRequestContext(), "NewTxn: the share txn is not allowed to create new txn")
+	}
 	if th.IsValidTxnOperator() {
 		err = th.CommitTxn()
 		if err != nil {
@@ -178,7 +193,7 @@ func (th *TxnHandler) NewTxn() (context.Context, TxnOperator, error) {
 func (th *TxnHandler) IsValidTxnOperator() bool {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	return th.txnOperator != nil
+	return th.txnOperator != nil && th.txnCtx != nil
 }
 
 func (th *TxnHandler) SetTxnOperatorInvalid() {
@@ -214,7 +229,7 @@ func (th *TxnHandler) GetSession() *Session {
 func (th *TxnHandler) CommitTxn() error {
 	th.entryMu.Lock()
 	defer th.entryMu.Unlock()
-	if !th.IsValidTxnOperator() {
+	if !th.IsValidTxnOperator() || th.IsShareTxn() {
 		return nil
 	}
 	ses := th.GetSession()
@@ -284,7 +299,7 @@ func (th *TxnHandler) CommitTxn() error {
 func (th *TxnHandler) RollbackTxn() error {
 	th.entryMu.Lock()
 	defer th.entryMu.Unlock()
-	if !th.IsValidTxnOperator() {
+	if !th.IsValidTxnOperator() || th.IsShareTxn() {
 		return nil
 	}
 	ses := th.GetSession()
@@ -366,6 +381,12 @@ func (th *TxnHandler) cancelTxnCtx() {
 	if th.txnCtxCancel != nil {
 		th.txnCtxCancel()
 	}
+}
+
+func (th *TxnHandler) IsShareTxn() bool {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.shareTxn
 }
 
 func (ses *Session) SetOptionBits(bit uint32) {

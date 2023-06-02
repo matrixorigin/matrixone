@@ -52,6 +52,9 @@ message Dispatch {
   repeated int32 ShuffleRegIdxLocal=5;
   repeated int32 ShuffleRegIdxRemote=6;
   bool  is_sink = 7;
+  int32 ShuffleType = 8;
+  int64 ShuffleColMin = 9;
+  int64 ShuffleColMax = 10;
 }
 
 message MultiArguemnt{
@@ -390,6 +393,7 @@ message SessionInfo {
   string version = 6;
   bytes  time_zone = 7;
   string  account = 8;
+  repeated string query_id = 9;
 }
 
 message Pipeline {

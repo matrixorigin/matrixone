@@ -91,7 +91,8 @@ UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
-ExpectedEOB
+col1    col2
+2    b
 deallocate prepare s1;
 drop table if exists test_01;
 create table test_01(a int, b varchar);
@@ -199,8 +200,8 @@ prepare s1 from select * from test_table where col1=?;
 set @a=2;
 internal error: Uncommitted transaction exists. Please commit or rollback first.
 execute s1 using @a;
-ExpectedEOB
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+col1    col2
+2    b
 deallocate prepare s1;
 rollback;
 use system;

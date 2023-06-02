@@ -132,7 +132,7 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	bat.Cnt = 1
 	bat.Zs = append(bat.Zs[:0], rbat.Zs...)
 	bat.Vecs = rbat.Vecs
-	bat.Attrs = rbat.Attrs
+	bat.Attrs = append(bat.Attrs, rbat.Attrs...)
 	// initialize bat.Aggs only if necessary
 	if len(rbat.AggInfos) > 0 {
 		bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))

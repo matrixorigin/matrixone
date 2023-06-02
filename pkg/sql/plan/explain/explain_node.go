@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -272,6 +271,15 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, aggListInfo)
 	}
 
+	// Get Window function info
+	if ndesc.Node.NodeType == plan.Node_WINDOW {
+		windowSpecListInfo, err := ndesc.GetWindowSpectListInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, windowSpecListInfo)
+	}
+
 	// Get Filter list info
 	if len(ndesc.Node.FilterList) > 0 {
 		filterInfo, err := ndesc.GetFilterConditionInfo(ctx, options)
@@ -415,12 +423,23 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 
-	idx := plan2.GetShuffleIndexForGroupBy(ndesc.Node)
-	if idx >= 0 {
-		buf.WriteString(" shuffle: ")
-		err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
-		if err != nil {
-			return "", err
+	if ndesc.Node.Stats.Shuffle {
+		idx := ndesc.Node.Stats.ShuffleColIdx
+		shuffleType := ndesc.Node.Stats.ShuffleType
+		if shuffleType == plan.ShuffleType_Hash {
+			buf.WriteString(" shuffle: hash(")
+			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
+		} else {
+			buf.WriteString(" shuffle: range(")
+			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
 		}
 	}
 	return buf.String(), nil
@@ -434,6 +453,29 @@ func (ndesc *NodeDescribeImpl) GetAggregationInfo(ctx context.Context, options *
 		for _, v := range ndesc.Node.GetAggList() {
 			if !first {
 				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetWindowSpectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Window Function: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.GetWinSpecList() {
+			if !first {
+				buf.WriteString("\n")
 			}
 			first = false
 			err := describeExpr(ctx, v, options, buf)

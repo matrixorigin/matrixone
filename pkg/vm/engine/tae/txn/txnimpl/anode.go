@@ -238,7 +238,7 @@ func (n *anode) GetColumnDataByIds(
 	return
 }
 
-func (n *anode) GetColumnDataById(_ context.Context, colIdx int) (view *model.ColumnView, err error) {
+func (n *anode) GetColumnDataById(ctx context.Context, colIdx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(colIdx)
 	err = n.FillColumnView(view)
 	return

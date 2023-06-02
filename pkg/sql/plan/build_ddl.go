@@ -48,7 +48,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
 			Default: &plan.Default{
-				NullAbility:  true,
+				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
 				OriginString: "",
 			},
@@ -249,7 +249,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 		}
 		dropSequence.Table = ""
 	}
-	if obj != nil && obj.PubAccountId != -1 {
+	if obj != nil && obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop sequence in subscription database")
 	}
 
@@ -280,6 +280,9 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
@@ -1185,7 +1188,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can truncate the cluster table")
 		}
 
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "can not truncate table '%v' which is published by other account", truncateTable.Table)
 		}
 
@@ -1268,7 +1271,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can drop the cluster table")
 		}
 
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop subscription table %s", dropTable.Table)
 		}
 
@@ -1328,7 +1331,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		if tableDef.ViewSql == nil {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop view in subscription database")
 		}
 	}
@@ -1424,7 +1427,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create index in subscription database")
 	}
 	// check index
@@ -1512,7 +1515,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
 	}
 
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop index in subscription database")
 	}
 
@@ -1572,7 +1575,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 				viewName)
 		}
 	} else {
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter view in subscription database")
 		}
 		if oldViewDef.ViewSql == nil {
@@ -1627,7 +1630,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if tableDef.ViewSql != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "you should use alter view statemnt for View")
 	}
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
 	alterTable.Database = databaseName
@@ -1647,6 +1650,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 
 	alterTable.TableDef = tableDef
 
+	var primaryKeys []string
+	var indexs []string
+	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
+	secondaryIndexInfos := make([]*tree.Index, 0)
 	for i, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
@@ -1657,6 +1664,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			switch opt.Typ {
 			case tree.AlterTableDropColumn:
 				alterTableDrop.Typ = plan.AlterTableDrop_COLUMN
+				err := checkIsDroppableColumn(tableDef, constraintName, ctx)
+				if err != nil {
+					return nil, err
+				}
 				for _, col := range tableDef.Cols {
 					if col.Name == constraintName {
 						name_not_found = false
@@ -1818,7 +1829,150 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 					AlterIndex: alterTableIndex,
 				},
 			}
+
+		case *tree.TableOptionComment:
+			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for field '%s' is too long", alterTable.TableDef.Name)
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterComment{
+					AlterComment: &plan.AlterTableComment{
+						NewComment: opt.Comment,
+					},
+				},
+			}
+		case *tree.AlterTableName:
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterName{
+					AlterName: &plan.AlterTableName{
+						OldName: tableDef.Name,
+						NewName: string(opt.Name.ToTableName().ObjectName),
+					},
+				},
+			}
+		case *tree.AlterAddCol:
+			colType, err := getTypeFromAst(ctx.GetContext(), opt.Column.Type)
+			if err != nil {
+				return nil, err
+			}
+			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
+				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
+				if colType.GetWidth() > types.MaxStringSize {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
+				}
+			}
+			var pks []string
+			var comment string
+			var auto_incr bool
+			for _, attr := range opt.Column.Attributes {
+				switch attribute := attr.(type) {
+				case *tree.AttributePrimaryKey, *tree.AttributeKey:
+					if colType.GetId() == int32(types.T_blob) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
+					}
+					if colType.GetId() == int32(types.T_text) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
+					}
+					if colType.GetId() == int32(types.T_json) {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", opt.Column.Name.Parts[0]))
+					}
+					pks = append(pks, opt.Column.Name.Parts[0])
+				case *tree.AttributeComment:
+					comment = attribute.CMT.String()
+					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
+						return nil, moerr.NewInvalidInput(ctx.GetContext(), "comment for column '%s' is too long", opt.Column.Name.Parts[0])
+					}
+				case *tree.AttributeAutoIncrement:
+					auto_incr = true
+					if !types.T(colType.GetId()).IsInteger() {
+						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
+					}
+				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
+						KeyParts: []*tree.KeyPart{
+							{
+								ColName: opt.Column.Name,
+							},
+						},
+						Name: opt.Column.Name.Parts[0],
+					})
+					indexs = append(indexs, opt.Column.Name.Parts[0])
+				}
+			}
+			if len(pks) > 0 {
+				if len(primaryKeys) > 0 {
+					return nil, moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
+				}
+				primaryKeys = pks
+			}
+
+			defaultValue, err := buildDefaultExpr(opt.Column, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+			if auto_incr && defaultValue.Expr != nil {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", opt.Column.Name.Parts[0])
+			}
+
+			onUpdateExpr, err := buildOnUpdate(opt.Column, colType, ctx.GetProcess())
+			if err != nil {
+				return nil, err
+			}
+
+			if !checkTableColumnNameValid(opt.Column.Name.Parts[0]) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", opt.Column.Name.Parts[0])
+			}
+
+			colType.AutoIncr = auto_incr
+			col := &ColDef{
+				Name:     opt.Column.Name.Parts[0],
+				Alg:      plan.CompressType_Lz4,
+				Typ:      colType,
+				Default:  defaultValue,
+				OnUpdate: onUpdateExpr,
+				Comment:  comment,
+			}
+			colMap[col.Name] = col
+			preName := ""
+			if opt.Pos.PreColName != nil {
+				preName = opt.Pos.PreColName.Parts[0]
+			}
+			err = checkIsAddableColumn(tableDef, opt.Column.Name.Parts[0], colType, ctx)
+			if err != nil {
+				return nil, err
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AddCol{
+					AddCol: &plan.AlterAddCol{
+						Name:    opt.Column.Name.Parts[0],
+						PreName: preName,
+						Type:    colType,
+						Pos:     opt.Pos.Pos,
+					},
+				},
+			}
 		}
+	}
+
+	for _, str := range indexs {
+		if _, ok := colMap[str]; !ok {
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", str)
+		}
+		if colMap[str].Typ.Id == int32(types.T_blob) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("BLOB column '%s' cannot be in index", str))
+		}
+		if colMap[str].Typ.Id == int32(types.T_text) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("TEXT column '%s' cannot be in index", str))
+		}
+		if colMap[str].Typ.Id == int32(types.T_json) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in index", str))
+		}
+	}
+
+	// check Constraint Name (include index/ unique)
+	err := checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
+	if err != nil {
+		return nil, err
 	}
 
 	return &Plan{
@@ -1858,7 +2012,7 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tblName)
 		}
 
-		if obj.PubAccountId != -1 {
+		if obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot lock table in subscription database")
 		}
 

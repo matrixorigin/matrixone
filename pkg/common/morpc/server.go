@@ -368,6 +368,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						if ce != nil {
 							ce.Write(fields...)
 						}
+						if err != nil {
+							return
+						}
 					}
 
 					for _, f := range responses {
@@ -525,6 +528,9 @@ func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
 func (cs *clientSession) Write(
 	ctx context.Context,
 	response Message) error {
+	if ctx == nil {
+		panic("Write nil context")
+	}
 	return cs.WriteRPCMessage(RPCMessage{
 		Ctx:     ctx,
 		Message: response,

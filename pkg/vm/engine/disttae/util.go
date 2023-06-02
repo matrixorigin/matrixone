@@ -11,11 +11,11 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"math"
 	"sort"
 	"strings"
@@ -23,14 +23,17 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -701,5 +704,131 @@ func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		infos = append(infos, txnMeta.DebugString())
 		logutil.Debugf(msg+" %s", infos...)
+	}
+}
+
+// SelectForSuperTenant is used to select CN servers for sys tenant.
+// For sys tenant, there are some special strategies to select CN servers.
+// The following strategies are listed in order of priority:
+//  1. The CN servers which are configured as sys account.
+//  2. The CN servers which are configured as some labels whose key is not account.
+//  3. The CN servers which are configured as no labels.
+//  4. At last, if no CN servers are selected,
+//     4.1 If the username is dump or root, we just select one randomly.
+//     4.2 Else, no servers are selected.
+func SelectForSuperTenant(
+	selector clusterservice.Selector,
+	username string,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService),
+) {
+	mc := clusterservice.GetMOCluster()
+
+	// found is true indicates that we have find some available CN services.
+	var found bool
+	var emptyCNs, allCNs []*metadata.CNService
+
+	// S1: Select servers that configured as sys account.
+	mc.GetCNService(selector, func(s metadata.CNService) bool {
+		if filter != nil && filter(s.ServiceID) {
+			return true
+		}
+		// At this phase, only append non-empty servers.
+		if len(s.Labels) == 0 {
+			emptyCNs = append(emptyCNs, &s)
+		} else {
+			found = true
+			appendFn(&s)
+		}
+		return true
+	})
+	if found {
+		return
+	}
+
+	// S2: If there are no servers that are configured as sys account.
+	// There may be some performance issues, but we need to do this still.
+	// Select all CN servers and select ones which are not configured as
+	// label with key "account".
+	mc.GetCNService(clusterservice.NewSelector(), func(s metadata.CNService) bool {
+		if filter != nil && filter(s.ServiceID) {
+			return true
+		}
+		// Append CN servers that are not configured as label with key "account".
+		if _, ok := s.Labels["account"]; len(s.Labels) > 0 && !ok {
+			found = true
+			appendFn(&s)
+		}
+		allCNs = append(allCNs, &s)
+		return true
+	})
+	if found {
+		return
+	}
+
+	// S3: Select CN servers which has no labels.
+	if len(emptyCNs) > 0 {
+		for _, cn := range emptyCNs {
+			appendFn(cn)
+		}
+		return
+	}
+
+	// S4.1: If the root is super, return all servers.
+	username = strings.ToLower(username)
+	if username == "dump" || username == "root" {
+		for _, cn := range allCNs {
+			appendFn(cn)
+		}
+		return
+	}
+
+	// S4.2: No servers are returned.
+}
+
+// SelectForCommonTenant selects CN services for common tenant.
+// If there are CN services for the selector, just select them,
+// else, return CN services with empty labels if there are any.
+func SelectForCommonTenant(
+	selector clusterservice.Selector, filter func(string) bool, appendFn func(service *metadata.CNService),
+) {
+	mc := clusterservice.GetMOCluster()
+
+	// found is true indicates that there are CN services for the selector.
+	var found bool
+
+	// preEmptyCNs keeps the CN services that has empty labels before we
+	// find any CN service with non-empty label.
+	var preEmptyCNs []*metadata.CNService
+
+	mc.GetCNService(selector, func(s metadata.CNService) bool {
+		if filter != nil && filter(s.ServiceID) {
+			return true
+		}
+		if len(s.Labels) > 0 {
+			// Find available CN, append it.
+			found = true
+			appendFn(&s)
+		} else {
+			if found {
+				// If there are already CN services with non-empty labels,
+				// then ignore those with empty labels.
+				return true
+			} else {
+				// If there are no CN services with non-empty labels yet,
+				// save the CNs to preEmptyCNs first.
+				preEmptyCNs = append(preEmptyCNs, &s)
+				return true
+			}
+		}
+		return true
+	})
+
+	// If there are no CN services with non-empty labels,
+	// return those with empty labels.
+	if !found && len(preEmptyCNs) > 0 {
+		for _, cn := range preEmptyCNs {
+			appendFn(cn)
+		}
 	}
 }

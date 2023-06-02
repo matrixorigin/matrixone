@@ -55,6 +55,9 @@ type Routine struct {
 	connectionBeCounted atomic.Bool
 
 	mu sync.Mutex
+
+	// the id of goroutine that executes the request
+	goroutineID uint64
 }
 
 func (rt *Routine) increaseCount(counter func()) {
@@ -128,6 +131,16 @@ func (rt *Routine) getCmdExecutor() CmdExecutor {
 
 func (rt *Routine) getConnectionID() uint32 {
 	return rt.getProtocol().ConnectionID()
+}
+
+func (rt *Routine) updateGoroutineId() {
+	if rt.goroutineID == 0 {
+		rt.goroutineID = GetRoutineId()
+	}
+}
+
+func (rt *Routine) getGoroutineId() uint64 {
+	return rt.goroutineID
 }
 
 func (rt *Routine) getParameters() *config.FrontendParameters {
@@ -295,10 +308,13 @@ func (rt *Routine) cleanup() {
 	//step 1: cancel the query if there is a running query.
 	//step 2: close the connection.
 	rt.closeOnce.Do(func() {
-		//step A: release the mempool related to the session
 		ses := rt.getSession()
+		//step A: rollback the txn
 		if ses != nil {
-			ses.Close()
+			err := ses.TxnRollback()
+			if err != nil {
+				logErrorf(ses.GetDebugString(), "rollback txn failed.error:%v", err)
+			}
 		}
 
 		//step B: cancel the query
@@ -311,6 +327,11 @@ func (rt *Routine) cleanup() {
 
 		//step D: clean protocol
 		rt.protocol.Quit()
+
+		//step E: release the resources related to the session
+		if ses != nil {
+			ses.Close()
+		}
 	})
 }
 

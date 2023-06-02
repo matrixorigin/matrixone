@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"sync"
 )
 
@@ -65,14 +66,29 @@ func (q *sliceBasedWaiterQueue) pop() (*waiter, []*waiter) {
 	return v, q.waiters[q.offset:]
 }
 
-func (q *sliceBasedWaiterQueue) put(w ...*waiter) {
+func (q *sliceBasedWaiterQueue) put(ws ...*waiter) {
 	q.Lock()
 	defer q.Unlock()
-	if len(q.waiters) == 0 {
-		q.waiters = w
-	} else {
-		q.waiters = append(q.waiters, w...)
+
+	if len(q.waiters) == 0 || len(ws) == 0 {
+		q.waiters = ws
+		return
 	}
+
+	// no new waiter added, moved from other waiter's waiter queue.
+	if len(ws) > 1 {
+		q.waiters = append(q.waiters, ws...)
+		return
+	}
+
+	// if a new waiter added, need to check if the current txn has a waiter in the queue.
+	for _, w := range q.waiters[q.offset:] {
+		if bytes.Equal(w.txnID, ws[0].txnID) {
+			w.sameTxnWaiters = append(w.sameTxnWaiters, ws[0])
+			return
+		}
+	}
+	q.waiters = append(q.waiters, ws[0])
 }
 
 func (q *sliceBasedWaiterQueue) iter(fn func(*waiter) bool) {

@@ -49,6 +49,9 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedAggregateFunctions {
 		allSupportedFunctions[fn.functionId] = fn
 	}
+	for _, fn := range supportedWindowFunctions {
+		allSupportedFunctions[fn.functionId] = fn
+	}
 }
 
 func GetFunctionIsAggregateByName(name string) bool {
@@ -66,7 +69,16 @@ func GetFunctionIsWinFunByName(name string) bool {
 		return false
 	}
 	f := allSupportedFunctions[fid]
-	return len(f.Overloads) > 0 && f.testFlag(plan.Function_WIN)
+	return f.isWindow()
+}
+
+func GetFunctionIsWinOrderFunByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	f := allSupportedFunctions[fid]
+	return f.isWindowOrder()
 }
 
 func GetFunctionIsMonotonicById(ctx context.Context, overloadID int64) (bool, error) {
@@ -361,6 +373,14 @@ func (fn *FuncNew) isFunction() bool {
 
 func (fn *FuncNew) isAggregate() bool {
 	return fn.testFlag(plan.Function_AGG)
+}
+
+func (fn *FuncNew) isWindow() bool {
+	return fn.testFlag(plan.Function_WIN_ORDER) || fn.testFlag(plan.Function_WIN_VALUE) || fn.testFlag(plan.Function_AGG)
+}
+
+func (fn *FuncNew) isWindowOrder() bool {
+	return fn.testFlag(plan.Function_WIN_ORDER)
 }
 
 func (fn *FuncNew) testFlag(funcFlag plan.Function_FuncFlag) bool {

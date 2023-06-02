@@ -256,7 +256,6 @@ func (c *compilerContext) getTableDef(
 	var indexes []*plan.IndexDef
 	var refChildTbls []uint64
 	var subscriptionName string
-	var pubAccountId int32 = -1
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -365,7 +364,6 @@ func (c *compilerContext) getTableDef(
 		SchemaName:       dbName,
 		ObjName:          tableName,
 		SubscriptionName: subscriptionName,
-		PubAccountId:     pubAccountId,
 	}
 
 	tableDef := &plan.TableDef{

@@ -804,6 +804,25 @@ func TestFetchVarcharRowsWithFilter(t *testing.T) {
 	)
 }
 
+func TestFetchRangeWithSameMinAndMax(t *testing.T) {
+	values := []int16{1, 1}
+	runFetchRowsTest(
+		t,
+		types.New(types.T_int16, 0, 0),
+		0,
+		values,
+		lock.Granularity_Row,
+		values[:1],
+		nil,
+		[]int16{math.MinInt16, math.MaxInt16},
+		func(packer *types.Packer, v int16) {
+			packer.EncodeInt16(v)
+		},
+		nil,
+		nil,
+	)
+}
+
 func runFetchRowsTest[T any](
 	t *testing.T,
 	tp types.Type,
@@ -900,10 +919,12 @@ func runFetchRowsTestWithAppendFunc[T any](
 	assertFN(expectValues, rows)
 
 	// many rows => range row
-	rows, g = fetcher(vec, packer, tp, max-1, false, filter, filterCols)
-	assert.Equal(t, lock.Granularity_Range, g)
-	assert.Equal(t, 2, len(rows))
-	assertFN(expectRangeValues, rows)
+	if len(expectRangeValues) > 0 {
+		rows, g = fetcher(vec, packer, tp, max-1, false, filter, filterCols)
+		assert.Equal(t, lock.Granularity_Range, g)
+		assert.Equal(t, 2, len(rows))
+		assertFN(expectRangeValues, rows)
+	}
 
 	// lock table
 	rows, g = fetcher(vec, packer, tp, max, true, filter, filterCols)
