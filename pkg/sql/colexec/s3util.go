@@ -102,11 +102,12 @@ func (w *S3Writer) GetMetaLocBat() *batch.Batch {
 func (w *S3Writer) SetMp(attrs []*engine.Attribute) {
 	for i := 0; i < len(attrs); i++ {
 		if attrs[i].Primary {
-			w.pk = i
+			if attrs[i].Name != catalog.FakePrimaryKeyColName {
+				w.sortIndex = i
+				w.pk = i
+			}
+			break
 		}
-		// if attrs[i].Default == nil {
-		// 	continue
-		// }
 	}
 }
 
@@ -138,10 +139,10 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 	// Get Single Col pk index
 	for idx, colDef := range tableDef.Cols {
 		if colDef.Name == tableDef.Pkey.PkeyColName {
-			if !colDef.Hidden {
+			if colDef.Name != catalog.FakePrimaryKeyColName {
 				writer.sortIndex = idx
+				writer.pk = idx
 			}
-			writer.pk = idx
 			break
 		}
 	}
@@ -184,10 +185,10 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 		// Get Single Col pk index
 		for idx, colDef := range tableDef.Cols {
 			if colDef.Name == tableDef.Pkey.PkeyColName {
-				if !colDef.Hidden {
+				if colDef.Name != catalog.FakePrimaryKeyColName {
 					writers[i].sortIndex = idx
+					writers[i].pk = idx
 				}
-				writers[i].pk = idx
 				break
 			}
 		}
@@ -550,7 +551,7 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, m *mpool.
 }
 
 func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
-	if w.sortIndex > -1 { // that means we get a fake primary key, and we do not need to set primary key for write s3
+	if w.pk > -1 {
 		pkIdx := uint16(w.pk)
 		w.writer.SetPrimaryKey(pkIdx)
 	}
