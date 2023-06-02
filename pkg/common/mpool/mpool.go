@@ -558,7 +558,7 @@ func (mp *MPool) Free(bs []byte) {
 	}
 
 	if pHdr.poolId == mp.id {
-		if pHdr.allocSz == -1 {
+		if atomic.LoadInt32(&pHdr.allocSz) == -1 {
 			// double free.
 			panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
 		}
@@ -573,7 +573,9 @@ func (mp *MPool) Free(bs []byte) {
 			mp.pools[pHdr.fixedPoolIdx].free(pHdr)
 		} else {
 			// non fixed pool just mark it freed
-			pHdr.allocSz = -1
+			if !atomic.CompareAndSwapInt32(&pHdr.allocSz, pHdr.allocSz, -1) {
+				panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
+			}
 		}
 	} else {
 		// cross pool free.
