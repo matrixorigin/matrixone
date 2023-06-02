@@ -340,7 +340,7 @@ func (c *MOCollector) Start() bool {
 
 	c.initCnt()
 
-	logutil.Infof("MOCollector Start")
+	logutil.Info("MOCollector Start")
 	for i := 0; i < c.collectorCnt; i++ {
 		c.stopWait.Add(1)
 		go c.doCollect(i)
@@ -431,13 +431,13 @@ var awakeBufferFactory = func(c *MOCollector) func(holder *bufferHolder) {
 			select {
 			case c.awakeGenerate <- req:
 			case <-time.After(time.Second * 3):
-				logutil.Info("awakeBufferFactory: timeout after 3 seconds")
+				logutil.Warn("awakeBufferFactory: timeout after 3 seconds")
 			}
 		} else {
 			select {
 			case c.awakeGenerate <- req:
 			default:
-				logutil.Info("awakeBufferFactory: awakeGenerate chan is full")
+				logutil.Warn("awakeBufferFactory: awakeGenerate chan is full")
 			}
 		}
 	}
