@@ -32,7 +32,7 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Stats(ctx context.Context, statsInfoMap any) bool {
+func (t *Table) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
 	return false
 }
 
