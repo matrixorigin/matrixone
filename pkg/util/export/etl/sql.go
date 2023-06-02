@@ -76,6 +76,8 @@ func (sw *DefaultSqlWriter) WriteRow(row *table.Row) error {
 func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	logutil.Debug("sqlWriter flushBuffer started", zap.Int("buffer size", len(sw.buffer)), zap.Bool("force", force))
 	now := time.Now()
+	sw.mux.Lock()
+	defer sw.mux.Unlock()
 
 	var err error
 	var cnt int
