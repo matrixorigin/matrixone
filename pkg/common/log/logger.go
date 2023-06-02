@@ -208,7 +208,7 @@ func wrapWithContext(logger *zap.Logger, ctx context.Context) *MOLogger {
 	}
 
 	return newMOLogger(
-		logger.WithOptions(zap.AddStacktrace(zap.ErrorLevel)),
+		logger,
 		ctx,
 	)
 }
