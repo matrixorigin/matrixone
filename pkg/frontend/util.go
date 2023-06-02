@@ -272,6 +272,110 @@ func WildcardMatch(pattern, target string) bool {
 	return p >= plen
 }
 
+func GetExprValue(e tree.Expr, ses *Session) (interface{}, error) {
+	/*
+		CORNER CASE:
+			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
+
+			tree.UnresolvedName{'utf8'} can not be resolved as the column of some table.
+	*/
+	switch v := e.(type) {
+	case *tree.UnresolvedName:
+		// set @a = on, type of a is bool.
+		return v.Parts[0], nil
+	}
+
+	var err error
+
+	table := &tree.TableName{}
+	table.ObjectName = "dual"
+
+	//1.composite the 'select (expr) from dual'
+	compositedSelect := &tree.Select{
+		Select: &tree.SelectClause{
+			Exprs: tree.SelectExprs{
+				tree.SelectExpr{
+					Expr: e,
+				},
+			},
+			From: &tree.From{
+				Tables: tree.TableExprs{
+					&tree.JoinTableExpr{
+						JoinType: tree.JOIN_TYPE_CROSS,
+						Left: &tree.AliasedTableExpr{
+							Expr: table,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	//2.run the select
+	ctx := ses.GetRequestContext()
+
+	//get txn
+	_, _, err = ses.GetTxnHandler().GetTxn()
+	if err != nil {
+		return nil, err
+	}
+
+	//run the statement in shared transaction
+	bh := ses.GetShareTxnBackgroundExec(ctx, true)
+	defer bh.Close()
+
+	err = bh.ExecStmt(ses.GetRequestContext(), compositedSelect)
+	if err != nil {
+		return nil, err
+	}
+
+	//3.get the result
+	batches := bh.GetExecResultBatches()
+	if len(batches) == 0 {
+		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+	}
+
+	if batches[0].VectorCount() > 1 {
+		return nil, moerr.NewInternalError(ctx, "the expr %s generates multi columns value", e.String())
+	}
+
+	//evaluate the count of rows, the count of columns
+	count := 0
+	var resultVec *vector.Vector
+	for _, b := range batches {
+		if b.Length() == 0 {
+			continue
+		}
+		count += b.Length()
+		if count > 1 {
+			return nil, moerr.NewInternalError(ctx, "the expr %s generates multi rows value", e.String())
+		}
+		if resultVec == nil && b.GetVector(0).Length() != 0 {
+			resultVec = b.GetVector(0)
+		}
+	}
+
+	if resultVec == nil {
+		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+	}
+
+	// for the decimal type, we need the type of expr
+	//!!!NOTE: the type here may be different from the one in the result vector.
+	var planExpr *plan.Expr
+	oid := resultVec.GetType().Oid
+	if oid == types.T_decimal64 || oid == types.T_decimal128 {
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx())
+		bindContext := plan2.NewBindContext(builder, nil)
+		binder := plan2.NewSetVarBinder(builder, bindContext)
+		planExpr, err = binder.BindExpr(e, 0, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return getValueFromVector(resultVec, ses, planExpr)
+}
+
 // only support single value and unary minus
 func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	switch v := e.(type) {

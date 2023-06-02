@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -45,7 +46,25 @@ type CmdExecutorImpl struct {
 	CmdExecutor
 }
 
-type doComQueryFunc func(context.Context, string) error
+// UserInput
+// normally, just use the sql.
+// for some special statement, like 'set_var', we need to use the stmt.
+// if the stmt is not nil, we neglect the sql.
+type UserInput struct {
+	sql  string
+	stmt tree.Statement
+}
+
+func (in *UserInput) GetSql() string {
+	return in.sql
+}
+
+// GetStmt if the stmt is not nil, we neglect the sql.
+func (in *UserInput) GetStmt() tree.Statement {
+	return in.stmt
+}
+
+type doComQueryFunc func(context.Context, *UserInput) error
 
 type stmtExecStatus int
 

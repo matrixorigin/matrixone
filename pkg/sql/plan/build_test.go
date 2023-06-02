@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"os"
 	"strings"
 	"testing"
@@ -1128,4 +1131,12 @@ func Test_mergeContexts(t *testing.T) {
 	err = bc.mergeContexts(ctx, bc1, bc2)
 	assert.Error(t, err)
 	assert.EqualError(t, err, "invalid input: table 'a' specified more than once")
+}
+
+func TestName(t *testing.T) {
+	one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, "select 1 from dual", 0)
+	if err != nil {
+		return
+	}
+	fmt.Println(one.String())
 }

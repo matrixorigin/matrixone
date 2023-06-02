@@ -839,7 +839,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		proc := &process.Process{}
 		InitGlobalSystemVariables(GSysVariables)
 		ses := &Session{planCache: newPlanCache(1), gSysVars: GSysVariables}
-		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
+		cw, err := GetComputationWrapper(db, &UserInput{sql: sql}, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -910,6 +910,7 @@ func Test_HandleDeallocate(t *testing.T) {
 func Test_CMD_FIELD_LIST(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("cmd field list", t, func() {
+		runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 		queryData := []byte("A")
 		queryData = append(queryData, 0)
 		query := string(queryData)
@@ -974,10 +975,11 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		ses.SetDatabaseName("t")
+		ses.seqLastValue = new(string)
 		mce := &MysqlCmdExecutor{}
 		mce.SetSession(ses)
 
-		err = mce.doComQuery(ctx, cmdFieldListQuery)
+		err = mce.doComQuery(ctx, &UserInput{sql: cmdFieldListQuery})
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -1077,8 +1079,8 @@ func Test_getSqlType(t *testing.T) {
 	convey.Convey("call getSqlType func", t, func() {
 		sql := "use db"
 		ses := &Session{}
-		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, intereSql)
+		ses.getSqlType(&UserInput{sql: sql})
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, internalSql)
 
 		user := "special_user"
 		tenant := &TenantInfo{
@@ -1086,23 +1088,23 @@ func Test_getSqlType(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 		SetSpecialUser(user, nil)
-		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, intereSql)
+		ses.getSqlType(&UserInput{sql: sql})
+		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, internalSql)
 
 		tenant.User = "dump"
-		ses.getSqlType(sql)
+		ses.getSqlType(&UserInput{sql: sql})
 		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
 
 		sql = "/* cloud_user */ use db"
-		ses.getSqlType(sql)
+		ses.getSqlType(&UserInput{sql: sql})
 		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudUserSql)
 
 		sql = "/* cloud_nonuser */ use db"
-		ses.getSqlType(sql)
+		ses.getSqlType(&UserInput{sql: sql})
 		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudNoUserSql)
 
 		sql = "/* json */ use db"
-		ses.getSqlType(sql)
+		ses.getSqlType(&UserInput{sql: sql})
 		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
 	})
 }

@@ -177,7 +177,7 @@ type Session struct {
 
 	seqCurValues map[uint64]string
 
-	seqLastValue string
+	seqLastValue *string
 
 	sqlHelper *SqlHelper
 
@@ -224,7 +224,7 @@ func (ses *Session) getRoutine() *Routine {
 func (ses *Session) SetSeqLastValue(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.seqLastValue = proc.SessionInfo.SeqLastValue[0]
+	*ses.seqLastValue = proc.SessionInfo.SeqLastValue[0]
 }
 
 func (ses *Session) DeleteSeqValues(proc *process.Process) {
@@ -246,7 +246,7 @@ func (ses *Session) AddSeqValues(proc *process.Process) {
 func (ses *Session) GetSeqLastValue() string {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.seqLastValue
+	return *ses.seqLastValue
 }
 
 func (ses *Session) CopySeqToProc(proc *process.Process) {
@@ -255,7 +255,14 @@ func (ses *Session) CopySeqToProc(proc *process.Process) {
 	for k, v := range ses.seqCurValues {
 		proc.SessionInfo.SeqCurValues[k] = v
 	}
-	proc.SessionInfo.SeqLastValue[0] = ses.seqLastValue
+	proc.SessionInfo.SeqLastValue[0] = *ses.seqLastValue
+}
+
+func (ses *Session) InheritSequenceData(other *Session) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.seqCurValues = other.seqCurValues
+	ses.seqLastValue = other.seqLastValue
 }
 
 func (ses *Session) GetSqlHelper() *SqlHelper {
@@ -358,7 +365,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		ses.statsCache = plan2.NewStatsCache()
 		// For seq init values.
 		ses.seqCurValues = make(map[uint64]string)
-		ses.seqLastValue = ""
+		ses.seqLastValue = new(string)
 	}
 
 	ses.isNotBackgroundSession = isNotBackgroundSession
@@ -429,7 +436,7 @@ func (ses *Session) Close() {
 	ses.planCache = nil
 	ses.statsCache = nil
 	ses.seqCurValues = nil
-	ses.seqLastValue = ""
+	ses.seqLastValue = nil
 	ses.sqlHelper = nil
 }
 
@@ -463,6 +470,9 @@ func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.M
 	ses.SetConnectContext(connCtx)
 	ses.SetBackgroundSession(true)
 	ses.UpdateDebugString()
+	ses.SetDatabaseName(upstream.GetDatabaseName())
+	//TODO: For seq init values.
+	ses.InheritSequenceData(upstream)
 	backSes := &BackgroundSession{
 		Session:  ses,
 		cancel:   cancelBackgroundFunc,
@@ -645,10 +655,13 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 }
 
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction
-func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context) BackgroundExec {
+func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, needBatch bool) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
 		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, true),
+	}
+	if needBatch {
+		bh.ses.SetOutputCallback(batchFetcher)
 	}
 	return bh
 }
@@ -1544,19 +1557,23 @@ func (ses *Session) GetFromRealUser() bool {
 	return ses.fromRealUser
 }
 
-func (ses *Session) getSqlType(sql string) {
+func (ses *Session) getSqlType(input *UserInput) {
+	sql := input.GetSql()
+	if input.GetStmt() != nil {
+		ses.sqlSourceType = append(ses.sqlSourceType, internalSql)
+	}
 	ses.sqlSourceType = nil
 	tenant := ses.GetTenantInfo()
 	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
 		if tenant != nil {
 			tenant.SetUser("")
 		}
-		ses.sqlSourceType = append(ses.sqlSourceType, intereSql)
+		ses.sqlSourceType = append(ses.sqlSourceType, internalSql)
 		return
 	}
 	flag, _, _ := isSpecialUser(tenant.User)
 	if flag {
-		ses.sqlSourceType = append(ses.sqlSourceType, intereSql)
+		ses.sqlSourceType = append(ses.sqlSourceType, internalSql)
 		return
 	}
 	for len(sql) > 0 {
@@ -1730,11 +1747,32 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	logInfo(bh.ses.GetDebugString(), "query trace(backgroundExecSql)",
 		logutil.ConnectionIdField(bh.ses.GetConnectionID()),
 		logutil.QueryField(SubStringFromBegin(sql, int(bh.ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
-	err = bh.mce.GetDoQueryFunc()(ctx, sql)
-	if err != nil {
-		return err
+	return bh.mce.GetDoQueryFunc()(ctx, &UserInput{sql: sql})
+}
+
+func (bh *BackgroundHandler) ExecStmt(ctx context.Context, stmt tree.Statement) error {
+	bh.mce.SetSession(bh.ses.Session)
+	if ctx == nil {
+		ctx = bh.ses.GetRequestContext()
+	} else {
+		bh.ses.SetRequestContext(ctx)
 	}
-	return err
+	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
+
+	// For determine this is a background sql.
+	ctx = context.WithValue(ctx, defines.BgKey{}, true)
+	bh.mce.GetSession().SetRequestContext(ctx)
+
+	//share txn can not run transaction statement
+	if bh.ses.isShareTxn() {
+		switch stmt.(type) {
+		case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+			return moerr.NewInternalError(ctx, "Exec() can not run transaction statement in share transaction")
+		}
+	}
+	logInfo(bh.ses.GetDebugString(), "query trace(backgroundExecStmt)",
+		logutil.ConnectionIdField(bh.ses.GetConnectionID()))
+	return bh.mce.GetDoQueryFunc()(ctx, &UserInput{stmt: stmt})
 }
 
 func (bh *BackgroundHandler) GetExecResultSet() []interface{} {
@@ -1777,7 +1815,7 @@ func (sh *SqlHelper) ExecSql(sql string) (ret []interface{}, err error) {
 		and committed outside this function.
 		!!!NOTE: wen can not execute the transaction statement(BEGIN,COMMIT,ROLLBACK,START TRANSACTION ect) here.
 	*/
-	bh := sh.ses.GetShareTxnBackgroundExec(ctx)
+	bh := sh.ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
 	bh.ClearExecResultSet()
