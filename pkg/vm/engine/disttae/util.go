@@ -125,6 +125,7 @@ func getBinarySearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T) (boo
 	if !canCompute {
 		return canCompute, nil
 	}
+
 	c := valExpr.Expr.(*plan.Expr_C)
 	switch val := c.C.Value.(type) {
 	case *plan.Const_I8Val:
