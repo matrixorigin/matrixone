@@ -371,7 +371,7 @@ func (nsp *Nulls) GetCardinality() int {
 	return nsp.Count()
 }
 
-func (nsp *Nulls) Merge(o Nulls) {
+func (nsp *Nulls) Merge(o *Nulls) {
 	if o.Count() == 0 {
 		return
 	}

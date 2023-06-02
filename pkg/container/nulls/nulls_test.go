@@ -210,7 +210,7 @@ func TestMerge(t *testing.T) {
 		}
 		assert.Equal(t, 16, n.Count())
 		assert.Equal(t, 16, m.Count())
-		n.Merge(m)
+		n.Merge(&m)
 		assert.Equal(t, 24, n.Count())
 	})
 }
