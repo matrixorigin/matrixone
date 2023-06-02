@@ -1520,7 +1520,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSingle,
 					Idx: c.anal.curr,
-					Arg: constructLoopSingle(node, c.proc),
+					Arg: constructLoopSingle(node, rightTyps, c.proc),
 				})
 			}
 		}
