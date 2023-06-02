@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -124,91 +125,51 @@ func getBinarySearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T) (boo
 	if !canCompute {
 		return canCompute, nil
 	}
-	switch val := valExpr.Expr.(*plan.Expr_C).C.Value.(type) {
+	c := valExpr.Expr.(*plan.Expr_C)
+	switch val := c.C.Value.(type) {
 	case *plan.Const_I8Val:
-		ok, v := transferIval(val.I8Val, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(int8))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(int8(val.I8Val))
 	case *plan.Const_I16Val:
-		ok, v := transferIval(val.I16Val, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(int16))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(int16(val.I16Val))
 	case *plan.Const_I32Val:
-		ok, v := transferIval(val.I32Val, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(int32))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(int32(val.I32Val))
 	case *plan.Const_I64Val:
-		ok, v := transferIval(val.I64Val, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(int64))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(int64(val.I64Val))
 	case *plan.Const_Dval:
-		ok, v := transferDval(val.Dval, oid)
-		if !ok {
-			return false, nil
+		if oid == types.T_float32 {
+			return true, vector.OrderedBinarySearchOffsetByValFactory(float32(val.Dval))
+		} else {
+			return true, vector.OrderedBinarySearchOffsetByValFactory(val.Dval)
 		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(float32))
 	case *plan.Const_U8Val:
-		ok, v := transferUval(val.U8Val, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(uint8))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(uint8(val.U8Val))
 	case *plan.Const_U16Val:
-		ok, v := transferUval(val.U16Val, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(uint16))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(uint16(val.U16Val))
 	case *plan.Const_U32Val:
-		ok, v := transferUval(val.U32Val, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(uint32))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(uint32(val.U32Val))
 	case *plan.Const_U64Val:
-		ok, v := transferUval(val.U64Val, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(uint64))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(val.U64Val)
 	case *plan.Const_Fval:
-		ok, v := transferFval(val.Fval, oid)
-		if !ok {
-			return false, nil
+		if oid == types.T_float32 {
+			return true, vector.OrderedBinarySearchOffsetByValFactory(float32(val.Fval))
+		} else {
+			return true, vector.OrderedBinarySearchOffsetByValFactory(val.Fval)
 		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(float32))
 	case *plan.Const_Dateval:
-		ok, v := transferDateval(val.Dateval, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(types.Date))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Dateval)
 	case *plan.Const_Timeval:
-		ok, v := transferTimeval(val.Timeval, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(types.Time))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Timeval)
 	case *plan.Const_Datetimeval:
-		ok, v := transferDatetimeval(val.Datetimeval, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(types.Datetime))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Datetimeval)
 	case *plan.Const_Timestampval:
-		ok, v := transferTimestampval(val.Timestampval, oid)
-		if !ok {
-			return false, nil
-		}
-		return true, vector.OrderedBinarySearchOffsetByValFactory(oid, v.(types.Timestamp))
+		return true, vector.OrderedBinarySearchOffsetByValFactory(val.Timestampval)
+	case *plan.Const_Decimal64Val:
+		return true, vector.FixSizedBinarySearchOffsetByValFactory(types.Decimal64(val.Decimal64Val.A), types.CompareDecimal64)
+	case *plan.Const_Decimal128Val:
+		v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
+		return true, vector.FixSizedBinarySearchOffsetByValFactory(v, types.CompareDecimal128)
+	case *plan.Const_Sval:
+		return true, vector.VarlenBinarySearchOffsetByValFactory(util.UnsafeStringToBytes(val.Sval))
 	}
 	return false, nil
 }

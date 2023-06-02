@@ -814,6 +814,10 @@ func (t T) FixedLength() int {
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
 }
 
+func (t T) IsFixedLen() bool {
+	return t.FixedLength() > 0
+}
+
 func (t T) IsOrdered() bool {
 	switch t {
 	case T_int8, T_int16, T_int32, T_int64,
