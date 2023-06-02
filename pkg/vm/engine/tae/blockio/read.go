@@ -142,13 +142,13 @@ func BlockReadInner(
 	vp engine.VectorPool,
 ) (result *batch.Batch, err error) {
 	var (
-		//rowid       *vector.Vector
 		deletedRows []int64
+		deleteMask  nulls.Bitmap
 		loaded      *batch.Batch
 	)
 
 	// read block data from storage
-	if loaded, _, deletedRows, err = readBlockData(
+	if loaded, _, deleteMask, err = readBlockData(
 		ctx, seqnums, colTypes, info, ts, fs, mp, vp,
 	); err != nil {
 		return
@@ -161,15 +161,23 @@ func BlockReadInner(
 			return
 		}
 
-		deletedRows = mergeDeleteRows(deletedRows, evalDeleteRowsByTimestamp(deletes, ts))
+		rows := evalDeleteRowsByTimestamp(deletes, ts)
+		deleteMask.Merge(rows)
+
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debugf(
 				"blockread %s read delete %d: base %s filter out %v\n",
-				info.BlockID.String(), deletes.Length(), ts.ToString(), len(deletedRows))
+				info.BlockID.String(), deletes.Length(), ts.ToString(), deleteMask.Count())
 		}
 	}
 
-	deletedRows = mergeDeleteRows(deletedRows, dels)
+	for _, row := range dels {
+		deleteMask.Add(uint64(row))
+	}
+
+	if !deleteMask.IsEmpty() {
+		deletedRows = deleteMask.ToI64Arrary()
+	}
 
 	result = batch.NewWithSize(len(loaded.Vecs))
 	for i, col := range loaded.Vecs {
@@ -240,7 +248,7 @@ func readBlockData(
 	fs fileservice.FileService,
 	m *mpool.MPool,
 	vp engine.VectorPool,
-) (bat *batch.Batch, rowid *vector.Vector, deletedRows []int64, err error) {
+) (bat *batch.Batch, rowid *vector.Vector, deleteMask nulls.Bitmap, err error) {
 
 	hasRowId, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 	if hasRowId {
@@ -291,7 +299,7 @@ func readBlockData(
 		return
 	}
 
-	readABlkColumns := func(cols []uint16) (result *batch.Batch, deletedRows []int64, err error) {
+	readABlkColumns := func(cols []uint16) (result *batch.Batch, deletes nulls.Bitmap, err error) {
 		var loaded *batch.Batch
 		// appendable block should be filtered by committs
 		cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
@@ -306,17 +314,17 @@ func readBlockData(
 		commits := vector.MustFixedCol[types.TS](loaded.Vecs[len(loaded.Vecs)-2])
 		for i := 0; i < len(commits); i++ {
 			if aborts[i] || commits[i].Greater(ts) {
-				deletedRows = append(deletedRows, int64(i))
+				deletes.Add(uint64(i))
 			}
 		}
 		logutil.Debugf(
 			"blockread %s scan filter cost %v: base %s filter out %v\n ",
-			info.BlockID.String(), time.Since(t0), ts.ToString(), len(deletedRows))
+			info.BlockID.String(), time.Since(t0), ts.ToString(), deletes.Count())
 		return
 	}
 
 	if info.EntryState {
-		bat, deletedRows, err = readABlkColumns(idxes)
+		bat, deleteMask, err = readABlkColumns(idxes)
 	} else {
 		bat, _, err = readColumns(idxes)
 	}
@@ -332,12 +340,12 @@ func readBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileser
 	return bat, nil
 }
 
-func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows []int64) {
+func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows *nulls.Bitmap) {
 	if deletes == nil {
-		return nil
+		return
 	}
 	// record visible delete rows
-	deletedRows := nulls.NewWithSize(0)
+	rows = nulls.NewWithSize(0)
 	rowids := vector.MustFixedCol[types.Rowid](deletes.Vecs[0])
 	tss := vector.MustFixedCol[types.TS](deletes.Vecs[1])
 	aborts := vector.MustFixedCol[bool](deletes.Vecs[3])
@@ -347,19 +355,8 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS) (rows []int64)
 			continue
 		}
 		row := rowid.GetRowOffset()
-		nulls.Add(deletedRows, uint64(row))
+		rows.Add(uint64(row))
 	}
-
-	if !deletedRows.Any() {
-		return
-	}
-
-	itr := deletedRows.GetBitmap().Iterator()
-	for itr.HasNext() {
-		r := itr.Next()
-		rows = append(rows, int64(r))
-	}
-
 	return
 }
 
