@@ -107,7 +107,7 @@ func BlockCompactionRead(
 func BlockReadInner(
 	ctx context.Context,
 	info *pkgcatalog.BlockInfo,
-	dels []int64,
+	inputDeleteRows []int64,
 	seqnums []uint16,
 	colTypes []types.Type,
 	ts types.TS,
@@ -123,21 +123,25 @@ func BlockReadInner(
 		loaded      *batch.Batch
 	)
 
-	// read block data from storage
+	// read block data from storage specified by meta location
 	if loaded, _, deleteMask, err = readBlockData(
 		ctx, seqnums, colTypes, info, ts, fs, mp, vp,
 	); err != nil {
 		return
 	}
 
-	// read deletes from storage if needed
+	// read deletes from storage specified by delta location
 	if !info.DeltaLocation().IsEmpty() {
 		var deletes *batch.Batch
+		// load from storage
 		if deletes, err = readBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
 			return
 		}
 
+		// eval delete rows by timestamp
 		rows := evalDeleteRowsByTimestamp(deletes, ts)
+
+		// merge delete rows
 		deleteMask.Merge(rows)
 
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
@@ -147,14 +151,22 @@ func BlockReadInner(
 		}
 	}
 
-	for _, row := range dels {
+	// merge deletes from input
+	// deletes from storage + deletes from input
+	for _, row := range inputDeleteRows {
 		deleteMask.Add(uint64(row))
 	}
 
+	// assemble result batch for return
 	result = batch.NewWithSize(len(loaded.Vecs))
 
+	// if there is a filter and the block is sorted,
+	// apply the filter to select rows
 	if filter != nil && info.Sorted {
+		// select rows by filter
 		selectRows = filter(loaded.Vecs)
+
+		// apply delete mask to selected rows
 		if !deleteMask.IsEmpty() {
 			var rows []int32
 			for _, row := range selectRows {
@@ -181,6 +193,10 @@ func BlockReadInner(
 	}
 
 	if len(selectRows) > 0 {
+		// NOTE: it always goes here if there is a filter and the block is sorted
+		// and there are selected rows after applying the filter and delete mask
+
+		// assemble result batch only with selected rows
 		for i, col := range loaded.Vecs {
 			typ := *col.GetType()
 			if typ.Oid == types.T_Rowid {
@@ -202,13 +218,20 @@ func BlockReadInner(
 			}
 		}
 	} else {
+		// Note: it always goes here if no filter or the block is not sorted
+
+		// transform delete mask to deleted rows
+		// TODO: avoid this transformation
 		if !deleteMask.IsEmpty() {
 			deletedRows = deleteMask.ToI64Arrary()
 		}
+
+		// assemble result batch
 		for i, col := range loaded.Vecs {
 			typ := *col.GetType()
+
 			if typ.Oid == types.T_Rowid {
-				// rowid is already allocted by the mpool
+				// rowid is already allocted by the mpool, no need to create a new vector
 				result.Vecs[i] = col
 			} else {
 				// for other types, we need to create a new vector
@@ -217,7 +240,8 @@ func BlockReadInner(
 				} else {
 					result.Vecs[i] = vp.GetVector(typ)
 				}
-				// copy the data from the loaded vector
+				// copy the data from loaded vector to result vector
+				// TODO: avoid this allocation and copy
 				if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], col); err != nil {
 					break
 				}
@@ -230,6 +254,7 @@ func BlockReadInner(
 		}
 	}
 
+	// if any error happens, free the result batch allocated
 	if err != nil {
 		for _, col := range result.Vecs {
 			if col != nil {
