@@ -67,7 +67,7 @@ func (rw *reactWriter) AddAfter(hook table.CheckWriteHook) {
 
 func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string, enableSqlWriter bool) (factory table.WriterFactory) {
 
-	var extension = table.GetExtension(ext)
+	var extension = table.CsvExtension
 	var cfg = table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
 
 	switch extension {
