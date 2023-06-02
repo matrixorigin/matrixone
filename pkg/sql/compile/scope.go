@@ -16,9 +16,8 @@ package compile
 
 import (
 	"context"
-	"hash/crc32"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"hash/crc32"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -182,6 +181,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
+	logutil.Infof("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
+	//fmt.Printf("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
+
 	var rds []engine.Reader
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)

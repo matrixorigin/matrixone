@@ -24,6 +24,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
+var _ table.RowWriter = (*reactWriter)(nil)
+var _ table.AfterWrite = (*reactWriter)(nil)
+
+// reactWriter implement table.AfterWrite, it can react before/after FlushAndClose
+type reactWriter struct {
+	ctx context.Context
+	w   table.RowWriter
+
+	// implement AfterWrite
+	afters []table.CheckWriteHook
+}
+
+func newWriter(ctx context.Context, w table.RowWriter) *reactWriter {
+	return &reactWriter{
+		ctx: ctx,
+		w:   w,
+	}
+}
+
+func (rw *reactWriter) WriteRow(row *table.Row) error {
+	return rw.w.WriteRow(row)
+}
+
+func (rw *reactWriter) GetContent() string {
+	return rw.w.GetContent()
+}
+
+func (rw *reactWriter) FlushAndClose() (int, error) {
+	n, err := rw.w.FlushAndClose()
+	if err == nil {
+		for _, hook := range rw.afters {
+			hook(rw.ctx)
+		}
+	}
+	return n, err
+}
+
+func (rw *reactWriter) AddAfter(hook table.CheckWriteHook) {
+	rw.afters = append(rw.afters, hook)
+}
+
 func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string) (factory table.WriterFactory) {
 
 	var extension = table.GetExtension(ext)
@@ -35,7 +76,7 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext
 			options := []etl.FSWriterOption{
 				etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
 			}
-			return etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
+			return newWriter(ctx, etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...)))
 		}
 	case table.TaeExtension:
 		mp, err := mpool.NewMPool("etl_fs_writer", 0, mpool.NoFixed)
@@ -44,7 +85,7 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext
 		}
 		factory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
 			filePath := cfg.LogsFilePathFactory(account, tbl, ts)
-			return etl.NewTAEWriter(ctx, tbl, mp, filePath, fs)
+			return newWriter(ctx, etl.NewTAEWriter(ctx, tbl, mp, filePath, fs))
 		}
 	}
 

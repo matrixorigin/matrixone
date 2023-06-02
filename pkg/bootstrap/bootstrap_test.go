@@ -38,6 +38,7 @@ func TestBootstrap(t *testing.T) {
 	b := NewBootstrapper(
 		&memLocker{},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
 		exec)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
@@ -64,6 +65,7 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 	b := NewBootstrapper(
 		&memLocker{},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
 		exec)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
@@ -90,6 +92,7 @@ func TestBootstrapWithWait(t *testing.T) {
 	b := NewBootstrapper(
 		&memLocker{id: 1},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
 		exec)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()

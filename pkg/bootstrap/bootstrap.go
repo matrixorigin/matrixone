@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -96,17 +97,19 @@ var (
 )
 
 type bootstrapper struct {
-	lock  Locker
-	clock clock.Clock
-	exec  executor.SQLExecutor
+	lock   Locker
+	clock  clock.Clock
+	client client.TxnClient
+	exec   executor.SQLExecutor
 }
 
 // NewBootstrapper create bootstrapper to bootstrap mo database
 func NewBootstrapper(
 	lock Locker,
 	clock clock.Clock,
+	client client.TxnClient,
 	exec executor.SQLExecutor) Bootstrapper {
-	return &bootstrapper{clock: clock, exec: exec, lock: lock}
+	return &bootstrapper{clock: clock, exec: exec, lock: lock, client: client}
 }
 
 func (b *bootstrapper) Bootstrap(ctx context.Context) error {
@@ -140,7 +143,7 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 		}
 		now, _ := b.clock.Now()
 		opts.WithMinCommittedTS(now)
-		return b.exec.ExecTxn(
+		err = b.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
 				for _, sql := range step2InitSQLs {
@@ -153,6 +156,17 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 				return nil
 			},
 			opts)
+		if err != nil {
+			return err
+		}
+
+		if b.client != nil {
+			// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
+			// bootstrap data.
+			now, _ = b.clock.Now()
+			b.client.(client.TxnClientWithCtl).SetLatestCommitTS(now)
+		}
+		return nil
 	}
 
 	// otherwrise, wait bootstrap completed

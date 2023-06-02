@@ -16,10 +16,12 @@ package disttae
 
 import (
 	"context"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"sort"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -126,16 +128,18 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 	}
 	if r.canCompute && r.searchFunc != nil {
 		row := r.searchFunc(vec)
-		if row >= vec.Length() {
-			// can not find row.
+		if row < 0 {
+			// if row == -1, means no row in batch, so we shrink batch to empty
 			bat.Shrink([]int64{})
-		} else if row > -1 {
-			// maybe find row.
+		} else {
+			// if row >= 0, means we find the row in batch, so we shrink batch to one row
 			bat.Shrink([]int64{int64(row)})
 		}
 	}
 
-	logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
+	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+		logutil.Debug(testutil.OperatorCatchBatch("block reader", bat))
+	}
 	return bat, nil
 }
 
