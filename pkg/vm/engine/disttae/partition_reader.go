@@ -176,6 +176,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 			}
 			bat.Clean(p.procMPool)
+			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
 
 			var hasRowId bool
 			// note: if there is rowId colName, it must be the last one
