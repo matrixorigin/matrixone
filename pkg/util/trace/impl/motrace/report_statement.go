@@ -331,8 +331,9 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		return nil
 	}
 	// Filter out part of the internal SQL statements
+	// Todo: review how to aggregate the internal SQL statements logging
 	if s.User == "internal" {
-		if s.Statement == "Commit" || s.Statement == "Start Transaction" {
+		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
 			return nil
 		}
 	}
