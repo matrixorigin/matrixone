@@ -454,7 +454,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 		}
 		reader.Close()
 		// todo: adjust the sleep settings
-		time.Sleep(20 * time.Second)
+		time.Sleep(5 * time.Second)
 	}
 
 	return nil
