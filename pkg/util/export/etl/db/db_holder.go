@@ -90,10 +90,9 @@ func SetDBConn(conn *sql.DB) {
 
 func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 
-	dbMux.Lock()
-	defer dbMux.Unlock()
-
 	initFunc := func() error {
+		dbMux.Lock()
+		defer dbMux.Unlock()
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			return errNotReady
