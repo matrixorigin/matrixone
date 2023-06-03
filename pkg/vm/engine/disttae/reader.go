@@ -337,6 +337,10 @@ func (r *blockMergeReader) Read(
 	return bat, nil
 }
 
+// -----------------------------------------------------------------
+// ------------------------ mergeReader ----------------------------
+// -----------------------------------------------------------------
+
 func NewMergeReader(readers []engine.Reader) *mergeReader {
 	return &mergeReader{
 		rds: readers,
@@ -347,8 +351,13 @@ func (r *mergeReader) Close() error {
 	return nil
 }
 
-func (r *mergeReader) Read(ctx context.Context, cols []string,
-	expr *plan.Expr, mp *mpool.MPool, vp engine.VectorPool) (*batch.Batch, error) {
+func (r *mergeReader) Read(
+	ctx context.Context,
+	cols []string,
+	expr *plan.Expr,
+	mp *mpool.MPool,
+	vp engine.VectorPool,
+) (*batch.Batch, error) {
 	if len(r.rds) == 0 {
 		return nil, nil
 	}
