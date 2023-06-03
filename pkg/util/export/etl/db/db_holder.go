@@ -94,10 +94,6 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	defer dbMux.Unlock()
 
 	initFunc := func() error {
-		if db.Load() != nil {
-			db.Load().(*sql.DB).Close()
-			db.Store(nil)
-		}
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			return errNotReady
