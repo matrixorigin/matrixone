@@ -296,6 +296,29 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, []uint16,
 	return found, idxes, typs
 }
 
+func buildRowidColumn(
+	info *pkgcatalog.BlockInfo,
+	m *mpool.MPool,
+	vp engine.VectorPool,
+) (col *vector.Vector, err error) {
+	if vp == nil {
+		col = vector.NewVec(objectio.RowidType)
+	} else {
+		col = vp.GetVector(objectio.RowidType)
+	}
+	if err = objectio.ConstructRowidColumnTo(
+		col,
+		&info.BlockID,
+		0,
+		info.MetaLocation().Rows(),
+		m,
+	); err != nil {
+		col.Free(m)
+		col = nil
+	}
+	return
+}
+
 func readBlockData(
 	ctx context.Context,
 	colIndexes []uint16,
@@ -310,25 +333,9 @@ func readBlockData(
 	hasRowId, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 	if hasRowId {
 		// generate rowid
-		if vp == nil {
-			rowid = vector.NewVec(objectio.RowidType)
-		} else {
-			rowid = vp.GetVector(objectio.RowidType)
-		}
-		if err = objectio.ConstructRowidColumnTo(
-			rowid,
-			&info.BlockID,
-			0,
-			info.MetaLocation().Rows(),
-			m); err != nil {
+		if rowid, err = buildRowidColumn(info, m, vp); err != nil {
 			return
 		}
-		defer func() {
-			if err != nil {
-				rowid.Free(m)
-				rowid = nil
-			}
-		}()
 	}
 
 	readColumns := func(cols []uint16) (result *batch.Batch, loaded *batch.Batch, err error) {
