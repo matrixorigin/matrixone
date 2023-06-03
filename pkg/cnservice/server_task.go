@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -92,7 +93,7 @@ func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 }
 
 func (s *service) initSqlWriterFactory() {
-	addressFunc := func(ctx context.Context) (string, error) {
+	addressFunc := func(ctx context.Context, randomCN bool) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 		haKeeperClient, err := s.getHAKeeperClient()
@@ -106,7 +107,10 @@ func (s *service) initSqlWriterFactory() {
 		if len(details.CNStores) == 0 {
 			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
 		}
-
+		if randomCN {
+			n := rand.Intn(len(details.CNStores))
+			return details.CNStores[n].SQLAddress, nil
+		}
 		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
 	}
 

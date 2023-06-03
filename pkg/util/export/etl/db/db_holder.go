@@ -77,12 +77,12 @@ func GetSQLWriterDBUser() (*DBUser, error) {
 	}
 }
 
-func SetSQLWriterDBAddressFunc(f func(context.Context) (string, error)) {
+func SetSQLWriterDBAddressFunc(f func(context.Context, bool) (string, error)) {
 	dbAddressFunc.Store(f)
 }
 
-func GetSQLWriterDBAddressFunc() func(context.Context) (string, error) {
-	return dbAddressFunc.Load().(func(context.Context) (string, error))
+func GetSQLWriterDBAddressFunc() func(context.Context, bool) (string, error) {
+	return dbAddressFunc.Load().(func(context.Context, bool) (string, error))
 }
 func SetDBConn(conn *sql.DB) {
 	db.Store(conn)
@@ -107,7 +107,7 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 		if addressFunc == nil {
 			return errNotReady
 		}
-		dbAddress, err := addressFunc(context.Background())
+		dbAddress, err := addressFunc(context.Background(), randomCN)
 		if err != nil {
 			return err
 		}
