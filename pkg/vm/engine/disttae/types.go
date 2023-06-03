@@ -426,10 +426,6 @@ type withFilterMixin struct {
 	}
 }
 
-type withPrefetchMixin struct {
-	prefetchColIdxs []uint16 //need to remove rowid
-}
-
 type blockReader struct {
 	withFilterMixin
 
@@ -442,50 +438,11 @@ type blockReader struct {
 	blks []*catalog.BlockInfo
 }
 
-//type blockReader struct {
-//	blks          []*catalog.BlockInfo
-//	ctx           context.Context
-//	fs            fileservice.FileService
-//	ts            timestamp.Timestamp
-//	tableDef      *plan.TableDef
-//	primarySeqnum int
-//	expr          *plan.Expr
-
-//	//used for prefetch
-//	infos           [][]*catalog.BlockInfo
-//	steps           []int
-//	currentStep     int
-//	prefetchColIdxs []uint16 //need to remove rowid
-
-//	// cached meta data.
-//	seqnums        []uint16
-//	colTypes       []types.Type
-//	colNulls       []bool
-//	pkidxInColIdxs int
-//	pkName         string
-//	// binary search info
-//	init       bool
-//	canCompute bool
-//	searchFunc func(*vector.Vector) int
-
-//	// used for sorted
-//	indexOfFirstSortedColumn int
-//}
-
 type blockMergeReader struct {
-	sels []int64
-	blks []ModifyBlockMeta
-	ctx  context.Context
-	fs   fileservice.FileService
-	ts   timestamp.Timestamp
-	//TODO::remove it, instead, use meta locations
-	table    *txnTable
-	tableDef *plan.TableDef
+	withFilterMixin
 
-	// cached meta data.
-	seqnums  []uint16
-	colTypes []types.Type
-	colNulls []bool
+	table *txnTable
+	blks  []ModifyBlockMeta
 }
 
 type mergeReader struct {

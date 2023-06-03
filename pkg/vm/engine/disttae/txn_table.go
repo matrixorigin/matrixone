@@ -1248,6 +1248,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		ctx,
 		num,
 		encodedPrimaryKey,
+		expr,
 		tbl.modifiedBlocks,
 		tbl.writes)
 	if err != nil {
@@ -1296,6 +1297,7 @@ func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
 	encodedPrimaryKey []byte,
+	expr *plan.Expr,
 	blks []ModifyBlockMeta,
 	entries []Entry,
 ) ([]engine.Reader, error) {
@@ -1390,30 +1392,21 @@ func (tbl *txnTable) newReader(
 
 	if readerNumber == 1 {
 		for i := range blks {
-			readers = append(readers, &blockMergeReader{
-				table:    tbl,
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{blks[i]},
-			})
+			readers = append(
+				readers,
+				newBlockMergeReader(
+					ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
+				),
+			)
 		}
 		return []engine.Reader{&mergeReader{readers}}, nil
 	}
 
 	if len(blks) < readerNumber-1 {
 		for i := range blks {
-			readers[i+1] = &blockMergeReader{
-				table:    tbl,
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{blks[i]},
-			}
+			readers[i+1] = newBlockMergeReader(
+				ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
+			)
 		}
 		for j := len(blks) + 1; j < readerNumber; j++ {
 			readers[j] = &emptyReader{}
@@ -1427,25 +1420,13 @@ func (tbl *txnTable) newReader(
 	}
 	for i := 1; i < readerNumber; i++ {
 		if i == readerNumber-1 {
-			readers[i] = &blockMergeReader{
-				table:    tbl,
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     blks[(i-1)*step:],
-			}
+			readers[i] = newBlockMergeReader(
+				ctx, tbl, ts, blks[(i-1)*step:], expr, fs,
+			)
 		} else {
-			readers[i] = &blockMergeReader{
-				table:    tbl,
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     blks[(i-1)*step : i*step],
-			}
+			readers[i] = newBlockMergeReader(
+				ctx, tbl, ts, blks[(i-1)*step:i*step], expr, fs,
+			)
 		}
 	}
 
