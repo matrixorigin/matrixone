@@ -15,7 +15,6 @@
 package etl
 
 import (
-	"context"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -37,13 +36,11 @@ func TestDefaultSqlWriter_WriteRowRecords(t *testing.T) {
 	db_holder.SetDBConn(db)
 
 	// set up your DefaultSqlWriter and records
-	ctx := context.Background()
 	var dummyStrColumn = table.Column{Name: "str", ColType: table.TVarchar, Scale: 32, Default: "", Comment: "str column"}
 
 	tbl := &table.Table{
 		Columns: []table.Column{dummyStrColumn},
 	}
-	sw := NewSqlWriter(ctx, tbl, nil) // fill in the appropriate CSVWriter
 	records := [][]string{
 		{"record1"},
 		{"record2"},
@@ -51,7 +48,7 @@ func TestDefaultSqlWriter_WriteRowRecords(t *testing.T) {
 	}
 
 	// call the function to test
-	cnt, err := sw.WriteRowRecords(records, tbl, false)
+	cnt, err := db_holder.WriteRowRecords(records, tbl)
 
 	// assertions
 	if err != nil {

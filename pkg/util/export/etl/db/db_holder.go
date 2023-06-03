@@ -17,12 +17,16 @@ package db_holder
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"go.uber.org/zap"
 )
 
@@ -38,10 +42,18 @@ var (
 	db atomic.Value
 
 	dbMux sync.Mutex
+
+	DBConnErrCount atomic.Uint32
 )
 
 const MOLoggerUser = "mo_logger"
 const MaxConnectionNumber = 1
+
+const DBConnRetryThreshold = 8
+
+const MAX_CHUNK_SIZE = 1024 * 1024 * 4
+
+const MAX_INSERT_TIME = 3 * time.Second
 
 type DBUser struct {
 	UserName string
@@ -76,12 +88,16 @@ func SetDBConn(conn *sql.DB) {
 	db.Store(conn)
 }
 
-func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
+func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 
 	dbMux.Lock()
 	defer dbMux.Unlock()
 
 	initFunc := func() error {
+		if db.Load() != nil {
+			db.Load().(*sql.DB).Close()
+			db.Store(nil)
+		}
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			return errNotReady
@@ -96,16 +112,11 @@ func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 			return err
 		}
 		dsn :=
-			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=30s&timeout=30s&maxAllowedPacket=0",
+			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=0",
 				dbUser.UserName,
 				dbUser.Password,
 				dbAddress)
 		newDBConn, err := sql.Open("mysql", dsn)
-		logutil.Info("sqlWriter db initialized", zap.String("address", dbAddress))
-		if err != nil {
-			logutil.Info("sqlWriter db initialized failed", zap.String("address", dbAddress), zap.Error(err))
-			return err
-		}
 		newDBConn.SetMaxOpenConns(MaxConnectionNumber)
 		newDBConn.SetMaxIdleConns(MaxConnectionNumber)
 		SetDBConn(newDBConn)
@@ -113,12 +124,126 @@ func InitOrRefreshDBConn(forceNewConn bool) (*sql.DB, error) {
 	}
 
 	if forceNewConn || db.Load() == nil {
-		logutil.Info("sqlWriter db init", zap.Bool("forceNewConn", forceNewConn))
 		err := initFunc()
 		if err != nil {
+			logutil.Error("sqlWriter db init failed", zap.Error(err))
 			return nil, err
 		}
+		logutil.Debug("sqlWriter db init", zap.Bool("force", forceNewConn), zap.Bool("randomCN", randomCN), zap.String("db", fmt.Sprintf("%v", db.Load())))
 	}
 	dbConn := db.Load().(*sql.DB)
 	return dbConn, nil
+}
+
+func WriteRowRecords(records [][]string, tbl *table.Table) (int, error) {
+	if len(records) == 0 {
+		return 0, nil
+	}
+	var err error
+
+	var dbConn *sql.DB
+
+	if DBConnErrCount.Load() > DBConnRetryThreshold {
+		dbConn, err = InitOrRefreshDBConn(true, true)
+		DBConnErrCount.Store(0)
+	} else {
+		dbConn, err = InitOrRefreshDBConn(false, false)
+	}
+	if err != nil {
+		logutil.Error("sqlWriter db init failed", zap.Error(err))
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), MAX_INSERT_TIME)
+	defer cancel()
+
+	done := make(chan error)
+	go bulkInsert(ctx, done, dbConn, records, tbl, MAX_CHUNK_SIZE)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			DBConnErrCount.Add(1)
+		} else {
+			logutil.Debug("sqlWriter WriteRowRecords finished", zap.Int("cnt", len(records)))
+			return len(records), nil
+		}
+	case <-ctx.Done():
+		DBConnErrCount.Add(1)
+		err = ctx.Err()
+	}
+	logutil.Warn("sqlWriter WriteRowRecords failed", zap.Error(err))
+
+	return 0, err
+}
+
+func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int) {
+	if records == nil || len(records) == 0 {
+		done <- nil
+		return
+	}
+
+	baseStr := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
+
+	sb := strings.Builder{}
+	defer sb.Reset()
+
+	tx, err := sqlDb.Begin()
+	if err != nil {
+		done <- err
+		return
+	}
+
+	for idx, row := range records {
+		if len(row) == 0 {
+			continue
+		}
+
+		sb.WriteString("(")
+		for i, field := range row {
+			if i != 0 {
+				sb.WriteString(",")
+			}
+			if tbl.Columns[i].ColType == table.TJson {
+				var js interface{}
+				escapedJSON, _ := json.Marshal(js)
+				_ = json.Unmarshal([]byte(field), &js)
+				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
+			} else {
+				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
+				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
+				} else {
+					sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
+				}
+			}
+		}
+		sb.WriteString(")")
+
+		if sb.Len() >= maxLen || idx == len(records)-1 {
+			stmt := baseStr + sb.String() + ";"
+			_, err := tx.ExecContext(ctx, stmt)
+			if err != nil {
+				tx.Rollback()
+				sb.Reset()
+				done <- err
+				return
+			}
+			select {
+			case <-ctx.Done():
+				// If context deadline is exceeded, rollback the transaction
+				tx.Rollback()
+				done <- ctx.Err()
+				return
+			default:
+			}
+			sb.Reset()
+		} else {
+			sb.WriteString(",")
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		done <- err
+		return
+	}
+	done <- nil
 }
