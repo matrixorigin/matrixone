@@ -51,8 +51,12 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
 	// append sink node
-	lastNodeId = appendSinkNode(builder, queryBindCtx, lastNodeId)
-	sourceStep = builder.appendStep(lastNodeId)
+	if tblInfo.isMulti {
+		lastNodeId = appendSinkNode(builder, queryBindCtx, lastNodeId)
+		sourceStep = builder.appendStep(lastNodeId)
+	} else {
+		sourceStep = -1
+	}
 
 	beginIdx := 0
 	for i, tableDef := range tblInfo.tableDefs {
@@ -62,7 +66,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext) (p *Plan, err erro
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, lastNodeId)
 		if err != nil {
 			return nil, err
 		}
@@ -197,6 +201,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		upPlanCtx.tableDef = tableDef
 		upPlanCtx.updateColLength = len(updateKeys)
 		upPlanCtx.isMulti = tableInfo.isMulti
+		upPlanCtx.needAggFilter = tableInfo.needAggFilter
 		upPlanCtx.rowIdPos = rowIdPos
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
