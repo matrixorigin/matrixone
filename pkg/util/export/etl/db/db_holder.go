@@ -112,6 +112,9 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 				dbUser.Password,
 				dbAddress)
 		newDBConn, err := sql.Open("mysql", dsn)
+		if err != nil {
+			return err
+		}
 		newDBConn.SetMaxOpenConns(MaxConnectionNumber)
 		newDBConn.SetMaxIdleConns(MaxConnectionNumber)
 		SetDBConn(newDBConn)
@@ -172,7 +175,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table) (int, error) {
 }
 
 func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int) {
-	if records == nil || len(records) == 0 {
+	if len(records) == 0 {
 		done <- nil
 		return
 	}
