@@ -602,7 +602,7 @@ func (s *service) bootstrap() error {
 			panic("missing internal sql executor")
 		}
 
-		ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
 		b := bootstrap.NewBootstrapper(
 			&locker{hakeeperClient: s._hakeeperClient},
