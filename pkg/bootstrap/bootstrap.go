@@ -113,17 +113,26 @@ func NewBootstrapper(
 }
 
 func (b *bootstrapper) Bootstrap(ctx context.Context) error {
-	if ok, err := b.checkAlreadyBootstrapped(ctx); ok || err != nil {
+	getLogger().Info("start to check bootstrap state")
+
+	ok, err := b.checkAlreadyBootstrapped(ctx)
+	if ok {
+		getLogger().Info("mo already boostrapped")
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 
-	ok, err := b.lock.Get(ctx)
+	ok, err = b.lock.Get(ctx)
 	if err != nil {
 		return err
 	}
 
 	// current node get the bootstrap privilege
 	if ok {
+		getLogger().Info("start to bootstrap mo in 2 steps")
+
 		opts := executor.Options{}
 		err := b.exec.ExecTxn(
 			ctx,
@@ -141,6 +150,9 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+
+		getLogger().Info("bootstrap mo step 1 completed")
+
 		now, _ := b.clock.Now()
 		opts.WithMinCommittedTS(now)
 		err = b.exec.ExecTxn(
@@ -160,12 +172,18 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 			return err
 		}
 
+		getLogger().Info("bootstrap mo step 2 completed")
+
 		if b.client != nil {
+			getLogger().Info("wait bootstrap logtail applied")
+
 			// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
 			// bootstrap data.
 			now, _ = b.clock.Now()
 			b.client.(client.TxnClientWithCtl).SetLatestCommitTS(now)
 		}
+
+		getLogger().Info("successfully completed bootstrap")
 		return nil
 	}
 
