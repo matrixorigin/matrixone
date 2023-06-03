@@ -93,7 +93,7 @@ func consumeLogTailOfPull(
 ) (err error) {
 	logutil.Debugf("consumeLogTailOfPull table %d %s", tbl.tableId, tbl.tableName)
 	var entries []*api.Entry
-	
+
 	if entries, err = logtail.LoadCheckpointEntries(
 		ctx,
 		logTail.CkpLocation,

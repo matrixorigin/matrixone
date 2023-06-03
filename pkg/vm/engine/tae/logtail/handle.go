@@ -709,10 +709,8 @@ func LoadCheckpointEntries(
 		datas[i] = data
 	}
 
-	for i := range locations {
-		for _, data := range datas {
-			data.ReadFrom(ctx, readers[i], nil)
-		}
+	for i, data := range datas {
+		data.ReadFrom(ctx, readers[i], nil)
 	}
 
 	entries := make([]*api.Entry, 0)
