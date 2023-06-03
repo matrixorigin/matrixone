@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -36,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -401,35 +401,76 @@ type column struct {
 	seqnum          uint16
 }
 
-type blockReader struct {
-	blks          []*catalog.BlockInfo
-	ctx           context.Context
-	fs            fileservice.FileService
-	ts            timestamp.Timestamp
-	tableDef      *plan.TableDef
-	primarySeqnum int
-	expr          *plan.Expr
+type withFilterMixin struct {
+	ctx      context.Context
+	fs       fileservice.FileService
+	ts       timestamp.Timestamp
+	tableDef *plan.TableDef
 
-	//used for prefetch
-	infos           [][]*catalog.BlockInfo
-	steps           []int
-	currentStep     int
-	prefetchColIdxs []uint16 //need to remove rowid
+	// columns used for reading
+	columns struct {
+		seqnums  []uint16
+		colTypes []types.Type
+		// colNulls []bool
 
-	// cached meta data.
-	seqnums        []uint16
-	colTypes       []types.Type
-	colNulls       []bool
-	pkidxInColIdxs int
-	pkName         string
-	// binary search info
-	init       bool
-	canCompute bool
-	searchFunc func(*vector.Vector) int
+		pkPos    int // -1 means no primary key in columns
+		rowidPos int // -1 means no rowid in columns
 
-	// used for sorted
-	indexOfFirstSortedColumn int
+		indexOfFirstSortedColumn int
+	}
+
+	filterState struct {
+		expr      *plan.Expr
+		evaluated bool
+		filter    blockio.ReadFilter
+	}
 }
+
+type withPrefetchMixin struct {
+	prefetchColIdxs []uint16 //need to remove rowid
+}
+
+type blockReader struct {
+	withFilterMixin
+
+	// used for prefetch
+	infos       [][]*catalog.BlockInfo
+	steps       []int
+	currentStep int
+
+	// block list to scan
+	blks []*catalog.BlockInfo
+}
+
+//type blockReader struct {
+//	blks          []*catalog.BlockInfo
+//	ctx           context.Context
+//	fs            fileservice.FileService
+//	ts            timestamp.Timestamp
+//	tableDef      *plan.TableDef
+//	primarySeqnum int
+//	expr          *plan.Expr
+
+//	//used for prefetch
+//	infos           [][]*catalog.BlockInfo
+//	steps           []int
+//	currentStep     int
+//	prefetchColIdxs []uint16 //need to remove rowid
+
+//	// cached meta data.
+//	seqnums        []uint16
+//	colTypes       []types.Type
+//	colNulls       []bool
+//	pkidxInColIdxs int
+//	pkName         string
+//	// binary search info
+//	init       bool
+//	canCompute bool
+//	searchFunc func(*vector.Vector) int
+
+//	// used for sorted
+//	indexOfFirstSortedColumn int
+//}
 
 type blockMergeReader struct {
 	sels []int64

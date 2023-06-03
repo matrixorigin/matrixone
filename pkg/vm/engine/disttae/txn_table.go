@@ -1273,15 +1273,9 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 
 	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
-			rds[i] = &blockReader{
-				fs:            tbl.db.txn.engine.fs,
-				tableDef:      tableDef,
-				primarySeqnum: tbl.primarySeqnum,
-				expr:          expr,
-				ts:            ts,
-				ctx:           ctx,
-				blks:          []*catalog.BlockInfo{blks[i]},
-			}
+			rds[i] = newBlockReader(
+				ctx, tableDef, ts, []*catalog.BlockInfo{blks[i]}, expr, tbl.db.txn.engine.fs,
+			)
 		}
 		for j := len(ranges); j < num; j++ {
 			rds[j] = &emptyReader{}
