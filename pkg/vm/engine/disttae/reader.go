@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
@@ -103,8 +104,28 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 		r.steps = r.steps[1:]
 	}
 
+	var filter blockio.ReadFilter
+	if blockInfo.Sorted && r.pkidxInColIdxs != -1 && r.expr != nil {
+		if !r.init {
+			r.init = true
+			r.canCompute, r.searchFunc = getBinarySearchFuncByExpr(r.expr, r.pkName, r.colTypes[r.pkidxInColIdxs].Oid)
+		}
+		if r.canCompute && r.searchFunc != nil {
+			filter = func(vecs []*vector.Vector) []int32 {
+				// return r.searchFunc(row[r.pkidxInColIdxs])
+				vec := vecs[r.pkidxInColIdxs]
+				row := r.searchFunc(vec)
+				if row < 0 {
+					return nil
+				} else {
+					return []int32{int32(row)}
+				}
+			}
+		}
+	}
+
 	logutil.Debugf("read %v with %v", cols, r.seqnums)
-	bat, err := blockio.BlockRead(r.ctx, blockInfo, nil, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	bat, err := blockio.BlockRead(r.ctx, blockInfo, nil, r.seqnums, r.colTypes, r.ts, filter, r.fs, mp, vp)
 	if err != nil {
 		return nil, err
 	}
@@ -112,28 +133,6 @@ func (r *blockReader) Read(ctx context.Context, cols []string,
 
 	if blockInfo.Sorted && r.indexOfFirstSortedColumn != -1 {
 		bat.GetVector(int32(r.indexOfFirstSortedColumn)).SetSorted(true)
-	}
-
-	// if it's not sorted or no filter expr, just return
-	if !blockInfo.Sorted || r.pkidxInColIdxs == -1 || r.expr == nil {
-		return bat, nil
-	}
-
-	// if expr like : pkCol = xx，  we will try to find(binary search) the row in batch
-	vec := bat.GetVector(int32(r.pkidxInColIdxs))
-	if !r.init {
-		r.init = true
-		r.canCompute, r.searchFunc = getBinarySearchFuncByExpr(r.expr, r.pkName, vec.GetType().Oid)
-	}
-	if r.canCompute && r.searchFunc != nil {
-		row := r.searchFunc(vec)
-		if row < 0 {
-			// if row == -1, means no row in batch, so we shrink batch to empty
-			bat.Shrink([]int64{})
-		} else {
-			// if row >= 0, means we find the row in batch, so we shrink batch to one row
-			bat.Shrink([]int64{int64(row)})
-		}
 	}
 
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
@@ -184,8 +183,8 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 
 	//start to load deletes, which maybe
 	//in txn.blockId_dn_delete_metaLoc_batch or in partitionState.
-	if _, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[r.blks[0].meta.BlockID]; ok {
-		deletes, err := r.table.LoadDeletesForBlock(r.blks[0].meta.BlockID)
+	if _, ok := r.table.db.txn.blockId_dn_delete_metaLoc_batch[info.BlockID]; ok {
+		deletes, err := r.table.LoadDeletesForBlock(info.BlockID)
 		if err != nil {
 			return nil, err
 		}
@@ -198,7 +197,7 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 			return nil, err
 		}
 		ts := types.TimestampToTS(r.ts)
-		iter := state.NewRowsIter(ts, &r.blks[0].meta.BlockID, true)
+		iter := state.NewRowsIter(ts, &info.BlockID, true)
 		for iter.Next() {
 			entry := iter.Entry()
 			_, offset := entry.RowID.Decode()
@@ -207,7 +206,9 @@ func (r *blockMergeReader) Read(ctx context.Context, cols []string,
 		iter.Close()
 	}
 
-	bat, err := blockio.BlockRead(r.ctx, info, r.blks[0].deletes, r.seqnums, r.colTypes, r.ts, r.fs, mp, vp)
+	bat, err := blockio.BlockRead(
+		r.ctx, info, r.blks[0].deletes, r.seqnums, r.colTypes, r.ts, nil, r.fs, mp, vp,
+	)
 	if err != nil {
 		return nil, err
 	}
