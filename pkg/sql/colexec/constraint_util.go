@@ -60,7 +60,8 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch
 func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int, pIdx int, partitionNum int) ([]*batch.Batch, error) {
 	vecList := make([]*vector.Vector, partitionNum)
 	for i := 0; i < partitionNum; i++ {
-		retVec := vector.NewVec(types.T_Rowid.ToType())
+		//retVec := vector.NewVec(types.T_Rowid.ToType())
+		retVec := proc.GetVector(types.T_Rowid.ToType())
 		vecList[i] = retVec
 	}
 
@@ -102,7 +103,8 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 		partitionBatch.Attrs = attrs
 		for i := range partitionBatch.Attrs {
 			vecType := bat.GetVector(int32(i)).GetType()
-			retVec := vector.NewVec(*vecType)
+			//retVec := vector.NewVec(*vecType)
+			retVec := proc.GetVector(*vecType)
 			partitionBatch.SetVector(int32(i), retVec)
 		}
 		batches[partIdx] = partitionBatch
