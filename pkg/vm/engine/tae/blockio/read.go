@@ -117,6 +117,7 @@ func BlockReadInner(
 	vp engine.VectorPool,
 ) (result *batch.Batch, err error) {
 	var (
+		rowidPos    int
 		selectRows  []int32
 		deletedRows []int64
 		deleteMask  nulls.Bitmap
@@ -124,7 +125,7 @@ func BlockReadInner(
 	)
 
 	// read block data from storage specified by meta location
-	if loaded, _, deleteMask, err = readBlockData(
+	if loaded, rowidPos, deleteMask, err = readBlockData(
 		ctx, seqnums, colTypes, info, ts, fs, mp, vp,
 	); err != nil {
 		return
@@ -185,8 +186,13 @@ func BlockReadInner(
 
 		// no rows selected, return empty batch
 		if len(selectRows) == 0 {
+			var typ types.Type
 			for i, col := range loaded.Vecs {
-				typ := *col.GetType()
+				if i == rowidPos {
+					typ = objectio.RowidType
+				} else {
+					typ = *col.GetType()
+				}
 				if vp == nil {
 					result.Vecs[i] = vector.NewVec(typ)
 				} else {
@@ -201,15 +207,24 @@ func BlockReadInner(
 		// NOTE: it always goes here if there is a filter and the block is sorted
 		// and there are selected rows after applying the filter and delete mask
 
+		// build rowid column if needed
+		if rowidPos >= 0 {
+			if loaded.Vecs[rowidPos], err = buildRowidColumn(
+				info, selectRows, mp, vp,
+			); err != nil {
+				return
+			}
+		}
+
 		// assemble result batch only with selected rows
 		for i, col := range loaded.Vecs {
 			typ := *col.GetType()
 			if typ.Oid == types.T_Rowid {
-				sels := make([]int64, len(selectRows))
-				for i, row := range selectRows {
-					sels[i] = int64(row)
-				}
-				col.Shrink(sels, false)
+				// sels := make([]int64, len(selectRows))
+				// for i, row := range selectRows {
+				// 	sels[i] = int64(row)
+				// }
+				// col.Shrink(sels, false)
 				result.Vecs[i] = col
 				continue
 			}
@@ -233,6 +248,15 @@ func BlockReadInner(
 			// 	len(deletedRows),
 			// 	loaded.Vecs[0].Length(),
 			// 	float64(len(deletedRows))/float64(loaded.Vecs[0].Length()))
+		}
+
+		// build rowid column if needed
+		if rowidPos >= 0 {
+			if loaded.Vecs[rowidPos], err = buildRowidColumn(
+				info, nil, mp, vp,
+			); err != nil {
+				return
+			}
 		}
 
 		// assemble result batch
@@ -274,18 +298,16 @@ func BlockReadInner(
 	return
 }
 
-func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, []uint16, []types.Type) {
-	found := false
-	idx := 0
+func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (int, []uint16, []types.Type) {
+	idx := -1
 	for i, typ := range colTypes {
 		if typ.Oid == types.T_Rowid {
 			idx = i
-			found = true
 			break
 		}
 	}
-	if !found {
-		return found, colIndexes, colTypes
+	if idx < 0 {
+		return idx, colIndexes, colTypes
 	}
 	idxes := make([]uint16, 0, len(colTypes)-1)
 	typs := make([]types.Type, 0, len(colTypes)-1)
@@ -293,11 +315,12 @@ func getRowsIdIndex(colIndexes []uint16, colTypes []types.Type) (bool, []uint16,
 	idxes = append(idxes, colIndexes[idx+1:]...)
 	typs = append(typs, colTypes[:idx]...)
 	typs = append(typs, colTypes[idx+1:]...)
-	return found, idxes, typs
+	return idx, idxes, typs
 }
 
 func buildRowidColumn(
 	info *pkgcatalog.BlockInfo,
+	sels []int32,
 	m *mpool.MPool,
 	vp engine.VectorPool,
 ) (col *vector.Vector, err error) {
@@ -306,13 +329,23 @@ func buildRowidColumn(
 	} else {
 		col = vp.GetVector(objectio.RowidType)
 	}
-	if err = objectio.ConstructRowidColumnTo(
-		col,
-		&info.BlockID,
-		0,
-		info.MetaLocation().Rows(),
-		m,
-	); err != nil {
+	if len(sels) == 0 {
+		err = objectio.ConstructRowidColumnTo(
+			col,
+			&info.BlockID,
+			0,
+			info.MetaLocation().Rows(),
+			m,
+		)
+	} else {
+		err = objectio.ConstructRowidColumnToWithSels(
+			col,
+			&info.BlockID,
+			sels,
+			m,
+		)
+	}
+	if err != nil {
 		col.Free(m)
 		col = nil
 	}
@@ -328,21 +361,14 @@ func readBlockData(
 	fs fileservice.FileService,
 	m *mpool.MPool,
 	vp engine.VectorPool,
-) (bat *batch.Batch, rowid *vector.Vector, deleteMask nulls.Bitmap, err error) {
-
-	hasRowId, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
-	if hasRowId {
-		// generate rowid
-		if rowid, err = buildRowidColumn(info, m, vp); err != nil {
-			return
-		}
-	}
+) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, err error) {
+	rowidPos, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 
 	readColumns := func(cols []uint16) (result *batch.Batch, loaded *batch.Batch, err error) {
-		if len(cols) == 0 && hasRowId {
+		if len(cols) == 0 && rowidPos >= 0 {
 			// only read rowid column on non appendable block, return early
 			result = batch.NewWithSize(1)
-			result.Vecs[0] = rowid
+			// result.Vecs[0] = rowid
 			return
 		}
 
@@ -353,9 +379,7 @@ func readBlockData(
 		colPos := 0
 		result = batch.NewWithSize(len(colTypes))
 		for i, typ := range colTypes {
-			if typ.Oid == types.T_Rowid {
-				result.Vecs[i] = rowid
-			} else {
+			if typ.Oid != types.T_Rowid {
 				result.Vecs[i] = loaded.Vecs[colPos]
 				colPos++
 			}
