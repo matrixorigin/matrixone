@@ -330,6 +330,12 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if s.User == db_holder.MOLoggerUser {
 		return nil
 	}
+	// Filter out part of the internal SQL statements
+	if s.User == "internal" {
+		if s.Statement == "Commit" || s.Statement == "Start Transaction" {
+			return nil
+		}
+	}
 
 	return GetGlobalBatchProcessor().Collect(ctx, s)
 }
