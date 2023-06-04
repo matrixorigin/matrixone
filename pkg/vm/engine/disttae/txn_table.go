@@ -1366,7 +1366,7 @@ func (tbl *txnTable) newReader(
 	if len(encodedPrimaryKey) > 0 {
 		iter = state.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
-			encodedPrimaryKey,
+			logtailreplay.Exact(encodedPrimaryKey),
 		)
 	} else {
 		iter = state.NewRowsIter(
