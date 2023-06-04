@@ -447,7 +447,7 @@ func TestGetCompositePkValueByExpr(t *testing.T) {
 		}
 		cnt := 0
 		if ok {
-			cnt = getComputableCompositePKCnt(vals)
+			cnt = getValidCompositePKCnt(vals)
 		}
 		require.Equal(t, tc.expect[i], cnt)
 	}
@@ -775,32 +775,3 @@ func TestComputeRangeByIntPk(t *testing.T) {
 		}
 	})
 }
-
-// func TestGetListByRange(t *testing.T) {
-// 	type asserts = struct {
-// 		result []DNStore
-// 		list   []DNStore
-// 		r      [][2]int64
-// 	}
-
-// 	testCases := []asserts{
-// 		{[]DNStore{{UUID: "1"}, {UUID: "2"}}, []DNStore{{UUID: "1"}, {UUID: "2"}}, [][2]int64{{14, 32324234234234}}},
-// 		{[]DNStore{{UUID: "1"}}, []DNStore{{UUID: "1"}, {UUID: "2"}}, [][2]int64{{14, 14}}},
-// 	}
-
-// 	t.Run("test getListByRange", func(t *testing.T) {
-// 		for i, testCase := range testCases {
-// 			result := getListByRange(testCase.list, testCase.r)
-// 			if len(result) != len(testCase.result) {
-// 				t.Fatalf("test getListByRange at cases[%d], data length is not match", i)
-// 			}
-// 			/*
-// 				for j, r := range testCase.result {
-// 					if r.UUID != result[j].UUID {
-// 						t.Fatalf("test getListByRange at cases[%d], result[%d] is not match", i, j)
-// 					}
-// 				}
-// 			*/
-// 		}
-// 	})
-// }

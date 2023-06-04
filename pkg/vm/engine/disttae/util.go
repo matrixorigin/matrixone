@@ -15,7 +15,9 @@
 package disttae
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"strings"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -90,7 +93,7 @@ func getPosInCompositPK(name string, pks []string) int {
 	return -1
 }
 
-func getComputableCompositePKCnt(vals []*plan.Expr_C) int {
+func getValidCompositePKCnt(vals []*plan.Expr_C) int {
 	if len(vals) == 0 {
 		return 0
 	}
@@ -101,6 +104,7 @@ func getComputableCompositePKCnt(vals []*plan.Expr_C) int {
 		}
 		cnt++
 	}
+
 	return cnt
 }
 
@@ -597,94 +601,6 @@ func _computeAnd(left *pkRange, right *pkRange) (bool, *pkRange) {
 	}
 }
 
-/*
-func getHashValue(buf []byte) uint64 {
-	buf = append([]byte{0}, buf...)
-	var states [3]uint64
-	if l := len(buf); l < 16 {
-		buf = append(buf, hashtable.StrKeyPadding[l:]...)
-	}
-	hashtable.BytesBatchGenHashStates(&buf, &states, 1)
-	return states[0]
-}
-
-func getListByItems[T DNStore](list []T, items []int64) []int {
-	fullList := func() []int {
-		dnList := make([]int, len(list))
-		for i := range list {
-			dnList[i] = i
-		}
-		return dnList
-	}
-
-	listLen := uint64(len(list))
-	if listLen == 1 {
-		return []int{0}
-	}
-
-	if len(items) == 0 || int64(len(items)) > MAX_RANGE_SIZE {
-		return fullList()
-	}
-
-	listMap := make(map[uint64]struct{})
-	for _, item := range items {
-		keys := make([]byte, 8)
-		binary.LittleEndian.PutUint64(keys, uint64(item))
-		val := getHashValue(keys)
-		modVal := val % listLen
-		listMap[modVal] = struct{}{}
-		if len(listMap) == int(listLen) {
-			return fullList()
-		}
-	}
-	dnList := make([]int, len(listMap))
-	i := 0
-	for idx := range listMap {
-		dnList[i] = int(idx)
-		i++
-	}
-	return dnList
-}
-*/
-
-// func getListByRange[T DNStore](list []T, pkRange [][2]int64) []int {
-// 	fullList := func() []int {
-// 		dnList := make([]int, len(list))
-// 		for i := range list {
-// 			dnList[i] = i
-// 		}
-// 		return dnList
-// 	}
-// 	listLen := uint64(len(list))
-// 	if listLen == 1 || len(pkRange) == 0 {
-// 		return []int{0}
-// 	}
-
-// 	listMap := make(map[uint64]struct{})
-// 	for _, r := range pkRange {
-// 		if r[1]-r[0] > MAX_RANGE_SIZE {
-// 			return fullList()
-// 		}
-// 		for i := r[0]; i <= r[1]; i++ {
-// 			keys := make([]byte, 8)
-// 			binary.LittleEndian.PutUint64(keys, uint64(i))
-// 			val := getHashValue(keys)
-// 			modVal := val % listLen
-// 			listMap[modVal] = struct{}{}
-// 			if len(listMap) == int(listLen) {
-// 				return fullList()
-// 			}
-// 		}
-// 	}
-// 	dnList := make([]int, len(listMap))
-// 	i := 0
-// 	for idx := range listMap {
-// 		dnList[i] = int(idx)
-// 		i++
-// 	}
-// 	return dnList
-// }
-
 func logDebugf(txnMeta txn.TxnMeta, msg string, infos ...interface{}) {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		infos = append(infos, txnMeta.DebugString())
@@ -815,5 +731,290 @@ func SelectForCommonTenant(
 		for _, cn := range preEmptyCNs {
 			appendFn(cn)
 		}
+	}
+}
+
+// Eval selected on column factories
+// 1. Sorted column
+// 1.1 ordered type column
+// 1.2 Fixed len type column
+// 1.3 Varlen type column
+//
+// 2. Unsorted column
+// 2.1 Fixed len type column
+// 2.2 Varlen type column
+
+// 1.1 ordered column type + sorted column
+func EvalSelectedOnOrderedSortedColumnFactory[T types.OrderedT](
+	v T,
+) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
+	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
+		vals := vector.MustFixedCol[T](col)
+		idx := vector.OrderedFindFirstIndexInSortedSlice(v, vals)
+		var newSels nulls.Bitmap
+		if sels.IsEmpty() {
+			for idx < len(vals) {
+				if vals[idx] != v {
+					break
+				}
+				newSels.Set(uint64(idx))
+				idx++
+			}
+		} else {
+			// sels is not empty
+			for idx < len(vals) {
+				if vals[idx] != v {
+					break
+				}
+				if sels.Contains(uint64(idx)) {
+					newSels.Add(uint64(idx))
+				}
+				idx++
+			}
+		}
+		if newSels.IsEmpty() {
+			return nil
+		} else {
+			return &newSels
+		}
+	}
+}
+
+// 1.2 fixed size column type + sorted column
+func EvalSelectedOnFixedSizeSortedColumnFactory[T types.FixedSizeTExceptStrType](
+	v T, comp func(T, T) int64,
+) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
+	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
+		vals := vector.MustFixedCol[T](col)
+		idx := vector.FixedSizeFindFirstIndexInSortedSliceWithCompare(v, vals, comp)
+		var newSels nulls.Bitmap
+		if sels.IsEmpty() {
+			for idx < len(vals) {
+				if comp(vals[idx], v) != 0 {
+					break
+				}
+				newSels.Set(uint64(idx))
+				idx++
+			}
+		} else {
+			// sels is not empty
+			for idx < len(vals) {
+				if comp(vals[idx], v) != 0 {
+					break
+				}
+				if sels.Contains(uint64(idx)) {
+					newSels.Add(uint64(idx))
+				}
+				idx++
+			}
+		}
+		if newSels.IsEmpty() {
+			return nil
+		} else {
+			return &newSels
+		}
+	}
+}
+
+// 1.3 varlen type column + sorted
+func EvalSelectedOnVarlenSortedColumnFactory(
+	v []byte,
+) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
+	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
+		idx := vector.FindFirstIndexInSortedVarlenVector(col, v)
+		var newSels nulls.Bitmap
+		length := col.Length()
+		if sels.IsEmpty() {
+			for idx < length {
+				if !bytes.Equal(col.GetBytesAt(idx), v) {
+					break
+				}
+				newSels.Set(uint64(idx))
+				idx++
+			}
+		} else {
+			// sels is not empty
+			for idx < length {
+				if !bytes.Equal(col.GetBytesAt(idx), v) {
+					break
+				}
+				if sels.Contains(uint64(idx)) {
+					newSels.Add(uint64(idx))
+				}
+				idx++
+			}
+		}
+		if newSels.IsEmpty() {
+			return nil
+		} else {
+			return &newSels
+		}
+	}
+}
+
+// 2.1 fixedSize type column + non-sorted
+func EvalSelectedOnFixedSizeColumnFactory[T types.FixedSizeTExceptStrType](
+	v T,
+) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
+	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
+		vals := vector.MustFixedCol[T](col)
+		var newSels nulls.Bitmap
+		if sels.IsEmpty() {
+			for idx, val := range vals {
+				if val == v {
+					newSels.Set(uint64(idx))
+				}
+			}
+		} else {
+			sels.Foreach(func(i uint64) bool {
+				if vals[i] == v {
+					newSels.Set(i)
+				}
+				return true
+			})
+		}
+		if newSels.IsEmpty() {
+			return nil
+		} else {
+			return &newSels
+		}
+	}
+}
+
+// 2.2 varlen type column + non-sorted
+func EvalSelectedOnVarlenColumnFactory(
+	v []byte,
+) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
+	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
+		var newSels nulls.Bitmap
+		if sels.IsEmpty() {
+			for idx := 0; idx < col.Length(); idx++ {
+				if bytes.Equal(col.GetBytesAt(idx), v) {
+					newSels.Set(uint64(idx))
+				}
+			}
+		} else {
+			sels.Foreach(func(i uint64) bool {
+				if bytes.Equal(col.GetBytesAt(int(i)), v) {
+					newSels.Set(i)
+				}
+				return true
+			})
+		}
+		if newSels.IsEmpty() {
+			return nil
+		} else {
+			return &newSels
+		}
+	}
+}
+
+// for composite primary keys:
+// 1. all related columns may have duplicated values
+// 2. only the first column is sorted
+// the filter function receives a vector as the column values and selected rows
+// it evaluates the filter expression only on the selected rows and returns the selected rows
+// which are evaluated to true
+func getCompositeFilterFuncByExpr(
+	expr *plan.Expr_C, isSorted bool,
+) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
+	switch val := expr.C.Value.(type) {
+	case *plan.Const_Bval:
+		return EvalSelectedOnFixedSizeColumnFactory(val.Bval)
+	case *plan.Const_I8Val:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(int8(val.I8Val))
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(int8(val.I8Val))
+	case *plan.Const_I16Val:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(int16(val.I16Val))
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(int16(val.I16Val))
+	case *plan.Const_I32Val:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(int32(val.I32Val))
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(int32(val.I32Val))
+	case *plan.Const_I64Val:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(int64(val.I64Val))
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(int64(val.I64Val))
+	case *plan.Const_U8Val:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(uint8(val.U8Val))
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(uint8(val.U8Val))
+	case *plan.Const_U16Val:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(uint16(val.U16Val))
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(uint16(val.U16Val))
+	case *plan.Const_U32Val:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(uint32(val.U32Val))
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(uint32(val.U32Val))
+	case *plan.Const_U64Val:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(uint64(val.U64Val))
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(uint64(val.U64Val))
+	case *plan.Const_Fval:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(float32(val.Fval))
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(float32(val.Fval))
+	case *plan.Const_Dval:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(val.Dval)
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(val.Dval)
+	case *plan.Const_Timeval:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(val.Timeval)
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(val.Timeval)
+	case *plan.Const_Timestampval:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(val.Timestampval)
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(val.Timestampval)
+	case *plan.Const_Dateval:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(val.Dateval)
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(val.Dateval)
+	case *plan.Const_Datetimeval:
+		if isSorted {
+			return EvalSelectedOnOrderedSortedColumnFactory(val.Datetimeval)
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(val.Datetimeval)
+	case *plan.Const_Decimal64Val:
+		v := types.Decimal64(val.Decimal64Val.A)
+		if isSorted {
+			return EvalSelectedOnFixedSizeSortedColumnFactory(v, types.CompareDecimal64)
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(v)
+	case *plan.Const_Decimal128Val:
+		v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
+		if isSorted {
+			return EvalSelectedOnFixedSizeSortedColumnFactory(v, types.CompareDecimal128)
+		}
+		return EvalSelectedOnFixedSizeColumnFactory(v)
+	case *plan.Const_Sval:
+		if isSorted {
+			return EvalSelectedOnVarlenSortedColumnFactory(util.UnsafeStringToBytes(val.Sval))
+		}
+		return EvalSelectedOnVarlenColumnFactory(util.UnsafeStringToBytes(val.Sval))
+	case *plan.Const_Jsonval:
+		if isSorted {
+			return EvalSelectedOnVarlenSortedColumnFactory(util.UnsafeStringToBytes(val.Jsonval))
+		}
+		return EvalSelectedOnVarlenColumnFactory(util.UnsafeStringToBytes(val.Jsonval))
+
+	default:
+		panic(fmt.Sprintf("unexpected const expr %v", expr))
 	}
 }
