@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package vector
 
 import (
@@ -6,6 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// FindFirstIndexInSortedSlice finds the first index of v in a sorted slice s
+// If v is not found, return -1
 func OrderedFindFirstIndexInSortedSlice[T types.OrderedT](v T, s []T) int {
 	if len(s) == 0 {
 		return -1
@@ -34,6 +50,9 @@ func OrderedFindFirstIndexInSortedSlice[T types.OrderedT](v T, s []T) int {
 	return -1
 }
 
+// FindFirstIndexInSortedSlice finds the first index of v in a sorted slice s
+// If v is not found, return -1
+// compare is a function to compare two elements in s
 func FixedSizeFindFirstIndexInSortedSliceWithCompare[T types.FixedSizeTExceptStrType](
 	v T, s []T, compare func(T, T) int64,
 ) int {
@@ -64,6 +83,7 @@ func FixedSizeFindFirstIndexInSortedSliceWithCompare[T types.FixedSizeTExceptStr
 	return -1
 }
 
+// FindFirstIndexInSortedSlice finds the first index of v in a sorted varlen vector
 func FindFirstIndexInSortedVarlenVector(vec *Vector, v []byte) int {
 	length := vec.Length()
 	if length == 0 {
