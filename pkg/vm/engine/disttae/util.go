@@ -751,6 +751,9 @@ func EvalSelectedOnOrderedSortedColumnFactory[T types.OrderedT](
 	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
 		vals := vector.MustFixedCol[T](col)
 		idx := vector.OrderedFindFirstIndexInSortedSlice(v, vals)
+		if idx < 0 {
+			return nil
+		}
 		var newSels nulls.Bitmap
 		if sels.IsEmpty() {
 			for idx < len(vals) {
@@ -787,6 +790,9 @@ func EvalSelectedOnFixedSizeSortedColumnFactory[T types.FixedSizeTExceptStrType]
 	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
 		vals := vector.MustFixedCol[T](col)
 		idx := vector.FixedSizeFindFirstIndexInSortedSliceWithCompare(v, vals, comp)
+		if idx < 0 {
+			return nil
+		}
 		var newSels nulls.Bitmap
 		if sels.IsEmpty() {
 			for idx < len(vals) {
@@ -822,6 +828,9 @@ func EvalSelectedOnVarlenSortedColumnFactory(
 ) func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap {
 	return func(col *vector.Vector, sels *nulls.Bitmap) *nulls.Bitmap {
 		idx := vector.FindFirstIndexInSortedVarlenVector(col, v)
+		if idx < 0 {
+			return nil
+		}
 		var newSels nulls.Bitmap
 		length := col.Length()
 		if sels.IsEmpty() {
