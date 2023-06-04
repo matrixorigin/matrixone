@@ -177,7 +177,13 @@ func (c *Compile) run(s *Scope) error {
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
-		return s.Run(c)
+		err := s.Run(c)
+		if err != nil {
+			return err
+		}
+
+		c.addAffectedRows(s.affectedRows())
+		return nil
 	case Merge, MergeInsert:
 		defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
