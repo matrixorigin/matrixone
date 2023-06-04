@@ -49,6 +49,8 @@ import (
 const LoggerNameETLMerge = "ETLMerge"
 const LoggerNameContentReader = "ETLContentReader"
 
+const MAX_MERGE_INSERT_TIME = 10 * time.Second
+
 // ========================
 // handle merge
 // ========================
@@ -396,14 +398,14 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	}()
 
 	// Step 3. do simple merge
-	cacheFileData := &SliceCache{}
-	row := m.Table.GetRow(ctx)
-	defer row.Free()
-	defer cacheFileData.Reset()
-
-	for _, fp := range files {
+	var uploadFile = func(ctx context.Context, fp *FileMeta) error {
+		row := m.Table.GetRow(ctx)
+		defer row.Free()
+		cacheFileData := &SliceCache{}
+		defer cacheFileData.Reset()
 		// open reader
 		reader, err := newETLReader(ctx, m.Table, m.FS, fp.FilePath, fp.FileSize, m.mp)
+		defer reader.Close()
 		if err != nil {
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
@@ -419,7 +421,6 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 					logutil.PathField(fp.FilePath),
 					logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", line), 102400)),
 				)
-				reader.Close()
 				return err
 			}
 			cacheFileData.Put(row)
@@ -427,22 +428,14 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 		if err != nil {
 			m.logger.Warn("failed to read file",
 				logutil.PathField(fp.FilePath), zap.Error(err))
-			reader.Close()
 			return err
 		}
 
 		// sql insert
 		if cacheFileData.Size() > 0 {
 			if err = cacheFileData.Flush(m.Table); err != nil {
-				m.logger.Error("failed to write sql",
-					logutil.TableField(m.Table.GetIdentify()),
-					logutil.PathField(fp.FilePath),
-					logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", line), 102400)),
-				)
-				reader.Close()
 				return err
 			}
-			reader.Close()
 			cacheFileData.Reset()
 		}
 		// delete empty file or file already uploaded
@@ -452,9 +445,20 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 				return err
 			}
 		}
-		reader.Close()
-		// todo: adjust the sleep settings
-		time.Sleep(5 * time.Second)
+		return nil
+	}
+
+	for _, fp := range files {
+		if err := uploadFile(ctx, fp); err != nil {
+			// todo: adjust the sleep settings
+			// Sleep 10 seconds to wait for the database to recover
+			time.Sleep(10 * time.Second)
+			m.logger.Error("failed to write sql",
+				logutil.TableField(m.Table.GetIdentify()),
+				logutil.PathField(fp.FilePath),
+				zap.Error(err),
+			)
+		}
 	}
 
 	return nil
@@ -668,7 +672,7 @@ type SliceCache struct {
 }
 
 func (c *SliceCache) Flush(tbl *table.Table) error {
-	_, err := db_holder.WriteRowRecords(c.m, tbl)
+	_, err := db_holder.WriteRowRecords(c.m, tbl, MAX_MERGE_INSERT_TIME)
 	c.Reset()
 	return err
 }

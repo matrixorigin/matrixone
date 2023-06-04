@@ -26,6 +26,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const MAX_INSERT_TIME = 3 * time.Second
+
 // DefaultSqlWriter SqlWriter is a writer that writes data to a SQL database.
 type DefaultSqlWriter struct {
 	ctx       context.Context
@@ -64,7 +66,7 @@ func (sw *DefaultSqlWriter) flushBuffer(force bool) (int, error) {
 	var err error
 	var cnt int
 
-	cnt, err = db_holder.WriteRowRecords(sw.buffer, sw.tbl)
+	cnt, err = db_holder.WriteRowRecords(sw.buffer, sw.tbl, MAX_INSERT_TIME)
 
 	if err != nil {
 		sw.dumpBufferToCSV()

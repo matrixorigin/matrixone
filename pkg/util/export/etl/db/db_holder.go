@@ -53,8 +53,6 @@ const DBConnRetryThreshold = 8
 
 const MAX_CHUNK_SIZE = 1024 * 1024 * 4
 
-const MAX_INSERT_TIME = 3 * time.Second
-
 type DBUser struct {
 	UserName string
 	Password string
@@ -133,7 +131,7 @@ func InitOrRefreshDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	return dbConn, nil
 }
 
-func WriteRowRecords(records [][]string, tbl *table.Table) (int, error) {
+func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration) (int, error) {
 	if len(records) == 0 {
 		return 0, nil
 	}
@@ -142,6 +140,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table) (int, error) {
 	var dbConn *sql.DB
 
 	if DBConnErrCount.Load() > DBConnRetryThreshold {
+		logutil.Warn("sqlWriter WriteRowRecords failed above threshold", zap.Uint32("failures", DBConnErrCount.Load()), zap.Error(err))
 		dbConn, err = InitOrRefreshDBConn(true, true)
 		DBConnErrCount.Store(0)
 	} else {
@@ -151,7 +150,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table) (int, error) {
 		logutil.Error("sqlWriter db init failed", zap.Error(err))
 		return 0, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), MAX_INSERT_TIME)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	done := make(chan error)
@@ -169,7 +168,6 @@ func WriteRowRecords(records [][]string, tbl *table.Table) (int, error) {
 		DBConnErrCount.Add(1)
 		err = ctx.Err()
 	}
-	logutil.Warn("sqlWriter WriteRowRecords failed", zap.Error(err))
 
 	return 0, err
 }
