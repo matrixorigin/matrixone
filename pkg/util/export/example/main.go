@@ -22,19 +22,19 @@ package main
 
 import (
 	"context"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
+	"runtime"
+	"runtime/pprof"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"go.uber.org/zap/zapcore"
-	"net/http"
-	"os"
-	"runtime"
-	"sync"
-	"time"
-
-	_ "net/http/pprof"
-	"runtime/pprof"
 
 	morun "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -122,7 +122,9 @@ func main() {
 func mergeAll(ctx context.Context, fs *fileservice.LocalETLFS) {
 	ctx, span := trace.Start(ctx, "mergeTable")
 	defer span.End()
-	merge, err := export.NewMerge(ctx, export.WithTable(motrace.SingleStatementTable), export.WithFileService(fs))
+	var err error
+	var merge *export.Merge
+	merge, err = export.NewMerge(ctx, export.WithTable(motrace.SingleStatementTable), export.WithFileService(fs))
 	err = merge.ListRange(ctx)
 	if err != nil {
 		logutil.Infof("[%v] failed to merge: %v", "All", err)
