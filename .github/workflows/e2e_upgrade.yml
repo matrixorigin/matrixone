@@ -126,10 +126,7 @@ jobs:
           mkdir -p ${{ github.workspace }}/upload
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
-          mv ${{ github.workspace }}/workspace/new-dump-stacks.log ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/workspace/dump-stacks.log ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/workspace/new-mo-service.log ${{ github.workspace }}/upload/
-          mv ${{ github.workspace }}/workspace/mo-service.log ${{ github.workspace }}/upload/
+          mv ${{ github.workspace }}/workspace ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
           
       - uses: actions/upload-artifact@v3
