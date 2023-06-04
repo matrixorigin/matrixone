@@ -921,6 +921,67 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
+	case plan.Node_LOCK_OP:
+
+		// get pk expr
+		pkexpr := &plan.Expr{
+			Typ: node.LockTargets[0].GetPrimaryColTyp(),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: node.LockTargets[0].PrimaryColIdxInBat,
+				},
+			},
+		}
+
+		increaseRefCnt(pkexpr, colRefCnt)
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		if err != nil {
+			return nil, err
+		}
+
+		decreaseRefCnt(pkexpr, colRefCnt)
+		err = builder.remapColRefForExpr(pkexpr, childRemapping.globalToLocal)
+		if err != nil {
+			return nil, err
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		for i, globalRef := range childRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+		if len(node.ProjectList) == 0 {
+			if len(childRemapping.localToGlobal) > 0 {
+				remapping.addColRef(childRemapping.localToGlobal[0])
+			}
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+					},
+				},
+			})
+		}
+
 	default:
 		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
 	}
@@ -1598,6 +1659,26 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		if len(selectList) == 0 {
 			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
+		}
+
+		if isForUpdate {
+			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+			pkPos, pkTyp := getPkPos(tableDef, false)
+			lockTarget := &plan.LockTarget{
+				TableId:            tableDef.TblId,
+				PrimaryColIdxInBat: int32(pkPos),
+				PrimaryColTyp:      pkTyp,
+				RefreshTsIdxInBat:  -1, //unsupport now
+				FilterColIdxInBat:  -1, //unsupport now
+			}
+			lockNode := &Node{
+				NodeType:    plan.Node_LOCK_OP,
+				Children:    []int32{nodeID},
+				TableDef:    tableDef,
+				LockTargets: []*plan.LockTarget{lockTarget},
+				BindingTags: []int32{builder.genNewTag()},
+			}
+			nodeID = builder.appendNode(lockNode, ctx)
 		}
 
 		// rewrite right join to left join
