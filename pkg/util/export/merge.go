@@ -460,6 +460,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 			)
 		}
 	}
+	logutil.Info("upload files success", logutil.TableField(m.Table.GetIdentify()), zap.Int("file count", len(files)))
 
 	return nil
 }
