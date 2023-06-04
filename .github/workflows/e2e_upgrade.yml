@@ -47,31 +47,19 @@ jobs:
           cd $GITHUB_WORKSPACE && mkdir workspace && cd workspace
           mv $GITHUB_WORKSPACE/upstream/mo-service .
           mv $GITHUB_WORKSPACE/head/mo-service-new .
-          mkdir -p head-config && mkdir -p upstream-config
-          mv $GITHUB_WORKSPACE/upstream/etc ./upstream-config/
-          mv $GITHUB_WORKSPACE/head/etc ./head-config/
           ls -al
-                    
-      - name: echo config files
-        run: |
-          cd $GITHUB_WORKSPACE/workspace
-          echo "==============configuration of upstram=============="
-          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./upstream-config/etc/launch-tae-multi-CN-tae-DN/cn1.toml
-          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./upstream-config/etc/launch-tae-multi-CN-tae-DN/cn2.toml
-          cat ./upstream-config/etc/launch-tae-multi-CN-tae-DN/cn1.toml
-          cat ./upstream-config/etc/launch-tae-multi-CN-tae-DN/cn2.toml
-          cat ./upstream-config/etc/launch-tae-multi-CN-tae-DN/dn.toml
-          echo "==============configuration of head=============="
-          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./head-config/etc/launch-tae-multi-CN-tae-DN/cn1.toml
-          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./head-config/etc/launch-tae-multi-CN-tae-DN/cn2.toml
-          cat ./head-config/etc/launch-tae-multi-CN-tae-DN/cn1.toml
-          cat ./head-config/etc/launch-tae-multi-CN-tae-DN/cn2.toml
-          cat ./head-config/etc/launch-tae-multi-CN-tae-DN/dn.toml
-          
+                            
       - name: Start the Latest Version of Main of MO
         run: |
           cd $GITHUB_WORKSPACE/workspace
-          ./mo-service -launch ./upstream-config/etc/launch-tae-multi-CN-tae-DN/launch.toml &>mo-service.log &
+          mv $GITHUB_WORKSPACE/upstream/etc .
+          echo "==============configuration of upstram=============="
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml          
+          ./mo-service -launch ./etc/launch-tae-multi-CN-tae-DN/launch.toml &>mo-service.log &
            
       - name: Clone test-tool repository
         uses: actions/checkout@v3
@@ -104,7 +92,15 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/workspace
           rm -rf mo-data/etl
-          ./mo-service-new -launch ./head-config/etc/launch-tae-multi-CN-tae-DN/launch.toml &>new-mo-service.log &
+          rm -rf etc
+          mv $GITHUB_WORKSPACE/head/etc .
+          echo "==============configuration of head=============="
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
+          cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml                
+          ./mo-service-new -launch ./etc/launch-tae-multi-CN-tae-DN/launch.toml &>new-mo-service.log &
 
       - name: Start BVT Test for MO with Version of Head
         id: bvt_on_latest_head_version
