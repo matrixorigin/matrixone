@@ -16,6 +16,7 @@ package etl
 
 import (
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -48,7 +49,7 @@ func TestDefaultSqlWriter_WriteRowRecords(t *testing.T) {
 	}
 
 	// call the function to test
-	cnt, err := db_holder.WriteRowRecords(records, tbl)
+	cnt, err := db_holder.WriteRowRecords(records, tbl, 1*time.Second)
 
 	// assertions
 	if err != nil {
