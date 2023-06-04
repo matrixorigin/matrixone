@@ -17,8 +17,9 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/stretchr/testify/require"
 
@@ -286,6 +287,111 @@ func TestEvalZonemapFilter(t *testing.T) {
 		}
 	}
 	require.Zero(t, m.CurrNB())
+}
+
+func TestGetCompositePkValueByExpr(t *testing.T) {
+	type myCase struct {
+		desc   []string
+		exprs  []*plan.Expr
+		expect []int
+	}
+	// a, b, c, d are columns of table t1
+	// d,c,b are composite primary key
+	tc := myCase{
+		desc: []string{
+			"a=10", "a=20 and b=10", "a=20 and d=10", "b=20 and c=10",
+			"b=10 and d=20", "b=10 and c=20 and d=30",
+			"c=10 and d=20", "a=20 and d=10 or d=10",
+		},
+		expect: []int{
+			0, 0, 1, 0, 1, 3, 2, 0,
+		},
+		exprs: []*plan.Expr{
+			makeFunctionExprForTest("=", []*plan.Expr{
+				makeColExprForTest(0, types.T_float64),
+				plan2.MakePlan2Float64ConstExprWithType(10),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(2, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(20),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(30),
+					}),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+			}),
+		},
+	}
+	pks := []string{"d", "c", "b"}
+	for i, expr := range tc.exprs {
+		vals := make([]*plan.Expr_C, len(pks))
+		ok := getCompositPKVals(expr, pks, vals)
+		for _, val := range vals {
+			t.Logf("val: %v", val)
+		}
+		cnt := 0
+		if ok {
+			cnt = getComputableCompositePKCnt(vals)
+		}
+		require.Equal(t, tc.expect[i], cnt)
+	}
 }
 
 func TestGetNonIntPkValueByExpr(t *testing.T) {

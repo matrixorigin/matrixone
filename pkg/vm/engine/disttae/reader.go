@@ -114,7 +114,7 @@ func (mixin *withFilterMixin) getReadFilter() (filter blockio.ReadFilter) {
 	// C: {A|B} and {A|B}
 	// D: {A|B|C} [and {A|B|C}]*
 	// for other patterns, no filter is needed
-	ok, searchFunc := getBinarySearchFuncByExpr(
+	ok, searchFunc := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
 		mixin.tableDef.Pkey.PkeyColName,
 		mixin.columns.colTypes[mixin.columns.pkPos].Oid,

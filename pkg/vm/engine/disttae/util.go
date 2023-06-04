@@ -81,6 +81,59 @@ func compPkCol(colName string, pkName string) bool {
 	return colName == pkName
 }
 
+func getPosInCompositPK(name string, pks []string) int {
+	for i, pk := range pks {
+		if compPkCol(name, pk) {
+			return i
+		}
+	}
+	return -1
+}
+
+func getComputableCompositePKCnt(vals []*plan.Expr_C) int {
+	if len(vals) == 0 {
+		return 0
+	}
+	cnt := 0
+	for _, val := range vals {
+		if val == nil {
+			break
+		}
+		cnt++
+	}
+	return cnt
+}
+
+func getCompositPKVals(expr *plan.Expr, pks []string, vals []*plan.Expr_C) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		fname := exprImpl.F.Func.ObjName
+		switch fname {
+		case "and":
+			getCompositPKVals(exprImpl.F.Args[0], pks, vals)
+			return getCompositPKVals(exprImpl.F.Args[1], pks, vals)
+		case "=":
+			switch leftExpr := exprImpl.F.Args[0].Expr.(type) {
+			case *plan.Expr_C:
+				if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
+					if pos := getPosInCompositPK(rightExpr.Col.Name, pks); pos != -1 {
+						vals[pos] = leftExpr
+						return true
+					}
+				}
+			case *plan.Expr_Col:
+				if pos := getPosInCompositPK(leftExpr.Col.Name, pks); pos != -1 {
+					if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_C); ok {
+						vals[pos] = rightExpr
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 func getPkExpr(expr *plan.Expr, pkName string) (bool, *plan.Expr) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -120,7 +173,7 @@ func getPkExpr(expr *plan.Expr, pkName string) (bool, *plan.Expr) {
 	return false, nil
 }
 
-func getBinarySearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, func(*vector.Vector) int) {
+func getNonCompositePKSearchFuncByExpr(expr *plan.Expr, pkName string, oid types.T) (bool, func(*vector.Vector) int) {
 	canCompute, valExpr := getPkExpr(expr, pkName)
 	if !canCompute {
 		return canCompute, nil
