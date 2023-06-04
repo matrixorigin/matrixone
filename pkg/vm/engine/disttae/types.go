@@ -420,8 +420,8 @@ type withFilterMixin struct {
 	}
 
 	filterState struct {
-		expr      *plan.Expr
 		evaluated bool
+		expr      *plan.Expr
 		filter    blockio.ReadFilter
 	}
 }
