@@ -94,6 +94,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 
 func (mixin *withFilterMixin) getReadFilter() (filter blockio.ReadFilter) {
 	if mixin.filterState.evaluated {
+		filter = mixin.filterState.filter
 		return
 	}
 
