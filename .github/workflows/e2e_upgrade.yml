@@ -34,7 +34,6 @@ jobs:
       - name: Build MatrixOne for head
         run: |
           cd $GITHUB_WORKSPACE/head && make clean && make build
-          mv mo-service mo-service-new
           git rev-parse --short HEAD          
       
       - name: Build MatrixOne for upstream
@@ -44,22 +43,20 @@ jobs:
 
       - name: Create path for execution
         run: |
-          cd $GITHUB_WORKSPACE && mkdir workspace && cd workspace
-          mv $GITHUB_WORKSPACE/upstream/mo-service .
-          mv $GITHUB_WORKSPACE/head/mo-service-new .
-          ls -al
+          cd $GITHUB_WORKSPACE && mkdir workspace 
                             
       - name: Start the Latest Version of Main of MO
         run: |
           cd $GITHUB_WORKSPACE/workspace
           mv $GITHUB_WORKSPACE/upstream/etc .
+          mv $GITHUB_WORKSPACE/upstream/mo-service .
           echo "==============configuration of upstram=============="
           sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
           sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
           cat ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
           cat ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
-          cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml          
-          ./mo-service -launch ./etc/launch-tae-multi-CN-tae-DN/launch.toml &>mo-service.log &
+          cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml     
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch-tae-multi-CN-tae-DN/launch.toml
            
       - name: Clone test-tool repository
         uses: actions/checkout@v3
@@ -86,22 +83,25 @@ jobs:
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/upstream-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
 
       - name: Start the Version of Head of MO
         run: |
           cd $GITHUB_WORKSPACE/workspace
+          mv mo-service mo-service-upstream
+          mv mo-service.log upstream-mo-service.log
           rm -rf mo-data/etl
           rm -rf etc
           mv $GITHUB_WORKSPACE/head/etc .
+          mv $GITHUB_WORKSPACE/head/mo-service .
           echo "==============configuration of head=============="
           sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
           sed -i 's/enable-sacrificing-freshness = false/enable-sacrificing-freshness = true/' ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
           cat ./etc/launch-tae-multi-CN-tae-DN/cn1.toml
           cat ./etc/launch-tae-multi-CN-tae-DN/cn2.toml
-          cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml                
-          ./mo-service-new -launch ./etc/launch-tae-multi-CN-tae-DN/launch.toml &>new-mo-service.log &
-
+          cat ./etc/launch-tae-multi-CN-tae-DN/dn.toml      
+          ./optools/run_bvt.sh $GITHUB_WORKSPACE/workspace launch-tae-multi-CN-tae-DN/launch.toml
+          
       - name: Start BVT Test for MO with Version of Head
         id: bvt_on_latest_head_version
         run: |
@@ -113,7 +113,7 @@ jobs:
       - name: Dump mo-service-new goroutines
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service-new' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/new-dump-stacks.log; pkill -9 mo-service-new; else echo 'current mo-service-new has already crashed'; exit 1; fi
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/new-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
 
       - name: generate upload files
         if: ${{ always() }}
