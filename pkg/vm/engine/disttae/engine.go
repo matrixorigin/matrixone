@@ -477,15 +477,9 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	}
 	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
-			rds[i] = &blockReader{
-				fs:            e.fs,
-				tableDef:      tblDef,
-				primarySeqnum: -1,
-				expr:          expr,
-				ts:            ts,
-				ctx:           ctx,
-				blks:          []*catalog.BlockInfo{blks[i]},
-			}
+			rds[i] = newBlockReader(
+				ctx, tblDef, ts, []*catalog.BlockInfo{blks[i]}, expr, e.fs,
+			)
 		}
 		for j := len(ranges); j < num; j++ {
 			rds[j] = &emptyReader{}
