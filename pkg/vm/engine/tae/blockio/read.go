@@ -220,11 +220,6 @@ func BlockReadInner(
 		for i, col := range loaded.Vecs {
 			typ := *col.GetType()
 			if typ.Oid == types.T_Rowid {
-				// sels := make([]int64, len(selectRows))
-				// for i, row := range selectRows {
-				// 	sels[i] = int64(row)
-				// }
-				// col.Shrink(sels, false)
 				result.Vecs[i] = col
 				continue
 			}
