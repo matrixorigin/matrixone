@@ -17,6 +17,7 @@ package bootstrap
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -82,9 +83,9 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 func TestBootstrapWithWait(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 
-	n := 0
+	var n atomic.Uint32
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		if sql == "show databases" && n == 1 {
+		if sql == "show databases" && n.Load() == 1 {
 			memRes := executor.NewMemResult(
 				[]types.Type{types.New(types.T_varchar, 2, 0)},
 				mpool.MustNewZero())
@@ -92,7 +93,7 @@ func TestBootstrapWithWait(t *testing.T) {
 			executor.AppendStringRows(memRes, 0, []string{bootstrappedCheckerDB})
 			return memRes.GetResult(), nil
 		}
-		n++
+		n.Add(1)
 		return executor.Result{}, nil
 	})
 
@@ -105,7 +106,7 @@ func TestBootstrapWithWait(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, b.Bootstrap(ctx))
-	assert.True(t, n > 0)
+	assert.True(t, n.Load() > 0)
 }
 
 type memLocker struct {
