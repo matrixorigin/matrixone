@@ -55,8 +55,8 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 
 	n := 0
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		n++
 		if sql == "show databases" {
+			n++
 			memRes := executor.NewMemResult(
 				[]types.Type{types.New(types.T_varchar, 2, 0)},
 				mpool.MustNewZero())
