@@ -17,8 +17,9 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/stretchr/testify/require"
 
@@ -286,6 +287,170 @@ func TestEvalZonemapFilter(t *testing.T) {
 		}
 	}
 	require.Zero(t, m.CurrNB())
+}
+
+func TestGetCompositePkValueByExpr(t *testing.T) {
+	type myCase struct {
+		desc   []string
+		exprs  []*plan.Expr
+		expect []int
+	}
+	// a, b, c, d are columns of table t1
+	// d,c,b are composite primary key
+	tc := myCase{
+		desc: []string{
+			"a=10", "a=20 and b=10", "a=20 and d=10", "b=20 and c=10",
+			"b=10 and d=20", "b=10 and c=20 and d=30",
+			"c=10 and d=20", "d=10 or a=10", "d=10 or c=20 and a=30",
+			"d=10 or c=20 and d=30", "d=10 and c=20 or d=30",
+		},
+		expect: []int{
+			0, 0, 1, 0, 1, 3, 2, 0, 0, 1, 0,
+		},
+		exprs: []*plan.Expr{
+			makeFunctionExprForTest("=", []*plan.Expr{
+				makeColExprForTest(0, types.T_float64),
+				plan2.MakePlan2Float64ConstExprWithType(10),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(1, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(2, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(20),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(30),
+					}),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(10),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(2, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(20),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(0),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(10),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(2, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(20),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(0, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(30),
+				}),
+			}),
+			makeFunctionExprForTest("and", []*plan.Expr{
+				makeFunctionExprForTest("or", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(10),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(2, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(20),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(30),
+				}),
+			}),
+			makeFunctionExprForTest("or", []*plan.Expr{
+				makeFunctionExprForTest("and", []*plan.Expr{
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(3, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(10),
+					}),
+					makeFunctionExprForTest("=", []*plan.Expr{
+						makeColExprForTest(2, types.T_float64),
+						plan2.MakePlan2Float64ConstExprWithType(20),
+					}),
+				}),
+				makeFunctionExprForTest("=", []*plan.Expr{
+					makeColExprForTest(3, types.T_float64),
+					plan2.MakePlan2Float64ConstExprWithType(30),
+				}),
+			}),
+		},
+	}
+	pks := []string{"d", "c", "b"}
+	for i, expr := range tc.exprs {
+		vals := make([]*plan.Expr_C, len(pks))
+		ok := getCompositPKVals(expr, pks, vals)
+		for _, val := range vals {
+			t.Logf("val: %v", val)
+		}
+		cnt := 0
+		if ok {
+			cnt = getValidCompositePKCnt(vals)
+		}
+		require.Equal(t, tc.expect[i], cnt)
+	}
 }
 
 func TestGetNonIntPkValueByExpr(t *testing.T) {
@@ -610,32 +775,3 @@ func TestComputeRangeByIntPk(t *testing.T) {
 		}
 	})
 }
-
-// func TestGetListByRange(t *testing.T) {
-// 	type asserts = struct {
-// 		result []DNStore
-// 		list   []DNStore
-// 		r      [][2]int64
-// 	}
-
-// 	testCases := []asserts{
-// 		{[]DNStore{{UUID: "1"}, {UUID: "2"}}, []DNStore{{UUID: "1"}, {UUID: "2"}}, [][2]int64{{14, 32324234234234}}},
-// 		{[]DNStore{{UUID: "1"}}, []DNStore{{UUID: "1"}, {UUID: "2"}}, [][2]int64{{14, 14}}},
-// 	}
-
-// 	t.Run("test getListByRange", func(t *testing.T) {
-// 		for i, testCase := range testCases {
-// 			result := getListByRange(testCase.list, testCase.r)
-// 			if len(result) != len(testCase.result) {
-// 				t.Fatalf("test getListByRange at cases[%d], data length is not match", i)
-// 			}
-// 			/*
-// 				for j, r := range testCase.result {
-// 					if r.UUID != result[j].UUID {
-// 						t.Fatalf("test getListByRange at cases[%d], result[%d] is not match", i, j)
-// 					}
-// 				}
-// 			*/
-// 		}
-// 	})
-// }
