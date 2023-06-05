@@ -124,7 +124,7 @@ func mergeAll(ctx context.Context, fs *fileservice.LocalETLFS) {
 	defer span.End()
 	var err error
 	var merge *export.Merge
-	merge, err = export.NewMerge(ctx, export.WithTable(motrace.SingleStatementTable), export.WithFileService(fs))
+	merge, _ = export.NewMerge(ctx, export.WithTable(motrace.SingleStatementTable), export.WithFileService(fs))
 	err = merge.ListRange(ctx)
 	if err != nil {
 		logutil.Infof("[%v] failed to merge: %v", "All", err)

@@ -401,11 +401,15 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	var uploadFile = func(ctx context.Context, fp *FileMeta) error {
 		row := m.Table.GetRow(ctx)
 		defer row.Free()
-		cacheFileData := &SliceCache{}
-		defer cacheFileData.Reset()
 		// open reader
 		reader, err := newETLReader(ctx, m.Table, m.FS, fp.FilePath, fp.FileSize, m.mp)
+		if err != nil {
+			return err
+		}
 		defer reader.Close()
+
+		cacheFileData := &SliceCache{}
+		defer cacheFileData.Reset()
 		if err != nil {
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
