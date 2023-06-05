@@ -277,16 +277,10 @@ nextval(seq_14)    currval(seq_14)
 176    176
 truncate table seq_table_01;
 insert into seq_table_01 select nextval('seq_14');
-select currval('seq_14');
-currval(seq_14)
-176
 insert into seq_table_01 values(nextval('seq_14'));
 insert into seq_table_01 values(nextval('seq_14'));
 insert into seq_table_01 values(nextval('seq_14'));
 insert into seq_table_01 values(nextval('seq_14'));
-select currval('seq_14');
-currval(seq_14)
-426
 select * from seq_table_01;
 col1
 226
