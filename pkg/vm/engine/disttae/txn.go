@@ -121,7 +121,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var size uint64
 	txn.Lock()
 	defer txn.Unlock()
-	if !(offset > 0 || txn.workspaceSize >= colexec.WriteS3Threshold ||
+	if !(offset > 0 && txn.workspaceSize >= colexec.WriteS3Threshold ||
 		(force && txn.workspaceSize >= colexec.TagS3Size)) {
 		return nil
 	}
