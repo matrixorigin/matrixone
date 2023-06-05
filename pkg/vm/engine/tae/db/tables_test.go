@@ -336,24 +336,24 @@ func TestTxn6(t *testing.T) {
 		filter.Op = handle.FilterEq
 		filter.Val = int32(5)
 
-		err := rel.UpdateByFilter(filter, uint16(3), int64(33), false)
+		err := rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(33), false)
 		assert.NoError(t, err)
 
-		err = rel.UpdateByFilter(filter, uint16(3), int64(44), false)
+		err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(44), false)
 		assert.NoError(t, err)
-		v, _, err := rel.GetValueByFilter(filter, 3)
+		v, _, err := rel.GetValueByFilter(context.Background(), filter, 3)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(44), v)
 
 		filter.Val = int32(6)
-		err = rel.UpdateByFilter(filter, uint16(3), int64(77), false)
+		err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(77), false)
 		assert.NoError(t, err)
 
-		err = rel.DeleteByFilter(filter)
+		err = rel.DeleteByFilter(context.Background(), filter)
 		assert.NoError(t, err)
 
 		// Double delete in a same txn -- FAIL
-		err = rel.DeleteByFilter(filter)
+		err = rel.DeleteByFilter(context.Background(), filter)
 		assert.Error(t, err)
 
 		{
@@ -362,28 +362,28 @@ func TestTxn6(t *testing.T) {
 			rel, _ := database.GetRelationByName(schema.Name)
 
 			filter.Val = int32(5)
-			v, _, err := rel.GetValueByFilter(filter, 3)
+			v, _, err := rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.NoError(t, err)
 			assert.NotEqual(t, int64(44), v)
 
-			err = rel.UpdateByFilter(filter, uint16(3), int64(55), false)
+			err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(55), false)
 			assert.Error(t, err)
 
 			filter.Val = int32(7)
-			err = rel.UpdateByFilter(filter, uint16(3), int64(88), false)
+			err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(88), false)
 			assert.NoError(t, err)
 
 			// Update row that has uncommitted delete -- FAIL
 			filter.Val = int32(6)
-			err = rel.UpdateByFilter(filter, uint16(3), int64(55), false)
+			err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(55), false)
 			assert.Error(t, err)
-			_, _, err = rel.GetValueByFilter(filter, 3)
+			_, _, err = rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.NoError(t, err)
 			err = txn.Rollback(context.Background())
 			assert.NoError(t, err)
 		}
 		filter.Val = int32(7)
-		err = rel.UpdateByFilter(filter, uint16(3), int64(99), false)
+		err = rel.UpdateByFilter(context.Background(), filter, uint16(3), int64(99), false)
 		assert.NoError(t, err)
 
 		assert.NoError(t, txn.Commit(context.Background()))
@@ -394,17 +394,17 @@ func TestTxn6(t *testing.T) {
 			rel, _ := database.GetRelationByName(schema.Name)
 
 			filter.Val = int32(5)
-			v, _, err := rel.GetValueByFilter(filter, 3)
+			v, _, err := rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(44), v)
 
 			filter.Val = int32(7)
-			v, _, err = rel.GetValueByFilter(filter, 3)
+			v, _, err = rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(99), v)
 
 			filter.Val = int32(6)
-			_, _, err = rel.GetValueByFilter(filter, 3)
+			_, _, err = rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.Error(t, err)
 
 			it := rel.MakeBlockIt()

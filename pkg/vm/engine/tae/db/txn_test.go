@@ -284,7 +284,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 func (c *APP1Client) GetGoodEntry(goodId uint64) (id *common.ID, offset uint32, entry *APP1Goods, err error) {
 	filter := handle.NewEQFilter(goodId)
 	goodRel, _ := c.DB.GetRelationByName(goods.Name)
-	id, offset, err = goodRel.GetByFilter(filter)
+	id, offset, err = goodRel.GetByFilter(context.Background(), filter)
 	if err != nil {
 		return
 	}
@@ -314,7 +314,7 @@ func (c *APP1Client) BuyGood(goodId uint64, count uint64) error {
 	}
 	newLeft := left - count
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
-	err = rel.UpdateByFilter(handle.NewEQFilter(entry.ID), uint16(2), newLeft, false)
+	err = rel.UpdateByFilter(context.Background(), handle.NewEQFilter(entry.ID), uint16(2), newLeft, false)
 	return err
 }
 
@@ -621,12 +621,12 @@ func TestTxn8(t *testing.T) {
 	assert.NoError(t, err)
 	pkv := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(pkv)
-	err = rel.UpdateByFilter(filter, 3, int64(9999), false)
+	err = rel.UpdateByFilter(context.Background(), filter, 3, int64(9999), false)
 	assert.NoError(t, err)
 
 	pkv = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(pkv)
-	id, row, err := rel.GetByFilter(filter)
+	id, row, err := rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
@@ -747,7 +747,7 @@ func TestTxn9(t *testing.T) {
 	rel, _ = db.GetRelationByName(schema.Name)
 	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
-	id, row, err := rel.GetByFilter(filter)
+	id, row, err := rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
 	assert.NoError(t, err)
@@ -760,7 +760,7 @@ func TestTxn9(t *testing.T) {
 	rel, _ = db.GetRelationByName(schema.Name)
 	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)
-	err = rel.UpdateByFilter(filter, 2, int32(9999), false)
+	err = rel.UpdateByFilter(context.Background(), filter, 2, int32(9999), false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	wg.Wait()
@@ -812,7 +812,7 @@ func TestTxn9(t *testing.T) {
 // 	{
 // 		// filter := handle.NewEQFilter(int32(99))
 // 		// txn, rel := tae.getRelation()
-// 		// err = rel1.UpdateByFilter(filter, 2, int32(88))
+// 		// err = rel1.UpdateByFilter(context.Background(), filter, 2, int32(88))
 // 		// assert.NoError(t, err)
 // 		// assert.NoError(t, txn.Commit(context.Background()))
 // 	}

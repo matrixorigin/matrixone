@@ -275,8 +275,8 @@ func (blk *txnBlock) GetSegment() (seg handle.Segment) {
 	return
 }
 
-func (blk *txnBlock) GetByFilter(filter *handle.Filter) (offset uint32, err error) {
-	return blk.entry.GetBlockData().GetByFilter(context.Background(), blk.table.store.txn, filter)
+func (blk *txnBlock) GetByFilter(ctx context.Context, filter *handle.Filter) (offset uint32, err error) {
+	return blk.entry.GetBlockData().GetByFilter(ctx, blk.table.store.txn, filter)
 }
 
 // newRelationBlockItOnSnap make a iterator on txn 's segments of snapshot, exclude segment of workspace

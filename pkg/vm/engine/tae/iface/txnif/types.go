@@ -123,7 +123,7 @@ type TxnWriter interface {
 
 type TxnAsyncer interface {
 	WaitDone(error, bool) error
-	WaitPrepared() error
+	WaitPrepared(ctx context.Context) error
 }
 
 type TxnTest interface {
@@ -231,17 +231,17 @@ type TxnStore interface {
 	io.Closer
 	Txn2PC
 	TxnUnsafe
-	WaitPrepared() error
+	WaitPrepared(ctx context.Context) error
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
 	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error
-	AddBlksWithMetaLoc(dbId, id uint64, metaLocs []objectio.Location) error
+	AddBlksWithMetaLoc(ctx context.Context, dbId, id uint64, metaLocs []objectio.Location) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error
-	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
+	GetByFilter(ctx context.Context, dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
 	GetValue(id *common.ID, row uint32, col uint16) (any, bool, error)
 
 	CreateRelation(dbId uint64, def any) (handle.Relation, error)

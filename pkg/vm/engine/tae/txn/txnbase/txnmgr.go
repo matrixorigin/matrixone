@@ -508,7 +508,7 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 	for _, item := range items {
 		op := item.(*OpTxn)
 		//Notice that WaitPrepared do nothing when op is OpRollback
-		if err = op.Txn.WaitPrepared(); err != nil {
+		if err = op.Txn.WaitPrepared(op.ctx); err != nil {
 			// v0.6 TODO: Error handling
 			panic(err)
 		}

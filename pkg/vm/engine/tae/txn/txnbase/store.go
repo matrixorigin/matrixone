@@ -29,14 +29,15 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
-func (store *NoopTxnStore) WaitPrepared() (err error)  { return }
-func (store *NoopTxnStore) GetLSN() uint64             { return 0 }
-func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn) {}
-func (store *NoopTxnStore) Close() error               { return nil }
+func (store *NoopTxnStore) WaitPrepared(ctx context.Context) (err error) { return }
+func (store *NoopTxnStore) GetLSN() uint64                               { return 0 }
+func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                   {}
+func (store *NoopTxnStore) Close() error                                 { return nil }
 func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
 	return nil
 }
 func (store *NoopTxnStore) AddBlksWithMetaLoc(
+	ctx context.Context,
 	dbId, tid uint64,
 	metaLocs []objectio.Location,
 ) error {
@@ -122,7 +123,7 @@ func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err 
 func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
 	return
 }
-func (store *NoopTxnStore) GetByFilter(uint64, uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
+func (store *NoopTxnStore) GetByFilter(context.Context, uint64, uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
 	return
 }
 func (store *NoopTxnStore) GetValue(*common.ID, uint32, uint16) (v any, isNull bool, err error) {

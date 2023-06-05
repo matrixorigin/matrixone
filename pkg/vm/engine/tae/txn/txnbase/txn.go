@@ -388,8 +388,8 @@ func (txn *Txn) String() string {
 	return fmt.Sprintf("%s: %v", str, txn.GetError())
 }
 
-func (txn *Txn) WaitPrepared() error {
-	return txn.Store.WaitPrepared()
+func (txn *Txn) WaitPrepared(ctx context.Context) error {
+	return txn.Store.WaitPrepared(ctx)
 }
 
 func (txn *Txn) WaitDone(err error, isAbort bool) error {

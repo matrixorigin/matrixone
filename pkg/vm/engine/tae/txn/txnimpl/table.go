@@ -607,7 +607,7 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 	return tbl.localSegment.Append(data)
 }
 
-func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error) {
+func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio.Location) (err error) {
 	var pkVecs []containers.Vector
 	defer func() {
 		for _, v := range pkVecs {
@@ -620,7 +620,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
 				bat, err := blockio.LoadColumns(
-					context.Background(),
+					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
 					tbl.store.dataFactory.Fs.Service,
@@ -639,18 +639,18 @@ func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error
 					return
 				}
 				//do PK deduplication check against txn's snapshot data.
-				if err = tbl.DedupSnapByPK(context.Background(), v, false); err != nil {
+				if err = tbl.DedupSnapByPK(ctx, v, false); err != nil {
 					return
 				}
 			}
 		} else if dedupType == txnif.FullSkipWorkSpaceDedup {
 			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupSnapByMetaLocs(context.Background(), metaLocs, false); err != nil {
+			if err = tbl.DedupSnapByMetaLocs(ctx, metaLocs, false); err != nil {
 				return
 			}
 		} else if dedupType == txnif.IncrementalDedup {
 			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupSnapByMetaLocs(context.Background(), metaLocs, true); err != nil {
+			if err = tbl.DedupSnapByMetaLocs(ctx, metaLocs, true); err != nil {
 				return
 			}
 		}
@@ -742,7 +742,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 	return
 }
 
-func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
+func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	if tbl.localSegment != nil {
 		id, offset, err = tbl.localSegment.GetByFilter(filter)
 		if err == nil {
@@ -759,7 +759,7 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 			blockIt.Next()
 			continue
 		}
-		offset, err = h.GetByFilter(filter)
+		offset, err = h.GetByFilter(ctx, filter)
 		if err == nil {
 			id = h.Fingerprint()
 			break
