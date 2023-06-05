@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 )
 
+type Bitmap = Nulls
+
 type Nulls struct {
 	np bitmap.Bitmap
 }
@@ -154,6 +156,14 @@ func (nsp *Nulls) Del(rows ...uint64) {
 	if nsp != nil {
 		for _, row := range rows {
 			nsp.np.Remove(row)
+		}
+	}
+}
+
+func (nsp *Nulls) DelI64(rows ...int64) {
+	if nsp != nil {
+		for _, row := range rows {
+			nsp.np.Remove(uint64(row))
 		}
 	}
 }
@@ -350,6 +360,24 @@ func (nsp *Nulls) ToArray() []uint64 {
 	return nsp.np.ToArray()
 }
 
+func (nsp *Nulls) ToI64Arrary() []int64 {
+	if nsp == nil || nsp.np.EmptyByFlag() {
+		return []int64{}
+	}
+	return nsp.np.ToI64Arrary()
+}
+
 func (nsp *Nulls) GetCardinality() int {
 	return nsp.Count()
+}
+
+func (nsp *Nulls) Merge(o *Nulls) {
+	if o.Count() == 0 {
+		return
+	}
+	itr := o.np.Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		nsp.Add(r)
+	}
 }

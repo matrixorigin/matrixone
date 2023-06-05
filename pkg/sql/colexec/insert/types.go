@@ -54,17 +54,19 @@ type InsertCtx struct {
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (ap *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	if ap.ctr.s3Writer != nil {
-		ap.ctr.s3Writer.Free(proc)
-		ap.ctr.s3Writer = nil
-	}
-
-	// Free the partition table S3writer object resources
-	if ap.ctr.partitionS3Writers != nil {
-		for _, writer := range ap.ctr.partitionS3Writers {
-			writer.Free(proc)
+	if ap.ctr != nil {
+		if ap.ctr.s3Writer != nil {
+			ap.ctr.s3Writer.Free(proc)
+			ap.ctr.s3Writer = nil
 		}
-		ap.ctr.partitionS3Writers = nil
+
+		// Free the partition table S3writer object resources
+		if ap.ctr.partitionS3Writers != nil {
+			for _, writer := range ap.ctr.partitionS3Writers {
+				writer.Free(proc)
+			}
+			ap.ctr.partitionS3Writers = nil
+		}
 	}
 }
 
