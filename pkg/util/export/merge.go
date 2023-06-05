@@ -451,9 +451,10 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 		}
 		return nil
 	}
+	var err error
 
 	for _, fp := range files {
-		if err := uploadFile(ctx, fp); err != nil {
+		if err = uploadFile(ctx, fp); err != nil {
 			// todo: adjust the sleep settings
 			// Sleep 10 seconds to wait for the database to recover
 			time.Sleep(10 * time.Second)
@@ -466,7 +467,7 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 	}
 	logutil.Debug("upload files success", logutil.TableField(m.Table.GetIdentify()), zap.Int("file count", len(files)))
 
-	return nil
+	return err
 }
 
 func SubStringPrefixLimit(str string, length int) string {
