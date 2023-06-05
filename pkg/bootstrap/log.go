@@ -12,33 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ltrim
+package bootstrap
 
 import (
-	"strings"
-	"testing"
+	"sync"
 
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 )
 
-func TestLtrim(t *testing.T) {
-	multiStrings := []string{
-		"",
-		" ",
-		"  ",
-		"   ",
-		" a",
-		" a ",
-		" a  ",
-		"  a ",
-		" 你好 ",
-		"　a", // fullwidth space
+var (
+	logger *log.MOLogger
+	once   sync.Once
+)
+
+func getLogger() *log.MOLogger {
+	once.Do(initLogger)
+	return logger
+}
+
+func initLogger() {
+	rt := runtime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
 	}
-	rs := make([]string, len(multiStrings))
-	Ltrim(multiStrings, rs)
-	for i, s := range multiStrings {
-		// TrimLeft of only space " " char.
-		// require.Equal(t, rs[i], strings.TrimLeft(s, " \u3000"))
-		require.Equal(t, rs[i], strings.TrimLeft(s, " "))
-	}
+	logger = rt.Logger()
 }

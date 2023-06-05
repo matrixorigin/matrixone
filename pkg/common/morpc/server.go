@@ -294,7 +294,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 			}
 		}
 
-		defer cs.cleanSend()
 		for {
 			select {
 			case <-ctx.Done():
@@ -367,6 +366,9 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						}
 						if ce != nil {
 							ce.Write(fields...)
+						}
+						if err != nil {
+							return
 						}
 					}
 
@@ -492,16 +494,39 @@ func (cs *clientSession) cleanSend() {
 }
 
 func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
+	f, err := cs.send(msg)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// stream only wait send completed
+	return f.waitSendCompleted()
+}
+
+func (cs *clientSession) Write(
+	ctx context.Context,
+	response Message) error {
+	if ctx == nil {
+		panic("Write nil context")
+	}
+	return cs.WriteRPCMessage(RPCMessage{
+		Ctx:     ctx,
+		Message: response,
+	})
+}
+
+func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	response := msg.Message
 	if err := cs.codec.Valid(response); err != nil {
-		return err
+		return nil, err
 	}
 
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
 	if cs.mu.closed {
-		return moerr.NewClientClosedNoCtx()
+		return nil, moerr.NewClientClosedNoCtx()
 	}
 
 	id := response.GetID()
@@ -515,20 +540,8 @@ func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
 	f := cs.newFutureFunc()
 	f.ref()
 	f.init(msg)
-	defer f.Close()
-
 	cs.c <- f
-	// stream only wait send completed
-	return f.waitSendCompleted()
-}
-
-func (cs *clientSession) Write(
-	ctx context.Context,
-	response Message) error {
-	return cs.WriteRPCMessage(RPCMessage{
-		Ctx:     ctx,
-		Message: response,
-	})
+	return f, nil
 }
 
 func (cs *clientSession) startCheckCacheTimeout() {

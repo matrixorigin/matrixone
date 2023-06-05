@@ -214,6 +214,12 @@ func (s *server) onMessage(
 		handler: handler,
 		s:       s,
 	}
+	n := len(s.queue)
+	if n > s.options.maxChannelBufferSize/2 {
+		s.rt.Logger().Warn("txn request handle channel is busy",
+			zap.Int("size", n),
+			zap.Int("max", s.options.maxChannelBufferSize))
+	}
 	return nil
 }
 

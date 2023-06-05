@@ -182,6 +182,11 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+		logutil.Infof("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
+	}
+	//fmt.Printf("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
+
 	var rds []engine.Reader
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
@@ -202,8 +207,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
-		if s.DataSource.AccountId != -1 {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId))
+		if s.DataSource.AccountId != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
 			s.NodeInfo.Data, s.DataSource.TableDef)

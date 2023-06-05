@@ -136,6 +136,7 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	c.u = u
 	c.fill = fill
 
+	c.pn = pn
 	// get execute related information
 	// about ap or tp, what and how many compute resource we can use.
 	c.info = plan2.GetExecTypeFromPlan(pn)
@@ -176,7 +177,13 @@ func (c *Compile) run(s *Scope) error {
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
-		return s.Run(c)
+		err := s.Run(c)
+		if err != nil {
+			return err
+		}
+
+		c.addAffectedRows(s.affectedRows())
+		return nil
 	case Merge, MergeInsert:
 		defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
@@ -256,10 +263,48 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) error {
+	if err := c.runOnce(); err != nil {
+		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
+		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+			c.proc.TxnOperator.Txn().IsRCIsolation() &&
+			c.info.Typ == plan2.ExecTypeTP {
+			// clear the workspace of the failed statement
+			if err = c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.ctx); err != nil {
+				return err
+			}
+			//  increase the statement id
+			if err = c.proc.TxnOperator.GetWorkspace().IncrStatemenetID(c.ctx); err != nil {
+				return err
+			}
+
+			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
+			// improved to refresh expression in the future.
+			cc := New(
+				c.addr,
+				c.db,
+				c.sql,
+				c.tenant,
+				c.uid,
+				c.proc.Ctx,
+				c.e, c.proc,
+				c.stmt,
+				c.isInternal,
+				c.cnLabel)
+			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
+				return err
+			}
+			return cc.runOnce()
+		}
+		return err
+	}
+	return nil
+}
+
+// run once
+func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
+
 	errC := make(chan error, len(c.scope))
-	// fmt.Printf("run sql %+v", DebugShowScopes(c.scope))
-	// reset early for multi steps
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
@@ -277,7 +322,6 @@ func (c *Compile) Run(_ uint64) error {
 	close(errC)
 	for e := range errC {
 		if e != nil {
-			// c.proc.TxnOperator.GetWorkspace().RollbackLastStatement(c.proc.Ctx)
 			return e
 		}
 	}
@@ -601,8 +645,8 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		}
 		c.setAnalyzeCurrent(ss, curr)
 
-		if idx := plan2.GetShuffleIndexForGroupBy(n); idx >= 0 {
-			ss = c.compileBucketGroup(n, ss, ns, idx)
+		if n.Stats.Shuffle {
+			ss = c.compileBucketGroup(n, ss, ns)
 			return c.compileSort(n, ss), nil
 		} else {
 			ss = c.compileMergeGroup(n, ss, ns)
@@ -1185,8 +1229,8 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
-		if n.ObjRef.PubAccountId != -1 {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
+		if n.ObjRef.PubInfo != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.TenantId))
 		}
 		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 		if err != nil {
@@ -1258,7 +1302,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			RelationName:           n.TableDef.Name,
 			PartitionRelationNames: partitionRelNames,
 			SchemaName:             n.ObjRef.SchemaName,
-			AccountId:              n.ObjRef.PubAccountId,
+			AccountId:              n.ObjRef.GetPubInfo(),
 			Expr:                   colexec.RewriteFilterExprList(n.FilterList),
 		},
 	}
@@ -1323,14 +1367,14 @@ func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope) []*
 	mergeChildren := c.newMergeScope(ss)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, false, 0),
+		Arg: constructBroadcastDispatch(0, rs, c.addr, n),
 	})
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
 	return rs
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Stats.BlockNum)), ss, children)
+	rs := c.newJoinScopeListWithBucket(c.newScopeList(2, int(n.Stats.BlockNum)), ss, children, n)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -1382,7 +1426,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 
 	switch node.JoinType {
 	case plan.Node_INNER:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
 		if len(node.OnList) == 0 {
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1411,7 +1455,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children)
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightSemi,
@@ -1420,7 +1464,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 					})
 				}
 			} else {
-				rs = c.newBroadcastJoinScopeList(ss, children)
+				rs = c.newBroadcastJoinScopeList(ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.Semi,
@@ -1430,7 +1474,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 				}
 			}
 		} else {
-			rs = c.newBroadcastJoinScopeList(ss, children)
+			rs = c.newBroadcastJoinScopeList(ss, children, node)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSemi,
@@ -1440,7 +1484,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 			}
 		}
 	case plan.Node_LEFT:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1458,7 +1502,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 		}
 	case plan.Node_RIGHT:
 		if isEq {
-			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children)
+			rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.Right,
@@ -1470,7 +1514,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 			panic("dont pass any no-equal right join plan to this function,it should be changed to left join by the planner")
 		}
 	case plan.Node_SINGLE:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
 		for i := range rs {
 			if isEq {
 				rs[i].appendInstruction(vm.Instruction{
@@ -1482,14 +1526,14 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSingle,
 					Idx: c.anal.curr,
-					Arg: constructLoopSingle(node, c.proc),
+					Arg: constructLoopSingle(node, rightTyps, c.proc),
 				})
 			}
 		}
 	case plan.Node_ANTI:
 		if isEq {
 			if node.BuildOnLeft {
-				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children)
+				rs = c.newJoinScopeListWithBucket(c.newScopeListForRightJoin(2, ss), ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.RightAnti,
@@ -1498,7 +1542,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 					})
 				}
 			} else {
-				rs = c.newBroadcastJoinScopeList(ss, children)
+				rs = c.newBroadcastJoinScopeList(ss, children, node)
 				for i := range rs {
 					rs[i].appendInstruction(vm.Instruction{
 						Op:  vm.Anti,
@@ -1508,7 +1552,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 				}
 			}
 		} else {
-			rs = c.newBroadcastJoinScopeList(ss, children)
+			rs = c.newBroadcastJoinScopeList(ss, children, node)
 			for i := range rs {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopAnti,
@@ -1518,7 +1562,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 			}
 		}
 	case plan.Node_MARK:
-		rs = c.newBroadcastJoinScopeList(ss, children)
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
 		for i := range rs {
 			//if isEq {
 			//	rs[i].appendInstruction(vm.Instruction{
@@ -1731,14 +1775,13 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node, idxToShuffle int) []*Scope {
+func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentIsFirst := c.anal.isFirst
 	c.anal.isFirst = false
 	dop := plan2.GetShuffleDop()
 	parent, children := c.newScopeListForGroup(validScopeCount(ss), dop)
 
 	j := 0
-	hashColumnIdx := plan2.GetHashColumnIdx(n.GroupBy[idxToShuffle])
 	for i := range ss {
 		if containBrokenNode(ss[i]) {
 			isEnd := ss[i].IsEnd
@@ -1748,7 +1791,7 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node,
 		if !ss[i].IsEnd {
 			ss[i].appendInstruction(vm.Instruction{
 				Op:  vm.Dispatch,
-				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, true, hashColumnIdx),
+				Arg: constructBroadcastDispatch(j, children, ss[i].NodeInfo.Addr, n),
 			})
 			j++
 			ss[i].IsEnd = true
@@ -1765,7 +1808,7 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node,
 	}
 
 	for i := range children {
-		children[i].Instructions = append(children[i].Instructions, vm.Instruction{
+		children[i].appendInstruction(vm.Instruction{
 			Op:      vm.Group,
 			Idx:     c.anal.curr,
 			IsFirst: currentIsFirst,
@@ -1773,11 +1816,11 @@ func (c *Compile) compileBucketGroup(n *plan.Node, ss []*Scope, ns []*plan.Node,
 		})
 	}
 
-	children = c.compileProjection(n, children)
+	children = c.compileProjection(n, c.compileRestrict(n, children))
 
 	// recovery the children's last operator
 	for i := range children {
-		children[i].Instructions = append(children[i].Instructions, lastOperator[i])
+		children[i].appendInstruction(lastOperator[i])
 	}
 
 	for i := range ss {
@@ -1992,13 +2035,13 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scop
 	return ss
 }
 
-func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope {
+func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope, n *plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
 	// construct left
 	leftMerge := c.newMergeScope(ss)
 	leftMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(0, rs, c.addr, false, 0),
+		Arg: constructBroadcastDispatch(0, rs, c.addr, n),
 	})
 	leftMerge.IsEnd = true
 
@@ -2007,7 +2050,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 	rightMerge := c.newMergeScope(children)
 	rightMerge.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, false, 0),
+		Arg: constructBroadcastDispatch(1, rs, c.addr, n),
 	})
 	rightMerge.IsEnd = true
 
@@ -2056,7 +2099,7 @@ func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope
 //return rs
 //}
 
-func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
+func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope, n *plan.Node) []*Scope {
 	length := len(ss)
 	rs := make([]*Scope, length)
 	idx := 0
@@ -2088,7 +2131,7 @@ func (c *Compile) newBroadcastJoinScopeList(ss []*Scope, children []*Scope) []*S
 	mergeChildren := c.newMergeScope(children)
 	mergeChildren.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
-		Arg: constructBroadcastDispatch(1, rs, c.addr, false, 0),
+		Arg: constructBroadcastDispatch(1, rs, c.addr, n),
 	})
 	mergeChildren.IsEnd = true
 	rs[idx].PreScopes = append(rs[idx].PreScopes, mergeChildren)
@@ -2230,8 +2273,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	}
-	if n.ObjRef.PubAccountId != -1 {
-		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubAccountId))
+	if n.ObjRef.PubInfo != nil {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.GetTenantId()))
 	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {

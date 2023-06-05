@@ -24,11 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/datediff"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/timediff"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 	"math"
@@ -2306,10 +2304,7 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	return nil
 }
 
-// TIMEDIFF
-
-func TimeDiff[T timediff.DiffT](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
-
+func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) (err error) {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
 	rs := vector.MustFunctionResult[types.Time](result)
@@ -2331,7 +2326,7 @@ func TimeDiff[T timediff.DiffT](ivecs []*vector.Vector, result vector.FunctionRe
 	return nil
 }
 
-func timeDiff[T timediff.DiffT](v1, v2 T) (types.Time, error) {
+func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
 	tmpTime := int64(v1 - v2)
 	// different sign need to check overflow
 	if (int64(v1)>>63)^(int64(v2)>>63) != 0 {
@@ -2369,7 +2364,7 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				return err
 			}
 		} else {
-			res, _ := datediff.TimeStampDiff(functionUtil.QuickBytesToStr(v1), v2, v3)
+			res, _ := v3.DateTimeDiffWithUnit(functionUtil.QuickBytesToStr(v1), v2)
 			if err = rs.Append(res, false); err != nil {
 				return err
 			}

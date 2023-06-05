@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -394,11 +395,17 @@ func (r *runner) DeleteIncrementalEntry(entry *CheckpointEntry) {
 	r.storage.Lock()
 	defer r.storage.Unlock()
 	r.storage.entries.Delete(entry)
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DeleteIncrementalEntry.Add(1)
+	})
 }
 func (r *runner) DeleteGlobalEntry(entry *CheckpointEntry) {
 	r.storage.Lock()
 	defer r.storage.Unlock()
 	r.storage.globals.Delete(entry)
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DeleteGlobalEntry.Add(1)
+	})
 }
 func (r *runner) FlushTable(ctx context.Context, dbID, tableID uint64, ts types.TS) (err error) {
 	makeCtx := func() *DirtyCtx {
@@ -475,6 +482,10 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 	}
 	location := objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	entry.SetLocation(location)
+
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
+	})
 	return
 }
 
@@ -501,6 +512,10 @@ func (r *runner) doGlobalCheckpoint(end types.TS, interval time.Duration) (entry
 	entry.SetLocation(location)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
+
+	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.CheckPoint.DoGlobalCheckPoint.Add(1)
+	})
 	return
 }
 

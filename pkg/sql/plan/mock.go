@@ -608,15 +608,14 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			objects[tableName] = &ObjectRef{
-				Server:       0,
-				Db:           0,
-				Schema:       0,
-				Obj:          tblId,
-				ServerName:   "",
-				DbName:       "",
-				SchemaName:   db,
-				ObjName:      tableName,
-				PubAccountId: -1,
+				Server:     0,
+				Db:         0,
+				Schema:     0,
+				Obj:        int64(tableIdx),
+				ServerName: "",
+				DbName:     "",
+				SchemaName: db,
+				ObjName:    tableName,
 			}
 
 			tableDef := &TableDef{

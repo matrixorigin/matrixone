@@ -70,6 +70,7 @@ Main workflow:
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"sort"
 	"strings"
 	"time"
@@ -163,7 +164,7 @@ func HandleSyncLogTailReq(
 	if scope == ScopeUserTables {
 		visitor = NewTableLogtailRespBuilder(ckpLoc, start, end, tableEntry)
 	} else {
-		visitor = NewCatalogLogtailRespBuilder(scope, ckpLoc, start, end)
+		visitor = NewCatalogLogtailRespBuilder(ctx, scope, ckpLoc, start, end)
 	}
 	defer visitor.Close()
 
@@ -195,6 +196,7 @@ type RespBuilder interface {
 // CatalogLogtailRespBuilder knows how to make api-entry from db and table entry.
 // impl catalog.Processor interface, driven by BoundTableOperator
 type CatalogLogtailRespBuilder struct {
+	ctx context.Context
 	*catalog.LoopProcessor
 	scope      Scope
 	start, end types.TS
@@ -203,8 +205,9 @@ type CatalogLogtailRespBuilder struct {
 	delBatch   *containers.Batch
 }
 
-func NewCatalogLogtailRespBuilder(scope Scope, ckp string, start, end types.TS) *CatalogLogtailRespBuilder {
+func NewCatalogLogtailRespBuilder(ctx context.Context, scope Scope, ckp string, start, end types.TS) *CatalogLogtailRespBuilder {
 	b := &CatalogLogtailRespBuilder{
+		ctx:           ctx,
 		LoopProcessor: new(catalog.LoopProcessor),
 		scope:         scope,
 		start:         start,
@@ -343,6 +346,10 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			Bat:          bat,
 		}
 		entries = append(entries, insEntry)
+		perfcounter.Update(b.ctx, func(counter *perfcounter.CounterSet) {
+			counter.TAE.LogTail.Entries.Add(int64(b.insBatch.Length()))
+			counter.TAE.LogTail.InsertEntries.Add(int64(b.insBatch.Length()))
+		})
 	}
 	if b.delBatch.Length() > 0 {
 		bat, err := containersBatchToProtoBatch(b.delBatch)
@@ -360,6 +367,10 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			Bat:          bat,
 		}
 		entries = append(entries, delEntry)
+		perfcounter.Update(b.ctx, func(counter *perfcounter.CounterSet) {
+			counter.TAE.LogTail.Entries.Add(int64(b.delBatch.Length()))
+			counter.TAE.LogTail.DeleteEntries.Add(int64(b.delBatch.Length()))
+		})
 	}
 	return api.SyncLogTailResp{
 		CkpLocation: b.checkpoint,

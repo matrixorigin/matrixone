@@ -139,7 +139,11 @@ message ObjectRef {
 	string schema_name	= 7;
 	string obj_name		= 8;
 	string subscription_name = 9;
-	int32 pub_account_id = 10;
+	PubInfo pub_info = 10;
+}
+
+message PubInfo {
+	int32 tenant_id = 1;
 }
 
 message SubscriptionMeta{
@@ -426,10 +430,13 @@ message TableFunction{
 	bytes param = 2;
 }
 
+enum ShuffleType {
+	Hash = 0;
+	Range = 1;
+}
 
 message Stats {
 	//for scan, number of blocks to read from S3
-	//for other nodes, it's meaningless
 	int32  block_num        = 1;
 	//for scan, cost of reading from S3, basically the read lines
 	//for other nodes, it means the estimated cost of current node
@@ -439,14 +446,23 @@ message Stats {
 	// average size of one row, currently not used
 	double rowsize	        = 4;
 	// hashmap size for nodes which build a hashmap
-	//for other nodes, it's meaningless
 	double hashmap_size		= 5;
 	//for scan, this means total count of all table, before filtering
-	//for other nodes, this is meanlingless
 	double table_cnt = 6;
 	//for scan, selectivity means outcnt divide total count
-	//for other node, currently be 0. will change in the future
 	double selectivity = 7;
+
+	// for group by and join node with big hashmap, use shuffle
+	// shuffle on which column. choose a column with max ndv
+	bool shuffle = 8;
+	int32 shuffleColIdx = 9;
+	// shuffle type
+	ShuffleType shuffleType = 10;
+	// for range shuffle on integer column, need to know its min and max value
+	int64 shuffleColMin = 11;
+	int64 shuffleColMax = 12;
+	//not used for now
+	int32   parallelism = 13;
 }
 
 message ColData {
@@ -659,10 +675,6 @@ message Node {
     AnalyzeInfo analyze_info = 25;
 
 	repeated Expr tbl_func_expr_list = 26;
-
-    // The pipeline will determine the parallelism by traversing the plan
-    // when it is received. Then the build is built based on this information.
-    int32   parallelism = 27;
 
 	ClusterTable cluster_table = 28;
 	bool not_cacheable = 29;

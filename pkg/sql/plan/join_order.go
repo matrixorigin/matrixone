@@ -15,10 +15,10 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 type joinEdge struct {
@@ -119,23 +119,9 @@ func IsEquiJoin(exprs []*plan.Expr) bool {
 			return true
 		}
 	}
-	return false || isEquiJoin0(exprs)
+	return false
 }
 
-func isEquiJoin0(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !SupportedJoinCondition(e.F.Func.GetObj()) {
-				return false
-			}
-			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				return false
-			}
-		}
-	}
-	return true
-}
 func SupportedJoinCondition(id int64) bool {
 	fid, _ := function.DecodeOverloadID(id)
 	return fid == function.EQUAL

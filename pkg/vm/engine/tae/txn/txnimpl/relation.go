@@ -245,7 +245,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 			colVal = v
 			colValIsNull = isNull
 		} else {
-			colVal, colValIsNull, err = h.table.GetValue(id, row, uint16(def.Idx))
+			colVal, colValIsNull, err = h.table.GetValue(context.Background(), id, row, uint16(def.Idx))
 			if err != nil {
 				return err
 			}

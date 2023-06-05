@@ -656,11 +656,11 @@ func runBindChangedTests(
 	runLockServiceTestsWithAdjustConfig(
 		t,
 		[]string{"s1", "s2", "s3"},
-		time.Millisecond*200,
+		time.Second,
 		func(alloc *lockTableAllocator, s []*service) {
 			l1 := s[0]
 			l2 := s[1]
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10000)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 
 			txnID1 := []byte("txn1")

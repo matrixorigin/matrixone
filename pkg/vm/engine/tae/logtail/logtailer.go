@@ -54,16 +54,19 @@ type Logtailer interface {
 var _ Logtailer = (*LogtailerImpl)(nil)
 
 type LogtailerImpl struct {
+	ctx       context.Context
 	ckpClient CheckpointClient
 	mgr       *Manager
 	c         *catalog.Catalog
 }
 
 func NewLogtailer(
+	ctx context.Context,
 	ckpClient CheckpointClient,
 	mgr *Manager,
 	c *catalog.Catalog) *LogtailerImpl {
 	return &LogtailerImpl{
+		ctx:       ctx,
 		ckpClient: ckpClient,
 		mgr:       mgr,
 		c:         c,
@@ -183,6 +186,7 @@ func (l *LogtailerImpl) getCatalogRespBuilder(scope Scope, reader *Reader, ckpLo
 }
 
 type tableRespBuilder struct {
+	ctx      context.Context
 	did, tid uint64
 	ckpLoc   string
 	scope    Scope
@@ -219,7 +223,7 @@ func (b *tableRespBuilder) collect() (api.SyncLogTailResp, error) {
 		}
 		builder = NewTableLogtailRespBuilder(b.ckpLoc, b.reader.from, b.reader.to, tableEntry)
 	} else {
-		builder = NewCatalogLogtailRespBuilder(b.scope, b.ckpLoc, b.reader.from, b.reader.to)
+		builder = NewCatalogLogtailRespBuilder(b.ctx, b.scope, b.ckpLoc, b.reader.from, b.reader.to)
 	}
 	op := NewBoundTableOperator(b.c, b.reader, b.scope, b.did, b.tid, builder)
 	err := op.Run()

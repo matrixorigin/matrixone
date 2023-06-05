@@ -16,15 +16,15 @@ package plan
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
-	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
 func TestSingleDDLPartition(t *testing.T) {
@@ -2042,7 +2042,7 @@ func Test_partition_binder(t *testing.T) {
 		{"abs(-1)", false, true},
 		{"ceiling(col1)", false, false},
 		{"ceiling(0.1)", false, true},
-		{"datediff('2007-12-31 23:59:59','2007-12-30')", false, false},
+		{"datediff('2007-12-31 23:59:59','2007-12-30')", false, false}, // XXX: should fold datediff and then report error
 		{"datediff(col3,'2007-12-30')", false, false},
 		{"day(col3)", false, false},
 		{"dayofyear(col3)", false, false},

@@ -82,7 +82,8 @@ type MOSpan struct {
 	Name      string    `json:"name"`
 	StartTime time.Time `json:"start_time"`
 	EndTime   time.Time `jons:"end_time"`
-	Duration  uint64    `json:"duration"`
+	// Duration
+	Duration time.Duration `json:"duration"`
 
 	tracer *MOTracer `json:"-"`
 }
@@ -138,16 +139,18 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(spanNameCol, table.StringField(s.Name))
 	row.SetColumnVal(startTimeCol, table.TimeField(s.StartTime))
 	row.SetColumnVal(endTimeCol, table.TimeField(s.EndTime))
-	row.SetColumnVal(durationCol, table.Uint64Field(uint64(s.EndTime.Sub(s.StartTime)))) // Duration
+	row.SetColumnVal(durationCol, table.Uint64Field(uint64(s.Duration)))
 	row.SetColumnVal(resourceCol, table.StringField(s.tracer.provider.resource.String()))
 }
 
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
+	s.EndTime = time.Now()
+	s.Duration = s.EndTime.Sub(s.StartTime)
+	if s.Duration < s.tracer.provider.longSpanTime {
+		return
+	}
 	for _, opt := range options {
 		opt.ApplySpanEnd(&s.SpanConfig)
-	}
-	if s.EndTime.IsZero() {
-		s.EndTime = time.Now()
 	}
 	for _, sp := range s.tracer.provider.spanProcessors {
 		sp.OnEnd(s)

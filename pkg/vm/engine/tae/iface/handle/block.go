@@ -15,6 +15,7 @@
 package handle
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 
@@ -59,8 +60,8 @@ type BlockReader interface {
 	GetByFilter(filter *Filter) (uint32, error)
 	GetColumnDataByNames(attrs []string) (*model.BlockView, error)
 	GetColumnDataByIds(colIdxes []int) (*model.BlockView, error)
-	GetColumnDataByName(string) (*model.ColumnView, error)
-	GetColumnDataById(int) (*model.ColumnView, error)
+	GetColumnDataByName(context.Context, string) (*model.ColumnView, error)
+	GetColumnDataById(context.Context, int) (*model.ColumnView, error)
 	GetMeta() any
 	GetMetaLoc() objectio.Location
 	GetDeltaLoc() objectio.Location
