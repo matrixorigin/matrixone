@@ -605,12 +605,15 @@ func (r *runner) tryScheduleCheckpoint() {
 
 	if entry.IsPendding() {
 		check := func() (done bool) {
+			if !r.source.IsCommitted(entry.GetStart(), entry.GetEnd()) {
+				return false
+			}
 			tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
 			tree.GetTree().Compact()
-			if tree.IsEmpty() {
-				done = true
+			if !tree.IsEmpty() {
+				return false
 			}
-			return
+			return true
 		}
 
 		if !check() {
