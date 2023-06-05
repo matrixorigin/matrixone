@@ -7,6 +7,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/FastFilter/xorfilter v0.1.3
 	github.com/RoaringBitmap/roaring v1.2.3
+	github.com/aliyun/credentials-go v1.2.7
 	github.com/aws/aws-sdk-go-v2 v1.18.0
 	github.com/aws/aws-sdk-go-v2/config v1.18.25
 	github.com/aws/aws-sdk-go-v2/credentials v1.13.24
@@ -61,6 +62,8 @@ require (
 require (
 	github.com/DataDog/zstd v1.5.0 // indirect
 	github.com/VictoriaMetrics/metrics v1.18.1 // indirect
+	github.com/alibabacloud-go/debug v0.0.0-20190504072949-9472017b5c68 // indirect
+	github.com/alibabacloud-go/tea v1.1.8 // indirect
 	github.com/andres-erbsen/clock v0.0.0-20160526145045-9e14626cd129 // indirect
 	github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.4.10 // indirect
@@ -124,6 +127,7 @@ require (
 	golang.org/x/net v0.10.0 // indirect
 	golang.org/x/tools v0.9.1 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
+	gopkg.in/ini.v1 v1.56.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 
 )
