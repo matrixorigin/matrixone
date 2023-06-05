@@ -18,13 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"testing"
-	"time"
-
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
 func TestStatementInfo_Report_EndStatement(t *testing.T) {
@@ -236,7 +236,7 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 			}
 			s.SetSerializableExecPlan(p)
 			got, _ := s.ExecPlan2Json(ctx)
-			assert.Equalf(t, tt.want, string(got), "ExecPlan2Json()")
+			assert.Equalf(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
 
 			mapper := new(map[string]any)
 			err := json.Unmarshal([]byte(got), mapper)

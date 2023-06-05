@@ -253,20 +253,15 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 				item.FillRow(tt.fields.ctx, row)
 				writer.WriteRow(row)
 			}
-			_, err := writer.FlushAndClose()
+			writer.FlushAndClose()
 
-			if err != nil {
-				//"internal error: the input value is not json type for column 21: {8 0  [123 34 99 111 100 101 34 58 50 48 48 44 34 109 101 115 115 97 103 101 34 58 34 78 79 32 69 120 101 99 80 108 97 110 34 125] <nil>}"
-				return
-			} else {
-				folder := path.Dir(filePath)
-				entrys, err := fs.List(ctx, folder)
-				require.Nil(t, err)
-				require.NotEqual(t, 0, len(entrys))
-				for _, e := range entrys {
-					t.Logf("file: %s, size: %d, is_dir: %v", e.Name, e.Size, e.IsDir)
-					require.NotEqual(t, 44, e.Size)
-				}
+			folder := path.Dir(filePath)
+			entrys, err := fs.List(ctx, folder)
+			require.Nil(t, err)
+			require.NotEqual(t, 0, len(entrys))
+			for _, e := range entrys {
+				t.Logf("file: %s, size: %d, is_dir: %v", e.Name, e.Size, e.IsDir)
+				require.NotEqual(t, 44, e.Size)
 			}
 		})
 	}
