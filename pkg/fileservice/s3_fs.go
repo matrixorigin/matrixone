@@ -31,6 +31,7 @@ import (
 
 	alicredentials "github.com/aliyun/credentials-go/credentials"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	retrypkg "github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -1013,8 +1014,10 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	// options for s3 client
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
-			opts.RetryMaxAttempts = 128
-			opts.RetryMode = aws.RetryModeAdaptive
+			opts.Retryer = retrypkg.NewStandard(func(opts *retrypkg.StandardOptions) {
+				opts.MaxAttempts = 1 << 30
+				opts.MaxBackoff = time.Minute * 1
+			})
 		},
 	}
 
