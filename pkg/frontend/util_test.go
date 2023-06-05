@@ -629,8 +629,8 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().IncrStatemenetID(gomock.Any()).Return(nil).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
-		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 
@@ -738,9 +738,10 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().IncrStatemenetID(gomock.Any()).Return(nil).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
-		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
