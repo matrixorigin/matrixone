@@ -52,8 +52,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select A from t1",
-		output: "select A from t1",
+		input:  "select a || 'hello' || 'world' from t1;",
+		output: "select concat(concat(a, hello), world) from t1",
 	}
 )
 
