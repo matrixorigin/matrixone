@@ -887,7 +887,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Limit = uint64(t.Limit)
 		in.OrderBy = t.Fs
 	case *mergeorder.Argument:
-		in.OrderBy = t.Fs
+		in.OrderBy = t.OrderInformation
 	case *connector.Argument:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
 		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
@@ -1272,7 +1272,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.MergeOrder:
 		v.Arg = &mergeorder.Argument{
-			Fs: opr.OrderBy,
+			OrderInformation: opr.OrderBy,
 		}
 	case vm.TableFunction:
 		v.Arg = &table_function.Argument{

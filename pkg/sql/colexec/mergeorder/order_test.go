@@ -83,19 +83,19 @@ func TestOrder(t *testing.T) {
 	for tci, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newIntBatch(tc.types, tc.proc, Rows, tc.arg.Fs)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderInformation)
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newIntBatch(tc.types, tc.proc, Rows, tc.arg.Fs)
+		tc.proc.Reg.MergeReceivers[1].Ch <- newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderInformation)
 		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg, false, false); ok || err != nil {
 				require.NoError(t, err)
 				// do the result check
-				if len(tc.arg.Fs) > 0 {
-					desc := tc.arg.Fs[0].Flag&plan.OrderBySpec_DESC != 0
-					index := tc.arg.Fs[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos
+				if len(tc.arg.OrderInformation) > 0 {
+					desc := tc.arg.OrderInformation[0].Flag&plan.OrderBySpec_DESC != 0
+					index := tc.arg.OrderInformation[0].Expr.Expr.(*plan.Expr_Col).Col.ColPos
 					bat := tc.proc.Reg.InputBatch
 					vec := bat.Vecs[index]
 					if vec.GetType().Oid == types.T_int8 {
@@ -202,7 +202,7 @@ func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
 		types: ts,
 		proc:  proc,
 		arg: &Argument{
-			Fs: fs,
+			OrderInformation: fs,
 		},
 		cancel: cancel,
 	}
