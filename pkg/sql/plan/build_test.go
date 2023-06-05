@@ -21,15 +21,48 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"go/constant"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 )
+
+func BenchmarkInsert(b *testing.B) {
+	typ := types.T_varchar.ToType()
+	typ.Width = 1024
+	targetType := makePlan2Type(&typ)
+	targetType.Width = 1024
+
+	originStr := "0123456789"
+	testExpr := tree.NewNumValWithType(constant.MakeString(originStr), originStr, false, tree.P_char)
+	targetT := &plan.Expr{
+		Typ: targetType,
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{
+				Typ: targetType,
+			},
+		},
+	}
+	ctx := context.TODO()
+	for i := 0; i < b.N; i++ {
+		binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+		expr, err := binder.BindExpr(testExpr, 0, true)
+		if err != nil {
+			break
+		}
+		_, err = forceCastExpr2(ctx, expr, typ, targetT)
+		if err != nil {
+			break
+		}
+	}
+}
 
 // only use in developing
 func TestSingleSQL(t *testing.T) {
