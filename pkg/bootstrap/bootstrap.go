@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 var (
@@ -154,7 +155,8 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 		getLogger().Info("bootstrap mo step 1 completed")
 
 		now, _ := b.clock.Now()
-		opts.WithMinCommittedTS(now)
+		// make sure txn start at now, and make sure can see the data of step1
+		opts = opts.WithMinCommittedTS(now)
 		err = b.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
@@ -169,6 +171,8 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 			},
 			opts)
 		if err != nil {
+			getLogger().Error("bootstrap mo step 2 failed",
+				zap.Error(err))
 			return err
 		}
 
