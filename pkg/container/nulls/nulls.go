@@ -371,6 +371,19 @@ func (nsp *Nulls) GetCardinality() int {
 	return nsp.Count()
 }
 
+func (nsp *Nulls) Foreach(fn func(uint64) bool) {
+	if nsp.IsEmpty() {
+		return
+	}
+	itr := nsp.np.Iterator()
+	for itr.HasNext() {
+		row := itr.Next()
+		if !fn(row) {
+			break
+		}
+	}
+}
+
 func (nsp *Nulls) Merge(o *Nulls) {
 	if o.Count() == 0 {
 		return
