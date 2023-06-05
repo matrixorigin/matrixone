@@ -62,7 +62,8 @@ func (r *Reader) HasCatalogChanges() bool {
 func (r *Reader) IsCommitted() bool {
 	committed := true
 	r.table.ForeachRowInBetween(r.from, r.to, nil, func(row RowT) (goNext bool) {
-		if row.GetTxnState(false) != txnif.TxnStateCommitted {
+		state := row.GetTxnState(false)
+		if state != txnif.TxnStateCommitted && state != txnif.TxnStateRollbacked {
 			committed = false
 			return false
 		}
