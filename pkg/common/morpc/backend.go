@@ -409,11 +409,6 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	messages := make([]*Future, 0, rb.options.batchSendSize)
 	stopped := false
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
 		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
 		if len(messages) > 0 {
 			written := 0
