@@ -219,7 +219,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 				return "", "", err
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel, _ := distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel := distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				tblName = tableName
 				break
@@ -251,7 +251,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				return false
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel = distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				return false
 			}
@@ -267,7 +267,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				return "", "", nil, err
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel = distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				break
 			}

@@ -1239,15 +1239,17 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 			pkVals := make([]*plan.Expr_C, len(pk.Names))
 			getCompositPKVals(expr, pk.Names, pkVals)
 			cnt := getValidCompositePKCnt(pkVals)
-			if cnt == len(pkVals) {
+			if cnt != 0 {
 				var packer *types.Packer
 				put := tbl.db.txn.engine.packerPool.Get(&packer)
-				for _, pkVal := range pkVals {
-					serialTupleByConstExpr(pkVal, packer)
+				for i := 0; i < cnt; i++ {
+					serialTupleByConstExpr(pkVals[i], packer)
 				}
 				v := packer.Bytes()
 				packer.Reset()
 				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+				// TODO: hack: remove the last comma, need to fix this in the future
+				encodedPrimaryKey = encodedPrimaryKey[0 : len(encodedPrimaryKey)-1]
 				put.Put()
 			}
 		} else {
@@ -1386,7 +1388,7 @@ func (tbl *txnTable) newReader(
 	if len(encodedPrimaryKey) > 0 {
 		iter = state.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
-			logtailreplay.Exact(encodedPrimaryKey),
+			logtailreplay.Prefix(encodedPrimaryKey),
 		)
 	} else {
 		iter = state.NewRowsIter(
