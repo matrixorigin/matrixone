@@ -62,7 +62,7 @@ func WithBackendBusyBufferSize(size int) BackendOption {
 	}
 }
 
-// WithBackendFilter set send fiter func. Input ready to send futures, output
+// WithBackendFilter set send filter func. Input ready to send futures, output
 // is really need to be send futures.
 func WithBackendFilter(filter func(Message, string) bool) BackendOption {
 	return func(rb *remoteBackend) {
@@ -159,7 +159,7 @@ type remoteBackend struct {
 }
 
 // NewRemoteBackend create a goetty connection based backend. This backend will start 2
-// goroutiune, one for read and one for write. If there is a network error in the underlying
+// goroutine, one for read and one for write. If there is a network error in the underlying
 // goetty connection, it will automatically retry until the Future times out.
 func NewRemoteBackend(
 	remote string,
@@ -927,7 +927,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 
 	err := s.doSendLocked(ctx, f, request)
 	// unlock before future.close to avoid deadlock with future.Close
-	// 1. current goroutine:        stream.Rlock
+	// 1. current goroutine:        stream.RLock
 	// 2. backend read goroutine:   cancelActiveStream -> backend.Lock
 	// 3. backend read goroutine:   cancelActiveStream -> stream.Lock : deadlock here
 	// 4. current goroutine:        f.Close -> backend.Lock           : deadlock here
