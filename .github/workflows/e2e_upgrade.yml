@@ -93,6 +93,7 @@ jobs:
           mv mo-service.log upstream-mo-service.log
           rm -rf mo-data/etl
           rm -rf etc
+          rm -rf optools
           mv $GITHUB_WORKSPACE/head/etc .
           mv $GITHUB_WORKSPACE/head/optools .
           mv $GITHUB_WORKSPACE/head/mo-service .
