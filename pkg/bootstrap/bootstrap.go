@@ -228,8 +228,45 @@ func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, erro
 	})
 	for _, db := range dbs {
 		if strings.EqualFold(db, bootstrappedCheckerDB) {
+			go func() {
+				for {
+					if b.showTables() {
+						return
+					}
+					time.Sleep(time.Second * 10)
+				}
+			}()
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+func (b *bootstrapper) showTables() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	now, _ := b.clock.Now()
+	opts := executor.Options{}
+	res, err := b.exec.Exec(
+		ctx,
+		"select relname from "+catalog.MO_TABLES,
+		opts.WithMinCommittedTS(now).WithDatabase(catalog.MO_CATALOG))
+	if err != nil {
+		return false
+	}
+	defer res.Close()
+
+	var tables []string
+	res.ReadRows(func(cols []*vector.Vector) bool {
+		tables = append(tables, executor.GetStringRows(cols[0])...)
+		return true
+	})
+	find := false
+	for _, t := range tables {
+		if strings.EqualFold(t, catalog.MOAutoIncrTable) {
+			find = true
+		}
+	}
+	getLogger().Info("table in mo_tables", zap.Any("tables", tables))
+	return find
 }
