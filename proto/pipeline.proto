@@ -431,3 +431,15 @@ message UuidToRegIdx {
   bytes uuid = 2;
   string from_addr = 3;
 }
+
+message RuntimeFilter {
+  enum RuntimeFilterType {
+    Empty = 0;
+    In = 1;
+    ZoneMap = 2;
+    BinaryFuse = 3;
+  }
+
+  RuntimeFilterType typ = 1;
+  bytes data = 2;
+}

@@ -305,12 +305,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
-		//for _, rfSpec := range node.RuntimeFilterList {
-		//	err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//}
+		for _, rfSpec := range node.RuntimeFilterList {
+			err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+		}
 
 		for i, col := range node.TableDef.Cols {
 			if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
@@ -446,12 +446,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
-		//for _, rfSpec := range node.RuntimeFilterBuildList {
-		//	err := builder.remapColRefForExpr(rfSpec.Expr, internalMap)
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//}
+		for _, rfSpec := range node.RuntimeFilterBuildList {
+			err := builder.remapColRefForExpr(rfSpec.Expr, internalMap)
+			if err != nil {
+				return nil, err
+			}
+		}
 
 		childProjList := builder.qry.Nodes[leftID].ProjectList
 		for i, globalRef := range leftRemapping.localToGlobal {
@@ -950,10 +950,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		determinShuffleMethod(rootID, builder)
 		builder.qry.Steps[i] = rootID
 
-		// XXX: This will be removed soon, after merging implementation of all join operators
+		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
 
-		//builder.generateRuntimeFilters(rootID)
+		builder.pushdownRuntimeFilters(rootID)
 
 		colRefCnt = make(map[[2]int32]int)
 		rootNode := builder.qry.Nodes[rootID]
