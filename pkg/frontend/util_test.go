@@ -679,96 +679,96 @@ func TestGetExprValue(t *testing.T) {
 
 	})
 
-	//cvey.Convey("", t, func() {
-	//	type args struct {
-	//		sql     string
-	//		wantErr bool
-	//		want    interface{}
-	//	}
-	//
-	//	dec1, _, _ := types.Parse64("1.0")
-	//	dec2, _, _ := types.Parse64("-1.0")
-	//	dec3, _, _ := types.Parse64("-1.2345670")
-	//
-	//	kases := []args{
-	//		{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{
-	//			Id:          int32(types.T_decimal64),
-	//			Width:       18,
-	//			Scale:       1,
-	//			NotNullable: true,
-	//		})},
-	//		{"set @@x=-1.0", false, plan.MakePlan2Decimal64ExprWithType(dec2, &plan.Type{
-	//			Id:          int32(types.T_decimal64),
-	//			Width:       18,
-	//			Scale:       1,
-	//			NotNullable: true,
-	//		})},
-	//		{"set @@x=-1.2345670", false, plan.MakePlan2Decimal64ExprWithType(dec3, &plan.Type{
-	//			Id:          int32(types.T_decimal64),
-	//			Width:       18,
-	//			Scale:       7,
-	//			NotNullable: true,
-	//		})},
-	//	}
-	//	ctrl := gomock.NewController(t)
-	//	defer ctrl.Finish()
-	//
-	//	eng := mock_frontend.NewMockEngine(ctrl)
-	//	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	//	eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	//	eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	//	db := mock_frontend.NewMockDatabase(ctrl)
-	//	db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
-	//
-	//	table := mock_frontend.NewMockRelation(ctrl)
-	//	db.EXPECT().Relation(ctx, "t").Return(table, nil).AnyTimes()
-	//	defs := []engine.TableDef{
-	//		&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: types.T_char.ToType()}},
-	//		&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Type: types.T_int32.ToType()}},
-	//	}
-	//
-	//	table.EXPECT().TableDefs(ctx).Return(defs, nil).AnyTimes()
-	//	eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
-	//	eng.EXPECT().Hints().Return(engine.Hints{
-	//		CommitOrRollbackTimeout: time.Second,
-	//	}).AnyTimes()
-	//	eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
-	//
-	//	ws := mock_frontend.NewMockWorkspace(ctrl)
-	//	ws.EXPECT().IncrStatemenetID(gomock.Any()).Return(nil).AnyTimes()
-	//
-	//	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	//	txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
-	//	txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
-	//	txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
-	//
-	//	txnClient := mock_frontend.NewMockTxnClient(ctrl)
-	//	txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
-	//
-	//	sv := &config.FrontendParameters{
-	//		SessionTimeout: toml.Duration{Duration: 5 * time.Minute},
-	//	}
-	//
-	//	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-	//
-	//	ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), pu, GSysVariables, true, nil, nil)
-	//	ses.txnCompileCtx.SetProcess(testutil.NewProc())
-	//	ses.requestCtx = ctx
-	//	ses.connectCtx = ctx
-	//	for _, kase := range kases {
-	//		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
-	//		cvey.So(err, cvey.ShouldBeNil)
-	//
-	//		sv, ok := stmt.(*tree.SetVar)
-	//		cvey.So(ok, cvey.ShouldBeTrue)
-	//		value, err := GetExprValue(sv.Assignments[0].Value, ses)
-	//		if kase.wantErr {
-	//			cvey.So(err, cvey.ShouldNotBeNil)
-	//		} else {
-	//			cvey.So(err, cvey.ShouldBeNil)
-	//			cvey.So(value, cvey.ShouldResemble, kase.want)
-	//		}
-	//	}
-	//
-	//})
+	cvey.Convey("", t, func() {
+		type args struct {
+			sql     string
+			wantErr bool
+			want    interface{}
+		}
+
+		dec1, _, _ := types.Parse64("1.0")
+		dec2, _, _ := types.Parse64("-1.0")
+		dec3, _, _ := types.Parse64("-1.2345670")
+
+		kases := []args{
+			{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       18,
+				Scale:       1,
+				NotNullable: true,
+			})},
+			{"set @@x=-1.0", false, plan.MakePlan2Decimal64ExprWithType(dec2, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       18,
+				Scale:       1,
+				NotNullable: true,
+			})},
+			{"set @@x=-1.2345670", false, plan.MakePlan2Decimal64ExprWithType(dec3, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       18,
+				Scale:       7,
+				NotNullable: true,
+			})},
+		}
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		db := mock_frontend.NewMockDatabase(ctrl)
+		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
+
+		table := mock_frontend.NewMockRelation(ctrl)
+		db.EXPECT().Relation(ctx, "t").Return(table, nil).AnyTimes()
+		defs := []engine.TableDef{
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: types.T_char.ToType()}},
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Type: types.T_int32.ToType()}},
+		}
+
+		table.EXPECT().TableDefs(ctx).Return(defs, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+
+		ws := mock_frontend.NewMockWorkspace(ctrl)
+		ws.EXPECT().IncrStatemenetID(gomock.Any()).Return(nil).AnyTimes()
+
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(ctx).Return(nil).AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv := &config.FrontendParameters{
+			SessionTimeout: toml.Duration{Duration: 5 * time.Minute},
+		}
+
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+
+		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), pu, GSysVariables, true, nil, nil)
+		ses.txnCompileCtx.SetProcess(testutil.NewProc())
+		ses.requestCtx = ctx
+		ses.connectCtx = ctx
+		for _, kase := range kases {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			cvey.So(err, cvey.ShouldBeNil)
+
+			sv, ok := stmt.(*tree.SetVar)
+			cvey.So(ok, cvey.ShouldBeTrue)
+			value, err := GetExprValue(sv.Assignments[0].Value, ses)
+			if kase.wantErr {
+				cvey.So(err, cvey.ShouldNotBeNil)
+			} else {
+				cvey.So(err, cvey.ShouldBeNil)
+				cvey.So(value, cvey.ShouldResemble, kase.want)
+			}
+		}
+
+	})
 }
