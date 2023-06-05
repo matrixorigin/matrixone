@@ -15,6 +15,7 @@
 package mysql
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -29,7 +30,7 @@ const eofChar = 0x100
 var scannerPool = sync.Pool{
 	New: func() any {
 		return &Scanner{
-			strBuilder: new(strings.Builder),
+			strBuilder: new(bytes.Buffer),
 		}
 	},
 }
@@ -47,7 +48,7 @@ type Scanner struct {
 	PrePos int
 	buf    string
 
-	strBuilder *strings.Builder
+	strBuilder *bytes.Buffer
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
@@ -320,7 +321,7 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 	return LEX_ERROR, buf.String()
 }
 
-func handleEscape(s *Scanner, buf *strings.Builder) uint16 {
+func handleEscape(s *Scanner, buf *bytes.Buffer) uint16 {
 	s.inc()
 	ch0 := s.cur()
 	switch ch0 {
