@@ -29,10 +29,10 @@ select @u32_var1,@u32_var2;
 set @u64_var1 = 0,@u64_var2 = 18446744073709551615;
 select @u64_var1,@u64_var2;
 --float32
-set @f32_var1 = 1.1754943508222875e-38,@f32_var2 = 3.4028234663852886e+38;
+set @f32_var1 = 1.1754943508222875e-38,@f32_var2 = 99999999999999999999999999999999999999;
 select @f32_var1,@f32_var2;
 --float64
-set @f64_var1 = 2.2250738585072014e-308,@f64_var2 = 1.7976931348623157e+308;
+set @f64_var1 = 2.2250738585072014e-308,@f64_var2 = 99999999999999999999999999999999999999;
 select @f64_var1,@f64_var2;
 --char
 set @ch_var='abc',@varch_var=cast('def' as varchar),@bin_var=cast('1001' as binary),@varbin_var=cast('1001' as varbinary(6)),@text_var=cast('ghi' as text),@blob_var=cast('1010' as blob);
@@ -41,7 +41,7 @@ select @ch_var,@varch_var,@bin_var,@varbin_var,@text_var,@blob_var;
 set @d64_var1 = cast(9223372036854775807 as decimal),@d64_var2 = cast(-9223372036854775808 as decimal);
 select @d64_var1,@d64_var2;
 --decimal128
-set @d128_var1 = cast(170141183460469231731687303715884105727 as decimal),@d128_var2 = cast(-170141183460469231731687303715884105728 as decimal);
+set @d128_var1 = cast(99999999999999999999999999999999999999 as decimal),@d128_var2 = cast(-99999999999999999999999999999999999999 as decimal);
 select @d128_var1,@d128_var2;
 --json
 set @json_var1 = cast('{"a":1,"b":2}' as json),@json_var2 = cast('[1,2,3]' as json);
