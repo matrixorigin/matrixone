@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -68,6 +69,13 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 	mixin.columns.pkPos = -1
 	mixin.columns.rowidPos = -1
 	mixin.columns.indexOfFirstSortedColumn = -1
+	compPKName2Pos := make(map[string]int)
+	if mixin.tableDef.Pkey != nil && mixin.tableDef.Pkey.CompPkeyCol != nil {
+		pk := mixin.tableDef.Pkey
+		for i, name := range pk.Names {
+			compPKName2Pos[name] = i
+		}
+	}
 	for i, column := range cols {
 		if column == catalog.Row_ID {
 			mixin.columns.rowidPos = i
@@ -80,6 +88,11 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			colIdx := mixin.tableDef.Name2ColIndex[column]
 			colDef := mixin.tableDef.Cols[colIdx]
 			mixin.columns.seqnums[i] = uint16(colDef.Seqnum)
+
+			if _, ok := compPKName2Pos[column]; ok {
+				compPKName2Pos[column] = i
+			}
+
 			if mixin.tableDef.Pkey != nil && mixin.tableDef.Pkey.PkeyColName == column {
 				// primary key is in the cols
 				mixin.columns.pkPos = i
@@ -90,6 +103,15 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			// }
 		}
 	}
+	if len(compPKName2Pos) != 0 {
+		for _, name := range mixin.tableDef.Pkey.Names {
+			if pos, ok := compPKName2Pos[name]; !ok {
+				break
+			} else {
+				mixin.columns.compPKPositions = append(mixin.columns.compPKPositions, pos)
+			}
+		}
+	}
 }
 
 func (mixin *withFilterMixin) getReadFilter() (filter blockio.ReadFilter) {
@@ -97,7 +119,74 @@ func (mixin *withFilterMixin) getReadFilter() (filter blockio.ReadFilter) {
 		filter = mixin.filterState.filter
 		return
 	}
+	pk := mixin.tableDef.Pkey
+	if pk == nil {
+		mixin.filterState.evaluated = true
+		mixin.filterState.filter = nil
+		return
+	}
+	if pk.CompPkeyCol == nil {
+		return mixin.getNonCompositPKFilter()
+	}
+	return mixin.getCompositPKFilter()
+}
 
+func (mixin *withFilterMixin) getCompositPKFilter() (filter blockio.ReadFilter) {
+	// if no primary key is included in the columns or no filter expr is given,
+	// no filter is needed
+	if len(mixin.columns.compPKPositions) == 0 || mixin.filterState.expr == nil {
+		mixin.filterState.evaluated = true
+		mixin.filterState.filter = nil
+		return
+	}
+
+	// evaluate
+	pkNames := mixin.tableDef.Pkey.Names
+	pkVals := make([]*plan.Expr_C, len(pkNames))
+	ok := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals)
+
+	if !ok || pkVals[0] == nil {
+		mixin.filterState.evaluated = true
+		mixin.filterState.filter = nil
+		return
+	}
+	cnt := getValidCompositePKCnt(pkVals)
+	pkVals = pkVals[:cnt]
+
+	filterFuncs := make([]func(*vector.Vector, *nulls.Bitmap) *nulls.Bitmap, len(pkVals))
+	for i := range filterFuncs {
+		filterFuncs[i] = getCompositeFilterFuncByExpr(pkVals[i], i == 0)
+	}
+
+	filter = func(vecs []*vector.Vector) []int32 {
+		var sels *nulls.Bitmap
+		for i := range filterFuncs {
+			pos := mixin.columns.compPKPositions[i]
+			vec := vecs[pos]
+			sels = filterFuncs[i](vec, sels)
+			if sels.IsEmpty() {
+				break
+			}
+		}
+		if sels.IsEmpty() {
+			return nil
+		}
+		res := make([]int32, 0, sels.GetCardinality())
+		sels.Foreach(func(i uint64) bool {
+			res = append(res, int32(i))
+			return true
+		})
+		// logutil.Debugf("%s: %d/%d", mixin.tableDef.Name, len(res), vecs[0].Length())
+
+		return res
+	}
+
+	mixin.filterState.evaluated = true
+	mixin.filterState.filter = filter
+	return
+}
+
+func (mixin *withFilterMixin) getNonCompositPKFilter() (filter blockio.ReadFilter) {
 	// if no primary key is included in the columns or no filter expr is given,
 	// no filter is needed
 	if mixin.columns.pkPos == -1 || mixin.filterState.expr == nil {
@@ -114,7 +203,7 @@ func (mixin *withFilterMixin) getReadFilter() (filter blockio.ReadFilter) {
 	// C: {A|B} and {A|B}
 	// D: {A|B|C} [and {A|B|C}]*
 	// for other patterns, no filter is needed
-	ok, searchFunc := getBinarySearchFuncByExpr(
+	ok, searchFunc := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
 		mixin.tableDef.Pkey.PkeyColName,
 		mixin.columns.colTypes[mixin.columns.pkPos].Oid,
