@@ -192,14 +192,19 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 	}
 
 	// otherwrise, wait bootstrap completed
+	getLogger().Info("another cn is in bootstrapping, waiting")
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Second):
+		default:
 			if ok, err := b.checkAlreadyBootstrapped(ctx); ok || err != nil {
+				getLogger().Info("waiting bootstrap completed",
+					zap.Bool("result", ok),
+					zap.Error(err))
 				return err
 			}
+			time.Sleep(time.Second)
 		}
 	}
 }
