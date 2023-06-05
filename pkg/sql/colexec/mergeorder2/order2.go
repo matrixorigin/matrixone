@@ -15,12 +15,18 @@
 package mergeorder2
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const maxBatchSizeToSend = 64 * mpool.MB
 
 type Argument struct {
 	ctr *container
@@ -40,10 +46,12 @@ type container struct {
 	// batchList is the data structure to store the all the received batches
 	batchList []*batch.Batch
 	orderCols [][]*vector.Vector
-	indexList []uint64
+	// indexList[i] = k means the number of rows before k in batchList[i] has been merged and send.
+	indexList []int64
 
 	// expression executors for order columns.
 	executors []colexec.ExpressionExecutor
+	compares  []compare.Compare
 }
 
 func (ctr *container) mergeAndEvaluateOrderColumn(proc *process.Process, bat *batch.Batch) error {
@@ -72,14 +80,116 @@ func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) erro
 	return nil
 }
 
-func (ctr *container) pickAndSend(proc *process.Process) error {
-	if len(ctr.indexList) == 0 {
-		ctr.sendOver = true
+func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
+	var desc, nullsLast bool
+
+	ctr.compares = make([]compare.Compare, len(fs))
+	for i := range ctr.compares {
+		desc = fs[i].Flag&plan2.OrderBySpec_DESC != 0
+		if fs[i].Flag&plan2.OrderBySpec_NULLS_FIRST != 0 {
+			nullsLast = false
+		} else if fs[i].Flag&plan2.OrderBySpec_NULLS_LAST != 0 {
+			nullsLast = true
+		} else {
+			nullsLast = desc
+		}
+
+		exprTyp := fs[i].Expr.Typ
+		typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
+		ctr.compares[i] = compare.New(typ, desc, nullsLast)
 	}
+	return
+}
+
+func (ctr *container) pickAndSend(proc *process.Process) error {
+	bat := batch.NewWithSize(ctr.batchList[0].VectorCount())
+	mp := proc.Mp()
+
+	for i := range bat.Vecs {
+		bat.Vecs[i] = proc.GetVector(*ctr.batchList[0].Vecs[i].GetType())
+	}
+
+	for {
+		choice := ctr.pickFirstRow()
+		for j := range bat.Vecs {
+			err := bat.Vecs[j].UnionOne(ctr.batchList[choice].Vecs[j], ctr.indexList[choice], mp)
+			if err != nil {
+				bat.Clean(mp)
+				return err
+			}
+		}
+		ctr.indexList[choice]++
+		if ctr.indexList[choice] == int64(ctr.orderCols[choice][0].Length()) {
+			ctr.removeBatch(proc, choice)
+		}
+
+		if len(ctr.indexList) == 0 {
+			ctr.sendOver = true
+			break
+		}
+		if bat.Size() >= maxBatchSizeToSend {
+			break
+		}
+	}
+
+	proc.SetInputBatch(bat)
 	return nil
 }
 
+func (ctr *container) pickFirstRow() (batIndex int) {
+	l := len(ctr.indexList)
+
+	if l > 1 {
+		i, j := 0, 1
+		for j < l {
+			for k := 0; k < len(ctr.compares); k++ {
+				ctr.compares[k].Set(0, ctr.orderCols[i][k])
+				ctr.compares[k].Set(1, ctr.orderCols[j][k])
+				result := ctr.compares[k].Compare(0, 1, ctr.indexList[i], ctr.indexList[j])
+				if result < 0 || k == len(ctr.compares)-1 {
+					break
+				} else if result > 0 {
+					i = j
+					break
+				}
+			}
+			j++
+		}
+		return i
+	}
+	return 0
+}
+
+func (ctr *container) removeBatch(proc *process.Process, index int) {
+	bat := ctr.batchList[index]
+	for i := range bat.Vecs {
+		proc.PutVector(bat.Vecs[i])
+	}
+	ctr.batchList = append(ctr.batchList[:index], ctr.batchList[index+1:]...)
+	ctr.indexList = append(ctr.indexList[:index], ctr.indexList[index+1:]...)
+
+	cols := ctr.orderCols[index]
+	for i := range cols {
+		proc.PutVector(cols[i])
+	}
+	ctr.orderCols = append(ctr.orderCols[:index], ctr.orderCols[index+1:]...)
+}
+
 func Prepare(proc *process.Process, arg any) (err error) {
+	ap := arg.(*Argument)
+	ap.ctr = new(container)
+	ctr := ap.ctr
+
+	length := 2 * len(proc.Reg.MergeReceivers)
+	ctr.batchList = make([]*batch.Batch, 0, length)
+	ctr.orderCols = make([][]*vector.Vector, 0, length)
+
+	for i := range ap.ctr.executors {
+		ap.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, ap.OrderInformation[i].Expr)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -111,6 +221,9 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				if err = ctr.evaluateOrderColumn(proc, 0); err != nil {
 					return false, err
 				}
+				ctr.generateCompares(ap.OrderInformation)
+				ctr.indexList = make([]int64, len(ctr.batchList))
+
 				ctr.receiveOver = true
 				break
 			}
