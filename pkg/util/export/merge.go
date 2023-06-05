@@ -453,14 +453,14 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 			// todo: adjust the sleep settings
 			// Sleep 10 seconds to wait for the database to recover
 			time.Sleep(10 * time.Second)
-			m.logger.Error("failed to write sql",
+			m.logger.Error("failed to upload file to MO",
 				logutil.TableField(m.Table.GetIdentify()),
 				logutil.PathField(fp.FilePath),
 				zap.Error(err),
 			)
 		}
 	}
-	logutil.Info("upload files success", logutil.TableField(m.Table.GetIdentify()), zap.Int("file count", len(files)))
+	logutil.Debug("upload files success", logutil.TableField(m.Table.GetIdentify()), zap.Int("file count", len(files)))
 
 	return nil
 }
