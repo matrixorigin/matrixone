@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -177,7 +178,13 @@ func (c *Compile) run(s *Scope) error {
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
-		return s.Run(c)
+		err := s.Run(c)
+		if err != nil {
+			return err
+		}
+
+		c.addAffectedRows(s.affectedRows())
+		return nil
 	case Merge, MergeInsert:
 		defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
@@ -270,8 +277,24 @@ func (c *Compile) Run(_ uint64) error {
 			if err = c.proc.TxnOperator.GetWorkspace().IncrStatemenetID(c.ctx); err != nil {
 				return err
 			}
-			//  retry
-			return c.runOnce()
+
+			// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
+			// improved to refresh expression in the future.
+			cc := New(
+				c.addr,
+				c.db,
+				c.sql,
+				c.tenant,
+				c.uid,
+				c.proc.Ctx,
+				c.e, c.proc,
+				c.stmt,
+				c.isInternal,
+				c.cnLabel)
+			if err := cc.Compile(c.proc.Ctx, c.pn, c.u, c.fill); err != nil {
+				return err
+			}
+			return cc.runOnce()
 		}
 		return err
 	}
@@ -417,26 +440,30 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		return nil, err
 	}
 	if c.info.Typ == plan2.ExecTypeAP {
-		client := cnclient.GetRPCClient()
-		if client != nil {
-			for i := 0; i < len(c.cnList); i++ {
-				_, _, err := net.SplitHostPort(c.cnList[i].Addr)
-				if err != nil {
-					logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
-				}
-				if isSameCN(c.addr, c.cnList[i].Addr) {
+		if client := cnclient.GetRPCClient(); client != nil {
+			i := 0
+			for _, cn := range c.cnList {
+				if cn.Addr == "" || isSameCN(c.addr, cn.Addr) {
 					continue
 				}
-				logutil.Infof("ping start")
-				err = client.Ping(ctx, c.cnList[i].Addr)
-				logutil.Infof("ping err %+v\n", err)
+				_, _, err := net.SplitHostPort(cn.Addr)
+				if err != nil {
+					logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", cn.Addr)
+					continue
+				}
+				logutil.Infof("ping %s start", cn.Addr)
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				err = client.Ping(ctx, cn.Addr)
+				cancel()
 				// ping failed
 				if err != nil {
-					logutil.Infof("ping err %+v\n", err)
-					c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
-					i--
+					logutil.Infof("ping %s err %+v\n", cn.Addr, err)
+					continue
 				}
+				c.cnList[i] = cn
+				i++
 			}
+			c.cnList = c.cnList[:i]
 		}
 	}
 
@@ -1504,7 +1531,7 @@ func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node,
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopSingle,
 					Idx: c.anal.curr,
-					Arg: constructLoopSingle(node, c.proc),
+					Arg: constructLoopSingle(node, rightTyps, c.proc),
 				})
 			}
 		}

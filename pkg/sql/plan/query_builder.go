@@ -248,6 +248,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			increaseRefCnt(expr, colRefCnt)
 		}
 
+		for _, expr := range node.BlockFilterList {
+			increaseRefCnt(expr, colRefCnt)
+		}
+
 		internalRemapping := &ColRefRemapping{
 			globalToLocal: make(map[[2]int32][2]int32),
 		}
@@ -292,6 +296,21 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				return nil, err
 			}
 		}
+
+		for _, expr := range node.BlockFilterList {
+			decreaseRefCnt(expr, colRefCnt)
+			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		//for _, rfSpec := range node.RuntimeFilterList {
+		//	err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
+		//	if err != nil {
+		//		return nil, err
+		//	}
+		//}
 
 		for i, col := range node.TableDef.Cols {
 			if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
@@ -426,6 +445,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				return nil, err
 			}
 		}
+
+		//for _, rfSpec := range node.RuntimeFilterBuildList {
+		//	err := builder.remapColRefForExpr(rfSpec.Expr, internalMap)
+		//	if err != nil {
+		//		return nil, err
+		//	}
+		//}
 
 		childProjList := builder.qry.Nodes[leftID].ProjectList
 		for i, globalRef := range leftRemapping.localToGlobal {

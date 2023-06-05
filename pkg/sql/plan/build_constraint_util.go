@@ -51,6 +51,7 @@ type dmlTableInfo struct {
 	isClusterTable []bool
 	haveConstraint bool
 	isMulti        bool
+	needAggFilter  bool
 	updateKeys     []map[string]tree.Expr // This slice index correspond to tableDefs
 	oldColPosMap   []map[string]int       // origin table values to their position in derived table
 	newColPosMap   []map[string]int       // insert/update values to their position in derived table
@@ -141,10 +142,11 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 
 	// remove unused table
 	newTblInfo := &dmlTableInfo{
-		nameToIdx: make(map[string]int),
-		idToName:  make(map[uint64]string),
-		alias:     make(map[string]int),
-		isMulti:   tblInfo.isMulti,
+		nameToIdx:     make(map[string]int),
+		idToName:      make(map[uint64]string),
+		alias:         make(map[string]int),
+		isMulti:       tblInfo.isMulti,
+		needAggFilter: tblInfo.needAggFilter,
 	}
 	for alias, columns := range usedTbl {
 		idx := tblInfo.alias[alias]
@@ -188,7 +190,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if jionTbl, ok := tbl.(*tree.JoinTableExpr); ok {
-		tblInfo.isMulti = true
+		tblInfo.needAggFilter = true
 		err := setTableExprToDmlTableInfo(ctx, jionTbl.Left, tblInfo, aliasMap, withMap)
 		if err != nil {
 			return err
@@ -318,6 +320,8 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree
 			return nil, err
 		}
 	}
+	tblInfo.isMulti = len(tblInfo.objRef) > 1
+	tblInfo.needAggFilter = tblInfo.needAggFilter || tblInfo.isMulti
 
 	return tblInfo, nil
 }

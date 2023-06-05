@@ -398,11 +398,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 }
 
 func (ses *Session) Close() {
-	if ses.isNotBackgroundSession {
-		mp := ses.GetMemPool()
-		mpool.DeleteMPool(mp)
-		ses.SetMemPool(nil)
-	}
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
@@ -438,6 +433,13 @@ func (ses *Session) Close() {
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
 	ses.sqlHelper = nil
+	//  The mpool cleanup must be placed at the end,
+	// and you must wait for all resources to be cleaned up before you can delete the mpool
+	if ses.isNotBackgroundSession {
+		mp := ses.GetMemPool()
+		mpool.DeleteMPool(mp)
+		ses.SetMemPool(nil)
+	}
 }
 
 // BackgroundSession executing the sql in background

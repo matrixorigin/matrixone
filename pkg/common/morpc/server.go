@@ -294,7 +294,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 			}
 		}
 
-		defer cs.cleanSend()
 		for {
 			select {
 			case <-ctx.Done():
@@ -315,18 +314,18 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					timeout := time.Duration(0)
 					for _, f := range responses {
 						if !s.options.filter(f.send.Message) {
-							f.messageSended(messageSkipped)
+							f.messageSent(messageSkipped)
 							continue
 						}
 
 						if f.send.Timeout() {
-							f.messageSended(f.send.Ctx.Err())
+							f.messageSent(f.send.Ctx.Err())
 							continue
 						}
 
 						v, err := f.send.GetTimeoutFromContext()
 						if err != nil {
-							f.messageSended(err)
+							f.messageSent(err)
 							continue
 						}
 
@@ -343,7 +342,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							s.logger.Error("write response failed",
 								zap.Uint64("request-id", f.send.Message.GetID()),
 								zap.Error(err))
-							f.messageSended(err)
+							f.messageSent(err)
 							return
 						}
 						written++
@@ -361,7 +360,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 									s.logger.Error("write response failed",
 										zap.Uint64("request-id", id),
 										zap.Error(err))
-									f.messageSended(err)
+									f.messageSent(err)
 								}
 							}
 						}
@@ -374,7 +373,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					}
 
 					for _, f := range responses {
-						f.messageSended(nil)
+						f.messageSent(nil)
 					}
 				}
 			}
@@ -487,7 +486,7 @@ func (cs *clientSession) cleanSend() {
 			if !ok {
 				return
 			}
-			f.messageSended(backendClosed)
+			f.messageSent(backendClosed)
 		default:
 			return
 		}
@@ -495,32 +494,12 @@ func (cs *clientSession) cleanSend() {
 }
 
 func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
-	response := msg.Message
-	if err := cs.codec.Valid(response); err != nil {
+	f, err := cs.send(msg)
+	if err != nil {
 		return err
 	}
-
-	cs.mu.RLock()
-	defer cs.mu.RUnlock()
-
-	if cs.mu.closed {
-		return moerr.NewClientClosedNoCtx()
-	}
-
-	id := response.GetID()
-	if v, ok := cs.sentStreamSequences.Load(id); ok {
-		seq := v.(uint32) + 1
-		cs.sentStreamSequences.Store(id, seq)
-		msg.stream = true
-		msg.streamSequence = seq
-	}
-
-	f := cs.newFutureFunc()
-	f.ref()
-	f.init(msg)
 	defer f.Close()
 
-	cs.c <- f
 	// stream only wait send completed
 	return f.waitSendCompleted()
 }
@@ -535,6 +514,34 @@ func (cs *clientSession) Write(
 		Ctx:     ctx,
 		Message: response,
 	})
+}
+
+func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
+	response := msg.Message
+	if err := cs.codec.Valid(response); err != nil {
+		return nil, err
+	}
+
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+
+	if cs.mu.closed {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+
+	id := response.GetID()
+	if v, ok := cs.sentStreamSequences.Load(id); ok {
+		seq := v.(uint32) + 1
+		cs.sentStreamSequences.Store(id, seq)
+		msg.stream = true
+		msg.streamSequence = seq
+	}
+
+	f := cs.newFutureFunc()
+	f.ref()
+	f.init(msg)
+	cs.c <- f
+	return f, nil
 }
 
 func (cs *clientSession) startCheckCacheTimeout() {

@@ -198,3 +198,19 @@ func TestFilter(t *testing.T) {
 		assert.Equal(t, 3, n.Count())
 	})
 }
+
+func TestMerge(t *testing.T) {
+	t.Run("merge test", func(t *testing.T) {
+		var n, m Nulls
+		for i := uint64(0); i < 16; i++ {
+			n.Add(i)
+		}
+		for i := uint64(8); i < 24; i++ {
+			m.Add(i)
+		}
+		assert.Equal(t, 16, n.Count())
+		assert.Equal(t, 16, m.Count())
+		n.Merge(&m)
+		assert.Equal(t, 24, n.Count())
+	})
+}
