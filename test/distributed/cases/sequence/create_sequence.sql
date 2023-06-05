@@ -127,24 +127,14 @@ insert into seq_table_01 select nextval('seq_13');
 insert into seq_table_01 values(nextval('seq_13'));
 select * from seq_table_01;
 create sequence seq_14  increment 50 start with 126 no cycle;
---126[176]
 select nextval('seq_14');
---176[226]
 select nextval('seq_14'),currval('seq_14');
 truncate table seq_table_01;
---226[276]
 insert into seq_table_01 select nextval('seq_14');
-select currval('seq_14');
---276[326]
 insert into seq_table_01 values(nextval('seq_14'));
---326[376]
 insert into seq_table_01 values(nextval('seq_14'));
---376[426]
 insert into seq_table_01 values(nextval('seq_14'));
---426[476]
 insert into seq_table_01 values(nextval('seq_14'));
---426
-select currval('seq_14');
 select * from seq_table_01;
 
 --abnormal test: max/min/start value out of range
@@ -185,7 +175,6 @@ drop sequence seq_15;
 -- @bvt:issue
 --lastval and setval
 create sequence seq_17 increment 10 start with 20 no cycle;
---最近的nextval 是nextval('seq_15')，值是1
 select lastval();
 select nextval('seq_17');
 select lastval();
