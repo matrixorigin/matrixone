@@ -314,14 +314,8 @@ func GetExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	//2.run the select
 	ctx := ses.GetRequestContext()
 
-	//get txn
-	_, _, err = ses.GetTxnHandler().GetTxn()
-	if err != nil {
-		return nil, err
-	}
-
 	//run the statement in shared transaction
-	bh := ses.GetShareTxnBackgroundExec(ctx, true)
+	bh := ses.GetRawBatchBackgroundExec(ctx)
 	defer bh.Close()
 
 	err = bh.ExecStmt(ses.GetRequestContext(), compositedSelect)

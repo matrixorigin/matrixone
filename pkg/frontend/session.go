@@ -177,6 +177,24 @@ type Session struct {
 
 	seqCurValues map[uint64]string
 
+	/*
+		CORNER CASE:
+
+		create sequence seq1;
+		set @@a = (select nextval(seq1)); // a = 1
+		select currval('seq1');// 1
+		select lastval('seq1');// right value is 1
+
+		We execute the expr of 'set var = expr' in a background session,
+		the last value of the seq1 is saved in the background session.
+
+		If we want to get the right value the lastval('seq1'), we need save
+		the last value of the seq1 in the session that starts the background session.
+
+		So, we define the type of seqLastValue as *string for updating its value conveniently.
+
+		TODO: we need to reimplement the sequence in some extent traced by issue #9847.
+	*/
 	seqLastValue *string
 
 	sqlHelper *SqlHelper
@@ -656,19 +674,20 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 		ses.GetParameterUnit())
 }
 
-// GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction
-func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, needBatch bool) BackgroundExec {
+// GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
+// newRawBatch denotes we need the raw batch instead of mysql result set.
+func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
 		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, true),
 	}
-	if needBatch {
+	if newRawBatch {
 		bh.ses.SetOutputCallback(batchFetcher)
 	}
 	return bh
 }
 
-func (ses *Session) GetBackgroundHandlerWithBatchFetcher(ctx context.Context) *BackgroundHandler {
+func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) *BackgroundHandler {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
 		ses: NewBackgroundSession(ctx, ses, ses.GetMemPool(), ses.GetParameterUnit(), GSysVariables, false),
