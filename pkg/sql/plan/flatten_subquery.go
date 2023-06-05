@@ -51,20 +51,20 @@ var (
 	}
 )
 
-func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext, isForUpdate bool) (int32, *plan.Expr, error) {
+func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
 	var err error
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for i, arg := range exprImpl.F.Args {
-			nodeID, exprImpl.F.Args[i], err = builder.flattenSubqueries(nodeID, arg, ctx, isForUpdate)
+			nodeID, exprImpl.F.Args[i], err = builder.flattenSubqueries(nodeID, arg, ctx)
 			if err != nil {
 				return 0, nil, err
 			}
 		}
 
 	case *plan.Expr_Sub:
-		if isForUpdate {
+		if builder.isForUpdate {
 			return 0, nil, moerr.NewInternalError(builder.GetContext(), "not support subquery for update")
 		}
 		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx)

@@ -1425,10 +1425,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var err error
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
-	var isForUpdate bool
 
 	if stmt.SelectLockInfo != nil && stmt.SelectLockInfo.LockType == tree.SelectLockForUpdate {
-		isForUpdate = true
+		builder.isForUpdate = true
 	}
 
 	// strip parentheses
@@ -1461,7 +1460,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	case *tree.SelectClause:
 		clause = selectClause
 	case *tree.UnionClause:
-		if isForUpdate {
+		if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
 		}
 		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
@@ -1571,7 +1570,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 	} else {
 		// build FROM clause
-		nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isForUpdate)
+		nodeID, err = builder.buildFrom(clause.From.Tables, ctx)
 		if err != nil {
 			return 0, err
 		}
@@ -1661,7 +1660,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
 		}
 
-		if isForUpdate {
+		if builder.isForUpdate {
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 			pkPos, pkTyp := getPkPos(tableDef, false)
 			lockTarget := &plan.LockTarget{
@@ -1694,7 +1693,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			var expr *plan.Expr
 
 			for _, cond := range whereList {
-				nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx, isForUpdate)
+				nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
 				if err != nil {
 					return 0, err
 				}
@@ -1875,7 +1874,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			var expr *plan.Expr
 
 			for _, cond := range havingList {
-				nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx, isForUpdate)
+				nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx)
 				if err != nil {
 					return 0, err
 				}
@@ -1915,7 +1914,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	// append PROJECT node
 	for i, proj := range ctx.projects {
-		nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx, isForUpdate)
+		nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx)
 		if err != nil {
 			return 0, err
 		}
@@ -2015,9 +2014,9 @@ func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
 	}
 }
 
-func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext, isForUpdate bool) (int32, error) {
+func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
 	if len(stmt) == 1 {
-		return builder.buildTable(stmt[0], ctx, -1, nil, isForUpdate)
+		return builder.buildTable(stmt[0], ctx, -1, nil)
 	}
 	return 0, moerr.NewInternalError(ctx.binder.GetContext(), "stmt's length should be zero")
 	// for now, stmt'length always be zero. if someday that change in parser, you should uncomment these codes
@@ -2060,10 +2059,10 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext, i
 	// return leftChildID, err
 }
 
-func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext, isForUpdate bool) (nodeID int32, err error) {
+func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
-		if isForUpdate {
+		if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from derived table for update")
 		}
 		subCtx := NewBindContext(builder, ctx)
@@ -2227,7 +2226,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					ExplicitCatalog: false,
 					ExplicitSchema:  false,
 				})
-				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx, isForUpdate)
+				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx)
 			}
 		}
 
@@ -2241,8 +2240,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
-			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx, isForUpdate)
-		} else if isForUpdate {
+			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
+		} else if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from join table for update")
 		}
 		return builder.buildJoinTable(tbl, ctx)
@@ -2254,7 +2253,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		return builder.buildTableFunction(tbl, ctx, preNodeId, leftCtx)
 
 	case *tree.ParenTableExpr:
-		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx, isForUpdate)
+		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		if _, ok := tbl.Expr.(*tree.Select); ok {
@@ -2263,7 +2262,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			}
 		}
 
-		nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx, isForUpdate)
+		nodeID, err = builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 		if err != nil {
 			return
 		}
@@ -2479,14 +2478,14 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
 
-	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx, false)
+	leftChildID, err := builder.buildTable(tbl.Left, leftCtx, -1, leftCtx)
 	if err != nil {
 		return 0, err
 	}
 	if _, ok := tbl.Right.(*tree.TableFunction); ok {
 		return 0, moerr.NewSyntaxError(builder.GetContext(), "Every table function must have an alias")
 	}
-	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx, false)
+	rightChildID, err := builder.buildTable(tbl.Right, rightCtx, leftChildID, leftCtx)
 	if err != nil {
 		return 0, err
 	}
