@@ -144,7 +144,7 @@ func (task *compactBlockTask) Name() string {
 }
 
 func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
-	logutil.Debug("[Start]", common.OperationField(task.Name()),
+	logutil.Info("[Start]", common.OperationField(task.Name()),
 		common.OperandField(task.meta.Repr()))
 	now := time.Now()
 	seg := task.compacted.GetSegment()
@@ -185,7 +185,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				// we can't create appendable seg here because compaction can be rollbacked.
 				// so just wait until the new appendable seg is available.
 				// actually this log can barely be printed.
-				logutil.Debugf("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
+				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
 				return moerr.GetOkExpectedEOB()
 			}
 			createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID)
@@ -287,7 +287,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	if task.created != nil {
 		createdStr = task.created.Fingerprint().BlockString()
 	}
-	logutil.Debug("[Done]",
+	logutil.Info("[Done]",
 		common.AnyField("txn-start-ts", task.txn.GetStartTS().ToString()),
 		common.OperationField(task.Name()),
 		common.AnyField("compacted", task.meta.Repr()),

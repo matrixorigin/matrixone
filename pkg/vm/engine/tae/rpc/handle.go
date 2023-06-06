@@ -962,7 +962,7 @@ func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 		mask := syscall.Umask(0)
 		if err := os.MkdirAll(targetDir, os.FileMode(0755)); err != nil {
 			syscall.Umask(mask)
-			logutil.Debugf("Recreate dir error:%v", err)
+			logutil.Infof("Recreate dir error:%v", err)
 			return nil, err
 		}
 		syscall.Umask(mask)
