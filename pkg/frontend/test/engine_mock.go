@@ -73,7 +73,7 @@ func (mr *MockStatisticsMockRecorder) Size(ctx, columnName interface{}) *gomock.
 }
 
 // Stats mocks base method.
-func (m *MockStatistics) Stats(ctx context.Context, statsInfoMap any) bool {
+func (m *MockStatistics) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats", ctx, statsInfoMap)
 	ret0, _ := ret[0].(bool)
@@ -432,7 +432,7 @@ func (mr *MockRelationMockRecorder) Size(ctx, columnName interface{}) *gomock.Ca
 }
 
 // Stats mocks base method.
-func (m *MockRelation) Stats(ctx context.Context, statsInfoMap any) bool {
+func (m *MockRelation) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats", ctx, statsInfoMap)
 	ret0, _ := ret[0].(bool)

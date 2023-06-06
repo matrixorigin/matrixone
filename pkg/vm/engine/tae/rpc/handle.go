@@ -17,11 +17,12 @@ package rpc
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"os"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -49,6 +50,8 @@ import (
 
 	"go.uber.org/zap"
 )
+
+const MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 100
 
 // TODO::GC the abandoned txn.
 type Handle struct {
@@ -98,14 +101,15 @@ func (h *Handle) HandleCommit(
 	h.mu.RLock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	h.mu.RUnlock()
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("HandleCommit start : %X\n",
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("HandleCommit start : %X",
 			string(meta.GetID()))
 	})
 	defer func() {
 		common.DoIfInfoEnabled(func() {
-			logutil.Infof("HandleCommit end : %X, %s\n",
-				string(meta.GetID()), time.Since(start))
+			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
+				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
+			}
 		})
 	}()
 	//Handle precommit-write command for 1PC
@@ -379,8 +383,8 @@ func (h *Handle) HandleInspectDN(
 	req *db.InspectDN,
 	resp *db.InspectResp) (err error) {
 	args, _ := shlex.Split(req.Operation)
-	common.DoIfInfoEnabled(func() {
-		logutil.Info("Inspect", zap.Strings("args", args))
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("Inspect", zap.Strings("args", args))
 	})
 	b := &bytes.Buffer{}
 
@@ -668,12 +672,12 @@ func (h *Handle) HandleCreateDatabase(
 		return err
 	}
 
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] create database: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("[precommit] create database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] create database end txn: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] create database end txn: %s", txn.String())
 		})
 	}()
 
@@ -705,12 +709,12 @@ func (h *Handle) HandleDropDatabase(
 		return err
 	}
 
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] drop database: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("[precommit] drop database: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] drop database end: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] drop database end: %s", txn.String())
 		})
 	}()
 
@@ -733,12 +737,13 @@ func (h *Handle) HandleCreateRelation(
 		return
 	}
 
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] create relation: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("[precommit] create relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] create relation end txn: %s\n", txn.String())
+		// do not turn it on in prod. This print outputs multiple duplicate lines
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] create relation end txn: %s", txn.String())
 		})
 	}()
 
@@ -770,12 +775,12 @@ func (h *Handle) HandleDropOrTruncateRelation(
 		return
 	}
 
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] drop/truncate relation: %+v\n txn: %s\n", req, txn.String())
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("[precommit] drop/truncate relation: %+v txn: %s", req, txn.String())
 	})
 	defer func() {
-		common.DoIfInfoEnabled(func() {
-			logutil.Infof("[precommit] drop/truncate relation end txn: %s\n", txn.String())
+		common.DoIfDebugEnabled(func() {
+			logutil.Debugf("[precommit] drop/truncate relation end txn: %s", txn.String())
 		})
 	}()
 
@@ -822,16 +827,16 @@ func (h *Handle) HandleWrite(
 		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 	}
 	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s\n txn: %s\n",
+		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s txn: %s",
 			req.Type, req.TableID,
 			req.TableName, req.DatabaseId, req.DatabaseName,
 			txn.String(),
 		)
-		logutil.Debugf("[precommit] write batch: %s\n", common.DebugMoBatch(req.Batch))
+		logutil.Debugf("[precommit] write batch: %s", common.DebugMoBatch(req.Batch))
 	})
 	defer func() {
 		common.DoIfDebugEnabled(func() {
-			logutil.Debugf("[precommit] handle write end txn: %s\n", txn.String())
+			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
 	}()
 
@@ -935,7 +940,7 @@ func (h *Handle) HandleAlterTable(
 	}
 
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("[precommit] alter table: %v txn: %s\n", req.String(), txn.String())
+		logutil.Debugf("[precommit] alter table: %v txn: %s", req.String(), txn.String())
 	})
 
 	dbase, err := txn.GetDatabaseByID(req.DbId)
@@ -957,13 +962,13 @@ func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 		mask := syscall.Umask(0)
 		if err := os.MkdirAll(targetDir, os.FileMode(0755)); err != nil {
 			syscall.Umask(mask)
-			logutil.Infof("Recreate dir error:%v\n", err)
+			logutil.Infof("Recreate dir error:%v", err)
 			return nil, err
 		}
 		syscall.Umask(mask)
 		tae, err = db.Open(targetDir+"/tae", opt)
 		if err != nil {
-			logutil.Infof("Open tae failed. error:%v", err)
+			logutil.Warnf("Open tae failed. error:%v", err)
 			return nil, err
 		}
 		return tae, nil
@@ -971,7 +976,7 @@ func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 
 	tae, err = db.Open(targetDir, opt)
 	if err != nil {
-		logutil.Infof("Open tae failed. error:%v", err)
+		logutil.Warnf("Open tae failed. error:%v", err)
 		return nil, err
 	}
 	return

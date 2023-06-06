@@ -1,7 +1,7 @@
 service-type = "CN"
 
 [log]
-level = "debug"
+level = "info"
 format = "console"
 max-size = 512
 
@@ -60,4 +60,4 @@ port = 6001
 
 [cn.txn]
 enable-sacrificing-freshness = false
-enable-cn-based-consistency = true
+enable-cn-based-consistency = false

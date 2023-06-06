@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"time"
 )
 
 type memStore struct {
@@ -89,6 +90,7 @@ func (s *memStore) Alloc(
 	next := getNext(curr, count, int(c.Step))
 	c.Offset = next
 	from, to := getNextRange(curr, next, int(c.Step))
+	time.Sleep(time.Millisecond * 10)
 	return from, to, nil
 }
 

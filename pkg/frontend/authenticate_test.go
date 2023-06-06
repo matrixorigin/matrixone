@@ -26,6 +26,8 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -5833,6 +5835,493 @@ func Test_doDropUser(t *testing.T) {
 	})
 }
 
+func Test_doInterpretCall(t *testing.T) {
+	convey.Convey("call precedure (not exist)fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+		call := &tree.CallStmt{
+			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
+		}
+
+		priv := determinePrivilegeSetOfStatement(call)
+		ses := newSes(priv, ctrl)
+		proc := testutil.NewProcess()
+		proc.FileService = ses.pu.FileService
+		ses.GetTxnCompileCtx().SetProcess(proc)
+		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.SetDatabaseName("procedure_test")
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForSpBody(ses.GetConnectContext(), string(call.Name.Name.ObjectName), ses.GetDatabaseName())
+		convey.So(err, convey.ShouldBeNil)
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		_, err = doInterpretCall(ctx, ses, call)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("call precedure (not support)fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+		call := &tree.CallStmt{
+			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
+		}
+
+		priv := determinePrivilegeSetOfStatement(call)
+		ses := newSes(priv, ctrl)
+		proc := testutil.NewProcess()
+		proc.FileService = ses.pu.FileService
+		ses.GetTxnCompileCtx().SetProcess(proc)
+		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.SetDatabaseName("procedure_test")
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForSpBody(ses.GetConnectContext(), string(call.Name.Name.ObjectName), ses.GetDatabaseName())
+		convey.So(err, convey.ShouldBeNil)
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{"begin set sid = 1000; end", "{}"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForGetSystemVariableValueWithDatabase("procedure_test", "version_compatibility")
+		mrs = newMrsForPasswordOfUser([][]interface{}{
+			{"0.7"},
+		})
+		bh.sql2result[sql] = mrs
+
+		_, err = doInterpretCall(ctx, ses, call)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("call precedure (not support)fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+		call := &tree.CallStmt{
+			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
+		}
+
+		priv := determinePrivilegeSetOfStatement(call)
+		ses := newSes(priv, ctrl)
+		proc := testutil.NewProcess()
+		proc.FileService = ses.pu.FileService
+		ses.GetTxnCompileCtx().SetProcess(proc)
+		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
+		ses.SetDatabaseName("procedure_test")
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, err := getSqlForSpBody(ses.GetConnectContext(), string(call.Name.Name.ObjectName), ses.GetDatabaseName())
+		convey.So(err, convey.ShouldBeNil)
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{"begin DECLARE v1 INT; SET v1 = 10; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end", "{}"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForGetSystemVariableValueWithDatabase("procedure_test", "version_compatibility")
+		mrs = newMrsForPasswordOfUser([][]interface{}{
+			{"0.7"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = "select v1 > 5"
+		mrs = newMrsForPasswordOfUser([][]interface{}{
+			{"1"},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = "select * from tbh1"
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		_, err = doInterpretCall(ctx, ses, call)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func Test_initProcedure(t *testing.T) {
+	convey.Convey("init precedure fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+		cp := &tree.CreateProcedure{
+			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
+			Args: nil,
+			Body: "'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'",
+		}
+
+		priv := determinePrivilegeSetOfStatement(cp)
+		ses := newSes(priv, ctrl)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		err := InitProcedure(ses.GetConnectContext(), ses, ses.GetTenantInfo(), cp)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("init precedure succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+		cp := &tree.CreateProcedure{
+			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
+			Args: nil,
+			Body: "'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end'",
+		}
+
+		priv := determinePrivilegeSetOfStatement(cp)
+		ses := newSes(priv, ctrl)
+		ses.SetDatabaseName("test_procedure")
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), ses.GetDatabaseName())
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := InitProcedure(ses.GetConnectContext(), ses, ses.GetTenantInfo(), cp)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+func TestDoSetSecondaryRoleAll(t *testing.T) {
+	convey.Convey("do set secondary role succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.SetRole{
+			SecondaryRole: false,
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{"6", "role5"},
+		})
+		bh.sql2result[sql] = mrs
+
+		err := doSetSecondaryRoleAll(ses.GetRequestContext(), ses)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("do set secondary role succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.SetRole{
+			SecondaryRole: false,
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForgetUserRolesExpectPublicRole(publicRoleID, ses.GetTenantInfo().UserID)
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doSetSecondaryRoleAll(ses.GetRequestContext(), ses)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestDoGrantPrivilegeImplicitly(t *testing.T) {
+	convey.Convey("do grant privilege implicitly for create database succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.CreateDatabase{
+			Name: tree.Identifier("abc"),
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForGrantOwnershipOnDatabase(string(stmt.Name), ses.GetTenantInfo().GetDefaultRole())
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doGrantPrivilegeImplicitly(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("do grant privilege implicitly for create table succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.CreateTable{}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForGrantOwnershipOnTable("abd", "t1", ses.GetTenantInfo().GetDefaultRole())
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doGrantPrivilegeImplicitly(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestDoGetGlobalSystemVariable(t *testing.T) {
+	convey.Convey("get global system variable succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.ShowVariables{
+			Global: true,
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSystemVariablesWithAccount(uint64(ses.GetTenantInfo().GetTenantID()))
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		_, err := doGetGlobalSystemVariable(ses.GetRequestContext(), ses)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+func TestDoSetGlobalSystemVariable(t *testing.T) {
+	convey.Convey("set global system variable succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.SetVar{
+			Assignments: []*tree.VarAssignmentExpr{
+				{
+					System: true,
+					Global: true,
+					Name:   "sql_mode",
+					Value:  tree.NewStrVal(""),
+				},
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForUpdateSystemVariableValue(getVariableValue(stmt.Assignments[0].Value), uint64(ses.GetTenantInfo().GetTenantID()), stmt.Assignments[0].Name)
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doSetGlobalSystemVariable(ses.GetRequestContext(), ses, stmt.Assignments[0].Name, stmt.Assignments[0].Value)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("set global system variable succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.SetVar{
+			Assignments: []*tree.VarAssignmentExpr{
+				{
+					System: true,
+					Global: true,
+					Name:   "sql_mode",
+					Value:  tree.NewStrVal("NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION"),
+				},
+			},
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForUpdateSystemVariableValue(getVariableValue(stmt.Assignments[0].Value), uint64(ses.GetTenantInfo().GetTenantID()), stmt.Assignments[0].Name)
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doSetGlobalSystemVariable(ses.GetRequestContext(), ses, stmt.Assignments[0].Name, stmt.Assignments[0].Value)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
 func Test_doAlterUser(t *testing.T) {
 	convey.Convey("alter user success", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6827,7 +7316,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Ref().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, GSysVariables, false, nil)
+	ses := NewSession(proto, nil, pu, GSysVariables, false, nil, nil)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,

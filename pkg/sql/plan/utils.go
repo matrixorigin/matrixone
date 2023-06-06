@@ -1033,7 +1033,7 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-func getSortOrder(tableDef *plan.TableDef, colName string) int {
+func GetSortOrder(tableDef *plan.TableDef, colName string) int {
 	if tableDef.Pkey != nil {
 		pkNames := tableDef.Pkey.Names
 		for i := range pkNames {

@@ -25,10 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -37,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -156,9 +155,9 @@ type Transaction struct {
 
 	batchSelectList map[*batch.Batch][]int64
 
-	statementID int
-
-	statements []int
+	rollbackCount int
+	statementID   int
+	statements    []int
 }
 
 type Pos struct {
@@ -233,11 +232,11 @@ func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
 	}
 	txn.statements = append(txn.statements, len(txn.writes))
 	txn.statementID++
-	if txn.statementID > 1 && txn.meta.IsRCIsolation() {
+	if txn.meta.IsRCIsolation() &&
+		(txn.statementID > 1 || txn.rollbackCount > 0) {
 		if err := txn.op.UpdateSnapshot(
 			ctx,
 			timestamp.Timestamp{}); err != nil {
-			logutil.Fatalf(err.Error())
 			return err
 		}
 		txn.resetSnapshot()
@@ -246,6 +245,10 @@ func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
 }
 
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
+	txn.Lock()
+	defer txn.Unlock()
+
+	txn.rollbackCount++
 	if txn.statementID > 0 {
 		txn.statementID--
 		end := txn.statements[txn.statementID]
@@ -398,47 +401,50 @@ type column struct {
 	seqnum          uint16
 }
 
+type withFilterMixin struct {
+	ctx      context.Context
+	fs       fileservice.FileService
+	ts       timestamp.Timestamp
+	tableDef *plan.TableDef
+
+	// columns used for reading
+	columns struct {
+		seqnums  []uint16
+		colTypes []types.Type
+		// colNulls []bool
+
+		compPKPositions []int // composite primary key pos in the columns
+
+		pkPos    int // -1 means no primary key in columns
+		rowidPos int // -1 means no rowid in columns
+
+		indexOfFirstSortedColumn int
+	}
+
+	filterState struct {
+		evaluated bool
+		expr      *plan.Expr
+		filter    blockio.ReadFilter
+	}
+}
+
 type blockReader struct {
-	blks          []*catalog.BlockInfo
-	ctx           context.Context
-	fs            fileservice.FileService
-	ts            timestamp.Timestamp
-	tableDef      *plan.TableDef
-	primarySeqnum int
-	expr          *plan.Expr
+	withFilterMixin
 
-	//used for prefetch
-	infos           [][]*catalog.BlockInfo
-	steps           []int
-	currentStep     int
-	prefetchColIdxs []uint16 //need to remove rowid
+	// used for prefetch
+	infos       [][]*catalog.BlockInfo
+	steps       []int
+	currentStep int
 
-	// cached meta data.
-	seqnums        []uint16
-	colTypes       []types.Type
-	colNulls       []bool
-	pkidxInColIdxs int
-	pkName         string
-	// binary search info
-	init       bool
-	canCompute bool
-	searchFunc func(*vector.Vector) int
+	// block list to scan
+	blks []*catalog.BlockInfo
 }
 
 type blockMergeReader struct {
-	sels []int64
-	blks []ModifyBlockMeta
-	ctx  context.Context
-	fs   fileservice.FileService
-	ts   timestamp.Timestamp
-	//TODO::remove it, instead, use meta locations
-	table    *txnTable
-	tableDef *plan.TableDef
+	withFilterMixin
 
-	// cached meta data.
-	seqnums  []uint16
-	colTypes []types.Type
-	colNulls []bool
+	table *txnTable
+	blks  []ModifyBlockMeta
 }
 
 type mergeReader struct {
@@ -448,69 +454,9 @@ type mergeReader struct {
 type emptyReader struct {
 }
 
-type BlockMeta struct {
-	Rows    int64
-	Info    catalog.BlockInfo
-	Zonemap []Zonemap
-}
-
-func (a *BlockMeta) MarshalBinary() ([]byte, error) {
-	return a.Marshal()
-}
-
-func (a *BlockMeta) UnmarshalBinary(data []byte) error {
-	return a.Unmarshal(data)
-}
-
-type Zonemap [64]byte
-
-func (z *Zonemap) ProtoSize() int {
-	return 64
-}
-
-func (z *Zonemap) MarshalToSizedBuffer(data []byte) (int, error) {
-	if len(data) < z.ProtoSize() {
-		panic("invalid byte slice")
-	}
-	n := copy(data, z[:])
-	return n, nil
-}
-
-func (z *Zonemap) MarshalTo(data []byte) (int, error) {
-	size := z.ProtoSize()
-	return z.MarshalToSizedBuffer(data[:size])
-}
-
-func (z *Zonemap) Marshal() ([]byte, error) {
-	data := make([]byte, z.ProtoSize())
-	n, err := z.MarshalToSizedBuffer(data)
-	if err != nil {
-		return nil, err
-	}
-	return data[:n], nil
-}
-
-func (z *Zonemap) Unmarshal(data []byte) error {
-	if len(data) < z.ProtoSize() {
-		panic("invalid byte slice")
-	}
-	copy(z[:], data)
-	return nil
-}
-
 type ModifyBlockMeta struct {
 	meta    catalog.BlockInfo
 	deletes []int64
-}
-
-type Columns []column
-
-func (cols Columns) Len() int           { return len(cols) }
-func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
-func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
-
-func (a BlockMeta) Eq(b BlockMeta) bool {
-	return a.Info.BlockID == b.Info.BlockID
 }
 
 type pkRange struct {

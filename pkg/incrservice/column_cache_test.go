@@ -17,6 +17,8 @@ package incrservice
 import (
 	"context"
 	"math"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
@@ -57,7 +59,7 @@ func TestColumnCacheAllocate(t *testing.T) {
 			c *columnCache) {
 			c.Lock()
 			require.NoError(t, c.waitPrevAllocatingLocked(ctx))
-			require.NoError(t, c.allocateLocked(ctx, 0, 200))
+			require.NoError(t, c.allocateLocked(ctx, 0, 200, 0))
 			c.Unlock()
 
 			c.Lock()
@@ -78,7 +80,7 @@ func TestColumnCacheInsert(t *testing.T) {
 			c *columnCache) {
 			c.Lock()
 			require.NoError(t, c.waitPrevAllocatingLocked(ctx))
-			require.NoError(t, c.allocateLocked(ctx, 0, 200))
+			require.NoError(t, c.allocateLocked(ctx, 0, 200, 0))
 			c.Unlock()
 
 			c.Lock()
@@ -379,6 +381,48 @@ func TestOverflowWithInit(t *testing.T) {
 						require.Equal(t, uint64(0), u)
 						return nil
 					}))
+		},
+	)
+}
+
+func TestMergeAllocate(t *testing.T) {
+	total := 3600000
+	goroutines := 60
+	batch := 6000
+	rowsPerGoroutine := total / goroutines
+	var added atomic.Uint64
+	capacity := 10000
+	runColumnCacheTests(
+		t,
+		capacity,
+		1,
+		func(
+			ctx context.Context,
+			cc *columnCache) {
+			var wg sync.WaitGroup
+			for i := 0; i < goroutines; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					n := rowsPerGoroutine / batch
+					for i := 0; i < n; i++ {
+						cc.applyAutoValues(
+							ctx,
+							0,
+							batch,
+							nil,
+							func(i int) bool { return false },
+							func(i int, u uint64) error {
+								added.Add(1)
+								return nil
+							})
+					}
+				}()
+			}
+
+			wg.Wait()
+			assert.Equal(t, uint64(total), added.Load())
+			assert.True(t, cc.allocateCount.Load() < 360)
 		},
 	)
 }

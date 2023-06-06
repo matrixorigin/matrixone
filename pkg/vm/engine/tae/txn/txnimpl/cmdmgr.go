@@ -30,9 +30,9 @@ type commandManager struct {
 	driver wal.Driver
 }
 
-func newCommandManager(driver wal.Driver) *commandManager {
+func newCommandManager(driver wal.Driver, maxMessageSize uint64) *commandManager {
 	return &commandManager{
-		cmd:    txnbase.NewTxnCmd(),
+		cmd:    txnbase.NewTxnCmd(maxMessageSize),
 		driver: driver,
 	}
 }
@@ -54,7 +54,6 @@ func (mgr *commandManager) ApplyTxnRecord(tid string, txn txnif.AsyncTxn) (logEn
 	if mgr.driver == nil {
 		return
 	}
-	mgr.cmd.SetCmdSize(mgr.csn)
 	mgr.cmd.SetTxn(txn)
 	var buf []byte
 	if buf, err = mgr.cmd.MarshalBinary(); err != nil {

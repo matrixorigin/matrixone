@@ -81,6 +81,7 @@ import (
     parenTableExpr *tree.ParenTableExpr
     identifierList tree.IdentifierList
     joinCond tree.JoinCond
+    selectLockInfo *tree.SelectLockInfo
 
     columnType *tree.T
     unresolvedName *tree.UnresolvedName
@@ -386,6 +387,7 @@ import (
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
+%token <str> DENSE_RANK
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -485,6 +487,7 @@ import (
 %type <str> insert_column
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
+%type <selectLockInfo> select_lock_opt
 
 %type <functionName> func_name
 %type <funcArgs> func_args_list_opt func_args_list
@@ -3916,9 +3919,9 @@ select_stmt:
     }
 
 select_no_parens:
-    simple_select order_by_opt limit_opt export_data_param_opt // select_lock_opt
+    simple_select order_by_opt limit_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: $4}
+        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: $4, SelectLockInfo: $5}
     }
 |   select_with_parens order_by_clause export_data_param_opt
     {
@@ -3928,9 +3931,9 @@ select_no_parens:
     {
         $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: $4}
     }
-|    with_clause simple_select order_by_opt limit_opt export_data_param_opt // select_lock_opt
+|   with_clause simple_select order_by_opt limit_opt export_data_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, With: $1}
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, SelectLockInfo:$6, With: $1}
     }
 |   with_clause select_with_parens order_by_clause export_data_param_opt
     {
@@ -4063,6 +4066,17 @@ nulls_first_last_opt:
 |   NULLS LAST
     {
         $$ = tree.NullsLast
+    }
+
+select_lock_opt:
+    {
+        $$ = nil
+    }
+|   FOR UPDATE
+    {
+        $$ = &tree.SelectLockInfo{
+            LockType:tree.SelectLockForUpdate,
+        }
     }
 
 select_with_parens:
@@ -6984,6 +6998,14 @@ function_call_window:
             WindowSpec: $4,
         }
     }
+|	DENSE_RANK '(' ')' window_spec
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            WindowSpec: $4,
+        }
+    }
 
 else_opt:
     {
@@ -9303,6 +9325,7 @@ non_reserved_keyword:
 |   COLUMN_FORMAT
 |   CASCADE
 |   DATA
+|	DAY
 |   DATETIME
 |   DECIMAL
 |   DYNAMIC
@@ -9468,6 +9491,7 @@ non_reserved_keyword:
 |   SUBSCRIPTIONS
 |   PUBLICATIONS
 |   PROPERTIES
+|	WEEK
 
 func_not_keyword:
     DATE_ADD
