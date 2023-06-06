@@ -538,9 +538,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		}
 		steps = append(steps, scope)
 	}
-
-	// str := DebugShowScopes(steps)
-	// fmt.Print(str)
+	
+	debugstr := DebugShowScopes(steps)
+	logutil.Infof("!!!!!!!!!!%v", debugstr)
 
 	return steps, err
 }
@@ -2586,17 +2586,7 @@ func isLaunchMode(cnlist engine.Nodes) bool {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
-	parts1 := strings.Split(addr, ":")
-	if len(parts1) != 2 {
-		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
-		return true
-	}
-	parts2 := strings.Split(currentCNAddr, ":")
-	if len(parts2) != 2 {
-		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
-		return true
-	}
-	return parts1[0] == parts2[0]
+	return addr == currentCNAddr
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
