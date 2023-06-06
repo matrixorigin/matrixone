@@ -22,19 +22,19 @@ package main
 
 import (
 	"context"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
+	"runtime"
+	"runtime/pprof"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"go.uber.org/zap/zapcore"
-	"net/http"
-	"os"
-	"runtime"
-	"sync"
-	"time"
-
-	_ "net/http/pprof"
-	"runtime/pprof"
 
 	morun "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -108,6 +108,8 @@ func main() {
 		panic(err)
 	}
 
+	mergeAll(ctx, fs)
+
 	mergeTable(ctx, fs, motrace.SingleStatementTable)
 	mergeTable(ctx, fs, motrace.SingleRowLogTable)
 	mergeTable(ctx, fs, mometric.SingleMetricTable)
@@ -115,6 +117,26 @@ func main() {
 	logutil.Infof("all done, run sleep(5)")
 	time.Sleep(5 * time.Second)
 	cancel()
+}
+
+func mergeAll(ctx context.Context, fs *fileservice.LocalETLFS) {
+	ctx, span := trace.Start(ctx, "mergeTable")
+	defer span.End()
+	var err error
+	var merge *export.Merge
+	merge, err = export.NewMerge(ctx, export.WithTable(motrace.SingleStatementTable), export.WithFileService(fs))
+	if err != nil {
+		logutil.Infof("[%v] failed to NewMerge: %v", "All", err)
+	}
+	err = merge.ListRange(ctx)
+	if err != nil {
+		logutil.Infof("[%v] failed to merge: %v", "All", err)
+	} else {
+		logutil.Infof("[%v] merge succeed.", "All")
+	}
+
+	writeAllocsProfile("All")
+
 }
 
 func mergeTable(ctx context.Context, fs *fileservice.LocalETLFS, table *table.Table) {
