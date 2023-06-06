@@ -319,14 +319,14 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						}
 
 						if f.send.Timeout() {
-							panic("TODO: delete")
+							s.logger.Fatal("TODO: delete")
 							f.messageSent(f.send.Ctx.Err())
 							continue
 						}
 
 						v, err := f.send.GetTimeoutFromContext()
 						if err != nil {
-							panic("TODO: delete")
+							s.logger.Fatal("TODO: delete")
 							f.messageSent(err)
 							continue
 						}
