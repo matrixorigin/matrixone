@@ -1230,17 +1230,39 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
 
 	var encodedPrimaryKey []byte
-	if tbl.primaryIdx >= 0 && expr != nil {
-		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
-		if ok {
-			var packer *types.Packer
-			put := tbl.db.txn.engine.packerPool.Get(&packer)
-			defer put.Put()
-			encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+	pk := tbl.tableDef.Pkey
+	if pk != nil && expr != nil {
+		// TODO: workaround for composite primary key
+		// right now for composite primary key, the filter expr will not be pushed down
+		// here we try to serialize the composite primary key
+		if pk.CompPkeyCol != nil {
+			pkVals := make([]*plan.Expr_C, len(pk.Names))
+			getCompositPKVals(expr, pk.Names, pkVals)
+			cnt := getValidCompositePKCnt(pkVals)
+			if cnt != 0 {
+				var packer *types.Packer
+				put := tbl.db.txn.engine.packerPool.Get(&packer)
+				for i := 0; i < cnt; i++ {
+					serialTupleByConstExpr(pkVals[i], packer)
+				}
+				v := packer.Bytes()
+				packer.Reset()
+				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+				// TODO: hack: remove the last comma, need to fix this in the future
+				encodedPrimaryKey = encodedPrimaryKey[0 : len(encodedPrimaryKey)-1]
+				put.Put()
+			}
+		} else {
+			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+			ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
+			if ok {
+				var packer *types.Packer
+				put := tbl.db.txn.engine.packerPool.Get(&packer)
+				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+				put.Put()
+			}
 		}
 	}
-
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 
@@ -1248,6 +1270,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 		ctx,
 		num,
 		encodedPrimaryKey,
+		expr,
 		tbl.modifiedBlocks,
 		tbl.writes)
 	if err != nil {
@@ -1273,15 +1296,9 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 
 	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
-			rds[i] = &blockReader{
-				fs:            tbl.db.txn.engine.fs,
-				tableDef:      tableDef,
-				primarySeqnum: tbl.primarySeqnum,
-				expr:          expr,
-				ts:            ts,
-				ctx:           ctx,
-				blks:          []*catalog.BlockInfo{blks[i]},
-			}
+			rds[i] = newBlockReader(
+				ctx, tableDef, ts, []*catalog.BlockInfo{blks[i]}, expr, tbl.db.txn.engine.fs,
+			)
 		}
 		for j := len(ranges); j < num; j++ {
 			rds[j] = &emptyReader{}
@@ -1302,6 +1319,7 @@ func (tbl *txnTable) newReader(
 	ctx context.Context,
 	readerNumber int,
 	encodedPrimaryKey []byte,
+	expr *plan.Expr,
 	blks []ModifyBlockMeta,
 	entries []Entry,
 ) ([]engine.Reader, error) {
@@ -1370,7 +1388,7 @@ func (tbl *txnTable) newReader(
 	if len(encodedPrimaryKey) > 0 {
 		iter = state.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
-			encodedPrimaryKey,
+			logtailreplay.Prefix(encodedPrimaryKey),
 		)
 	} else {
 		iter = state.NewRowsIter(
@@ -1396,30 +1414,21 @@ func (tbl *txnTable) newReader(
 
 	if readerNumber == 1 {
 		for i := range blks {
-			readers = append(readers, &blockMergeReader{
-				table:    tbl,
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{blks[i]},
-			})
+			readers = append(
+				readers,
+				newBlockMergeReader(
+					ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
+				),
+			)
 		}
 		return []engine.Reader{&mergeReader{readers}}, nil
 	}
 
 	if len(blks) < readerNumber-1 {
 		for i := range blks {
-			readers[i+1] = &blockMergeReader{
-				table:    tbl,
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     []ModifyBlockMeta{blks[i]},
-			}
+			readers[i+1] = newBlockMergeReader(
+				ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
+			)
 		}
 		for j := len(blks) + 1; j < readerNumber; j++ {
 			readers[j] = &emptyReader{}
@@ -1433,25 +1442,13 @@ func (tbl *txnTable) newReader(
 	}
 	for i := 1; i < readerNumber; i++ {
 		if i == readerNumber-1 {
-			readers[i] = &blockMergeReader{
-				table:    tbl,
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     blks[(i-1)*step:],
-			}
+			readers[i] = newBlockMergeReader(
+				ctx, tbl, ts, blks[(i-1)*step:], expr, fs,
+			)
 		} else {
-			readers[i] = &blockMergeReader{
-				table:    tbl,
-				fs:       fs,
-				ts:       ts,
-				ctx:      ctx,
-				tableDef: tbl.tableDef,
-				sels:     make([]int64, 0, 1024),
-				blks:     blks[(i-1)*step : i*step],
-			}
+			readers[i] = newBlockMergeReader(
+				ctx, tbl, ts, blks[(i-1)*step:i*step], expr, fs,
+			)
 		}
 	}
 
