@@ -559,21 +559,20 @@ func ForeachVectorWindow(
 }
 
 func ForeachWindowBytes(
-	vec Vector,
+	vec *movec.Vector,
 	start, length int,
 	op ItOpT[[]byte],
 	sels *roaring.Bitmap,
 ) (err error) {
 	typ := vec.GetType()
-	cnVec := vec.GetDownstreamVector()
 	if typ.IsVarlen() {
-		return ForeachWindowVarlen(cnVec, start, length, op, nil, sels)
+		return ForeachWindowVarlen(vec, start, length, op, nil, sels)
 	}
 	tsize := typ.TypeSize()
-	data := cnVec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
+	data := vec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
 	if sels == nil || sels.IsEmpty() {
 		for i := 0; i < length; i++ {
-			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(i+start), i+start); err != nil {
+			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(uint64(i+start)), i+start); err != nil {
 				break
 			}
 		}
@@ -587,7 +586,7 @@ func ForeachWindowBytes(
 				break
 			}
 			i := int(idx)
-			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(i), i); err != nil {
+			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(uint64(i)), i); err != nil {
 				break
 			}
 		}

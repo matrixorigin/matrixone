@@ -207,7 +207,7 @@ func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
+		containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil)
 	} else {
 		op = func(key []byte, isNull bool, row int) (err error) {
 			if isNull || zm.containsBytes(key) {
@@ -215,7 +215,7 @@ func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
+		containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil)
 	}
 	ok = !visibility.IsEmpty()
 	return
@@ -234,7 +234,7 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
+		containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil)
 	} else {
 		op = func(key []byte, isNull bool, _ int) (err error) {
 			if isNull || zm.containsBytes(key) {
@@ -243,7 +243,7 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
+		containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil)
 	}
 	return
 }
@@ -1114,8 +1114,9 @@ func adjustBytes(bs []byte) {
 	}
 }
 
-func BatchUpdateZM(zm ZM, vs containers.Vector) (err error) {
-	if vs.GetDownstreamVector().IsConstNull() {
+func BatchUpdateZM(zm ZM, vec *vector.Vector) (err error) {
+	length := vec.Length()
+	if vec.IsConstNull() || length == 0 {
 		return
 	}
 	op := func(v []byte, isNull bool, _ int) (err error) {
@@ -1125,7 +1126,7 @@ func BatchUpdateZM(zm ZM, vs containers.Vector) (err error) {
 		UpdateZM(zm, v)
 		return
 	}
-	containers.ForeachWindowBytes(vs, 0, vs.Length(), op, nil)
+	containers.ForeachWindowBytes(vec, 0, length, op, nil)
 	return
 }
 

@@ -539,7 +539,7 @@ func BenchmarkForeachVectorBytes(b *testing.B) {
 	b.Run("int64-bytes", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
+			ForeachWindowBytes(vec.GetDownstreamVector(), 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
 				return
 			}, nil)
 		}

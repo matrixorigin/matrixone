@@ -16,6 +16,7 @@ package indexwrapper
 
 import (
 	"context"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -46,7 +47,7 @@ func (idx *MutIndex) BatchUpsert(
 	defer func() {
 		err = TranslateError(err)
 	}()
-	if err = index.BatchUpdateZM(idx.zonemap, keys); err != nil {
+	if err = index.BatchUpdateZM(idx.zonemap, keys.GetDownstreamVector()); err != nil {
 		return
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
@@ -133,7 +134,7 @@ func (idx *MutIndex) BatchDedup(
 		}
 		return nil
 	}
-	if err = containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
+	if err = containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			return
 		} else {

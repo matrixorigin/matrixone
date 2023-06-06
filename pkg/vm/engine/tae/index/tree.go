@@ -82,7 +82,7 @@ func (art *simpleARTMap) BatchInsert(
 		startRow++
 		return nil
 	}
-	err = containers.ForeachWindowBytes(keys, offset, length, op, nil)
+	err = containers.ForeachWindowBytes(keys.GetDownstreamVector(), offset, length, op, nil)
 	return
 }
 
