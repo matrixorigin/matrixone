@@ -169,7 +169,7 @@ func (d *deletableSegBuilder) finish() []*catalog.SegmentEntry {
 	copy(ret[:len(d.segCandids)], d.segCandids)
 	copy(ret[len(d.segCandids):], d.nsegCandids)
 	if cnt := len(d.nsegCandids); cnt != 0 {
-		logutil.Debug("Mergeblocks deletable nseg", zap.Int("cnt", cnt))
+		logutil.Info("Mergeblocks deletable nseg", zap.Int("cnt", cnt))
 	}
 	return ret
 }
@@ -207,7 +207,7 @@ func (ml *mergeLimiter) canMerge(tid uint64, totalRow int, blks int) bool {
 		return false
 	}
 	if totalRow > constMergeRightNow {
-		logutil.Debugf("Mergeblocks %d merge right now: %d rows %d blks", tid, totalRow, blks)
+		logutil.Infof("Mergeblocks %d merge right now: %d rows %d blks", tid, totalRow, blks)
 		delete(ml.stats, tid)
 		return true
 	}
@@ -225,7 +225,7 @@ func (ml *mergeLimiter) canMerge(tid uint64, totalRow int, blks int) bool {
 		// a lot of things happened in the past scan interval...
 		st.ttl = ml.ttl(totalRow)
 		st.lastTotalRow = totalRow
-		logutil.Debugf("Mergeblocks delta %d on table %d, resched to %v", d, tid, st.ttl)
+		logutil.Infof("Mergeblocks delta %d on table %d, resched to %v", d, tid, st.ttl)
 		return false
 	} else {
 		// this table is quiet finally, check ttl
@@ -322,7 +322,7 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 			logutil.Infof("[Mergeblocks] Schedule del seg errinfo=%v", err)
 			return
 		}
-		logutil.Debugf("[Mergeblocks] Scheduled | del %d seg", len(mergedSegs))
+		logutil.Infof("[Mergeblocks] Scheduled | del %d seg", len(mergedSegs))
 		return
 	}
 
@@ -345,7 +345,7 @@ func (s *MergeTaskBuilder) trySchedMergeTask() {
 			s.limiter.IncActiveCount()
 			task.AddObserver(s.limiter)
 		}
-		logutil.Debugf("[Mergeblocks] Scheduled | Scopes=[%d],[%d]%s",
+		logutil.Infof("[Mergeblocks] Scheduled | Scopes=[%d],[%d]%s",
 			len(segScopes), len(scopes),
 			common.BlockIDArraryString(scopes[:constMergeMinBlks]))
 	}
@@ -367,7 +367,7 @@ func (s *MergeTaskBuilder) PreExecute() error {
 
 	// print stats for every 50s (default)
 	if s.runCnt%10 == 0 {
-		logutil.Debugf("Mergeblocks stats: %s", s.limiter.String())
+		logutil.Infof("Mergeblocks stats: %s", s.limiter.String())
 	}
 
 	if s.runCnt%5 == 0 {
@@ -376,7 +376,7 @@ func (s *MergeTaskBuilder) PreExecute() error {
 			logutil.Infof("Mergeblocks available mem: %dg", stats.Available/(1<<30))
 			if limit := int32(stats.Available / const4GBytes); limit != s.limiter.concurrentMergeLimit && limit > 1 {
 				s.limiter.concurrentMergeLimit = limit
-				logutil.Debugf("Mergeblocks set concurrency limit %d", limit)
+				logutil.Infof("Mergeblocks set concurrency limit %d", limit)
 			}
 		}
 	}

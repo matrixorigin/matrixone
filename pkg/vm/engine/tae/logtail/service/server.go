@@ -386,7 +386,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 				return
 			}
 
-			logger.Debug("handle subscription asynchronously", zap.Any("table", sub.req.Table))
+			logger.Info("handle subscription asynchronously", zap.Any("table", sub.req.Table))
 
 			subscriptionFunc := func(sub subscription) {
 				sendCtx, cancel := context.WithTimeout(ctx, sub.timeout)

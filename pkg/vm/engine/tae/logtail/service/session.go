@@ -219,7 +219,7 @@ func NewSession(
 		heartbeatTimer:    time.NewTimer(heartbeatInterval),
 	}
 
-	ss.logger.Debug("initialize new session for morpc stream")
+	ss.logger.Info("initialize new session for morpc stream")
 
 	sender := func() {
 		defer ss.wg.Done()
@@ -232,7 +232,7 @@ func NewSession(
 
 			case msg, ok := <-ss.sendChan:
 				if !ok {
-					ss.logger.Debug("session sender channel closed")
+					ss.logger.Info("session sender channel closed")
 					return
 				}
 
@@ -269,7 +269,7 @@ func NewSession(
 
 // Drop closes sender goroutine.
 func (ss *Session) PostClean() {
-	ss.logger.Debug("clean session for morpc stream")
+	ss.logger.Info("clean session for morpc stream")
 
 	// close morpc stream, maybe verbose
 	if err := ss.stream.Close(); err != nil {
@@ -331,7 +331,7 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 		if state, ok := ss.tables[t.id]; ok && state == TableSubscribed {
 			qualified = append(qualified, t.tail)
 		} else {
-			ss.logger.Debug("table not subscribed, filter out",
+			ss.logger.Info("table not subscribed, filter out",
 				zap.String("id", string(t.id)),
 				zap.String("checkpoint", t.tail.CkpLocation),
 			)
@@ -404,7 +404,7 @@ func (ss *Session) SendErrorResponse(
 func (ss *Session) SendSubscriptionResponse(
 	sendCtx context.Context, tail logtail.TableLogtail,
 ) error {
-	ss.logger.Debug("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
+	ss.logger.Info("send subscription response", zap.Any("table", tail.Table), zap.String("To", tail.Ts.String()))
 
 	resp := ss.responses.Acquire()
 	resp.Response = newSubscritpionResponse(tail)
@@ -419,7 +419,7 @@ func (ss *Session) SendSubscriptionResponse(
 func (ss *Session) SendUnsubscriptionResponse(
 	sendCtx context.Context, table api.TableID,
 ) error {
-	ss.logger.Debug("send unsubscription response", zap.Any("table", table))
+	ss.logger.Info("send unsubscription response", zap.Any("table", table))
 
 	resp := ss.responses.Acquire()
 	resp.Response = newUnsubscriptionResponse(table)

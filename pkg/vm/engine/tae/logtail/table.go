@@ -197,7 +197,7 @@ func (table *TxnTable) ForeachRowInBetween(
 			minTs = blk.bornTS
 			return false
 		})
-		logutil.Debug("[logtail] fetch with too small ts", zap.String("ts", from.ToString()), zap.String("minTs", minTs.ToString()))
+		logutil.Info("[logtail] fetch with too small ts", zap.String("ts", from.ToString()), zap.String("minTs", minTs.ToString()))
 	}
 	snapshot.Ascend(pivot, func(blk BlockT) bool {
 		if blk.bornTS.Greater(to) {

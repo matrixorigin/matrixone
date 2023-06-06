@@ -156,7 +156,7 @@ func (r *runner) ForceIncrementalCheckpoint(end types.TS) error {
 		return err
 	}
 	entry.SetState(ST_Finished)
-	logutil.Debugf("%s is done, takes %s", entry.String(), time.Since(now))
+	logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
 	return nil
 }
 

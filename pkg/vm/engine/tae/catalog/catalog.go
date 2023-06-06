@@ -140,7 +140,7 @@ func (catalog *Catalog) InitSystemDB() {
 	}
 }
 func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
-	logutil.Debugf("GC Catalog %v", ts.ToString())
+	logutil.Infof("GC Catalog %v", ts.ToString())
 	processor := LoopProcessor{}
 	processor.DatabaseFn = func(d *DBEntry) error {
 		d.RLock()

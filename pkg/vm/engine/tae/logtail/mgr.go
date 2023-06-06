@@ -186,7 +186,7 @@ func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) {
 	}
 	mgr.truncated = ts
 	cnt := mgr.table.TruncateByTimeStamp(ts)
-	logutil.Debug("[logtail] GC", zap.String("ts", ts.ToString()), zap.Int("deleted", cnt))
+	logutil.Info("[logtail] GC", zap.String("ts", ts.ToString()), zap.Int("deleted", cnt))
 }
 
 func (mgr *Manager) GetTableOperator(
