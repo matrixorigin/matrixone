@@ -24,14 +24,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 type S3Writer struct {
@@ -73,7 +76,8 @@ const (
 	// trigger write s3
 	WriteS3Threshold uint64 = 64 * mpool.MB
 
-	TagS3Size uint64 = 10 * mpool.MB
+	TagS3Size            uint64 = 10 * mpool.MB
+	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
 )
 
 func (w *S3Writer) Free(proc *process.Process) {
@@ -249,7 +253,21 @@ func (w *S3Writer) Output(proc *process.Process) error {
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
-	if w.batSize >= TagS3Size {
+	var S3SizeThreshold = TagS3SizeForMOLogger
+
+	if proc != nil && proc.Ctx != nil {
+		isMoLogger, ok := proc.Ctx.Value(defines.IsMoLogger{}).(bool)
+		if ok && isMoLogger {
+			logutil.Info("WriteS3CacheBatch proc", zap.Bool("isMoLogger", isMoLogger))
+			S3SizeThreshold = TagS3SizeForMOLogger
+		}
+	}
+
+	if proc.GetSessionInfo() != nil && proc.GetSessionInfo().GetUser() == db_holder.MOLoggerUser {
+		logutil.Info("WriteS3CacheBatch", zap.String("user", proc.GetSessionInfo().GetUser()))
+		S3SizeThreshold = TagS3SizeForMOLogger
+	}
+	if w.batSize >= S3SizeThreshold {
 		if err := w.SortAndFlush(proc); err != nil {
 			return err
 		}

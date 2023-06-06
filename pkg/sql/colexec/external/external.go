@@ -288,15 +288,6 @@ func FilterFileList(ctx context.Context, node *plan.Node, proc *process.Process,
 	return filterByAccountAndFilename(ctx, node, proc, fileList, fileSize)
 }
 
-func IsSysTable(dbName string, tableName string) bool {
-	if dbName == "system" {
-		return tableName == "statement_info" || tableName == "rawlog"
-	} else if dbName == "system_metrics" {
-		return tableName == "metric"
-	}
-	return false
-}
-
 func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error) {
 	if param.Extern.Local {
 		return io.NopCloser(proc.LoadLocalReader), nil

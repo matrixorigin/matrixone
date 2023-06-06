@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/google/uuid"
@@ -194,10 +195,16 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(errorCol, table.StringField(fmt.Sprintf("%s", s.Error)))
 	}
 	execPlan, stats := s.ExecPlan2Json(ctx)
-	row.SetColumnVal(execPlanCol, table.StringField(execPlan))
+	if GetTracerProvider().disableSqlWriter {
+		// Be careful, this two string is unsafe, will be free after Free
+		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
+		row.SetColumnVal(statsCol, table.StringField(util.UnsafeBytesToString(stats)))
+	} else {
+		row.SetColumnVal(execPlanCol, table.BytesField(execPlan))
+		row.SetColumnVal(statsCol, table.BytesField(stats))
+	}
 	row.SetColumnVal(rowsReadCol, table.Int64Field(s.RowsRead))
 	row.SetColumnVal(bytesScanCol, table.Int64Field(s.BytesScan))
-	row.SetColumnVal(statsCol, table.StringField(stats))
 	row.SetColumnVal(stmtTypeCol, table.StringField(s.StatementType))
 	row.SetColumnVal(queryTypeCol, table.StringField(s.QueryType))
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
@@ -207,15 +214,15 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 // and set RowsRead, BytesScan from ExecPlan
 //
 // please used in s.mux.Lock()
-func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
+func (s *StatementInfo) ExecPlan2Json(ctx context.Context) ([]byte, []byte) {
 	var stats Statistic
 
 	if s.jsonByte != nil {
 		goto endL
 	} else if s.ExecPlan == nil {
 		uuidStr := uuid.UUID(s.StatementID).String()
-		return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr),
-			`{"code":200,"message":"NO ExecPlan"}`
+		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)),
+			[]byte(`{"code":200,"message":"NO ExecPlan"}`)
 	} else {
 		s.jsonByte, s.statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
 		s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
@@ -228,7 +235,7 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
 		s.statsJsonByte = []byte("{}")
 	}
 endL:
-	return util.UnsafeBytesToString(s.jsonByte), util.UnsafeBytesToString(s.statsJsonByte)
+	return s.jsonByte, s.statsJsonByte
 }
 
 func GetLongQueryTime() time.Duration {
@@ -319,5 +326,17 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
+	// Filter out the MO_LOGGER SQL statements
+	if s.User == db_holder.MOLoggerUser {
+		return nil
+	}
+	// Filter out part of the internal SQL statements
+	// Todo: review how to aggregate the internal SQL statements logging
+	if s.User == "internal" {
+		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
+			return nil
+		}
+	}
+
 	return GetGlobalBatchProcessor().Collect(ctx, s)
 }

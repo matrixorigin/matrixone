@@ -458,7 +458,7 @@ func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.M
 	ses.upstream = upstream
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := motrace.StatementFromContext(reqCtx); stmt != nil {
-		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
+		logutil.Debugf("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(reqCtx)
 	ses.SetRequestContext(cancelBackgroundCtx)
@@ -1417,7 +1417,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	}
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
-	logInfo(sessionInfo, tenant.String())
+	logInfo(ses, sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)
 }
@@ -1729,7 +1729,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 			}
 		}
 	}
-	logInfo(bh.ses.GetDebugString(), "query trace(backgroundExecSql)",
+	logDebug(bh.mce.GetSession(), bh.ses.GetDebugString(), "query trace(backgroundExecSql)",
 		logutil.ConnectionIdField(bh.ses.GetConnectionID()),
 		logutil.QueryField(SubStringFromBegin(sql, int(bh.ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
 	err = bh.mce.GetDoQueryFunc()(ctx, sql)
