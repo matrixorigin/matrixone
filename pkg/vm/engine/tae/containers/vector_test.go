@@ -487,7 +487,7 @@ func TestForeachWindowBytes(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowVarlen(vec1, 0, vec1.Length(), op, nil, nil)
+	ForeachWindowVarlen(vec1.GetDownstreamVector(), 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 

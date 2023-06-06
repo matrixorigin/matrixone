@@ -241,6 +241,16 @@ func (v *Vector) SetClass(class int) {
 	v.class = class
 }
 
+func (v *Vector) IsNull(i uint64) bool {
+	if v.IsConstNull() {
+		return true
+	}
+	if v.IsConst() {
+		return false
+	}
+	return v.nsp.Contains(i)
+}
+
 func DecodeFixedCol[T types.FixedSizeT](v *Vector) []T {
 	sz := int(v.typ.TypeSize())
 

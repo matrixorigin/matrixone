@@ -185,7 +185,7 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 			}
 		}()
 		return containers.ForeachWindowVarlen(
-			vec,
+			vec.GetDownstreamVector(),
 			0,
 			vec.Length(),
 			func(v2 []byte, _ bool, row int) (err error) {

@@ -280,7 +280,7 @@ func ForeachVectorWindow(
 			op = op1.(func([]byte, bool, int) error)
 		}
 		return ForeachWindowVarlen(
-			vec,
+			vec.GetDownstreamVector(),
 			start,
 			length,
 			op,
@@ -564,10 +564,10 @@ func ForeachWindowBytes(
 	sels *roaring.Bitmap,
 ) (err error) {
 	typ := vec.GetType()
-	if typ.IsVarlen() {
-		return ForeachWindowVarlen(vec, start, length, op, nil, sels)
-	}
 	cnVec := vec.GetDownstreamVector()
+	if typ.IsVarlen() {
+		return ForeachWindowVarlen(cnVec, start, length, op, nil, sels)
+	}
 	tsize := typ.TypeSize()
 	data := cnVec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
 	if sels == nil || sels.IsEmpty() {
@@ -665,20 +665,19 @@ func ForeachWindowFixed[T any](
 }
 
 func ForeachWindowVarlen(
-	vec Vector,
+	vec *movec.Vector,
 	start, length int,
 	op ItOpT[[]byte],
 	opAny ItOp,
 	sels *roaring.Bitmap,
 ) (err error) {
-	src := vec.(*vectorWrapper)
-	if src.downstreamVector.IsConst() {
+	if vec.IsConst() {
 		var v []byte
 		isnull := false
-		if src.downstreamVector.IsConstNull() {
+		if vec.IsConstNull() {
 			isnull = true
 		} else {
-			v = src.downstreamVector.GetBytesAt(0)
+			v = vec.GetBytesAt(0)
 		}
 		for i := 0; i < length; i++ {
 			if op != nil {
@@ -694,17 +693,17 @@ func ForeachWindowVarlen(
 		}
 		return
 	}
-	slice, area := movec.MustVarlenaRawData(src.downstreamVector)
+	slice, area := movec.MustVarlenaRawData(vec)
 	slice = slice[start : start+length]
 	if sels == nil || sels.IsEmpty() {
 		for i, v := range slice {
 			if op != nil {
-				if err = op(v.GetByteSlice(area), src.IsNull(i+start), i+start); err != nil {
+				if err = op(v.GetByteSlice(area), vec.IsNull(uint64(i+start)), i+start); err != nil {
 					break
 				}
 			}
 			if opAny != nil {
-				if err = opAny(v.GetByteSlice(area), src.IsNull(i+start), i+start); err != nil {
+				if err = opAny(v.GetByteSlice(area), vec.IsNull(uint64(i+start)), i+start); err != nil {
 					break
 				}
 			}
@@ -720,12 +719,12 @@ func ForeachWindowVarlen(
 			}
 			v := slice[int(idx)-start]
 			if op != nil {
-				if err = op(v.GetByteSlice(area), src.IsNull(int(idx)), int(idx)); err != nil {
+				if err = op(v.GetByteSlice(area), vec.IsNull(uint64(idx)), int(idx)); err != nil {
 					break
 				}
 			}
 			if opAny != nil {
-				if err = opAny(v.GetByteSlice(area), src.IsNull(int(idx)), int(idx)); err != nil {
+				if err = opAny(v.GetByteSlice(area), vec.IsNull(uint64(idx)), int(idx)); err != nil {
 					break
 				}
 			}
