@@ -43,11 +43,11 @@ func Call(_ int, proc *process.Process, arg any, _ bool, _ bool) (bool, error) {
 	select {
 	case <-proc.Ctx.Done():
 		proc.PutBatch(bat)
-		logutil.Infof("proc context done during connector send")
+		logutil.Warn("proc context done during connector send")
 		return true, nil
 	case <-reg.Ctx.Done():
 		proc.PutBatch(bat)
-		logutil.Infof("reg.Ctx done during connector send")
+		logutil.Warn("reg.Ctx done during connector send")
 		return true, nil
 	case reg.Ch <- bat:
 		proc.SetInputBatch(nil)

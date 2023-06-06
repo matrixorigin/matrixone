@@ -350,7 +350,7 @@ func (tbl *txnTable) GetMetadataScanInfoBytes(ctx context.Context, name string) 
 
 func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*catalog.MetadataScanInfo, error) {
 	if len(tbl.blockInfos) == 0 {
-		logutil.Infof("meta info is nil")
+		logutil.Debugf("meta info is nil")
 		return nil, nil
 	}
 

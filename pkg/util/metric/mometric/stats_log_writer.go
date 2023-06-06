@@ -16,11 +16,12 @@ package mometric
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
 type StatsLogWriter struct {
@@ -83,6 +84,8 @@ func (e *StatsLogWriter) Stop(_ bool) (<-chan struct{}, bool) {
 func (e *StatsLogWriter) gatherAndWrite() {
 	statsFamilies := e.registry.ExportLog()
 	for statsFName, statsFamily := range statsFamilies {
-		e.logger.Info(statsFName+" stats ", statsFamily...)
+		if len(statsFamily) > 1 {
+			e.logger.Info(statsFName, statsFamily...)
+		}
 	}
 }

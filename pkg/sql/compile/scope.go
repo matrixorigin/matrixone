@@ -183,7 +183,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		logutil.Infof("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
+		logutil.Debugf("---->ParallelRun---> %s", DebugShowScopes([]*Scope{s}))
 	}
 	//fmt.Printf("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
 
