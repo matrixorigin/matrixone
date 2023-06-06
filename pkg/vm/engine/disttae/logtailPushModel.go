@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
+	"go.uber.org/zap"
 )
 
 const (
@@ -308,6 +310,26 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				}
 
 				response := resp.response
+				ok := false
+				if response.LogtailResponse.GetUpdateResponse() != nil {
+					for _, v := range response.LogtailResponse.GetUpdateResponse().LogtailList {
+						if v.Table.TbId < 4 {
+							ok = true
+							break
+						}
+					}
+				} else if response.LogtailResponse.GetSubscribeResponse() != nil {
+					if response.LogtailResponse.GetSubscribeResponse().Logtail.Table.TbId < 4 {
+						ok = true
+					}
+				}
+				if ok {
+					logutil.Info(">>>> TODO:delete, receive logtail response",
+						zap.String("client", fmt.Sprintf("%p", client)),
+						zap.String("response", response.String()),
+					)
+				}
+
 				// consume subscribe response
 				if sResponse := response.GetSubscribeResponse(); sResponse != nil {
 					if err := distributeSubscribeResponse(
