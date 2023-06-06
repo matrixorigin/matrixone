@@ -411,8 +411,8 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	for {
 		messages, stopped = rb.fetch(ctx, messages, rb.options.batchSendSize)
 		if len(messages) > 0 {
-			written := 0
 			writeTimeout := time.Duration(0)
+			written := messages[:0]
 			for _, f := range messages {
 				id := f.getSendMessageID()
 				if stopped {
@@ -422,26 +422,24 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 				if v := rb.doWrite(ctx, id, f); v > 0 {
 					writeTimeout += v
-					written++
+					written = append(written, f)
 				}
 			}
 
-			if written > 0 {
+			if len(written) > 0 {
 				if err := rb.conn.Flush(writeTimeout); err != nil {
-					for _, f := range messages {
-						if rb.options.filter(f.send.Message, rb.remote) {
-							id := f.getSendMessageID()
-							rb.logger.Error("write request failed",
-								zap.Uint64("request-id", id),
-								zap.Error(err))
-							f.messageSended(err)
-						}
+					for _, f := range written {
+						id := f.getSendMessageID()
+						rb.logger.Error("write request failed",
+							zap.Uint64("request-id", id),
+							zap.Error(err))
+						f.messageSended(err)
+					}
+				} else {
+					for _, f := range written {
+						f.messageSended(nil)
 					}
 				}
-			}
-
-			for _, m := range messages {
-				m.messageSended(nil)
 			}
 		}
 		if stopped {
