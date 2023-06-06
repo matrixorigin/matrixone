@@ -1696,6 +1696,7 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 		return moerr.NewInternalError(ctx, "executeStmtInSameSession can not run non select statement in the same session")
 	}
 
+	prevDB := ses.GetDatabaseName()
 	//1. replace output callback by batchFetcher.
 	// the result batch will be saved in the session.
 	// you can get the result batch by calling GetResultBatches()
@@ -1704,6 +1705,8 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 	// Any response yielded during running query will be dropped by the FakeProtocol.
 	// The client will not receive any response from the FakeProtocol.
 	prevProto := ses.ReplaceProtocol(&FakeProtocol{})
+	// inherit database
+	ses.SetDatabaseName(prevDB)
 	//restore normal protocol and output callback
 	defer func() {
 		ses.SetOutputCallback(getDataFromPipeline)
@@ -1711,6 +1714,7 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 	}()
 	logDebug(ses, ses.GetDebugString(), "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
+	//3. execute the statement
 	return mce.GetDoQueryFunc()(ctx, &UserInput{stmt: stmt})
 }
 
