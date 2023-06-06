@@ -391,11 +391,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 }
 
 func (ses *Session) Close() {
-	if ses.isNotBackgroundSession {
-		mp := ses.GetMemPool()
-		mpool.DeleteMPool(mp)
-		ses.SetMemPool(nil)
-	}
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
@@ -431,6 +426,13 @@ func (ses *Session) Close() {
 	ses.seqCurValues = nil
 	ses.seqLastValue = ""
 	ses.sqlHelper = nil
+	//  The mpool cleanup must be placed at the end,
+	// and you must wait for all resources to be cleaned up before you can delete the mpool
+	if ses.isNotBackgroundSession {
+		mp := ses.GetMemPool()
+		mpool.DeleteMPool(mp)
+		ses.SetMemPool(nil)
+	}
 }
 
 // BackgroundSession executing the sql in background
@@ -456,7 +458,7 @@ func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.M
 	ses.upstream = upstream
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := motrace.StatementFromContext(reqCtx); stmt != nil {
-		logutil.Infof("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
+		logutil.Debugf("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(reqCtx)
 	ses.SetRequestContext(cancelBackgroundCtx)
@@ -1415,7 +1417,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	}
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
-	logInfo(sessionInfo, tenant.String())
+	logInfo(ses, sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)
 }
@@ -1727,7 +1729,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 			}
 		}
 	}
-	logInfo(bh.ses.GetDebugString(), "query trace(backgroundExecSql)",
+	logDebug(bh.mce.GetSession(), bh.ses.GetDebugString(), "query trace(backgroundExecSql)",
 		logutil.ConnectionIdField(bh.ses.GetConnectionID()),
 		logutil.QueryField(SubStringFromBegin(sql, int(bh.ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
 	err = bh.mce.GetDoQueryFunc()(ctx, sql)
@@ -1821,4 +1823,64 @@ func (ses *Session) getLastCommitTS() timestamp.Timestamp {
 // getCNLabels returns requested CN labels.
 func (ses *Session) getCNLabels() map[string]string {
 	return ses.requestLabel
+}
+
+// getSystemVariableValue get the system vaiables value from the mo_mysql_compatibility_mode table
+func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, error) {
+	var sql string
+	var err error
+	var erArray []ExecResult
+	var accountId uint32
+	var variableValue string
+	var val interface{}
+
+	ctx := ses.GetRequestContext()
+
+	// check the variable name isValid or not
+	_, err = ses.GetGlobalVar(varName)
+	if err != nil {
+		return nil, err
+	}
+
+	tenantInfo := ses.GetTenantInfo()
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return nil, err
+	}
+
+	accountId = tenantInfo.GetTenantID()
+	sql = getSqlForGetSystemVariableValueWithAccount(uint64(accountId), varName)
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		variableValue, err = erArray[0].GetString(ctx, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		if sv, ok := gSysVarsDefs[varName]; ok {
+			val, err = sv.GetType().ConvertFromString(variableValue)
+			if err != nil {
+				return nil, err
+			}
+			return val, nil
+		}
+	}
+
+	return nil, moerr.NewInternalError(ctx, "can not resolve global system variable %s", varName)
 }

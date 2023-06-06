@@ -2186,6 +2186,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			dbName := midNode.ObjRef.SchemaName
 			tableName := midNode.TableDef.Name
 			currentAccountID := builder.compCtx.GetAccountId()
+			acctName := builder.compCtx.GetUserName()
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
@@ -2196,6 +2197,22 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_SYSTEM_METRICS && tableName == catalog.MO_METRIC {
+					motablesFilter := util.BuildSysMetricFilter(acctName)
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
+					motablesFilter := util.BuildSysStatementInfoFilter(acctName)
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
 					if err != nil {
 						return 0, err
 					}

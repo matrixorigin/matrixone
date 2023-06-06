@@ -778,6 +778,31 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 
 var ForceCastExpr = forceCastExpr
 
+func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
+	if targetType.Typ.Id == 0 {
+		return expr, nil
+	}
+	t1 := makeTypeByPlan2Expr(expr)
+	if t1.Eq(t2) {
+		return expr, nil
+	}
+
+	targetType.Typ.NotNullable = expr.Typ.NotNullable
+	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
+				Args: []*Expr{expr, targetType},
+			},
+		},
+		Typ: targetType.Typ,
+	}, nil
+}
+
 func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
@@ -836,6 +861,15 @@ func buildValueScan(
 
 	for i, colName := range updateColumns {
 		col := tableDef.Cols[colToIdx[colName]]
+		colTyp := makeTypeByPlan2Type(col.Typ)
+		targetTyp := &plan.Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{
+					Typ: col.Typ,
+				},
+			},
+		}
 		var defExpr *Expr
 		rows := make([]*Expr, len(slt.Rows))
 		if isAllDefault {
@@ -843,7 +877,7 @@ func buildValueScan(
 			if err != nil {
 				return err
 			}
-			defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+			defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
 			if err != nil {
 				return err
 			}
@@ -864,7 +898,7 @@ func buildValueScan(
 						return err
 					}
 				}
-				defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
 				if err != nil {
 					return err
 				}

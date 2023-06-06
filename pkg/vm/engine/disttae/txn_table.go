@@ -350,7 +350,7 @@ func (tbl *txnTable) GetMetadataScanInfoBytes(ctx context.Context, name string) 
 
 func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*catalog.MetadataScanInfo, error) {
 	if len(tbl.blockInfos) == 0 {
-		logutil.Infof("meta info is nil")
+		logutil.Debugf("meta info is nil")
 		return nil, nil
 	}
 
@@ -1230,17 +1230,39 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
 
 	var encodedPrimaryKey []byte
-	if tbl.primaryIdx >= 0 && expr != nil {
-		pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
-		ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
-		if ok {
-			var packer *types.Packer
-			put := tbl.db.txn.engine.packerPool.Get(&packer)
-			defer put.Put()
-			encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+	pk := tbl.tableDef.Pkey
+	if pk != nil && expr != nil {
+		// TODO: workaround for composite primary key
+		// right now for composite primary key, the filter expr will not be pushed down
+		// here we try to serialize the composite primary key
+		if pk.CompPkeyCol != nil {
+			pkVals := make([]*plan.Expr_C, len(pk.Names))
+			getCompositPKVals(expr, pk.Names, pkVals)
+			cnt := getValidCompositePKCnt(pkVals)
+			if cnt != 0 {
+				var packer *types.Packer
+				put := tbl.db.txn.engine.packerPool.Get(&packer)
+				for i := 0; i < cnt; i++ {
+					serialTupleByConstExpr(pkVals[i], packer)
+				}
+				v := packer.Bytes()
+				packer.Reset()
+				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+				// TODO: hack: remove the last comma, need to fix this in the future
+				encodedPrimaryKey = encodedPrimaryKey[0 : len(encodedPrimaryKey)-1]
+				put.Put()
+			}
+		} else {
+			pkColumn := tbl.tableDef.Cols[tbl.primaryIdx]
+			ok, v := getPkValueByExpr(expr, pkColumn.Name, types.T(pkColumn.Typ.Id))
+			if ok {
+				var packer *types.Packer
+				put := tbl.db.txn.engine.packerPool.Get(&packer)
+				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+				put.Put()
+			}
 		}
 	}
-
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 
@@ -1366,7 +1388,7 @@ func (tbl *txnTable) newReader(
 	if len(encodedPrimaryKey) > 0 {
 		iter = state.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
-			encodedPrimaryKey,
+			logtailreplay.Prefix(encodedPrimaryKey),
 		)
 	} else {
 		iter = state.NewRowsIter(

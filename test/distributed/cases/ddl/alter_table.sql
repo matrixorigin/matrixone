@@ -224,12 +224,10 @@ alter table t6 add column d int;
 drop table t6;
 drop table t5;
 
--- @bvt:issue#9719
 create table t5(a tinyint, b smallint, primary key(a))partition by hash(a) partitions 4;
 alter table t5 add column c int;
 alter table t5 drop column a;
 drop table t5;
--- @bvt:issue
 
 create table t5(a int, b int) cluster by a;
 alter table t5 add column c int;
