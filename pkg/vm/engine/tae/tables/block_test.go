@@ -64,7 +64,7 @@ func TestGetActiveRow(t *testing.T) {
 	vec.Append(int8(1), false)
 	vec.Append(int8(1), false)
 	idx := indexwrapper.NewMutIndex(types.T_int8.ToType())
-	err := idx.BatchUpsert(vec, 0)
+	err := idx.BatchUpsert(vec.GetDownstreamVector(), 0)
 	assert.NoError(t, err)
 	blk.node.Load().MustMNode().pkIndex = idx
 

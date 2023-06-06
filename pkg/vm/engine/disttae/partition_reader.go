@@ -189,6 +189,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				// add rowId col for rbat
 				lens := rbat.Length()
 				vec := vector.NewVec(types.T_Rowid.ToType())
+				vec.PreExtend(lens, p.procMPool)
 				for i := 0; i < lens; i++ {
 					if err := vector.AppendFixed(vec, *objectio.NewRowid(blkid, uint32(i)), false,
 						p.procMPool); err != nil {

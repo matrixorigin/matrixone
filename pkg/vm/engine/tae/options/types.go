@@ -82,4 +82,6 @@ type Options struct {
 	Shard     metadata.DNShard
 	LogStoreT LogstoreType
 	Ctx       context.Context
+	// MaxMessageSize is the size of max message which is sent to log-service.
+	MaxMessageSize uint64
 }
