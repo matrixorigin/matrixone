@@ -71,6 +71,8 @@ func handleRead[
 		preq PReq,
 		presp PResp,
 	) (
+		// for logtail
+		cb func(),
 		err error,
 	),
 ) (
@@ -93,7 +95,10 @@ func handleRead[
 		}
 	}()
 
-	err = fn(ctx, txnMeta, preq, presp)
+	cb, err := fn(ctx, txnMeta, preq, presp)
+	if cb != nil {
+		defer cb()
+	}
 	if err != nil {
 		return nil, err
 	}
