@@ -692,13 +692,14 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &right.Argument{
-		LeftTypes:  left_typs,
-		RightTypes: right_typs,
-		Nbucket:    Nbucket,
-		Ibucket:    Ibucket,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
+		LeftTypes:          left_typs,
+		RightTypes:         right_typs,
+		Nbucket:            Nbucket,
+		Ibucket:            Ibucket,
+		Result:             result,
+		Cond:               cond,
+		Conditions:         constructJoinConditions(conds, proc),
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 }
 
@@ -709,12 +710,13 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &rightsemi.Argument{
-		RightTypes: right_typs,
-		Nbucket:    Nbucket,
-		Ibucket:    Ibucket,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
+		RightTypes:         right_typs,
+		Nbucket:            Nbucket,
+		Ibucket:            Ibucket,
+		Result:             result,
+		Cond:               cond,
+		Conditions:         constructJoinConditions(conds, proc),
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 }
 
@@ -725,12 +727,13 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &rightanti.Argument{
-		RightTypes: right_typs,
-		Nbucket:    Nbucket,
-		Ibucket:    Ibucket,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
+		RightTypes:         right_typs,
+		Nbucket:            Nbucket,
+		Ibucket:            Ibucket,
+		Result:             result,
+		Cond:               cond,
+		Conditions:         constructJoinConditions(conds, proc),
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 }
 
@@ -1305,17 +1308,31 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 
 	case vm.Right:
 		arg := in.Arg.(*right.Argument)
-		return &hashbuild.Argument{
+		retArg := &hashbuild.Argument{
 			Ibucket:     arg.Ibucket,
 			Nbucket:     arg.Nbucket,
 			NeedHashMap: true,
 			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
+
+		if arg.RuntimeFilterSpecs != nil {
+			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
+			for _, spec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+						Expr: spec.Expr,
+						Chan: ch,
+					})
+				}
+			}
+		}
+
+		return retArg
 
 	case vm.RightSemi:
 		arg := in.Arg.(*rightsemi.Argument)
-		return &hashbuild.Argument{
+		retArg := &hashbuild.Argument{
 			Ibucket:     arg.Ibucket,
 			Nbucket:     arg.Nbucket,
 			NeedHashMap: true,
@@ -1323,15 +1340,43 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 			Conditions:  arg.Conditions[1],
 		}
 
+		if arg.RuntimeFilterSpecs != nil {
+			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
+			for _, spec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+						Expr: spec.Expr,
+						Chan: ch,
+					})
+				}
+			}
+		}
+
+		return retArg
+
 	case vm.RightAnti:
 		arg := in.Arg.(*rightanti.Argument)
-		return &hashbuild.Argument{
+		retArg := &hashbuild.Argument{
 			Ibucket:     arg.Ibucket,
 			Nbucket:     arg.Nbucket,
 			NeedHashMap: true,
 			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
+
+		if arg.RuntimeFilterSpecs != nil {
+			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
+			for _, spec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+						Expr: spec.Expr,
+						Chan: ch,
+					})
+				}
+			}
+		}
+
+		return retArg
 
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)

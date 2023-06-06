@@ -33,11 +33,15 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		builder.pushdownRuntimeFilters(childID)
 	}
 
-	if node.NodeType != plan.Node_JOIN || node.Stats.Shuffle || node.BuildOnLeft {
+	if node.NodeType != plan.Node_JOIN {
 		return
 	}
 
-	if node.JoinType != plan.Node_INNER && node.JoinType != plan.Node_LEFT && node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_SINGLE {
+	if node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_MARK {
+		return
+	}
+
+	if node.JoinType == plan.Node_ANTI && !node.BuildOnLeft {
 		return
 	}
 
