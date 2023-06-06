@@ -241,10 +241,26 @@ func NewSession(
 
 					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
 					defer cancel()
-					ss.logger.Debug(">>>> TODO:delete, send logtail response",
-						zap.String("session", ss.stream.remote),
-						zap.String("response", msg.response.String()),
-					)
+					ok := false
+					if msg.response.LogtailResponse.GetUpdateResponse() != nil {
+						for _, v := range msg.response.LogtailResponse.GetUpdateResponse().LogtailList {
+							if v.Table.TbId < 4 {
+								ok = true
+								break
+							}
+						}
+					} else if msg.response.LogtailResponse.GetSubscribeResponse() != nil {
+						if msg.response.LogtailResponse.GetSubscribeResponse().Logtail.Table.TbId < 4 {
+							ok = true
+						}
+					}
+					if ok {
+						ss.logger.Info(">>>> TODO:delete, send logtail response",
+							zap.String("session", ss.stream.remote),
+							zap.String("response", msg.response.String()),
+						)
+					}
+
 					err := ss.stream.write(ctx, msg.response)
 					if err != nil {
 						ss.logger.Error("fail to send logtail response",
