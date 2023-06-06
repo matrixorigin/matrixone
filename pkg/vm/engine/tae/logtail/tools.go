@@ -191,8 +191,7 @@ func DataChangeToLogtailBatch(src *containers.BatchWithVersion) *containers.Batc
 	return bat
 }
 
-// consume containers.Batch to construct api batch
 func containersBatchToProtoBatch(bat *containers.Batch) (*api.Batch, error) {
-	mobat := containers.CopyToCNBatch(bat)
+	mobat := containers.ToCNBatch(bat)
 	return batch.BatchToProtoBatch(mobat)
 }

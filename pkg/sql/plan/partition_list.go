@@ -77,7 +77,7 @@ func (lpb *listPartitionBuilder) build(ctx context.Context, partitionBinder *Par
 	}
 
 	partitionDef.PartitionMsg = tree.String(partitionSyntaxDef, dialect.MYSQL)
-	//tableDef.Partition = partitionDef
+	tableDef.Partition = partitionDef
 	return nil
 }
 

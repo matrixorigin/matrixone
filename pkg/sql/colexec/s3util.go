@@ -24,19 +24,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 type S3Writer struct {
 	sortIndex int
-	pk        map[string]struct{}
+	pk        int
 	idx       int16
 
 	schemaVersion uint32
@@ -73,7 +76,8 @@ const (
 	// trigger write s3
 	WriteS3Threshold uint64 = 64 * mpool.MB
 
-	TagS3Size uint64 = 10 * mpool.MB
+	TagS3Size            uint64 = 10 * mpool.MB
+	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
 )
 
 func (w *S3Writer) Free(proc *process.Process) {
@@ -102,16 +106,17 @@ func (w *S3Writer) GetMetaLocBat() *batch.Batch {
 func (w *S3Writer) SetMp(attrs []*engine.Attribute) {
 	for i := 0; i < len(attrs); i++ {
 		if attrs[i].Primary {
-			w.pk[attrs[i].Name] = struct{}{}
-		}
-		if attrs[i].Default == nil {
-			continue
+			if attrs[i].Name != catalog.FakePrimaryKeyColName {
+				w.sortIndex = i
+				w.pk = i
+			}
+			break
 		}
 	}
 }
 
 func (w *S3Writer) Init(proc *process.Process) {
-	w.pk = make(map[string]struct{})
+	w.pk = -1
 	w.ResetMetaLocBat(proc)
 }
 
@@ -122,7 +127,7 @@ func (w *S3Writer) SetSortIdx(sortIdx int) {
 func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, error) {
 	writer := &S3Writer{
 		sortIndex: -1,
-		pk:        make(map[string]struct{}),
+		pk:        -1,
 		idx:       0,
 	}
 	writer.ResetMetaLocBat(proc)
@@ -135,41 +140,29 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 		}
 	}
 
-	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-		// the serialized cpk col is located in the last of the bat.vecs
-		writer.sortIndex = len(tableDef.Cols) - 1
-	} else {
-		// Get Single Col pk index
-		for idx, colDef := range tableDef.Cols {
-			if colDef.Primary && !colDef.Hidden {
+	// Get Single Col pk index
+	for idx, colDef := range tableDef.Cols {
+		if colDef.Name == tableDef.Pkey.PkeyColName {
+			if colDef.Name != catalog.FakePrimaryKeyColName {
 				writer.sortIndex = idx
-				break
+				writer.pk = idx
 			}
+			break
 		}
-		if tableDef.ClusterBy != nil {
-			if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-				// the serialized clusterby col is located in the last of the bat.vecs
-				writer.sortIndex = len(tableDef.Cols) - 1
-			} else {
-				for idx, colDef := range tableDef.Cols {
-					if colDef.Name == tableDef.ClusterBy.Name {
-						writer.sortIndex = idx
-					}
+	}
+	if tableDef.ClusterBy != nil {
+		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+			// the serialized clusterby col is located in the last of the bat.vecs
+			writer.sortIndex = len(tableDef.Cols) - 1
+		} else {
+			for idx, colDef := range tableDef.Cols {
+				if colDef.Name == tableDef.ClusterBy.Name {
+					writer.sortIndex = idx
 				}
 			}
 		}
 	}
-	// get Primary
-	for _, def := range tableDef.Cols {
-		if def.Primary {
-			writer.pk[def.Name] = struct{}{}
-		}
-	}
 
-	// Check whether the composite primary key column is included
-	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-		writer.pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
-	}
 	return writer, nil
 }
 
@@ -180,7 +173,7 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 	for i := range writers {
 		writers[i] = &S3Writer{
 			sortIndex: -1,
-			pk:        make(map[string]struct{}),
+			pk:        -1,
 			idx:       int16(i), // This value is aligned with the partition number
 		}
 		writers[i].ResetMetaLocBat(proc)
@@ -193,41 +186,29 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 			}
 		}
 
-		if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-			// the serialized cpk col is located in the last of the bat.vecs
-			writers[i].sortIndex = len(tableDef.Cols) - 1
-		} else {
-			// Get Single Col pk index
-			for idx, colDef := range tableDef.Cols {
-				if colDef.Primary {
+		// Get Single Col pk index
+		for idx, colDef := range tableDef.Cols {
+			if colDef.Name == tableDef.Pkey.PkeyColName {
+				if colDef.Name != catalog.FakePrimaryKeyColName {
 					writers[i].sortIndex = idx
-					break
+					writers[i].pk = idx
 				}
+				break
 			}
-			if tableDef.ClusterBy != nil {
-				if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-					// the serialized clusterby col is located in the last of the bat.vecs
-					writers[i].sortIndex = len(tableDef.Cols) - 1
-				} else {
-					for idx, colDef := range tableDef.Cols {
-						if colDef.Name == tableDef.ClusterBy.Name {
-							writers[i].sortIndex = idx
-						}
+		}
+		if tableDef.ClusterBy != nil {
+			if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+				// the serialized clusterby col is located in the last of the bat.vecs
+				writers[i].sortIndex = len(tableDef.Cols) - 1
+			} else {
+				for idx, colDef := range tableDef.Cols {
+					if colDef.Name == tableDef.ClusterBy.Name {
+						writers[i].sortIndex = idx
 					}
 				}
 			}
 		}
-		// get Primary
-		for _, def := range tableDef.Cols {
-			if def.Primary {
-				writers[i].pk[def.Name] = struct{}{}
-			}
-		}
 
-		// Check whether the composite primary key column is included
-		if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
-			writers[i].pk[tableDef.Pkey.CompPkeyCol.Name] = struct{}{}
-		}
 	}
 	return writers, nil
 }
@@ -272,7 +253,21 @@ func (w *S3Writer) Output(proc *process.Process) error {
 }
 
 func (w *S3Writer) WriteS3CacheBatch(proc *process.Process) error {
-	if w.batSize >= TagS3Size {
+	var S3SizeThreshold = TagS3SizeForMOLogger
+
+	if proc != nil && proc.Ctx != nil {
+		isMoLogger, ok := proc.Ctx.Value(defines.IsMoLogger{}).(bool)
+		if ok && isMoLogger {
+			logutil.Info("WriteS3CacheBatch proc", zap.Bool("isMoLogger", isMoLogger))
+			S3SizeThreshold = TagS3SizeForMOLogger
+		}
+	}
+
+	if proc.GetSessionInfo() != nil && proc.GetSessionInfo().GetUser() == db_holder.MOLoggerUser {
+		logutil.Info("WriteS3CacheBatch", zap.String("user", proc.GetSessionInfo().GetUser()))
+		S3SizeThreshold = TagS3SizeForMOLogger
+	}
+	if w.batSize >= S3SizeThreshold {
 		if err := w.SortAndFlush(proc); err != nil {
 			return err
 		}
@@ -573,18 +568,10 @@ func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, m *mpool.
 	return bat.Shuffle(sels, m)
 }
 
-func getPrimaryKeyIdx(pk map[string]struct{}, attrs []string) (uint16, bool) {
-	for i := range attrs {
-		if _, ok := pk[attrs[i]]; ok {
-			return uint16(i), true
-		}
-	}
-	return 0, false
-}
-
 func (w *S3Writer) WriteBlock(bat *batch.Batch) error {
-	if idx, ok := getPrimaryKeyIdx(w.pk, bat.Attrs); ok {
-		w.writer.SetPrimaryKey(idx)
+	if w.pk > -1 {
+		pkIdx := uint16(w.pk)
+		w.writer.SetPrimaryKey(pkIdx)
 	}
 	_, err := w.writer.WriteBatch(bat)
 	if err != nil {

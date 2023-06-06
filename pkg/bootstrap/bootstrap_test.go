@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -29,6 +30,8 @@ import (
 )
 
 func TestBootstrap(t *testing.T) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+
 	n := 0
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		n++
@@ -48,6 +51,8 @@ func TestBootstrap(t *testing.T) {
 }
 
 func TestBootstrapAlreadyBootstrapped(t *testing.T) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+
 	n := 0
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		n++
@@ -75,6 +80,8 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 }
 
 func TestBootstrapWithWait(t *testing.T) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+
 	n := 0
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		if sql == "show databases" && n == 1 {

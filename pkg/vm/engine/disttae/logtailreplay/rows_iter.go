@@ -111,18 +111,54 @@ func (p *rowsIter) Close() error {
 
 type primaryKeyIter struct {
 	ts          types.TS
-	key         []byte
+	spec        PrimaryKeyMatchSpec
 	iter        btree.IterG[*PrimaryIndexEntry]
 	firstCalled bool
 	rows        *btree.BTreeG[RowEntry]
 	curRow      RowEntry
 }
 
-func (p *PartitionState) NewPrimaryKeyIter(ts types.TS, key []byte) *primaryKeyIter {
+type PrimaryKeyMatchSpec struct {
+	Seek  []byte
+	Match func(key []byte) bool
+}
+
+func Exact(key []byte) PrimaryKeyMatchSpec {
+	return PrimaryKeyMatchSpec{
+		Seek: key,
+		Match: func(k []byte) bool {
+			return bytes.Equal(k, key)
+		},
+	}
+}
+
+func Prefix(prefix []byte) PrimaryKeyMatchSpec {
+	return PrimaryKeyMatchSpec{
+		Seek: prefix,
+		Match: func(k []byte) bool {
+			return bytes.HasPrefix(k, prefix)
+		},
+	}
+}
+
+func MinMax(min []byte, max []byte) PrimaryKeyMatchSpec {
+	return PrimaryKeyMatchSpec{
+		Seek: min,
+		Match: func(k []byte) bool {
+			return bytes.Compare(min, k) <= 0 &&
+				bytes.Compare(k, max) <= 0
+		},
+	}
+}
+
+func (p *PartitionState) NewPrimaryKeyIter(
+	ts types.TS,
+	spec PrimaryKeyMatchSpec,
+) *primaryKeyIter {
 	iter := p.primaryIndex.Copy().Iter()
 	return &primaryKeyIter{
 		ts:   ts,
-		key:  key,
+		spec: spec,
 		iter: iter,
 		rows: p.rows.Copy(),
 	}
@@ -135,7 +171,7 @@ func (p *primaryKeyIter) Next() bool {
 
 		if !p.firstCalled {
 			if !p.iter.Seek(&PrimaryIndexEntry{
-				Bytes: p.key,
+				Bytes: p.spec.Seek,
 			}) {
 				return false
 			}
@@ -148,7 +184,7 @@ func (p *primaryKeyIter) Next() bool {
 
 		entry := p.iter.Item()
 
-		if !bytes.Equal(entry.Bytes, p.key) {
+		if !p.spec.Match(entry.Bytes) {
 			// no more
 			return false
 		}

@@ -139,9 +139,12 @@ func (c *LogtailClient) Unsubscribe(
 // 2. response for subscription: *LogtailResponse.GetSubscribeResponse() != nil
 // 3. response for unsubscription: *LogtailResponse.GetUnsubscribeResponse() != nil
 // 3. response for incremental logtail: *LogtailResponse.GetUpdateResponse() != nil
-func (c *LogtailClient) Receive() (*LogtailResponse, error) {
+func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 	recvFunc := func() (*LogtailResponseSegment, error) {
 		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+
 		case <-c.broken:
 			return nil, moerr.NewStreamClosedNoCtx()
 
