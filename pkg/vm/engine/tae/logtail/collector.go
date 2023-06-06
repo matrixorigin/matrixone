@@ -35,6 +35,7 @@ type Collector interface {
 	Run()
 	ScanInRange(from, to types.TS) (*DirtyTreeEntry, int)
 	ScanInRangePruned(from, to types.TS) *DirtyTreeEntry
+	IsCommitted(from, to types.TS) bool
 	GetAndRefreshMerged() *DirtyTreeEntry
 	Merge() *DirtyTreeEntry
 	GetMaxLSN(from, to types.TS) uint64
@@ -175,6 +176,11 @@ func (d *dirtyCollector) ScanInRange(from, to types.TS) (
 		tree:  tree,
 	}
 	return
+}
+
+func (d *dirtyCollector) IsCommitted(from, to types.TS) bool {
+	reader := d.sourcer.GetReader(from, to)
+	return reader.IsCommitted()
 }
 
 // DirtyCount returns unflushed table, segment, block count
