@@ -1697,6 +1697,10 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 	}
 
 	prevDB := ses.GetDatabaseName()
+	prevOptionBits := ses.GetOptionBits()
+	prevServerStatus := ses.GetServerStatus()
+	//autocommit = on
+	ses.setAutocommitOn()
 	//1. replace output callback by batchFetcher.
 	// the result batch will be saved in the session.
 	// you can get the result batch by calling GetResultBatches()
@@ -1709,6 +1713,8 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 	ses.SetDatabaseName(prevDB)
 	//restore normal protocol and output callback
 	defer func() {
+		ses.SetOptionBits(prevOptionBits)
+		ses.SetServerStatus(prevServerStatus)
 		ses.SetOutputCallback(getDataFromPipeline)
 		ses.ReplaceProtocol(prevProto)
 	}()
@@ -1893,53 +1899,6 @@ func (ses *Session) getCNLabels() map[string]string {
 	return ses.requestLabel
 }
 
-func (ui *UserInput) genSqlSourceType(ses *Session) {
-	sql := ui.getSql()
-	ui.sqlSourceType = nil
-	if ui.getStmt() != nil {
-		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
-		return
-	}
-	tenant := ses.GetTenantInfo()
-	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
-		if tenant != nil {
-			tenant.SetUser("")
-		}
-		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
-		return
-	}
-	flag, _, _ := isSpecialUser(tenant.User)
-	if flag {
-		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
-		return
-	}
-	for len(sql) > 0 {
-		p1 := strings.Index(sql, "/*")
-		p2 := strings.Index(sql, "*/")
-		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
-			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
-			return
-		}
-		source := strings.TrimSpace(sql[p1+2 : p2])
-		if source == cloudUserTag {
-			ui.sqlSourceType = append(ui.sqlSourceType, cloudUserSql)
-		} else if source == cloudNoUserTag {
-			ui.sqlSourceType = append(ui.sqlSourceType, cloudNoUserSql)
-		} else {
-			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
-		}
-		sql = sql[p2+2:]
-	}
-}
-
-func (ui *UserInput) getSqlSourceType(i int) string {
-	sqlType := ui.sqlSourceType[0]
-	if i < len(ui.sqlSourceType) {
-		sqlType = ui.sqlSourceType[i]
-	}
-	return sqlType
-}
-
 // getSystemVariableValue get the system vaiables value from the mo_mysql_compatibility_mode table
 func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, error) {
 	var sql string
@@ -1998,4 +1957,51 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	}
 
 	return nil, moerr.NewInternalError(ctx, "can not resolve global system variable %s", varName)
+}
+
+func (ui *UserInput) genSqlSourceType(ses *Session) {
+	sql := ui.getSql()
+	ui.sqlSourceType = nil
+	if ui.getStmt() != nil {
+		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		return
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
+		if tenant != nil {
+			tenant.SetUser("")
+		}
+		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		return
+	}
+	flag, _, _ := isSpecialUser(tenant.User)
+	if flag {
+		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		return
+	}
+	for len(sql) > 0 {
+		p1 := strings.Index(sql, "/*")
+		p2 := strings.Index(sql, "*/")
+		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
+			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
+			return
+		}
+		source := strings.TrimSpace(sql[p1+2 : p2])
+		if source == cloudUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, cloudUserSql)
+		} else if source == cloudNoUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, cloudNoUserSql)
+		} else {
+			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
+		}
+		sql = sql[p2+2:]
+	}
+}
+
+func (ui *UserInput) getSqlSourceType(i int) string {
+	sqlType := ui.sqlSourceType[0]
+	if i < len(ui.sqlSourceType) {
+		sqlType = ui.sqlSourceType[i]
+	}
+	return sqlType
 }
