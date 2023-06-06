@@ -433,6 +433,38 @@ func (c *Compile) cnListStrategy() {
 // 	return attachedScope, nil
 // }
 
+func (c *Compile) checkOtherCNAliveness() {
+	client := cnclient.GetRPCClient()
+	if client == nil {
+		return
+	}
+	i := 0
+	for _, cn := range c.cnList {
+		if isSameCN(c.addr, cn.Addr) {
+			c.cnList[i] = cn
+			i++
+			continue
+		}
+		_, _, err := net.SplitHostPort(cn.Addr)
+		if err != nil {
+			logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", cn.Addr)
+			continue
+		}
+		logutil.Debugf("ping %s start", cn.Addr)
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		err = client.Ping(ctx, cn.Addr)
+		cancel()
+		if err != nil {
+			// ping failed
+			logutil.Debugf("ping %s err %+v\n", cn.Addr, err)
+			continue
+		}
+		c.cnList[i] = cn
+		i++
+	}
+	c.cnList = c.cnList[:i]
+}
+
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
 	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
@@ -440,31 +472,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		return nil, err
 	}
 	if c.info.Typ == plan2.ExecTypeAP {
-		if client := cnclient.GetRPCClient(); client != nil {
-			i := 0
-			for _, cn := range c.cnList {
-				if cn.Addr == "" || isSameCN(c.addr, cn.Addr) {
-					continue
-				}
-				_, _, err := net.SplitHostPort(cn.Addr)
-				if err != nil {
-					logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", cn.Addr)
-					continue
-				}
-				logutil.Debugf("ping %s start", cn.Addr)
-				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-				err = client.Ping(ctx, cn.Addr)
-				cancel()
-				// ping failed
-				if err != nil {
-					logutil.Debugf("ping %s err %+v\n", cn.Addr, err)
-					continue
-				}
-				c.cnList[i] = cn
-				i++
-			}
-			c.cnList = c.cnList[:i]
-		}
+		c.checkOtherCNAliveness()
 	}
 
 	c.info.CnNumbers = len(c.cnList)
