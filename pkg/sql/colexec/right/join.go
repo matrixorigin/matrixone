@@ -127,7 +127,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 
 	if bat != nil {
 		ctr.bat = bat
-		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(bat.Length())
 		analyze.Alloc(ctr.mp.Map().Size())
