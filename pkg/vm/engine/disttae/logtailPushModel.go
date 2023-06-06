@@ -204,7 +204,7 @@ func (client *pushClient) subscribeTable(
 		if err != nil {
 			return err
 		}
-		logutil.Infof("send subscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
+		logutil.Debugf("[log-tail-push-client] send subscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
 		return nil
 	}
 }
@@ -220,7 +220,7 @@ func (client *pushClient) unsubscribeTable(
 		if err != nil {
 			return err
 		}
-		logutil.Infof("send unsubscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
+		logutil.Debugf("[log-tail-push-client] send unsubscribe tbl[db: %d, tbl: %d] request succeed", tblId.DbId, tblId.TbId)
 		return nil
 	}
 }
@@ -248,7 +248,7 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 	close(ch)
 
 	if err != nil {
-		logutil.Errorf("connect to dn log tail server failed")
+		logutil.Errorf("[log-tail-push-client] connect to dn log tail server failed")
 	}
 	return err
 }
@@ -276,17 +276,13 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			for {
 				deadline, cancel := context.WithTimeout(ctx, maxTimeToWaitServerResponse)
 				select {
-				case <-deadline.Done():
-					// max wait time is out.
-					goto cleanAndReconnect
-
-				case ch <- client.subscriber.receiveResponse():
+				case ch <- client.subscriber.receiveResponse(deadline):
 					// receive a response from log tail service.
 					cancel()
 
 				case err := <-errChan:
 					// receive an error from sub-routine to consume log.
-					logutil.ErrorField(err)
+					logutil.Errorf("[log-tail-push-client] consume log tail failed. err '%s'", err)
 					cancel()
 					goto cleanAndReconnect
 
@@ -294,19 +290,20 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					cancel()
 					isLastReconnectRoutineClean = true
 					if err != nil {
-						logutil.Errorf("connect to dn log tail service failed, reason: %s", err)
+						logutil.Errorf("[log-tail-push-client] connect to dn log tail service failed, reason: %s", err)
 						goto cleanAndReconnect
 					}
 
 					client.receivedLogTailTime.ready.Store(true)
 					client.subscriber.setReady()
+					logutil.Infof("[log-tail-push-client] connect to dn log tail service succeed.")
 					continue
 				}
 
 				resp := <-ch
 				if resp.err != nil {
-					// may rpc close error or decode error.
-					logutil.ErrorField(resp.err)
+					// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
+					logutil.Errorf("[log-tail-push-client] receive an error from log tail client, err : '%s'.", resp.err)
 					goto cleanAndReconnect
 				}
 
@@ -315,7 +312,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				if sResponse := response.GetSubscribeResponse(); sResponse != nil {
 					if err := distributeSubscribeResponse(
 						ctx, e, sResponse, receiver); err != nil {
-						logutil.ErrorField(err)
+						logutil.Errorf("[log-tail-push-client] distribute subscribe response failed, err : '%s'.", err)
 						goto cleanAndReconnect
 					}
 					continue
@@ -325,7 +322,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				if upResponse := response.GetUpdateResponse(); upResponse != nil {
 					if err := distributeUpdateResponse(
 						ctx, e, upResponse, receiver); err != nil {
-						logutil.ErrorField(err)
+						logutil.Errorf("[log-tail-push-client] distribute update response failed, err : '%s'.", err)
 						goto cleanAndReconnect
 					}
 					continue
@@ -335,7 +332,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				if unResponse := response.GetUnsubscribeResponse(); unResponse != nil {
 					if err := distributeUnSubscribeResponse(
 						ctx, e, unResponse, receiver); err != nil {
-						logutil.ErrorField(err)
+						logutil.Errorf("[log-tail-push-client] distribute unsubscribe response failed, err : '%s'.", err)
 						goto cleanAndReconnect
 					}
 					continue
@@ -343,6 +340,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			}
 
 		cleanAndReconnect:
+			logutil.Infof("[log-tail-push-client] start to clean log tail consume routines")
 			for _, r := range receiver {
 				r.close()
 			}
@@ -350,11 +348,11 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				<-reconnectErr
 			}
 
-			logutil.Infof("start to reconnect to dn log tail service")
+			logutil.Debugf("[log-tail-push-client] clean finished, start to reconnect to dn log tail service")
 			for {
 				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
 				if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
-					logutil.Error("rebuild the cn log tail client failed.")
+					logutil.Error("[log-tail-push-client] rebuild the cn log tail client failed.")
 					time.Sleep(retryReconnect)
 					continue
 				}
@@ -396,7 +394,6 @@ func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
 					}
 					if !v.isDeleting && !v.latestTime.After(shouldClean) {
 						if err := client.unsubscribeTable(ctx, api.TableID{DbId: k.db, TbId: k.tbl}); err == nil {
-							logutil.Infof("sign tbl[dbId: %d, tblId: %d] unsubscribing", k.db, k.tbl)
 							client.subscribed.m[k] = tableSubscribeStatus{
 								isDeleting: true,
 								latestTime: v.latestTime,
@@ -461,14 +458,14 @@ func (s *subscribedTable) setTableSubscribe(dbId, tblId uint64) {
 		isDeleting: false,
 		latestTime: time.Now(),
 	}
-	logutil.Infof("subscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
+	logutil.Debugf("subscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	delete(s.m, subscribeID{dbId, tblId})
-	logutil.Infof("unsubscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
+	logutil.Debugf("unsubscribe tbl[db: %d, tbl: %d] succeed", dbId, tblId)
 }
 
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
@@ -645,8 +642,8 @@ func (s *logTailSubscriber) unSubscribeTable(
 	return s.logTailClient.Unsubscribe(ctx, tblId)
 }
 
-func (s *logTailSubscriber) receiveResponse() logTailSubscriberResponse {
-	r, err := s.logTailClient.Receive()
+func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTailSubscriberResponse {
+	r, err := s.logTailClient.Receive(deadlineCtx)
 	return logTailSubscriberResponse{
 		response: r,
 		err:      err,

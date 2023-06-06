@@ -54,6 +54,7 @@ func NewTAEStorage(
 	logtailServerCfg *options.LogtailServerCfg,
 	logStore options.LogstoreType,
 	incrementalDedup bool,
+	maxMessageSize uint64,
 ) (*taeStorage, error) {
 	opt := &options.Options{
 		Clock:            rt.Clock(),
@@ -64,6 +65,7 @@ func NewTAEStorage(
 		LogStoreT:        logStore,
 		IncrementalDedup: incrementalDedup,
 		Ctx:              ctx,
+		MaxMessageSize:   maxMessageSize,
 	}
 
 	taeHandler := rpc.NewTAEHandle(dataDir, opt)

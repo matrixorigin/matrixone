@@ -177,7 +177,13 @@ func (c *Compile) run(s *Scope) error {
 	switch s.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
-		return s.Run(c)
+		err := s.Run(c)
+		if err != nil {
+			return err
+		}
+
+		c.addAffectedRows(s.affectedRows())
+		return nil
 	case Merge, MergeInsert:
 		defer c.fillAnalyzeInfo()
 		err := s.MergeRun(c)
@@ -443,12 +449,12 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 				if isSameCN(c.addr, c.cnList[i].Addr) {
 					continue
 				}
-				logutil.Infof("ping start")
+				logutil.Debugf("ping start")
 				err = client.Ping(ctx, c.cnList[i].Addr)
-				logutil.Infof("ping err %+v\n", err)
+				logutil.Debugf("ping err %+v\n", err)
 				// ping failed
 				if err != nil {
-					logutil.Infof("ping err %+v\n", err)
+					logutil.Debugf("ping err %+v\n", err)
 					c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
 					i--
 				}
@@ -2270,6 +2276,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if n.ObjRef.PubInfo != nil {
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(n.ObjRef.PubInfo.GetTenantId()))
 	}
+	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	}
 	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
 	if err != nil {
 		return nil, err
@@ -2549,12 +2558,12 @@ func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
 	parts1 := strings.Split(addr, ":")
 	if len(parts1) != 2 {
-		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
 		return true
 	}
 	parts2 := strings.Split(currentCNAddr, ":")
 	if len(parts2) != 2 {
-		logutil.Warnf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
 		return true
 	}
 	return parts1[0] == parts2[0]

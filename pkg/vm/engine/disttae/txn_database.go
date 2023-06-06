@@ -97,13 +97,13 @@ func (db *txnDatabase) getTableNameById(ctx context.Context, id uint64) string {
 	return tblName
 }
 
-func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, engine.Relation, error) {
+func (db *txnDatabase) getRelationById(ctx context.Context, id uint64) (string, engine.Relation) {
 	tblName := db.getTableNameById(ctx, id)
 	if tblName == "" {
-		return "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", id)
+		return "", nil
 	}
-	rel, err := db.Relation(ctx, tblName)
-	return tblName, rel, err
+	rel, _ := db.Relation(ctx, tblName)
+	return tblName, rel
 }
 
 func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relation, error) {

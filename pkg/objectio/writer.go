@@ -455,6 +455,9 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnu
 		}
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
 	}
+	if warned > 0 {
+		logutil.Warnf("warned %d times", warned)
+	}
 	blockMeta.BlockHeader().SetRows(uint32(rows))
 	w.blocks = append(w.blocks, block)
 	w.lastId++

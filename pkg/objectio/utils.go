@@ -211,3 +211,22 @@ func ConstructRowidColumnTo(
 	}
 	return
 }
+
+func ConstructRowidColumnToWithSels(
+	vec *vector.Vector,
+	id *Blockid,
+	sels []int32,
+	mp *mpool.MPool,
+) (err error) {
+	vec.PreExtend(len(sels), mp)
+	for _, row := range sels {
+		rid := NewRowid(id, uint32(row))
+		if err = vector.AppendFixed(vec, *rid, false, mp); err != nil {
+			break
+		}
+	}
+	if err != nil {
+		vec.Free(mp)
+	}
+	return
+}

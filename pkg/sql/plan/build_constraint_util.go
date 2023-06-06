@@ -51,6 +51,7 @@ type dmlTableInfo struct {
 	isClusterTable []bool
 	haveConstraint bool
 	isMulti        bool
+	needAggFilter  bool
 	updateKeys     []map[string]tree.Expr // This slice index correspond to tableDefs
 	oldColPosMap   []map[string]int       // origin table values to their position in derived table
 	newColPosMap   []map[string]int       // insert/update values to their position in derived table
@@ -141,10 +142,11 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 
 	// remove unused table
 	newTblInfo := &dmlTableInfo{
-		nameToIdx: make(map[string]int),
-		idToName:  make(map[uint64]string),
-		alias:     make(map[string]int),
-		isMulti:   tblInfo.isMulti,
+		nameToIdx:     make(map[string]int),
+		idToName:      make(map[uint64]string),
+		alias:         make(map[string]int),
+		isMulti:       tblInfo.isMulti,
+		needAggFilter: tblInfo.needAggFilter,
 	}
 	for alias, columns := range usedTbl {
 		idx := tblInfo.alias[alias]
@@ -188,7 +190,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 
 	if jionTbl, ok := tbl.(*tree.JoinTableExpr); ok {
-		tblInfo.isMulti = true
+		tblInfo.needAggFilter = true
 		err := setTableExprToDmlTableInfo(ctx, jionTbl.Left, tblInfo, aliasMap, withMap)
 		if err != nil {
 			return err
@@ -318,6 +320,8 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree
 			return nil, err
 		}
 	}
+	tblInfo.isMulti = len(tblInfo.objRef) > 1
+	tblInfo.needAggFilter = tblInfo.needAggFilter || tblInfo.isMulti
 
 	return tblInfo, nil
 }
@@ -774,6 +778,31 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 
 var ForceCastExpr = forceCastExpr
 
+func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
+	if targetType.Typ.Id == 0 {
+		return expr, nil
+	}
+	t1 := makeTypeByPlan2Expr(expr)
+	if t1.Eq(t2) {
+		return expr, nil
+	}
+
+	targetType.Typ.NotNullable = expr.Typ.NotNullable
+	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
+				Args: []*Expr{expr, targetType},
+			},
+		},
+		Typ: targetType.Typ,
+	}, nil
+}
+
 func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
@@ -832,6 +861,15 @@ func buildValueScan(
 
 	for i, colName := range updateColumns {
 		col := tableDef.Cols[colToIdx[colName]]
+		colTyp := makeTypeByPlan2Type(col.Typ)
+		targetTyp := &plan.Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_T{
+				T: &plan.TargetType{
+					Typ: col.Typ,
+				},
+			},
+		}
 		var defExpr *Expr
 		rows := make([]*Expr, len(slt.Rows))
 		if isAllDefault {
@@ -839,7 +877,7 @@ func buildValueScan(
 			if err != nil {
 				return err
 			}
-			defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+			defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
 			if err != nil {
 				return err
 			}
@@ -860,7 +898,7 @@ func buildValueScan(
 						return err
 					}
 				}
-				defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
 				if err != nil {
 					return err
 				}
