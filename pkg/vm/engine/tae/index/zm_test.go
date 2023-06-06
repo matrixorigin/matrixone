@@ -356,8 +356,7 @@ func BenchmarkZM(b *testing.B) {
 	})
 }
 
-// Benchmark the performance of UpdateZMForNotNullVector
-func BenchmarkUpdateZMForNotNullVector(b *testing.B) {
+func BenchmarkUpdateZMVector(b *testing.B) {
 	zm := NewZM(types.T_int64, 0)
 	dnVec := containers.MockVector(types.T_int64.ToType(), 10000, false, nil)
 	defer dnVec.Close()
@@ -366,7 +365,7 @@ func BenchmarkUpdateZMForNotNullVector(b *testing.B) {
 	b.Run("update-vector", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			UpdateZMForNotNullVector(zm, vec)
+			BatchUpdateZM(zm, vec)
 		}
 	})
 }
