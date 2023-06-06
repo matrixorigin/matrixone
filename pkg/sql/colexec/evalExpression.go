@@ -62,7 +62,7 @@ var (
 // ExpressionExecutor
 // generated from plan.Expr, can evaluate the result from vectors directly.
 type ExpressionExecutor interface {
-	// Eval should include memory reuse logic. it's results cannot be used directly.
+	// Eval include memory reuse logic. it's results cannot be got directly.
 	// If it needs to be modified or saved, it should be copied by vector.Dup().
 	Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error)
 

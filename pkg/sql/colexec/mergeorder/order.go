@@ -102,7 +102,10 @@ func (ctr *container) evaluateOrderColumn(proc *process.Process, index int) erro
 		if err != nil {
 			return err
 		}
-		ctr.orderCols[index][i] = vec
+		ctr.orderCols[index][i], err = colexec.SafeGetResult(proc, vec, ctr.executors[i])
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -287,5 +290,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 
 	// then use the order to get the data from the batch.
 	err := ctr.pickAndSend(proc)
+	if ctr.sendOver {
+		a := 1
+		_ = a
+	}
+
 	return ctr.sendOver, err
 }
