@@ -434,7 +434,7 @@ func (w *objectWriterV1) AddBlock(blockMeta BlockObject, bat *batch.Batch, seqnu
 			rows = vec.Length()
 		} else if rows != vec.Length() {
 			warned++
-			logutil.Debugf("%s unmatched length, expect %d, get %d", bat.Attrs[i], rows, vec.Length())
+			logutil.Warnf("%s unmatched length, expect %d, get %d", bat.Attrs[i], rows, vec.Length())
 		}
 		buf.Reset()
 		h := IOEntryHeader{IOET_ColData, IOET_ColumnData_CurrVer}
