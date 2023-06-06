@@ -224,11 +224,13 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	ap := arg.(*Argument)
 	ap.ctr = new(container)
 	ctr := ap.ctr
+	ap.ctr.InitReceiver(proc, true)
 
 	length := 2 * len(proc.Reg.MergeReceivers)
 	ctr.batchList = make([]*batch.Batch, 0, length)
 	ctr.orderCols = make([][]*vector.Vector, 0, length)
 
+	ap.ctr.executors = make([]colexec.ExpressionExecutor, len(ap.OrderInformation))
 	for i := range ap.ctr.executors {
 		ap.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, ap.OrderInformation[i].Expr)
 		if err != nil {
