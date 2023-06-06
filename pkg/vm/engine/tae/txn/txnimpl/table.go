@@ -914,22 +914,19 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	}
 	return
 }
-func (tbl *txnTable) updateDedupedSegmentHint(hint uint64) {
+
+func (tbl *txnTable) updateDedupedSegmentHintAndBlockID(hint uint64, id *types.Blockid) {
 	if tbl.dedupedSegmentHint == 0 {
 		tbl.dedupedSegmentHint = hint
+		tbl.dedupedBlockID = id
 		return
 	}
 	if tbl.dedupedSegmentHint > hint {
 		tbl.dedupedSegmentHint = hint
-	}
-}
-
-func (tbl *txnTable) updateDedupedBlockID(id *types.Blockid) {
-	if tbl.dedupedBlockID == nil {
-		tbl.dedupedBlockID = id
+		tbl.dedupedSegmentHint = hint
 		return
 	}
-	if tbl.dedupedBlockID.Compare(*id) > 0 {
+	if tbl.dedupedSegmentHint == hint && tbl.dedupedBlockID.Compare(*id) > 0 {
 		tbl.dedupedBlockID = id
 	}
 }
@@ -996,6 +993,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		segmentHint := blk.GetSegment().SortHint
 		if segmentHint > maxSegmentHint {
 			maxSegmentHint = segmentHint
+			maxBlockID = &blk.ID
 		}
 		if blk.ID.Compare(*maxBlockID) > 0 {
 			maxBlockID = &blk.ID
@@ -1051,8 +1049,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		}
 		it.Next()
 	}
-	tbl.updateDedupedSegmentHint(maxSegmentHint)
-	tbl.updateDedupedBlockID(maxBlockID)
+	tbl.updateDedupedSegmentHintAndBlockID(maxSegmentHint, maxBlockID)
 	return
 }
 
@@ -1071,6 +1068,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			segmentHint := blk.GetSegment().SortHint
 			if segmentHint > maxSegmentHint {
 				maxSegmentHint = segmentHint
+				maxBlockID = &blk.ID
 			}
 			if blk.ID.Compare(*maxBlockID) > 0 {
 				maxBlockID = &blk.ID
@@ -1127,8 +1125,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 		if v, ok := loaded[i]; ok {
 			v.Close()
 		}
-		tbl.updateDedupedSegmentHint(maxSegmentHint)
-		tbl.updateDedupedBlockID(maxBlockID)
+		tbl.updateDedupedSegmentHintAndBlockID(maxSegmentHint, maxBlockID)
 	}
 	return
 }
