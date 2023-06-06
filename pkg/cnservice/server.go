@@ -170,6 +170,7 @@ func NewService(
 
 func (s *service) Start() error {
 	s.initTaskServiceHolder()
+	s.initSqlWriterFactory()
 
 	if err := s.ctlservice.Start(); err != nil {
 		return err

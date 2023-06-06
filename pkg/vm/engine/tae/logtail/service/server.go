@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -372,7 +372,7 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 		return
 	}
 	s.waterline.Advance(e.to)
-	logutil.Infof("init waterline to %v", e.to.String())
+	logger.Info("init waterline", zap.String("to", e.to.String()))
 
 	for {
 		select {
@@ -405,10 +405,15 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 
 				// fetch total logtail for table
 				var tail logtail.TableLogtail
+				var closeCB func()
 				moprobe.WithRegion(ctx, moprobe.SubscriptionPullLogTail, func() {
-					tail, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
+					tail, closeCB, subErr = s.logtail.TableLogtail(sendCtx, table, from, to)
 				})
+
 				if subErr != nil {
+					if closeCB != nil {
+						closeCB()
+					}
 					logger.Error("fail to fetch table total logtail", zap.Error(subErr), zap.Any("table", table))
 					if err := sub.session.SendErrorResponse(
 						sendCtx, table, moerr.ErrInternal, "fail to fetch table total logtail",
@@ -418,8 +423,14 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					return
 				}
 
+				cb := func() {
+					if closeCB != nil {
+						closeCB()
+					}
+				}
+
 				// send subscription response
-				subErr = sub.session.SendSubscriptionResponse(sendCtx, tail)
+				subErr = sub.session.SendSubscriptionResponse(sendCtx, tail, cb)
 				if subErr != nil {
 					logger.Error("fail to send subscription response", zap.Error(subErr))
 					return
@@ -455,9 +466,20 @@ func (s *LogtailServer) logtailSender(ctx context.Context) {
 					})
 				}
 
+				var refcount atomic.Int32
+				closeCB := func() {
+					if refcount.Add(-1) == 0 {
+						if e.closeCB != nil {
+							e.closeCB()
+						}
+					}
+				}
+
 				// publish incremental logtail for all subscribed tables
-				for _, session := range s.ssmgr.ListSession() {
-					if err := session.Publish(ctx, from, to, wraps...); err != nil {
+				sessions := s.ssmgr.ListSession()
+				refcount.Add(int32(len(sessions)))
+				for _, session := range sessions {
+					if err := session.Publish(ctx, from, to, closeCB, wraps...); err != nil {
 						logger.Error("fail to publish incremental logtail", zap.Error(err),
 							zap.Uint64("stream-id", session.stream.streamID), zap.String("remote", session.stream.remote),
 						)
@@ -502,7 +524,7 @@ func (s *LogtailServer) Start() error {
 
 // NotifyLogtail provides incremental logtail for server.
 func (s *LogtailServer) NotifyLogtail(
-	from, to timestamp.Timestamp, tails ...logtail.TableLogtail,
+	from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail,
 ) error {
-	return s.event.NotifyLogtail(from, to, tails...)
+	return s.event.NotifyLogtail(from, to, closeCB, tails...)
 }

@@ -17,6 +17,7 @@ package etl
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"strconv"
 	"time"
 
@@ -218,8 +219,7 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 					return err
 				}
 			case table.TBytes:
-				dst := field.EncodeBytes()
-				err := vector.SetStringAt(vec, rowIdx, dst, mp)
+				err := vector.SetBytesAt(vec, rowIdx, field.Bytes, mp)
 				if err != nil {
 					return err
 				}
@@ -233,15 +233,28 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 				return moerr.NewInternalError(ctx, "not Support string type %v", field.Type)
 			}
 		case types.T_json:
-			// convert normal json-string to bytejson-bytes
-			jsonBytes, err := bytejson.ParseJsonByteFromString(field.String)
-			if err != nil {
-				return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
+			switch field.Type {
+			case table.TVarchar, table.TText:
+				// convert normal json-string to bytejson-bytes
+				jsonBytes, err := bytejson.ParseJsonByteFromString(field.String)
+				if err != nil {
+					return moerr.NewInternalError(ctx, "the input value is not json type for column %d: %v", colIdx, field)
+				}
+				err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
+				if err != nil {
+					return err
+				}
+			case table.TBytes:
+				val := field.Bytes
+				if len(val) == 0 {
+					val = util.UnsafeStringToBytes(field.String)
+				}
+				err := vector.SetBytesAt(vec, rowIdx, val, mp)
+				if err != nil {
+					return err
+				}
 			}
-			err = vector.SetBytesAt(vec, rowIdx, jsonBytes, mp)
-			if err != nil {
-				return err
-			}
+
 		case types.T_datetime:
 			cols := vector.MustFixedCol[types.Datetime](vec)
 			switch field.Type {

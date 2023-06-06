@@ -65,6 +65,8 @@ type tracerProviderConfig struct {
 
 	// writerFactory gen writer for CSV output
 	writerFactory table.WriterFactory // WithFSWriterFactory, default from export.GetFSWriterFactory4Trace
+	// disableSqlWriter
+	disableSqlWriter bool // set by WithSQLWriterDisable
 
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
@@ -169,6 +171,12 @@ func WithLongSpanTime(d time.Duration) tracerProviderOption {
 func WithSpanDisable(disable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.disableSpan = disable
+	}
+}
+
+func WithSQLWriterDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableSqlWriter = disable
 	}
 }
 

@@ -88,6 +88,7 @@ func (s *store) handleCommands(cmds []logservicepb.ScheduleCommand) {
 			s.handleShutdownStore(cmd)
 		} else if cmd.CreateTaskService != nil {
 			s.createTaskService(cmd.CreateTaskService)
+			s.createSQLLogger(cmd.CreateTaskService)
 		}
 	}
 }

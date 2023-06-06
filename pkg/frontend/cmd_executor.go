@@ -245,7 +245,7 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
-		logError(ses.GetDebugString(), bse.err.Error())
+		logError(ses, ses.GetDebugString(), bse.err.Error())
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
 			incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
