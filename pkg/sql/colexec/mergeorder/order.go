@@ -177,10 +177,12 @@ func (ctr *container) pickFirstRow() (batIndex int) {
 				ctr.compares[k].Set(0, ctr.orderCols[i][k])
 				ctr.compares[k].Set(1, ctr.orderCols[j][k])
 				result := ctr.compares[k].Compare(0, 1, ctr.indexList[i], ctr.indexList[j])
-				if result < 0 || k == len(ctr.compares)-1 {
+				if result < 0 {
 					break
 				} else if result > 0 {
 					i = j
+					break
+				} else if k == len(ctr.compares)-1 {
 					break
 				}
 			}

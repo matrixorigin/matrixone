@@ -82,8 +82,17 @@ func TestOrder(t *testing.T) {
 		}
 		tc.proc.Reg.InputBatch = batch.EmptyBatch
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
+		if tc.proc.Reg.InputBatch != nil {
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+		}
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
+		if tc.proc.Reg.InputBatch != nil {
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
+		}
+		tc.proc.Reg.InputBatch = nil
+		tc.arg.Free(tc.proc, false)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }

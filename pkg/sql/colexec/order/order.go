@@ -119,6 +119,7 @@ func (ctr *container) appendBatch(proc *process.Process, bat *batch.Batch) (enou
 	if err != nil {
 		return false, err
 	}
+	proc.PutBatch(bat)
 	return all >= maxBatchSizeToSort, nil
 }
 
