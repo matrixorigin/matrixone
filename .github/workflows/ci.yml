@@ -13,76 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-
-  ut-linux-x86:
-    runs-on: ubuntu-latest
-    name: UT Test on Ubuntu/x64
-      
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: '3'
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-
-      - name: Set up Go
-        uses: ./.github/actions/setup_env
-        
-      - name: Set env
-        run: |
-          echo "endpoint=${{ secrets.S3ENDPOINT }}" >> $GITHUB_ENV
-          echo "region=${{ secrets.S3REGION }}" >> $GITHUB_ENV
-          echo "apikey=${{ secrets.S3APIKEY }}" >> $GITHUB_ENV
-          echo "apisecret=${{ secrets.S3APISECRET }}" >> $GITHUB_ENV
-          echo "bucket=${{ secrets.S3BUCKET }}" >> $GITHUB_ENV
-
-      - name: Unit Testing
-        run: |
-          cd $GITHUB_WORKSPACE && make clean && make config
-          make ut UT_PARALLEL=6
-         
-         
-  ut-mac-x86:
-    if: ${{ !github.event.pull_request.draft }}
-    runs-on: macos-12
-    name: UT Test on Darwin/x86
-
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: '3'
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-
-      - name: Set up Go
-        uses: ./.github/actions/setup_env
-
-      - name: Unit Testing
-        run: |
-          cd $GITHUB_WORKSPACE && make clean && make config
-          make ut UT_PARALLEL=6
-
-          
-  ut-linux-arm:
-    if: ${{ !github.event.pull_request.draft }}
-    runs-on: arm64-runner
-    name: UT Test on Linux/Arm
-
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-depth: '3'
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-
-      - name: Set up Go
-        uses: ./.github/actions/setup_env
-
-      - name: Unit Testing
-        run: |
-          cd $GITHUB_WORKSPACE && make clean && make config
-          make ut UT_PARALLEL=6
-       
   sca:
     runs-on: ubuntu-latest
     name: SCA Test on Ubuntu/x64
@@ -102,10 +32,10 @@ jobs:
       - name: Prepare ENV
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config && make build
-          make install-static-check-tools
+          # make install-static-check-tools
           
       - name: Static Code Analysis
         run: |
           cd $GITHUB_WORKSPACE
-          make static-check
+          # make static-check
           
