@@ -1338,12 +1338,12 @@ func transferDecimal128val(a, b int64, oid types.T) (bool, any) {
 	}
 }
 
-func groupBlocksToObjects(blocks []*catalog.BlockInfo, dop int) ([][]*catalog.BlockInfo, []int) {
+func groupBlocksToObjects(blocks [][]byte, dop int) ([][]*catalog.BlockInfo, []int) {
 	var infos [][]*catalog.BlockInfo
 	objMap := make(map[string]int, 0)
 	lenObjs := 0
 	for i := range blocks {
-		block := blocks[i]
+		block := catalog.DecodeBlockInfo(blocks[i])
 		objName := block.MetaLocation().Name().String()
 		if idx, ok := objMap[objName]; ok {
 			infos[idx] = append(infos[idx], block)
