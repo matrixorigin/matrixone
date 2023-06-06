@@ -241,7 +241,10 @@ func NewSession(
 
 					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
 					defer cancel()
-
+					ss.logger.Debug(">>>> TODO:delete, send logtail response",
+						zap.String("session", ss.stream.remote),
+						zap.String("response", msg.response.String()),
+					)
 					err := ss.stream.write(ctx, msg.response)
 					if err != nil {
 						ss.logger.Error("fail to send logtail response",
