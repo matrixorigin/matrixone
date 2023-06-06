@@ -62,9 +62,10 @@ var TxnStoreFactory = func(
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
 	indexCache model.LRUCache,
-	dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
+	dataFactory *tables.DataFactory,
+	maxMessageSize uint64) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(ctx, catalog, driver, transferTable, indexCache, dataFactory)
+		return newStore(ctx, catalog, driver, transferTable, indexCache, dataFactory, maxMessageSize)
 	}
 }
 
@@ -74,13 +75,14 @@ func newStore(
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
 	indexCache model.LRUCache,
-	dataFactory *tables.DataFactory) *txnStore {
+	dataFactory *tables.DataFactory,
+	maxMessageSize uint64) *txnStore {
 	return &txnStore{
 		ctx:           ctx,
 		transferTable: transferTable,
 		dbs:           make(map[uint64]*txnDB),
 		catalog:       catalog,
-		cmdMgr:        newCommandManager(driver),
+		cmdMgr:        newCommandManager(driver, maxMessageSize),
 		driver:        driver,
 		logs:          make([]entry.Entry, 0),
 		dataFactory:   dataFactory,
@@ -677,13 +679,18 @@ func (store *txnStore) PrepareWAL() (err error) {
 		return
 	}
 
-	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), store.txn)
-	if err != nil {
-		return
+	// Apply the record from the command list.
+	// Split the commands by max message size.
+	for store.cmdMgr.cmd.MoreCmds() {
+		logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), store.txn)
+		if err != nil {
+			return err
+		}
+		if logEntry != nil {
+			store.logs = append(store.logs, logEntry)
+		}
 	}
-	if logEntry != nil {
-		store.logs = append(store.logs, logEntry)
-	}
+
 	for _, db := range store.dbs {
 		if err = db.Apply1PCCommit(); err != nil {
 			return

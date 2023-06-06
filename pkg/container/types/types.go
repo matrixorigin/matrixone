@@ -17,28 +17,12 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )
 
 type T uint8
-
-var typesPool = sync.Pool{
-	New: func() any {
-		return &Type{}
-	},
-}
-
-func GetTypeFromPool() Type {
-	typ := typesPool.Get().(*Type)
-	return *typ
-}
-
-func PutTypeToPool(typ Type) {
-	typesPool.Put(&typ)
-}
 
 const (
 	// any family
@@ -386,7 +370,7 @@ var Types map[string]T = map[string]T{
 }
 
 func New(oid T, width, scale int32) Type {
-	typ := GetTypeFromPool()
+	typ := Type{}
 	typ.Oid = oid
 	typ.Size = int32(oid.TypeLen())
 	typ.Width = width

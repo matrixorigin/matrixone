@@ -43,7 +43,7 @@ import (
 const (
 	maxMessageSizeToMoRpc = 64 * mpool.MB
 
-	HandleNotifyTimeout = 60 * time.Second
+	HandleNotifyTimeout = 120 * time.Second
 )
 
 // cnInformation records service information to help handle messages.

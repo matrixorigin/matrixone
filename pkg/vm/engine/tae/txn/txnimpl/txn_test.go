@@ -362,7 +362,7 @@ func TestNodeCommand(t *testing.T) {
 func TestTxnManager1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil, nil, nil),
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil, nil, nil, 0),
 		TxnFactory(nil), types.NewMockHLCClock(1))
 	mgr.Start(context.Background())
 	txn, _ := mgr.StartTxn(nil)
@@ -423,7 +423,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)
 	factory := tables.NewDataFactory(fs, indexCache, nil, dir)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, nil, indexCache, factory),
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, nil, indexCache, factory, 0),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start(context.Background())
 	return c, mgr, driver
