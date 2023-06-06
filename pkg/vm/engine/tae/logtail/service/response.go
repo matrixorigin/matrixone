@@ -115,29 +115,6 @@ type LogtailResponseSegmentPool interface {
 	Release(*LogtailResponseSegment)
 }
 
-type segmentPool struct {
-	pool *sync.Pool
-}
-
-func NewLogtailResponseSegmentPool() LogtailResponseSegmentPool {
-	return &segmentPool{
-		pool: &sync.Pool{
-			New: func() any {
-				return &LogtailResponseSegment{}
-			},
-		},
-	}
-}
-
-func (p *segmentPool) Acquire() *LogtailResponseSegment {
-	return p.pool.Get().(*LogtailResponseSegment)
-}
-
-func (p *segmentPool) Release(seg *LogtailResponseSegment) {
-	seg.Reset()
-	p.pool.Put(seg)
-}
-
 // LogtailServerSegmentPool describes segment pool for logtail server.
 type LogtailServerSegmentPool interface {
 	LogtailResponseSegmentPool

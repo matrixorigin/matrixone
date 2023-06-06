@@ -154,7 +154,6 @@ func (s *morpcStream) write(
 		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
 
 		if err := s.cs.Write(ctx, seg); err != nil {
-			s.segments.Release(seg)
 			return err
 		}
 	}
