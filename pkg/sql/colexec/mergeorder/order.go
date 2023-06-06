@@ -193,16 +193,26 @@ func (ctr *container) pickFirstRow() (batIndex int) {
 	return 0
 }
 
+func (ctr *container) removeIndexListItem(index int) {
+	ctr.indexList = append(ctr.indexList[:index], ctr.indexList[index+1:]...)
+}
+
 func (ctr *container) removeBatch(proc *process.Process, index int) {
 	bat := ctr.batchList[index]
+	cols := ctr.orderCols[index]
+
+	alreadyPut := make(map[*vector.Vector]bool, len(bat.Vecs))
 	for i := range bat.Vecs {
 		proc.PutVector(bat.Vecs[i])
+		alreadyPut[bat.Vecs[i]] = true
 	}
 	ctr.batchList = append(ctr.batchList[:index], ctr.batchList[index+1:]...)
 	ctr.indexList = append(ctr.indexList[:index], ctr.indexList[index+1:]...)
 
-	cols := ctr.orderCols[index]
 	for i := range cols {
+		if _, ok := alreadyPut[cols[i]]; ok {
+			continue
+		}
 		proc.PutVector(cols[i])
 	}
 	ctr.orderCols = append(ctr.orderCols[:index], ctr.orderCols[index+1:]...)
