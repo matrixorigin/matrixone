@@ -42,6 +42,7 @@ const ETLParamTypeAll = MergeLogTypeALL
 const ETLParamAccountAll = "*"
 
 const AccountAll = ETLParamAccountAll
+const AccountSys = "sys"
 
 var ETLParamTSAll = time.Time{}
 

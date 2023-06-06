@@ -275,7 +275,7 @@ type initUser struct {
 }
 
 var (
-	specialUser atomic.Value
+	specialUsers atomic.Value
 )
 
 // SetSpecialUser saves the user for initialization
@@ -294,26 +294,32 @@ func SetSpecialUser(userName string, password []byte) {
 		account:  acc,
 		password: password,
 	}
+	users := getSpecialUsers()
+	if users == nil {
+		users = make(map[string]*initUser)
+	}
+	users[userName] = user
 
-	specialUser.Store(user)
+	specialUsers.Store(users)
 }
 
 // isSpecialUser checks the user is the one for initialization
 func isSpecialUser(userName string) (bool, []byte, *TenantInfo) {
-	user := getSpecialUser()
-	if user != nil && user.account.GetUser() == userName {
-		return true, user.password, user.account
+	users := getSpecialUsers()
+
+	if len(users) > 0 && users[userName] != nil {
+		return true, users[userName].password, users[userName].account
 	}
 	return false, nil, nil
 }
 
-// getSpecialUser loads the user for initialization
-func getSpecialUser() *initUser {
-	value := specialUser.Load()
+// getSpecialUsers loads the user for initialization
+func getSpecialUsers() map[string]*initUser {
+	value := specialUsers.Load()
 	if value == nil {
 		return nil
 	}
-	return value.(*initUser)
+	return value.(map[string]*initUser)
 }
 
 const (
@@ -1313,6 +1319,8 @@ const (
 
 	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
+	getSystemVariableValueWithAccountFromat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and variable_name = '%s' and system_variables = true;`
+
 	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s';`
 
 	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
@@ -1731,6 +1739,12 @@ func getSystemVariablesWithAccount(accountId uint64) string {
 	return fmt.Sprintf(getSystemVariablesWithAccountFromat, accountId)
 }
 
+// getSqlForGetSystemVariableValueWithAccount will get sql for get variable value with specific account
+func getSqlForGetSystemVariableValueWithAccount(accountId uint64, varName string) string {
+	return fmt.Sprintf(getSystemVariableValueWithAccountFromat, accountId, varName)
+}
+
+// getSqlForUpdateSystemVariableValue returns a SQL query to update the value of a system variable for a given account.
 func getSqlForUpdateSystemVariableValue(varValue string, accountId uint64, varName string) string {
 	return fmt.Sprintf(updateSystemVariableValueFormat, varValue, accountId, varName)
 }
