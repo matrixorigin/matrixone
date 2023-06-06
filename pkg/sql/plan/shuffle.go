@@ -82,12 +82,23 @@ func GetHashColumn(expr *plan.Expr) *plan.ColRef {
 	return nil
 }
 
+func maybeSorted(n *plan.Node, builder *QueryBuilder, scanID int32) bool {
+	// for scan node, primary key and cluster by may be sorted
+	if n.NodeType == plan.Node_TABLE_SCAN {
+		return n.NodeId == scanID
+	}
+	// for inner join, if left child may be sorted, then inner join may be sorted
+	if n.NodeType == plan.Node_JOIN && n.JoinType == plan.Node_INNER {
+		leftChild := builder.qry.Nodes[n.Children[0]]
+		return maybeSorted(leftChild, builder, scanID)
+	}
+	return false
+}
+
 func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) {
 	// hash by default
 	n.Stats.ShuffleType = plan.ShuffleType_Hash
-	if builder.qry.Nodes[n.Children[0]].NodeType != plan.Node_TABLE_SCAN {
-		return
-	}
+
 	if builder == nil {
 		return
 	}
@@ -99,6 +110,9 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		tableDef := builder.qry.Nodes[binding.nodeId].TableDef
 		colName := tableDef.Cols[col.ColPos].Name
 		if GetSortOrder(tableDef, colName) != 0 {
+			return
+		}
+		if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, binding.nodeId) {
 			return
 		}
 		sc := builder.compCtx.GetStatsCache()

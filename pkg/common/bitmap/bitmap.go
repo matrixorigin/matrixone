@@ -380,6 +380,20 @@ func (n *Bitmap) ToArray() []uint64 {
 	return rows
 }
 
+func (n *Bitmap) ToI64Arrary() []int64 {
+	var rows []int64
+	if n.EmptyByFlag() {
+		return rows
+	}
+
+	itr := n.Iterator()
+	for itr.HasNext() {
+		r := itr.Next()
+		rows = append(rows, int64(r))
+	}
+	return rows
+}
+
 func (n *Bitmap) Marshal() []byte {
 	var buf bytes.Buffer
 	flag := n.emptyFlag.Load()

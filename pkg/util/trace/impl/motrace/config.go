@@ -55,6 +55,8 @@ type tracerProviderConfig struct {
 	// resource contains attributes representing an entity that produces telemetry.
 	resource *trace.Resource // withMOVersion, WithNode,
 
+	// disableSpan
+	disableSpan bool
 	// debugMode used in Tracer.Debug
 	debugMode bool // DebugMode
 
@@ -71,6 +73,8 @@ type tracerProviderConfig struct {
 	exportInterval time.Duration //  WithExportInterval
 	// longQueryTime unit ns
 	longQueryTime int64 //  WithLongQueryTime
+	// longSpanTime
+	longSpanTime time.Duration
 
 	bufferSizeThreshold int64 // WithBufferSizeThreshold
 
@@ -154,6 +158,18 @@ func WithLongQueryTime(secs float64) tracerProviderOption {
 	return tracerProviderOption(func(cfg *tracerProviderConfig) {
 		cfg.longQueryTime = int64(float64(time.Second) * secs)
 	})
+}
+
+func WithLongSpanTime(d time.Duration) tracerProviderOption {
+	return tracerProviderOption(func(cfg *tracerProviderConfig) {
+		cfg.longSpanTime = d
+	})
+}
+
+func WithSpanDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableSpan = disable
+	}
 }
 
 func WithBufferSizeThreshold(size int64) tracerProviderOption {

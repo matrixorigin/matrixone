@@ -240,7 +240,7 @@ func WrapError(err error, internalCode uint16) *TxnError {
 		return v
 	}
 
-	panic(fmt.Sprintf("only moerr supported, got %T, %v", err, err.Error()))
+	return WrapError(moerr.NewInternalErrorNoCtx(err.Error()), internalCode)
 }
 
 // UnwrapError unwrap the moerr from the TxnError

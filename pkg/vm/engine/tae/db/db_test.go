@@ -4358,7 +4358,7 @@ func TestBlockRead(t *testing.T) {
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
 		context.Background(), info, nil, colIdxs, colTyps,
-		beforeDel, fs, pool, nil,
+		beforeDel, nil, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4366,13 +4366,13 @@ func TestBlockRead(t *testing.T) {
 
 	b2, err := blockio.BlockReadInner(
 		context.Background(), info, nil, colIdxs, colTyps,
-		afterFirstDel, fs, pool, nil,
+		afterFirstDel, nil, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
 		context.Background(), info, nil, colIdxs, colTyps,
-		afterSecondDel, fs, pool, nil,
+		afterSecondDel, nil, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, len(columns), len(b2.Vecs))
@@ -4384,7 +4384,7 @@ func TestBlockRead(t *testing.T) {
 		nil,
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
-		afterSecondDel, fs, pool, nil,
+		afterSecondDel, nil, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(b4.Vecs))
@@ -4396,7 +4396,7 @@ func TestBlockRead(t *testing.T) {
 		context.Background(), info,
 		nil, []uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
-		afterSecondDel, fs, pool, nil,
+		afterSecondDel, nil, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(b5.Vecs))

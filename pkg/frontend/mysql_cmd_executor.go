@@ -209,23 +209,26 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	var txnID uuid.UUID
+	stm := motrace.NewStatementInfo()
+	// set TransactionID
 	var txn TxnOperator
 	var err error
 	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
 		_, txn, err = handler.GetTxn()
 		if err != nil {
 			logErrorf(ses.GetDebugString(), "RecordStatement. error:%v", err)
+			copy(stm.TransactionID[:], motrace.NilTxnID[:])
 		} else {
-			copy(txnID[:], txn.Txn().ID)
+			copy(stm.TransactionID[:], txn.Txn().ID)
 		}
 	}
-	var sesID uuid.UUID
-	copy(sesID[:], ses.GetUUID())
+	// set SessionID
+	copy(stm.SessionID[:], ses.GetUUID())
 	requestAt := envBegin
 	if !useEnv {
 		requestAt = time.Now()
 	}
+	// set StatementID
 	var stmID uuid.UUID
 	var statement tree.Statement = nil
 	var text string
@@ -238,23 +241,20 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
-	stm := &motrace.StatementInfo{
-		StatementID:          stmID,
-		TransactionID:        txnID,
-		SessionID:            sesID,
-		Account:              tenant.GetTenant(),
-		RoleId:               proc.SessionInfo.RoleId,
-		User:                 tenant.GetUser(),
-		Host:                 ses.protocol.Peer(),
-		Database:             ses.GetDatabaseName(),
-		Statement:            text,
-		StatementFingerprint: "", // fixme: (Reserved)
-		StatementTag:         "", // fixme: (Reserved)
-		SqlSourceType:        sqlType,
-		RequestAt:            requestAt,
-		StatementType:        getStatementType(statement).GetStatementType(),
-		QueryType:            getStatementType(statement).GetQueryType(),
-	}
+	copy(stm.StatementID[:], stmID[:])
+	// END> set StatementID
+	stm.Account = tenant.GetTenant()
+	stm.RoleId = proc.SessionInfo.RoleId
+	stm.User = tenant.GetUser()
+	stm.Host = ses.protocol.Peer()
+	stm.Database = ses.GetDatabaseName()
+	stm.Statement = text
+	stm.StatementFingerprint = "" // fixme= (Reserved)
+	stm.StatementTag = ""         // fixme= (Reserved)
+	stm.SqlSourceType = sqlType
+	stm.RequestAt = requestAt
+	stm.StatementType = getStatementType(statement).GetStatementType()
+	stm.QueryType = getStatementType(statement).GetQueryType()
 	if sqlType != "internal_sql" {
 		ses.tStmt = stm
 		ses.pushQueryId(types.Uuid(stmID).ToString())
@@ -3733,41 +3733,110 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-type marshalPlanHandler struct {
-	marshalPlan *explain.ExplainData
-	uuid        uuid.UUID
+type jsonPlanHandler struct {
+	jsonBytes      []byte
+	statsJsonBytes []byte
+	stats          motrace.Statistic
+	buffer         *bytes.Buffer
 }
 
-func NewMarshalPlanHandler(ctx context.Context, uuid uuid.UUID, plan *plan2.Plan) *marshalPlanHandler {
+func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *jsonPlanHandler {
+	h := NewMarshalPlanHandler(ctx, stmt, plan)
+	jsonBytes, statsJsonBytes, stats := h.Marshal(ctx)
+	return &jsonPlanHandler{
+		jsonBytes:      jsonBytes,
+		statsJsonBytes: statsJsonBytes,
+		stats:          stats,
+		buffer:         h.handoverBuffer(),
+	}
+}
+
+func (h *jsonPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJsonBytes []byte, stats motrace.Statistic) {
+	return h.jsonBytes, h.statsJsonBytes, h.stats
+}
+
+func (h *jsonPlanHandler) Free() {
+	if h.buffer != nil {
+		releaseMarshalPlanBufferPool(h.buffer)
+		h.buffer = nil
+		h.jsonBytes = nil
+		h.statsJsonBytes = nil
+	}
+}
+
+type marshalPlanHandler struct {
+	marshalPlan *explain.ExplainData
+	stmt        *motrace.StatementInfo
+	uuid        uuid.UUID
+	buffer      *bytes.Buffer
+}
+
+func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *marshalPlanHandler {
 	// TODO: need mem improvement
+	uuid := uuid.UUID(stmt.StatementID)
 	if plan == nil || plan.GetQuery() == nil {
 		return &marshalPlanHandler{
 			marshalPlan: nil,
+			stmt:        stmt,
 			uuid:        uuid,
+			buffer:      getMarshalPlanBufferPool(),
 		}
 	}
 	return &marshalPlanHandler{
 		marshalPlan: explain.BuildJsonPlan(ctx, uuid, &explain.MarshalPlanOptions, plan.GetQuery()),
+		stmt:        stmt,
 		uuid:        uuid,
+		buffer:      getMarshalPlanBufferPool(),
 	}
 }
 
-func (h *marshalPlanHandler) Free() {}
+func (h *marshalPlanHandler) Free() {
+	h.stmt = nil
+	if h.buffer != nil {
+		releaseMarshalPlanBufferPool(h.buffer)
+		h.buffer = nil
+	}
+}
+
+func (h *marshalPlanHandler) handoverBuffer() *bytes.Buffer {
+	b := h.buffer
+	h.buffer = nil
+	return b
+}
+
+var marshalPlanBufferPool = sync.Pool{New: func() any {
+	return bytes.NewBuffer(make([]byte, 0, 8192))
+}}
+
+// get buffer from marshalPlanBufferPool
+func getMarshalPlanBufferPool() *bytes.Buffer {
+	return marshalPlanBufferPool.Get().(*bytes.Buffer)
+}
+
+func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
+	marshalPlanBufferPool.Put(b)
+}
 
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
+	var err error
 	if h.marshalPlan != nil {
+		var jsonBytesLen, statsJonsBytesLen = 0, 0
+		h.buffer.Reset()
 		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		// XXX, `buffer` can be used repeatedly as a global variable in the future
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
-		buffer := bytes.NewBuffer(make([]byte, 0, 8192))
-		encoder := json.NewEncoder(buffer)
+		encoder := json.NewEncoder(h.buffer)
 		encoder.SetEscapeHTML(false)
-		err := encoder.Encode(h.marshalPlan)
-		if err != nil {
-			moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
-			jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
+		if time.Since(h.stmt.RequestAt) > motrace.GetLongQueryTime() {
+			err = encoder.Encode(h.marshalPlan)
+			if err != nil {
+				moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
+				jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
+			} else {
+				jsonBytesLen = h.buffer.Len()
+			}
 		} else {
-			jsonBytes = buffer.Bytes()
+			jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
 		}
 		// data transform Global to json
 		if len(h.marshalPlan.Steps) > 0 {
@@ -3775,16 +3844,22 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, sta
 			// logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(h.marshalPlan.Steps))
 			// }
 			// XXX, `buffer` can be used repeatedly as a global variable in the future
-			buffer := &bytes.Buffer{}
-			encoder := json.NewEncoder(buffer)
-			encoder.SetEscapeHTML(false)
 			global := h.marshalPlan.Steps[0].GraphData.Global
 			err = encoder.Encode(&global)
 			if err != nil {
 				statsJonsBytes = []byte(fmt.Sprintf(`{"code":200,"message":"%q"}`, err.Error()))
 			} else {
-				statsJonsBytes = buffer.Bytes()
+				statsJonsBytesLen = h.buffer.Len()
 			}
+		}
+		// BG: bytes.Buffer maintain buf []byte.
+		// if buf[off:] not enough but len(buf) is enough place, then it will reset off = 0.
+		// So, in here, we need call Next(...) after all data has been written
+		if jsonBytesLen > 0 {
+			jsonBytes = h.buffer.Next(jsonBytesLen)
+		}
+		if statsJonsBytesLen > 0 {
+			statsJonsBytes = h.buffer.Next(statsJonsBytesLen - jsonBytesLen)
 		}
 	} else {
 		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query no record execution plan")

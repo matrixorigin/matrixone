@@ -280,6 +280,9 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 	}
 
 	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil, moerr.NewNoDB(ctx.GetContext())
+		}
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
@@ -471,10 +474,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			return nil, err
 		}
 
-		//err = addPartitionTableDef(ctx.GetContext(), string(stmt.Table.ObjectName), createTable)
-		//if err != nil {
-		//	return nil, err
-		//}
+		err = addPartitionTableDef(ctx.GetContext(), string(stmt.Table.ObjectName), createTable)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &Plan{
@@ -490,58 +493,58 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 }
 
 // addPartitionTableDef constructs the table def for the partition table
-// func addPartitionTableDef(ctx context.Context, mainTableName string, createTable *plan.CreateTable) error {
-// 	//add partition table
-// 	//there is no index for the partition table
-// 	//there is no foreign key for the partition table
-// 	if !util.IsValidNameForPartitionTable(mainTableName) {
-// 		return moerr.NewInvalidInput(ctx, "invalid main table name %s", mainTableName)
-// 	}
+func addPartitionTableDef(ctx context.Context, mainTableName string, createTable *plan.CreateTable) error {
+	//add partition table
+	//there is no index for the partition table
+	//there is no foreign key for the partition table
+	if !util.IsValidNameForPartitionTable(mainTableName) {
+		return moerr.NewInvalidInput(ctx, "invalid main table name %s", mainTableName)
+	}
 
-// 	//common properties
-// 	partitionProps := []*plan.Property{
-// 		{
-// 			Key:   catalog.SystemRelAttr_Kind,
-// 			Value: catalog.SystemPartitionRel,
-// 		},
-// 		{
-// 			Key:   catalog.SystemRelAttr_CreateSQL,
-// 			Value: "",
-// 		},
-// 	}
-// 	partitionPropsDef := &plan.TableDef_DefType{
-// 		Def: &plan.TableDef_DefType_Properties{
-// 			Properties: &plan.PropertiesDef{
-// 				Properties: partitionProps,
-// 			},
-// 		}}
+	//common properties
+	partitionProps := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemPartitionRel,
+		},
+		{
+			Key:   catalog.SystemRelAttr_CreateSQL,
+			Value: "",
+		},
+	}
+	partitionPropsDef := &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: partitionProps,
+			},
+		}}
 
-// 	partitionDef := createTable.TableDef.Partition
-// 	partitionTableDefs := make([]*TableDef, partitionDef.PartitionNum)
+	partitionDef := createTable.TableDef.Partition
+	partitionTableDefs := make([]*TableDef, partitionDef.PartitionNum)
 
-// 	partitionTableNames := make([]string, partitionDef.PartitionNum)
-// 	for i := 0; i < int(partitionDef.PartitionNum); i++ {
-// 		part := partitionDef.Partitions[i]
-// 		ok, partitionTableName := util.MakeNameOfPartitionTable(part.GetPartitionName(), mainTableName)
-// 		if !ok {
-// 			return moerr.NewInvalidInput(ctx, "invalid partition table name %s", partitionTableName)
-// 		}
+	partitionTableNames := make([]string, partitionDef.PartitionNum)
+	for i := 0; i < int(partitionDef.PartitionNum); i++ {
+		part := partitionDef.Partitions[i]
+		ok, partitionTableName := util.MakeNameOfPartitionTable(part.GetPartitionName(), mainTableName)
+		if !ok {
+			return moerr.NewInvalidInput(ctx, "invalid partition table name %s", partitionTableName)
+		}
 
-// 		//save the table name for a partition
-// 		part.PartitionTableName = partitionTableName
-// 		partitionTableNames[i] = partitionTableName
+		//save the table name for a partition
+		part.PartitionTableName = partitionTableName
+		partitionTableNames[i] = partitionTableName
 
-// 		partitionTableDefs[i] = &TableDef{
-// 			Name: partitionTableName,
-// 			Cols: createTable.TableDef.Cols, //same as the main table's column defs
-// 		}
-// 		partitionTableDefs[i].Pkey = createTable.TableDef.GetPkey()
-// 		partitionTableDefs[i].Defs = append(partitionTableDefs[i].Defs, partitionPropsDef)
-// 	}
-// 	partitionDef.PartitionTableNames = partitionTableNames
-// 	createTable.PartitionTables = partitionTableDefs
-// 	return nil
-// }
+		partitionTableDefs[i] = &TableDef{
+			Name: partitionTableName,
+			Cols: createTable.TableDef.Cols, //same as the main table's column defs
+		}
+		partitionTableDefs[i].Pkey = createTable.TableDef.GetPkey()
+		partitionTableDefs[i].Defs = append(partitionTableDefs[i].Defs, partitionPropsDef)
+	}
+	partitionDef.PartitionTableNames = partitionTableNames
+	createTable.PartitionTables = partitionTableDefs
+	return nil
+}
 
 // buildPartitionByClause build partition by clause info and semantic check.
 // Currently, sub partition and partition value verification are not supported

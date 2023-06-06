@@ -85,7 +85,7 @@ spec:
       busy-queue-size = 1
       [cn.txn]
       enable-sacrificing-freshness = true
-      enable-cn-based-consistency = true
+      enable-cn-based-consistency = false
     replicas: 2
     overlay:
       imagePullSecrets:

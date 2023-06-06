@@ -1186,12 +1186,13 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func constructLoopSingle(n *plan.Node, proc *process.Process) *loopsingle.Argument {
+func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	return &loopsingle.Argument{
+		Typs:   typs,
 		Result: result,
 		Cond:   colexec.RewriteFilterExprList(n.OnList),
 	}
@@ -1416,6 +1417,8 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 				continue
 			}
 			eqConds = append(eqConds, exprs[i])
+		} else {
+			notEqConds = append(notEqConds, exprs[i])
 		}
 	}
 	if len(notEqConds) == 0 {
