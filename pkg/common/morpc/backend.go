@@ -1005,6 +1005,9 @@ func (s *stream) done(
 	}
 	if response != nil &&
 		message.streamSequence != s.lastReceivedSequence+1 {
+		logutil.Fatal("TODO: delete, BUG, sequence not match",
+			zap.Uint32("recv", message.streamSequence),
+			zap.Uint32("lastReceivedSequence", s.lastReceivedSequence))
 		response = nil
 	}
 

@@ -59,6 +59,11 @@ type PayloadMessage interface {
 	SetPayloadField(data []byte)
 }
 
+type DebugMessage interface {
+	Message
+	Log() bool
+}
+
 // RPCMessage any message sent via morpc needs to have a Context set, which is transmitted across the network.
 // So messages sent and received at the network level are RPCMessage.
 type RPCMessage struct {

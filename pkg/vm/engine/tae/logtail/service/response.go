@@ -26,9 +26,10 @@ import (
 // LogtailResponse wraps logtail.LogtailResponse.
 type LogtailResponse struct {
 	logtail.LogtailResponse
+	ok bool
 }
 
-var _ morpc.Message = (*LogtailResponse)(nil)
+var _ morpc.DebugMessage = (*LogtailResponse)(nil)
 
 func (r *LogtailResponse) SetID(id uint64) {
 	r.ResponseId = id
@@ -38,11 +39,15 @@ func (r *LogtailResponse) GetID() uint64 {
 	return r.ResponseId
 }
 func (r *LogtailResponse) DebugString() string {
-	return ""
+	return r.String()
 }
 
 func (r *LogtailResponse) Size() int {
 	return r.ProtoSize()
+}
+
+func (r *LogtailResponse) Log() bool {
+	return r.ok
 }
 
 // LogtailResponsePool acquires or releases LogtailResponse.
@@ -80,6 +85,7 @@ func (p *responsePool) Release(resp *LogtailResponse) {
 // LogtailResponseSegment wrps logtail.MessageSegment.
 type LogtailResponseSegment struct {
 	logtail.MessageSegment
+	ok bool
 }
 
 var _ morpc.Message = (*LogtailResponseSegment)(nil)
@@ -104,6 +110,10 @@ func (s *LogtailResponseSegment) DebugString() string {
 
 func (s *LogtailResponseSegment) Size() int {
 	return s.ProtoSize()
+}
+
+func (s *LogtailResponseSegment) Log() bool {
+	return s.ok
 }
 
 // LogtailResponseSegmentPool acquires or releases LogtailResponseSegment.

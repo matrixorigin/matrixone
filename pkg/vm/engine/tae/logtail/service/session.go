@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -136,6 +137,10 @@ func (s *morpcStream) write(
 	}
 	chunks := Split(buf[:n], s.limit)
 
+	if len(chunks) == 0 {
+		logutil.Fatal("BUG: chunks is empty")
+	}
+
 	s.logger.Debug("send response by segment",
 		zap.Int("chunk-number", len(chunks)),
 		zap.Int("chunk-limit", s.limit),
@@ -150,6 +155,7 @@ func (s *morpcStream) write(
 		seg.MaxSequence = int32(len(chunks))
 		n := copy(seg.Payload, chunk)
 		seg.Payload = seg.Payload[:n]
+		seg.ok = response.ok
 
 		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
 
@@ -259,6 +265,7 @@ func NewSession(
 							zap.String("session", ss.stream.remote),
 							zap.String("response", msg.response.String()),
 						)
+						msg.response.ok = true
 					}
 
 					err := ss.stream.write(ctx, msg.response)

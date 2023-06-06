@@ -319,12 +319,14 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						}
 
 						if f.send.Timeout() {
+							panic("TODO: delete")
 							f.messageSent(f.send.Ctx.Err())
 							continue
 						}
 
 						v, err := f.send.GetTimeoutFromContext()
 						if err != nil {
+							panic("TODO: delete")
 							f.messageSent(err)
 							continue
 						}
@@ -346,6 +348,12 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							return
 						}
 						written++
+						if m, ok := f.send.Message.(DebugMessage); ok && m.Log() {
+							s.logger.Info(">>>> TODO:delete, write response",
+								zap.String("client", cs.conn.RemoteAddress()),
+								zap.Uint32("sequence", f.send.streamSequence),
+								zap.String("response", m.DebugString()))
+						}
 					}
 
 					if written > 0 {
