@@ -223,7 +223,7 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 				}
 			}()
 			return containers.ForeachWindowFixed(
-				vec,
+				vec.GetDownstreamVector(),
 				0,
 				vec.Length(),
 				func(v2 T, _ bool, row int) (err error) {

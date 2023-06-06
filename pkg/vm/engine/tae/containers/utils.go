@@ -274,13 +274,14 @@ func ForeachVectorWindow(
 	sel *roaring.Bitmap,
 ) (err error) {
 	typ := vec.GetType()
+	col := vec.GetDownstreamVector()
 	if typ.IsVarlen() {
 		var op func([]byte, bool, int) error
 		if op1 != nil {
 			op = op1.(func([]byte, bool, int) error)
 		}
 		return ForeachWindowVarlen(
-			vec.GetDownstreamVector(),
+			col,
 			start,
 			length,
 			op,
@@ -294,7 +295,7 @@ func ForeachVectorWindow(
 			op = op1.(func(bool, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -306,7 +307,7 @@ func ForeachVectorWindow(
 			op = op1.(func(int8, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -318,7 +319,7 @@ func ForeachVectorWindow(
 			op = op1.(func(int16, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -330,7 +331,7 @@ func ForeachVectorWindow(
 			op = op1.(func(int32, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -342,7 +343,7 @@ func ForeachVectorWindow(
 			op = op1.(func(int64, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -354,7 +355,7 @@ func ForeachVectorWindow(
 			op = op1.(func(uint8, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -366,7 +367,7 @@ func ForeachVectorWindow(
 			op = op1.(func(uint16, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -378,7 +379,7 @@ func ForeachVectorWindow(
 			op = op1.(func(uint32, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -390,7 +391,7 @@ func ForeachVectorWindow(
 			op = op1.(func(uint64, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -402,7 +403,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Decimal64, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -414,7 +415,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Decimal128, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -426,7 +427,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Decimal256, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -438,7 +439,7 @@ func ForeachVectorWindow(
 			op = op1.(func(float32, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -450,7 +451,7 @@ func ForeachVectorWindow(
 			op = op1.(func(float64, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -462,7 +463,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Timestamp, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -474,7 +475,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Date, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -486,7 +487,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Time, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -498,7 +499,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Datetime, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -510,7 +511,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.TS, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -522,7 +523,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Blockid, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -534,7 +535,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Uuid, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -546,7 +547,7 @@ func ForeachVectorWindow(
 			op = op1.(func(types.Rowid, bool, int) error)
 		}
 		return ForeachWindowFixed(
-			vec,
+			col,
 			start,
 			length,
 			op,
@@ -596,20 +597,19 @@ func ForeachWindowBytes(
 }
 
 func ForeachWindowFixed[T any](
-	vec Vector,
+	vec *movec.Vector,
 	start, length int,
 	op ItOpT[T],
 	opAny ItOp,
 	sels *roaring.Bitmap,
 ) (err error) {
-	src := vec.(*vectorWrapper)
-	if src.downstreamVector.IsConst() {
+	if vec.IsConst() {
 		var v T
 		isnull := false
-		if src.downstreamVector.IsConstNull() {
+		if vec.IsConstNull() {
 			isnull = true
 		} else {
-			v = movec.GetFixedAt[T](src.downstreamVector, 0)
+			v = movec.GetFixedAt[T](vec, 0)
 		}
 		for i := 0; i < length; i++ {
 			if op != nil {
@@ -625,16 +625,16 @@ func ForeachWindowFixed[T any](
 		}
 		return
 	}
-	slice := movec.MustFixedCol[T](src.downstreamVector)[start : start+length]
+	slice := movec.MustFixedCol[T](vec)[start : start+length]
 	if sels == nil || sels.IsEmpty() {
 		for i, v := range slice {
 			if op != nil {
-				if err = op(v, src.IsNull(i+start), i+start); err != nil {
+				if err = op(v, vec.IsNull(uint64(i+start)), i+start); err != nil {
 					break
 				}
 			}
 			if opAny != nil {
-				if err = opAny(v, src.IsNull(i+start), i+start); err != nil {
+				if err = opAny(v, vec.IsNull(uint64(i+start)), i+start); err != nil {
 					break
 				}
 			}
@@ -650,12 +650,12 @@ func ForeachWindowFixed[T any](
 			}
 			v := slice[int(idx)-start]
 			if op != nil {
-				if err = op(v, src.IsNull(int(idx)), int(idx)); err != nil {
+				if err = op(v, vec.IsNull(uint64(idx)), int(idx)); err != nil {
 					break
 				}
 			}
 			if opAny != nil {
-				if err = opAny(v, src.IsNull(int(idx)), int(idx)); err != nil {
+				if err = opAny(v, vec.IsNull(uint64(idx)), int(idx)); err != nil {
 					break
 				}
 			}
