@@ -20,6 +20,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -41,13 +42,13 @@ func NewMutIndex(typ types.Type) *MutIndex {
 // If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map
 // If any other unknown error hanppens, return error
 func (idx *MutIndex) BatchUpsert(
-	keys containers.Vector,
+	keys *vector.Vector,
 	offset int,
 ) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
-	if err = index.BatchUpdateZM(idx.zonemap, keys.GetDownstreamVector()); err != nil {
+	if err = index.BatchUpdateZM(idx.zonemap, keys); err != nil {
 		return
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
@@ -103,7 +104,7 @@ func (idx *MutIndex) Dedup(ctx context.Context, key any, skipfn func(row uint32)
 
 func (idx *MutIndex) BatchDedup(
 	ctx context.Context,
-	keys containers.Vector,
+	keys *vector.Vector,
 	keysZM index.ZM,
 	skipfn func(row uint32) (err error),
 	_ objectio.BloomFilter,
@@ -113,10 +114,6 @@ func (idx *MutIndex) BatchDedup(
 			return
 		}
 	} else {
-		if keys.Length() == 1 {
-			err = idx.Dedup(ctx, keys.ShallowGet(0), skipfn)
-			return
-		}
 		// 1. all keys are definitely not existed
 		if exist := idx.zonemap.FastContainsAny(keys); !exist {
 			return
@@ -134,7 +131,7 @@ func (idx *MutIndex) BatchDedup(
 		}
 		return nil
 	}
-	if err = containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil); err != nil {
+	if err = containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			return
 		} else {

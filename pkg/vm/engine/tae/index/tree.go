@@ -17,6 +17,7 @@ package index
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	art "github.com/plar/go-adaptive-radix-tree"
 )
@@ -66,7 +67,7 @@ func (art *simpleARTMap) Insert(key []byte, offset uint32) (err error) {
 }
 
 func (art *simpleARTMap) BatchInsert(
-	keys containers.Vector,
+	keys *vector.Vector,
 	offset, length int,
 	startRow uint32,
 ) (err error) {
@@ -82,7 +83,7 @@ func (art *simpleARTMap) BatchInsert(
 		startRow++
 		return nil
 	}
-	err = containers.ForeachWindowBytes(keys.GetDownstreamVector(), offset, length, op, nil)
+	err = containers.ForeachWindowBytes(keys, offset, length, op, nil)
 	return
 }
 

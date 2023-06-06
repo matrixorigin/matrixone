@@ -21,7 +21,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -194,34 +193,7 @@ func (zm ZM) Update(v any) (err error) {
 	return
 }
 
-func (zm ZM) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
-	if !zm.IsInited() {
-		return
-	}
-	visibility = roaring.New()
-	var op containers.ItOpT[[]byte]
-	if zm.IsString() {
-		op = func(key []byte, isNull bool, row int) (err error) {
-			if isNull || zm.containsString(key) {
-				visibility.AddInt(row)
-			}
-			return
-		}
-		containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil)
-	} else {
-		op = func(key []byte, isNull bool, row int) (err error) {
-			if isNull || zm.containsBytes(key) {
-				visibility.AddInt(row)
-			}
-			return
-		}
-		containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil)
-	}
-	ok = !visibility.IsEmpty()
-	return
-}
-
-func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
+func (zm ZM) FastContainsAny(keys *vector.Vector) (ok bool) {
 	if !zm.IsInited() {
 		return false
 	}
@@ -234,7 +206,7 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil)
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 	} else {
 		op = func(key []byte, isNull bool, _ int) (err error) {
 			if isNull || zm.containsBytes(key) {
@@ -243,7 +215,7 @@ func (zm ZM) FastContainsAny(keys containers.Vector) (ok bool) {
 			}
 			return
 		}
-		containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil)
+		containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
 	}
 	return
 }
