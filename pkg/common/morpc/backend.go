@@ -432,7 +432,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 						if rb.options.filter(f.send.Message, rb.remote) {
 							id := f.getSendMessageID()
 							rb.logger.Error("write request failed",
-								zap.Uint64("request-id", id))
+								zap.Uint64("request-id", id), zap.Error(err))
 							f.messageSended(err)
 						}
 					}
@@ -479,7 +479,7 @@ func (rb *remoteBackend) doWrite(ctx context.Context, id uint64, f *Future) time
 	}
 	if err := rb.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
 		rb.logger.Error("write request failed",
-			zap.Uint64("request-id", id))
+			zap.Uint64("request-id", id), zap.Error(err))
 		f.messageSended(err)
 		return 0
 	}
@@ -512,7 +512,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 		default:
 			msg, err := rb.conn.Read(goetty.ReadOptions{})
 			if err != nil {
-				rb.logger.Error("read from backend failed")
+				rb.logger.Error("read from backend failed", zap.Error(err))
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()
 				rb.scheduleResetConn()
@@ -583,7 +583,7 @@ func (rb *remoteBackend) makeAllWritesDoneWithClosed(ctx context.Context) {
 
 func (rb *remoteBackend) handleResetConn() {
 	if err := rb.resetConn(); err != nil {
-		rb.logger.Error("fail to reset backend connection")
+		rb.logger.Error("fail to reset backend connection", zap.Error(err))
 		rb.inactive()
 	}
 }
@@ -716,7 +716,7 @@ func (rb *remoteBackend) resetConn() error {
 			rb.activeReadLoop(false)
 			return nil
 		}
-		rb.logger.Error("init remote connection failed, retry later")
+		rb.logger.Error("init remote connection failed, retry later", zap.Error(err))
 
 		duration := time.Duration(0)
 		for {
@@ -763,7 +763,7 @@ func (rb *remoteBackend) activeReadLoop(locked bool) {
 	}
 
 	if err := rb.readStopper.RunTask(rb.readLoop); err != nil {
-		rb.logger.Error("active read loop failed")
+		rb.logger.Error("active read loop failed", zap.Error(err))
 		return
 	}
 	rb.stateMu.readLoopActive = true
@@ -803,7 +803,7 @@ func (rb *remoteBackend) closeConn(close bool) {
 	}
 
 	if err := fn(); err != nil {
-		rb.logger.Error("close remote conn failed")
+		rb.logger.Error("close remote conn failed", zap.Error(err))
 	}
 }
 
