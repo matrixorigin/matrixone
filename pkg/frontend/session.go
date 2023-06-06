@@ -139,13 +139,9 @@ type Session struct {
 	isNotBackgroundSession bool
 	lastInsertID           uint64
 
-	sqlSourceType []string
-
 	InitTempEngine bool
 
 	tempTablestorage *memorystorage.Storage
-
-	isBackgroundSession bool
 
 	tStmt *motrace.StatementInfo
 
@@ -153,7 +149,7 @@ type Session struct {
 
 	rs *plan.ResultColDef
 
-	QueryId []string
+	queryId []string
 
 	blockIdx int
 
@@ -305,10 +301,23 @@ func (ses *Session) GetAutoIncrCacheManager() *defines.AutoIncrCacheManager {
 const saveQueryIdCnt = 10
 
 func (ses *Session) pushQueryId(uuid string) {
-	if len(ses.QueryId) > saveQueryIdCnt {
-		ses.QueryId = ses.QueryId[1:]
+	if len(ses.queryId) > saveQueryIdCnt {
+		ses.queryId = ses.queryId[1:]
 	}
-	ses.QueryId = append(ses.QueryId, uuid)
+	ses.queryId = append(ses.queryId, uuid)
+}
+
+func (ses *Session) getQueryId(internalSql bool) []string {
+	if internalSql {
+		cnt := len(ses.queryId)
+		//the last one is cnt-1
+		if cnt > 0 {
+			return ses.queryId[:cnt-1]
+		} else {
+			return ses.queryId[:cnt]
+		}
+	}
+	return ses.queryId
 }
 
 type errInfo struct {
@@ -439,12 +448,11 @@ func (ses *Session) Close() {
 	ses.errInfo = nil
 	ses.cache = nil
 	ses.debugStr = ""
-	ses.sqlSourceType = nil
 	ses.tempTablestorage = nil
 	ses.tStmt = nil
 	ses.ast = nil
 	ses.rs = nil
-	ses.QueryId = nil
+	ses.queryId = nil
 	ses.p = nil
 	ses.planCache = nil
 	ses.statsCache = nil
@@ -488,7 +496,6 @@ func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.M
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(reqCtx)
 	ses.SetRequestContext(cancelBackgroundCtx)
 	ses.SetConnectContext(connCtx)
-	ses.SetBackgroundSession(true)
 	ses.UpdateDebugString()
 	ses.SetDatabaseName(upstream.GetDatabaseName())
 	//TODO: For seq init values.
@@ -525,31 +532,34 @@ func (ses *Session) ResetBlockIdx() {
 	ses.blockIdx = 0
 }
 
-func (ses *Session) SetBackgroundSession(b bool) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.isBackgroundSession = b
-}
-
 func (ses *Session) IsBackgroundSession() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	return ses.isBackgroundSession
+	return !ses.isNotBackgroundSession
 }
 
 func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
+	if len(sql) == 0 {
+		return
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.planCache.cache(sql, stmts, plans)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
+	if len(sql) == 0 {
+		return nil
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.planCache.get(sql)
 }
 
 func (ses *Session) isCached(sql string) bool {
+	if len(sql) == 0 {
+		return false
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.planCache.isCached(sql)
@@ -857,6 +867,14 @@ func (ses *Session) GetMysqlResultSet() *MysqlResultSet {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.mrs
+}
+
+func (ses *Session) ReplaceProtocol(proto Protocol) Protocol {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	old := ses.protocol
+	ses.protocol = proto
+	return old
 }
 
 func (ses *Session) SetMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
@@ -1578,44 +1596,6 @@ func (ses *Session) GetFromRealUser() bool {
 	return ses.fromRealUser
 }
 
-func (ses *Session) getSqlType(input *UserInput) {
-	sql := input.GetSql()
-	if input.GetStmt() != nil {
-		ses.sqlSourceType = append(ses.sqlSourceType, internalSql)
-	}
-	ses.sqlSourceType = nil
-	tenant := ses.GetTenantInfo()
-	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
-		if tenant != nil {
-			tenant.SetUser("")
-		}
-		ses.sqlSourceType = append(ses.sqlSourceType, internalSql)
-		return
-	}
-	flag, _, _ := isSpecialUser(tenant.User)
-	if flag {
-		ses.sqlSourceType = append(ses.sqlSourceType, internalSql)
-		return
-	}
-	for len(sql) > 0 {
-		p1 := strings.Index(sql, "/*")
-		p2 := strings.Index(sql, "*/")
-		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
-			ses.sqlSourceType = append(ses.sqlSourceType, externSql)
-			return
-		}
-		source := strings.TrimSpace(sql[p1+2 : p2])
-		if source == cloudUserTag {
-			ses.sqlSourceType = append(ses.sqlSourceType, cloudUserSql)
-		} else if source == cloudNoUserTag {
-			ses.sqlSourceType = append(ses.sqlSourceType, cloudNoUserSql)
-		} else {
-			ses.sqlSourceType = append(ses.sqlSourceType, externSql)
-		}
-		sql = sql[p2+2:]
-	}
-}
-
 func changeVersion(ctx context.Context, ses *Session, db string) error {
 	var err error
 	if _, ok := bannedCatalogDatabases[db]; ok {
@@ -1705,6 +1685,33 @@ func executeSQLInBackgroundSession(
 		return nil, err
 	}
 	return getResultSet(reqCtx, bh)
+}
+
+// executeStmtInSameSession executes the statement in the same session.
+// To be clear,
+func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, stmt tree.Statement) error {
+	switch stmt.(type) {
+	case *tree.Select, *tree.ParenSelect:
+	default:
+		return moerr.NewInternalError(ctx, "executeStmtInSameSession can not run non select statement in the same session")
+	}
+
+	//1. replace output callback by batchFetcher.
+	// the result batch will be saved in the session.
+	// you can get the result batch by calling GetResultBatches()
+	ses.SetOutputCallback(batchFetcher)
+	//2. replace protocol by FakeProtocol.
+	// Any response yielded during running query will be dropped by the FakeProtocol.
+	// The client will not receive any response from the FakeProtocol.
+	prevProto := ses.ReplaceProtocol(&FakeProtocol{})
+	//restore normal protocol and output callback
+	defer func() {
+		ses.SetOutputCallback(getDataFromPipeline)
+		ses.ReplaceProtocol(prevProto)
+	}()
+	logInfo(ses.GetDebugString(), "query trace(ExecStmtInSameSession)",
+		logutil.ConnectionIdField(ses.GetConnectionID()))
+	return mce.GetDoQueryFunc()(ctx, &UserInput{stmt: stmt})
 }
 
 type BackgroundHandler struct {
@@ -1880,4 +1887,51 @@ func (ses *Session) getLastCommitTS() timestamp.Timestamp {
 // getCNLabels returns requested CN labels.
 func (ses *Session) getCNLabels() map[string]string {
 	return ses.requestLabel
+}
+
+func (ui *UserInput) genSqlSourceType(ses *Session) {
+	sql := ui.getSql()
+	ui.sqlSourceType = nil
+	if ui.getStmt() != nil {
+		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		return
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
+		if tenant != nil {
+			tenant.SetUser("")
+		}
+		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		return
+	}
+	flag, _, _ := isSpecialUser(tenant.User)
+	if flag {
+		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		return
+	}
+	for len(sql) > 0 {
+		p1 := strings.Index(sql, "/*")
+		p2 := strings.Index(sql, "*/")
+		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
+			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
+			return
+		}
+		source := strings.TrimSpace(sql[p1+2 : p2])
+		if source == cloudUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, cloudUserSql)
+		} else if source == cloudNoUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, cloudNoUserSql)
+		} else {
+			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
+		}
+		sql = sql[p2+2:]
+	}
+}
+
+func (ui *UserInput) getSqlSourceType(i int) string {
+	sqlType := ui.sqlSourceType[0]
+	if i < len(ui.sqlSourceType) {
+		sqlType = ui.sqlSourceType[i]
+	}
+	return sqlType
 }

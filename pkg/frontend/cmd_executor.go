@@ -51,17 +51,26 @@ type CmdExecutorImpl struct {
 // for some special statement, like 'set_var', we need to use the stmt.
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
-	sql  string
-	stmt tree.Statement
+	sql           string
+	stmt          tree.Statement
+	sqlSourceType []string
 }
 
-func (in *UserInput) GetSql() string {
+func (in *UserInput) getSql() string {
 	return in.sql
 }
 
-// GetStmt if the stmt is not nil, we neglect the sql.
-func (in *UserInput) GetStmt() tree.Statement {
+// getStmt if the stmt is not nil, we neglect the sql.
+func (in *UserInput) getStmt() tree.Statement {
 	return in.stmt
+}
+
+func (in *UserInput) getSqlSourceTypes() []string {
+	return in.sqlSourceType
+}
+
+func (in *UserInput) isInternal() bool {
+	return in.getStmt() != nil
 }
 
 type doComQueryFunc func(context.Context, *UserInput) error

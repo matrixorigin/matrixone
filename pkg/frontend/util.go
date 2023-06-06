@@ -272,7 +272,7 @@ func WildcardMatch(pattern, target string) bool {
 	return p >= plen
 }
 
-func GetExprValue(e tree.Expr, ses *Session) (interface{}, error) {
+func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -314,17 +314,14 @@ func GetExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	//2.run the select
 	ctx := ses.GetRequestContext()
 
-	//run the statement in shared transaction
-	bh := ses.GetRawBatchBackgroundExec(ctx)
-	defer bh.Close()
-
-	err = bh.ExecStmt(ses.GetRequestContext(), compositedSelect)
+	//run the statement in the same session
+	ses.ClearResultBatches()
+	err = executeStmtInSameSession(ctx, mce, ses, compositedSelect)
 	if err != nil {
 		return nil, err
 	}
 
-	//3.get the result
-	batches := bh.GetExecResultBatches()
+	batches := ses.GetResultBatches()
 	if len(batches) == 0 {
 		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
 	}

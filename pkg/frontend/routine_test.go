@@ -162,21 +162,21 @@ func Test_ConnectionCount(t *testing.T) {
 		var stmts []tree.Statement = nil
 		var cmdFieldStmt *InternalCmdFieldList
 		var err error
-		if isCmdFieldListSql(input.GetSql()) {
-			cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.GetSql())
+		if isCmdFieldListSql(input.getSql()) {
+			cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.getSql())
 			if err != nil {
 				return nil, err
 			}
 			stmts = append(stmts, cmdFieldStmt)
 		} else {
-			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.GetSql(), 1)
+			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), 1)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		for _, stmt := range stmts {
-			cw = append(cw, newMockWrapper(ctrl, ses, resultSet, noResultSet, input.GetSql(), stmt, proc))
+			cw = append(cw, newMockWrapper(ctrl, ses, resultSet, noResultSet, input.getSql(), stmt, proc))
 		}
 		return cw, nil
 	}

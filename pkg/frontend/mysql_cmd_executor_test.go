@@ -1076,11 +1076,12 @@ func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, e
 }
 
 func Test_getSqlType(t *testing.T) {
-	convey.Convey("call getSqlType func", t, func() {
+	convey.Convey("call genSqlSourceType func", t, func() {
 		sql := "use db"
 		ses := &Session{}
-		ses.getSqlType(&UserInput{sql: sql})
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, internalSql)
+		ui := &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, internalSql)
 
 		user := "special_user"
 		tenant := &TenantInfo{
@@ -1088,24 +1089,29 @@ func Test_getSqlType(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 		SetSpecialUser(user, nil)
-		ses.getSqlType(&UserInput{sql: sql})
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, internalSql)
+		ui = &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, internalSql)
 
 		tenant.User = "dump"
-		ses.getSqlType(&UserInput{sql: sql})
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
+		ui = &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, externSql)
 
 		sql = "/* cloud_user */ use db"
-		ses.getSqlType(&UserInput{sql: sql})
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudUserSql)
+		ui = &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, cloudUserSql)
 
 		sql = "/* cloud_nonuser */ use db"
-		ses.getSqlType(&UserInput{sql: sql})
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudNoUserSql)
+		ui = &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, cloudNoUserSql)
 
 		sql = "/* json */ use db"
-		ses.getSqlType(&UserInput{sql: sql})
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
+		ui = &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, externSql)
 	})
 }
 

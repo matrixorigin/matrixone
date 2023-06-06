@@ -587,6 +587,8 @@ func TestGetExprValue(t *testing.T) {
 			{"set @@x=(select cast('00:00:00' as time))", false, "00:00:00"},
 			{"set @@x=(select cast('1000-01-01 00:00:00' as datetime))", false, "1000-01-01 00:00:00"},
 			{"set @@x=(select cast('1970-01-01 00:00:00' as timestamp))", false, "1970-01-01 00:00:00"},
+			{"set @@x=(select 1 into outfile './test.csv')", false, 1}, //!!!NOTE: there is no file './test.csv'.
+			{"set @@x=(((select true = false)))", false, false},
 		}
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -648,6 +650,9 @@ func TestGetExprValue(t *testing.T) {
 		ses.requestCtx = ctx
 		ses.connectCtx = ctx
 		ses.SetDatabaseName("db")
+		exe := NewMysqlCmdExecutor()
+		exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
+		exe.SetSession(ses)
 		for _, kase := range kases {
 			fmt.Println("++++>", kase.sql)
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
@@ -655,7 +660,7 @@ func TestGetExprValue(t *testing.T) {
 
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
-			value, err := GetExprValue(sv.Assignments[0].Value, ses)
+			value, err := getExprValue(sv.Assignments[0].Value, exe, ses)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {
@@ -756,13 +761,16 @@ func TestGetExprValue(t *testing.T) {
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		ses.connectCtx = ctx
+		exe := NewMysqlCmdExecutor()
+		exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
+		exe.SetSession(ses)
 		for _, kase := range kases {
 			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
-			value, err := GetExprValue(sv.Assignments[0].Value, ses)
+			value, err := getExprValue(sv.Assignments[0].Value, exe, ses)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {

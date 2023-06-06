@@ -255,7 +255,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
-	if sqlType != "internal_sql" {
+	if sqlType != internalSql {
 		ses.tStmt = stm
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
@@ -631,7 +631,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 	return err
 }
 
-func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
+func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree.SetVar) error {
 	var err error = nil
 	setVarFunc := func(system, global bool, name string, value interface{}) error {
 		if system {
@@ -678,7 +678,7 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 		name := assign.Name
 		var value interface{}
 
-		value, err = GetExprValue(assign.Value, ses)
+		value, err = getExprValue(assign.Value, mce, ses)
 		if err != nil {
 			return err
 		}
@@ -725,7 +725,7 @@ handle setvar
 */
 func (mce *MysqlCmdExecutor) handleSetVar(ctx context.Context, sv *tree.SetVar) error {
 	ses := mce.GetSession()
-	err := doSetVar(ctx, ses, sv)
+	err := doSetVar(ctx, mce, ses, sv)
 	if err != nil {
 		return err
 	}
@@ -1599,7 +1599,7 @@ GetComputationWrapper gets the execs from the computation engine
 */
 var GetComputationWrapper = func(db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(input.GetSql()); cached != nil {
+	if cached := ses.getCachedPlan(input.getSql()); cached != nil {
 		modify := false
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
@@ -1621,10 +1621,10 @@ var GetComputationWrapper = func(db string, input *UserInput, user string, eng e
 	var cmdFieldStmt *InternalCmdFieldList
 	var err error
 	// if the input is an option ast, we should use it directly
-	if input.GetStmt() != nil {
-		stmts = append(stmts, input.GetStmt())
-	} else if isCmdFieldListSql(input.GetSql()) {
-		cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.GetSql())
+	if input.getStmt() != nil {
+		stmts = append(stmts, input.getStmt())
+	} else if isCmdFieldListSql(input.getSql()) {
+		cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.getSql())
 		if err != nil {
 			return nil, err
 		}
@@ -1635,7 +1635,7 @@ var GetComputationWrapper = func(db string, input *UserInput, user string, eng e
 		if err != nil {
 			v = int64(1)
 		}
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.GetSql(), v.(int64))
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64))
 		if err != nil {
 			return nil, err
 		}
@@ -3215,10 +3215,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
 	beginInstant := time.Now()
 	ses := mce.GetSession()
-	ses.getSqlType(input)
+	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
-	ses.SetSql(input.GetSql())
+	ses.SetSql(input.getSql())
 	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	proc := process.New(
@@ -3265,7 +3265,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
-	proc.SessionInfo.QueryId = ses.QueryId
+	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 	ses.txnCompileCtx.SetProcess(proc)
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		input,
@@ -3273,12 +3273,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.GetSql()), ses.sqlSourceType, err)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.sqlSourceType, err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
 		}
-		logStatementStringStatus(requestCtx, ses, input.GetSql(), fail, retErr)
+		logStatementStringStatus(requestCtx, ses, input.getSql(), fail, retErr)
 		return retErr
 	}
 
@@ -3289,7 +3289,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	canCache := true
 
 	singleStatement := len(cws) == 1
-	sqlRecord := parsers.HandleSqlForRecord(input.GetSql())
+	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
@@ -3305,10 +3305,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		ses.sentRows.Store(int64(0))
 		stmt := cw.GetAst()
-		sqlType := ses.sqlSourceType[0]
-		if i < len(ses.sqlSourceType) {
-			sqlType = ses.sqlSourceType[i]
-		}
+		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
@@ -3347,7 +3344,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		}
 	} // end of for
 
-	if canCache && !ses.isCached(input.GetSql()) {
+	if canCache && !ses.isCached(input.getSql()) {
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
@@ -3358,7 +3355,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 				return nil
 			}
 		}
-		ses.cachePlan(input.GetSql(), stmts, plans)
+		ses.cachePlan(input.getSql(), stmts, plans)
 	}
 
 	return nil
@@ -3389,7 +3386,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 	ses := mce.GetSession()
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
-	ses.SetSql(input.GetSql())
+	ses.SetSql(input.getSql())
 	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	proc := process.New(
@@ -3430,19 +3427,19 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 	}
 
 	stmtExecs, err = GetStmtExecList(ses.GetDatabaseName(),
-		input.GetSql(),
+		input.getSql(),
 		ses.GetUserName(),
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.GetSql()), ses.sqlSourceType, err)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.sqlSourceType, err)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
-		logStatementStringStatus(requestCtx, ses, input.GetSql(), fail, retErr)
+		logStatementStringStatus(requestCtx, ses, input.getSql(), fail, retErr)
 		return retErr
 	}
 
 	singleStatement := len(stmtExecs) == 1
-	sqlRecord := parsers.HandleSqlForRecord(input.GetSql())
+	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 	for i, exec := range stmtExecs {
 		err = Execute(requestCtx, ses, proc, exec, beginInstant, sqlRecord[i], "", singleStatement)
 		if err != nil {
