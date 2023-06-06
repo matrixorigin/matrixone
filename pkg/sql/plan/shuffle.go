@@ -192,6 +192,30 @@ func GetShuffleDop() (dop int) {
 	return MAXShuffleDOP
 }
 
+// default shuffle type for scan is hash
+// for table with primary key, and ndv of first column in primary key is high enough, use range shuffle
+// only support integer type
+func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
+	n.Stats.Shuffle = true
+	n.Stats.ShuffleType = plan.ShuffleType_Hash
+	if n.TableDef.Pkey != nil {
+		firstColName := n.TableDef.Pkey.Names[0]
+		firstColID := n.TableDef.Name2ColIndex[firstColName]
+		sc := builder.compCtx.GetStatsCache()
+		if sc == nil {
+			return
+		}
+		s := sc.GetStatsInfoMap(n.TableDef.TblId)
+		if s.NdvMap[firstColName] < ShuffleThreshHold {
+			return
+		}
+		n.Stats.ShuffleType = plan.ShuffleType_Range
+		n.Stats.ShuffleColIdx = int32(n.TableDef.Cols[firstColID].Seqnum)
+		n.Stats.ShuffleColMin = int64(s.MinValMap[firstColName])
+		n.Stats.ShuffleColMax = int64(s.MaxValMap[firstColName])
+	}
+}
+
 func determinShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
@@ -202,6 +226,8 @@ func determinShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	switch node.NodeType {
 	case plan.Node_AGG:
 		determinShuffleForGroupBy(node, builder)
+	case plan.Node_TABLE_SCAN:
+		determinShuffleForScan(node, builder)
 	default:
 		node.Stats.ShuffleColIdx = -1
 	}
