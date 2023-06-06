@@ -9,5 +9,4 @@ begin;
 update dis_table_02 set b='dpqweoe' where a>1;
 commit;
 start transaction;
-internal error: Write conflicts detected. Previous transaction need to be aborted.
 drop table if exists dis_table_02;

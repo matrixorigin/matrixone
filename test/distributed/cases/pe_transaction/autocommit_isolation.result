@@ -212,13 +212,14 @@ c    d
 2    2
 50    50
 Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 50    50
 1    1
 2    2
 commit;
-w-w conflict
 set @@autocommit=1;
 select * from test_11;
 c    d
@@ -333,8 +334,9 @@ c    d
 2    2
 100    50
 Insert into test_11 values(100,50);
+Duplicate entry '100' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
-w-w conflict
 set @@autocommit=1;
 select * from test_11;
 c    d

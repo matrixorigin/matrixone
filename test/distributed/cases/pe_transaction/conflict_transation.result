@@ -9,8 +9,9 @@ Previous DML conflicts with existing constraints or data format. This transactio
 use conflict_transation;
 start transaction ;
 insert into ct_01 values(2,'yooo');
-commit;
 Duplicate entry '2' for key 'a'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+commit;
 commit;
 select * from ct_01;
 a    b
@@ -22,13 +23,15 @@ start transaction ;
 update ct_02 set a=5 where b='app';
 begin;
 update ct_02 set a=5 where b='bell';
+Duplicate entry '5' for key 'a'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 commit;
-w-w conflict
 begin;
 update ct_02 set a=3 where b='bell';
-commit;
 Duplicate entry '3' for key 'a'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+commit;
 select * from ct_02;
 a    b
 1    bell
@@ -95,7 +98,7 @@ select * from ct_06;
 a    b    c    d
 501    number2    908    zzzztttt
 commit;
-w-w conflict
+Duplicate entry '908' for key '__mo_index_idx_col'
 select * from ct_06;
 a    b    c    d
 501    number2    908    zzzztttt
@@ -103,9 +106,10 @@ create table ct_07(a int,b varchar(25),c date, d double,primary key(a,c));
 insert into ct_07 values (1,'901','2011-09-29',0.01),(2,'187','2011-09-29',1.31),(3,'90','2111-02-09',10.01);
 begin;
 insert into ct_07 values (3,'90','2111-02-09',10.01);
+Duplicate entry '(3,2111-02-09)' for key '__mo_cpkey_col'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),(4,'90','2011-09-29',89.3);
 Duplicate entry '(4,2011-09-29)' for key '__mo_cpkey_col'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from ct_07;
 a    b    c    d
 1    901    2011-09-29    0.01

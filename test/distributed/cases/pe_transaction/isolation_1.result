@@ -201,12 +201,15 @@ c    d
 2    2
 Insert into test_11 values(50,50);
 Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
-5    4
-50    50
 1    1
 2    2
+3    1
+4    2
+50    50
 select * from test_11;
 c    d
 3    1
@@ -216,7 +219,6 @@ c    d
 2    2
 commit;
 commit;
-w-w conflict
 select * from test_11;
 c    d
 1    1
@@ -252,6 +254,8 @@ c    d
 1    1
 2    2
 Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 50    50
@@ -269,7 +273,6 @@ c    d
 2    2
 select * from test_11;
 c    d
-50    50
 1    1
 2    2
 commit;
@@ -282,7 +285,6 @@ select * from test_11;
 c    d
 1    1
 2    2
-50    50
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -304,6 +306,8 @@ c    d
 1    1
 2    2
 Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 50    50
@@ -316,9 +320,9 @@ c    d
 2    2
 select * from test_11;
 c    d
-50    50
 1    1
 2    2
+50    50
 update test_11 set c = 100 where d = 50;
 select * from test_11;
 c    d
@@ -327,24 +331,22 @@ c    d
 2    2
 select * from test_11;
 c    d
-50    50
 1    1
 2    2
+100    50
 Insert into test_11 values(100,50);
+Duplicate entry '100' for key 'c'
 commit;
 commit;
-w-w conflict
 select * from test_11;
 c    d
 1    1
 2    2
-50    50
 100    50
 select * from test_11;
 c    d
 1    1
 2    2
-50    50
 100    50
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
@@ -367,6 +369,8 @@ c    d
 1    1
 2    2
 Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 50    50
@@ -390,9 +394,9 @@ c    d
 2    2
 select * from test_11;
 c    d
-50    50
 1    1
 2    2
+100    50
 update test_11 set c = 101 where c = 50;
 commit;
 commit;
@@ -400,12 +404,12 @@ select * from test_11;
 c    d
 1    1
 2    2
-101    50
+100    50
 select * from test_11;
 c    d
 1    1
 2    2
-101    50
+100    50
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -427,6 +431,8 @@ c    d
 1    1
 2    2
 Insert into test_11 values(50,50);
+Duplicate entry '50' for key 'c'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 50    50
@@ -450,13 +456,12 @@ c    d
 2    2
 select * from test_11;
 c    d
-50    50
 1    1
 2    2
+100    50
 update test_11 set c = 100 where d = 50;
 commit;
 commit;
-w-w conflict
 select * from test_11;
 c    d
 1    1

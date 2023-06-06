@@ -227,6 +227,7 @@ delete from dis_table_02 where a>1;
 select b, c from dis_table_02;
 -- @session:id=1{
 select b, c from dis_table_02;
+-- @wait:0:commit
 update dis_table_02 set b='tittttt' where a>1;
 select b, c from dis_table_02;
 -- @session}
@@ -272,6 +273,8 @@ use isolation_2;
 create table dis_table_04(a int,b varchar(25) not null,c datetime,primary key(a),unique key bstr (b),key cdate (c));
 insert into dis_table_04 values (6666,'kkkk','2010-11-25');
 insert into dis_table_04 values (879,'oopp','2011-11-26');
+insert into dis_table_01 select 20,'apple';
+insert into dis_table_01 select 21,'orange';
 select * from dis_table_01;
 start transaction ;
 use isolation_2;
@@ -280,6 +283,7 @@ select * from dis_table_04 ;
 -- @session:id=1{
 begin ;
 use isolation_2;
+-- @wait:0:commit
 update dis_table_04 set b='uuyyy' where a=879;
 select * from dis_table_04;
 commit;
@@ -365,6 +369,3 @@ select * from dis_table_07;
 commit;
 select * from dis_table_07;
 drop table dis_table_07;
-
-
-

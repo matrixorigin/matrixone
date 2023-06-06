@@ -12,7 +12,7 @@ null    23
 create table index_02 (col1 bigint primary key,col2 char(25) unique key,col3 float,col4 char(50),key num_id(col4));
 insert into index_02 values (67834,'13456789872',20.23,'5678'),(56473,'',100.00,'5678');
 insert into index_02 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
-Duplicate entry '' for key '__mo_index_idx_col'
+Duplicate entry '()' for key '__mo_index_idx_col'
 insert into index_02 values (67834,'13456799878',20.23,'4090'),(56473,NULL,100.00,'');
 Duplicate entry '67834' for key 'col1'
 insert into index_02 values (3,'excel',0.1,'4090'),(4,'中文',0.2,''),(5,'MMEabc$%^123',0.2,'');
@@ -259,7 +259,7 @@ create table index_table_04 (col1 bigint not null auto_increment,col2 varchar(25
 insert into index_table_04(col2,col3,col4)  select 'apple',1,'10';
 insert into index_table_04(col2,col3,col4)  select 'apple',2,'11';
 insert into index_table_04(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry '46016170706c65003a1502' for key '__mo_index_idx_col'
+Duplicate entry '(apple,2)' for key '__mo_index_idx_col'
 insert into index_table_04(col2,col3,col4)  select NULL,NULL,'13';
 select * from index_table_04;
 col1    col2    col3    col4
@@ -523,7 +523,7 @@ create unique index m1_index on create_index_18(col2,col3);
 insert into create_index_18(col2,col3,col4)  select 'apple',1,'10';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry '46016170706c65003a1502' for key '__mo_index_idx_col'
+Duplicate entry '(apple,2)' for key '__mo_index_idx_col'
 insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
 select * from create_index_18;
 col1    col2    col3    col4
@@ -538,7 +538,7 @@ insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
 insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
 insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
-Duplicate entry '46016170706c65003a15024601313200' for key '__mo_index_idx_col'
+Duplicate entry '(apple,2,12)' for key '__mo_index_idx_col'
 select * from create_index_18;
 col1    col2    col3    col4
 1    apple    1    10
