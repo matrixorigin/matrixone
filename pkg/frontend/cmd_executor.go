@@ -56,21 +56,21 @@ type UserInput struct {
 	sqlSourceType []string
 }
 
-func (in *UserInput) getSql() string {
-	return in.sql
+func (ui *UserInput) getSql() string {
+	return ui.sql
 }
 
 // getStmt if the stmt is not nil, we neglect the sql.
-func (in *UserInput) getStmt() tree.Statement {
-	return in.stmt
+func (ui *UserInput) getStmt() tree.Statement {
+	return ui.stmt
 }
 
-func (in *UserInput) getSqlSourceTypes() []string {
-	return in.sqlSourceType
+func (ui *UserInput) getSqlSourceTypes() []string {
+	return ui.sqlSourceType
 }
 
-func (in *UserInput) isInternal() bool {
-	return in.getStmt() != nil
+func (ui *UserInput) isInternal() bool {
+	return ui.getStmt() != nil
 }
 
 type doComQueryFunc func(context.Context, *UserInput) error

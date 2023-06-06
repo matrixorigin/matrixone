@@ -1081,7 +1081,7 @@ func Test_getSqlType(t *testing.T) {
 		ses := &Session{}
 		ui := &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, internalSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, internalSql)
 
 		user := "special_user"
 		tenant := &TenantInfo{
@@ -1091,27 +1091,27 @@ func Test_getSqlType(t *testing.T) {
 		SetSpecialUser(user, nil)
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, internalSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, internalSql)
 
 		tenant.User = "dump"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, externSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, externSql)
 
 		sql = "/* cloud_user */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, cloudUserSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, cloudUserSql)
 
 		sql = "/* cloud_nonuser */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, cloudNoUserSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, cloudNoUserSql)
 
 		sql = "/* json */ use db"
 		ui = &UserInput{sql: sql}
 		ui.genSqlSourceType(ses)
-		convey.So(ui.sqlSourceType[0], convey.ShouldEqual, externSql)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, externSql)
 	})
 }
 
