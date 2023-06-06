@@ -93,7 +93,7 @@ func TestGet(t *testing.T) {
 	f.init(newTestRPCMessage(ctx, 1))
 	defer f.Close()
 
-	f.messageSended(nil)
+	f.messageSent(nil)
 	f.done(req, nil)
 	resp, err := f.Get()
 	assert.Nil(t, err)
@@ -109,7 +109,7 @@ func TestGetWithTimeout(t *testing.T) {
 	f.init(newTestRPCMessage(ctx, 1))
 	defer f.Close()
 
-	f.messageSended(nil)
+	f.messageSent(nil)
 	resp, err := f.Get()
 	assert.NotNil(t, err)
 	assert.Nil(t, resp)
@@ -128,7 +128,7 @@ func TestGetWithError(t *testing.T) {
 	errResp := moerr.NewBackendClosed(context.TODO())
 	f.error(1, errResp, nil)
 
-	f.messageSended(nil)
+	f.messageSent(nil)
 	resp, err := f.Get()
 	assert.Error(t, err)
 	assert.Nil(t, resp)

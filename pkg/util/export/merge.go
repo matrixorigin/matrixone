@@ -16,6 +16,7 @@ package export
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"encoding/csv"
 	"fmt"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
@@ -46,6 +48,8 @@ import (
 
 const LoggerNameETLMerge = "ETLMerge"
 const LoggerNameContentReader = "ETLContentReader"
+
+const MAX_MERGE_INSERT_TIME = 10 * time.Second
 
 // ========================
 // handle merge
@@ -270,14 +274,120 @@ func (m *Merge) Main(ctx context.Context, ts time.Time) error {
 	return err
 }
 
-// doMergeFiles handle merge{read, write, delete} ops
-// Step 1. find new timestamp_start, timestamp_end.
-// Step 2. make new filename, file writer
-// Step 3. read file data(valid format), and write down new file
-// Step 4. delete old files.
-func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileMeta, bufferSize int64) error {
+// ListRange do list all accounts, all dates which belong to m.Table.GetName()
+func (m *Merge) ListRange(ctx context.Context) error {
+	var files = make([]*FileMeta, 0, 1000)
+	var totalSize int64
 
-	var err error
+	accounts, err := m.FS.List(ctx, "/")
+	if err != nil {
+		return err
+	}
+	if len(accounts) == 0 {
+		m.logger.Info("merge find empty data")
+		return nil
+	}
+	m.logger.Debug(fmt.Sprintf("merge task with max file: %v MB", m.MaxFileSize/mpool.MB))
+	for _, account := range accounts {
+		if !account.IsDir {
+			m.logger.Warn(fmt.Sprintf("path is not dir: %s", account.Name))
+			continue
+		}
+		// build targetPath like "${account}/logs/*/*/*/${table_name}"
+		targetPath := m.pathBuilder.Build(account.Name, table.MergeLogTypeLogs, table.ETLParamTSAll, m.Table.GetDatabase(), m.Table.GetName())
+
+		// search all paths like:
+		// 0: ${account}/logs/2023/05/31/${table_name}
+		// 1: ${account}/logs/2023/06/01/${table_name}
+		// 2: ...
+		rootPaths, err := m.getAllTargetPath(ctx, targetPath)
+		if err != nil {
+			return err
+		}
+
+		// get all file entry
+		for _, rootPath := range rootPaths {
+			m.logger.Info("start merge", logutil.TableField(m.Table.GetIdentify()), logutil.PathField(rootPath),
+				zap.String("metadata.ID", m.Task.Metadata.ID))
+
+			fileEntrys, err := m.FS.List(ctx, rootPath)
+			if err != nil {
+				// fixme: m.logger.Error()
+				return err
+			}
+			files = files[:0]
+			totalSize = 0
+			for _, f := range fileEntrys {
+				filepath := path.Join(rootPath, f.Name)
+				totalSize += f.Size
+				files = append(files, &FileMeta{filepath, f.Size})
+				if totalSize > m.MaxFileSize {
+					if err = m.doMergeFiles(ctx, account.Name, files, totalSize); err != nil {
+						m.logger.Error(fmt.Sprintf("merge task meet error: %v", err))
+					}
+					files = files[:0]
+					totalSize = 0
+				}
+			}
+
+			if len(files) > 0 {
+				if err = m.doMergeFiles(ctx, account.Name, files, 0); err != nil {
+					m.logger.Warn(fmt.Sprintf("merge task meet error: %v", err))
+				}
+			}
+		}
+	}
+
+	return err
+}
+
+func (m *Merge) getAllTargetPath(ctx context.Context, filePath string) ([]string, error) {
+	sep := "/"
+	pathDir := strings.Split(filePath, sep)
+	l := list.New()
+	if pathDir[0] == "" {
+		l.PushBack(sep)
+	} else {
+		l.PushBack(pathDir[0])
+	}
+
+	for i := 1; i < len(pathDir); i++ {
+		length := l.Len()
+		for j := 0; j < length; j++ {
+			elem := l.Remove(l.Front())
+			prefix := elem.(string)
+			entries, err := m.FS.List(ctx, prefix)
+			if err != nil {
+				return nil, err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir && i+1 != len(pathDir) {
+					continue
+				}
+				matched, err := path.Match(pathDir[i], entry.Name)
+				if err != nil {
+					return nil, err
+				}
+				if !matched {
+					continue
+				}
+				l.PushBack(path.Join(prefix, entry.Name))
+			}
+		}
+	}
+
+	length := l.Len()
+	fileList := make([]string, 0, length)
+	for idx := 0; idx < length; idx++ {
+		fileList = append(fileList, l.Remove(l.Front()).(string))
+	}
+	return fileList, nil
+}
+
+// doMergeFiles handle merge{read, write, delete} ops
+// Upload the files to SQL table
+// Delete the files from local disk
+func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileMeta, bufferSize int64) error {
 	ctx, span := trace.Start(ctx, "doMergeFiles")
 	defer span.End()
 
@@ -287,138 +397,74 @@ func (m *Merge) doMergeFiles(ctx context.Context, account string, files []*FileM
 		<-m.runningJobs
 	}()
 
-	if len(files) < m.MinFilesMerge {
-		return moerr.NewInternalError(ctx, "file cnt %d less then threshold %d", len(files), m.MinFilesMerge)
-	}
-
-	// Step 1. group by node_uuid, find target timestamp
-	timestamps := make([]string, 0, len(files))
-	var p table.Path
-	for _, f := range files {
-		p, err = m.pathBuilder.ParsePath(ctx, f.FilePath)
-		if err != nil {
-			return err
-		}
-		ts := p.Timestamp()
-		if len(ts) == 0 {
-			m.logger.Warn(fmt.Sprintf("merge file meet unknown file: %s", f.FilePath))
-			continue
-		}
-		timestamps = append(timestamps, ts[0])
-	}
-	if len(timestamps) == 0 {
-		return moerr.NewNotSupported(ctx, "csv merge: NO timestamp for merge")
-	}
-	timestampStart := timestamps[0]
-	timestampEnd := timestamps[len(timestamps)-1]
-
-	// new buffer
-	if bufferSize <= 0 {
-		bufferSize = m.MaxFileSize
-	}
-	var buf []byte = nil
-	if mergedExtension == table.CsvExtension {
-		buf = make([]byte, 0, bufferSize)
-	}
-
-	// Step 2. new filename, file writer
-	prefix := m.pathBuilder.Build(account, table.MergeLogTypeMerged, m.datetime, m.Table.GetDatabase(), m.Table.GetName())
-	mergeFilename := m.pathBuilder.NewMergeFilename(timestampStart, timestampEnd, mergedExtension)
-	mergeFilepath := path.Join(prefix, mergeFilename)
-	newFileWriter, _ := newETLWriter(ctx, m.FS, mergeFilepath, buf, m.Table, m.mp)
-	m.logger.Info("start merge", logutil.TableField(m.Table.GetIdentify()), logutil.PathField(mergeFilepath),
-		zap.String("metadata.ID", m.Task.Metadata.ID))
-
 	// Step 3. do simple merge
-	cacheFileData := newRowCache(m.Table)
-	row := m.Table.GetRow(ctx)
-	defer row.Free()
-	defer cacheFileData.Reset()
-	var reader ETLReader
-	var fileRows int
-	var readRows = 0
-	for _, path := range files {
+	var uploadFile = func(ctx context.Context, fp *FileMeta) error {
+		row := m.Table.GetRow(ctx)
+		defer row.Free()
 		// open reader
-		fileRows = 0
-		reader, err = newETLReader(ctx, m.Table, m.FS, path.FilePath, path.FileSize, m.mp)
+		reader, err := newETLReader(ctx, m.Table, m.FS, fp.FilePath, fp.FileSize, m.mp)
 		if err != nil {
 			m.logger.Error(fmt.Sprintf("merge file meet read failed: %v", err))
 			return err
 		}
+		defer reader.Close()
+
+		cacheFileData := &SliceCache{}
+		defer cacheFileData.Reset()
 
 		// read all content
 		var line []string
 		line, err = reader.ReadLine()
 		for ; line != nil && err == nil; line, err = reader.ReadLine() {
-			fileRows++
 			if err = row.ParseRow(line); err != nil {
 				m.logger.Error("parse ETL rows failed",
 					logutil.TableField(m.Table.GetIdentify()),
-					logutil.PathField(path.FilePath),
+					logutil.PathField(fp.FilePath),
 					logutil.VarsField(SubStringPrefixLimit(fmt.Sprintf("%v", line), 102400)),
 				)
-				reader.Close()
 				return err
 			}
 			cacheFileData.Put(row)
 		}
 		if err != nil {
 			m.logger.Warn("failed to read file",
-				logutil.PathField(path.FilePath), zap.Error(err))
-			reader.Close()
+				logutil.PathField(fp.FilePath), zap.Error(err))
 			return err
 		}
 
-		// flush cache data
-		if cacheFileData.Size() > m.FileCacheSize {
-			if err = cacheFileData.Flush(newFileWriter); err != nil {
-				m.logger.Warn("failed to write merged etl file",
-					logutil.PathField(mergeFilepath), zap.Error(err))
-				reader.Close()
+		// sql insert
+		if cacheFileData.Size() > 0 {
+			if err = cacheFileData.Flush(m.Table); err != nil {
+				return err
+			}
+			cacheFileData.Reset()
+		}
+		// delete empty file or file already uploaded
+		if cacheFileData.Size() == 0 {
+			if err = m.FS.Delete(ctx, fp.FilePath); err != nil {
+				m.logger.Warn("failed to delete file", zap.Error(err))
 				return err
 			}
 		}
-		reader.Close()
-		readRows += fileRows
-		if fileRows == 0 {
-			m.logger.Warn("read empty file",
+		return nil
+	}
+	var err error
+
+	for _, fp := range files {
+		if err = uploadFile(ctx, fp); err != nil {
+			// todo: adjust the sleep settings
+			// Sleep 10 seconds to wait for the database to recover
+			time.Sleep(10 * time.Second)
+			m.logger.Error("failed to upload file to MO",
 				logutil.TableField(m.Table.GetIdentify()),
-				logutil.PathField(path.FilePath),
-				zap.Int64("size", path.FileSize))
+				logutil.PathField(fp.FilePath),
+				zap.Error(err),
+			)
 		}
 	}
-	// flush cache data
-	if !cacheFileData.IsEmpty() {
-		if err = cacheFileData.Flush(newFileWriter); err != nil {
-			m.logger.Warn("failed to write merged etl file",
-				logutil.PathField(mergeFilepath), zap.Error(err))
-			return err
-		}
-	} else {
-		m.logger.Warn("no remain cache data", logutil.PathField(mergeFilepath), zap.Int("readRows", readRows))
-	}
-	// close writer
-	if _, err = newFileWriter.FlushAndClose(); err != nil {
-		m.logger.Warn("failed to write merged file",
-			logutil.PathField(mergeFilepath), zap.Error(err))
-		return err
-	}
-	if readRows == 0 {
-		m.logger.Error("read empty file", logutil.PathField(mergeFilepath))
-		return moerr.NewEmptyRange(ctx, mergeFilepath)
-	}
+	logutil.Debug("upload files success", logutil.TableField(m.Table.GetIdentify()), zap.Int("file count", len(files)))
 
-	// step 4. delete old files
-	paths := make([]string, len(files))
-	for idx, f := range files {
-		paths[idx] = f.FilePath
-	}
-	if err = m.FS.Delete(ctx, paths...); err != nil {
-		m.logger.Warn("failed to delete input files", zap.Error(err))
-		return err
-	}
-
-	return nil
+	return err
 }
 
 func SubStringPrefixLimit(str string, length int) string {
@@ -596,10 +642,6 @@ func NewContentWriter(writer io.StringWriter, buffer []byte) *ContentWriter {
 }
 
 func (w *ContentWriter) WriteStrings(record []string) error {
-	if err := w.parser.Write(record); err != nil {
-		return err
-	}
-	w.parser.Flush()
 	return nil
 }
 
@@ -615,15 +657,14 @@ func newETLWriter(ctx context.Context, fs fileservice.FileService, filePath stri
 	} else {
 		// CSV
 		fsWriter := etl.NewFSWriter(ctx, fs, etl.WithFilePath(filePath))
-		return NewContentWriter(fsWriter, buf), nil
+		return etl.NewCSVWriter(ctx, fsWriter), nil
 	}
-
 }
 
 type Cache interface {
 	Put(*table.Row)
 	Size() int64
-	Flush(ETLWriter) error
+	Flush(*table.Table) error
 	Reset()
 	IsEmpty() bool
 }
@@ -633,14 +674,10 @@ type SliceCache struct {
 	size int64
 }
 
-func (c *SliceCache) Flush(writer ETLWriter) error {
-	for _, record := range c.m {
-		if err := writer.WriteStrings(record); err != nil {
-			return err
-		}
-	}
+func (c *SliceCache) Flush(tbl *table.Table) error {
+	_, err := db_holder.WriteRowRecords(c.m, tbl, MAX_MERGE_INSERT_TIME)
 	c.Reset()
-	return nil
+	return err
 }
 
 func (c *SliceCache) Reset() {
@@ -662,46 +699,33 @@ func (c *SliceCache) Put(r *table.Row) {
 
 func (c *SliceCache) Size() int64 { return c.size }
 
-func (c *MapCache) Size() int64 { return c.size }
+func LongRunETLMerge(ctx context.Context, task task.Task, logger *log.MOLogger, opts ...MergeOption) error {
+	// should init once in/with schema-init.
+	tables := table.GetAllTable()
+	if len(tables) == 0 {
+		logger.Info("empty tables")
+		return nil
+	}
 
-type MapCache struct {
-	m    map[string][]string
-	size int64
-}
+	newOptions := []MergeOption{WithMaxFileSize(maxFileSize.Load())}
+	newOptions = append(newOptions, opts...)
+	newOptions = append(newOptions, WithTable(tables[0]))
+	merge, err := NewMerge(ctx, newOptions...)
+	if err != nil {
+		return err
+	}
+	merge.Task = task
 
-// Flush will do Reset
-func (c *MapCache) Flush(writer ETLWriter) error {
-	for _, record := range c.m {
-		if err := writer.WriteStrings(record); err != nil {
-			return err
+	logger.Info("start LongRunETLMerge")
+	// handle today
+	for _, tbl := range tables {
+		merge.Table = tbl
+		if err = merge.ListRange(ctx); err != nil {
+			logger.Error("merge metric failed", zap.Error(err))
 		}
 	}
-	c.Reset()
+
 	return nil
-}
-
-func (c *MapCache) Reset() {
-	c.size = 0
-	for key := range c.m {
-		delete(c.m, key)
-	}
-}
-
-func (c *MapCache) IsEmpty() bool {
-	return len(c.m) == 0
-}
-
-func (c *MapCache) Put(r *table.Row) {
-	c.m[r.CsvPrimaryKey()] = r.GetCsvStrings()
-	c.size += r.Size()
-}
-
-func newRowCache(tbl *table.Table) Cache {
-	if len(tbl.PrimaryKeyColumn) == 0 {
-		return &SliceCache{}
-	} else {
-		return &MapCache{m: make(map[string][]string)}
-	}
 }
 
 func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, task task.Task) error {
@@ -718,6 +742,15 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 		defer logger.Info(fmt.Sprintf("done merge '%s', ID: %d, CreateAt: %d, Metadata.ID: %s", args,
 			task.ID, task.CreateAt, task.Metadata.ID))
 
+		// new branch: task run long time
+		if len(args) == 0 {
+			if err := LongRunETLMerge(ctx, task, logger, opts...); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		// old branch
 		elems := strings.Split(string(args), ParamSeparator)
 		id := elems[0]
 		table, exist := table.GetTable(id)
@@ -766,6 +799,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 var MergeTaskCronExpr = MergeTaskCronExprEvery4Hour
 
 const MergeTaskCronExprEvery15Sec = "*/15 * * * * *"
+const MergeTaskCronExprEveryMin = "0 * * * * *"
 const MergeTaskCronExprEvery05Min = "0 */5 * * * *"
 const MergeTaskCronExprEvery15Min = "0 */15 * * * *"
 const MergeTaskCronExprEvery1Hour = "0 0 */1 * * *"
@@ -791,17 +825,9 @@ func CreateCronTask(ctx context.Context, executorID task.TaskCode, taskService t
 	ctx, span := trace.Start(ctx, "ETLMerge.CreateCronTask")
 	defer span.End()
 	logger := runtime.ProcessLevelRuntime().Logger().WithContext(ctx)
-	// should init once in/with schema-init.
-	tables := table.GetAllTable()
 	logger.Info(fmt.Sprintf("init merge task with CronExpr: %s", MergeTaskCronExpr))
-	for _, tbl := range tables {
-		logger.Debug(fmt.Sprintf("init table merge task: %s", tbl.GetIdentify()))
-		if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID, tbl.GetIdentify()), MergeTaskCronExpr); err != nil {
-			return err
-		}
-		if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID, tbl.GetIdentify(), MergeTaskYesterday), MergeTaskCronExprYesterday); err != nil {
-			return err
-		}
+	if err = taskService.CreateCronTask(ctx, MergeTaskMetadata(executorID), MergeTaskCronExpr); err != nil {
+		return err
 	}
 	return nil
 }
@@ -845,13 +871,11 @@ func InitCronExpr(ctx context.Context, duration time.Duration) error {
 }
 
 var maxFileSize atomic.Int64
-var mergedExtension = table.GetExtension(table.CsvExtension)
 
 func InitMerge(ctx context.Context, SV *config.ObservabilityParameters) error {
 	var err error
 	mergeCycle := SV.MergeCycle.Duration
 	filesize := SV.MergeMaxFileSize
-	ext := SV.MergedExtension
 	if mergeCycle > 0 {
 		err = InitCronExpr(ctx, mergeCycle)
 		if err != nil {
@@ -859,6 +883,5 @@ func InitMerge(ctx context.Context, SV *config.ObservabilityParameters) error {
 		}
 	}
 	maxFileSize.Store(int64(filesize * mpool.MB))
-	mergedExtension = table.GetExtension(ext)
 	return nil
 }

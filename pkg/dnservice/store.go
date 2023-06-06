@@ -179,6 +179,7 @@ func NewService(
 		return nil, err
 	}
 	s.initTaskHolder()
+	s.initSqlWriterFactory()
 	return s, nil
 }
 
