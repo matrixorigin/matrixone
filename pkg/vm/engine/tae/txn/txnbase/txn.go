@@ -79,7 +79,7 @@ type Txn struct {
 	Mgr                      *TxnManager
 	Store                    txnif.TxnStore
 	Err                      error
-	LSN                      uint64
+	LSN                      atomic.Uint64
 	TenantID, UserID, RoleID atomic.Uint32
 	isReplay                 bool
 	DedupType                txnif.DedupType
@@ -116,19 +116,20 @@ func NewPersistedTxn(
 	prepareRollbackFn func(txnif.AsyncTxn) error,
 	applyCommitFn func(txnif.AsyncTxn) error,
 	applyRollbackFn func(txnif.AsyncTxn) error) *Txn {
-	return &Txn{
+	txn := &Txn{
 		Mgr:               mgr,
 		TxnCtx:            ctx,
 		Store:             store,
 		isReplay:          true,
-		LSN:               lsn,
 		PrepareRollbackFn: prepareRollbackFn,
 		PrepareCommitFn:   prepareCommitFn,
 		ApplyRollbackFn:   applyRollbackFn,
 		ApplyCommitFn:     applyCommitFn,
 	}
+	txn.LSN.Store(lsn)
+	return txn
 }
-func (txn *Txn) GetLsn() uint64 { return txn.LSN }
+func (txn *Txn) GetLsn() uint64 { return txn.LSN.Load() }
 func (txn *Txn) IsReplay() bool { return txn.isReplay }
 
 func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
@@ -295,7 +296,7 @@ func (txn *Txn) GetStore() txnif.TxnStore {
 	return txn.Store
 }
 
-func (txn *Txn) GetLSN() uint64 { return txn.LSN }
+func (txn *Txn) GetLSN() uint64 { return txn.LSN.Load() }
 
 func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 	// Idempotent check
@@ -339,7 +340,7 @@ func (txn *Txn) ApplyCommit() (err error) {
 	}
 	defer func() {
 		//Get the lsn of ETTxnRecord entry in GroupC.
-		txn.LSN = txn.Store.GetLSN()
+		txn.LSN.Store(txn.Store.GetLSN())
 		if err == nil {
 			err = txn.Store.Close()
 		} else {
@@ -356,7 +357,7 @@ func (txn *Txn) ApplyRollback() (err error) {
 		return
 	}
 	defer func() {
-		txn.LSN = txn.Store.GetLSN()
+		txn.LSN.Store(txn.Store.GetLSN())
 		if err == nil {
 			err = txn.Store.Close()
 		} else {
