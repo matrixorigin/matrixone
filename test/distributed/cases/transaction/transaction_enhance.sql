@@ -281,3 +281,4 @@ select * from atomic_table_18;
 commit;
 select * from atomic_table_18;
 set autocommit=1;
+drop account if exists trans_acc1;

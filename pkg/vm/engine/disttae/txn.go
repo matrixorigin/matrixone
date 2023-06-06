@@ -25,11 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (txn *Transaction) getBlockInfos(
@@ -123,7 +121,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var size uint64
 	txn.Lock()
 	defer txn.Unlock()
-	if !(offset > 0 || txn.workspaceSize >= colexec.WriteS3Threshold ||
+	if !((offset > 0 && txn.workspaceSize >= colexec.WriteS3Threshold) ||
 		(force && txn.workspaceSize >= colexec.TagS3Size)) {
 		return nil
 	}
@@ -195,47 +193,6 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	return nil
 }
 
-// func (txn *Transaction) dumpWrites(offset int) (size uint64, mp map[[2]string][]*batch.Batch) {
-// 	txn.Lock()
-// 	defer txn.Unlock()
-
-// 	for i := offset; i < len(txn.writes); i++ {
-// 		if txn.writes[i].bat == nil {
-// 			continue
-// 		}
-// 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-// 			size += uint64(txn.writes[i].bat.Size())
-// 		}
-// 	}
-// 	if offset > 0 && size < txn.workspaceSize {
-// 		return 0, nil
-// 	}
-
-// 	mp = make(map[[2]string][]*batch.Batch)
-// 	for i := offset; i < len(txn.writes); i++ {
-// 		// TODO: after shrink, we should update workspace size
-// 		if txn.writes[i].bat == nil || txn.writes[i].bat.Length() == 0 {
-// 			continue
-// 		}
-// 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-// 			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
-// 			bat := txn.writes[i].bat
-// 			// skip rowid
-// 			bat.Attrs = bat.Attrs[1:]
-// 			bat.Vecs = bat.Vecs[1:]
-// 			mp[key] = append(mp[key], bat)
-// 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
-// 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
-// 			// maybe this will cause that the log imcrements unlimitly
-// 			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
-// 			// i--
-// 			txn.writes[i].bat = nil
-// 		}
-// 	}
-
-// 	return
-// }
-
 func (txn *Transaction) getS3Writer(key [2]string) (*colexec.S3Writer, engine.Relation, error) {
 	sortIdx, attrs, tbl, err := txn.getSortIdx(key)
 	if err != nil {
@@ -269,7 +226,7 @@ func (txn *Transaction) getSortIdx(key [2]string) (int, []*engine.Attribute, eng
 	}
 	for i := 0; i < len(attrs); i++ {
 		if attrs[i].ClusterBy ||
-			(attrs[i].Primary && !attrs[i].IsHidden) {
+			(attrs[i].Primary && attrs[i].Name != catalog.FakePrimaryKeyColName) {
 			return i, attrs, tbl, err
 		}
 	}
@@ -464,72 +421,6 @@ func (txn *Transaction) mergeTxnWorkspace() {
 		}
 	}
 }
-
-func evalFilterExprWithZonemap(
-	ctx context.Context,
-	meta objectio.ColumnMetaFetcher,
-	expr *plan.Expr,
-	zms []objectio.ZoneMap,
-	vecs []*vector.Vector,
-	columnMap map[int]int,
-	proc *process.Process,
-) (selected bool) {
-	return colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
-}
-
-/* used by multi-dn
-func needSyncDnStores(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef,
-	priKeys []*engine.Attribute, dnStores []DNStore, proc *process.Process) []int {
-	var pk *engine.Attribute
-
-	fullList := func() []int {
-		dnList := make([]int, len(dnStores))
-		for i := range dnStores {
-			dnList[i] = i
-		}
-		return dnList
-	}
-	if len(dnStores) == 1 {
-		return []int{0}
-	}
-	for _, key := range priKeys {
-		// If it is a composite primary key, skip
-		if key.Name == catalog.CPrimaryKeyColName {
-			continue
-		}
-		pk = key
-		break
-	}
-	// have no PrimaryKey, return all the list
-	if expr == nil || pk == nil || tableDef == nil {
-		return fullList()
-	}
-	if pk.Type.IsIntOrUint() {
-		canComputeRange, intPkRange := computeRangeByIntPk(expr, pk.Name, "")
-		if !canComputeRange {
-			return fullList()
-		}
-		if intPkRange.isRange {
-			r := intPkRange.ranges
-			if r[0] == math.MinInt64 || r[1] == math.MaxInt64 || r[1]-r[0] > MAX_RANGE_SIZE {
-				return fullList()
-			}
-			intPkRange.isRange = false
-			for i := intPkRange.ranges[0]; i <= intPkRange.ranges[1]; i++ {
-				intPkRange.items = append(intPkRange.items, i)
-			}
-		}
-		return getListByItems(dnStores, intPkRange.items)
-	}
-	canComputeRange, hashVal := computeRangeByNonIntPk(ctx, expr, pk.Name, proc)
-	if !canComputeRange {
-		return fullList()
-	}
-	listLen := uint64(len(dnStores))
-	idx := hashVal % listLen
-	return []int{int(idx)}
-}
-*/
 
 func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
 	txn.Lock()

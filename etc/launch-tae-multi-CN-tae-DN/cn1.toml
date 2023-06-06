@@ -48,4 +48,4 @@ port = 16001
 
 [cn.txn]
 enable-sacrificing-freshness = false
-enable-cn-based-consistency = true
+enable-cn-based-consistency = false

@@ -319,4 +319,5 @@ commit;
 select * from atomic_table_18;
 SQL parser error: table "atomic_table_18" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
-set autocommit=0;
+set autocommit=1;
+drop account if exists trans_acc1;
