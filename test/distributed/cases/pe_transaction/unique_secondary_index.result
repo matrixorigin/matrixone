@@ -1,0 +1,837 @@
+create table index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key num_phone(col2),key num_id(col4));
+insert into index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
+insert into index_01 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
+Duplicate entry '13456789872' for key '__mo_index_idx_col'
+insert into index_01 values (4,'13866666666',20.23,'5678'),(5,'13873458290',100.00,'23'),(6,'13777777777',100.00,'23');
+Duplicate entry '13873458290' for key '__mo_index_idx_col'
+select col2,col4 from index_01;
+col2    col4
+13456789872    5678
+13873458290    23
+null    23
+create table index_02 (col1 bigint primary key,col2 char(25) unique key,col3 float,col4 char(50),key num_id(col4));
+insert into index_02 values (67834,'13456789872',20.23,'5678'),(56473,'',100.00,'5678');
+insert into index_02 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
+Duplicate entry '' for key '__mo_index_idx_col'
+insert into index_02 values (67834,'13456799878',20.23,'4090'),(56473,NULL,100.00,'');
+Duplicate entry '67834' for key 'col1'
+insert into index_02 values (3,'excel',0.1,'4090'),(4,'中文',0.2,''),(5,'MMEabc$%^123',0.2,'');
+select col2,col4 from index_02;
+col2    col4
+13456789872    5678
+    5678
+excel    4090
+中文    
+MMEabc$%^123    
+select * from index_02 where col2="MMEabc$%^123";
+col1    col2    col3    col4
+5    MMEabc$%^123    0.2    
+create table index_03 (col1 bigint auto_increment primary key,col2 int,col3 float,col4 int,unique key id1(col2),key id2(col4));
+insert into index_03(col2,col3,col4) values (10,20.23,4090),(10,100.00,5678);
+Duplicate entry '10' for key '__mo_index_idx_col'
+insert into index_03(col2,col3,col4) values (10,20.23,4090),(11,100.00,4090);
+insert into index_03(col2,col3,col4) values (67834,20.23,4090),(56473,100.00,5678),(NULL,0.01,NULL);
+insert into index_03(col2,col3,col4) values (-2147483648,1.2,100),(2147483647,2.0,5);
+select * from index_03;
+col1    col2    col3    col4
+3    10    20.23    4090
+4    11    100.0    4090
+5    67834    20.23    4090
+6    56473    100.0    5678
+7    null    0.01    null
+8    -2147483648    1.2    100
+9    2147483647    2.0    5
+select * from index_03 where col2=-2147483648;
+col1    col2    col3    col4
+8    -2147483648    1.2    100
+create table index_04 (col1 bigint,col2 int primary key,col3 float,col4 bigint,unique key id1(col1),key id2(col4));
+insert into index_04 values (67834,2,20.23,4090),(67834,4,100.00,4091);
+Duplicate entry '67834' for key '__mo_index_idx_col'
+insert into index_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
+insert into index_04 values (3,2,20.23,4090),(2,4,100.00,4091),(4,4,100.00,4090);
+(Duplicate entry ')([\d\D]*)(' for key 'col2')
+select * from index_04;
+col1    col2    col3    col4
+1    2    20.23    4090
+2    4    100.0    4091
+null    3    0.01    null
+select * from index_04 where col1 between 10 and 1000000;
+col1    col2    col3    col4
+create table index_05 (col1 smallint unique key,col2 int primary key,col3 float,col4 smallint,key id2(col4));
+insert into index_05 values (1,2,20.23,4090),(1,4,100.00,4091);
+Duplicate entry '1' for key '__mo_index_idx_col'
+insert into index_05 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
+select * from index_05;
+col1    col2    col3    col4
+1    2    20.23    4090
+2    4    100.0    4091
+null    3    0.01    null
+create table index_06 (col1 tinyint,col2 int primary key,col3 float,col4 tinyint,unique key id1(col1),key id2(col4));
+insert into index_06 values (1,2,20.23,56),(1,4,100.00,90);
+Duplicate entry '1' for key '__mo_index_idx_col'
+insert into index_06 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+select * from index_06;
+col1    col2    col3    col4
+1    2    20.23    56
+2    4    100.0    41
+null    3    0.01    null
+create table index_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned,unique key id1(col1),key id2(col4));
+insert into index_07 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+insert into index_07 values (1,2,20.23,56),(1,4,100.00,90);
+(Duplicate entry ')([\d\D]*)(' for key ')([col2|__mo_index_idx_col]*)(')
+select * from index_07;
+col1    col2    col3    col4
+1    2    20.23    56
+2    4    100.0    41
+null    3    0.01    null
+create table index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned,unique key id1(col1),key id2(col4));
+insert into index_08 values (1,2,20.23,56),(1,4,100.00,90);
+Duplicate entry '1' for key '__mo_index_idx_col'
+insert into index_08 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+select * from index_08;
+col1    col2    col3    col4
+1    2    20.23    56
+2    4    100.0    41
+null    3    0.01    null
+create table index_09 (col1 bigint primary key,col2 decimal(4,2),col3 decimal(4,2),unique key d1(col2),key d2(col3));
+insert into index_09 values (1000,20.23,20.00),(1200,20.23,0.10);
+Duplicate entry '20.23' for key '__mo_index_idx_col'
+insert into index_09 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
+select * from index_09;
+col1    col2    col3
+1000    20.23    20.00
+1200    0.23    20.10
+1100    null    null
+create table index_10 (col1 bigint primary key,col2 float,col3 float,unique key d1(col2),key d2(col3));
+insert into index_10 values (1000,20.23,20.00),(1200,20.23,0.10);
+Duplicate entry '20.23' for key '__mo_index_idx_col'
+insert into index_10 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
+select * from index_10;
+col1    col2    col3
+1000    20.23    20.0
+1200    0.23    20.1
+1100    null    null
+create table index_11 (col1 bigint primary key,col2 double,col3 double,unique key d1(col2),key d2(col3));
+insert into index_11 values (1000,20.23,20.00),(1200,20.23,0.10);
+Duplicate entry '20.23' for key '__mo_index_idx_col'
+insert into index_11 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
+select * from index_11;
+col1    col2    col3
+1000    20.23    20.0
+1200    0.23    20.1
+1100    null    null
+create table index_12 (col1 bigint auto_increment primary key,col2 date,col3 date,unique key d1(col2),key d2(col3));
+insert into index_12(col2,col3) values ('2013-01-01','2014-02-01'),('2013-01-01','2014-02-20');
+Duplicate entry '2013-01-01' for key '__mo_index_idx_col'
+insert into index_12(col2,col3) values (NULL,'2014-02-01'),(NULL,NULL);
+select col2 from index_12;
+col2
+null
+null
+create table index_13 (col1 bigint auto_increment primary key,col2 datetime,col3 datetime,unique key d1(col2),key d2(col3));
+insert into index_13(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
+Duplicate entry '2013-01-01 12:00:00' for key '__mo_index_idx_col'
+insert into index_13(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
+create table index_14 (col1 bigint auto_increment primary key,col2 timestamp,col3 timestamp,unique key d1(col2),key d2(col3));
+insert into index_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
+Duplicate entry '2013-01-01 12:00:00' for key '__mo_index_idx_col'
+insert into index_14(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
+create table index_15 (col1 bigint primary key,col2 bool,unique key c2(col2));
+insert into index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
+(Duplicate entry ')([\d\D][true|false]*)(' for key '__mo_index_idx_col')
+insert into index_15 values (1,TRUE),(2,FALSE),(3,NULL);
+select * from index_15;
+col1    col2
+1    true
+2    false
+3    null
+create table index_16 (col1 bigint primary key,col2 blob,col3 blob,unique key d1(col2),key d2(col3));
+not supported: BLOB column 'col2' cannot be in index
+create table index_17 (col1 bigint primary key,col2 json,col3 json,unique key d1(col2),key d2(col3));
+not supported: JSON column 'col2' cannot be in index
+create table index_18 (col1 bigint primary key,col2 text,col3 text,unique key d1(col2),key d2(col3));
+not supported: TEXT column 'col2' cannot be in index
+create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key 123(col2),key num_id(col4));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 108 near " 123(col2),key num_id(col4));";
+create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key abs@123.abc(col2),key num_id(col4));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 116 near "@123.abc(col2),key num_id(col4));";
+create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key default(col2),key num_id(col4));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 112 near " default(col2),key num_id(col4));";
+create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key `default`(col2),key num_id(col4));
+drop table index_name;
+create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key `123`(col2),key num_id(col4));
+drop table index_name;
+create table index_name (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50),unique key `abs@123.abc`(col2),key num_id(col4));
+drop table index_name;
+create table index_table_01 (col1 bigint auto_increment primary key,col2 varchar(25),col3 float default 87.01,col4 int,unique key num_phone(col2),key num_id(col4));
+insert into index_table_01 values (67834,'13456789872',20.23,4090),(56473,'',100.00,5678);
+insert into index_table_01 values (34,NULL,4090,1);
+insert into index_table_01 values (56478,'',103.00,5670);
+Duplicate entry '' for key '__mo_index_idx_col'
+select * from index_table_01;
+col1    col2    col3    col4
+67834    13456789872    20.23    4090
+56473        100.0    5678
+34    null    4090.0    1
+drop table index_table_01;
+create table index_table_02 (col1 bigint primary key,col2 varchar(25) not null,col3 float default 87.01,col4 int,unique key num_phone(col2),key num_id(col4));
+insert into index_table_02 values (34,NULL,4090,1);
+constraint violation: Column 'col2' cannot be null
+drop table index_table_02;
+create table index_table_02 (col1 bigint primary key,col2 int default 0,unique key col2(col2));
+insert into index_table_02(col1) values (1);
+insert into index_table_02(col1) values (2),(3);
+Duplicate entry '0' for key '__mo_index_idx_col'
+drop table index_table_02;
+create table index_table_03 (col1 bigint,col2 int,unique key col2(col2));
+insert into index_table_03 values (1,20),(2,NULL),(3,90);
+update index_table_03 set col2=10 where col2 is NULL;
+select * from index_table_03;
+col1    col2
+1    20
+3    90
+2    10
+drop table index_table_03;
+CREATE TABLE IF NOT EXISTS `t_code_rule` (
+`code_id` bigint(20) NOT NULL ,
+`code_no` varchar(50) NOT NULL,
+`org_no` varchar(50) NOT NULL,
+`org_name` varchar(50) NOT NULL,
+`ancestors` varchar(255) NOT NULL,
+`code_rule_no` varchar(50) NOT NULL,
+`code_rule_name` varchar(50) NOT NULL,
+`code_name` varchar(50) NOT NULL,
+`code_type` int(11),
+`split` varchar(50) DEFAULT NULL,
+`remark` varchar(255),
+`create_time` datetime NOT NULL,
+`create_user` varchar(50) DEFAULT NULL,
+`last_update_time` datetime DEFAULT NULL,
+`last_update_user` varchar(50) DEFAULT NULL,
+`is_system_code` varchar(20)  NOT NULL DEFAULT 'N',
+PRIMARY KEY (`code_id`),
+UNIQUE KEY `code_type` (`code_type`),
+KEY `code_no` (`code_no`),
+KEY `code_rule_no` (`code_rule_no`),
+KEY `org_no` (`org_no`)
+);
+show create table t_code_rule;
+Table    Create Table
+t_code_rule    CREATE TABLE `t_code_rule` (\n`code_id` BIGINT NOT NULL,\n`code_no` VARCHAR(50) NOT NULL,\n`org_no` VARCHAR(50) NOT NULL,\n`org_name` VARCHAR(50) NOT NULL,\n`ancestors` VARCHAR(255) NOT NULL,\n`code_rule_no` VARCHAR(50) NOT NULL,\n`code_rule_name` VARCHAR(50) NOT NULL,\n`code_name` VARCHAR(50) NOT NULL,\n`code_type` INT DEFAULT NULL,\n`split` VARCHAR(50) DEFAULT null,\n`remark` VARCHAR(255) DEFAULT NULL,\n`create_time` DATETIME NOT NULL,\n`create_user` VARCHAR(50) DEFAULT null,\n`last_update_time` DATETIME DEFAULT null,\n`last_update_user` VARCHAR(50) DEFAULT null,\n`is_system_code` VARCHAR(20) DEFAULT 'N',\nPRIMARY KEY (`code_id`),\nUNIQUE KEY `code_type` (`code_type`),\nKEY `code_no` (`code_no`),\nKEY `code_rule_no` (`code_rule_no`),\nKEY `org_no` (`org_no`)\n)
+load data infile  '$resources/load_data/unique_index_file.csv' into table t_code_rule ;
+select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
+code_id    code_type    code_no    code_rule_no    org_no
+1000    30    18723    0000234    yy01
+1001    31    9999    0000235    yy02
+1002    32    8783    0000236    yy03
+1003    33    6783    0000237    yy04
+1004    34    8394    0000238    yy05
+1005    21    1111    0000239    yy06
+1006    36    5983    0000240    yy07
+1007    37    9844    0000241    yy08
+1008    null    2378    0000242    yy09
+1009    39    8744    0000243    yy10
+truncate table t_code_rule;
+load data infile  '$resources/load_data/unique_index_duplicate.csv' into table t_code_rule;
+Duplicate entry '30' for key '__mo_index_idx_col'
+select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
+code_id    code_type    code_no    code_rule_no    org_no
+create table index_temp( col1 bigint(20) NOT NULL ,col2 varchar(50) NOT NULL,col3 varchar(50) NOT NULL,col4 varchar(50) NOT NULL,col5 varchar(255) NOT NULL,col6 varchar(50) NOT NULL,col7 varchar(50) NOT NULL,col8 varchar(50) NOT NULL,col9 int(11) ,col10 varchar(50) DEFAULT NULL,col11 varchar(255),col12 datetime NOT NULL,col13 varchar(50) DEFAULT NULL,col14 datetime DEFAULT NULL,col15 varchar(50) DEFAULT NULL,col16 varchar(20)  NOT NULL DEFAULT 'N');
+load data infile  '$resources/load_data/unique_index_file.csv' into table index_temp;
+insert into t_code_rule select * from index_temp;
+select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
+code_id    code_type    code_no    code_rule_no    org_no
+1000    30    18723    0000234    yy01
+1001    31    9999    0000235    yy02
+1002    32    8783    0000236    yy03
+1003    33    6783    0000237    yy04
+1004    34    8394    0000238    yy05
+1005    21    1111    0000239    yy06
+1006    36    5983    0000240    yy07
+1007    37    9844    0000241    yy08
+1008    null    2378    0000242    yy09
+1009    39    8744    0000243    yy10
+truncate table index_temp;
+load data infile  '$resources/load_data/unique_index_duplicate.csv' into table index_temp;
+insert into t_code_rule select * from index_temp;
+(Duplicate entry ')([\d\D]*)(' for key '__mo_index_idx_col')
+create table index_table_04 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key m1(col2,col3),key num_id(col4));
+insert into index_table_04(col2,col3,col4)  select 'apple',1,'10';
+insert into index_table_04(col2,col3,col4)  select 'apple',2,'11';
+insert into index_table_04(col2,col3,col4)  select 'apple',2,'12';
+Duplicate entry '46016170706c65003a1502' for key '__mo_index_idx_col'
+insert into index_table_04(col2,col3,col4)  select NULL,NULL,'13';
+select * from index_table_04;
+col1    col2    col3    col4
+1    apple    1    10
+2    apple    2    11
+4    null    null    13
+drop table index_table_04;
+create table index_table_04 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key m1(col2),unique key m2(col3),key num_id(col4));
+insert into index_table_04(col2,col3,col4)  select 'apple',1,'10';
+insert into index_table_04(col2,col3,col4)  select 'apple',2,'11';
+Duplicate entry 'apple' for key '__mo_index_idx_col'
+insert into index_table_04(col2,col3,col4)  select 'apple',2,'12';
+Duplicate entry 'apple' for key '__mo_index_idx_col'
+insert into index_table_04(col2,col3,col4)  select NULL,NULL,'13';
+select * from index_table_04;
+col1    col2    col3    col4
+1    apple    1    10
+4    null    null    13
+create table index_table_05 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key col2(col2),key num_id(col4));
+insert into index_table_05(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('bread',3,'12');
+select * from index_table_05;
+col1    col2    col3    col4
+1    apple    1    10
+2    store    2    11
+3    bread    3    12
+update index_table_05 set col2='chart' where col1=2;
+select col2 from index_table_05;
+col2
+apple
+bread
+chart
+update index_table_05 set col2='bread' where col1=1;
+Duplicate entry 'bread' for key '__mo_index_idx_col'
+select * from index_table_05;
+col1    col2    col3    col4
+1    apple    1    10
+3    bread    3    12
+2    chart    2    11
+delete from index_table_05 where col2='apple';
+select * from index_table_05;
+col1    col2    col3    col4
+3    bread    3    12
+2    chart    2    11
+truncate table index_table_05;
+insert into index_table_05(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('apple',3,'12');
+Duplicate entry 'apple' for key '__mo_index_idx_col'
+select * from index_table_05;
+col1    col2    col3    col4
+drop table index_table_05;
+create table index_table_05 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key col2(col2),key num_id(col4));
+insert into index_table_05(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('bread',3,'12');
+create table index_table_06 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),key num_id(col4));
+insert into index_table_06(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('bread',3,'12');
+select * from index_table_06;
+col1    col2    col3    col4
+1    apple    1    10
+2    store    2    11
+3    bread    3    12
+drop table index_table_06;
+create table index_table_06 (col1 bigint not null auto_increment,col2 varchar(25),col3 int default 10,col4 varchar(50),primary key (col1),key col2(col2),key col3(col3));
+insert into index_table_06(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('bread',2,'12');
+insert into index_table_06(col2,col3,col4) values ('read',1,'10'),('write',2,'11'),('bread',3,'10');
+insert into index_table_06(col2,col3,col4) values ('read',NULL,'10'),('write',NULL,NULL);
+select col2,col3 from index_table_06;
+col2    col3
+apple    1
+store    2
+bread    2
+read    1
+write    2
+bread    3
+read    null
+write    null
+create table index_table_07 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key col10(col10),key num_id(col4));
+invalid input: column 'col10' is not exist
+create table index_table_07 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key col2(col2),key num_id(col40));
+invalid input: column 'col40' is not exist
+create table create_index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50));
+create unique index varchar_index on create_index_01(col2) comment 'create varchar index';
+insert into create_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
+insert into create_index_01 values (67834,'13456789872',20.23,'4090'),(56473,'13456789872',100.00,'5678');
+Duplicate entry '13456789872' for key '__mo_index_idx_col'
+select col2,col4 from create_index_01;
+col2    col4
+13456789872    5678
+13873458290    23
+null    23
+select * from create_index_01 where col2 not in ('13873458290');
+col1    col2    col3    col4
+1    13456789872    20.23    5678
+drop index varchar_index on create_index_01;
+create table create_index_02 (col1 bigint,col2 char(25),col3 float,col4 char(50));
+create unique index char_index on create_index_02(col2);
+insert into create_index_02 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
+insert into create_index_02 values (67834,'13456799878',20.23,'4090'),(56473,NULL,100.00,'');
+insert into create_index_02 values (3,'excel',0.1,'4090'),(4,'中文',0.2,''),(5,'MMEabc$%^123',0.2,'');
+select col2,col4 from create_index_02;
+col2    col4
+    5678
+13873458290    23
+13456799878    4090
+null    
+excel    4090
+中文    
+MMEabc$%^123    
+select * from create_index_02 where col2 like "MME%";
+col1    col2    col3    col4
+5    MMEabc$%^123    0.2    
+drop index char_index on create_index_02;
+create table create_index_03 (col1 bigint auto_increment,col2 int,col3 float,col4 int);
+create unique index int_index on create_index_03(col2);
+insert into create_index_03(col2,col3,col4) values (10,20.23,4090),(10,100.00,5678);
+Duplicate entry '10' for key '__mo_index_idx_col'
+insert into create_index_03(col2,col3,col4) values (10,20.23,4090),(11,100.00,4090);
+insert into create_index_03(col2,col3,col4) values (67834,20.23,4090),(56473,100.00,5678),(NULL,0.01,NULL);
+select * from create_index_03;
+col1    col2    col3    col4
+3    10    20.23    4090
+4    11    100.0    4090
+5    67834    20.23    4090
+6    56473    100.0    5678
+7    null    0.01    null
+drop index int_index on create_index_03;
+create table create_index_04 (col1 bigint,col2 int primary key,col3 float,col4 bigint);
+create unique index bigint_index on create_index_04(col1);
+insert into create_index_04 values (67834,2,20.23,4090),(67834,4,100.00,4091);
+Duplicate entry '67834' for key '__mo_index_idx_col'
+insert into create_index_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
+insert into create_index_04 values (-9223372036854775808,5,20.23,4090),(9223372036854775807,6,100.00,4091);
+select * from create_index_04;
+col1    col2    col3    col4
+1    2    20.23    4090
+2    4    100.0    4091
+null    3    0.01    null
+-9223372036854775808    5    20.23    4090
+9223372036854775807    6    100.0    4091
+select * from create_index_04 where col1 in (-9223372036854775808,9223372036854775807);
+col1    col2    col3    col4
+-9223372036854775808    5    20.23    4090
+9223372036854775807    6    100.0    4091
+create table create_index_05 (col1 smallint,col2 int primary key,col3 float,col4 smallint);
+create unique index smallint_index on create_index_05(col1);
+insert into create_index_05 values (1,2,20.23,4090),(1,4,100.00,4091);
+Duplicate entry '1' for key '__mo_index_idx_col'
+insert into create_index_05 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
+select * from create_index_05;
+col1    col2    col3    col4
+1    2    20.23    4090
+2    4    100.0    4091
+null    3    0.01    null
+create table create_index_06 (col1 tinyint,col2 int primary key,col3 float,col4 tinyint);
+create unique index tinyint_index on create_index_06(col1);
+insert into create_index_06 values (1,2,20.23,56),(1,4,100.00,90);
+Duplicate entry '1' for key '__mo_index_idx_col'
+insert into create_index_06 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+select * from create_index_06;
+col1    col2    col3    col4
+1    2    20.23    56
+2    4    100.0    41
+null    3    0.01    null
+create table create_index_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned);
+create unique index int_unsigned_index on create_index_07(col1);
+insert into create_index_07 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+insert into create_index_07 values (1,2,20.23,56),(1,4,100.00,90);
+(Duplicate entry ')([\d\D]*)(' for key ')([col2|__mo_index_idx_col]*)(')
+select * from create_index_07;
+col1    col2    col3    col4
+1    2    20.23    56
+2    4    100.0    41
+null    3    0.01    null
+create table create_index_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned);
+create unique index bigint_unsigned_index on create_index_08(col1);
+insert into create_index_08 values (1,2,20.23,56),(1,4,100.00,90);
+Duplicate entry '1' for key '__mo_index_idx_col'
+insert into create_index_08 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+select * from create_index_08;
+col1    col2    col3    col4
+1    2    20.23    56
+2    4    100.0    41
+null    3    0.01    null
+create table create_index_09 (col1 bigint primary key,col2 decimal(16,8),col3 decimal(16,8));
+create unique index decimal_index on create_index_09(col2);
+insert into create_index_09 values (1000,20.23,20.00),(1200,20.23,0.10);
+Duplicate entry '20.23000000' for key '__mo_index_idx_col'
+insert into create_index_09 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
+select * from create_index_09;
+col1    col2    col3
+1000    20.23000000    20.00000000
+1200    0.23000000    20.10000000
+1100    null    null
+create table create_index_10 (col1 bigint primary key,col2 float,col3 float);
+create unique index float_index on create_index_10(col2);
+insert into create_index_10 values (1000,20.23,20.00),(1200,20.23,0.10);
+Duplicate entry '20.23' for key '__mo_index_idx_col'
+insert into create_index_10 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
+select * from create_index_10;
+col1    col2    col3
+1000    20.23    20.0
+1200    0.23    20.1
+1100    null    null
+create table create_index_11 (col1 bigint primary key,col2 double,col3 double);
+create unique index double_index on create_index_11(col2);
+insert into create_index_11 values (1000,20.23,20.00),(1200,20.23,0.10);
+Duplicate entry '20.23' for key '__mo_index_idx_col'
+insert into create_index_11 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
+select * from create_index_11;
+col1    col2    col3
+1000    20.23    20.0
+1200    0.23    20.1
+1100    null    null
+create table create_index_12(col1 bigint auto_increment primary key,col2 date,col3 date);
+create unique index date_index on create_index_12(col2);
+insert into create_index_12(col2,col3) values ('2013-01-01','2014-02-01'),('2013-01-01','2014-02-20');
+Duplicate entry '2013-01-01' for key '__mo_index_idx_col'
+insert into create_index_12(col2,col3) values (NULL,'2014-02-01'),(NULL,NULL);
+create table create_index_13 (col1 bigint auto_increment primary key,col2 datetime,col3 datetime);
+create unique index datetime_index on create_index_13(col2);
+insert into create_index_13(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
+Duplicate entry '2013-01-01 12:00:00' for key '__mo_index_idx_col'
+insert into create_index_13(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
+create table create_index_14 (col1 bigint auto_increment primary key,col2 timestamp,col3 timestamp);
+create unique index timestamp_index on create_index_14(col2);
+insert into create_index_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
+Duplicate entry '2013-01-01 12:00:00' for key '__mo_index_idx_col'
+insert into create_index_14(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
+create table create_index_15 (col1 bigint primary key,col2 bool);
+create unique index bool_index on create_index_15(col2);
+insert into create_index_15 values (1,TRUE),(2,FALSE),(3,TRUE);
+(Duplicate entry ')([\d\D][true|false]*)(' for key '__mo_index_idx_col')
+insert into create_index_15 values (1,TRUE),(2,FALSE),(3,NULL);
+select * from create_index_15;
+col1    col2
+1    true
+2    false
+3    null
+create table create_index_16 (col1 bigint primary key,col2 blob,col3 blob);
+create unique index blob_index on create_index_16(col2);
+not supported: BLOB column 'col2' cannot be in index
+drop table create_index_16;
+create table create_index_17 (col1 bigint primary key,col2 json,col3 json);
+create unique index json_index on create_index_17(col2);
+not supported: JSON column 'col2' cannot be in index
+drop table create_index_17;
+create table create_index_18 (col1 bigint primary key,col2 text,col3 text);
+create unique index text_index on create_index_18(col2);
+not supported: TEXT column 'col2' cannot be in index
+drop table create_index_18;
+create table create_index_name (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1));
+create unique index 123 on create_index_name(col2);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 23 near " 123 on create_index_name(col2);";
+create unique index INdex_123 on create_index_name(col3);
+create unique index abs@123.abc on create_index_name(col4);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 31 near "@123.abc on create_index_name(col4);";
+create unique index index_123 on create_index_name(col3);
+duplicate key name 'index_123'
+create unique index default on create_index_name(col3);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 27 near " default on create_index_name(col3);";
+create unique index `default` on create_index_name(col3);
+create table create_index_18 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1));
+create unique index m1_index on create_index_18(col2,col3);
+insert into create_index_18(col2,col3,col4)  select 'apple',1,'10';
+insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
+insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
+Duplicate entry '46016170706c65003a1502' for key '__mo_index_idx_col'
+insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
+select * from create_index_18;
+col1    col2    col3    col4
+1    apple    1    10
+2    apple    2    11
+4    null    null    13
+drop index m1_index on create_index_18;
+create unique index m2_index on create_index_18(col2,col3,col4);
+truncate table create_index_18;
+insert into create_index_18(col2,col3,col4)  select 'apple',1,'10';
+insert into create_index_18(col2,col3,col4)  select 'apple',2,'11';
+insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
+insert into create_index_18(col2,col3,col4)  select NULL,NULL,'13';
+insert into create_index_18(col2,col3,col4)  select 'apple',2,'12';
+Duplicate entry '46016170706c65003a15024601313200' for key '__mo_index_idx_col'
+select * from create_index_18;
+col1    col2    col3    col4
+1    apple    1    10
+2    apple    2    11
+3    apple    2    12
+4    null    null    13
+drop index m2_index on create_index_18;
+create unique index m3_index on create_index_18(col2);
+Duplicate entry 'apple' for key 'col2'
+create unique index m4_index on create_index_18(col3);
+Duplicate entry '2' for key 'col3'
+create unique index m5_index on create_index_18(col4);
+select * from create_index_18;
+col1    col2    col3    col4
+1    apple    1    10
+2    apple    2    11
+3    apple    2    12
+4    null    null    13
+show create table create_index_18;
+Table    Create Table
+create_index_18    CREATE TABLE `create_index_18` (\n`col1` BIGINT NOT NULL AUTO_INCREMENT,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `m5_index` (`col4`)\n)
+drop index m3_index on create_index_18;
+internal error: not found index: m3_index
+drop index m4_index on create_index_18;
+internal error: not found index: m4_index
+drop index m5_index on create_index_18;
+drop table create_index_18;
+create table create_index_18(col1 int,col2 char(15));
+insert into create_index_18 values(2,'20');
+insert into create_index_18 values(3,'20');
+create unique index m1_index on create_index_18(col1);
+create unique index m2_index on create_index_18(col1);
+create unique index m3_index on create_index_18(col1,col2);
+drop table create_index_18;
+drop index m3_index on create_index_18;
+no such table unique_secondary_index.create_index_18
+create table create_index_19 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1));
+create unique index col2 on create_index_19(col2);
+insert into create_index_19(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('bread',3,'12');
+select * from create_index_19;
+col1    col2    col3    col4
+1    apple    1    10
+2    store    2    11
+3    bread    3    12
+update create_index_19 set col2='chart' where col1=2;
+select col2 from create_index_19;
+col2
+apple
+bread
+chart
+update create_index_19 set col2='bread' where col1=1;
+Duplicate entry 'bread' for key '__mo_index_idx_col'
+select * from create_index_19;
+col1    col2    col3    col4
+1    apple    1    10
+3    bread    3    12
+2    chart    2    11
+delete from create_index_19 where col2='apple';
+select * from create_index_19;
+col1    col2    col3    col4
+3    bread    3    12
+2    chart    2    11
+truncate table create_index_19;
+insert into create_index_19(col2,col3,col4) values ('apple',1,'10'),('store',2,'11'),('apple',3,'12');
+Duplicate entry 'apple' for key '__mo_index_idx_col'
+select * from create_index_19;
+col1    col2    col3    col4
+drop table create_index_19;
+create table create_index_20(col1 int,col2 char(15));
+create unique index m3_index on create_index_20(col3);
+invalid input: column 'col3' is not exist
+drop index char_index on create_index_20;
+internal error: not found index: char_index
+drop account if exists unique_test_account;
+create account unique_test_account admin_name='admin' identified by '123456';
+create user if not exists user_1 identified by '123456';
+create role if not exists 'unique_priv_1';
+grant create database,drop database,connect on account *  to unique_priv_1;
+grant create table on database *  to unique_priv_1;
+grant all on table *.* to unique_priv_1;
+grant unique_priv_1 to user_1;
+create database testdb;
+use testdb;
+create table create_index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50));
+create unique index varchar_index on create_index_01(col2) comment 'create varchar index';
+insert into create_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
+select col2,col4 from create_index_01;
+col2    col4
+13456789872    5678
+13873458290    23
+null    23
+drop index varchar_index on create_index_01;
+drop database testdb;
+drop account if exists unique_test_account;
+use unique_secondary_index;
+create table trans_index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50));
+start transaction;
+create unique index varchar_index on trans_index_01(col2) comment 'create varchar index';
+insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
+use unique_secondary_index;
+insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23');
+Duplicate entry '1' for key 'col1'
+commit;
+select * from trans_index_01;
+col1    col2    col3    col4
+1    13456789872    20.23    5678
+2    13873458290    100.0    23
+3    null    100.0    23
+drop table trans_index_01;
+use unique_secondary_index;
+create table trans_index_01 (col1 bigint primary key,col2 varchar(25),col3 float,col4 varchar(50));
+create unique index varchar_index on trans_index_01(col2) comment 'create varchar index';
+start transaction;
+use unique_secondary_index;
+drop index varchar_index on trans_index_01;
+insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13456789872',100.00,'23'),(3,NULL,100.00,'23');
+insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13456789872',100.00,'23'),(3,NULL,100.00,'23');
+Duplicate entry '13456789872' for key '__mo_index_idx_col'
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
+select * from trans_index_01;
+col1    col2    col3    col4
+1    13456789872    20.23    5678
+2    13456789872    100.0    23
+3    null    100.0    23
+commit;
+select * from trans_index_01;
+col1    col2    col3    col4
+1    13456789872    20.23    5678
+2    13456789872    100.0    23
+3    null    100.0    23
+drop table trans_index_01;
+create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50));
+insert into create_secondary_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23'),(3,NULL,100.00,'23');
+create index varchar_second_index on create_secondary_01(col4) comment 'create varchar index';
+show create table create_secondary_01;
+Table    Create Table
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nKEY `varchar_second_index` (`col4`) COMMENT 'create varchar index'\n)
+insert into create_secondary_01 values (4,'13456789899',20.23,'5678'),(5,'13873458255',100.00,'23');
+select * from create_secondary_01;
+col1    col2    col3    col4
+1    13456789872    20.23    5678
+2    13873458290    100.0    23
+3    null    100.0    23
+4    13456789899    20.23    5678
+5    13873458255    100.0    23
+drop index varchar_second_index on create_secondary_01;
+show create table create_secondary_01;
+Table    Create Table
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`)\n)
+create table create_secondary_02 (col1 bigint,col2 char(25),col3 float,col4 char(50));
+create index char_second_index on create_secondary_02(col2);
+insert into create_secondary_02 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
+select col2,col4 from create_secondary_02;
+col2    col4
+    5678
+13873458290    23
+drop index char_second_index on create_secondary_02;
+create table create_secondary_03 (col1 bigint auto_increment,col2 int default 1000,col3 float,col4 int);
+create index int_second_index on create_secondary_03(col2);
+insert into create_secondary_03(col3,col4) values (20.23,4090),(100.00,5678);
+select * from create_secondary_03;
+col1    col2    col3    col4
+1    1000    20.23    4090
+2    1000    100.0    5678
+drop index int_second_index on create_secondary_03;
+create table create_secondary_04 (col1 bigint,col2 int primary key,col3 float,col4 bigint);
+create index bigint_index on create_secondary_04(col1);
+insert into create_secondary_04 values (1,2,20.23,4090),(2,4,100.00,4091),(NULL,3,0.01,NULL);
+select * from create_secondary_04;
+col1    col2    col3    col4
+1    2    20.23    4090
+2    4    100.0    4091
+null    3    0.01    null
+create table create_secondary_05 (col1 smallint,col2 int primary key,col3 float,col4 smallint);
+create index smallint_second_index on create_secondary_05(col1);
+insert into create_secondary_05 values (1,2,20.23,4090),(1,4,100.00,4091);
+select * from create_secondary_05;
+col1    col2    col3    col4
+1    2    20.23    4090
+1    4    100.0    4091
+create table create_secondary_06 (col1 tinyint,col2 int primary key,col3 float,col4 tinyint);
+create index tinyint_second_index on create_secondary_06(col1);
+insert into create_secondary_06 values (1,2,20.23,56),(1,4,100.00,90);
+select * from create_secondary_06;
+col1    col2    col3    col4
+1    2    20.23    56
+1    4    100.0    90
+create table create_secondary_07 (col1 int unsigned,col2 int primary key,col3 float,col4 int unsigned);
+create index int_unsigned_index on create_secondary_07(col1);
+insert into create_secondary_07 values (1,2,20.23,56),(1,4,100.00,90);
+show create table create_secondary_07;
+Table    Create Table
+create_secondary_07    CREATE TABLE `create_secondary_07` (\n`col1` INT UNSIGNED DEFAULT NULL,\n`col2` INT NOT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` INT UNSIGNED DEFAULT NULL,\nPRIMARY KEY (`col2`),\nKEY `int_unsigned_index` (`col1`)\n)
+select * from create_secondary_07;
+col1    col2    col3    col4
+1    2    20.23    56
+1    4    100.0    90
+create table create_secondary_08 (col1 bigint unsigned,col2 int primary key,col3 float,col4 bigint unsigned);
+create index bigint_unsigned_index on create_secondary_08(col1);
+insert into create_secondary_08 values (1,2,20.23,56),(2,4,100.00,41),(NULL,3,0.01,NULL);
+select * from create_secondary_08;
+col1    col2    col3    col4
+1    2    20.23    56
+2    4    100.0    41
+null    3    0.01    null
+create table create_secondary_09 (col1 bigint primary key,col2 decimal(16,8),col3 decimal(16,8));
+create index decimal_index on create_secondary_09(col2);
+insert into create_secondary_09 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
+select * from create_secondary_09;
+col1    col2    col3
+1000    20.23000000    20.00000000
+1200    0.23000000    20.10000000
+1100    null    null
+create table create_secondary_10 (col1 bigint primary key,col2 float,col3 float);
+insert into create_secondary_10 values (1000,20.23,20.00),(1200,0.23,20.10),(1100,NULL,NULL);
+create index float_index on create_secondary_10(col2);
+select * from create_secondary_10;
+col1    col2    col3
+1000    20.23    20.0
+1200    0.23    20.1
+1100    null    null
+create table create_secondary_11 (col1 bigint primary key,col2 double,col3 double);
+create index double_index on create_secondary_11(col2);
+insert into create_secondary_11 values (1000,20.23,20.00),(1200,20.23,0.10);
+select * from create_secondary_11;
+col1    col2    col3
+1000    20.23    20.0
+1200    20.23    0.1
+create table create_secondary_12(col1 bigint auto_increment primary key,col2 date,col3 date);
+create index date_index on create_secondary_12(col2);
+insert into create_secondary_12(col2,col3) values ('2013-01-01','2014-02-01'),('2013-01-01','2014-02-20');
+create table create_secondary_13 (col1 bigint auto_increment primary key,col2 datetime,col3 datetime);
+create index datetime_index on create_secondary_13(col2);
+insert into create_secondary_13(col2,col3) values (NULL,'2014-02-01 12:00:0'),(NULL,NULL);
+create table create_secondary_14 (col1 bigint auto_increment primary key,col2 timestamp,col3 timestamp);
+create index timestamp_index on create_secondary_14(col2);
+insert into create_secondary_14(col2,col3) values ('2013-01-01 12:00:00','2014-02-01 10:00:00'),('2013-01-01 12:00:00','2014-02-20 05:00:00');
+create table create_secondary_15 (col1 bigint primary key,col2 bool);
+create index bool_index on create_secondary_15(col2);
+insert into create_secondary_15 values (1,TRUE),(2,FALSE),(3,TRUE);
+select * from create_secondary_15;
+col1    col2
+1    true
+2    false
+3    true
+create table create_secondary_16 (col1 bigint primary key,col2 blob,col3 blob);
+create index blob_index on create_secondary_16(col2);
+not supported: BLOB column 'col2' cannot be in index
+drop table create_secondary_16;
+create table create_secondary_17 (col1 bigint primary key,col2 json,col3 json);
+create index json_index on create_secondary_17(col2);
+not supported: JSON column 'col2' cannot be in index
+drop table create_secondary_17;
+create table create_secondary_18 (col1 bigint primary key,col2 text,col3 text);
+create index text_index on create_secondary_18(col2);
+not supported: TEXT column 'col2' cannot be in index
+drop table create_secondary_18;
+drop table create_secondary_01;
+create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50),col5 int);
+create index secondary_key on create_secondary_01(col4,col5);
+insert into create_secondary_01 values (1,'13456789872',20.23,'5678',99),(2,'13873458290',100.00,'23',9),(3,NULL,100.00,'23',99);
+select * from create_secondary_01;
+col1    col2    col3    col4    col5
+1    13456789872    20.23    5678    99
+2    13873458290    100.0    23    9
+3    null    100.0    23    99
+show create table create_secondary_01;
+Table    Create Table
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\n`col5` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nKEY `secondary_key` (`col4`,`col5`)\n)
+drop index secondary_key on create_secondary_01;
+truncate table create_secondary_01;
+show create table create_secondary_01;
+Table    Create Table
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\n`col5` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`)\n)
+drop table create_secondary_01;
+create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50),col5 int);
+create index secondary_key1 on create_secondary_01(col1);
+create index secondary_key2 on create_secondary_01(col1,col2);
+show create table create_secondary_01;
+Table    Create Table
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\n`col5` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nKEY `secondary_key1` (`col1`),\nKEY `secondary_key2` (`col1`,`col2`)\n)
+drop index secondary_key1 on create_secondary_01;
+drop index secondary_key2 on create_secondary_01;
+create index secondary_key1 on create_secondary_01(col4,col5);
+create index secondary_key1 on create_secondary_01(col4,col5);
+duplicate key name 'secondary_key1'
+drop table create_secondary_01;
+create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50),col5 int);
+drop index secondary_key1 on create_secondary_01;
+internal error: not found index: secondary_key1
+create unique index secondary_key1 on create_secondary_01(col1);
+create index secondary_key1 on create_secondary_01(col1);
+duplicate key name 'secondary_key1'
+show create table create_secondary_01;
+Table    Create Table
+create_secondary_01    CREATE TABLE `create_secondary_01` (\n`col1` BIGINT NOT NULL,\n`col2` VARCHAR(25) DEFAULT NULL,\n`col3` FLOAT DEFAULT NULL,\n`col4` VARCHAR(50) DEFAULT NULL,\n`col5` INT DEFAULT NULL,\nPRIMARY KEY (`col1`),\nUNIQUE KEY `col2` (`col2`),\nUNIQUE KEY `secondary_key1` (`col1`)\n)
