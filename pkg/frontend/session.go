@@ -1824,3 +1824,63 @@ func (ses *Session) getLastCommitTS() timestamp.Timestamp {
 func (ses *Session) getCNLabels() map[string]string {
 	return ses.requestLabel
 }
+
+// getSystemVariableValue get the system vaiables value from the mo_mysql_compatibility_mode table
+func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, error) {
+	var sql string
+	var err error
+	var erArray []ExecResult
+	var accountId uint32
+	var variableValue string
+	var val interface{}
+
+	ctx := ses.GetRequestContext()
+
+	// check the variable name isValid or not
+	_, err = ses.GetGlobalVar(varName)
+	if err != nil {
+		return nil, err
+	}
+
+	tenantInfo := ses.GetTenantInfo()
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return nil, err
+	}
+
+	accountId = tenantInfo.GetTenantID()
+	sql = getSqlForGetSystemVariableValueWithAccount(uint64(accountId), varName)
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		variableValue, err = erArray[0].GetString(ctx, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		if sv, ok := gSysVarsDefs[varName]; ok {
+			val, err = sv.GetType().ConvertFromString(variableValue)
+			if err != nil {
+				return nil, err
+			}
+			return val, nil
+		}
+	}
+
+	return nil, moerr.NewInternalError(ctx, "can not resolve global system variable %s", varName)
+}
