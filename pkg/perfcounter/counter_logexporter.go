@@ -35,19 +35,30 @@ func NewCounterLogExporter(counter *CounterSet) stats.LogExporter {
 func (c *CounterLogExporter) Export() []zap.Field {
 	var fields []zap.Field
 
-	fields = append(fields, zap.Any("FileService Cache Hit Rate",
-		float64(c.counter.FileService.Cache.Hit.LoadW())/
-			float64(c.counter.FileService.Cache.Read.LoadW())))
-	fields = append(fields, zap.Any("FileService Cache Memory Hit Rate",
-		float64(c.counter.FileService.Cache.Memory.Hit.LoadW())/
-			float64(c.counter.FileService.Cache.Memory.Read.LoadW())))
-	fields = append(fields, zap.Any("FileService Cache Disk Hit Rate",
-		float64(c.counter.FileService.Cache.Disk.Hit.LoadW())/
-			float64(c.counter.FileService.Cache.Disk.Read.LoadW())))
+	cacheHit := c.counter.FileService.Cache.Hit.LoadW()
+	cacheRead := c.counter.FileService.Cache.Read.LoadW()
+	if cacheHit != 0 && cacheRead != 0 {
+		fields = append(fields, zap.Any("FileService Cache Hit Rate", float64(cacheHit)/float64(cacheRead)))
+	}
+
+	cacheMemHit := c.counter.FileService.Cache.Memory.Hit.LoadW()
+	cacheMemRead := c.counter.FileService.Cache.Memory.Read.LoadW()
+	if cacheMemHit != 0 && cacheMemRead != 0 {
+		fields = append(fields, zap.Any("FileService Cache Memory Hit Rate", float64(cacheMemHit)/float64(cacheMemRead)))
+	}
+
+	cacheDiskHit := c.counter.FileService.Cache.Disk.Hit.LoadW()
+	cacheDiskRead := c.counter.FileService.Cache.Disk.Read.LoadW()
+	if cacheDiskHit != 0 && cacheDiskRead != 0 {
+		fields = append(fields, zap.Any("FileService Cache Disk Hit Rate", float64(cacheDiskHit)/float64(cacheDiskRead)))
+	}
 
 	// all fields in CounterSet
 	_ = c.counter.IterFields(func(path []string, counter *stats.Counter) error {
-		fields = append(fields, zap.Any(strings.Join(path, "."), counter.SwapW(0)))
+		counterValue := counter.SwapW(0)
+		if counterValue != 0 {
+			fields = append(fields, zap.Any(strings.Join(path, "."), counterValue))
+		}
 		return nil
 	})
 

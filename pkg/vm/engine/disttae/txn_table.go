@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -350,7 +351,7 @@ func (tbl *txnTable) GetMetadataScanInfoBytes(ctx context.Context, name string) 
 
 func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*catalog.MetadataScanInfo, error) {
 	if len(tbl.blockInfos) == 0 {
-		logutil.Infof("meta info is nil")
+		logutil.Debugf("meta info is nil")
 		return nil, nil
 	}
 
@@ -548,7 +549,7 @@ func (tbl *txnTable) resetSnapshot() {
 }
 
 // return all unmodified blocks
-func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges [][]byte, err error) {
+func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][]byte, err error) {
 	tbl.db.txn.mergeTxnWorkspace()
 	tbl.db.txn.DumpBatch(false, 0)
 	tbl.writes = tbl.writes[:0]
@@ -586,6 +587,107 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs ...*plan.Expr) (ranges []
 		tbl.db.txn.proc,
 	)
 	return
+}
+
+func (tbl *txnTable) ApplyRuntimeFilters(ctx context.Context, blocks [][]byte, exprs []*plan.Expr, filters []*pipeline.RuntimeFilter) ([][]byte, error) {
+	var err error
+	evaluators := make([]RuntimeFilterEvaluator, len(filters))
+
+	for i, filter := range filters {
+		switch filter.Typ {
+		case pipeline.RuntimeFilter_IN:
+			vec := vector.NewVec(types.T_any.ToType())
+			err = vec.UnmarshalBinary(filter.Data)
+			if err != nil {
+				return nil, err
+			}
+			evaluators[i] = &RuntimeInFilter{
+				InList: vec,
+			}
+
+		case pipeline.RuntimeFilter_MIN_MAX:
+			evaluators[i] = &RuntimeZonemapFilter{
+				Zm: objectio.ZoneMap(filter.Data),
+			}
+		}
+	}
+
+	proc := tbl.db.txn.proc
+
+	var (
+		objMeta  objectio.ObjectMeta
+		skipObj  bool
+		auxIdCnt int32
+	)
+
+	for _, expr := range exprs {
+		auxIdCnt = plan2.AssignAuxIdForExpr(expr, auxIdCnt)
+	}
+
+	columnMap := make(map[int]int)
+	zms := make([]objectio.ZoneMap, auxIdCnt)
+	vecs := make([]*vector.Vector, auxIdCnt)
+	plan2.GetColumnMapByExprs(exprs, tbl.getTableDef(), &columnMap)
+
+	defer func() {
+		for i := range vecs {
+			if vecs[i] != nil {
+				vecs[i].Free(proc.Mp())
+			}
+		}
+	}()
+
+	errCtx := errutil.ContextWithNoReport(ctx, true)
+
+	curr := 1 // Skip the first block which is always the memtable
+	for i := 1; i < len(blocks); i++ {
+		blk := catalog.DecodeBlockInfo(blocks[i])
+		location := blk.MetaLocation()
+
+		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
+			if objMeta, err = objectio.FastLoadObjectMeta(errCtx, &location, proc.FileService); err != nil {
+				return nil, err
+			}
+
+			skipObj = false
+			// here we only eval expr on the object meta if it has more than 2 blocks
+			if objMeta.BlockCount() > 2 {
+				for i, expr := range exprs {
+					zm := colexec.GetExprZoneMap(errCtx, proc, expr, objMeta, columnMap, zms, vecs)
+					if zm.IsInited() && !evaluators[i].Evaluate(zm) {
+						skipObj = true
+						break
+					}
+				}
+			}
+		}
+
+		if skipObj {
+			continue
+		}
+
+		var skipBlk bool
+
+		// eval filter expr on the block
+		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+		for i, expr := range exprs {
+			zm := colexec.GetExprZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs)
+			if zm.IsInited() && !evaluators[i].Evaluate(zm) {
+				skipBlk = true
+				break
+			}
+		}
+
+		if skipBlk {
+			continue
+		}
+
+		// store the block in ranges
+		blocks[curr] = blocks[i]
+		curr++
+	}
+
+	return blocks[:curr], nil
 }
 
 // txn can read :
@@ -649,13 +751,11 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var (
-		objMeta   objectio.ObjectMeta
-		zms       []objectio.ZoneMap
-		vecs      []*vector.Vector
-		columnMap map[int]int
-		skipObj   bool
-		cnt       int32
-		anyMono   bool
+		objMeta  objectio.ObjectMeta
+		zms      []objectio.ZoneMap
+		vecs     []*vector.Vector
+		skipObj  bool
+		auxIdCnt int32
 	)
 
 	defer func() {
@@ -666,32 +766,24 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	}()
 
-	isMono := make([]bool, len(exprs))
-
 	// check if expr is monotonic, if not, we can skip evaluating expr for each block
-	for i, expr := range exprs {
-		if plan2.CheckExprIsMonotonic(proc.Ctx, expr) {
-			anyMono = true
-			isMono[i] = true
-			cnt += plan2.AssignAuxIdForExpr(expr, cnt)
-		}
+	for _, expr := range exprs {
+		auxIdCnt += plan2.AssignAuxIdForExpr(expr, auxIdCnt)
 	}
 
-	if anyMono {
-		columnMap = make(map[int]int)
-		zms = make([]objectio.ZoneMap, cnt)
-		vecs = make([]*vector.Vector, cnt)
-		plan2.GetColumnMapByExpr(colexec.RewriteFilterExprList(exprs), tableDef, &columnMap)
+	columnMap := make(map[int]int)
+	if auxIdCnt > 0 {
+		zms = make([]objectio.ZoneMap, auxIdCnt)
+		vecs = make([]*vector.Vector, auxIdCnt)
+		plan2.GetColumnMapByExprs(exprs, tableDef, &columnMap)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
 	hasDeletes := len(deletes) > 0
 	for _, blk := range blocks {
-		var skipBlk bool
-
 		// if expr is monotonic, we need evaluating expr for each block
-		if anyMono {
+		if auxIdCnt > 0 {
 			location := blk.MetaLocation()
 
 			// check whether the block belongs to a new object
@@ -711,8 +803,8 @@ func (tbl *txnTable) rangesOnePart(
 				skipObj = false
 				// here we only eval expr on the object meta if it has more than 2 blocks
 				if objMeta.BlockCount() > 2 {
-					for i, expr := range exprs {
-						if isMono[i] && !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objMeta, columnMap, zms, vecs) {
+					for _, expr := range exprs {
+						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, objMeta, columnMap, zms, vecs) {
 							skipObj = true
 							break
 						}
@@ -724,19 +816,21 @@ func (tbl *txnTable) rangesOnePart(
 				continue
 			}
 
+			var skipBlk bool
+
 			// eval filter expr on the block
 			blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
-			for i, expr := range exprs {
-				if isMono[i] && !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
+			for _, expr := range exprs {
+				if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
 					skipBlk = true
 					break
 				}
 			}
-		}
 
-		// if the block is not needed, skip it
-		if skipBlk {
-			continue
+			// if the block is not needed, skip it
+			if skipBlk {
+				continue
+			}
 		}
 
 		if hasDeletes {
@@ -1239,15 +1333,17 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 			pkVals := make([]*plan.Expr_C, len(pk.Names))
 			getCompositPKVals(expr, pk.Names, pkVals)
 			cnt := getValidCompositePKCnt(pkVals)
-			if cnt == len(pkVals) {
+			if cnt != 0 {
 				var packer *types.Packer
 				put := tbl.db.txn.engine.packerPool.Get(&packer)
-				for _, pkVal := range pkVals {
-					serialTupleByConstExpr(pkVal, packer)
+				for i := 0; i < cnt; i++ {
+					serialTupleByConstExpr(pkVals[i], packer)
 				}
 				v := packer.Bytes()
 				packer.Reset()
 				encodedPrimaryKey = logtailreplay.EncodePrimaryKey(v, packer)
+				// TODO: hack: remove the last comma, need to fix this in the future
+				encodedPrimaryKey = encodedPrimaryKey[0 : len(encodedPrimaryKey)-1]
 				put.Put()
 			}
 		} else {
@@ -1285,17 +1381,14 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 
 func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]*catalog.BlockInfo, len(ranges))
-	for i := range ranges {
-		blks[i] = catalog.DecodeBlockInfo(ranges[i])
-	}
 	ts := tbl.db.txn.meta.SnapshotTS
 	tableDef := tbl.getTableDef()
 
 	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
+			blk := catalog.DecodeBlockInfo(ranges[i])
 			rds[i] = newBlockReader(
-				ctx, tableDef, ts, []*catalog.BlockInfo{blks[i]}, expr, tbl.db.txn.engine.fs,
+				ctx, tableDef, ts, []*catalog.BlockInfo{blk}, expr, tbl.db.txn.engine.fs,
 			)
 		}
 		for j := len(ranges); j < num; j++ {
@@ -1304,7 +1397,7 @@ func (tbl *txnTable) newBlockReader(ctx context.Context, num int, expr *plan.Exp
 		return rds, nil
 	}
 
-	infos, steps := groupBlocksToObjects(blks, num)
+	infos, steps := groupBlocksToObjects(ranges, num)
 	blockReaders := newBlockReaders(ctx, tbl.db.txn.engine.fs, tableDef, tbl.primarySeqnum, ts, num, expr)
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
@@ -1386,7 +1479,7 @@ func (tbl *txnTable) newReader(
 	if len(encodedPrimaryKey) > 0 {
 		iter = state.NewPrimaryKeyIter(
 			types.TimestampToTS(ts),
-			encodedPrimaryKey,
+			logtailreplay.Prefix(encodedPrimaryKey),
 		)
 	} else {
 		iter = state.NewRowsIter(

@@ -109,3 +109,112 @@ func FindFirstIndexInSortedVarlenVector(vec *Vector, v []byte) int {
 	}
 	return -1
 }
+
+// OrderedGetMinAndMax returns the min and max value of a vector of ordered type
+// If the vector has null, the null value will be ignored
+func OrderedGetMinAndMax[T types.OrderedT](vec *Vector) (minv, maxv T) {
+	col := MustFixedCol[T](vec)
+	if vec.HasNull() {
+		first := true
+		for i, j := 0, vec.Length(); i < j; i++ {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			if first {
+				minv, maxv = col[i], col[i]
+				first = false
+			} else {
+				if minv > col[i] {
+					minv = col[i]
+				}
+				if maxv < col[i] {
+					maxv = col[i]
+				}
+			}
+		}
+	} else {
+		minv, maxv = col[0], col[0]
+		for i, j := 1, vec.Length(); i < j; i++ {
+			if minv > col[i] {
+				minv = col[i]
+			}
+			if maxv < col[i] {
+				maxv = col[i]
+			}
+		}
+	}
+	return
+}
+
+func FixedSizeGetMinMax[T types.OrderedT](
+	vec *Vector, comp func(T, T) int64,
+) (minv, maxv T) {
+	col := MustFixedCol[T](vec)
+	if vec.HasNull() {
+		first := true
+		for i, j := 0, vec.Length(); i < j; i++ {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			if first {
+				minv, maxv = col[i], col[i]
+				first = false
+			} else {
+				if comp(minv, col[i]) > 0 {
+					minv = col[i]
+				}
+				if comp(maxv, col[i]) < 0 {
+					maxv = col[i]
+				}
+			}
+		}
+	} else {
+		minv, maxv = col[0], col[0]
+		for i, j := 1, vec.Length(); i < j; i++ {
+			if comp(minv, col[i]) > 0 {
+				minv = col[i]
+			}
+			if comp(maxv, col[i]) < 0 {
+				maxv = col[i]
+			}
+		}
+	}
+	return
+}
+
+func VarlenGetMinMax(vec *Vector) (minv, maxv []byte) {
+	col, area := MustVarlenaRawData(vec)
+	if vec.HasNull() {
+		first := true
+		for i, j := 0, vec.Length(); i < j; i++ {
+			if vec.IsNull(uint64(i)) {
+				continue
+			}
+			val := col[i].GetByteSlice(area)
+			if first {
+				minv, maxv = val, val
+				first = false
+			} else {
+				if bytes.Compare(minv, val) > 0 {
+					minv = val
+				}
+				if bytes.Compare(maxv, val) < 0 {
+					maxv = val
+				}
+			}
+		}
+	} else {
+		val := col[0].GetByteSlice(area)
+		minv, maxv = val, val
+		for i, j := 1, vec.Length(); i < j; i++ {
+			val := col[i].GetByteSlice(area)
+			if bytes.Compare(minv, val) > 0 {
+				minv = val
+			}
+			if bytes.Compare(maxv, val) < 0 {
+				maxv = val
+			}
+		}
+	}
+	return
+}

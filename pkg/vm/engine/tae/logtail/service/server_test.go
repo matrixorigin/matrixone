@@ -133,26 +133,26 @@ func mockLocktailer(tables ...api.TableID) taelogtail.Logtailer {
 
 func (m *logtailer) RangeLogtail(
 	ctx context.Context, from, to timestamp.Timestamp,
-) ([]logtail.TableLogtail, error) {
+) ([]logtail.TableLogtail, []func(), error) {
 	tails := make([]logtail.TableLogtail, 0, len(m.tables))
 	for _, table := range m.tables {
 		tails = append(tails, mockLogtail(table, to))
 	}
-	return tails, nil
+	return tails, nil, nil
 }
 
-func (m *logtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error) {
+func (m *logtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error) {
 }
 
 func (m *logtailer) TableLogtail(
 	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
-) (logtail.TableLogtail, error) {
+) (logtail.TableLogtail, func(), error) {
 	for _, t := range m.tables {
 		if t.String() == table.String() {
-			return mockLogtail(table, to), nil
+			return mockLogtail(table, to), nil, nil
 		}
 	}
-	return logtail.TableLogtail{CkpLocation: "checkpoint", Table: &table, Ts: &to}, nil
+	return logtail.TableLogtail{CkpLocation: "checkpoint", Table: &table, Ts: &to}, nil, nil
 }
 
 func (m *logtailer) Now() (timestamp.Timestamp, timestamp.Timestamp) {
@@ -220,7 +220,7 @@ func startLogtailServer(
 				tails = append(tails, mockLogtail(table, now))
 			}
 
-			err := logtailServer.NotifyLogtail(from, now, tails...)
+			err := logtailServer.NotifyLogtail(from, now, nil, tails...)
 			if err != nil {
 				return
 			}
