@@ -346,9 +346,6 @@ func getShuffledSelsByRange(ap *Argument, bat *batch.Batch) [][]int32 {
 		groupByCol := vector.MustFixedCol[int32](groupByVec)
 		for row, v := range groupByCol {
 			regIndex := plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), lenRegs)
-			if regIndex >= lenRegs {
-				logutil.Warnf("fail")
-			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_int16:

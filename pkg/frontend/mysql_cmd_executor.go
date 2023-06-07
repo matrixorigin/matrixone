@@ -203,6 +203,23 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
+	// set StatementID
+	var stmID uuid.UUID
+	var statement tree.Statement = nil
+	var text string
+	if cw != nil {
+		copy(stmID[:], cw.GetUUID())
+		statement = cw.GetAst()
+		ses.ast = statement
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	} else {
+		stmID = uuid.New()
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	}
+	if sqlType != intereSql {
+		ses.pushQueryId(types.Uuid(stmID).ToString())
+	}
+
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
@@ -229,19 +246,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !useEnv {
 		requestAt = time.Now()
 	}
-	// set StatementID
-	var stmID uuid.UUID
-	var statement tree.Statement = nil
-	var text string
-	if cw != nil {
-		copy(stmID[:], cw.GetUUID())
-		statement = cw.GetAst()
-		ses.ast = statement
-		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	} else {
-		stmID = uuid.New()
-		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	}
+
 	copy(stm.StatementID[:], stmID[:])
 	// END> set StatementID
 	stm.Account = tenant.GetTenant()
@@ -256,9 +261,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
-	if sqlType != "internal_sql" {
+	if sqlType != intereSql {
 		ses.tStmt = stm
-		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)

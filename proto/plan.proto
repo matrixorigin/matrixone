@@ -694,7 +694,7 @@ message Node {
 	repeated Expr block_filter_list = 38;
 
 	// Runtime filters
-	repeated RuntimeFilterSpec runtime_filter_list = 39;
+	repeated RuntimeFilterSpec runtime_filter_probe_list = 39;
 	repeated RuntimeFilterSpec runtime_filter_build_list = 40;
 }
 
@@ -705,6 +705,8 @@ message LockTarget {
   int32 refresh_ts_idx_in_bat   = 4;
   int32 filter_col_idx_in_bat   = 5;
   bool lock_table 				= 6;
+	bool is_partition_table = 7;
+	repeated uint64 partition_table_ids = 8;
 }
 
 message PreInsertUkCtx {
