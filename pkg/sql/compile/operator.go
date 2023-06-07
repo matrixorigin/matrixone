@@ -530,11 +530,22 @@ func constructLockOp(n *plan.Node, proc *process.Process) (*lockop.Argument, err
 	arg := lockop.NewArgument()
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
-		arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+		if target.IsPartitionTable {
+			arg.AddLockTargetWithPartition(target.GetPartitionTableIds(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetFilterColIdxInBat())
+		} else {
+			arg.AddLockTarget(target.GetTableId(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat())
+		}
+
 	}
 	for _, target := range n.LockTargets {
 		if target.LockTable {
-			arg.LockTable(target.TableId)
+			if target.IsPartitionTable {
+				for _, pTblId := range target.PartitionTableIds {
+					arg.LockTable(pTblId)
+				}
+			} else {
+				arg.LockTable(target.TableId)
+			}
 		}
 	}
 	return arg, nil
