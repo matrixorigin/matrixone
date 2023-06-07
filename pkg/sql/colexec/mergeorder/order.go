@@ -43,12 +43,8 @@ type Argument struct {
 type container struct {
 	colexec.ReceiverOperator
 
+	// operator status
 	status int
-	// receiveOver and sendOver are the flags to indicate whether
-	// this operator has received all the data from the child pipelines.
-	// and send all the data to the next operator.
-	receiveOver bool
-	sendOver    bool
 
 	// batchList is the data structure to store the all the received batches
 	batchList []*batch.Batch
