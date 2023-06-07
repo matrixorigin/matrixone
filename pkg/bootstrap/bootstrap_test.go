@@ -102,6 +102,7 @@ func TestBootstrapWithWait(t *testing.T) {
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
 		nil,
 		exec)
+	b.(*bootstrapper).disableCheck = true
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 

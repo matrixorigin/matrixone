@@ -98,10 +98,11 @@ var (
 )
 
 type bootstrapper struct {
-	lock   Locker
-	clock  clock.Clock
-	client client.TxnClient
-	exec   executor.SQLExecutor
+	lock         Locker
+	clock        clock.Clock
+	client       client.TxnClient
+	exec         executor.SQLExecutor
+	disableCheck bool
 }
 
 // NewBootstrapper create bootstrapper to bootstrap mo database
@@ -226,14 +227,16 @@ func (b *bootstrapper) checkAlreadyBootstrapped(ctx context.Context) (bool, erro
 	})
 	for _, db := range dbs {
 		if strings.EqualFold(db, bootstrappedCheckerDB) {
-			go func() {
-				for {
-					if b.showTables() {
-						return
+			if !b.disableCheck {
+				go func() {
+					for {
+						if b.showTables() {
+							return
+						}
+						time.Sleep(time.Second * 10)
 					}
-					time.Sleep(time.Second * 10)
-				}
-			}()
+				}()
+			}
 			return true, nil
 		}
 	}
