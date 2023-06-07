@@ -109,6 +109,7 @@ type Schema struct {
 	fks       []*ForeignKeyDef
 	clusterby *ClusterByDef
 	outcnt    float64
+	tblId     int64
 }
 
 const SF float64 = 1
@@ -421,14 +422,14 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"sal", types.T_decimal64, true, 7, 0},
 			{"comm", types.T_decimal64, true, 7, 0},
 			{"deptno", types.T_uint32, true, 32, 0},
-			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
 		},
 		pks: []int{0}, // primary key "empno"
 		fks: []*plan.ForeignKeyDef{
 			{
 				Name:        "fk1",                       // string
 				Cols:        []uint64{7},                 // []uint64
-				ForeignTbl:  272450,                      // uint64
+				ForeignTbl:  88888,                       // uint64
 				ForeignCols: []uint64{1},                 // []uint64
 				OnDelete:    plan.ForeignKeyDef_RESTRICT, // ForeignKeyDef_RefAction
 				OnUpdate:    plan.ForeignKeyDef_RESTRICT, // ForeignKeyDef_RefAction
@@ -440,7 +441,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				tableName: catalog.IndexTableNamePrefix + "412f4fad-77ba-11ed-b347-000c29847904",
 				parts:     []string{"ename", "job"},
 				cols: []col{
-					{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
 				},
 				tableExist: true,
 			},
@@ -451,9 +452,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	// index table
 	constraintTestSchema[catalog.IndexTableNamePrefix+"412f4fad-77ba-11ed-b347-000c29847904"] = &Schema{
 		cols: []col{
-			{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
-			{"__mo_index_pri_col", types.T_uint32, true, 32, 0},
-			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
 		},
 		pks:    []int{0},
 		outcnt: 13,
@@ -469,11 +470,12 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		);
 	*/
 	constraintTestSchema["dept"] = &Schema{
+		tblId: 88888,
 		cols: []col{
 			{"deptno", types.T_uint32, true, 32, 0},
 			{"dname", types.T_varchar, true, 15, 0},
 			{"loc", types.T_varchar, true, 50, 0},
-			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
 		},
 		pks: []int{0}, // primary key "deptno"
 		idxs: []index{
@@ -482,7 +484,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				tableName: catalog.IndexTableNamePrefix + "8e3246dd-7a19-11ed-ba7d-000c29847904",
 				parts:     []string{"dname"},
 				cols: []col{
-					{"__mo_index_idx_col", types.T_varchar, true, 15, 0},
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 15, 0},
 				},
 				tableExist: true,
 			},
@@ -493,9 +495,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	// index table
 	constraintTestSchema[catalog.IndexTableNamePrefix+"8e3246dd-7a19-11ed-ba7d-000c29847904"] = &Schema{
 		cols: []col{
-			{"__mo_index_idx_col", types.T_varchar, true, 15, 0},
-			{"__mo_index_pri_col", types.T_uint32, true, 32, 0},
-			{"__mo_rowid", types.T_Rowid, true, 0, 0},
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 15, 0},
+			{catalog.IndexTablePrimaryColName, types.T_uint32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, true, 0, 0},
 		},
 		pks:    []int{0},
 		outcnt: 4,
@@ -547,13 +549,14 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"deptno", types.T_uint32, true, 32, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0}, // primary key "deptno"
 		idxs: []index{
 			{
 				indexName: "",
 				tableName: catalog.IndexTableNamePrefix + "6380d30e-79f8-11ed-9c02-000c29847904",
 				parts:     []string{"empno", "ename"},
 				cols: []col{
-					{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
+					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
 				},
 				tableExist: true,
 			},
@@ -563,7 +566,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 
 	constraintTestSchema[catalog.IndexTableNamePrefix+"6380d30e-79f8-11ed-9c02-000c29847904"] = &Schema{
 		cols: []col{
-			{"__mo_index_idx_col", types.T_varchar, true, 65535, 0},
+			{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks:    []int{0},
@@ -579,6 +582,10 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 	for db, schema := range schemas {
 		tableIdx := 0
 		for tableName, table := range schema {
+			tblId := table.tblId
+			if tblId == 0 {
+				tblId = int64(tableIdx)
+			}
 			colDefs := make([]*ColDef, 0, len(table.cols))
 
 			for idx, col := range table.cols {
@@ -592,6 +599,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 					},
 					Name:    col.Name,
 					Primary: idx == 0,
+					Hidden:  col.Name == catalog.Row_ID || col.Name == catalog.CPrimaryKeyColName,
 					Pkidx:   1,
 					Default: &plan.Default{
 						NullAbility: col.Nullable,
@@ -600,23 +608,29 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			}
 
 			objects[tableName] = &ObjectRef{
-				Server:       0,
-				Db:           0,
-				Schema:       0,
-				Obj:          int64(tableIdx),
-				ServerName:   "",
-				DbName:       "",
-				SchemaName:   db,
-				ObjName:      tableName,
-				PubAccountId: -1,
+				Server:     0,
+				Db:         0,
+				Schema:     0,
+				Obj:        int64(tableIdx),
+				ServerName: "",
+				DbName:     "",
+				SchemaName: db,
+				ObjName:    tableName,
 			}
 
 			tableDef := &TableDef{
 				TableType: catalog.SystemOrdinaryRel,
-				TblId:     uint64(tableIdx),
+				TblId:     uint64(tblId),
 				Name:      tableName,
 				Cols:      colDefs,
 				Indexes:   make([]*IndexDef, len(table.idxs)),
+			}
+			if len(table.pks) == 1 {
+				tableDef.Pkey = &plan.PrimaryKeyDef{
+					PkeyColName: colDefs[table.pks[0]].Name,
+					Names:       []string{colDefs[table.pks[0]].Name},
+					CompPkeyCol: colDefs[table.pks[0]],
+				}
 			}
 
 			if table.idxs != nil {
@@ -842,9 +856,9 @@ func NewEmptyMockOptimizer() *MockOptimizer {
 	}
 }
 
-func NewMockOptimizer(isDml bool) *MockOptimizer {
+func NewMockOptimizer(_ bool) *MockOptimizer {
 	return &MockOptimizer{
-		ctxt: *NewMockCompilerContext(isDml),
+		ctxt: *NewMockCompilerContext(true),
 	}
 }
 

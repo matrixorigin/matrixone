@@ -574,7 +574,7 @@ create database db6;
 create publication pubname6 database db6 account test_tenant_1 comment 'publication to test_tenant_1';
 show create publication pubname6;
 Publication    Create Publication
-pubname6    CREATE PUBLICATION `pubname6` DATABASE `db6` ACCOUNT `test_tenant_1` COMMENT 'publication to test_tenant_1'
+pubname6    CREATE PUBLICATION pubname6 DATABASE db6 ACCOUNT test_tenant_1
 show publications;
 Name    Database
 pubname6    db6

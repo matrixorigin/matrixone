@@ -54,7 +54,8 @@ func getUserId(proc *process.Process) *vector.Vector {
 }
 
 func currentAccountCall(_ int, proc *process.Process, arg *Argument) (bool, error) {
-	rbat := batch.New(false, arg.Attrs)
+	rbat := batch.NewWithSize(len(arg.Attrs))
+	rbat.Attrs = arg.Attrs
 	for i, attr := range arg.Attrs {
 		switch attr {
 		case "account_name":

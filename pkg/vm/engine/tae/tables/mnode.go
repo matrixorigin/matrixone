@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -67,7 +68,7 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 }
 
 func (node *memoryNode) close() {
-	logutil.Infof("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
+	logutil.Debugf("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
 	node.data.Close()
 	node.data = nil
 	if node.pkIndex != nil {
@@ -86,7 +87,7 @@ func (node *memoryNode) BatchDedup(
 	skipFn func(row uint32) error,
 	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(ctx, keys, keysZM, skipFn, bf)
+	return node.pkIndex.BatchDedup(ctx, keys.GetDownstreamVector(), keysZM, skipFn, bf)
 }
 
 func (node *memoryNode) ContainsKey(ctx context.Context, key any) (ok bool, err error) {

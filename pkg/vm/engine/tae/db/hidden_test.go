@@ -55,7 +55,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(schema.PhyAddrKey.Idx)
+			view, err := blk.GetColumnDataById(context.Background(), schema.PhyAddrKey.Idx)
 			assert.NoError(t, err)
 			defer view.Close()
 			fp := blk.Fingerprint()
@@ -78,7 +78,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		blk := getOneBlock(rel)
-		view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName)
+		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 		assert.NoError(t, err)
 		defer view.Close()
 		offsets := make([]uint32, 0)
@@ -120,7 +120,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName)
+			view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
@@ -161,7 +161,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(catalog.PhyAddrColumnName)
+			view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
@@ -211,7 +211,7 @@ func TestHidden2(t *testing.T) {
 		blk := getOneBlock(rel)
 		var hidden *model.ColumnView
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(def.Idx)
+			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length(), view.Length())
@@ -233,7 +233,7 @@ func TestHidden2(t *testing.T) {
 			return
 		}, nil)
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(def.Idx)
+			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
 			assert.NoError(t, err)
 			defer view.Close()
 			view.ApplyDeletes()
@@ -248,7 +248,7 @@ func TestHidden2(t *testing.T) {
 		blk := getOneBlock(rel)
 		var hidden *model.ColumnView
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(def.Idx)
+			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length()-1, view.Length())
@@ -337,7 +337,7 @@ func TestHidden2(t *testing.T) {
 		rows := 0
 		for it.Valid() {
 			blk := it.GetBlock()
-			hidden, err := blk.GetColumnDataById(schema.PhyAddrKey.Idx)
+			hidden, err := blk.GetColumnDataById(context.Background(), schema.PhyAddrKey.Idx)
 			assert.NoError(t, err)
 			defer hidden.Close()
 			hidden.ApplyDeletes()

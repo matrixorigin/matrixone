@@ -109,14 +109,18 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	count := bat.Length()
 	for i, rp := range ap.Result {
 		if rp >= 0 {
-			rbat.Vecs[i] = bat.Vecs[rp]
-			bat.Vecs[rp] = nil
+			// rbat.Vecs[i] = bat.Vecs[rp]
+			// bat.Vecs[rp] = nil
+			typ := *bat.Vecs[rp].GetType()
+			rbat.Vecs[i] = vector.NewVec(typ)
+			if err := vector.GetUnionAllFunction(typ, proc.Mp())(rbat.Vecs[i], bat.Vecs[rp]); err != nil {
+				return err
+			}
 		} else {
 			rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -187,8 +191,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			bat.Vecs[rp] = nil
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil

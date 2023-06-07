@@ -33,9 +33,9 @@ type Container struct {
 type Argument struct {
 	// 1. main table
 	Tbl engine.Relation
-	// 2. unique index tables
-	Unique_tbls  []engine.Relation
-	AffectedRows uint64
+	// 2. partition sub tables
+	PartitionSources []engine.Relation
+	affectedRows     uint64
 	// 3. used for ut_test, otherwise the batch will free,
 	// and we can't get the result to check
 	notFreeBatch bool
@@ -43,24 +43,29 @@ type Argument struct {
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
-	for k := range arg.container.mp {
-		arg.container.mp[k].Clean(proc.GetMPool())
-		arg.container.mp[k] = nil
-	}
+	// for k := range arg.container.mp {
+	// 	arg.container.mp[k].Clean(proc.GetMPool())
+	// 	arg.container.mp[k] = nil
+	// }
 }
 
 func (arg *Argument) GetMetaLocBat(name string) {
-	bat := batch.New(true, []string{name})
-	bat.Cnt = 1
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_text,
-		0, 0))
-	arg.container.mp[0] = bat
-	for i := range arg.Unique_tbls {
-		bat := batch.New(true, []string{name})
+	// If the target is a partition table
+	if len(arg.PartitionSources) > 0 {
+		// 'i' aligns with partition number
+		for i := range arg.PartitionSources {
+			bat := batch.NewWithSize(1)
+			bat.Attrs = []string{name}
+			bat.Cnt = 1
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_text, 0, 0))
+			arg.container.mp[i] = bat
+		}
+	} else {
+		bat := batch.NewWithSize(1)
+		bat.Attrs = []string{name}
 		bat.Cnt = 1
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_text,
-			0, 0))
-		arg.container.mp[i+1] = bat
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_text, 0, 0))
+		arg.container.mp[0] = bat
 	}
 }
 
@@ -70,28 +75,29 @@ func (arg *Argument) Split(proc *process.Process, bat *batch.Batch) error {
 	metaLocs := vector.MustStrCol(bat.GetVector(1))
 	for i := range tblIdx {
 		if tblIdx[i] >= 0 {
-			if tblIdx[i] == 0 {
-				location, err := blockio.EncodeLocationFromString(metaLocs[i])
-				if err != nil {
-					return err
-				}
-				arg.AffectedRows += uint64(location.Rows())
+			location, err := blockio.EncodeLocationFromString(metaLocs[i])
+			if err != nil {
+				return err
 			}
+			arg.affectedRows += uint64(location.Rows())
 			vector.AppendBytes(arg.container.mp[int(tblIdx[i])].Vecs[0], []byte(metaLocs[i]), false, proc.GetMPool())
 		} else {
 			idx := int(-(tblIdx[i] + 1))
-			bat := &batch.Batch{}
-			if err := bat.UnmarshalBinary([]byte(metaLocs[i])); err != nil {
+			newBat := &batch.Batch{}
+			if err := newBat.UnmarshalBinary([]byte(metaLocs[i])); err != nil {
 				return err
 			}
-			if idx == 0 {
-				arg.AffectedRows += uint64(bat.Length())
-			}
-			arg.container.mp2[idx] = append(arg.container.mp2[idx], bat)
+			newBat.Cnt = 1
+			arg.affectedRows += uint64(newBat.Length())
+			arg.container.mp2[idx] = append(arg.container.mp2[idx], newBat)
 		}
 	}
 	for _, bat := range arg.container.mp {
 		bat.SetZs(bat.Vecs[0].Length(), proc.GetMPool())
 	}
 	return nil
+}
+
+func (arg *Argument) AffectedRows() uint64 {
+	return arg.affectedRows
 }

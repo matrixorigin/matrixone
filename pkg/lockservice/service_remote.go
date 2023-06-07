@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
@@ -67,47 +68,58 @@ func (s *service) initRemoteHandler() {
 func (s *service) handleRemoteLock(
 	ctx context.Context,
 	req *pb.Request,
-	resp *pb.Response) error {
+	resp *pb.Response,
+	cs morpc.ClientSession) {
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale
 		// lock table binding.
-		return err
+		writeResponse(ctx, resp, err, cs)
+		return
 	}
 	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
-	result, err := l.lock(ctx, txn, req.Lock.Rows, req.Lock.Options)
-	if err != nil {
-		return err
-	}
-	resp.Lock.Result = result
-	return nil
+
+	l.lock(
+		ctx,
+		txn,
+		req.Lock.Rows,
+		LockOptions{LockOptions: req.Lock.Options, async: true},
+		func(result pb.Result, err error) {
+			resp.Lock.Result = result
+			writeResponse(ctx, resp, err, cs)
+		})
 }
 
 func (s *service) handleRemoteUnlock(
 	ctx context.Context,
 	req *pb.Request,
-	resp *pb.Response) error {
+	resp *pb.Response,
+	cs morpc.ClientSession) {
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale lock
 		// table binding.
-		return err
+		writeResponse(ctx, resp, err, cs)
+		return
 	}
-	return s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS)
+	err = s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS)
+	writeResponse(ctx, resp, err, cs)
 }
 
 func (s *service) handleRemoteGetLock(
 	ctx context.Context,
 	req *pb.Request,
-	resp *pb.Response) error {
+	resp *pb.Response,
+	cs morpc.ClientSession) {
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale lock
 		// table binding.
-		return err
+		writeResponse(ctx, resp, err, cs)
+		return
 	}
 	l.getLock(
 		req.GetTxnLock.TxnID,
@@ -116,27 +128,32 @@ func (s *service) handleRemoteGetLock(
 			n := lock.waiter.waiters.len()
 			if n > 0 {
 				resp.GetTxnLock.Value = int32(lock.value)
-				values := make([][]byte, 0, n)
-				lock.waiter.waiters.iter(func(v []byte) bool {
-					values = append(values, v)
+				values := make([]pb.WaitTxn, 0, n)
+				lock.waiter.waiters.iter(func(w *waiter) bool {
+					txn := s.activeTxnHolder.getActiveTxn(w.txnID, false, "")
+					if txn != nil {
+						values = append(values, txn.toWaitTxn(s.cfg.ServiceID, false))
+					}
 					return true
 				})
 				resp.GetTxnLock.WaitingList = values
 			}
 		})
-	return nil
+	writeResponse(ctx, resp, err, cs)
 }
 
 func (s *service) handleRemoteGetWaitingList(
 	ctx context.Context,
 	req *pb.Request,
-	resp *pb.Response) error {
+	resp *pb.Response,
+	cs morpc.ClientSession) {
 	txn := s.activeTxnHolder.getActiveTxn(
 		req.GetWaitingList.Txn.TxnID,
 		false,
 		"")
 	if txn == nil {
-		return nil
+		writeResponse(ctx, resp, nil, cs)
+		return
 	}
 	txn.fetchWhoWaitingMe(
 		s.cfg.ServiceID,
@@ -147,21 +164,23 @@ func (s *service) handleRemoteGetWaitingList(
 			return true
 		},
 		s.getLockTable)
-	return nil
+	writeResponse(ctx, resp, nil, cs)
 }
 
 func (s *service) handleKeepRemoteLock(
 	ctx context.Context,
 	req *pb.Request,
-	resp *pb.Response) error {
+	resp *pb.Response,
+	cs morpc.ClientSession) {
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
-		return err
+		writeResponse(ctx, resp, err, cs)
+		return
 	}
 
 	s.activeTxnHolder.keepRemoteActiveTxn(req.KeepRemoteLock.ServiceID)
-	return nil
+	writeResponse(ctx, resp, nil, cs)
 }
 
 func (s *service) getLocalLockTable(
@@ -182,7 +201,7 @@ func (s *service) getLocalLockTable(
 	return l, nil
 }
 
-func (s *service) getTxnWaitingList(
+func (s *service) getTxnWaitingListOnRemote(
 	txnID []byte,
 	createdOn string) ([]pb.WaitTxn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)

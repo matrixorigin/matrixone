@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -397,29 +398,41 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
 		motrace.EndStatement(ctx, nil, ses.sentRows.Load())
-		logInfo(ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
+		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
 		motrace.EndStatement(ctx, err, ses.sentRows.Load())
-		logError(ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
+		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 }
 
-func logInfo(info string, msg string, fields ...zap.Field) {
+func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
 	fields = append(fields, zap.String("session_info", info))
 	logutil.Info(msg, fields...)
 }
 
-//func logDebug(info string, msg string, fields ...zap.Field) {
-//	fields = append(fields, zap.String("session_info", info))
-//	logutil.Debug(msg, fields...)
-//}
+func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Debug(msg, fields...)
+}
 
-func logError(info string, msg string, fields ...zap.Field) {
+func logError(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
 	fields = append(fields, zap.String("session_info", info))
 	logutil.Error(msg, fields...)
 }
 
 func logInfof(info string, msg string, fields ...interface{}) {
+	if strings.Contains(info, "sys:mo_logger") {
+		return
+	}
 	fields = append(fields, info)
 	logutil.Infof(msg+" %s", fields...)
 }
@@ -528,7 +541,6 @@ func rowsetDataToVector(
 	compileCtx plan2.CompilerContext,
 	exprs []*plan.Expr,
 	tarVec *vector.Vector,
-	emptyBatch *batch.Batch,
 	params []*plan.Expr,
 	uf func(*vector.Vector, *vector.Vector, int64) error,
 ) error {
@@ -547,12 +559,12 @@ func rowsetDataToVector(
 		}
 
 		if expr, ok := e.Expr.(*plan.Expr_P); ok {
-			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, params[int(expr.P.Pos)])
+			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, batch.EmptyForConstFoldBatch, params[int(expr.P.Pos)])
 			if err != nil {
 				return err
 			}
 		} else if _, ok := e.Expr.(*plan.Expr_V); ok {
-			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, emptyBatch, e)
+			exprImpl, err = plan2.GetVarValue(ctx, compileCtx, proc, batch.EmptyForConstFoldBatch, e)
 			if err != nil {
 				return err
 			}
@@ -560,7 +572,7 @@ func rowsetDataToVector(
 			exprImpl = e
 		} else {
 			exprImpl = plan2.DeepCopyExpr(e)
-			exprImpl, err = rewriteExpr(ctx, proc, compileCtx, emptyBatch, params, exprImpl)
+			exprImpl, err = rewriteExpr(ctx, proc, compileCtx, batch.EmptyForConstFoldBatch, params, exprImpl)
 			if err != nil {
 				return err
 			}
@@ -572,7 +584,7 @@ func rowsetDataToVector(
 		}
 
 		var vec *vector.Vector
-		vec, err = colexec.EvalExpressionOnce(proc, exprImpl, []*batch.Batch{emptyBatch})
+		vec, err = colexec.EvalExpressionOnce(proc, exprImpl, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
 			return err
 		}
@@ -600,4 +612,8 @@ func getVariableValue(varDefault interface{}) string {
 	default:
 		return ""
 	}
+}
+
+func makeServerVersion(pu *mo_config.ParameterUnit, version string) string {
+	return pu.SV.ServerVersionPrefix + version
 }

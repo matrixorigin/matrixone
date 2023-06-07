@@ -73,7 +73,7 @@ func TestTop(t *testing.T) {
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
+		tc.proc.Reg.InputBatch = batch.EmptyBatch
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
@@ -100,7 +100,7 @@ func BenchmarkTop(b *testing.B) {
 			_, _ = Call(0, tc.proc, tc.arg, false, false)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
 			_, _ = Call(0, tc.proc, tc.arg, false, false)
-			tc.proc.Reg.InputBatch = &batch.Batch{}
+			tc.proc.Reg.InputBatch = batch.EmptyBatch
 			_, _ = Call(0, tc.proc, tc.arg, false, false)
 			tc.proc.Reg.InputBatch = nil
 			_, _ = Call(0, tc.proc, tc.arg, false, false)

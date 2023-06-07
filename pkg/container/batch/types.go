@@ -16,10 +16,20 @@ package batch
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
+
+var (
+	EmptyBatch             = &Batch{}
+	EmptyForConstFoldBatch = NewWithSize(0)
+)
+
+func init() {
+	EmptyForConstFoldBatch.Zs = []int64{1}
+}
 
 type EncodeBatch struct {
 	Zs       []int64
@@ -174,5 +184,6 @@ type Batch struct {
 	// ring
 	Zs   []int64
 	Aggs []agg.Agg[any]
-	Ht   any // hash table
+
+	AuxData any // hash table, runtime filter, etc.
 }

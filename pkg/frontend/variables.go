@@ -243,6 +243,12 @@ func (svbt SystemVariableBoolType) Zero() interface{} {
 }
 
 func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{}, error) {
+	if value == "on" {
+		return int8(1), nil
+	} else if value == "off" {
+		return int8(0), nil
+	}
+
 	convertVal, err := strconv.ParseInt(value, 10, 8)
 	if err != nil {
 		return nil, errorConvertFromStringToBoolFailed
@@ -251,6 +257,7 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 		return nil, errorConvertFromStringToBoolFailed
 	}
 	return int8(convertVal), nil
+
 }
 
 type SystemVariableIntType struct {
@@ -1331,14 +1338,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("mo_pk_check_by_dn"),
 		Default:           int8(0),
-	},
-	"cn_label": {
-		Name:              "cn_label",
-		Scope:             ScopeSession,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("cn_label"),
-		Default:           "",
 	},
 	"syspublications": {
 		Name:              "syspublications",

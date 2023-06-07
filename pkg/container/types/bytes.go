@@ -51,6 +51,7 @@ func (v *Varlena) OffsetLen() (uint32, uint32) {
 	s := v.U32Slice()
 	return s[1], s[2]
 }
+
 func (v *Varlena) SetOffsetLen(voff, vlen uint32) {
 	s := v.U32Slice()
 	s[0] = VarlenaBigHdr

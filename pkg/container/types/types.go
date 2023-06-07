@@ -370,13 +370,13 @@ var Types map[string]T = map[string]T{
 }
 
 func New(oid T, width, scale int32) Type {
-	return Type{
-		Oid:     oid,
-		Size:    int32(oid.TypeLen()),
-		Width:   width,
-		Scale:   scale,
-		Charset: CharsetType(oid),
-	}
+	typ := Type{}
+	typ.Oid = oid
+	typ.Size = int32(oid.TypeLen())
+	typ.Width = width
+	typ.Scale = scale
+	typ.Charset = CharsetType(oid)
+	return typ
 }
 
 func CharsetType(oid T) uint8 {
@@ -459,6 +459,27 @@ func (t Type) IsFloat() bool {
 	default:
 		return false
 	}
+}
+
+func (t Type) IsDecimal() bool {
+	switch t.Oid {
+	case T_decimal64, T_decimal128, T_decimal256:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t Type) IsTemporal() bool {
+	switch t.Oid {
+	case T_date, T_time, T_datetime, T_timestamp, T_interval:
+		return true
+	}
+	return false
+}
+
+func (t Type) IsNumericOrTemporal() bool {
+	return t.IsIntOrUint() || t.IsFloat() || t.IsDecimal() || t.IsTemporal()
 }
 
 func (t Type) String() string {
@@ -775,6 +796,22 @@ func (t T) FixedLength() int {
 		return -24
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
+}
+
+func (t T) IsFixedLen() bool {
+	return t.FixedLength() > 0
+}
+
+func (t T) IsOrdered() bool {
+	switch t {
+	case T_int8, T_int16, T_int32, T_int64,
+		T_uint8, T_uint16, T_uint32, T_uint64,
+		T_float32, T_float64,
+		T_date, T_time, T_datetime, T_timestamp:
+		return true
+	default:
+		return false
+	}
 }
 
 // IsUnsignedInt return true if the types.T is UnSigned integer type

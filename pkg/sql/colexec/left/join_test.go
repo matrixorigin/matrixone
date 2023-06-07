@@ -17,7 +17,6 @@ package left
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -85,7 +85,7 @@ func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
 		nb0 := tc.proc.Mp().CurrNB()
 		bat := hashBuild(t, tc)
-		if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+		if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
 			jm.SetDupCount(int64(1))
 		}
 		err := Prepare(tc.proc, tc.arg)
@@ -269,7 +269,7 @@ func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
 	ok, err := hashbuild.Call(0, tc.proc, tc.barg, false, false)
 	require.NoError(t, err)
-	require.Equal(t, true, ok)
+	require.Equal(t, false, ok)
 	return tc.proc.Reg.InputBatch
 }
 

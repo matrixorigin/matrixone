@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -160,6 +161,15 @@ func TextColumn(name, comment string) Column {
 	}
 }
 
+func TextDefaultColumn(name, defaultVal, comment string) Column {
+	return Column{
+		Name:    name,
+		ColType: TText,
+		Default: defaultVal,
+		Comment: comment,
+	}
+}
+
 func DatetimeColumn(name, comment string) Column {
 	return Column{
 		Name:    name,
@@ -246,6 +256,7 @@ type Table struct {
 	Table            string
 	Columns          []Column
 	PrimaryKeyColumn []Column
+	ClusterBy        []Column
 	Engine           string
 	Comment          string
 	// PathBuilder help to desc param 'infile'
@@ -256,7 +267,7 @@ type Table struct {
 	TableOptions TableOptions
 	// SupportUserAccess default false. if true, user account can access.
 	SupportUserAccess bool
-	// SupportConstAccess default false. if true, use Table.Account
+	// SupportConstAccess default false. if true, use Table.Account first
 	SupportConstAccess bool
 
 	// name2ColumnIdx used in Row
@@ -301,6 +312,8 @@ func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 	switch strings.ToUpper(tbl.Engine) {
 	case ExternalTableEngine:
 		sb.WriteString(TableOptions.GetCreateOptions())
+	case NormalTableEngine:
+		sb.WriteString(TableOptions.GetCreateOptions())
 	default:
 		panic(moerr.NewInternalError(ctx, "NOT support engine: %s", tbl.Engine))
 	}
@@ -332,6 +345,17 @@ func (tbl *Table) ToCreateSql(ctx context.Context, ifNotExists bool) string {
 		sb.WriteString(`)`)
 	}
 	sb.WriteString("\n)")
+	// cluster by
+	if len(tbl.ClusterBy) > 0 && tbl.Engine != ExternalTableEngine {
+		sb.WriteString(" cluster by (")
+		for idx, col := range tbl.ClusterBy {
+			if idx > 0 {
+				sb.WriteString(`, `)
+			}
+			sb.WriteString(fmt.Sprintf("`%s`", col.Name))
+		}
+		sb.WriteString(`)`)
+	}
 	sb.WriteString(TableOptions.GetTableOptions(tbl.PathBuilder))
 
 	return sb.String()
@@ -433,7 +457,11 @@ func (cf *ColumnField) GetTime() time.Time {
 	if cf.Interface != nil {
 		return time.Unix(0, cf.Integer).In(cf.Interface.(*time.Location))
 	} else {
-		return time.Unix(0, cf.Integer)
+		if cf.Integer == 0 {
+			return time.Time{}
+		} else {
+			return time.Unix(0, cf.Integer)
+		}
 	}
 }
 
@@ -450,7 +478,12 @@ func (cf *ColumnField) EncodedDatetime(dst []byte) []byte {
 	return Time2DatetimeBuffed(cf.GetTime(), dst[:0])
 }
 
+var emptyTime = time.Time{}
+
 func TimeField(val time.Time) ColumnField {
+	if val == emptyTime {
+		return ColumnField{Type: TDatetime, Integer: 0, Interface: nil}
+	}
 	secs := val.UnixNano()
 	return ColumnField{Type: TDatetime, Integer: secs, Interface: val.Location()}
 }
@@ -587,16 +620,18 @@ func (r *Row) Reset() {
 	}
 }
 
-// GetAccount return r.Columns[r.AccountIdx] if r.AccountIdx >= 0 and r.Table.PathBuilder.SupportAccountStrategy,
+// GetAccount
+// return r.Table.Account if r.Table.SupportConstAccess
+// else return r.Columns[r.AccountIdx] if r.AccountIdx >= 0 and r.Table.PathBuilder.SupportAccountStrategy,
 // else return "sys"
 func (r *Row) GetAccount() string {
-	if r.Table.PathBuilder.SupportAccountStrategy() && r.Table.accountIdx >= 0 {
-		return r.Columns[r.Table.accountIdx].String
-	}
 	if r.Table.SupportConstAccess && len(r.Table.Account) > 0 {
 		return r.Table.Account
 	}
-	return "sys"
+	if r.Table.PathBuilder.SupportAccountStrategy() && r.Table.accountIdx >= 0 {
+		return r.Columns[r.Table.accountIdx].String
+	}
+	return AccountSys
 }
 
 func (r *Row) SetVal(col string, cf ColumnField) {
@@ -624,17 +659,27 @@ func (r *Row) ToStrings() []string {
 		case types.T_uint64:
 			col[idx] = fmt.Sprintf("%d", uint64(r.Columns[idx].Integer))
 		case types.T_float64:
-			col[idx] = fmt.Sprintf("%.1f", r.Columns[idx].GetFloat64())
+			col[idx] = strconv.FormatFloat(r.Columns[idx].GetFloat64(), 'f', -1, 64)
 		case types.T_char, types.T_varchar,
 			types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 			switch r.Columns[idx].Type {
 			case TBytes:
-				col[idx] = r.Columns[idx].EncodeBytes()
+				// hack way for json column, avoid early copy. pls see more in BytesTIPs
+				val := r.Columns[idx].Bytes
+				if len(val) == 0 {
+					col[idx] = typ.Default
+				} else {
+					col[idx] = string(r.Columns[idx].Bytes)
+				}
 			case TUuid:
 				dst := r.Columns[idx].EncodeUuid()
 				col[idx] = string(dst[:])
 			default:
-				col[idx] = r.Columns[idx].String // default val can see Row.Reset
+				val := r.Columns[idx].String
+				if len(val) == 0 {
+					val = typ.Default
+				}
+				col[idx] = val
 			}
 		case types.T_json:
 			switch r.Columns[idx].Type {
@@ -647,6 +692,17 @@ func (r *Row) ToStrings() []string {
 					val = typ.Default
 				}
 				col[idx] = val
+			case TBytes:
+				// BytesTIPs: hack way for json column, avoid early copy.
+				// Data-safety depends on Writer call Row.ToStrings() before IBuffer2SqlItem.Free()
+				// important:
+				// StatementInfo's execPlanCol / statsCol, this two column will be free by StatementInfo.Free()
+				val := r.Columns[idx].Bytes
+				if len(val) == 0 {
+					col[idx] = typ.Default
+				} else {
+					col[idx] = string(val)
+				}
 			}
 		case types.T_datetime:
 			col[idx] = Time2DatetimeString(r.Columns[idx].GetTime())
@@ -814,7 +870,7 @@ func SetPathBuilder(ctx context.Context, pathBuilder string) error {
 	return nil
 }
 
-var ZeroTime = time.Unix(0, 0)
+var ZeroTime = time.Time{}
 
 const timestampFormatter = "2006-01-02 15:04:05.000000"
 

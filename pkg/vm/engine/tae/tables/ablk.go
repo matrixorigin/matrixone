@@ -16,9 +16,8 @@ package tables
 
 import (
 	"context"
-	"time"
-
 	"sync/atomic"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -131,11 +130,13 @@ func (blk *ablock) GetColumnDataByIds(
 }
 
 func (blk *ablock) GetColumnDataById(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
 ) (view *model.ColumnView, err error) {
 	return blk.resolveColumnData(
+		ctx,
 		txn,
 		readSchema.(*catalog.Schema),
 		col,
@@ -179,6 +180,7 @@ func (blk *ablock) DataCommittedBefore(ts types.TS) bool {
 }
 
 func (blk *ablock) resolveColumnData(
+	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	col int,
@@ -195,6 +197,7 @@ func (blk *ablock) resolveColumnData(
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnData(
+			ctx,
 			txn,
 			readSchema,
 			col,
@@ -294,6 +297,7 @@ func (blk *ablock) resolveInMemoryColumnData(
 }
 
 func (blk *ablock) GetValue(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	row, col int) (v any, isNull bool, err error) {
@@ -304,6 +308,7 @@ func (blk *ablock) GetValue(
 		return blk.getInMemoryValue(node.MustMNode(), txn, schema, row, col)
 	} else {
 		return blk.getPersistedValue(
+			ctx,
 			node.MustPNode(),
 			txn,
 			schema,
@@ -415,7 +420,7 @@ func (blk *ablock) getPersistedRowByFilter(
 
 	// Load persisted deletes
 	view := model.NewColumnView(0)
-	if err = blk.FillPersistedDeletes(txn, view.BaseView); err != nil {
+	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
 		return
 	}
 
@@ -605,7 +610,7 @@ func (blk *ablock) BatchDedup(
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
+			logutil.Debugf("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
 		}
 	}()
 	node := blk.PinNode()

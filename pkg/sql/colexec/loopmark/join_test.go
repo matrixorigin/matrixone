@@ -84,6 +84,7 @@ func TestJoin(t *testing.T) {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.arg.Free(tc.proc, false)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 	for _, tc := range tcs {
@@ -105,6 +106,7 @@ func TestJoin(t *testing.T) {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.arg.Free(tc.proc, false)
+		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 
@@ -209,7 +211,7 @@ func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
 	ok, err := hashbuild.Call(0, tc.proc, tc.barg, false, false)
 	require.NoError(t, err)
-	require.Equal(t, true, ok)
+	require.Equal(t, false, ok)
 	return tc.proc.Reg.InputBatch
 }
 

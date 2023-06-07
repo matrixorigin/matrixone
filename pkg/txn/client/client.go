@@ -19,6 +19,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
+	"go.uber.org/zap"
 )
 
 // WithTxnIDGenerator setup txn id generator
@@ -61,10 +63,16 @@ func WithLockService(lockService lockservice.LockService) TxnClientCreateOption 
 //
 // If we need to ensure that all the transactions on a CN can read the writes of the previous committed
 // transaction, then we can use WithEenableCNBasedConsistency to turn on.
-func WithEnableSacrificingFreshness(timestampWaiter TimestampWaiter) TxnClientCreateOption {
+func WithEnableSacrificingFreshness() TxnClientCreateOption {
 	return func(tc *txnClient) {
-		tc.timestampWaiter = timestampWaiter
 		tc.enableSacrificingFreshness = true
+	}
+}
+
+// WithTimestampWaiter setup timestamp waiter to get the latest applied committed timestamp from logtail.
+func WithTimestampWaiter(waiter TimestampWaiter) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.timestampWaiter = waiter
 	}
 }
 
@@ -88,6 +96,15 @@ func WithEnableRefreshExpression() TxnClientCreateOption {
 	}
 }
 
+// WithEnableLeakCheck enable txn leak check. Used to found any txn is not committed or rollbacked.
+func WithEnableLeakCheck(
+	maxActiveAges time.Duration,
+	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.leakChecker = newLeakCheck(maxActiveAges, leakHandleFunc)
+	}
+}
+
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
@@ -96,6 +113,7 @@ type txnClient struct {
 	generator                  TxnIDGenerator
 	lockService                lockservice.LockService
 	timestampWaiter            TimestampWaiter
+	leakChecker                *leakChecker
 	enableCNBasedConsistency   bool
 	enableSacrificingFreshness bool
 	enableRefreshExpression    bool
@@ -128,6 +146,7 @@ func NewTxnClient(
 		opt(c)
 	}
 	c.adjust()
+	c.startLeakChecker()
 	return c
 }
 
@@ -159,20 +178,32 @@ func (client *txnClient) New(
 
 	options = append(options,
 		WithTxnCNCoordinator(),
-		WithTxnClose(client),
-		WithUpdateLastCommitTSFunc(client.updateLastCommitTS),
 		WithTxnLockService(client.lockService))
-	return newTxnOperator(
+	op := newTxnOperator(
 		client.sender,
 		txnMeta,
-		options...), nil
+		options...)
+	op.timestampWaiter = client.timestampWaiter
+	op.AppendEventCallback(ClosedEvent,
+		client.updateLastCommitTS,
+		client.popTransaction)
+	client.addToLeakCheck(op)
+	return op, nil
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
-	return newTxnOperatorWithSnapshot(client.sender, snapshot)
+	op, err := newTxnOperatorWithSnapshot(client.sender, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	op.timestampWaiter = client.timestampWaiter
+	return op, nil
 }
 
 func (client *txnClient) Close() error {
+	if client.leakChecker != nil {
+		client.leakChecker.close()
+	}
 	return client.sender.Close()
 }
 
@@ -196,11 +227,11 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 	return txn.TxnMode_Pessimistic
 }
 
-func (client *txnClient) updateLastCommitTS(ts timestamp.Timestamp) {
+func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if client.mu.latestCommitTS.Less(ts) {
-		client.mu.latestCommitTS = ts
+	if client.mu.latestCommitTS.Less(txn.CommitTS) {
+		client.mu.latestCommitTS = txn.CommitTS
 	}
 }
 
@@ -247,7 +278,15 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 }
 
 func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
-	client.updateLastCommitTS(ts)
+	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
+	if client.timestampWaiter != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		defer cancel()
+		_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
+		if err != nil {
+			util.GetLogger().Fatal("wait latest commit ts failed", zap.Error(err))
+		}
+	}
 }
 
 func (client *txnClient) popTransaction(txn txn.TxnMeta) {
@@ -267,6 +306,8 @@ func (client *txnClient) popTransaction(txn txn.TxnMeta) {
 	case i == 0:
 		client.mu.minTS = client.mu.txns[i].SnapshotTS
 	}
+
+	client.removeFromLeakCheck(txn.ID)
 }
 
 func (client *txnClient) pushTransaction(txn txn.TxnMeta) {
@@ -283,5 +324,23 @@ func (client *txnClient) pushTransaction(txn txn.TxnMeta) {
 	}
 	if client.mu.minTS.IsEmpty() || txn.SnapshotTS.Less(client.mu.minTS) {
 		client.mu.minTS = txn.SnapshotTS
+	}
+}
+
+func (client *txnClient) startLeakChecker() {
+	if client.leakChecker != nil {
+		client.leakChecker.start()
+	}
+}
+
+func (client *txnClient) addToLeakCheck(op *txnOperator) {
+	if client.leakChecker != nil {
+		client.leakChecker.txnOpened(op.txnID, op.option.createBy)
+	}
+}
+
+func (client *txnClient) removeFromLeakCheck(id []byte) {
+	if client.leakChecker != nil {
+		client.leakChecker.txnClosed(id)
 	}
 }

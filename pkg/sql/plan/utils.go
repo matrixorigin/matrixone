@@ -161,7 +161,7 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding, markTag int32) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]any, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -211,6 +211,14 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 		colRef := exprImpl.Col
 		if colRef.RelPos == tag {
 			expr = DeepCopyExpr(projects[colRef.ColPos])
+		}
+	case *plan.Expr_W:
+		replaceColRefs(exprImpl.W.WindowFunc, tag, projects)
+		for _, arg := range exprImpl.W.PartitionBy {
+			replaceColRefs(arg, tag, projects)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			replaceColRefs(order.Expr, tag, projects)
 		}
 	}
 
@@ -776,6 +784,14 @@ func increaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
 		for _, arg := range exprImpl.F.Args {
 			increaseRefCnt(arg, colRefCnt)
 		}
+	case *plan.Expr_W:
+		increaseRefCnt(exprImpl.W.WindowFunc, colRefCnt)
+		for _, arg := range exprImpl.W.PartitionBy {
+			increaseRefCnt(arg, colRefCnt)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			increaseRefCnt(order.Expr, colRefCnt)
+		}
 	}
 }
 
@@ -787,6 +803,14 @@ func decreaseRefCnt(expr *plan.Expr, colRefCnt map[[2]int32]int) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
 			decreaseRefCnt(arg, colRefCnt)
+		}
+	case *plan.Expr_W:
+		decreaseRefCnt(exprImpl.W.WindowFunc, colRefCnt)
+		for _, arg := range exprImpl.W.PartitionBy {
+			decreaseRefCnt(arg, colRefCnt)
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			decreaseRefCnt(order.Expr, colRefCnt)
 		}
 	}
 }
@@ -891,6 +915,12 @@ func GetColumnMapByExpr(expr *plan.Expr, tableDef *plan.TableDef, columnMap *map
 			seqnum = int(tableDef.Cols[colIdx].Seqnum)
 		}
 		(*columnMap)[int(idx)] = seqnum
+	}
+}
+
+func GetColumnMapByExprs(exprs []*plan.Expr, tableDef *plan.TableDef, columnMap *map[int]int) {
+	for _, expr := range exprs {
+		GetColumnMapByExpr(expr, tableDef, columnMap)
 	}
 }
 
@@ -1009,7 +1039,7 @@ func CheckExprIsMonotonic(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-func getSortOrder(tableDef *plan.TableDef, colName string) int {
+func GetSortOrder(tableDef *plan.TableDef, colName string) int {
 	if tableDef.Pkey != nil {
 		pkNames := tableDef.Pkey.Names
 		for i := range pkNames {
@@ -1050,8 +1080,23 @@ func fixColumnName(tableDef *plan.TableDef, expr *plan.Expr) {
 }
 
 func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.Expr, error) {
-	var err error
+	// If it is Expr_List, perform constant folding on its elements
+	if exprImpl, ok := e.Expr.(*plan.Expr_List); ok {
+		exprList := exprImpl.List
+		for i, exprElem := range exprList.List {
+			_, ok2 := exprElem.Expr.(*plan.Expr_F)
+			if ok2 {
+				foldExpr, err := ConstantFold(bat, exprElem, proc)
+				if err != nil {
+					return e, nil
+				}
+				exprImpl.List.List[i] = foldExpr
+			}
+		}
+		return e, nil
+	}
 
+	var err error
 	if elist, ok := e.Expr.(*plan.Expr_List); ok {
 		for i, expr := range elist.List.List {
 			if elist.List.List[i], err = ConstantFold(bat, expr, proc); err != nil {
@@ -1065,6 +1110,7 @@ func ConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Process) (*plan.
 	if !ok || proc == nil {
 		return e, nil
 	}
+
 	overloadID := ef.F.Func.GetObj()
 	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
@@ -1204,6 +1250,7 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		default:
 			return false
 		}
+
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		val_u, valOk := constExpr.C.Value.(*plan.Const_U64Val)
 		if !valOk {
@@ -1238,6 +1285,10 @@ func checkNoNeedCast(constT, columnT types.Type, constExpr *plan.Expr_C) bool {
 		default:
 			return false
 		}
+
+	case types.T_decimal64, types.T_decimal128:
+		return columnT.Oid == types.T_decimal64 || columnT.Oid == types.T_decimal128
+
 	default:
 		return false
 	}
@@ -1503,9 +1554,8 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 // if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
 // we get batch like [1,2,3,4, origin_a, origin_b, origin_c, origin_d, row_id ....]。
 // we get expr like:  []*Expr{ 1=origin_a ,  (2 = origin_b and 3 = origin_c) }
-func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int) ([]*Expr, error) {
+func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, colCount int) ([]*Expr, error) {
 	checkExpr := make([]*Expr, len(uniqueCols))
-	colCount := len(tableDef.Cols)
 
 	for i, uniqueColMap := range uniqueCols {
 		var condExpr *Expr

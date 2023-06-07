@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 
 	// "time"
 
@@ -47,8 +48,7 @@ const (
 	SnapshotAttr_DBID            = "db_id"
 	SegmentAttr_ID               = "id"
 	SegmentAttr_CreateAt         = "create_at"
-	SegmentAttr_State            = "state"
-	SegmentAttr_Sorted           = "sorted"
+	SegmentAttr_SegNode          = "seg_node"
 	SnapshotAttr_BlockMaxRow     = "block_max_row"
 	SnapshotAttr_SegmentMaxBlock = "segment_max_block"
 	SnapshotAttr_SchemaExtra     = "schema_extra"
@@ -306,8 +306,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	catalog.OnReplayDBID(dbid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
-		logutil.Infof("delete %d", dbid)
-		logutil.Info(catalog.SimplePPString(common.PPL3))
+		logutil.Info("delete %d", zap.Uint64("dbid", dbid), zap.String("catalog pp", catalog.SimplePPString(common.PPL3)))
 		panic(err)
 	}
 	dbDeleteAt := db.GetDeleteAt()
@@ -520,7 +519,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
 	if err != nil {
-		logutil.Infof("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
+		logutil.Debugf("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
 		logutil.Info(catalog.SimplePPString(3))
 		panic(err)
 	}
@@ -554,15 +553,14 @@ func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *container
 	for i := 0; i < idVec.Length(); i++ {
 		dbid := insTxn.GetVectorByName(SnapshotAttr_DBID).Get(i).(uint64)
 		tid := insTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
-		appendable := ins.GetVectorByName(SegmentAttr_State).Get(i).(bool)
-		state := ES_NotAppendable
-		if appendable {
-			state = ES_Appendable
+		nodebytes := ins.GetVectorByName(SegmentAttr_SegNode).Get(i).([]byte)
+		node := &SegmentNode{}
+		if _, err := node.ReadFrom(bytes.NewReader(nodebytes)); err != nil {
+			logutil.Errorf("read segment node err %v", err)
 		}
-		sorted := ins.GetVectorByName(SegmentAttr_Sorted).Get(i).(bool)
 		sid := ins.GetVectorByName(SegmentAttr_ID).Get(i).(types.Segmentid)
 		txnNode := txnbase.ReadTuple(insTxn, i)
-		catalog.onReplayCreateSegment(dbid, tid, &sid, state, sorted, txnNode, dataFactory)
+		catalog.onReplayCreateSegment(dbid, tid, &sid, node, txnNode, dataFactory)
 	}
 	idVec = delTxn.GetVectorByName(SnapshotAttr_DBID)
 	for i := 0; i < idVec.Length(); i++ {
@@ -576,12 +574,12 @@ func (catalog *Catalog) OnReplaySegmentBatch(ins, insTxn, del, delTxn *container
 func (catalog *Catalog) onReplayCreateSegment(
 	dbid, tbid uint64,
 	segid *types.Segmentid,
-	state EntryState,
-	sorted bool,
+	segNode *SegmentNode,
+
 	txnNode *txnbase.TxnMVCCNode,
 	dataFactory DataFactory,
 ) {
-	// catalog.OnReplaySegmentID(segid)
+	catalog.OnReplaySegmentID(segNode.SortHint)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
 		logutil.Info(catalog.SimplePPString(common.PPL3))
@@ -601,11 +599,9 @@ func (catalog *Catalog) onReplayCreateSegment(
 		return
 	}
 	seg = NewReplaySegmentEntry()
-	seg.SegmentNode = &SegmentNode{}
+	seg.SegmentNode = segNode
 	seg.table = rel
 	seg.ID = *segid
-	seg.state = state
-	seg.sorted = sorted
 	seg.segData = dataFactory.MakeSegmentFactory()(seg)
 	rel.AddEntryLocked(seg)
 	un := &MVCCNode[*MetadataMVCCNode]{

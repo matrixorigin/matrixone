@@ -50,8 +50,12 @@ type LockOptions struct {
 
 // Argument lock op argument.
 type Argument struct {
-	parker  *types.Packer
-	targets []lockTarget
+	parker   *types.Packer
+	targets  []lockTarget
+	fetchers []FetchLockRowsFunc
+
+	// conflict on rc
+	err error
 }
 
 type lockTarget struct {
@@ -59,9 +63,9 @@ type lockTarget struct {
 	primaryColumnIndexInBatch    int32
 	refreshTimestampIndexInBatch int32
 	primaryColumnType            types.Type
-	fetcher                      FetchLockRowsFunc
 	filter                       RowsFilter
 	filterColIndexInBatch        int32
+	lockTable                    bool
 }
 
 // RowsFilter used to filter row from primary vector. The row will not lock if filter return false.

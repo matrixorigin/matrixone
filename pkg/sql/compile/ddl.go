@@ -26,22 +26,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-)
-
-var (
-	insertIntoIndexTableWithPKeyFormat    = "insert into  %s.`%s` select serial(%s), %s from %s.%s where serial(%s) is not null;"
-	insertIntoIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
-	createIndexTableForamt                = "create table %s.`%s` (%s);"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -63,35 +59,10 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		datType = catalog.SystemDBTypeSubscription
 	}
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, datType)
-	err := c.e.Create(ctx,
-		dbName, c.proc.TxnOperator)
-	if err != nil {
-		return err
-	}
-
-	// subscription database does not need to create auto increment table
-	if datType == catalog.SystemDBTypeSubscription {
-		return nil
-	}
-	return colexec.CreateAutoIncrTable(c.e, c.ctx, c.proc, dbName)
+	return c.e.Create(ctx, dbName, c.proc.TxnOperator)
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
-	errChan := make(chan error, len(s.PreScopes))
-	for i := range s.PreScopes {
-		switch s.PreScopes[i].Magic {
-		case Deletion:
-			// execute additional sql pipeline, currently, only delete operations are performed
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				_, err = cs.Delete(c)
-			}(s.PreScopes[i])
-		}
-	}
-
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
 	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
@@ -103,11 +74,11 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
-			return err
-		}
+	// delete all index object under the database from mo_catalog.mo_indexes
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithDatabaseIdFormat, s.Plan.GetDdl().GetDropDatabase().GetDatabaseId())
+	err = c.runSql(deleteSql)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -155,36 +126,48 @@ func (s *Scope) AlterView(c *Compile) error {
 	return dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
 }
 
-func (s *Scope) AlterTable(c *Compile) error {
-	errChan := make(chan error, len(s.PreScopes))
-	for i := range s.PreScopes {
-		switch s.PreScopes[i].Magic {
-		case Deletion:
-			// execute additional sql pipeline, currently, only delete operations are performed
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				_, err = cs.Delete(c)
-			}(s.PreScopes[i])
-		case Update:
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				_, err = cs.Update(c)
-			}(s.PreScopes[i])
+func addAlterKind(alterKind []api.AlterKind, kind api.AlterKind) []api.AlterKind {
+	for i := range alterKind {
+		if alterKind[i] == kind {
+			return alterKind
 		}
 	}
+	alterKind = append(alterKind, kind)
+	return alterKind
+}
 
+func getAddColPos(cols []*plan.ColDef, def *plan.ColDef, colName string, pos int32) ([]*plan.ColDef, int32, error) {
+	if pos == 0 {
+		cols = append([]*plan.ColDef{def}, cols...)
+		return cols, pos, nil
+	} else if pos == -1 {
+		length := len(cols)
+		cols = append(cols, nil)
+		copy(cols[length:], cols[length-1:])
+		cols[length-1] = def
+		return cols, int32(length - 1), nil
+	}
+	var idx int
+	for idx = 0; idx < len(cols); idx++ {
+		if cols[idx].Name == colName {
+			cols = append(cols, nil)
+			copy(cols[idx+2:], cols[idx+1:])
+			cols[idx+1] = def
+			return cols, int32(idx + 1), nil
+		}
+	}
+	return nil, 0, moerr.NewInvalidInputNoCtx("column '%s' doesn't exist in table", colName)
+}
+
+func (s *Scope) AlterTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := c.db
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
+	databaseId := dbSource.GetDatabaseId(c.ctx)
+
 	tblName := qry.GetTableDef().GetName()
 	rel, err := dbSource.Relation(c.ctx, tblName)
 	if err != nil {
@@ -202,10 +185,16 @@ func (s *Scope) AlterTable(c *Compile) error {
 	var addRefChildTbls []uint64
 	var newFkeys []*plan.ForeignKeyDef
 
-	var addIndex *plan.IndexDef
-	var dropIndex *plan.IndexDef
+	var addIndex []*plan.IndexDef
+	var dropIndex []*plan.IndexDef
 	var alterIndex *plan.IndexDef
 
+	var alterKind []api.AlterKind
+	var comment string
+	var oldName, newName string
+	var addCol []*plan.AlterAddCol
+	var dropCol []*plan.AlterDropCol
+	cols := tableDef.Cols
 	// drop foreign key
 	for _, action := range qry.Actions {
 		switch act := action.Action.(type) {
@@ -213,6 +202,7 @@ func (s *Scope) AlterTable(c *Compile) error {
 			alterTableDrop := act.Drop
 			constraintName := alterTableDrop.Name
 			if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
+				alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 				for i, fk := range tableDef.Fkeys {
 					if fk.Name == constraintName {
 						removeRefChildTbls[constraintName] = fk.ForeignTbl
@@ -221,11 +211,12 @@ func (s *Scope) AlterTable(c *Compile) error {
 					}
 				}
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
+				alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 				for i, indexdef := range tableDef.Indexes {
 					if indexdef.IndexName == constraintName {
-						dropIndex = indexdef
+						dropIndex = append(dropIndex, indexdef)
 						tableDef.Indexes = append(tableDef.Indexes[:i], tableDef.Indexes[i+1:]...)
-						// drop index table
+						//1. drop index table
 						if indexdef.TableExist {
 							if _, err = dbSource.Relation(c.ctx, indexdef.IndexTableName); err != nil {
 								return err
@@ -234,94 +225,80 @@ func (s *Scope) AlterTable(c *Compile) error {
 								return err
 							}
 						}
+						//2. delete index object from mo_catalog.mo_indexes
+						deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, tableDef.TblId, indexdef.IndexName)
+						err = c.runSql(deleteSql)
+						if err != nil {
+							return err
+						}
+						break
+					}
+				}
+			} else if alterTableDrop.Typ == plan.AlterTableDrop_COLUMN {
+				alterKind = append(alterKind, api.AlterKind_DropColumn)
+				var idx int
+				for idx = 0; idx < len(cols); idx++ {
+					if cols[idx].Name == constraintName {
+						drop := &plan.AlterDropCol{
+							Idx: uint32(idx),
+							Seq: cols[idx].Seqnum,
+						}
+						dropCol = append(dropCol, drop)
+						copy(cols[idx:], cols[idx+1:])
+						cols = cols[0 : len(cols)-1]
 						break
 					}
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
+			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
 		case *plan.AlterTable_Action_AddIndex:
+			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 			indexDef := act.AddIndex.IndexInfo.TableDef.Indexes[0]
-			addIndex = indexDef
-			// build and update constraint def
-			err = colexec.InsertOneIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName, indexDef)
-			if err != nil {
-				return err
-			}
-			if act.AddIndex.IndexTableExist {
-				var sql string
-				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
-				planCols := def.GetCols()
-				for i, planCol := range planCols {
-					if i == 1 {
-						sql += ","
-					}
-					sql += planCol.Name + " "
-					typeId := types.T(planCol.Typ.Id)
-					switch typeId {
-					case types.T_char:
-						sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
-					case types.T_varchar:
-						sql += fmt.Sprintf("VARCHAR(%d)", planCol.Typ.Width)
-					case types.T_binary:
-						sql += fmt.Sprintf("BINARY(%d)", planCol.Typ.Width)
-					case types.T_varbinary:
-						sql += fmt.Sprintf("VARBINARY(%d)", planCol.Typ.Width)
-					case types.T_decimal64:
-						sql += fmt.Sprintf("DECIMAL(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-					case types.T_decimal128:
-						sql += fmt.Sprintf("DECIAML(%d,%d)", planCol.Typ.Width, planCol.Typ.Scale)
-					default:
-						sql += typeId.String()
-					}
-					if i == 0 {
-						sql += " primary key"
-					}
+			for i := range addIndex {
+				if indexDef.IndexName == addIndex[i].IndexName {
+					return moerr.NewDuplicateKey(c.ctx, indexDef.IndexName)
 				}
-
-				createSQL := fmt.Sprintf(createIndexTableForamt, dbName, indexDef.IndexTableName, sql)
-				_, err = c.proc.SessionInfo.SqlHelper.ExecSql(createSQL)
+			}
+			addIndex = append(addIndex, indexDef)
+			if indexDef.Unique {
+				// 0. check original data is not duplicated
+				err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tblName, partsToColsStr(indexDef.Parts))
 				if err != nil {
 					return err
 				}
-				var insetSQL string
-				var temp string
-				for i, part := range indexDef.Parts {
-					if i == 0 {
-						temp += part
-					} else {
-						temp += "," + part
-					}
+			}
+
+			//1. build and update constraint def
+			insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef)
+			if err != nil {
+				return err
+			}
+			err = c.runSql(insertSql)
+			if err != nil {
+				return err
+			}
+			//---------------------------------------------------------
+			if act.AddIndex.IndexTableExist {
+				def := act.AddIndex.IndexInfo.GetIndexTables()[0]
+				// 2. create index table from unique index object
+				createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
+				err = c.runSql(createSQL)
+				if err != nil {
+					return err
 				}
 
-				if tableDef.Pkey == nil || len(tableDef.Pkey.PkeyColName) == 0 {
-					insetSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, dbName, indexDef.IndexTableName, temp, dbName, tblName, temp)
-				} else {
-					pkeyName := tableDef.Pkey.PkeyColName
-					var pKeyMsg string
-					if pkeyName == catalog.CPrimaryKeyColName {
-						pKeyMsg = "serial("
-						for i, part := range tableDef.Pkey.Names {
-							if i == 0 {
-								pKeyMsg += part
-							} else {
-								pKeyMsg += "," + part
-							}
-						}
-						pKeyMsg += ")"
-					} else {
-						pKeyMsg = pkeyName
-					}
-
-					insetSQL = fmt.Sprintf(insertIntoIndexTableWithPKeyFormat, dbName, indexDef.IndexTableName, temp, pKeyMsg, dbName, tblName, temp)
-				}
-				_, err = c.proc.SessionInfo.SqlHelper.ExecSql(insetSQL)
+				// 3. insert data into index table for unique index object
+				insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
+				err = c.runSql(insertSQL)
 				if err != nil {
 					return err
 				}
 			}
 		case *plan.AlterTable_Action_AlterIndex:
+			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateConstraint)
 			tableAlterIndex := act.AlterIndex
 			constraintName := tableAlterIndex.IndexName
 			for i, indexdef := range tableDef.Indexes {
@@ -329,9 +306,42 @@ func (s *Scope) AlterTable(c *Compile) error {
 					alterIndex = indexdef
 					alterIndex.Visible = tableAlterIndex.Visible
 					tableDef.Indexes[i].Visible = tableAlterIndex.Visible
+					// update the index visibility in mo_catalog.mo_indexes
+					var updateSql string
+					if alterIndex.Visible {
+						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 1, tableDef.TblId, indexdef.IndexName)
+					} else {
+						updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, 0, tableDef.TblId, indexdef.IndexName)
+					}
+					err = c.runSql(updateSql)
+					if err != nil {
+						return err
+					}
+
 					break
 				}
 			}
+		case *plan.AlterTable_Action_AlterComment:
+			alterKind = addAlterKind(alterKind, api.AlterKind_UpdateComment)
+			comment = act.AlterComment.NewComment
+		case *plan.AlterTable_Action_AlterName:
+			alterKind = addAlterKind(alterKind, api.AlterKind_RenameTable)
+			oldName = act.AlterName.OldName
+			newName = act.AlterName.NewName
+		case *plan.AlterTable_Action_AddCol:
+			alterKind = append(alterKind, api.AlterKind_AddColumn)
+			col := &plan.ColDef{
+				Name: act.AddCol.Name,
+				Alg:  plan.CompressType_Lz4,
+				Typ:  act.AddCol.Type,
+			}
+			var pos int32
+			cols, pos, err = getAddColPos(cols, col, act.AddCol.PreName, act.AddCol.Pos)
+			if err != nil {
+				return err
+			}
+			act.AddCol.Pos = pos
+			addCol = append(addCol, act.AddCol)
 		}
 	}
 
@@ -369,21 +379,19 @@ func (s *Scope) AlterTable(c *Compile) error {
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.IndexDef:
 			originHasIndexDef = true
-			if dropIndex != nil {
+			for in := range dropIndex {
 				for i, idx := range t.Indexes {
-					if dropIndex.IndexName == idx.IndexName {
+					if dropIndex[in].IndexName == idx.IndexName {
 						t.Indexes = append(t.Indexes[:i], t.Indexes[i+1:]...)
+						break
 					}
 				}
 			}
-			if addIndex != nil {
-				t.Indexes = append(t.Indexes, addIndex)
-			}
-
+			t.Indexes = append(t.Indexes, addIndex...)
 			if alterIndex != nil {
 				for i, idx := range t.Indexes {
 					if alterIndex.IndexName == idx.IndexName {
-						t.Indexes[i].TableExist = alterIndex.Visible
+						t.Indexes[i].Visible = alterIndex.Visible
 					}
 				}
 			}
@@ -399,11 +407,45 @@ func (s *Scope) AlterTable(c *Compile) error {
 	}
 	if !originHasIndexDef && addIndex != nil {
 		newCt.Cts = append(newCt.Cts, &engine.IndexDef{
-			Indexes: []*plan.IndexDef{addIndex},
+			Indexes: []*plan.IndexDef(addIndex),
 		})
 	}
 
-	err = rel.UpdateConstraint(c.ctx, newCt)
+	var addColIdx int
+	var dropColIdx int
+	constraint := make([][]byte, 0)
+	for _, kind := range alterKind {
+		var req *api.AlterTableReq
+		switch kind {
+		case api.AlterKind_UpdateConstraint:
+			ct, err := newCt.MarshalBinary()
+			if err != nil {
+				return err
+			}
+			req = api.NewUpdateConstraintReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), string(ct))
+		case api.AlterKind_UpdateComment:
+			req = api.NewUpdateCommentReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), comment)
+		case api.AlterKind_RenameTable:
+			req = api.NewRenameTableReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), oldName, newName)
+		case api.AlterKind_AddColumn:
+			name := addCol[addColIdx].Name
+			typ := addCol[addColIdx].Type
+			pos := addCol[addColIdx].Pos
+			addColIdx++
+			req = api.NewAddColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), name, typ, pos)
+		case api.AlterKind_DropColumn:
+			req = api.NewRemoveColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
+			dropColIdx++
+		default:
+		}
+		tmp, err := req.Marshal()
+		if err != nil {
+			return err
+		}
+		constraint = append(constraint, tmp)
+	}
+
+	err = rel.AlterTable(c.ctx, newCt, constraint)
 	if err != nil {
 		return err
 	}
@@ -427,12 +469,6 @@ func (s *Scope) AlterTable(c *Compile) error {
 			return err
 		}
 	}
-
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -440,7 +476,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
-	tableCols := planCols
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
@@ -582,13 +617,25 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if checkIndexInitializable(dbName, tblName) {
-		err = colexec.InsertIndexMetadata(c.e, c.ctx, dbSource, c.proc, tblName)
+		newRelation, err := dbSource.Relation(c.ctx, tblName)
+		if err != nil {
+			return err
+		}
+		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
+		if err != nil {
+			return err
+		}
+		err = c.runSql(insertSQL)
 		if err != nil {
 			return err
 		}
 	}
-
-	return colexec.CreateAutoIncrCol(c.e, c.ctx, dbSource, c.proc, tableCols, dbName, tblName)
+	return maybeCreateAutoIncrement(
+		c.ctx,
+		dbSource,
+		qry.GetTableDef(),
+		c.proc.TxnOperator,
+		nil)
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
@@ -604,7 +651,6 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
-	tableCols := planCols
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
@@ -667,7 +713,14 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		}
 	}
 
-	return colexec.CreateAutoIncrCol(c.e, c.ctx, tmpDBSource, c.proc, tableCols, defines.TEMPORARY_DBNAME, engine.GetTempTableName(dbName, tblName))
+	return maybeCreateAutoIncrement(
+		c.ctx,
+		tmpDBSource,
+		qry.GetTableDef(),
+		c.proc.TxnOperator,
+		func() string {
+			return engine.GetTempTableName(dbName, tblName)
+		})
 }
 
 func (s *Scope) CreateIndex(c *Compile) error {
@@ -676,27 +729,39 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	databaseId := d.GetDatabaseId(c.ctx)
+
 	r, err := d.Relation(c.ctx, qry.Table)
 	if err != nil {
 		return err
 	}
+	tableId := r.GetTableID(c.ctx)
 
-	// build and create index table
-	if qry.TableExist {
-		def := qry.GetIndex().GetIndexTables()[0]
-		planCols := def.GetCols()
-		exeCols := planColsToExeCols(planCols)
-		exeDefs, err := planDefsToExeDefs(def)
+	tableDef := plan2.DeepCopyTableDef(qry.TableDef)
+	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
+
+	if indexDef.Unique {
+		// 0. check original data is not duplicated
+		err = genNewUniqueIndexDuplicateCheck(c, qry.Database, tableDef.Name, partsToColsStr(indexDef.Parts))
 		if err != nil {
 			return err
 		}
-		if _, err := d.Relation(c.ctx, def.Name); err == nil {
-			return moerr.NewTableAlreadyExists(c.ctx, def.Name)
-		}
-		if err := d.Create(c.ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+	}
+
+	// build and create index table for unique index
+	if qry.TableExist {
+		def := qry.GetIndex().GetIndexTables()[0]
+		createSQL := genCreateIndexTableSql(def, indexDef, qry.Database)
+		err = c.runSql(createSQL)
+		if err != nil {
 			return err
 		}
 
+		insertSQL := genInsertIndexTableSql(tableDef, indexDef, qry.Database)
+		err = c.runSql(insertSQL)
+		if err != nil {
+			return err
+		}
 	}
 	// build and update constraint def
 	defs, err := planDefsToExeDefs(qry.GetIndex().GetTableDef())
@@ -725,45 +790,12 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 
-	// TODO: implement by insert ... select ...
-	// insert data into index table
-	indexDef := qry.GetIndex().GetTableDef().Indexes[0]
-	if indexDef.Unique {
-		targetAttrs := getIndexColsFromOriginTable(tblDefs, indexDef.Parts)
-		ret, err := r.Ranges(c.ctx, nil)
-		if err != nil {
-			return err
-		}
-		rds, err := r.NewReader(c.ctx, 1, nil, ret)
-		if err != nil {
-			return err
-		}
-		bat, err := rds[0].Read(c.ctx, targetAttrs, nil, c.proc.Mp(), nil)
-		if err != nil {
-			return err
-		}
-		err = rds[0].Close()
-		if err != nil {
-			return err
-		}
-
-		if bat != nil {
-			indexBat, cnt := util.BuildUniqueKeyBatch(bat.Vecs, targetAttrs, indexDef.Parts, qry.OriginTablePrimaryKey, c.proc)
-			indexR, err := d.Relation(c.ctx, indexDef.IndexTableName)
-			if err != nil {
-				return err
-			}
-			if cnt != 0 {
-				if err := indexR.Write(c.ctx, indexBat); err != nil {
-					return err
-				}
-			}
-			indexBat.Clean(c.proc.Mp())
-		}
-		// other situation is not supported now and check in plan
+	// generate insert into mo_indexes metadata
+	sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef)
+	if err != nil {
+		return err
 	}
-
-	err = colexec.InsertOneIndexMetadata(c.e, c.ctx, d, c.proc, qry.Table, indexDef)
+	err = c.runSql(sql)
 	if err != nil {
 		return err
 	}
@@ -771,21 +803,6 @@ func (s *Scope) CreateIndex(c *Compile) error {
 }
 
 func (s *Scope) DropIndex(c *Compile) error {
-	errChan := make(chan error, len(s.PreScopes))
-	for i := range s.PreScopes {
-		switch s.PreScopes[i].Magic {
-		case Deletion:
-			// execute additional sql pipeline, currently, only delete operations are performed
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				_, err = cs.Delete(c)
-			}(s.PreScopes[i])
-		}
-	}
-
 	qry := s.Plan.GetDdl().GetDropIndex()
 	d, err := c.e.Database(c.ctx, qry.Database, c.proc.TxnOperator)
 	if err != nil {
@@ -796,7 +813,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
-	// build and update constraint def
+	//1. build and update constraint def
 	tblDefs, err := r.TableDefs(c.ctx)
 	if err != nil {
 		return err
@@ -817,7 +834,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
-	// drop index table
+	//2. drop index table
 	if qry.IndexTableName != "" {
 		if _, err = d.Relation(c.ctx, qry.IndexTableName); err != nil {
 			return err
@@ -826,10 +843,12 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 	}
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
-			return err
-		}
+
+	//3. delete index object from mo_catalog.mo_indexes
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.ctx), qry.IndexName)
+	err = c.runSql(deleteSql)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -1006,6 +1025,13 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		isTemp = true
 	}
 
+	if !isTemp {
+		// before dropping table, lock it. It only works on pessimistic mode.
+		if err := lockTable(c.proc, rel); err != nil {
+			return err
+		}
+	}
+
 	if isTemp {
 		// memoryengine truncate always return 0, so for temporary table, just use origin tableId as newId
 		_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
@@ -1023,6 +1049,19 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		var err error
 		if isTemp {
 			_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
+		} else {
+			_, err = dbSource.Truncate(c.ctx, name)
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	//Truncate Partition subtable if needed
+	for _, name := range tqry.PartitionTableNames {
+		var err error
+		if isTemp {
+			dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, name))
 		} else {
 			_, err = dbSource.Truncate(c.ctx, name)
 		}
@@ -1069,17 +1108,25 @@ func (s *Scope) TruncateTable(c *Compile) error {
 
 	}
 
-	id := rel.GetTableID(c.ctx)
-
 	if isTemp {
-		err = colexec.ResetAutoInsrCol(c.e, c.ctx, engine.GetTempTableName(dbName, tblName), dbSource, c.proc, id, newId, defines.TEMPORARY_DBNAME)
-	} else {
-		err = colexec.ResetAutoInsrCol(c.e, c.ctx, tblName, dbSource, c.proc, oldId, newId, dbName)
+		oldId = rel.GetTableID(c.ctx)
 	}
+	err = incrservice.GetAutoIncrementService().Reset(
+		c.ctx,
+		oldId,
+		newId,
+		false,
+		c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
 
+	// update index information in mo_catalog.mo_indexes
+	updateSql := fmt.Sprintf(updateMoIndexesTruncateTableFormat, newId, oldId)
+	err = c.runSql(updateSql)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1113,24 +1160,10 @@ func (s *Scope) DropSequence(c *Compile) error {
 }
 
 func (s *Scope) DropTable(c *Compile) error {
-	errChan := make(chan error, len(s.PreScopes))
-	for i := range s.PreScopes {
-		switch s.PreScopes[i].Magic {
-		case Deletion:
-			// execute additional sql pipeline, currently, only delete operations are performed
-			go func(cs *Scope) {
-				var err error
-				defer func() {
-					errChan <- err
-				}()
-				_, err = cs.Delete(c)
-			}(s.PreScopes[i])
-		}
-	}
-
 	qry := s.Plan.GetDdl().GetDropTable()
 	dbName := qry.GetDatabase()
 	tblName := qry.GetTable()
+	isView := qry.GetIsView()
 
 	var dbSource engine.Database
 	var rel engine.Relation
@@ -1166,11 +1199,29 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
+	if !isTemp && !isView {
+		// before dropping table, lock it. It only works on pessimistic mode.
+		if err := lockTable(c.proc, rel); err != nil {
+			return err
+		}
+	}
+
 	// update tableDef of foreign key's table
 	for _, fkTblId := range qry.ForeignTbl {
 		err := s.removeRefChildTbl(c, fkTblId, tblId)
 		if err != nil {
 			return err
+		}
+	}
+
+	// delete all index objects of the table in mo_catalog.mo_indexes
+	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
+		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
+			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
+			err = c.runSql(deleteSql)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1192,7 +1243,10 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
-			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, defines.TEMPORARY_DBNAME, rel.GetTableID(c.ctx))
+			err := incrservice.GetAutoIncrementService().Delete(
+				c.ctx,
+				rel.GetTableID(c.ctx),
+				c.proc.TxnOperator)
 			if err != nil {
 				return err
 			}
@@ -1217,16 +1271,13 @@ func (s *Scope) DropTable(c *Compile) error {
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
 			// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
-			err := colexec.DeleteAutoIncrCol(c.e, c.ctx, dbSource, rel, c.proc, dbName, rel.GetTableID(c.ctx))
+			err := incrservice.GetAutoIncrementService().Delete(
+				c.ctx,
+				rel.GetTableID(c.ctx),
+				c.proc.TxnOperator)
 			if err != nil {
 				return err
 			}
-		}
-	}
-
-	for i := 0; i < len(s.PreScopes); i++ {
-		if err := <-errChan; err != nil {
-			return err
 		}
 	}
 	return nil
@@ -1333,39 +1384,6 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 		}
 	}
 	return exeCols
-}
-
-// Get the required columns of the index table from the original table
-func getIndexColsFromOriginTable(tblDefs []engine.TableDef, indexColumns []string) []string {
-	colNameMap := make(map[string]int)
-	for _, tbldef := range tblDefs {
-		if constraintDef, ok := tbldef.(*engine.ConstraintDef); ok {
-			for _, ct := range constraintDef.Cts {
-				if pk, ok2 := ct.(*engine.PrimaryKeyDef); ok2 {
-					if pk.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-						colNameMap[catalog.CPrimaryKeyColName] = 1
-					} else {
-						for _, name := range pk.Pkey.Names {
-							colNameMap[name] = 1
-						}
-					}
-					break
-				}
-			}
-		}
-	}
-
-	for _, column := range indexColumns {
-		colNameMap[column] = 1
-	}
-
-	j := 0
-	keys := make([]string, len(colNameMap))
-	for k := range colNameMap {
-		keys[j] = k
-		j++
-	}
-	return keys
 }
 
 func (s *Scope) CreateSequence(c *Compile) error {
@@ -1717,4 +1735,50 @@ func getValue[T constraints.Integer](minus bool, num any) T {
 		}
 	}
 	return v
+}
+
+func lockTable(
+	proc *process.Process,
+	rel engine.Relation) error {
+	id := rel.GetTableID(proc.Ctx)
+	defs, err := rel.GetPrimaryKeys(proc.Ctx)
+	if err != nil {
+		return err
+	}
+	if len(defs) != 1 {
+		panic("invalid primary keys")
+	}
+
+	return lockop.LockTable(
+		proc,
+		id,
+		defs[0].Type)
+}
+
+func maybeCreateAutoIncrement(
+	ctx context.Context,
+	db engine.Database,
+	def *plan.TableDef,
+	txnOp client.TxnOperator,
+	nameResolver func() string) error {
+	if def.TblId == 0 {
+		name := def.Name
+		if nameResolver != nil {
+			name = nameResolver()
+		}
+		tb, err := db.Relation(ctx, name)
+		if err != nil {
+			return err
+		}
+		def.TblId = tb.GetTableID(ctx)
+	}
+	cols := incrservice.GetAutoColumnFromDef(def)
+	if len(cols) == 0 {
+		return nil
+	}
+	return incrservice.GetAutoIncrementService().Create(
+		ctx,
+		def.TblId,
+		cols,
+		txnOp)
 }

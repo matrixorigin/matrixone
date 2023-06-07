@@ -74,7 +74,7 @@ func calcNdvUsingZonemap(zm objectio.ZoneMap, t *types.Type) float64 {
 }
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid
-func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
+func getInfoFromZoneMap(ctx context.Context, blocks []catalog.BlockInfo, tableDef *plan.TableDef, proc *process.Process) (*plan2.InfoFromZoneMap, error) {
 	var tableCnt float64
 	lenCols := len(tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
@@ -84,34 +84,32 @@ func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, table
 	lenobjs := 0
 
 	var init bool
-	for i := range blocks {
-		for _, blk := range blocks[i] {
-			location := blk.MetaLocation()
-			if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
-				if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
-					return nil, err
+	for _, blk := range blocks {
+		location := blk.MetaLocation()
+		if !objectio.IsSameObjectLocVsMeta(location, objectMeta) {
+			if objectMeta, err = objectio.FastLoadObjectMeta(ctx, &location, proc.FileService); err != nil {
+				return nil, err
+			}
+			lenobjs++
+			tableCnt += float64(objectMeta.BlockHeader().Rows())
+			if !init {
+				init = true
+				for idx, col := range tableDef.Cols[:lenCols] {
+					objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
+					info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
+					info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
+					info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
 				}
-				lenobjs++
-				tableCnt += float64(objectMeta.BlockHeader().Rows())
-				if !init {
-					init = true
-					for idx, col := range tableDef.Cols[:lenCols] {
-						objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
-						info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
-						info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
-						info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
+			} else {
+				for idx, col := range tableDef.Cols[:lenCols] {
+					objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
+					zm := objColMeta.ZoneMap().Clone()
+					if !zm.IsInited() {
+						continue
 					}
-				} else {
-					for idx, col := range tableDef.Cols[:lenCols] {
-						objColMeta := objectMeta.MustGetColumn(uint16(col.Seqnum))
-						zm := objColMeta.ZoneMap().Clone()
-						if !zm.IsInited() {
-							continue
-						}
-						index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
-						index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
-						info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
-					}
+					index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
+					index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
+					info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
 				}
 			}
 		}
@@ -146,16 +144,12 @@ func getInfoFromZoneMap(ctx context.Context, blocks [][]catalog.BlockInfo, table
 // we need to get the zonemap from cn, and eval the filters with zonemap
 func CalcStats(
 	ctx context.Context,
-	blocks [][]catalog.BlockInfo,
+	blocks []catalog.BlockInfo,
 	tableDef *plan.TableDef,
 	proc *process.Process,
 	s *plan2.StatsInfoMap,
 ) bool {
-	var blockNumTotal int
-
-	for i := range blocks {
-		blockNumTotal += len(blocks[i])
-	}
+	blockNumTotal := len(blocks)
 	if blockNumTotal == 0 {
 		return false
 	}

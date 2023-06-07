@@ -73,7 +73,7 @@ type Block interface {
 	PrepareCompact() bool
 
 	Rows() int
-	GetColumnDataById(txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int) (*model.ColumnView, error)
+	GetColumnDataById(ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int) (*model.ColumnView, error)
 	GetColumnDataByIds(txn txnif.AsyncTxn, readSchema any, colIdxes []int) (*model.BlockView, error)
 	Prefetch(idxes []uint16) error
 	GetMeta() any
@@ -100,7 +100,7 @@ type Block interface {
 	//	metaLoc objectio.Location, rowmask *roaring.Bitmap, precommit bool) error
 
 	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
-	GetValue(txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
+	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
 	Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error
 	PPString(level common.PPLevel, depth int, prefix string) string
 

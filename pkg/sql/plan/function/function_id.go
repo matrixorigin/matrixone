@@ -53,6 +53,8 @@ const (
 	ISNOTTRUE                 //ISNOTTRUE
 	ISFALSE                   //ISFALSE
 	ISNOTFALSE                //ISNOTTRUE
+	ISEMPTY                   //ISEMPTY
+	NOT_IN_ROWS               //NOT_IN_ROWS
 	OP_BIT_AND                // &
 	OP_BIT_OR                 // |
 	OP_BIT_XOR                // ^
@@ -74,6 +76,7 @@ const (
 	ARRAY_SIZE     // ARRAY_SIZE
 	ASCII          // ASCII
 	ASIN           // ASIN
+	ASSERT         // ASSERT
 	ATAN           // ATAN
 	ATAN2          // ATAN2
 	AVG            // AVG
@@ -386,6 +389,8 @@ var functionIdRegister = map[string]int32{
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
+	// count window
+	"rank": RANK,
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
@@ -421,6 +426,7 @@ var functionIdRegister = map[string]int32{
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	"abs":                            ABS,
 	"acos":                           ACOS,
+	"assert":                         ASSERT,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
@@ -440,6 +446,7 @@ var functionIdRegister = map[string]int32{
 	"log":                            LOG,
 	"ltrim":                          LTRIM,
 	"month":                          MONTH,
+	"not_in_rows":                    NOT_IN_ROWS,
 	"oct":                            OCT,
 	"rand":                           RANDOM,
 	"reverse":                        REVERSE,
@@ -454,6 +461,7 @@ var functionIdRegister = map[string]int32{
 	"extract":                        EXTRACT,
 	"if":                             IFF,
 	"iff":                            IFF,
+	"isempty":                        ISEMPTY,
 	"date_add":                       DATE_ADD,
 	"date_sub":                       DATE_SUB,
 	"atan":                           ATAN,
@@ -482,12 +490,14 @@ var functionIdRegister = map[string]int32{
 	"last_uuid":                      LAST_QUERY_ID,
 	"roles_graphml":                  ROLES_GRAPHML,
 	"row_count":                      ROW_COUNT,
+	"row_number":                     ROW_NUMBER,
 	"version":                        VERSION,
 	"collation":                      COLLATION,
 	"json_extract":                   JSON_EXTRACT,
 	"json_quote":                     JSON_QUOTE,
 	"enable_fault_injection":         ENABLE_FAULT_INJECTION,
 	"disable_fault_injection":        DISABLE_FAULT_INJECTION,
+	"dense_rank":                     DENSE_RANK,
 	"add_fault_point":                ADD_FAULT_POINT,
 	"remove_fault_point":             REMOVE_FAULT_POINT,
 	"trigger_fault_point":            TRIGGER_FAULT_POINT,

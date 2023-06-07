@@ -80,7 +80,7 @@ func TestOrder(t *testing.T) {
 		if tc.proc.Reg.InputBatch != nil {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		tc.proc.Reg.InputBatch = &batch.Batch{}
+		tc.proc.Reg.InputBatch = batch.EmptyBatch
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg, false, false)
@@ -108,7 +108,7 @@ func BenchmarkOrder(b *testing.B) {
 			if tc.proc.Reg.InputBatch != nil {
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			}
-			tc.proc.Reg.InputBatch = &batch.Batch{}
+			tc.proc.Reg.InputBatch = batch.EmptyBatch
 			_, _ = Call(0, tc.proc, tc.arg, false, false)
 			tc.proc.Reg.InputBatch = nil
 			_, _ = Call(0, tc.proc, tc.arg, false, false)

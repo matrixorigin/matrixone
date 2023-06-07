@@ -18,6 +18,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,8 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"io"
-	"strings"
 )
 
 var (
@@ -114,6 +115,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 		Attrs: make([]string, num),
 		Vecs:  make([]*vector.Vector, num),
 		Zs:    make([]int64, len(fileList)),
+		Cnt:   1,
 	}
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name

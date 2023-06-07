@@ -106,7 +106,7 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 }
 
 func UpdateStatsInfoMap(info *InfoFromZoneMap, blockNumTotal int, tableDef *plan.TableDef, s *StatsInfoMap) {
-	logutil.Infof("need to update statsCache for table %v", tableDef.Name)
+	logutil.Debugf("need to update statsCache for table %v", tableDef.Name)
 	s.BlockNumber = blockNumTotal
 	s.TableCnt = info.TableCnt
 	s.tableName = tableDef.Name
@@ -360,7 +360,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	}
 	ret, col := CheckFilter(expr)
 	if ret && col != nil {
-		switch getSortOrder(tableDef, col.Name) {
+		switch GetSortOrder(tableDef, col.Name) {
 		case 0:
 			return math.Min(expr.Selectivity, 0.5)
 		case 1:
@@ -514,23 +514,27 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	case plan.Node_AGG:
 		if len(node.GroupBy) > 0 {
-			input := childStats.Outcnt
-			output := 1.0
+			incnt := childStats.Outcnt
+			outcnt := 1.0
 			for _, groupby := range node.GroupBy {
 				ndv := getExprNdv(groupby, nil, node.NodeId, builder)
 				if ndv > 1 {
 					groupby.Ndv = ndv
-					output *= ndv
+					outcnt *= ndv
 				}
 			}
-			if output > input {
-				output = math.Min(input, output*math.Pow(childStats.Selectivity, 0.8))
+			if outcnt > incnt {
+				outcnt = math.Min(incnt, outcnt*math.Pow(childStats.Selectivity, 0.8))
 			}
 			node.Stats = &plan.Stats{
-				Outcnt:      output,
-				Cost:        input + output,
-				HashmapSize: output,
+				Outcnt:      outcnt,
+				Cost:        incnt + outcnt,
+				HashmapSize: outcnt,
 				Selectivity: 1,
+			}
+			if len(node.FilterList) > 0 {
+				node.Stats.Outcnt *= 0.05
+				node.Stats.Selectivity *= 0.05
 			}
 		} else {
 			node.Stats = &plan.Stats{
@@ -742,7 +746,7 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if IsEquiJoin(node.OnList) && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
+		if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
 			node.BuildOnLeft = true
 		}
 	}

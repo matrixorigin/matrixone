@@ -309,7 +309,7 @@ func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 			assert.NoError(t, st.Close(false))
 		}()
 
-		st.mu.sequence = 2
+		st.sequence = 2
 		req := newTestMessage(st.ID())
 		assert.NoError(t, st.Send(ctx, req))
 
@@ -318,6 +318,50 @@ func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 		assert.NotNil(t, rc)
 		resp := <-rc
 		assert.Nil(t, resp)
+	})
+}
+
+func TestStreamReadCannotBlockWrite(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+		defer cancel()
+
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
+			return cs.Write(ctx, request.Message)
+		})
+
+		st, err := c.NewStream(testAddr, false)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, st.Close(false))
+		}()
+
+		ch, err := st.Receive()
+		require.NoError(t, err)
+
+		cc := make(chan struct{})
+		n := 1000
+		go func() {
+			defer close(cc)
+			i := 0
+			for {
+				<-ch
+				i++
+				if i == n {
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}()
+		for i := 0; i < n; i++ {
+			require.NoError(t, st.Send(ctx, newTestMessage(st.ID())))
+		}
+		<-cc
 	})
 }
 

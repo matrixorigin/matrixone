@@ -64,20 +64,20 @@ func (sdp *Stddevpop[T1]) Grows(sizes int) {
 	sdp.Variance.Grows(sizes)
 }
 
-func (sdp *Stddevpop[T1]) Eval(vs []float64) []float64 {
-	sdp.Variance.Eval(vs)
+func (sdp *Stddevpop[T1]) Eval(vs []float64, err error) ([]float64, error) {
+	sdp.Variance.Eval(vs, err)
 	for i, v := range vs {
 		vs[i] = math.Sqrt(v)
 	}
-	return vs
+	return vs, nil
 }
 
-func (sdp *Stddevpop[T1]) Merge(groupIndex1, groupIndex2 int64, x, y float64, IsEmpty1 bool, IsEmpty2 bool, agg any) (float64, bool) {
+func (sdp *Stddevpop[T1]) Merge(groupIndex1, groupIndex2 int64, x, y float64, IsEmpty1 bool, IsEmpty2 bool, agg any) (float64, bool, error) {
 	Stddevpop := agg.(*Stddevpop[T1])
 	return sdp.Variance.Merge(groupIndex1, groupIndex2, x, y, IsEmpty1, IsEmpty2, Stddevpop.Variance)
 }
 
-func (sdp *Stddevpop[T1]) Fill(groupIndex int64, v1 T1, v2 float64, z int64, IsEmpty bool, hasNull bool) (float64, bool) {
+func (sdp *Stddevpop[T1]) Fill(groupIndex int64, v1 T1, v2 float64, z int64, IsEmpty bool, hasNull bool) (float64, bool, error) {
 	return sdp.Variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
 }
 
@@ -101,22 +101,28 @@ func (s *StdD64) Grows(size int) {
 	s.Variance.Grows(size)
 }
 
-func (s *StdD64) Eval(vs []types.Decimal128) []types.Decimal128 {
-	s.Variance.Eval(vs)
+func (s *StdD64) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+	vs, err = s.Variance.Eval(vs, err)
+	if err != nil {
+		return nil, err
+	}
 	for i, v := range vs {
 		tmp := math.Sqrt(types.Decimal128ToFloat64(v, s.Variance.ScaleDivMul))
-		d, _ := types.Decimal128FromFloat64(tmp, 38, s.Variance.ScaleDivMul)
+		d, err1 := types.Decimal128FromFloat64(tmp, 38, s.Variance.ScaleDivMul)
+		if err1 != nil {
+			return nil, err1
+		}
 		vs[i] = d
 	}
-	return vs
+	return vs, nil
 }
 
-func (s *StdD64) Merge(groupIndex1, groupIndex2 int64, x, y types.Decimal128, IsEmpty1 bool, IsEmpty2 bool, agg any) (types.Decimal128, bool) {
+func (s *StdD64) Merge(groupIndex1, groupIndex2 int64, x, y types.Decimal128, IsEmpty1 bool, IsEmpty2 bool, agg any) (types.Decimal128, bool, error) {
 	ss := agg.(*StdD64)
 	return s.Variance.Merge(groupIndex1, groupIndex2, x, y, IsEmpty1, IsEmpty2, ss.Variance)
 }
 
-func (s *StdD64) Fill(groupIndex int64, v1 types.Decimal64, v2 types.Decimal128, z int64, IsEmpty bool, hasNull bool) (types.Decimal128, bool) {
+func (s *StdD64) Fill(groupIndex int64, v1 types.Decimal64, v2 types.Decimal128, z int64, IsEmpty bool, hasNull bool) (types.Decimal128, bool, error) {
 	return s.Variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
 }
 
@@ -140,22 +146,28 @@ func (s *StdD128) Grows(size int) {
 	s.Variance.Grows(size)
 }
 
-func (s *StdD128) Eval(vs []types.Decimal128) []types.Decimal128 {
-	s.Variance.Eval(vs)
+func (s *StdD128) Eval(vs []types.Decimal128, err error) ([]types.Decimal128, error) {
+	vs, err = s.Variance.Eval(vs, err)
+	if err != nil {
+		return nil, err
+	}
 	for i, v := range vs {
 		tmp := math.Sqrt(types.Decimal128ToFloat64(v, s.Variance.ScaleDivMul))
-		d, _ := types.Decimal128FromFloat64(tmp, 38, s.Variance.ScaleDivMul)
+		d, err1 := types.Decimal128FromFloat64(tmp, 38, s.Variance.ScaleDivMul)
+		if err1 != nil {
+			return nil, err1
+		}
 		vs[i] = d
 	}
-	return vs
+	return vs, nil
 }
 
-func (s *StdD128) Merge(groupIndex1, groupIndex2 int64, x, y types.Decimal128, IsEmpty1 bool, IsEmpty2 bool, agg any) (types.Decimal128, bool) {
+func (s *StdD128) Merge(groupIndex1, groupIndex2 int64, x, y types.Decimal128, IsEmpty1 bool, IsEmpty2 bool, agg any) (types.Decimal128, bool, error) {
 	ss := agg.(*StdD128)
 	return s.Variance.Merge(groupIndex1, groupIndex2, x, y, IsEmpty1, IsEmpty2, ss.Variance)
 }
 
-func (s *StdD128) Fill(groupIndex int64, v1 types.Decimal128, v2 types.Decimal128, z int64, IsEmpty bool, hasNull bool) (types.Decimal128, bool) {
+func (s *StdD128) Fill(groupIndex int64, v1 types.Decimal128, v2 types.Decimal128, z int64, IsEmpty bool, hasNull bool) (types.Decimal128, bool, error) {
 	return s.Variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
 }
 

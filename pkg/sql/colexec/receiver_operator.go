@@ -88,7 +88,7 @@ func (r *ReceiverOperator) ReceiveFromAllRegs(analyze process.Analyze) (*batch.B
 		if !ok {
 			select {
 			case <-r.proc.Ctx.Done():
-				logutil.Infof("process context done during merge receive")
+				logutil.Debugf("process context done during merge receive")
 			default:
 				logutil.Errorf("children pipeline closed unexpectedly")
 			}

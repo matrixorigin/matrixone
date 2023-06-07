@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -115,6 +117,7 @@ type testHandler struct {
 	connID      uint32
 	conn        goetty.IOSession
 	sessionVars map[string]string
+	labels      map[string]string
 	server      *testCNServer
 }
 
@@ -217,6 +220,7 @@ func (s *testCNServer) Start() error {
 					mysqlProto: frontend.NewMysqlClientProtocol(
 						cid, c, 0, &fp),
 					sessionVars: make(map[string]string),
+					labels:      make(map[string]string),
 					server:      s,
 				}
 				go func(h *testHandler) {
@@ -231,6 +235,12 @@ func testHandle(h *testHandler) {
 	// read salt from proxy.
 	data := make([]byte, 20)
 	_, _ = h.conn.RawConn().Read(data)
+	// read label info.
+	label := &proxy.RequestLabel{}
+	reader := bufio.NewReader(h.conn.RawConn())
+	if err := label.Decode(reader); err != nil {
+		h.labels = label.Labels
+	}
 	// server writes init handshake.
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeHandshakePayload())
 	// server reads auth information from client.

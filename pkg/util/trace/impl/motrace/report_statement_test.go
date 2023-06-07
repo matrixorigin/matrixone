@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,7 +40,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 		StatementFingerprint string
 		StatementTag         string
 		RequestAt            time.Time
-		ExecPlan             any
+		ExecPlan             SerializableExecPlan
 		Status               StatementInfoStatus
 		Error                error
 		ResponseAt           time.Time
@@ -151,7 +152,6 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 	}
 }
 
-var realNoExecPlanJsonResult = `{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":"00000000-0000-0000-0000-000000000000"}`
 var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
@@ -180,21 +180,12 @@ var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]
 
 func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 	type args struct {
-		setDefault        func()
 		ExecPlan          any
 		SerializeExecPlan SerializeExecPlanFunc
 	}
 
 	dummyExecPlan := map[string]any{"key": "val", "int": 1}
-	defaultEPJson := `{"int":1,"key":"val"}`
 	dummyEPJson := `{"func":"dummy2","result":{"int":1,"key":"val"}}`
-
-	var setDefaultNil = func() {
-		SetDefaultSerializeExecPlan(nil)
-	}
-	var setDefaultDummy = func() {
-		SetDefaultSerializeExecPlan(dummySerializeExecPlan)
-	}
 
 	tests := []struct {
 		name string
@@ -202,45 +193,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 		want string
 	}{
 		{
-			name: "nil",
-			args: args{
-				setDefault:        setDefaultNil,
-				ExecPlan:          nil,
-				SerializeExecPlan: nil,
-			},
-			want: realNoExecPlanJsonResult,
-		},
-		{
-			name: "nil_ep_nil",
-			args: args{
-				setDefault:        setDefaultNil,
-				ExecPlan:          dummyExecPlan,
-				SerializeExecPlan: nil,
-			},
-			want: realNoExecPlanJsonResult,
-		},
-		{
-			name: "dummyDefault_nil_nil",
-			args: args{
-				setDefault:        setDefaultDummy,
-				ExecPlan:          nil,
-				SerializeExecPlan: nil,
-			},
-			want: dummyNoExecPlanJsonResult,
-		},
-		{
-			name: "dummyDefault_ep_nil",
-			args: args{
-				setDefault:        setDefaultDummy,
-				ExecPlan:          dummyExecPlan,
-				SerializeExecPlan: nil,
-			},
-			want: defaultEPJson,
-		},
-		{
 			name: "dummyDefault_ep_Serialize",
 			args: args{
-				setDefault:        setDefaultDummy,
 				ExecPlan:          dummyExecPlan,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
@@ -249,7 +203,6 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 		{
 			name: "nil_ep_Serialize",
 			args: args{
-				setDefault:        setDefaultNil,
 				ExecPlan:          dummyExecPlan,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
@@ -258,7 +211,6 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 		{
 			name: "dummyDefault_nil_Serialize",
 			args: args{
-				setDefault:        setDefaultDummy,
 				ExecPlan:          nil,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
@@ -267,7 +219,6 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 		{
 			name: "nil_nil_Serialize",
 			args: args{
-				setDefault:        setDefaultNil,
 				ExecPlan:          nil,
 				SerializeExecPlan: dummySerializeExecPlan2,
 			},
@@ -278,11 +229,14 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 	ctx := DefaultContext()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.args.setDefault()
 			s := &StatementInfo{}
-			s.SetExecPlan(tt.args.ExecPlan, tt.args.SerializeExecPlan)
+			p := &dummySerializableExecPlan{
+				plan: tt.args.ExecPlan,
+				f:    tt.args.SerializeExecPlan,
+			}
+			s.SetSerializableExecPlan(p)
 			got, _ := s.ExecPlan2Json(ctx)
-			assert.Equalf(t, tt.want, got, "ExecPlan2Json()")
+			assert.Equalf(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
 
 			mapper := new(map[string]any)
 			err := json.Unmarshal([]byte(got), mapper)
@@ -290,3 +244,22 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 		})
 	}
 }
+
+type dummySerializableExecPlan struct {
+	plan any
+	f    SerializeExecPlanFunc
+	uuid uuid.UUID
+}
+
+func NewDummySerializableExecPlan(plan any, f SerializeExecPlanFunc, uuid2 uuid.UUID) *dummySerializableExecPlan {
+	return &dummySerializableExecPlan{
+		plan: plan,
+		f:    f,
+		uuid: uuid2,
+	}
+}
+
+func (p *dummySerializableExecPlan) Marshal(ctx context.Context) ([]byte, []byte, Statistic) {
+	return p.f(ctx, p.plan, p.uuid)
+}
+func (p *dummySerializableExecPlan) Free() {}

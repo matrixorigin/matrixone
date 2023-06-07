@@ -127,7 +127,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 	// dumpBatch or compaction will set some batches as nil
 	if len(p.inserts) > 0 && (p.inserts[0] == nil || p.inserts[0].Length() == 0) {
 		p.inserts = p.inserts[1:]
-		return &batch.Batch{}, nil
+		return batch.EmptyBatch, nil
 	}
 	if len(p.inserts) > 0 || p.blockBatch.hasRows() {
 		var bat *batch.Batch
@@ -160,15 +160,22 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 			if err != nil {
 				return nil, err
 			}
-			rbat := bat
-			for i, vec := range rbat.Vecs {
-				rbat.Vecs[i], err = vec.Dup(p.procMPool)
-				if err != nil {
+			rbat := batch.NewWithSize(bat.VectorCount())
+			rbat.SetAttributes(colNames)
+			for i, vec := range bat.Vecs {
+				typ := *vec.GetType()
+				if vp == nil {
+					rbat.Vecs[i] = vector.NewVec(typ)
+				} else {
+					rbat.Vecs[i] = vp.GetVector(typ)
+				}
+				if err := vector.GetUnionAllFunction(typ, mp)(rbat.Vecs[i], vec); err != nil {
+					bat.Clean(p.procMPool)
+					rbat.Clean(p.procMPool)
 					return nil, err
 				}
 			}
-			rbat.SetAttributes(colNames)
-			rbat.Cnt = 1
+			bat.Clean(p.procMPool)
 			rbat.SetZs(rbat.Vecs[0].Length(), p.procMPool)
 
 			var hasRowId bool
@@ -182,6 +189,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				// add rowId col for rbat
 				lens := rbat.Length()
 				vec := vector.NewVec(types.T_Rowid.ToType())
+				vec.PreExtend(lens, p.procMPool)
 				for i := 0; i < lens; i++ {
 					if err := vector.AppendFixed(vec, *objectio.NewRowid(blkid, uint32(i)), false,
 						p.procMPool); err != nil {
@@ -215,6 +223,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				srcVec := bat.Vecs[i]
 				uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
 				for j := 0; j < bat.Length(); j++ {
+					//FIXME::it seems that redundant to check rowIds[j] in p.deletes.
 					if _, ok := p.deletes[rowIds[j]]; ok {
 						continue
 					}
@@ -224,11 +233,9 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				}
 			}
 			logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
-			/*
-				CORNER CASE:
-				if some rowIds[j] is in p.deletes above, then some rows has been filtered.
-				the bat.Length() is not always the right value for the result batch b.
-			*/
+			//		CORNER CASE:
+			//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
+			//		the bat.Length() is not always the right value for the result batch b.
 			b.SetZs(b.Vecs[0].Length(), mp)
 			logutil.Debug(testutil.OperatorCatchBatch("partition reader[workspace]", b))
 			return b, nil

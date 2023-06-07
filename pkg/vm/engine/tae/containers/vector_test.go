@@ -322,7 +322,11 @@ func TestVector7(t *testing.T) {
 			if i >= vec.Length() {
 				assert.Equal(t, vec2.Get(i-vec.Length()), vec3.Get(i))
 			} else {
-				assert.Equal(t, vec.Get(i), vec3.Get(i))
+				if vec.IsNull(i) {
+					assert.Equal(t, true, vec3.IsNull(i))
+				} else {
+					assert.Equal(t, vec.Get(i), vec3.Get(i))
+				}
 			}
 		}
 
@@ -463,7 +467,7 @@ func TestForeachWindowFixed(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowFixed(vec1, 0, vec1.Length(), op, nil, nil)
+	ForeachWindowFixed(vec1.GetDownstreamVector(), 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -483,7 +487,7 @@ func TestForeachWindowBytes(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowVarlen(vec1, 0, vec1.Length(), op, nil, nil)
+	ForeachWindowVarlen(vec1.GetDownstreamVector(), 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -535,7 +539,7 @@ func BenchmarkForeachVectorBytes(b *testing.B) {
 	b.Run("int64-bytes", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
+			ForeachWindowBytes(vec.GetDownstreamVector(), 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
 				return
 			}, nil)
 		}

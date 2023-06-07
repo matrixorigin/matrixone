@@ -109,7 +109,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 	if bat != nil {
 		ctr.bat = bat
-		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
 		anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
@@ -127,8 +127,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 			rbat.Vecs[i] = vector.NewConstNull(*ctr.bat.Vecs[rp.Pos].GetType(), bat.Length(), proc.Mp())
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -243,12 +242,16 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = bat.Vecs[rp.Pos]
-			bat.Vecs[rp.Pos] = nil
+			// rbat.Vecs[i] = bat.Vecs[rp.Pos]
+			// bat.Vecs[rp.Pos] = nil
+			typ := *bat.Vecs[rp.Pos].GetType()
+			rbat.Vecs[i] = vector.NewVec(typ)
+			if err := vector.GetUnionAllFunction(typ, proc.Mp())(rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
+				return err
+			}
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil

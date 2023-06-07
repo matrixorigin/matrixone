@@ -16,7 +16,6 @@ package preinsert
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -34,7 +33,11 @@ func Prepare(_ *proc, _ any) error {
 }
 
 func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
-	defer analyze(idx, proc)()
+	analy := proc.GetAnalyze(idx)
+	analy.Start()
+	defer analy.Stop()
+
+	var err error
 
 	arg := x.(*Argument)
 	bat := proc.InputBatch()
@@ -44,47 +47,77 @@ func Call(idx int, proc *proc, x any, _, _ bool) (bool, error) {
 	}
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
+		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
+
 	defer proc.PutBatch(bat)
-	info := colexec.GetInfoForInsertAndUpdate(arg.TableDef, nil)
 
-	//get insert batch
-	insertBatch, err := colexec.GetUpdateBatch(proc, bat, info.IdxList, bat.Length(), info.Attrs, nil, arg.ParentIdx)
-	if err != nil {
-		return false, err
-	}
-
-	if info.HasAutoCol {
-		err := genAutoIncrCol(insertBatch, proc, arg)
+	newBat := batch.NewWithSize(len(arg.Attrs))
+	newBat.Attrs = make([]string, 0, len(arg.Attrs))
+	for idx := range arg.Attrs {
+		newBat.Attrs = append(newBat.Attrs, arg.Attrs[idx])
+		newBat.SetVector(int32(idx), proc.GetVector(*bat.GetVector(int32(idx)).GetType()))
+		err := newBat.Vecs[idx].UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
 		if err != nil {
+			return false, err
+		}
+	}
+	newBat.Zs = append(newBat.Zs, bat.Zs...)
+
+	if arg.HasAutoCol {
+		err := genAutoIncrCol(newBat, proc, arg)
+		if err != nil {
+			newBat.Clean(proc.GetMPool())
 			return false, err
 		}
 	}
 
 	// check new rows not null
-	err = colexec.BatchDataNotNullCheck(insertBatch, arg.TableDef, proc.Ctx)
+	err = colexec.BatchDataNotNullCheck(newBat, arg.TableDef, proc.Ctx)
 	if err != nil {
+		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 
-	err = genCompositePrimaryKey(insertBatch, proc, arg.TableDef)
+	// calculate the composite primary key column and append the result vector to batch
+	err = genCompositePrimaryKey(newBat, proc, arg.TableDef)
 	if err != nil {
+		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 
-	err = genClusterBy(insertBatch, proc, arg.TableDef)
+	err = genClusterBy(newBat, proc, arg.TableDef)
 	if err != nil {
+		newBat.Clean(proc.GetMPool())
 		return false, err
 	}
 
-	proc.SetInputBatch(insertBatch)
+	if arg.IsUpdate {
+		idx := len(bat.Vecs) - 1
+		newBat.Attrs = append(newBat.Attrs, catalog.Row_ID)
+		rowIdVec := proc.GetVector(*bat.GetVector(int32(idx)).GetType())
+		err := rowIdVec.UnionBatch(bat.Vecs[idx], 0, bat.Vecs[idx].Length(), nil, proc.Mp())
+		if err != nil {
+			return false, err
+		}
+		newBat.Vecs = append(newBat.Vecs, rowIdVec)
+	}
+
+	proc.SetInputBatch(newBat)
 	return false, nil
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
-	return colexec.UpdateInsertBatch(proc, arg.TableDef.Cols, bat,
-		arg.TableDef.TblId, arg.SchemaName, arg.TableDef.Name)
+	lastInsertValue, err := proc.IncrService.InsertValues(
+		proc.Ctx,
+		arg.TableDef.TblId,
+		bat)
+	if err != nil {
+		return err
+	}
+	proc.SetLastInsertID(lastInsertValue)
+	return nil
 }
 
 func genCompositePrimaryKey(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
@@ -105,14 +138,4 @@ func genClusterBy(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 		return nil
 	}
 	return util.FillCompositeClusterByBatch(bat, clusterBy, proc)
-}
-
-func analyze(idx int, proc *proc) func() {
-	t := time.Now()
-	anal := proc.GetAnalyze(idx)
-	anal.Start()
-	return func() {
-		anal.Stop()
-		anal.AddInsertTime(t)
-	}
 }

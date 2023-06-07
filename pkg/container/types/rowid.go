@@ -62,8 +62,24 @@ func (r Rowid) Less(than Rowid) bool {
 	return bytes.Compare(r[:], than[:]) < 0
 }
 
+func (r Rowid) Le(than Rowid) bool {
+	return r.Less(than) || r.Equal(than)
+}
+
 func (r Rowid) Equal(to Rowid) bool {
 	return bytes.Equal(r[:], to[:])
+}
+
+func (r Rowid) NotEqual(to Rowid) bool {
+	return !r.Equal(to)
+}
+
+func (r Rowid) Great(than Rowid) bool {
+	return !r.Less(than)
+}
+
+func (r Rowid) Ge(than Rowid) bool {
+	return r.Great(than) || r.Equal(than)
 }
 
 // CloneBlockID clones the block id from row id.

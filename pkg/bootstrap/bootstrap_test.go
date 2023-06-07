@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -29,6 +30,8 @@ import (
 )
 
 func TestBootstrap(t *testing.T) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+
 	n := 0
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		n++
@@ -38,15 +41,18 @@ func TestBootstrap(t *testing.T) {
 	b := NewBootstrapper(
 		&memLocker{},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
 		exec)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
 	require.NoError(t, b.Bootstrap(ctx))
-	assert.Equal(t, len(initSQLs)+1, n)
+	assert.Equal(t, len(step1InitSQLs)+len(step2InitSQLs)+1, n)
 }
 
 func TestBootstrapAlreadyBootstrapped(t *testing.T) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+
 	n := 0
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		n++
@@ -64,6 +70,7 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 	b := NewBootstrapper(
 		&memLocker{},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
 		exec)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
@@ -73,6 +80,8 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 }
 
 func TestBootstrapWithWait(t *testing.T) {
+	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
+
 	n := 0
 	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 		if sql == "show databases" && n == 1 {
@@ -90,6 +99,7 @@ func TestBootstrapWithWait(t *testing.T) {
 	b := NewBootstrapper(
 		&memLocker{id: 1},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		nil,
 		exec)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()

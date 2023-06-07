@@ -50,19 +50,61 @@ func TestCheckWithDeadlock(t *testing.T) {
 		})
 	defer d.close()
 
-	assert.NoError(t, d.check(pb.WaitTxn{TxnID: txn1}))
+	assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn1}))
 	assert.Equal(t, txn1, <-abortC)
 	d.txnClosed(txn1)
 
-	assert.NoError(t, d.check(pb.WaitTxn{TxnID: txn2}))
+	assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn2}))
 	assert.Equal(t, txn2, <-abortC)
 	d.txnClosed(txn2)
 
-	assert.NoError(t, d.check(pb.WaitTxn{TxnID: txn3}))
+	assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn3}))
 	assert.Equal(t, txn3, <-abortC)
 	d.txnClosed(txn3)
 
-	assert.NoError(t, d.check(pb.WaitTxn{TxnID: txn4}))
+	assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn4}))
+	select {
+	case <-abortC:
+		assert.Fail(t, "can not found dead lock")
+	case <-time.After(time.Millisecond * 100):
+	}
+}
+
+func TestCheckWithDeadlockWith2Txn(t *testing.T) {
+	txn1 := []byte("t1")
+	txn2 := []byte("t2")
+	txn3 := []byte("t3")
+
+	depends := map[string][]pb.WaitTxn{
+		string(txn1): {{TxnID: txn2}},
+		string(txn2): {{TxnID: txn1}},
+	}
+	abortC := make(chan []byte, 1)
+	defer close(abortC)
+
+	d := newDeadlockDetector(
+		"s1",
+		func(txn pb.WaitTxn, w *waiters) (bool, error) {
+			for _, v := range depends[string(txn.TxnID)] {
+				if !w.add(v) {
+					return false, nil
+				}
+			}
+			return true, nil
+		}, func(txn pb.WaitTxn) {
+			abortC <- txn.TxnID
+		})
+	defer d.close()
+
+	assert.NoError(t, d.check(txn2, pb.WaitTxn{TxnID: txn1}))
+	assert.Equal(t, txn1, <-abortC)
+	d.txnClosed(txn1)
+
+	assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn2}))
+	assert.Equal(t, txn2, <-abortC)
+	d.txnClosed(txn2)
+
+	assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn3}))
 	select {
 	case <-abortC:
 		assert.Fail(t, "can not found dead lock")

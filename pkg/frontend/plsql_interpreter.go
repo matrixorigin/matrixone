@@ -221,24 +221,26 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 	return 0, nil
 }
 
-func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) error {
-	var tmpErr error
+func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (err error) {
+	curScope := make(map[string]interface{})
 	interpreter.bh.ClearExecResultSet()
 
 	// use current database as default
-	err := interpreter.bh.Exec(interpreter.ctx, "use "+dbName)
+	err = interpreter.bh.Exec(interpreter.ctx, "use "+dbName)
 	if err != nil {
 		return err
 	}
 
 	// make sure the entire sp is in a single transaction
 	err = interpreter.bh.Exec(interpreter.ctx, "begin;")
+	defer func() {
+		err = finishTxn(interpreter.ctx, interpreter.bh, err)
+	}()
 	if err != nil {
 		return err
 	}
 
 	// save parameters as local variables
-	curScope := make(map[string]interface{})
 	*interpreter.varScope = append(*interpreter.varScope, curScope)
 	for k, v := range interpreter.argsMap {
 		var value interface{}
@@ -274,12 +276,6 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 	_, err = interpreter.interpret(stmt)
 
 	if err != nil {
-		goto handleFailed
-	}
-
-	// commit the first part sp
-	err = interpreter.bh.Exec(interpreter.ctx, "commit;")
-	if err != nil {
 		return err
 	}
 
@@ -291,7 +287,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 
 	err = interpreter.FlushParam()
 	if err != nil {
-		goto handleFailed
+		return err
 	}
 
 	// err = interpreter.bh.Exec(interpreter.ctx, "commit;")
@@ -300,14 +296,6 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) er
 	// }
 
 	return nil
-
-handleFailed:
-	// rollback on error
-	tmpErr = interpreter.bh.Exec(interpreter.ctx, "rollback;")
-	if tmpErr != nil {
-		return tmpErr
-	}
-	return err
 }
 
 func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error) {

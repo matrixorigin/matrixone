@@ -18,23 +18,60 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"go/constant"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 )
 
+func BenchmarkInsert(b *testing.B) {
+	typ := types.T_varchar.ToType()
+	typ.Width = 1024
+	targetType := makePlan2Type(&typ)
+	targetType.Width = 1024
+
+	originStr := "0123456789"
+	testExpr := tree.NewNumValWithType(constant.MakeString(originStr), originStr, false, tree.P_char)
+	targetT := &plan.Expr{
+		Typ: targetType,
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{
+				Typ: targetType,
+			},
+		},
+	}
+	ctx := context.TODO()
+	for i := 0; i < b.N; i++ {
+		binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+		expr, err := binder.BindExpr(testExpr, 0, true)
+		if err != nil {
+			break
+		}
+		_, err = forceCastExpr2(ctx, expr, typ, targetT)
+		if err != nil {
+			break
+		}
+	}
+}
+
 // only use in developing
 func TestSingleSQL(t *testing.T) {
-	//sql := "select * from nation"
-	//sql := "create view v_nation as select n_nationkey,n_name,n_regionkey,n_comment from nation"
-	//sql := "CREATE TABLE t1(id INT PRIMARY KEY,name VARCHAR(25),deptId INT,CONSTRAINT fk_t1 FOREIGN KEY(deptId) REFERENCES nation(n_nationkey))"
-	sql := "create table t2(empno int unsigned,ename varchar(15),job varchar(10)) cluster by(empno,ename)"
-	mock := NewMockOptimizer(false)
+	// sql := "INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
+	// sql := "insert into dept values (11, 'aa', 'bb')"
+	// sql := "delete from dept where deptno > 10"
+	// sql := "delete from nation where n_nationkey > 10"
+	// sql := "delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name"
+	// sql := "update nation set n_name ='a' where n_nationkey > 10"
+	// sql := "update dept set deptno = 11 where deptno = 10"
+	sql := "prepare stmt1 from update nation set n_name = ? where n_nationkey = ?"
+	mock := NewMockOptimizer(true)
 	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)

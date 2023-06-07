@@ -87,7 +87,7 @@ type LockService interface {
 	//
 	// Returns false if conflicts are encountered in FastFail wait policy and ErrDeadLockDetected
 	// returns if current operation was aborted by deadlock detection.
-	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options LockOptions) (pb.Result, error)
+	Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options pb.LockOptions) (pb.Result, error)
 	// Unlock release all locks associated with the transaction. If commitTS is not empty, means
 	// the txn was committed.
 	Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp) error
@@ -122,7 +122,7 @@ type lockTable interface {
 	// 1. ErrDeadlockDetectorClosed, indicates that the current transaction has triggered a deadlock.
 	// 2. ErrLockTableNotMatch, indicates that the LockTable binding relationship has changed.
 	// 3. Other known errors.
-	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions) (pb.Result, error)
+	lock(ctx context.Context, txn *activeTxn, rows [][]byte, options LockOptions, cb func(pb.Result, error))
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp)
 	// getLock get a lock
@@ -180,7 +180,7 @@ type Client interface {
 }
 
 // RequestHandleFunc request handle func
-type RequestHandleFunc func(context.Context, *pb.Request, *pb.Response) error
+type RequestHandleFunc func(context.Context, *pb.Request, *pb.Response, morpc.ClientSession)
 
 // ServerOption server option
 type ServerOption func(*server)
@@ -196,7 +196,10 @@ type Server interface {
 }
 
 // LockOptions options for lock
-type LockOptions = pb.LockOptions
+type LockOptions struct {
+	pb.LockOptions
+	async bool
+}
 
 // Lock stores specific lock information. Since there are a large number of lock objects
 // in the LockStorage at runtime, this object has been specially designed to save memory

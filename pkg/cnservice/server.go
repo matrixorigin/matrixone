@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -45,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"go.uber.org/zap"
 )
 
 func NewService(
@@ -113,7 +116,12 @@ func NewService(
 	// Init the autoIncrCacheManager after the default value is set before the init of moserver.
 	srv.aicm = &defines.AutoIncrCacheManager{AutoIncrCaches: make(map[string]defines.AutoIncrCache), Mu: &sync.Mutex{}, MaxSize: pu.SV.AutoIncrCacheSize}
 
+	if _, err = srv.getHAKeeperClient(); err != nil {
+		return nil, err
+	}
 	srv.pu = pu
+	srv.pu.LockService = srv.lockService
+	srv.pu.HAKeeperClient = srv._hakeeperClient
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
 	}
@@ -162,6 +170,7 @@ func NewService(
 
 func (s *service) Start() error {
 	s.initTaskServiceHolder()
+	s.initSqlWriterFactory()
 
 	if err := s.ctlservice.Start(); err != nil {
 		return err
@@ -471,9 +480,11 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			return
 		}
 		var opts []client.TxnClientCreateOption
+		opts = append(opts,
+			client.WithTimestampWaiter(s.timestampWaiter))
 		if s.cfg.Txn.EnableSacrificingFreshness {
 			opts = append(opts,
-				client.WithEnableSacrificingFreshness(s.timestampWaiter))
+				client.WithEnableSacrificingFreshness())
 		}
 		if s.cfg.Txn.EnableCNBasedConsistency {
 			opts = append(opts,
@@ -482,6 +493,16 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.EnableRefreshExpression {
 			opts = append(opts,
 				client.WithEnableRefreshExpression())
+		}
+		if s.cfg.Txn.EnableLeakCheck {
+			opts = append(opts, client.WithEnableLeakCheck(
+				s.cfg.Txn.MaxActiveAges.Duration,
+				func(txnID []byte, createAt time.Time, createBy string) {
+					runtime.DefaultRuntime().Logger().Fatal("found leak txn",
+						zap.String("txn-id", hex.EncodeToString(txnID)),
+						zap.Time("create-at", createAt),
+						zap.String("create-by", createBy))
+				}))
 		}
 		opts = append(opts, client.WithLockService(s.lockService))
 		c = client.NewTxnClient(
@@ -553,7 +574,27 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
 }
 
+func (s *service) initIncrService() {
+	rt := runtime.ProcessLevelRuntime()
+	v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		panic("missing internal sql executor")
+	}
+
+	store, err := incrservice.NewSQLStore(v.(executor.SQLExecutor))
+	if err != nil {
+		panic(err)
+	}
+	incrService := incrservice.NewIncrService(
+		store,
+		s.cfg.AutoIncrement)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(
+		runtime.AutoIncrmentService,
+		incrService)
+}
+
 func (s *service) bootstrap() error {
+	s.initIncrService()
 	return s.stopper.RunTask(func(ctx context.Context) {
 		rt := runtime.ProcessLevelRuntime()
 		v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
@@ -561,11 +602,12 @@ func (s *service) bootstrap() error {
 			panic("missing internal sql executor")
 		}
 
-		ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
 		b := bootstrap.NewBootstrapper(
 			&locker{hakeeperClient: s._hakeeperClient},
 			rt.Clock(),
+			s._txnClient,
 			v.(executor.SQLExecutor))
 		// bootstrap can not failed. We panic here to make sure the service can not start.
 		// If bootstrap failed, need clean all data to retry.

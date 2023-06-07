@@ -32,7 +32,7 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Stats(ctx context.Context, statsInfoMap any) bool {
+func (t *Table) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
 	return false
 }
 
@@ -262,6 +262,11 @@ func (t *Table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
 	return nil
 }
 
+func (t *Table) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+	// implement me
+	return nil
+}
+
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 	data.InitZsOne(data.Length())
 	shards, err := t.engine.shardPolicy.Batch(
@@ -360,6 +365,10 @@ func (t *Table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
 
 func (t *Table) GetTableID(ctx context.Context) uint64 {
 	return uint64(t.id)
+}
+
+func (t *Table) GetDBID(ctx context.Context) uint64 {
+	return 0
 }
 
 func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) {

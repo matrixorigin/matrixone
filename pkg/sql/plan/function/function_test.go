@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -217,4 +218,9 @@ func Test_GetFunctionByName(t *testing.T) {
 			require.Equal(t, c.requireRet, get.retType, msg)
 		}
 	}
+}
+
+func TestGetFunctionIsWinfunByName(t *testing.T) {
+	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
+	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
 }

@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
-type Partitions []*Partition
-
 // a partition corresponds to a dn
 type Partition struct {
 	lock  chan struct{}
@@ -48,6 +46,10 @@ func (r RowID) Less(than RowID) bool {
 	return bytes.Compare(r[:], than[:]) < 0
 }
 
+func (p *Partition) Snapshot() *PartitionState {
+	return p.state.Load()
+}
+
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("unimplemented")
 }
@@ -60,14 +62,6 @@ func (p *Partition) MutateState() (*PartitionState, func()) {
 			panic("concurrent mutation")
 		}
 	}
-}
-
-func (p Partitions) Snapshot() []*PartitionState {
-	ret := make([]*PartitionState, 0, len(p))
-	for _, partition := range p {
-		ret = append(ret, partition.state.Load())
-	}
-	return ret
 }
 
 func (p *Partition) Lock() <-chan struct{} {

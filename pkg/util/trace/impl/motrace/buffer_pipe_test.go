@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/google/gops/agent"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zapcore"
 )
@@ -47,9 +49,11 @@ var traceIDSpanIDCsvStr string
 
 func noopReportError(context.Context, error, int) {}
 
+var dummyBaseTime time.Time
+
 func init() {
 	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
-	table.ZeroTime = time.Unix(0, 0)
+	dummyBaseTime = time.Unix(0, 0)
 	SV := config.ObservabilityParameters{}
 	SV.SetDefaultValues("v0.test.0")
 	SV.TraceExportInterval = 15
@@ -314,14 +318,15 @@ func Test_genCsvData(t *testing.T) {
 					&MOSpan{
 						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, Parent: trace.NoopSpan{}},
 						Name:       "span1",
-						StartTime:  table.ZeroTime,
-						EndTime:    table.ZeroTime.Add(time.Microsecond),
+						StartTime:  dummyBaseTime,
+						EndTime:    dummyBaseTime.Add(time.Microsecond),
+						Duration:   time.Microsecond,
 						tracer:     gTracer.(*MOTracer),
 					},
 				},
 				buf: buf,
 			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",internal
+			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",internal
 `,
 		},
 		{
@@ -331,22 +336,33 @@ func Test_genCsvData(t *testing.T) {
 					&MOSpan{
 						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _1SpanID, Kind: trace.SpanKindStatement}, Parent: trace.NoopSpan{}},
 						Name:       "span1",
-						StartTime:  table.ZeroTime,
-						EndTime:    table.ZeroTime.Add(time.Microsecond),
+						StartTime:  dummyBaseTime,
+						EndTime:    dummyBaseTime.Add(time.Microsecond),
+						Duration:   time.Microsecond,
 						tracer:     gTracer.(*MOTracer),
 					},
 					&MOSpan{
 						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _2SpanID, Kind: trace.SpanKindRemote}, Parent: trace.NoopSpan{}},
 						Name:       "span2",
-						StartTime:  table.ZeroTime.Add(time.Microsecond),
-						EndTime:    table.ZeroTime.Add(time.Millisecond),
+						StartTime:  dummyBaseTime.Add(time.Microsecond),
+						EndTime:    dummyBaseTime.Add(time.Millisecond),
+						Duration:   time.Millisecond - time.Microsecond,
 						tracer:     gTracer.(*MOTracer),
+					},
+					&MOSpan{
+						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _2SpanID, Kind: trace.SpanKindRemote}, Parent: trace.NoopSpan{}},
+						Name:       "empty_end",
+						StartTime:  dummyBaseTime.Add(time.Microsecond),
+						Duration:   0,
+						tracer:     gTracer.(*MOTracer),
+						//EndTime:    table.ZeroTime,
 					},
 				},
 				buf: buf,
 			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",statement
-span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,,,,{},0,,,span2,0,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
+			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",statement
+span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,span2,0,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
+span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,{},0,,,empty_end,0,1970-01-01 00:00:00.000001,0001-01-01 00:00:00.000000,0,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote
 `,
 		},
 		{
@@ -356,7 +372,7 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 					&MOZapLog{
 						Level:       zapcore.InfoLevel,
 						SpanContext: &sc,
-						Timestamp:   table.ZeroTime,
+						Timestamp:   dummyBaseTime,
 						Caller:      "trace/buffer_pipe_sql_test.go:912",
 						Message:     "info message",
 						Extra:       "{}",
@@ -364,7 +380,7 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 				},
 				buf: buf,
 			},
-			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,info message,{},0,,,,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,{},internal
+			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:912,info message,{},0,,,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},internal
 `,
 		},
 		{
@@ -374,7 +390,7 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 					&MOZapLog{
 						Level:       zapcore.InfoLevel,
 						SpanContext: &sc,
-						Timestamp:   table.ZeroTime,
+						Timestamp:   dummyBaseTime,
 						Caller:      "trace/buffer_pipe_sql_test.go:939",
 						Message:     "info message",
 						Extra:       "{}",
@@ -382,7 +398,7 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 					&MOZapLog{
 						Level:       zapcore.DebugLevel,
 						SpanContext: &sc,
-						Timestamp:   table.ZeroTime.Add(time.Microsecond + time.Millisecond),
+						Timestamp:   dummyBaseTime.Add(time.Microsecond + time.Millisecond),
 						Caller:      "trace/buffer_pipe_sql_test.go:939",
 						Message:     "debug message",
 						Extra:       "{}",
@@ -390,8 +406,8 @@ span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-00000000
 				},
 				buf: buf,
 			},
-			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:939,info message,{},0,,,,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,{},internal
-log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.001001,debug,trace/buffer_pipe_sql_test.go:939,debug message,{},0,,,,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,{},internal
+			want: `log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000000,info,trace/buffer_pipe_sql_test.go:939,info message,{},0,,,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},internal
+log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.001001,debug,trace/buffer_pipe_sql_test.go:939,debug message,{},0,,,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},internal
 `,
 		},
 		{
@@ -409,8 +425,8 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						ExecPlan:             nil,
-						RequestAt:            table.ZeroTime,
-						ResponseAt:           table.ZeroTime,
+						RequestAt:            dummyBaseTime,
+						ResponseAt:           dummyBaseTime,
 					},
 				},
 				buf: buf,
@@ -433,8 +449,8 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						ExecPlan:             nil,
-						RequestAt:            table.ZeroTime,
-						ResponseAt:           table.ZeroTime,
+						RequestAt:            dummyBaseTime,
+						ResponseAt:           dummyBaseTime,
 					},
 					&StatementInfo{
 						StatementID:          _2TraceID,
@@ -446,8 +462,8 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 						Statement:            "show databases",
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
-						RequestAt:            table.ZeroTime.Add(time.Microsecond),
-						ResponseAt:           table.ZeroTime.Add(time.Microsecond + time.Second),
+						RequestAt:            dummyBaseTime.Add(time.Microsecond),
+						ResponseAt:           dummyBaseTime.Add(time.Microsecond + time.Second),
 						Duration:             time.Microsecond + time.Second,
 						Status:               StatementStatusFailed,
 						Error:                moerr.NewInternalError(DefaultContext(), "test error"),
@@ -464,24 +480,24 @@ log_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000
 			name: "single_error",
 			args: args{
 				in: []IBuffer2SqlItem{
-					&MOErrorHolder{Error: err1, Timestamp: table.ZeroTime},
+					&MOErrorHolder{Error: err1, Timestamp: dummyBaseTime},
 				},
 				buf: buf,
 			},
-			want: `error_info,node_uuid,Standalone,0,,,1970-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,{},
+			want: `error_info,node_uuid,Standalone,0,,,1970-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
 `,
 		},
 		{
 			name: "multi_error",
 			args: args{
 				in: []IBuffer2SqlItem{
-					&MOErrorHolder{Error: err1, Timestamp: table.ZeroTime},
-					&MOErrorHolder{Error: err2, Timestamp: table.ZeroTime.Add(time.Millisecond + time.Microsecond)},
+					&MOErrorHolder{Error: err1, Timestamp: dummyBaseTime},
+					&MOErrorHolder{Error: err2, Timestamp: dummyBaseTime.Add(time.Millisecond + time.Microsecond)},
 				},
 				buf: buf,
 			},
-			want: `error_info,node_uuid,Standalone,0,,,1970-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,{},
-error_info,node_uuid,Standalone,0,,,1970-01-01 00:00:00.001001,,,,{},20101,test2: internal error: test1,test2: internal error: test1,,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,{},
+			want: `error_info,node_uuid,Standalone,0,,,1970-01-01 00:00:00.000000,,,,{},20101,internal error: test1,internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
+error_info,node_uuid,Standalone,0,,,1970-01-01 00:00:00.001001,,,,{},20101,test2: internal error: test1,test2: internal error: test1,,0,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,0,{},
 `,
 		},
 	}
@@ -507,9 +523,10 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 		buf *bytes.Buffer
 	}
 	tests := []struct {
-		name string
-		args args
-		want []string
+		name       string
+		args       args
+		wantReqCnt int
+		want       []string
 	}{
 		{
 			name: "single_statement",
@@ -526,12 +543,13 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						ExecPlan:             nil,
-						RequestAt:            table.ZeroTime,
-						ResponseAt:           table.ZeroTime,
+						RequestAt:            dummyBaseTime,
+						ResponseAt:           dummyBaseTime,
 					},
 				},
 				buf: buf,
 			},
+			wantReqCnt: 1,
 			want: []string{`00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,0,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0,"{""code"":200,""message"":""NO ExecPlan""}",,,0,,0
 `},
 		},
@@ -550,8 +568,8 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						ExecPlan:             nil,
-						RequestAt:            table.ZeroTime,
-						ResponseAt:           table.ZeroTime,
+						RequestAt:            dummyBaseTime,
+						ResponseAt:           dummyBaseTime,
 					},
 					&StatementInfo{
 						StatementID:          _2TraceID,
@@ -563,8 +581,8 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 						Statement:            "show databases",
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
-						RequestAt:            table.ZeroTime.Add(time.Microsecond),
-						ResponseAt:           table.ZeroTime.Add(time.Microsecond + time.Second),
+						RequestAt:            dummyBaseTime.Add(time.Microsecond),
+						ResponseAt:           dummyBaseTime.Add(time.Microsecond + time.Second),
 						Duration:             time.Microsecond + time.Second,
 						Status:               StatementStatusFailed,
 						Error:                moerr.NewInternalError(DefaultContext(), "test error"),
@@ -573,6 +591,7 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 				},
 				buf: buf,
 			},
+			wantReqCnt: 1,
 			want: []string{`00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,0,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0,"{""code"":200,""message"":""NO ExecPlan""}",,,0,,0
 `, `00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,sys,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000001000,Failed,20101,internal error: test error,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000002""}",0,0,"{""code"":200,""message"":""NO ExecPlan""}",,,0,,0
 `},
@@ -584,13 +603,13 @@ func Test_genCsvData_diffAccount(t *testing.T) {
 			require.NotEqual(t, nil, got)
 			reqs, ok := got.(table.ExportRequests)
 			require.Equal(t, true, ok)
-			require.Equal(t, len(tt.args.in), len(reqs))
+			require.Equal(t, tt.wantReqCnt, len(reqs))
 			require.Equal(t, len(tt.args.in), len(tt.want))
 			for _, req := range reqs {
 				found := false
 				batch := req.(*table.RowRequest)
 				for idx, w := range tt.want {
-					if w == batch.GetContent() {
+					if strings.Contains(batch.GetContent(), w) {
 						found = true
 						t.Logf("idx %d: %s", idx, w)
 					}
@@ -631,8 +650,6 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						ExecPlan:             nil,
 						Duration:             time.Second - time.Nanosecond,
 						ResultCount:          1,
-						RequestAt:            table.ZeroTime,
-						ResponseAt:           table.ZeroTime,
 					},
 					&StatementInfo{
 						StatementID:          _1TraceID,
@@ -644,12 +661,11 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						Statement:            "show tables",
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
-						ExecPlan:             nil,
+						ExecPlan:             NewDummySerializableExecPlan(nil, dummySerializeExecPlan, uuid.UUID(_1TraceID)),
 						Duration:             time.Second - time.Nanosecond,
-						SerializeExecPlan:    dummySerializeExecPlan,
 						ResultCount:          2,
-						RequestAt:            table.ZeroTime,
-						ResponseAt:           table.ZeroTime,
+						RequestAt:            dummyBaseTime,
+						ResponseAt:           dummyBaseTime,
 					},
 					&StatementInfo{
 						StatementID:          _2TraceID,
@@ -661,13 +677,12 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 						Statement:            "show databases",
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
-						RequestAt:            table.ZeroTime.Add(time.Microsecond),
-						ResponseAt:           table.ZeroTime.Add(time.Microsecond + time.Second),
+						RequestAt:            dummyBaseTime.Add(time.Microsecond),
+						ResponseAt:           dummyBaseTime.Add(time.Microsecond + time.Second),
 						Duration:             time.Second,
 						Status:               StatementStatusFailed,
 						Error:                moerr.NewInternalError(DefaultContext(), "test error"),
-						ExecPlan:             map[string]string{"key": "val"},
-						SerializeExecPlan:    dummySerializeExecPlan,
+						ExecPlan:             NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 						SqlSourceType:        "internal",
 						ResultCount:          3,
 					},
@@ -675,7 +690,7 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 				buf:    buf,
 				queryT: int64(time.Second),
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,0,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0,"{""code"":200,""message"":""NO ExecPlan""}",,,0,,1
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,999999999,Running,0,,"{""code"":200,""message"":""NO ExecPlan Serialize function"",""steps"":null,""success"":false,""uuid"":""00000000-0000-0000-0000-000000000001""}",0,0,"{""code"":200,""message"":""NO ExecPlan""}",,,0,,1
 00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,0,,"{""code"":200,""message"":""no exec plan""}",0,0,{},,,0,,2
 00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,20101,internal error: test error,"{""key"":""val""}",1,1,{},,,0,internal,3
 `,

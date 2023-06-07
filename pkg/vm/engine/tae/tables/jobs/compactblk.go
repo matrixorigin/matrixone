@@ -15,8 +15,11 @@
 package jobs
 
 import (
+	"context"
 	"fmt"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -92,7 +95,7 @@ func NewCompactBlockTask(
 
 func (task *compactBlockTask) Scopes() []common.ID { return task.scopes }
 
-func (task *compactBlockTask) PrepareData() (preparer *model.PreparedCompactedBlockData, empty bool, err error) {
+func (task *compactBlockTask) PrepareData(ctx context.Context) (preparer *model.PreparedCompactedBlockData, empty bool, err error) {
 	preparer = model.NewPreparedCompactedBlockData()
 	preparer.Columns = containers.NewBatch()
 
@@ -103,7 +106,7 @@ func (task *compactBlockTask) PrepareData() (preparer *model.PreparedCompactedBl
 		if def.IsPhyAddr() {
 			continue
 		}
-		view, err = task.compacted.GetColumnDataById(def.Idx)
+		view, err = task.compacted.GetColumnDataById(ctx, def.Idx)
 		if err != nil {
 			return
 		}
@@ -140,7 +143,7 @@ func (task *compactBlockTask) Name() string {
 	return fmt.Sprintf("[%d]compact", task.ID())
 }
 
-func (task *compactBlockTask) Execute() (err error) {
+func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	logutil.Info("[Start]", common.OperationField(task.Name()),
 		common.OperandField(task.meta.Repr()))
 	now := time.Now()
@@ -148,7 +151,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	defer seg.Close()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
-	preparer, empty, err := task.PrepareData()
+	preparer, empty, err := task.PrepareData(ctx)
 	if err != nil {
 		return
 	}
@@ -290,6 +293,10 @@ func (task *compactBlockTask) Execute() (err error) {
 		common.AnyField("compacted", task.meta.Repr()),
 		common.AnyField("created", createdStr),
 		common.DurationField(time.Since(now)))
+
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.CompactBlock.Add(1)
+	})
 	return
 }
 
@@ -329,7 +336,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	if err != nil {
 		return
 	}
-	logutil.Infof("update metaloc for %s", id.String())
+	logutil.Debugf("update metaloc for %s", id.String())
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
 	}

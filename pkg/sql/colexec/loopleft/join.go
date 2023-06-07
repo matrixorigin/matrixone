@@ -106,14 +106,18 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = bat.Vecs[rp.Pos]
-			bat.Vecs[rp.Pos] = nil
+			// rbat.Vecs[i] = bat.Vecs[rp.Pos]
+			// bat.Vecs[rp.Pos] = nil
+			typ := *bat.Vecs[rp.Pos].GetType()
+			rbat.Vecs[i] = vector.NewVec(typ)
+			if err := vector.GetUnionAllFunction(typ, proc.Mp())(rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
+				return err
+			}
 		} else {
-			rbat.Vecs[i] = vector.NewConstNull(*ctr.bat.Vecs[rp.Pos].GetType(), bat.Length(), proc.Mp())
+			rbat.Vecs[i] = vector.NewConstNull(ap.Typs[rp.Pos], bat.Length(), proc.Mp())
 		}
 	}
-	rbat.Zs = bat.Zs
-	bat.Zs = nil
+	rbat.Zs = append(rbat.Zs, bat.Zs...)
 	anal.Output(rbat, isLast)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -127,91 +131,104 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		if rp.Rel == 0 {
 			rbat.Vecs[i] = proc.GetVector(*bat.Vecs[rp.Pos].GetType())
 		} else {
-			rbat.Vecs[i] = proc.GetVector(*ctr.bat.Vecs[rp.Pos].GetType())
+			rbat.Vecs[i] = proc.GetVector(ap.Typs[rp.Pos])
 		}
 	}
 	count := bat.Length()
-	if ctr.joinBat == nil {
-		ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
-	}
-	for i := 0; i < count; i++ {
-		matched := false
-		if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
-			ctr.bat.Length(), ctr.cfs); err != nil {
-			rbat.Clean(proc.Mp())
-			return err
-		}
-		vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
-		if err != nil {
-			rbat.Clean(proc.Mp())
-			return err
-		}
-
-		rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
-		if vec.IsConst() {
-			b, null := rs.GetValue(0)
-			if !null && b {
-				for j := 0; j < len(ctr.bat.Zs); j++ {
-					matched = true
-					for k, rp := range ap.Result {
-						if rp.Rel == 0 {
-							if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-								vec.Free(proc.Mp())
-								rbat.Clean(proc.Mp())
-								return err
-							}
-						} else {
-							if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-								vec.Free(proc.Mp())
-								rbat.Clean(proc.Mp())
-								return err
-							}
-						}
-					}
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
-
-				}
-			}
-		} else {
-			l := vec.Length()
-			for j := uint64(0); j < uint64(l); j++ {
-				b, null := rs.GetValue(j)
-				if !null && b {
-					matched = true
-					for k, rp := range ap.Result {
-						if rp.Rel == 0 {
-							if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
-								vec.Free(proc.Mp())
-								rbat.Clean(proc.Mp())
-								return err
-							}
-						} else {
-							if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
-								vec.Free(proc.Mp())
-								rbat.Clean(proc.Mp())
-								return err
-							}
-						}
-					}
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
-				}
-			}
-		}
-		if !matched {
+	if ctr.expr == nil {
+		for i := 0; i < count; i++ {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {
-					if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionMulti(bat.Vecs[rp.Pos], int64(i), ctr.bat.Length(), proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}
 				} else {
-					if err := rbat.Vecs[k].UnionNull(proc.Mp()); err != nil {
+					if err := rbat.Vecs[k].UnionBatch(ctr.bat.Vecs[rp.Pos], 0, ctr.bat.Length(), nil, proc.Mp()); err != nil {
 						rbat.Clean(proc.Mp())
 						return err
 					}
 				}
 			}
-			rbat.Zs = append(rbat.Zs, bat.Zs[i])
+			rbat.Zs = append(rbat.Zs, ctr.bat.Zs...)
+		}
+	} else {
+		if ctr.joinBat == nil {
+			ctr.joinBat, ctr.cfs = colexec.NewJoinBatch(bat, proc.Mp())
+		}
+		for i := 0; i < count; i++ {
+			matched := false
+			if err := colexec.SetJoinBatchValues(ctr.joinBat, bat, int64(i),
+				ctr.bat.Length(), ctr.cfs); err != nil {
+				rbat.Clean(proc.Mp())
+				return err
+			}
+			vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, ctr.bat})
+			if err != nil {
+				rbat.Clean(proc.Mp())
+				return err
+			}
+			defer vec.Free(proc.Mp())
+
+			rs := vector.GenerateFunctionFixedTypeParameter[bool](vec)
+			if vec.IsConst() {
+				b, null := rs.GetValue(0)
+				if !null && b {
+					matched = true
+					for k, rp := range ap.Result {
+						if rp.Rel == 0 {
+							if err := rbat.Vecs[k].UnionMulti(bat.Vecs[rp.Pos], int64(i), ctr.bat.Length(), proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
+								return err
+							}
+						} else {
+							if err := rbat.Vecs[k].UnionBatch(ctr.bat.Vecs[rp.Pos], 0, ctr.bat.Length(), nil, proc.Mp()); err != nil {
+								rbat.Clean(proc.Mp())
+								return err
+							}
+						}
+					}
+					rbat.Zs = append(rbat.Zs, ctr.bat.Zs...)
+				}
+			} else {
+				l := vec.Length()
+				for j := uint64(0); j < uint64(l); j++ {
+					b, null := rs.GetValue(j)
+					if !null && b {
+						matched = true
+						for k, rp := range ap.Result {
+							if rp.Rel == 0 {
+								if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+									rbat.Clean(proc.Mp())
+									return err
+								}
+							} else {
+								if err := rbat.Vecs[k].UnionOne(ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp()); err != nil {
+									rbat.Clean(proc.Mp())
+									return err
+								}
+							}
+						}
+						rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+					}
+				}
+			}
+			if !matched {
+				for k, rp := range ap.Result {
+					if rp.Rel == 0 {
+						if err := rbat.Vecs[k].UnionOne(bat.Vecs[rp.Pos], int64(i), proc.Mp()); err != nil {
+							rbat.Clean(proc.Mp())
+							return err
+						}
+					} else {
+						if err := rbat.Vecs[k].UnionNull(proc.Mp()); err != nil {
+							rbat.Clean(proc.Mp())
+							return err
+						}
+					}
+				}
+				rbat.Zs = append(rbat.Zs, bat.Zs[i])
+			}
 		}
 	}
 	anal.Output(rbat, isLast)

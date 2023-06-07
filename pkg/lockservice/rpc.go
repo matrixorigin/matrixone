@@ -235,22 +235,28 @@ func (s *server) onMessage(
 		resp := acquireResponse()
 		resp.RequestID = req.RequestID
 		resp.Method = req.Method
-		if err := handler(ctx, req, resp); err != nil {
-			resp.WrapError(err)
-		}
-		if getLogger().Enabled(zap.DebugLevel) {
-			getLogger().Debug("handle request completed",
-				zap.String("response", resp.DebugString()))
-		}
-		return cs.Write(ctx, resp)
-	}
-
-	switch req.Method {
-	case pb.Method_Lock:
-		go fn(req)
+		handler(ctx, req, resp, cs)
 		return nil
-	default:
-		return fn(req)
+	}
+	return fn(req)
+}
+
+func writeResponse(
+	ctx context.Context,
+	resp *pb.Response,
+	err error,
+	cs morpc.ClientSession) {
+	if err != nil {
+		resp.WrapError(err)
+	}
+	if getLogger().Enabled(zap.DebugLevel) {
+		getLogger().Debug("handle request completed",
+			zap.String("response", resp.DebugString()))
+	}
+	if err := cs.Write(ctx, resp); err != nil {
+		getLogger().Error("write response failed",
+			zap.Error(err),
+			zap.String("response", resp.DebugString()))
 	}
 }
 

@@ -232,6 +232,7 @@ select b, c from dis_table_02;
 -- @session}
 select b, c from dis_table_02;
 -- @session:id=2{
+rollback;
 start transaction ;
 update dis_table_02 set b='catttteee' where a>1;
 select b, c from dis_table_02;

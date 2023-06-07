@@ -25,10 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -60,19 +62,25 @@ func New(
 			return true
 		})
 
-	dnMap := make(map[string]int)
-	for i := range services {
-		dnMap[services[i].ServiceID] = i
+	var dnID string
+	if len(services) > 0 {
+		dnID = services[0].ServiceID
+	}
+
+	ls, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.LockService)
+	if !ok {
+		logutil.Fatalf("missing lock service")
 	}
 
 	e := &Engine{
 		mp:         mp,
 		fs:         fs,
+		ls:         ls.(lockservice.LockService),
 		cli:        cli,
 		idGen:      idGen,
 		catalog:    cache.NewCatalog(),
-		dnMap:      dnMap,
-		partitions: make(map[[2]uint64]logtailreplay.Partitions),
+		dnID:       dnID,
+		partitions: make(map[[2]uint64]*logtailreplay.Partition),
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -211,7 +219,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 				return "", "", err
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel, _ := distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel := distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				tblName = tableName
 				break
@@ -243,7 +251,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 				return false
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel = distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				return false
 			}
@@ -253,13 +261,13 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if rel == nil {
 		dbNames := e.catalog.Databases(accountId, txn.meta.SnapshotTS)
-		for _, dbName := range dbNames {
+		for _, dbName = range dbNames {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
 				return "", "", nil, err
 			}
 			distDb := db.(*txnDatabase)
-			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
+			tableName, rel = distDb.getRelationById(noRepCtx, tableId)
 			if rel != nil {
 				break
 			}
@@ -331,7 +339,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.cli,
 		op,
 		e.fs,
-		nil,
+		e.ls,
 		nil,
 	)
 
@@ -341,8 +349,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		op:              op,
 		proc:            proc,
 		engine:          e,
-		readOnly:        true,
-		meta:            op.Txn(),
+		meta:            op.TxnRef(),
 		idGen:           e.idGen,
 		dnStores:        e.getDNServices(),
 		tableMap:        new(sync.Map),
@@ -364,8 +371,10 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		cnBlkId_Pos:                     map[types.Blockid]Pos{},
 		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
+		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
-	// TxnWorkSpace SegmentName
+	txn.readOnly.Store(true)
+	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
 	e.newTransaction(op, txn)
 
@@ -383,10 +392,12 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
+	txn.IncrStatemenetID(ctx)
 	defer e.delTransaction(txn)
-	if txn.readOnly {
+	if txn.readOnly.Load() {
 		return nil
 	}
+	txn.mergeTxnWorkspace()
 	err := txn.DumpBatch(true, 0)
 	if err != nil {
 		return err
@@ -410,26 +421,44 @@ func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 	return nil
 }
 
-func (e *Engine) Nodes(isInternal bool, tenant string, cnLabel map[string]string) (engine.Nodes, error) {
+func (e *Engine) Nodes(
+	isInternal bool, tenant string, username string, cnLabel map[string]string,
+) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	cluster := clusterservice.GetMOCluster()
 	var selector clusterservice.Selector
-	if isInternal || strings.ToLower(tenant) == "sys" {
-		selector = clusterservice.NewSelector()
-	} else {
-		selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ)
-	}
-	if len(cnLabel) > 0 {
-		selector = selector.SelectByLabel(cnLabel, clusterservice.EQ)
-	}
-	cluster.GetCNService(selector, func(c metadata.CNService) bool {
-		nodes = append(nodes, engine.Node{
-			Mcpu: runtime.NumCPU(),
-			Id:   c.ServiceID,
-			Addr: c.PipelineServiceAddress,
+
+	// If the requested labels are empty, return all CN servers.
+	if len(cnLabel) == 0 {
+		cluster.GetCNService(selector, func(c metadata.CNService) bool {
+			nodes = append(nodes, engine.Node{
+				Mcpu: runtime.NumCPU(),
+				Id:   c.ServiceID,
+				Addr: c.PipelineServiceAddress,
+			})
+			return true
 		})
-		return true
-	})
+		return nodes, nil
+	}
+
+	selector = clusterservice.NewSelector().SelectByLabel(cnLabel, clusterservice.EQ)
+	if isInternal || strings.ToLower(tenant) == "sys" {
+		SelectForSuperTenant(selector, username, nil, func(s *metadata.CNService) {
+			nodes = append(nodes, engine.Node{
+				Mcpu: runtime.NumCPU(),
+				Id:   s.ServiceID,
+				Addr: s.PipelineServiceAddress,
+			})
+		})
+	} else {
+		SelectForCommonTenant(selector, nil, func(s *metadata.CNService) {
+			nodes = append(nodes, engine.Node{
+				Mcpu: runtime.NumCPU(),
+				Id:   s.ServiceID,
+				Addr: s.PipelineServiceAddress,
+			})
+		})
+	}
 	return nodes, nil
 }
 
@@ -441,22 +470,13 @@ func (e *Engine) Hints() (h engine.Hints) {
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]*catalog.BlockInfo, len(ranges))
-	for i := range ranges {
-		blks[i] = catalog.DecodeBlockInfo(ranges[i])
-		blks[i].EntryState = false
-	}
 	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
-			rds[i] = &blockReader{
-				fs:            e.fs,
-				tableDef:      tblDef,
-				primarySeqnum: -1,
-				expr:          expr,
-				ts:            ts,
-				ctx:           ctx,
-				blks:          []*catalog.BlockInfo{blks[i]},
-			}
+			blk := catalog.DecodeBlockInfo(ranges[i])
+			blk.EntryState = false
+			rds[i] = newBlockReader(
+				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs,
+			)
 		}
 		for j := len(ranges); j < num; j++ {
 			rds[j] = &emptyReader{}
@@ -464,7 +484,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 		return rds, nil
 	}
 
-	infos, steps := groupBlocksToObjects(blks, num)
+	infos, steps := groupBlocksToObjects(ranges, num)
 	blockReaders := newBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr)
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {
@@ -522,7 +542,7 @@ func (e *Engine) getDNServices() []DNStore {
 func (e *Engine) cleanMemoryTable() {
 	e.Lock()
 	defer e.Unlock()
-	e.partitions = make(map[[2]uint64]logtailreplay.Partitions)
+	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
 }
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
@@ -532,5 +552,5 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// after we set it to empty, actually this part of memory was not immediately released.
 	// maybe a very old transaction still using that.
 	delete(e.partitions, [2]uint64{dbId, tblId})
-	logutil.Infof("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
+	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }

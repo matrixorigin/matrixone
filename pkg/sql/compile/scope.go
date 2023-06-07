@@ -18,8 +18,6 @@ import (
 	"context"
 	"hash/crc32"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -32,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -51,6 +50,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -89,19 +89,24 @@ func (s *Scope) Run(c *Compile) (err error) {
 	return nil
 }
 
+func (s *Scope) SetContextRecursively(ctx context.Context) {
+	if s.Proc == nil {
+		return
+	}
+	newCtx := s.Proc.ResetContextFromParent(ctx)
+	for _, scope := range s.PreScopes {
+		scope.SetContextRecursively(newCtx)
+	}
+}
+
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(c *Compile) error {
 	errChan := make(chan error, len(s.PreScopes))
-
-	for _, scope := range s.PreScopes {
-		scope.Proc.ResetContextFromParent(s.Proc.Ctx)
-	}
-
 	for _, scope := range s.PreScopes {
 		switch scope.Magic {
 		case Normal:
 			go func(cs *Scope) { errChan <- cs.Run(c) }(scope)
-		case Merge:
+		case Merge, MergeInsert:
 			go func(cs *Scope) { errChan <- cs.MergeRun(c) }(scope)
 		case Remote:
 			go func(cs *Scope) { errChan <- cs.RemoteRun(c) }(scope)
@@ -177,6 +182,11 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
+	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
+		logutil.Debugf("---->ParallelRun---> %s", DebugShowScopes([]*Scope{s}))
+	}
+	//fmt.Printf("---->ParallelRun---> %s \n", DebugShowScopes([]*Scope{s}))
+
 	var rds []engine.Reader
 
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
@@ -197,8 +207,8 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		}
-		if s.DataSource.AccountId != -1 {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId))
+		if s.DataSource.AccountId != nil {
+			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
 			s.NodeInfo.Data, s.DataSource.TableDef)
@@ -206,13 +216,45 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			return err
 		}
 		s.NodeInfo.Data = nil
+
 	case s.NodeInfo.Rel != nil:
 		var err error
+
+		if len(s.DataSource.RuntimeFilterReceivers) > 0 {
+			exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterReceivers))
+			filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
+
+			for _, receiver := range s.DataSource.RuntimeFilterReceivers {
+				select {
+				case <-s.Proc.Ctx.Done():
+					return nil
+
+				case filter := <-receiver.Chan:
+					if filter == nil || filter.Typ == pbpipeline.RuntimeFilter_Empty {
+						exprs = nil
+						break
+					}
+
+					exprs = append(exprs, receiver.Expr)
+					filters = append(filters, filter)
+				}
+			}
+
+			if len(exprs) > 0 {
+				s.NodeInfo.Data, err = s.NodeInfo.Rel.ApplyRuntimeFilters(c.ctx, s.NodeInfo.Data, exprs, filters)
+				if err != nil {
+					return err
+				}
+			} else {
+				s.NodeInfo.Data = s.NodeInfo.Data[:0]
+			}
+		}
 
 		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
 			return err
 		}
 		s.NodeInfo.Data = nil
+
 	default:
 		var err error
 		var db engine.Database
@@ -293,6 +335,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
 	newScope := newParallelScope(s, ss)
+	newScope.SetContextRecursively(s.Proc.Ctx)
 	return newScope.MergeRun(c)
 }
 
@@ -344,7 +387,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	s = newParallelScope(s, ss)
 
 	if isRight {
-		channel := make(chan *bitmap.Bitmap)
+		channel := make(chan *bitmap.Bitmap, mcpu)
 		for i := range s.PreScopes {
 			switch arg := s.PreScopes[i].Instructions[0].Arg.(type) {
 			case *right.Argument:
@@ -415,7 +458,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 		case vm.Top:
 			flg = true
 			arg := in.Arg.(*top.Argument)
-			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeTop,
 				Idx: in.Idx,
@@ -424,8 +467,8 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					Limit: arg.Limit,
 				},
 			}
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Top,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
@@ -438,7 +481,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 		case vm.Order:
 			flg = true
 			arg := in.Arg.(*order.Argument)
-			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeOrder,
 				Idx: in.Idx,
@@ -446,8 +489,8 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					Fs: arg.Fs,
 				},
 			}
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Order,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
@@ -459,7 +502,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 		case vm.Limit:
 			flg = true
 			arg := in.Arg.(*limit.Argument)
-			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeLimit,
 				Idx: in.Idx,
@@ -467,8 +510,8 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					Limit: arg.Limit,
 				},
 			}
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Limit,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
@@ -480,7 +523,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 		case vm.Group:
 			flg = true
 			arg := in.Arg.(*group.Argument)
-			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeGroup,
 				Idx: in.Idx,
@@ -488,8 +531,8 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					NeedEval: false,
 				},
 			}
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Group,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
@@ -504,7 +547,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 		case vm.Offset:
 			flg = true
 			arg := in.Arg.(*offset.Argument)
-			s.Instructions = append(s.Instructions[:1], s.Instructions[i+1:]...)
+			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeOffset,
 				Idx: in.Idx,
@@ -512,8 +555,8 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					Offset: arg.Offset,
 				},
 			}
-			for i := range ss {
-				ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			for j := range ss {
+				ss[j].appendInstruction(vm.Instruction{
 					Op:      vm.Offset,
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
@@ -525,7 +568,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 		case vm.Output:
 		default:
 			for j := range ss {
-				ss[j].Instructions = append(ss[j].Instructions, dupInstruction(&in, nil, j))
+				ss[j].appendInstruction(dupInstruction(&in, nil, j))
 			}
 		}
 	}
@@ -683,6 +726,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 	for i := range s.RemoteReceivRegInfos {
 		op := &s.RemoteReceivRegInfos[i]
 		go func(info *RemoteReceivRegInfo, reg *process.WaitRegister) {
+
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
 				close(reg.Ch)
@@ -691,7 +735,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			}
 			defer func(streamSender morpc.Stream) {
 				close(reg.Ch)
-				_ = streamSender.Close(false)
+				_ = streamSender.Close(true)
 			}(streamSender)
 
 			message := cnclient.AcquireMessage()
@@ -727,8 +771,8 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 
 func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, forwardCh chan *batch.Batch) error {
 	var val morpc.Message
-	var dataBuffer []byte
 	var ok bool
+	var m *pbpipeline.Message
 	for {
 		select {
 		case <-proc.Ctx.Done():
@@ -740,7 +784,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			}
 		}
 
-		m, ok := val.(*pbpipeline.Message)
+		m, ok = val.(*pbpipeline.Message)
 		if !ok {
 			panic("unexpected message type for cn-server")
 		}
@@ -756,15 +800,14 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 		}
 
 		// normal receive
-		dataBuffer = append(dataBuffer, m.Data...)
 		switch m.GetSid() {
 		case pbpipeline.WaitingNext:
 			continue
 		case pbpipeline.Last:
-			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+			if m.Checksum != crc32.ChecksumIEEE(m.Data) {
 				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
 			}
-			bat, err := decodeBatch(proc.Mp(), dataBuffer)
+			bat, err := decodeBatch(proc.Mp(), nil, m.Data)
 			if err != nil {
 				return err
 			}
@@ -775,7 +818,6 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 				// used for BroadCastJoin
 				forwardCh <- bat
 			}
-			dataBuffer = nil
 		}
 	}
 }

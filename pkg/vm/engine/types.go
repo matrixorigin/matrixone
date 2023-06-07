@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -84,7 +85,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
-	Stats(ctx context.Context, statsInfoMap any) bool
+	Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool
 	Rows(ctx context.Context) (int64, error)
 	Size(ctx context.Context, columnName string) (int64, error)
 }
@@ -515,7 +516,9 @@ func (def *IndexDef) ToPBVersion() ConstraintPB {
 type Relation interface {
 	Statistics
 
-	Ranges(context.Context, ...*plan.Expr) ([][]byte, error)
+	Ranges(context.Context, []*plan.Expr) ([][]byte, error)
+
+	ApplyRuntimeFilters(context.Context, [][]byte, []*plan.Expr, []*pipeline.RuntimeFilter) ([][]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
@@ -536,7 +539,11 @@ type Relation interface {
 	// only ConstraintDef can be modified
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
+	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
+
 	GetTableID(context.Context) uint64
+
+	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
@@ -588,7 +595,7 @@ type Engine interface {
 
 	// Nodes returns all nodes for worker jobs. isInternal, tenant, cnLabel are
 	// used to filter CN servers.
-	Nodes(isInternal bool, tenant string, cnLabel map[string]string) (cnNodes Nodes, err error)
+	Nodes(isInternal bool, tenant string, username string, cnLabel map[string]string) (cnNodes Nodes, err error)
 
 	// Hints returns hints of engine features
 	// return value should not be cached

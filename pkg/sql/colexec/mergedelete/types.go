@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package mergedelete
 
 import (
@@ -20,8 +21,10 @@ import (
 
 type Argument struct {
 	AffectedRows uint64
-	// single table's delete
+	// 1. single table's delete (main table)
 	DelSource engine.Relation
+	// 2. partition sub tables
+	PartitionSources []engine.Relation
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

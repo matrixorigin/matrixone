@@ -155,7 +155,8 @@ type QueryBuilder struct {
 
 	nextTag int32
 
-	mysqlCompatible bool
+	mysqlCompatible    bool
+	haveOnDuplicateKey bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
 }
 
 type CTERef struct {
@@ -177,14 +178,17 @@ type BindContext struct {
 	aggregateTag int32
 	projectTag   int32
 	resultTag    int32
+	windowTag    int32
 
 	groups     []*plan.Expr
 	aggregates []*plan.Expr
 	projects   []*plan.Expr
 	results    []*plan.Expr
+	windows    []*plan.Expr
 
 	groupByAst     map[string]int32
 	aggregateByAst map[string]int32
+	windowByAst    map[string]int32
 	projectByExpr  map[string]int32
 
 	aliasMap map[string]int32

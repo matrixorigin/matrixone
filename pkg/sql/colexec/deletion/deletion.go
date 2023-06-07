@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+//row id be divided into four types:
+// 1. RawBatchOffset : belong to txn's workspace
+// 2. CNBlockOffset  : belong to txn's workspace
+
+// 3. RawRowIdBatch  : belong to txn's snapshot data.
+// 4. FlushMetaLoc   : belong to txn's snapshot data, which on S3 and pointed by delta location.
 const (
 	RawRowIdBatch = iota
 	// remember that, for one block,
@@ -48,11 +53,11 @@ func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	if ap.RemoteDelete {
 		ap.ctr = new(container)
-		ap.ctr.blockId_rowIdBatch = make(map[string]*batch.Batch)
-		ap.ctr.blockId_metaLoc = make(map[string]*batch.Batch)
 		ap.ctr.blockId_type = make(map[string]int8)
 		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
 		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerSegment)}
+		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[string]*batch.Batch)
+		ap.ctr.partitionId_blockId_metaLoc = make(map[int]map[string]*batch.Batch)
 	}
 	return nil
 }
@@ -60,50 +65,62 @@ func Prepare(_ *process.Process, arg any) error {
 // the bool return value means whether it completed its work or not
 func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (bool, error) {
 	p := arg.(*Argument)
-	bat := proc.Reg.InputBatch
+	bat := proc.InputBatch()
 
 	// last batch of block
 	if bat == nil {
 		if p.RemoteDelete {
 			// ToDo: CNBlock Compaction
 			// blkId,delta_metaLoc,type
-			resBat := batch.New(true, []string{
+			resBat := batch.NewWithSize(5)
+			resBat.Attrs = []string{
 				catalog.BlockMeta_Delete_ID,
 				catalog.BlockMeta_DeltaLoc,
 				catalog.BlockMeta_Type,
+				catalog.BlockMeta_Partition,
 				catalog.BlockMeta_Deletes_Length,
-			})
+			}
 			resBat.SetVector(0, vector.NewVec(types.T_text.ToType()))
 			resBat.SetVector(1, vector.NewVec(types.T_text.ToType()))
 			resBat.SetVector(2, vector.NewVec(types.T_int8.ToType()))
-			for blkid, bat := range p.ctr.blockId_rowIdBatch {
-				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
-				bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
-				bytes, err := bat.MarshalBinary()
-				if err != nil {
-					return true, err
+			resBat.SetVector(3, vector.NewVec(types.T_int32.ToType()))
+
+			for pidx, blockId_rowIdBatch := range p.ctr.partitionId_blockId_rowIdBatch {
+				for blkid, bat := range blockId_rowIdBatch {
+					vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+					bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
+					bytes, err := bat.MarshalBinary()
+					if err != nil {
+						return true, err
+					}
+					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
+					vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_type[blkid], false, proc.GetMPool())
+					vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
 				}
-				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-				vector.AppendFixed(resBat.GetVector(2), p.ctr.blockId_type[blkid], false, proc.GetMPool())
 			}
-			for blkid, bat := range p.ctr.blockId_metaLoc {
-				vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
-				bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
-				bytes, err := bat.MarshalBinary()
-				if err != nil {
-					return true, err
+
+			for pidx, blockId_metaLoc := range p.ctr.partitionId_blockId_metaLoc {
+				for blkid, bat := range blockId_metaLoc {
+					vector.AppendBytes(resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
+					bat.SetZs(bat.GetVector(0).Length(), proc.GetMPool())
+					bytes, err := bat.MarshalBinary()
+					if err != nil {
+						return true, err
+					}
+					vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
+					vector.AppendFixed(resBat.GetVector(2), int8(FlushMetaLoc), false, proc.GetMPool())
+					vector.AppendFixed(resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
 				}
-				vector.AppendBytes(resBat.GetVector(1), bytes, false, proc.GetMPool())
-				vector.AppendFixed(resBat.GetVector(2), int8(FlushMetaLoc), false, proc.GetMPool())
 			}
+
 			resBat.SetZs(resBat.Vecs[0].Length(), proc.GetMPool())
-			resBat.SetVector(3, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.Length(), proc.GetMPool()))
+			resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), p.ctr.deleted_length, resBat.Length(), proc.GetMPool()))
 			proc.SetInputBatch(resBat)
 		} else {
 			// ToDo: need ouyuaning to make sure there are only one table
 			// in a deletion operator
 			// do compaction here
-			p.DeleteCtx.DelSource[0].Delete(proc.Ctx, nil, catalog.Row_ID)
+			p.DeleteCtx.Source.Delete(proc.Ctx, nil, catalog.Row_ID)
 		}
 		return true, nil
 	}
@@ -111,56 +128,62 @@ func Call(_ int, proc *process.Process, arg any, isFirst bool, isLast bool) (boo
 	// empty batch
 	if bat.Length() == 0 {
 		bat.Clean(proc.Mp())
+		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
 
-	defer bat.Clean(proc.Mp())
+	defer proc.PutBatch(bat)
 	if p.RemoteDelete {
 		// we will cache all rowId in memory,
 		// when the size is too large we will
 		// trigger write s3
 		p.SplitBatch(proc, bat)
+		proc.SetInputBatch(batch.EmptyBatch)
 		return false, nil
 	}
+
 	var affectedRows uint64
-	var err error
 	delCtx := p.DeleteCtx
 
-	// check OnRestrict, if is not all null, throw error
-	for _, idx := range delCtx.OnRestrictIdx {
-		if bat.Vecs[idx].Length() != bat.Vecs[idx].GetNulls().Count() {
-			return false, moerr.NewInternalError(proc.Ctx, "Cannot delete or update a parent row: a foreign key constraint fails")
+	if len(delCtx.PartitionTableIDs) > 0 {
+		delBatches, err := colexec.GroupByPartitionForDelete(proc, bat, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, len(delCtx.PartitionTableIDs))
+		if err != nil {
+			return false, err
 		}
+
+		for i, delBatch := range delBatches {
+			tempRows := uint64(delBatch.Length())
+			if tempRows > 0 {
+				affectedRows += tempRows
+				err = delCtx.PartitionSources[i].Delete(proc.Ctx, delBatch, catalog.Row_ID)
+				if err != nil {
+					delBatch.Clean(proc.Mp())
+					return false, err
+				}
+				delBatch.Clean(proc.Mp())
+			}
+		}
+	} else {
+		delBatch, err := colexec.FilterRowIdForDel(proc, bat, delCtx.RowIdIdx)
+		if err != nil {
+			return false, err
+		}
+		affectedRows = uint64(delBatch.Length())
+		if affectedRows > 0 {
+			err = delCtx.Source.Delete(proc.Ctx, delBatch, catalog.Row_ID)
+			if err != nil {
+				delBatch.Clean(proc.GetMPool())
+				return false, err
+			}
+		}
+		delBatch.Clean(proc.GetMPool())
 	}
 
-	// delete unique index
-	_, err = colexec.FilterAndDelByRowId(proc, bat, delCtx.IdxIdx, delCtx.IdxSource)
-	if err != nil {
-		return false, err
+	proc.SetInputBatch(batch.EmptyBatch)
+
+	if delCtx.AddAffectedRows {
+		atomic.AddUint64(&p.affectedRows, affectedRows)
 	}
 
-	// delete child table(which ref on delete cascade)
-	_, err = colexec.FilterAndDelByRowId(proc, bat, delCtx.OnCascadeIdx, delCtx.OnCascadeSource)
-	if err != nil {
-		return false, err
-	}
-
-	// update child table(which ref on delete set null)
-	_, err = colexec.FilterAndUpdateByRowId(proc, bat, delCtx.OnSetIdx, delCtx.OnSetSource, delCtx.OnSetRef, delCtx.OnSetTableDef, delCtx.OnSetUpdateCol, nil, delCtx.OnSetUniqueSource)
-	if err != nil {
-		return false, err
-	}
-
-	// delete origin table
-	idxList := make([]int32, len(delCtx.DelIdx))
-	for i := 0; i < len(delCtx.DelIdx); i++ {
-		// for now, we have row_id & pk. but only use row_id for delete
-		idxList[i] = delCtx.DelIdx[i][0]
-	}
-	affectedRows, err = colexec.FilterAndDelByRowId(proc, bat, idxList, delCtx.DelSource)
-	if err != nil {
-		return false, err
-	}
-	atomic.AddUint64(&p.AffectedRows, affectedRows)
 	return false, nil
 }

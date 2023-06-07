@@ -167,6 +167,9 @@ func (c *client) maybeInitBackends() error {
 }
 
 func (c *client) Send(ctx context.Context, backend string, request Message) (*Future, error) {
+	if ctx == nil {
+		panic("client Send nil context")
+	}
 	for {
 		b, err := c.getBackend(backend, false)
 		if err != nil {
@@ -197,6 +200,9 @@ func (c *client) NewStream(backend string, lock bool) (Stream, error) {
 }
 
 func (c *client) Ping(ctx context.Context, backend string) error {
+	if ctx == nil {
+		panic("client Ping nil context")
+	}
 	for {
 		b, err := c.getBackend(backend, false)
 		if err != nil {
@@ -350,7 +356,7 @@ func (c *client) triggerGCInactive(remote string) {
 }
 
 func (c *client) gcInactiveTask(ctx context.Context) {
-	c.logger.Info("gc inactive backends task started")
+	c.logger.Debug("gc inactive backends task started")
 	defer c.logger.Error("gc inactive backends task stopped")
 
 	for {

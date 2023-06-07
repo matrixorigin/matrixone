@@ -159,6 +159,10 @@ func (s *StorageTxnOperator) Txn() txn.TxnMeta {
 	return s.meta
 }
 
+func (s *StorageTxnOperator) TxnRef() *txn.TxnMeta {
+	return &s.meta
+}
+
 func (s *StorageTxnOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 
 	// set op txn meta
@@ -226,6 +230,6 @@ func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
 	panic("should not call")
 }
 
-func (s *StorageTxnOperator) UpdateSnapshot(ts timestamp.Timestamp) error {
+func (s *StorageTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
 }

@@ -100,11 +100,13 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	// Init and start txn manager
 	db.TransferTable = model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	txnStoreFactory := txnimpl.TxnStoreFactory(
+		opts.Ctx,
 		db.Opts.Catalog,
 		db.Wal,
 		db.TransferTable,
 		indexCache,
-		dataFactory)
+		dataFactory,
+		opts.MaxMessageSize)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewManager(

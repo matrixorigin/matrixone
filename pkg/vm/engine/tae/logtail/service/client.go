@@ -19,9 +19,11 @@ import (
 	"sync"
 
 	"go.uber.org/ratelimit"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 )
@@ -57,6 +59,7 @@ func NewLogtailClient(stream morpc.Stream, opts ...ClientOption) (*LogtailClient
 
 	recvChan, err := stream.Receive()
 	if err != nil {
+		logutil.Error("logtail client: fail to fetch message channel from morpc stream", zap.Error(err))
 		return nil, err
 	}
 	client.recvChan = recvChan
@@ -72,7 +75,11 @@ func NewLogtailClient(stream morpc.Stream, opts ...ClientOption) (*LogtailClient
 
 // Close closes stream.
 func (c *LogtailClient) Close() error {
-	return c.stream.Close(true)
+	err := c.stream.Close(true)
+	if err != nil {
+		logutil.Error("logtail client: fail to close morpc stream", zap.Error(err))
+	}
+	return err
 }
 
 // Subscribe subscribes table.
@@ -80,6 +87,7 @@ func (c *LogtailClient) Subscribe(
 	ctx context.Context, table api.TableID,
 ) error {
 	if c.streamBroken() {
+		logutil.Error("logtail client: subscribe via broken morpc stream")
 		return moerr.NewStreamClosedNoCtx()
 	}
 
@@ -92,7 +100,12 @@ func (c *LogtailClient) Subscribe(
 		},
 	}
 	request.SetID(c.stream.ID())
-	return c.stream.Send(ctx, request)
+
+	err := c.stream.Send(ctx, request)
+	if err != nil {
+		logutil.Error("logtail client: fail to subscribe via morpc stream", zap.Error(err))
+	}
+	return err
 }
 
 // Unsubscribe cancel subscription for table.
@@ -100,6 +113,7 @@ func (c *LogtailClient) Unsubscribe(
 	ctx context.Context, table api.TableID,
 ) error {
 	if c.streamBroken() {
+		logutil.Error("logtail client: unsubscribe via broken morpc stream")
 		return moerr.NewStreamClosedNoCtx()
 	}
 
@@ -112,7 +126,11 @@ func (c *LogtailClient) Unsubscribe(
 		},
 	}
 	request.SetID(c.stream.ID())
-	return c.stream.Send(ctx, request)
+	err := c.stream.Send(ctx, request)
+	if err != nil {
+		logutil.Error("logtail client: fail to unsubscribe via morpc stream", zap.Error(err))
+	}
+	return err
 }
 
 // Receive fetches logtail response.
@@ -121,14 +139,22 @@ func (c *LogtailClient) Unsubscribe(
 // 2. response for subscription: *LogtailResponse.GetSubscribeResponse() != nil
 // 3. response for unsubscription: *LogtailResponse.GetUnsubscribeResponse() != nil
 // 3. response for incremental logtail: *LogtailResponse.GetUpdateResponse() != nil
-func (c *LogtailClient) Receive() (*LogtailResponse, error) {
+func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 	recvFunc := func() (*LogtailResponseSegment, error) {
 		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+
 		case <-c.broken:
 			return nil, moerr.NewStreamClosedNoCtx()
 
 		case message, ok := <-c.recvChan:
 			if !ok || message == nil {
+				logutil.Error("logtail client: morpc stream broken",
+					zap.Bool("is message nil", message == nil),
+					zap.Bool("is message channel closed", !ok),
+				)
+
 				// mark stream as broken
 				c.once.Do(func() { close(c.broken) })
 				return nil, moerr.NewStreamClosedNoCtx()
@@ -155,6 +181,7 @@ func (c *LogtailClient) Receive() (*LogtailResponse, error) {
 
 	resp := &LogtailResponse{}
 	if err := resp.Unmarshal(buf); err != nil {
+		logutil.Error("logtail client: fail to unmarshal logtail response", zap.Error(err))
 		return nil, err
 	}
 	return resp, nil

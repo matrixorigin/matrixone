@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions, buf *bytes.Buffer) error {
@@ -39,6 +39,7 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			buf.WriteString(strconv.Itoa(int(exprImpl.Col.ColPos)))
 			buf.WriteString("]")
 		}
+
 	case *plan.Expr_C:
 		if exprImpl.C.Isnull {
 			buf.WriteString("(null)")
@@ -66,6 +67,12 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			fmt.Fprintf(buf, "%v", strconv.FormatFloat(float64(val.Fval), 'f', -1, 32))
 		case *plan.Const_Dval:
 			fmt.Fprintf(buf, "%v", strconv.FormatFloat(val.Dval, 'f', -1, 64))
+		case *plan.Const_Dateval:
+			fmt.Fprintf(buf, "%s", types.Date(val.Dateval))
+		case *plan.Const_Datetimeval:
+			fmt.Fprintf(buf, "%s", types.Date(val.Datetimeval))
+		case *plan.Const_Timeval:
+			fmt.Fprintf(buf, "%s", types.Date(val.Timeval))
 		case *plan.Const_Sval:
 			buf.WriteString("'" + val.Sval + "'")
 		case *plan.Const_Bval:
@@ -82,6 +89,39 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		err := funcExprExplain(ctx, funcExpr, expr.Typ, options, buf)
 		if err != nil {
 			return err
+		}
+	case *plan.Expr_W:
+		w := exprImpl.W
+		funcExpr := w.WindowFunc.Expr.(*plan.Expr_F)
+		err := funcExprExplain(ctx, funcExpr, expr.Typ, options, buf)
+		if err != nil {
+			return err
+		}
+
+		if len(w.PartitionBy) > 0 {
+			buf.WriteString("; Partition By: ")
+			for i, arg := range w.PartitionBy {
+				if i > 0 {
+					buf.WriteString(", ")
+				}
+				err = describeExpr(ctx, arg, options, buf)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		if len(w.OrderBy) > 0 {
+			buf.WriteString("; Order By: ")
+			for i, arg := range w.OrderBy {
+				if i > 0 {
+					buf.WriteString(", ")
+				}
+				err = describeExpr(ctx, arg.Expr, options, buf)
+				if err != nil {
+					return err
+				}
+			}
 		}
 	case *plan.Expr_Sub:
 		subqryExpr := expr.Expr.(*plan.Expr_Sub)
@@ -202,8 +242,8 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		// TODO need rewrite to deal with case is nil
 		buf.WriteString("CASE")
 		// case when expression has two part(case when condition and else exression)
-		condSize := len(funcExpr.F.Args) / 2
-		for i := 0; i < condSize; i++ {
+		condSize := len(funcExpr.F.Args) - 1
+		for i := 0; i < condSize; i += 2 {
 			whenExpr := funcExpr.F.Args[i]
 			thenExpr := funcExpr.F.Args[i+1]
 			buf.WriteString(" WHEN ")

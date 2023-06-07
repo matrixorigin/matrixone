@@ -143,14 +143,14 @@ func logLocalLockWaitOn(
 	serviceID string,
 	txn *activeTxn,
 	tableID uint64,
-	waiter *waiter,
+	w *waiter,
 	key []byte,
 	waitOn Lock) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		var waits [][]byte
-		waitOn.waiter.waiters.iter(func(b []byte) bool {
-			waits = append(waits, b)
+		waitOn.waiter.waiters.iter(func(v *waiter) bool {
+			waits = append(waits, v.txnID)
 			return true
 		})
 
@@ -158,7 +158,7 @@ func logLocalLockWaitOn(
 			serviceIDField(serviceID),
 			txnField(txn),
 			zap.Uint64("table", tableID),
-			zap.Stringer("waiter", waiter),
+			zap.Stringer("waiter", w),
 			bytesField("wait-on-key", key),
 			zap.Stringer("wait-on", waitOn),
 			bytesArrayField("wait-txn-list", waits))
@@ -604,13 +604,15 @@ func logWaiterClose(
 func logWaiterFetchNextWaiter(
 	serviceID string,
 	w *waiter,
-	next *waiter) {
+	next *waiter,
+	v notifyValue) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("notify next waiter",
 			serviceIDField(serviceID),
 			zap.Stringer("waiter", w),
-			zap.Stringer("next-waiter", next))
+			zap.Stringer("next-waiter", next),
+			zap.Any("notify", v))
 	}
 }
 

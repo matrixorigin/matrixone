@@ -191,12 +191,12 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 			metaLocBat.Vecs[0].Append([]byte(blkMetas[offset+i]), false)
 		}
 		offset += 50
-		metaLocMoBat := containers.CopyToCNBatch(metaLocBat)
+		metaLocMoBat := containers.ToCNBatch(metaLocBat)
 		addS3BlkEntry, err := makePBEntry(INSERT, dbTestID,
 			tbTestID, dbName, schema.Name, obj.String(), metaLocMoBat)
 		assert.NoError(t, err)
 		entries = append(entries, addS3BlkEntry)
-		metaLocBat.Close()
+		defer metaLocBat.Close()
 	}
 	err = handle.HandlePreCommit(
 		context.TODO(),
@@ -261,10 +261,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	assert.Nil(t, err)
 
 	moBats := make([]*batch.Batch, 4)
-	moBats[0] = containers.CopyToCNBatch(taeBats[0])
-	moBats[1] = containers.CopyToCNBatch(taeBats[1])
-	moBats[2] = containers.CopyToCNBatch(taeBats[2])
-	moBats[3] = containers.CopyToCNBatch(taeBats[3])
+	moBats[0] = containers.ToCNBatch(taeBats[0])
+	moBats[1] = containers.ToCNBatch(taeBats[1])
+	moBats[2] = containers.ToCNBatch(taeBats[2])
+	moBats[3] = containers.ToCNBatch(taeBats[3])
 
 	//write taeBats[0], taeBats[1] two blocks into file service
 	objName1 := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
@@ -382,7 +382,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	metaLocBat1 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc1), false)
 	metaLocBat1.Vecs[0].Append([]byte(metaLoc2), false)
-	metaLocMoBat1 := containers.CopyToCNBatch(metaLocBat1)
+	metaLocMoBat1 := containers.ToCNBatch(metaLocBat1)
 	addS3BlkEntry1, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName1.String(), metaLocMoBat1)
 	assert.NoError(t, err)
@@ -395,7 +395,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	//add one non-appendable block from S3 into "tbtest" table
 	metaLocBat2 := containers.BuildBatch(attrs, vecTypes, vecOpts)
 	metaLocBat2.Vecs[0].Append([]byte(metaLoc3), false)
-	metaLocMoBat2 := containers.CopyToCNBatch(metaLocBat2)
+	metaLocMoBat2 := containers.ToCNBatch(metaLocBat2)
 	addS3BlkEntry2, err := makePBEntry(INSERT, dbTestID,
 		tbTestID, dbName, schema.Name, objName2.String(), metaLocMoBat2)
 	assert.NoError(t, err)
@@ -430,7 +430,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	it := tbH.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		cv, err := blk.GetColumnDataByName(schema.ColDefs[1].Name)
+		cv, err := blk.GetColumnDataByName(context.Background(), schema.ColDefs[1].Name)
 		assert.NoError(t, err)
 		defer cv.Close()
 		rows += cv.Length()
@@ -509,7 +509,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	delLocBat.Vecs[0].Append([]byte(delLoc3), false)
 	delLocBat.Vecs[0].Append([]byte(delLoc4), false)
 
-	delLocMoBat := containers.CopyToCNBatch(delLocBat)
+	delLocMoBat := containers.ToCNBatch(delLocBat)
 	var delApiEntries []*api.Entry
 	deleteS3BlkEntry, err := makePBEntry(DELETE, dbTestID,
 		tbTestID, dbName, schema.Name, objName3.String(), delLocMoBat)
@@ -543,7 +543,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	it = tbH.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		cv, err := blk.GetColumnDataByName(schema.ColDefs[1].Name)
+		cv, err := blk.GetColumnDataByName(context.Background(), schema.ColDefs[1].Name)
 		assert.NoError(t, err)
 		defer cv.Close()
 		cv.ApplyDeletes()
@@ -694,7 +694,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 
 	//DML: insert batch into table
 	insertTxn := mock1PCTxn(handle.db)
-	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100))
+	moBat := containers.ToCNBatch(catalog.MockBatch(schema, 100))
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -729,7 +729,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	it := tbH.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		cv, err := blk.GetColumnDataByName(schema.ColDefs[1].Name)
+		cv, err := blk.GetColumnDataByName(context.Background(), schema.ColDefs[1].Name)
 		assert.NoError(t, err)
 		defer cv.Close()
 		assert.Equal(t, 100, cv.Length())
@@ -743,7 +743,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 
 	it = tbH.MakeBlockIt()
 	blk := it.GetBlock()
-	cv, err := blk.GetColumnDataByName(hideCol[0].Name)
+	cv, err := blk.GetColumnDataByName(context.Background(), hideCol[0].Name)
 	assert.NoError(t, err)
 	defer cv.Close()
 	assert.NoError(t, txn.Commit())
@@ -786,7 +786,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	it = tbH.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		v, err := blk.GetColumnDataByName(schema.ColDefs[1].Name)
+		v, err := blk.GetColumnDataByName(context.Background(), schema.ColDefs[1].Name)
 		assert.NoError(t, err)
 		defer v.Close()
 		v.ApplyDeletes()
@@ -933,7 +933,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	assert.NoError(t, err)
 
 	//DML::insert batch into table
-	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100))
+	moBat := containers.ToCNBatch(catalog.MockBatch(schema, 100))
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -960,7 +960,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	//insert 20 rows, then rollback the txn
 	//FIXME::??
 	//batch.SetLength(moBat, 20)
-	moBat = containers.CopyToCNBatch(catalog.MockBatch(schema, 20))
+	moBat = containers.ToCNBatch(catalog.MockBatch(schema, 20))
 	insertEntry, err = makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -991,7 +991,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	it := tbH.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		v, err := blk.GetColumnDataByName(schema.ColDefs[1].Name)
+		v, err := blk.GetColumnDataByName(context.Background(), schema.ColDefs[1].Name)
 		assert.NoError(t, err)
 		defer v.Close()
 		assert.Equal(t, 100, v.Length())
@@ -1003,7 +1003,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
 	it = tbH.MakeBlockIt()
-	cv, err := it.GetBlock().GetColumnDataByName(hideCol[0].Name)
+	cv, err := it.GetBlock().GetColumnDataByName(context.Background(), hideCol[0].Name)
 	assert.NoError(t, err)
 	defer cv.Close()
 	_ = it.Close()
@@ -1081,7 +1081,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 
 	it = tbH.MakeBlockIt()
 	for it.Valid() {
-		v, err := it.GetBlock().GetColumnDataByName(schema.ColDefs[1].Name)
+		v, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.ColDefs[1].Name)
 		assert.NoError(t, err)
 		defer v.Close()
 		v.ApplyDeletes()
@@ -1226,7 +1226,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	assert.NoError(t, err)
 
 	//DML::insert batch into table
-	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100))
+	moBat := containers.ToCNBatch(catalog.MockBatch(schema, 100))
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -1252,7 +1252,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	//insert 20 rows ,then rollback
 	//FIXME::??
 	//batch.SetLength(moBat, 20)
-	moBat = containers.CopyToCNBatch(catalog.MockBatch(schema, 20))
+	moBat = containers.ToCNBatch(catalog.MockBatch(schema, 20))
 	insertEntry, err = makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -1276,7 +1276,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	rollbackTxn = mock2PCTxn(handle.db)
 	//insert 10 rows ,then rollback
 	//batch.SetLength(moBat, 10)
-	moBat = containers.CopyToCNBatch(catalog.MockBatch(schema, 10))
+	moBat = containers.ToCNBatch(catalog.MockBatch(schema, 10))
 	insertEntry, err = makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -1304,7 +1304,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	assert.NoError(t, err)
 	it := tbH.MakeBlockIt()
 	for it.Valid() {
-		v, err := it.GetBlock().GetColumnDataByName(schema.ColDefs[1].Name)
+		v, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.ColDefs[1].Name)
 		assert.NoError(t, err)
 		defer v.Close()
 		assert.Equal(t, 100, v.Length())
@@ -1315,7 +1315,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	hideCol, err := GetHideKeysOfTable(tbH)
 	assert.NoError(t, err)
 	it = tbH.MakeBlockIt()
-	v, err := it.GetBlock().GetColumnDataByName(hideCol[0].Name)
+	v, err := it.GetBlock().GetColumnDataByName(context.Background(), hideCol[0].Name)
 	assert.NoError(t, err)
 	defer v.Close()
 	_ = it.Close()
@@ -1393,7 +1393,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 
 	it = tbH.MakeBlockIt()
 	for it.Valid() {
-		v, err := it.GetBlock().GetColumnDataByName(schema.ColDefs[1].Name)
+		v, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.ColDefs[1].Name)
 		assert.NoError(t, err)
 		defer v.Close()
 		v.ApplyDeletes()
@@ -1589,7 +1589,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Wait()
 
 	//DML::insert batch into table
-	moBat := containers.CopyToCNBatch(catalog.MockBatch(schema, 100))
+	moBat := containers.ToCNBatch(catalog.MockBatch(schema, 100))
 	insertEntry, err := makePBEntry(INSERT, dbTestId,
 		tbTestId, dbName, schema.Name, "", moBat)
 	assert.NoError(t, err)
@@ -1621,7 +1621,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 
 		it := tbH.MakeBlockIt()
 		for it.Valid() {
-			v, err := it.GetBlock().GetColumnDataByName(schema.ColDefs[1].Name)
+			v, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.ColDefs[1].Name)
 			assert.NoError(t, err)
 			defer v.Close()
 			assert.Equal(t, 100, v.Length())
@@ -1655,7 +1655,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.NoError(t, err)
 
 		it := tbH.MakeBlockIt()
-		v, err := it.GetBlock().GetColumnDataByName(hideCol[0].Name)
+		v, err := it.GetBlock().GetColumnDataByName(context.Background(), hideCol[0].Name)
 		assert.NoError(t, err)
 		_ = it.Close()
 
@@ -1703,7 +1703,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 
 		it := tbH.MakeBlockIt()
 		for it.Valid() {
-			v, err := it.GetBlock().GetColumnDataByName(schema.ColDefs[1].Name)
+			v, err := it.GetBlock().GetColumnDataByName(context.Background(), schema.ColDefs[1].Name)
 			assert.NoError(t, err)
 			defer v.Close()
 			v.ApplyDeletes()

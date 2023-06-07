@@ -70,6 +70,7 @@ func (b *UpdateBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool)
 		Col: &plan.ColRef{
 			RelPos: 0,
 			ColPos: int32(idx),
+			Name:   col,
 		},
 	}
 	return

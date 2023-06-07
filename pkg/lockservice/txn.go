@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -215,12 +216,18 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 				txnID,
 				lockKey,
 				func(lock Lock) {
-					lock.waiter.waiters.iter(func(id []byte) bool {
-						if txn := holder.getActiveTxn(id, false, ""); txn != nil {
-							hasDeadLock = !waiters(txn.toWaitTxn(serviceID, bytes.Equal(txn.txnID, id)))
-							return !hasDeadLock
+					lock.waiter.waiters.iter(func(w *waiter) bool {
+						wt := w.waitTxn
+						if len(wt.TxnID) == 0 {
+							if txn := holder.getActiveTxn(w.txnID, false, ""); txn != nil {
+								wt = txn.toWaitTxn(serviceID, bytes.Equal(txn.txnID, w.txnID))
+							}
 						}
-						return false
+						if len(wt.TxnID) == 0 {
+							return true
+						}
+						hasDeadLock = !waiters(wt)
+						return !hasDeadLock
 					})
 				})
 			return !hasDeadLock
@@ -233,7 +240,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	return true
 }
 
-func (txn *activeTxn) setBlocked(txnID []byte, w *waiter, locked bool) {
+func (txn *activeTxn) clearBlocked(txnID []byte, locked bool) {
 	if !locked {
 		txn.Lock()
 		defer txn.Unlock()
@@ -244,10 +251,29 @@ func (txn *activeTxn) setBlocked(txnID []byte, w *waiter, locked bool) {
 		panic("invalid set Blocked")
 	}
 
-	txn.blockedWaiter = w
-	if w != nil {
-		return
+	txn.blockedWaiter = nil
+}
+
+func (txn *activeTxn) setBlocked(txnID []byte, w *waiter, locked bool) {
+	if !locked {
+		txn.Lock()
+		defer txn.Unlock()
 	}
+
+	if w == nil {
+		panic("invalid waiter")
+	}
+
+	// txn already closed
+	if !bytes.Equal(txn.txnID, txnID) {
+		panic("invalid set Blocked")
+	}
+
+	if !w.casStatus("", ready, blocking) {
+		panic(fmt.Sprintf("invalid waiter status %d, %s", w.getStatus(), w))
+	}
+
+	txn.blockedWaiter = w
 }
 
 func (txn *activeTxn) isRemoteLocked() bool {

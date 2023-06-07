@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -158,14 +159,19 @@ func mergeSort(proc *process.Process, bat2 *batch.Batch,
 }
 
 func (ctr *container) mergeSort2(bat2 *batch.Batch, proc *process.Process) error {
-	var err error
 	if ctr.bat == nil {
 		ctr.bat = bat2
-		ctr.bat, err = bat2.Dup(proc.Mp())
-		if err != nil {
-			return err
+		for i, vec := range ctr.bat.Vecs {
+			if vec.IsConst() {
+				typ := *vec.GetType()
+				rvec := vector.NewVec(typ)
+				if err := vector.GetUnionAllFunction(typ, proc.Mp())(rvec, vec); err != nil {
+					return err
+				}
+				ctr.bat.Vecs[i] = rvec
+				vec.Free(proc.Mp())
+			}
 		}
-		bat2.Clean(proc.Mp())
 		ctr.finalSelectList = generateSelectList(int64(ctr.bat.Length()))
 		copy(ctr.compare0Index, ctr.poses)
 		return nil

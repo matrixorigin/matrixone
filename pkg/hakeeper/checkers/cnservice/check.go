@@ -15,23 +15,34 @@
 package cnservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 func Check(cfg hakeeper.Config, infos pb.CNState, user pb.TaskTableUser, currentTick uint64) (operators []*operator.Operator) {
 	if user.Username == "" {
+		runtime.ProcessLevelRuntime().Logger().Warn("username is still empty.")
 		return
 	}
 	working, expired := parseCNStores(cfg, infos, currentTick)
+	if len(working)+len(expired) == 0 {
+		runtime.ProcessLevelRuntime().Logger().Error("there are no CNs yet.")
+		return
+	}
 	for _, store := range working {
 		if !infos.Stores[store].TaskServiceCreated {
+			runtime.ProcessLevelRuntime().Logger().Info("create task service for CN.",
+				zap.String("uuid", store))
 			operators = append(operators, operator.CreateTaskServiceOp("",
 				store, pb.CNService, user))
 		}
 	}
 	for _, store := range expired {
+		runtime.ProcessLevelRuntime().Logger().Warn("expired CN.",
+			zap.String("uuid", store))
 		operators = append(operators, operator.CreateDeleteCNOp("", store))
 	}
 	return operators

@@ -18,7 +18,6 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 func Acos(v float64) (float64, error) {
@@ -32,19 +31,6 @@ func Acos(v float64) (float64, error) {
 
 func Atan(v float64) (float64, error) {
 	return math.Atan(v), nil
-}
-
-func AtanWithTwoArg(firstArg, secondArg, result *vector.Vector) error {
-	firstCol := vector.MustFixedCol[float64](firstArg)
-	secondCol := vector.MustFixedCol[float64](secondArg)
-	resCol := vector.MustFixedCol[float64](result)
-	for i, v := range firstCol {
-		if v == 0 {
-			return moerr.NewInvalidArgNoCtx("Atan first input", 0)
-		}
-		resCol[i] = math.Atan(secondCol[i] / v)
-	}
-	return nil
 }
 
 func Cos(v float64) (float64, error) {
