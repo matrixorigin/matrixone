@@ -69,6 +69,9 @@ func (ui *UserInput) getSqlSourceTypes() []string {
 	return ui.sqlSourceType
 }
 
+// isInternal return true if the stmt is not nil.
+// it means the statement is not from any client.
+// currently, we use it to handle the 'set_var' statement.
 func (ui *UserInput) isInternal() bool {
 	return ui.getStmt() != nil
 }
@@ -126,7 +129,7 @@ var _ StmtExecutor = &resultSetStmtExecutor{}
 func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec StmtExecutor, beginInstant time.Time, envStmt, sqlType string, useEnv bool) error {
 	var err, err2 error
 	var cmpBegin, runBegin time.Time
-	ctx = RecordStatement(ctx, ses, proc, stmtExec, beginInstant, envStmt, sqlType, useEnv)
+	ctx = RecordStatement(ctx, ses, proc, stmtExec, beginInstant, envStmt, sqlType, useEnv, nil)
 	err = stmtExec.Setup(ctx, ses)
 	if err != nil {
 		goto handleRet
