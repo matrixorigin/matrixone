@@ -553,7 +553,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	tbl.db.txn.mergeTxnWorkspace()
 	tbl.db.txn.DumpBatch(false, 0)
 	tbl.writes = tbl.writes[:0]
-	tbl.writesOffset = len(tbl.db.txn.writes)
+	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
 
 	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
 
