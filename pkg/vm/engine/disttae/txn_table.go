@@ -595,7 +595,7 @@ func (tbl *txnTable) ApplyRuntimeFilters(ctx context.Context, blocks [][]byte, e
 
 	for i, filter := range filters {
 		switch filter.Typ {
-		case pipeline.RuntimeFilter_In:
+		case pipeline.RuntimeFilter_IN:
 			vec := vector.NewVec(types.T_any.ToType())
 			err = vec.UnmarshalBinary(filter.Data)
 			if err != nil {
@@ -605,7 +605,7 @@ func (tbl *txnTable) ApplyRuntimeFilters(ctx context.Context, blocks [][]byte, e
 				InList: vec,
 			}
 
-		case pipeline.RuntimeFilter_ZoneMap:
+		case pipeline.RuntimeFilter_MIN_MAX:
 			evaluators[i] = &RuntimeZonemapFilter{
 				Zm: objectio.ZoneMap(filter.Data),
 			}

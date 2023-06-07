@@ -279,6 +279,7 @@ message HashBuild {
   uint64 nbucket = 4;
   repeated plan.Type types = 5;
   repeated plan.Expr conds = 6;
+  repeated plan.RuntimeFilterSpec runtime_filter_list = 7;
 }
 
 message ExternalName2ColIndex {
@@ -357,6 +358,7 @@ message Source {
   plan.Expr  expr = 7;
   plan.TableDef tableDef = 8;
   timestamp.Timestamp timestamp = 9;
+  repeated plan.RuntimeFilterSpec runtime_filter_list = 10;
 }
 
 message NodeInfo {
@@ -434,10 +436,11 @@ message UuidToRegIdx {
 
 message RuntimeFilter {
   enum RuntimeFilterType {
-    Empty = 0;
-    In = 1;
-    ZoneMap = 2;
-    BinaryFuse = 3;
+    NO_FILTER = 0;
+    IN = 1;
+    BITMAP = 2;
+    MIN_MAX = 3;
+    BINARY_FUSE = 4;
   }
 
   RuntimeFilterType typ = 1;
