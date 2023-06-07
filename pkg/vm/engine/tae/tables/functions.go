@@ -185,7 +185,7 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 			}
 		}()
 		return containers.ForeachWindowVarlen(
-			vec,
+			vec.GetDownstreamVector(),
 			0,
 			vec.Length(),
 			func(v2 []byte, _ bool, row int) (err error) {
@@ -223,7 +223,7 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 				}
 			}()
 			return containers.ForeachWindowFixed(
-				vec,
+				vec.GetDownstreamVector(),
 				0,
 				vec.Length(),
 				func(v2 T, _ bool, row int) (err error) {

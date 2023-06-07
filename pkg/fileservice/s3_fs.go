@@ -29,7 +29,6 @@ import (
 	"strings"
 	"time"
 
-	alicredentials "github.com/aliyun/credentials-go/credentials"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -936,29 +935,15 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		credentialProvider = credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
 	}
 
-	// credentials for Aliyun
-	if credentialProvider == nil &&
-		endpointURL != nil &&
-		strings.Contains(endpointURL.Hostname(), "aliyuncs.com") {
-		credentialProvider = aws.CredentialsProviderFunc(
-			func(_ context.Context) (cs aws.Credentials, err error) {
-				aliCredential, err := alicredentials.NewCredential(nil)
-				if err != nil {
-					return
-				}
-				accessKeyID, err := aliCredential.GetAccessKeyId()
-				if err != nil {
-					return
-				}
-				cs.AccessKeyID = *accessKeyID
-				secretAccessKey, err := aliCredential.GetAccessKeySecret()
-				if err != nil {
-					return
-				}
-				cs.SecretAccessKey = *secretAccessKey
-				return
-			},
-		)
+	// credentials for 3rd-party services
+	if credentialProvider == nil && endpointURL != nil {
+		hostname := endpointURL.Hostname()
+		if strings.Contains(hostname, "aliyuncs.com") {
+			credentialProvider = newAliyunCredentialsProvider()
+		} else if strings.Contains(hostname, "myqcloud.com") ||
+			strings.Contains(hostname, "tencentcos.cn") {
+			credentialProvider = newTencentCloudCredentialsProvider()
+		}
 	}
 
 	// role arn credential
