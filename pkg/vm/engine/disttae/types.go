@@ -459,14 +459,15 @@ type ModifyBlockMeta struct {
 	deletes []int64
 }
 
-func (m *ModifyBlockMeta) copy() *ModifyBlockMeta {
-	if m == nil {
-		return nil
+func (m ModifyBlockMeta) copy() ModifyBlockMeta {
+	c := ModifyBlockMeta{
+		meta: m.meta,
 	}
-	c := *m
-	c.deletes = make([]int64, len(m.deletes))
-	copy(c.deletes, m.deletes)
-	return &c
+	if m.deletes != nil {
+		c.deletes = make([]int64, len(m.deletes))
+		copy(c.deletes, m.deletes)
+	}
+	return c
 }
 
 type pkRange struct {
