@@ -131,7 +131,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 	if bat != nil {
 		var err error
-		joinMap := bat.Ht.(*hashmap.JoinMap)
+		joinMap := bat.AuxData.(*hashmap.JoinMap)
 		ctr.evalNullSels(bat)
 		ctr.nullWithBatch, err = DumpBatch(bat, proc, ctr.nullSels)
 		if err != nil {
@@ -369,7 +369,7 @@ func (ctr *container) EvalEntire(pbat, bat *batch.Batch, idx int, proc *process.
 
 // collect the idx of tuple which contains null values
 func (ctr *container) evalNullSels(bat *batch.Batch) {
-	joinMap := bat.Ht.(*hashmap.JoinMap)
+	joinMap := bat.AuxData.(*hashmap.JoinMap)
 	jmSels := joinMap.Sels()
 	selsMap := make(map[int32]bool)
 	for _, sel := range jmSels {
