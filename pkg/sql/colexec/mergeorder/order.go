@@ -278,6 +278,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 					ctr.generateCompares(ap.OrderBySpecs)
 					ctr.indexList = make([]int64, len(ctr.batchList))
 				}
+				continue
 			}
 
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
