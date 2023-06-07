@@ -815,7 +815,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *offset.Argument:
 		in.Offset = t.Offset
 	case *order.Argument:
-		in.OrderBy = t.OrderInformation
+		in.OrderBy = t.OrderBySpec
 	case *product.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -881,7 +881,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Limit = uint64(t.Limit)
 		in.OrderBy = t.Fs
 	case *mergeorder.Argument:
-		in.OrderBy = t.OrderInformation
+		in.OrderBy = t.OrderBySpecs
 	case *connector.Argument:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
 		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
@@ -1174,7 +1174,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Offset:
 		v.Arg = &offset.Argument{Offset: opr.Offset}
 	case vm.Order:
-		v.Arg = &order.Argument{OrderInformation: opr.OrderBy}
+		v.Arg = &order.Argument{OrderBySpec: opr.OrderBy}
 	case vm.Product:
 		t := opr.GetProduct()
 		v.Arg = &product.Argument{
@@ -1266,7 +1266,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.MergeOrder:
 		v.Arg = &mergeorder.Argument{
-			OrderInformation: opr.OrderBy,
+			OrderBySpecs: opr.OrderBy,
 		}
 	case vm.TableFunction:
 		v.Arg = &table_function.Argument{

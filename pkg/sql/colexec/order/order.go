@@ -32,7 +32,7 @@ const maxBatchSizeToSort = 64 * mpool.MB
 type Argument struct {
 	ctr *container
 
-	OrderInformation []*plan.OrderBySpec
+	OrderBySpec []*plan.OrderBySpec
 }
 
 type container struct {
@@ -205,7 +205,7 @@ func (ctr *container) sortAndSend(proc *process.Process) (err error) {
 func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
 	buf.WriteString("τ([")
-	for i, f := range ap.OrderInformation {
+	for i, f := range ap.OrderBySpec {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
@@ -219,10 +219,10 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	ap.ctr = new(container)
 	ctr := ap.ctr
 	{
-		ctr.desc = make([]bool, len(ap.OrderInformation))
-		ctr.nullsLast = make([]bool, len(ap.OrderInformation))
-		ctr.sortVectors = make([]*vector.Vector, len(ap.OrderInformation))
-		for i, f := range ap.OrderInformation {
+		ctr.desc = make([]bool, len(ap.OrderBySpec))
+		ctr.nullsLast = make([]bool, len(ap.OrderBySpec))
+		ctr.sortVectors = make([]*vector.Vector, len(ap.OrderBySpec))
+		for i, f := range ap.OrderBySpec {
 			ctr.desc[i] = f.Flag&pbplan.OrderBySpec_DESC != 0
 			if f.Flag&pbplan.OrderBySpec_NULLS_FIRST != 0 {
 				ap.ctr.nullsLast[i] = false
@@ -234,10 +234,10 @@ func Prepare(proc *process.Process, arg any) (err error) {
 		}
 	}
 
-	ctr.sortVectors = make([]*vector.Vector, len(ap.OrderInformation))
-	ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(ap.OrderInformation))
+	ctr.sortVectors = make([]*vector.Vector, len(ap.OrderBySpec))
+	ctr.sortExprExecutor = make([]colexec.ExpressionExecutor, len(ap.OrderBySpec))
 	for i := range ctr.sortVectors {
-		ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, ap.OrderInformation[i].Expr)
+		ctr.sortExprExecutor[i], err = colexec.NewExpressionExecutor(proc, ap.OrderBySpec[i].Expr)
 		if err != nil {
 			return err
 		}

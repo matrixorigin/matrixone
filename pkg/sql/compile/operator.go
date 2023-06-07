@@ -219,7 +219,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Order:
 		t := sourceIns.Arg.(*order.Argument)
 		res.Arg = &order.Argument{
-			OrderInformation: t.OrderInformation,
+			OrderBySpec: t.OrderBySpec,
 		}
 	case vm.Product:
 		t := sourceIns.Arg.(*product.Argument)
@@ -307,7 +307,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.MergeOrder:
 		t := sourceIns.Arg.(*mergeorder.Argument)
 		res.Arg = &mergeorder.Argument{
-			OrderInformation: t.OrderInformation,
+			OrderBySpecs: t.OrderBySpecs,
 		}
 	case vm.Mark:
 		t := sourceIns.Arg.(*mark.Argument)
@@ -815,7 +815,7 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 
 func constructOrder(n *plan.Node) *order.Argument {
 	return &order.Argument{
-		OrderInformation: n.OrderBy,
+		OrderBySpec: n.OrderBy,
 	}
 }
 
@@ -1161,7 +1161,7 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 
 func constructMergeOrder(n *plan.Node) *mergeorder.Argument {
 	return &mergeorder.Argument{
-		OrderInformation: n.OrderBy,
+		OrderBySpecs: n.OrderBy,
 	}
 }
 

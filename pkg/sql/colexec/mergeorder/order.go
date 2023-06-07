@@ -29,15 +29,21 @@ import (
 
 const maxBatchSizeToSend = 64 * mpool.MB
 
+const (
+	receiving = iota
+	sending   = 1
+)
+
 type Argument struct {
 	ctr *container
 
-	OrderInformation []*plan.OrderBySpec
+	OrderBySpecs []*plan.OrderBySpec
 }
 
 type container struct {
 	colexec.ReceiverOperator
 
+	status int
 	// receiveOver and sendOver are the flags to indicate whether
 	// this operator has received all the data from the child pipelines.
 	// and send all the data to the next operator.
@@ -125,10 +131,9 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 		typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
 		ctr.compares[i] = compare.New(typ, desc, nullsLast)
 	}
-	return
 }
 
-func (ctr *container) pickAndSend(proc *process.Process) error {
+func (ctr *container) pickAndSend(proc *process.Process) (sendOver bool, err error) {
 	bat := batch.NewWithSize(ctr.batchList[0].VectorCount())
 	mp := proc.Mp()
 
@@ -140,10 +145,10 @@ func (ctr *container) pickAndSend(proc *process.Process) error {
 	for {
 		choice := ctr.pickFirstRow()
 		for j := range bat.Vecs {
-			err := bat.Vecs[j].UnionOne(ctr.batchList[choice].Vecs[j], ctr.indexList[choice], mp)
+			err = bat.Vecs[j].UnionOne(ctr.batchList[choice].Vecs[j], ctr.indexList[choice], mp)
 			if err != nil {
 				bat.Clean(mp)
-				return err
+				return false, err
 			}
 		}
 
@@ -154,7 +159,7 @@ func (ctr *container) pickAndSend(proc *process.Process) error {
 		}
 
 		if len(ctr.indexList) == 0 {
-			ctr.sendOver = true
+			sendOver = true
 			break
 		}
 		if bat.Size() >= maxBatchSizeToSend {
@@ -164,7 +169,7 @@ func (ctr *container) pickAndSend(proc *process.Process) error {
 	bat.SetZs(wholeLength, mp)
 
 	proc.SetInputBatch(bat)
-	return nil
+	return sendOver, nil
 }
 
 func (ctr *container) pickFirstRow() (batIndex int) {
@@ -193,10 +198,6 @@ func (ctr *container) pickFirstRow() (batIndex int) {
 	return 0
 }
 
-func (ctr *container) removeIndexListItem(index int) {
-	ctr.indexList = append(ctr.indexList[:index], ctr.indexList[index+1:]...)
-}
-
 func (ctr *container) removeBatch(proc *process.Process, index int) {
 	bat := ctr.batchList[index]
 	cols := ctr.orderCols[index]
@@ -223,7 +224,7 @@ func (ctr *container) removeBatch(proc *process.Process, index int) {
 func String(arg any, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
 	buf.WriteString("mergeorder([")
-	for i, f := range ap.OrderInformation {
+	for i, f := range ap.OrderBySpecs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
@@ -242,9 +243,9 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	ctr.batchList = make([]*batch.Batch, 0, length)
 	ctr.orderCols = make([][]*vector.Vector, 0, length)
 
-	ap.ctr.executors = make([]colexec.ExpressionExecutor, len(ap.OrderInformation))
+	ap.ctr.executors = make([]colexec.ExpressionExecutor, len(ap.OrderBySpecs))
 	for i := range ap.ctr.executors {
-		ap.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, ap.OrderInformation[i].Expr)
+		ap.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, ap.OrderBySpecs[i].Expr)
 		if err != nil {
 			return err
 		}
@@ -260,49 +261,43 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 	anal.Start()
 	defer anal.Stop()
 
-	// get batch from receiver and do merge sort.
-	// but do not really sort, just get the order.
-	if !ctr.receiveOver {
-		for {
+	for {
+		switch ctr.status {
+		case receiving:
 			bat, end, err := ctr.ReceiveFromAllRegs(anal)
 			if err != nil {
 				return false, err
 			}
 			if end {
-				if len(ctr.batchList) == 0 {
-					proc.SetInputBatch(nil)
-					return true, nil
+				ctr.status = sending
+				if len(ctr.batchList) > 1 {
+					// evaluate the first batch's order column.
+					if err = ctr.evaluateOrderColumn(proc, 0); err != nil {
+						return false, err
+					}
+					ctr.generateCompares(ap.OrderBySpecs)
+					ctr.indexList = make([]int64, len(ctr.batchList))
 				}
-
-				// If only one batch, no need to sort. just send it.
-				if len(ctr.batchList) == 1 {
-					proc.SetInputBatch(ctr.batchList[0])
-					ctr.batchList[0] = nil
-					return true, nil
-				}
-
-				// evaluate the first batch's order column.
-				if err = ctr.evaluateOrderColumn(proc, 0); err != nil {
-					return false, err
-				}
-				ctr.generateCompares(ap.OrderInformation)
-				ctr.indexList = make([]int64, len(ctr.batchList))
-
-				ctr.receiveOver = true
-				break
 			}
+
 			if err = ctr.mergeAndEvaluateOrderColumn(proc, bat); err != nil {
 				return false, err
 			}
+
+		case sending:
+			if len(ctr.batchList) == 0 {
+				proc.SetInputBatch(nil)
+				return true, nil
+			}
+
+			// If only one batch, no need to sort. just send it.
+			if len(ctr.batchList) == 1 {
+				proc.SetInputBatch(ctr.batchList[0])
+				ctr.batchList[0] = nil
+				return true, nil
+			}
+
+			return ctr.pickAndSend(proc)
 		}
 	}
-
-	// then use the order to get the data from the batch.
-	err := ctr.pickAndSend(proc)
-	if ctr.sendOver {
-		a := 1
-		_ = a
-	}
-
-	return ctr.sendOver, err
 }
