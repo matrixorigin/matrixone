@@ -947,13 +947,14 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		ReCalcNodeStats(rootID, builder, true, false)
 		builder.applySwapRuleByStats(rootID, true)
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
-		determinShuffleMethod(rootID, builder)
 		builder.qry.Steps[i] = rootID
 
 		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 
+		//after determine shuffle method, never call ReCalcNodeStats again
+		determineShuffleMethod(rootID, builder)
 		builder.pushdownRuntimeFilters(rootID)
 
 		colRefCnt = make(map[[2]int32]int)
