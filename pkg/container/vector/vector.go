@@ -70,6 +70,7 @@ func (v *Vector) SetSorted(b bool) {
 
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
+	v.class = FLAT
 	//v.data = v.data[:0]
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -128,6 +129,14 @@ func (v *Vector) SetNulls(nsp *nulls.Nulls) {
 	}
 }
 
+func (v *Vector) HasNull() bool {
+	return v.IsConstNull() || !v.nsp.IsEmpty()
+}
+
+func (v *Vector) AllNull() bool {
+	return v.IsConstNull() || (v.length != 0 && v.nsp.Count() == v.length)
+}
+
 func (v *Vector) GetIsBin() bool {
 	return v.isBin
 }
@@ -153,6 +162,19 @@ func (v *Vector) GetBytesAt(i int) []byte {
 	}
 	bs := v.col.([]types.Varlena)
 	return bs[i].GetByteSlice(v.area)
+}
+
+func (v *Vector) GetRawBytesAt(i int) []byte {
+	if v.typ.IsVarlen() {
+		return v.GetBytesAt(i)
+	} else {
+		if v.IsConst() {
+			i = 0
+		} else {
+			i *= v.GetType().TypeSize()
+		}
+		return v.data[i : i+v.GetType().TypeSize()]
+	}
 }
 
 func (v *Vector) CleanOnlyData() {
@@ -225,6 +247,16 @@ func (v *Vector) IsConst() bool {
 
 func (v *Vector) SetClass(class int) {
 	v.class = class
+}
+
+func (v *Vector) IsNull(i uint64) bool {
+	if v.IsConstNull() {
+		return true
+	}
+	if v.IsConst() {
+		return false
+	}
+	return v.nsp.Contains(i)
 }
 
 func DecodeFixedCol[T types.FixedSizeT](v *Vector) []T {
@@ -2713,4 +2745,303 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 	}
 
 	return w, nil
+}
+
+// GetMinMaxValue returns the min and max value of the vector.
+// if the length is 0 or all null, return false
+func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
+	if v.Length() == 0 || v.AllNull() {
+		return
+	}
+	ok = true
+	switch v.typ.Oid {
+	case types.T_bool:
+		var minVal, maxVal bool
+		col := MustFixedCol[bool](v)
+		if v.HasNull() {
+			first := true
+			for i, j := 0, len(col); i < j; i++ {
+				if v.IsNull(uint64(i)) {
+					continue
+				}
+				if first {
+					minVal, maxVal = col[i], col[i]
+					first = false
+				} else {
+					minVal = minVal && col[i]
+					maxVal = maxVal && col[i]
+				}
+			}
+		} else {
+			minVal, maxVal = col[0], col[0]
+			for i, j := 1, len(col); i < j; i++ {
+				minVal = minVal && col[i]
+				maxVal = maxVal && col[i]
+			}
+		}
+		minv = types.EncodeBool(&minVal)
+		maxv = types.EncodeBool(&maxVal)
+
+	case types.T_int8:
+		minVal, maxVal := OrderedGetMinAndMax[int8](v)
+		minv = types.EncodeInt8(&minVal)
+		maxv = types.EncodeInt8(&maxVal)
+
+	case types.T_int16:
+		minVal, maxVal := OrderedGetMinAndMax[int16](v)
+		minv = types.EncodeInt16(&minVal)
+		maxv = types.EncodeInt16(&maxVal)
+
+	case types.T_int32:
+		minVal, maxVal := OrderedGetMinAndMax[int32](v)
+		minv = types.EncodeInt32(&minVal)
+		maxv = types.EncodeInt32(&maxVal)
+
+	case types.T_int64:
+		minVal, maxVal := OrderedGetMinAndMax[int64](v)
+		minv = types.EncodeInt64(&minVal)
+		maxv = types.EncodeInt64(&maxVal)
+
+	case types.T_uint8:
+		minVal, maxVal := OrderedGetMinAndMax[uint8](v)
+		minv = types.EncodeUint8(&minVal)
+		maxv = types.EncodeUint8(&maxVal)
+
+	case types.T_uint16:
+		minVal, maxVal := OrderedGetMinAndMax[uint16](v)
+		minv = types.EncodeUint16(&minVal)
+		maxv = types.EncodeUint16(&maxVal)
+
+	case types.T_uint32:
+		minVal, maxVal := OrderedGetMinAndMax[uint32](v)
+		minv = types.EncodeUint32(&minVal)
+		maxv = types.EncodeUint32(&maxVal)
+
+	case types.T_uint64:
+		minVal, maxVal := OrderedGetMinAndMax[uint64](v)
+		minv = types.EncodeUint64(&minVal)
+		maxv = types.EncodeUint64(&maxVal)
+
+	case types.T_float32:
+		minVal, maxVal := OrderedGetMinAndMax[float32](v)
+		minv = types.EncodeFloat32(&minVal)
+		maxv = types.EncodeFloat32(&maxVal)
+
+	case types.T_float64:
+		minVal, maxVal := OrderedGetMinAndMax[float64](v)
+		minv = types.EncodeFloat64(&minVal)
+		maxv = types.EncodeFloat64(&maxVal)
+
+	case types.T_date:
+		minVal, maxVal := OrderedGetMinAndMax[types.Date](v)
+		minv = types.EncodeDate(&minVal)
+		maxv = types.EncodeDate(&maxVal)
+
+	case types.T_datetime:
+		minVal, maxVal := OrderedGetMinAndMax[types.Datetime](v)
+		minv = types.EncodeDatetime(&minVal)
+		maxv = types.EncodeDatetime(&maxVal)
+
+	case types.T_time:
+		minVal, maxVal := OrderedGetMinAndMax[types.Time](v)
+		minv = types.EncodeTime(&minVal)
+		maxv = types.EncodeTime(&maxVal)
+
+	case types.T_timestamp:
+		minVal, maxVal := OrderedGetMinAndMax[types.Timestamp](v)
+		minv = types.EncodeTimestamp(&minVal)
+		maxv = types.EncodeTimestamp(&maxVal)
+
+	case types.T_decimal64:
+		col := MustFixedCol[types.Decimal64](v)
+		var minVal, maxVal types.Decimal64
+		if v.HasNull() {
+			first := true
+			for i, j := 0, len(col); i < j; i++ {
+				if v.IsNull(uint64(i)) {
+					continue
+				}
+				if first {
+					minVal, maxVal = col[i], col[i]
+					first = false
+				} else {
+					if col[i].Less(minVal) {
+						minVal = col[i]
+					}
+					if maxVal.Less(col[i]) {
+
+						maxVal = col[i]
+					}
+				}
+			}
+		} else {
+			minVal, maxVal = col[0], col[0]
+			for i, j := 1, len(col); i < j; i++ {
+				if col[i].Less(minVal) {
+					minVal = col[i]
+				}
+				if maxVal.Less(col[i]) {
+					maxVal = col[i]
+				}
+			}
+		}
+
+		minv = types.EncodeDecimal64(&minVal)
+		maxv = types.EncodeDecimal64(&maxVal)
+
+	case types.T_decimal128:
+		col := MustFixedCol[types.Decimal128](v)
+		var minVal, maxVal types.Decimal128
+		if v.HasNull() {
+			first := true
+			for i, j := 0, len(col); i < j; i++ {
+				if v.IsNull(uint64(i)) {
+					continue
+				}
+				if first {
+					minVal, maxVal = col[i], col[i]
+					first = false
+				} else {
+					if col[i].Less(minVal) {
+						minVal = col[i]
+					}
+					if maxVal.Less(col[i]) {
+
+						maxVal = col[i]
+					}
+				}
+			}
+		} else {
+			minVal, maxVal = col[0], col[0]
+			for i, j := 1, len(col); i < j; i++ {
+				if col[i].Less(minVal) {
+					minVal = col[i]
+				}
+				if maxVal.Less(col[i]) {
+					maxVal = col[i]
+				}
+			}
+		}
+
+		minv = types.EncodeDecimal128(&minVal)
+		maxv = types.EncodeDecimal128(&maxVal)
+
+	case types.T_TS:
+		col := MustFixedCol[types.TS](v)
+		var minVal, maxVal types.TS
+		if v.HasNull() {
+			first := true
+			for i, j := 0, len(col); i < j; i++ {
+				if v.IsNull(uint64(i)) {
+					continue
+				}
+				if first {
+					minVal, maxVal = col[i], col[i]
+					first = false
+				} else {
+					if col[i].Less(minVal) {
+						minVal = col[i]
+					}
+					if maxVal.Less(col[i]) {
+
+						maxVal = col[i]
+					}
+				}
+			}
+		} else {
+			minVal, maxVal = col[0], col[0]
+			for i, j := 1, len(col); i < j; i++ {
+				if col[i].Less(minVal) {
+					minVal = col[i]
+				}
+				if maxVal.Less(col[i]) {
+					maxVal = col[i]
+				}
+			}
+		}
+
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_uuid:
+		col := MustFixedCol[types.Uuid](v)
+		var minVal, maxVal types.Uuid
+		if v.HasNull() {
+			first := true
+			for i, j := 0, len(col); i < j; i++ {
+				if v.IsNull(uint64(i)) {
+					continue
+				}
+				if first {
+					minVal, maxVal = col[i], col[i]
+					first = false
+				} else {
+					if col[i].Lt(minVal) {
+						minVal = col[i]
+					}
+					if maxVal.Lt(col[i]) {
+
+						maxVal = col[i]
+					}
+				}
+			}
+		} else {
+			minVal, maxVal = col[0], col[0]
+			for i, j := 1, len(col); i < j; i++ {
+				if col[i].Lt(minVal) {
+					minVal = col[i]
+				}
+				if maxVal.Lt(col[i]) {
+					maxVal = col[i]
+				}
+			}
+		}
+
+		minv = types.EncodeUuid(&minVal)
+		maxv = types.EncodeUuid(&maxVal)
+
+	case types.T_Rowid:
+		col := MustFixedCol[types.Rowid](v)
+		var minVal, maxVal types.Rowid
+		if v.HasNull() {
+			first := true
+			for i, j := 0, len(col); i < j; i++ {
+				if v.IsNull(uint64(i)) {
+					continue
+				}
+				if first {
+					minVal, maxVal = col[i], col[i]
+					first = false
+				} else {
+					if col[i].Less(minVal) {
+						minVal = col[i]
+					}
+					if maxVal.Less(col[i]) {
+
+						maxVal = col[i]
+					}
+				}
+			}
+		} else {
+			minVal, maxVal = col[0], col[0]
+			for i, j := 1, len(col); i < j; i++ {
+				if col[i].Less(minVal) {
+					minVal = col[i]
+				}
+				if maxVal.Less(col[i]) {
+					maxVal = col[i]
+				}
+			}
+		}
+
+		minv = types.EncodeFixed(minVal)
+		maxv = types.EncodeFixed(maxVal)
+
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		minv, maxv = VarlenGetMinMax(v)
+
+	default:
+		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
+	}
+	return
 }

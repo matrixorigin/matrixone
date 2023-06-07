@@ -611,7 +611,7 @@ func TestGetExprValue(t *testing.T) {
 
 		table.EXPECT().TableDefs(gomock.Any()).Return(defs, nil).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
-		table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(false).AnyTimes()
+		table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(false).AnyTimes()
 
 		var ranges [][]byte
 		id := make([]byte, 8)
