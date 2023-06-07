@@ -162,5 +162,6 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.DNShard, facto
 		logtailServerCfg,
 		options.LogstoreType(s.cfg.Txn.Storage.LogBackend),
 		s.cfg.Txn.IncrementalDedup,
+		uint64(s.cfg.RPC.MaxMessageSize),
 	)
 }

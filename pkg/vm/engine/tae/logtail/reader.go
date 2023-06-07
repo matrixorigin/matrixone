@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
@@ -56,6 +57,19 @@ func (r *Reader) HasCatalogChanges() bool {
 	}
 	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op)
 	return changed
+}
+
+func (r *Reader) IsCommitted() bool {
+	committed := true
+	r.table.ForeachRowInBetween(r.from, r.to, nil, func(row RowT) (goNext bool) {
+		state := row.GetTxnState(false)
+		if state != txnif.TxnStateCommitted && state != txnif.TxnStateRollbacked {
+			committed = false
+			return false
+		}
+		return true
+	})
+	return committed
 }
 
 // Merge all dirty table/segment/block of **a table** into one tree

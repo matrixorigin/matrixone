@@ -70,6 +70,7 @@ func (v *Vector) SetSorted(b bool) {
 
 func (v *Vector) Reset(typ types.Type) {
 	v.typ = typ
+	v.class = FLAT
 	//v.data = v.data[:0]
 	if v.area != nil {
 		v.area = v.area[:0]
@@ -153,6 +154,19 @@ func (v *Vector) GetBytesAt(i int) []byte {
 	}
 	bs := v.col.([]types.Varlena)
 	return bs[i].GetByteSlice(v.area)
+}
+
+func (v *Vector) GetRawBytesAt(i int) []byte {
+	if v.typ.IsVarlen() {
+		return v.GetBytesAt(i)
+	} else {
+		if v.IsConst() {
+			i = 0
+		} else {
+			i *= v.GetType().TypeSize()
+		}
+		return v.data[i : i+v.GetType().TypeSize()]
+	}
 }
 
 func (v *Vector) CleanOnlyData() {
@@ -304,7 +318,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.length = 0
 	v.cantFreeData = false
 	v.cantFreeArea = false
-	types.PutTypeToPool(v.typ)
 
 	v.nsp.Reset()
 	v.sorted = false

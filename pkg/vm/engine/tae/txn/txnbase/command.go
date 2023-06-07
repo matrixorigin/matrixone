@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -37,6 +38,12 @@ const (
 	IOET_WALTxnEntry_CurrVer            = IOET_WALTxnEntry_V1
 	IOET_WALTxnCommand_Composed_CurrVer = IOET_WALTxnCommand_Composed_V1
 	IOET_WALTxnCommand_TxnState_CurrVer = IOET_WALTxnCommand_TxnState_V1
+
+	// CmdBufReserved is reserved size of cmd buffer. ComposedCmd.CmdBufLimit is
+	// the max buffer size that could be sent out to log-service. This value is normally
+	// the max RPC message size which is configured in config of DN. The message contains
+	// mainly commands, but also other information whose size is CmdBufReserved.
+	CmdBufReserved = 1024
 )
 
 func init() {
@@ -59,7 +66,7 @@ func init() {
 		},
 		nil,
 		func(b []byte) (any, error) {
-			txnEntry := NewComposedCmd()
+			txnEntry := NewComposedCmd(0)
 			err := txnEntry.UnmarshalBinary(b)
 			return txnEntry, err
 		},
@@ -99,8 +106,15 @@ type TxnStateCmd struct {
 }
 
 type ComposedCmd struct {
-	Cmds    []txnif.TxnCmd
-	CmdSize uint32
+	Cmds []txnif.TxnCmd
+
+	// CmdBufLimit indicates max cmd buffer size. We can only send out
+	// the cmd buffer whose size is less than it.
+	CmdBufLimit int64
+
+	// lastPos is the position in the Cmds list, before which the cmds have
+	// been marshalled into buffer.
+	LastPos int
 }
 
 type BaseCustomizedCmd struct {
@@ -116,9 +130,14 @@ func NewBaseCustomizedCmd(id uint32, impl txnif.TxnCmd) *BaseCustomizedCmd {
 	}
 }
 
-func NewComposedCmd() *ComposedCmd {
+func NewComposedCmd(maxSize uint64) *ComposedCmd {
+	if maxSize < CmdBufReserved {
+		maxSize = math.MaxInt64
+	}
 	return &ComposedCmd{
-		Cmds: make([]txnif.TxnCmd, 0),
+		Cmds:        make([]txnif.TxnCmd, 0),
+		CmdBufLimit: int64(maxSize - CmdBufReserved),
+		LastPos:     -1, // init value.
 	}
 }
 
@@ -213,9 +232,9 @@ func (c *TxnStateCmd) VerboseString() string {
 func (c *TxnStateCmd) Close() {
 }
 
-func NewTxnCmd() *TxnCmd {
+func NewTxnCmd(maxMessageSize uint64) *TxnCmd {
 	return &TxnCmd{
-		ComposedCmd: NewComposedCmd(),
+		ComposedCmd: NewComposedCmd(maxMessageSize),
 		TxnCtx:      &TxnCtx{},
 	}
 }
@@ -347,7 +366,7 @@ func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
 	return
 }
 func (c *TxnCmd) UnmarshalBinary(buf []byte) (err error) {
-	c.ComposedCmd = NewComposedCmd()
+	c.ComposedCmd = NewComposedCmd(0)
 	composeedCmdBufLength := types.DecodeUint32(buf[:4])
 	n := 4
 	cmd, err := BuildCommandFrom(buf[n : n+int(composeedCmdBufLength)])
@@ -399,17 +418,43 @@ func (cc *ComposedCmd) GetType() uint16 {
 }
 
 func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = cc.WriteTo(&bbuf); err != nil {
+	// cmdBuf only buffers the cmds.
+	var cmdBuf bytes.Buffer
+
+	if cc.LastPos < 0 {
+		cc.LastPos = 0
+	}
+	prevLastPos := cc.LastPos
+	if _, err = cc.WriteTo(&cmdBuf); err != nil {
 		return
 	}
-	buf = bbuf.Bytes()
+
+	// headBuf buffers the header data.
+	var headerBuf bytes.Buffer
+	t := cc.GetType()
+	if _, err = headerBuf.Write(types.EncodeUint16(&t)); err != nil {
+		return
+	}
+	ver := IOET_WALTxnCommand_Composed_CurrVer
+	if _, err = headerBuf.Write(types.EncodeUint16(&ver)); err != nil {
+		return
+	}
+	var length uint32
+	if cc.LastPos == 0 {
+		length = uint32(len(cc.Cmds) - prevLastPos)
+	} else {
+		length = uint32(cc.LastPos - prevLastPos)
+	}
+	if _, err = headerBuf.Write(types.EncodeUint32(&length)); err != nil {
+		return
+	}
+
+	buf = append(headerBuf.Bytes(), cmdBuf.Bytes()...)
 	return
 }
 
 func (cc *ComposedCmd) UnmarshalBinary(buf []byte) (err error) {
-	bbuf := bytes.NewBuffer(buf)
-	n, err := cc.ReadFrom(bbuf)
+	var n int64
 	length := uint32(0)
 	length = types.DecodeUint32(buf[n : n+4])
 	n += 4
@@ -427,26 +472,7 @@ func (cc *ComposedCmd) UnmarshalBinary(buf []byte) (err error) {
 }
 
 func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
-	t := cc.GetType()
-	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
-		return
-	}
-	n += 2
-	ver := IOET_WALTxnCommand_Composed_CurrVer
-	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
-		return
-	}
-	n += 2
-	if _, err = w.Write(types.EncodeUint32(&cc.CmdSize)); err != nil {
-		return
-	}
-	n += 4
-	length := uint32(len(cc.Cmds))
-	if _, err = w.Write(types.EncodeUint32(&length)); err != nil {
-		return
-	}
-	n += 4
-	for _, cmd := range cc.Cmds {
+	for idx, cmd := range cc.Cmds[cc.LastPos:] {
 		var buf []byte
 		var sn int64
 		if buf, err = cmd.MarshalBinary(); err != nil {
@@ -456,15 +482,19 @@ func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 			return
 		}
 		n += sn
-	}
-	return
-}
+		// If the size cmd buffer is bigger than the limit, stop push items into
+		// the buffer and update cc.last.
+		if n >= cc.CmdBufLimit {
+			cc.LastPos += idx + 1
 
-func (cc *ComposedCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	if _, err = r.Read(types.EncodeUint32(&cc.CmdSize)); err != nil {
-		return
+			// We have pushed all cmds, set cc.last to 0 to stop pushing any items.
+			if cc.LastPos == len(cc.Cmds) {
+				cc.LastPos = 0
+			}
+			return
+		}
 	}
-	n += 4
+	cc.LastPos = 0
 	return
 }
 
@@ -472,12 +502,12 @@ func (cc *ComposedCmd) AddCmd(cmd txnif.TxnCmd) {
 	cc.Cmds = append(cc.Cmds, cmd)
 }
 
-func (cc *ComposedCmd) SetCmdSize(size uint32) {
-	cc.CmdSize = size
+func (cc *ComposedCmd) MoreCmds() bool {
+	return cc.LastPos != 0
 }
 
 func (cc *ComposedCmd) ToString(prefix string) string {
-	s := fmt.Sprintf("%sComposedCmd: Cnt=%d/%d", prefix, cc.CmdSize, len(cc.Cmds))
+	s := fmt.Sprintf("%sComposedCmd: Cnt=%d", prefix, len(cc.Cmds))
 	for _, cmd := range cc.Cmds {
 		s = fmt.Sprintf("%s\n%s\t%s", s, prefix, cmd.String())
 	}
@@ -485,14 +515,14 @@ func (cc *ComposedCmd) ToString(prefix string) string {
 }
 
 func (cc *ComposedCmd) ToDesc(prefix string) string {
-	s := fmt.Sprintf("%sComposedCmd: Cnt=%d/%d", prefix, cc.CmdSize, len(cc.Cmds))
+	s := fmt.Sprintf("%sComposedCmd: Cnt=%d", prefix, len(cc.Cmds))
 	for _, cmd := range cc.Cmds {
 		s = fmt.Sprintf("%s\n%s\t%s", s, prefix, cmd.Desc())
 	}
 	return s
 }
 func (cc *ComposedCmd) ToVerboseString(prefix string) string {
-	s := fmt.Sprintf("%sComposedCmd: Cnt=%d/%d", prefix, cc.CmdSize, len(cc.Cmds))
+	s := fmt.Sprintf("%sComposedCmd: Cnt=%d", prefix, len(cc.Cmds))
 	for _, cmd := range cc.Cmds {
 		s = fmt.Sprintf("%s\n%s\t%s", s, prefix, cmd.VerboseString())
 	}
