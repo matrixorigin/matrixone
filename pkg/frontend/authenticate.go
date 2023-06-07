@@ -6782,6 +6782,7 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
+			logutil.Infof("init mo_mysql_compatibility_mode 1 for variable %s %s", variable.Name, getVariableValue(variable.Default))
 			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
@@ -7151,6 +7152,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
+			logutil.Infof("init mo_mysql_compatibility_mode 2 for variable %s %s", variable.Name, getVariableValue(variable.Default))
 			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
@@ -8238,6 +8240,7 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 			}
 
 			accountId = tenantInfo.GetTenantID()
+			logutil.Infof("set global system variable %s=%v", varName, getVariableValue(varValue))
 			sql = getSqlForUpdateSystemVariableValue(getVariableValue(varValue), uint64(accountId), varName)
 			err = bh.Exec(ctx, sql)
 			if err != nil {
