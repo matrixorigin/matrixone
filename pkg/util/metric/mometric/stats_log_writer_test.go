@@ -105,7 +105,7 @@ func TestStatsLogWriter(t *testing.T) {
 	}))
 
 	// 2.3 Start the LogWriter
-	c := newStatsLogWriter(&stats.DefaultRegistry, customLogger, 100*time.Millisecond)
+	c := newStatsLogWriter(stats.DefaultRegistry, customLogger, 100*time.Millisecond)
 	serviceCtx := context.Background()
 	assert.True(t, c.Start(serviceCtx))
 

@@ -21,8 +21,14 @@ import (
 
 // Registry holds mapping between FamilyName and Family
 type Registry struct {
-	families map[string]*Family
 	sync.RWMutex
+	families map[string]*Family
+}
+
+func NewRegistry() *Registry {
+	return &Registry{
+		families: make(map[string]*Family),
+	}
 }
 
 func (r *Registry) Register(familyName string, opts ...Options) {
@@ -81,7 +87,7 @@ func defaultOptions() options {
 }
 
 // DefaultRegistry will be used to register all the MO Dev Stats.
-var DefaultRegistry = Registry{}
+var DefaultRegistry = NewRegistry()
 
 // Register registers stats family to default stats registry
 // familyName is a unique family name for the stats
