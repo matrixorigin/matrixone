@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	bits2 "math/bits"
 	"strconv"
@@ -252,11 +251,9 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 
 	convertVal, err := strconv.ParseInt(value, 10, 8)
 	if err != nil {
-		logutil.Errorf("convert %s to bool failed 1 err:%v", value, err)
 		return nil, errorConvertFromStringToBoolFailed
 	}
 	if convertVal != 1 && convertVal != 0 {
-		logutil.Errorf("convert %s to bool failed 2", value)
 		return nil, errorConvertFromStringToBoolFailed
 	}
 	return int8(convertVal), nil
