@@ -126,6 +126,13 @@ func (client *pushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp
 	if client.receivedLogTailTime.greatEq(snapshotTS.Prev()) {
 		return
 	}
+
+	// If reconnect, receivedLogTailTime will reset. But latestAppliedLogTailTS is always keep the latest applied
+	// logtail ts.
+	ts := client.receivedLogTailTime.latestAppliedLogTailTS.Load()
+	if ts != nil && ts.GreaterEq(snapshotTS) {
+		return
+	}
 	panic(fmt.Sprintf("BUG: all log tail must be applied before %s",
 		snapshotTS.DebugString()))
 }
@@ -464,12 +471,16 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
 // support `getTimestamp()` method to get time of last received log.
 type syncLogTailTimestamp struct {
-	timestampWaiter client.TimestampWaiter
-	ready           atomic.Bool
-	tList           []atomic.Pointer[timestamp.Timestamp]
+	timestampWaiter        client.TimestampWaiter
+	ready                  atomic.Bool
+	tList                  []atomic.Pointer[timestamp.Timestamp]
+	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
+	ts := r.getTimestamp()
+	r.latestAppliedLogTailTS.Store(&ts)
+
 	r.timestampWaiter = timestampWaiter
 	r.ready.Store(false)
 	if len(r.tList) == 0 {
@@ -500,7 +511,8 @@ func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 
 func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
 	r.tList[index].Store(&newTimestamp)
-	r.timestampWaiter.NotifyLatestCommitTS(r.getTimestamp())
+	ts := r.getTimestamp()
+	r.timestampWaiter.NotifyLatestCommitTS(ts)
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
