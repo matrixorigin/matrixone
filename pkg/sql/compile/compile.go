@@ -1330,8 +1330,8 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 	// Register runtime filters
 	// XXX currently we only implement runtime filter on single CN
 	if len(c.cnList) == 1 {
-		s.DataSource.RuntimeFilterReceivers = make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterList))
-		for i, rfSpec := range n.RuntimeFilterList {
+		s.DataSource.RuntimeFilterReceivers = make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterProbeList))
+		for i, rfSpec := range n.RuntimeFilterProbeList {
 			ch := make(chan *pipeline.RuntimeFilter, 1)
 			s.DataSource.RuntimeFilterReceivers[i] = &colexec.RuntimeFilterChan{
 				Expr: rfSpec.Expr,

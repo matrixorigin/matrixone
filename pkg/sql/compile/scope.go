@@ -230,9 +230,13 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 					return nil
 
 				case filter := <-receiver.Chan:
-					if filter == nil || filter.Typ == pbpipeline.RuntimeFilter_Empty {
+					if filter == nil {
 						exprs = nil
+						s.NodeInfo.Data = s.NodeInfo.Data[:0]
 						break
+					}
+					if filter.Typ == pbpipeline.RuntimeFilter_NO_FILTER {
+						continue
 					}
 
 					exprs = append(exprs, receiver.Expr)
@@ -245,8 +249,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				if err != nil {
 					return err
 				}
-			} else {
-				s.NodeInfo.Data = s.NodeInfo.Data[:0]
 			}
 		}
 
