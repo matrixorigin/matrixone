@@ -105,7 +105,7 @@ func (appender *blockAppender) ApplyAppend(
 			continue
 		}
 		if colDef.IsRealPrimary() {
-			if err = node.pkIndex.BatchUpsert(bat.Vecs[colDef.Idx], from); err != nil {
+			if err = node.pkIndex.BatchUpsert(bat.Vecs[colDef.Idx].GetDownstreamVector(), from); err != nil {
 				panic(err)
 			}
 		}

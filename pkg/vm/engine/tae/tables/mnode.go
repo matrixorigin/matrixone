@@ -87,7 +87,7 @@ func (node *memoryNode) BatchDedup(
 	skipFn func(row uint32) error,
 	bf objectio.BloomFilter,
 ) (sels *roaring.Bitmap, err error) {
-	return node.pkIndex.BatchDedup(ctx, keys, keysZM, skipFn, bf)
+	return node.pkIndex.BatchDedup(ctx, keys.GetDownstreamVector(), keysZM, skipFn, bf)
 }
 
 func (node *memoryNode) ContainsKey(ctx context.Context, key any) (ok bool, err error) {
