@@ -21,10 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -53,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
@@ -73,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
@@ -83,6 +81,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -189,7 +188,6 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var err error
-	var dataBuffer []byte
 	var sequence uint64
 
 	if sender.receiveCh == nil {
@@ -227,23 +225,19 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 		}
 		sequence++
 
-		dataBuffer = append(dataBuffer, m.Data...)
 		if m.WaitingNextToMerge() {
 			continue
 		}
-		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
+		if m.Checksum != crc32.ChecksumIEEE(m.Data) {
 			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
-		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
+		bat, err := decodeBatch(c.proc.Mp(), c.proc, m.Data)
 		if err != nil {
 			return err
 		}
 		nextAnalyze.Network(bat)
 		sendToConnectOperator(nextOperator, bat)
-		// XXX maybe we can use dataBuffer = dataBuffer[:0] to do memory reuse.
-		// but it seems that decode batch will do some memory reflect. but not copy.
-		dataBuffer = nil
 	}
 }
 

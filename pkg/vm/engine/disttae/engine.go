@@ -470,15 +470,12 @@ func (e *Engine) Hints() (h engine.Hints) {
 func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Timestamp,
 	expr *plan.Expr, ranges [][]byte, tblDef *plan.TableDef) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	blks := make([]*catalog.BlockInfo, len(ranges))
-	for i := range ranges {
-		blks[i] = catalog.DecodeBlockInfo(ranges[i])
-		blks[i].EntryState = false
-	}
 	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
+			blk := catalog.DecodeBlockInfo(ranges[i])
+			blk.EntryState = false
 			rds[i] = newBlockReader(
-				ctx, tblDef, ts, []*catalog.BlockInfo{blks[i]}, expr, e.fs,
+				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs,
 			)
 		}
 		for j := len(ranges); j < num; j++ {
@@ -487,7 +484,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 		return rds, nil
 	}
 
-	infos, steps := groupBlocksToObjects(blks, num)
+	infos, steps := groupBlocksToObjects(ranges, num)
 	blockReaders := newBlockReaders(ctx, e.fs, tblDef, -1, ts, num, expr)
 	distributeBlocksToBlockReaders(blockReaders, num, infos, steps)
 	for i := 0; i < num; i++ {

@@ -15,9 +15,11 @@
 package colexec
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -813,7 +815,7 @@ func EvaluateFilterByZoneMap(
 		return false
 	}
 
-	zm := evaluateFilterByZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
+	zm := GetExprZoneMap(ctx, proc, expr, meta, columnMap, zms, vecs)
 	if !zm.IsInited() || zm.GetType() != types.T_bool {
 		selected = true
 	} else {
@@ -822,7 +824,7 @@ func EvaluateFilterByZoneMap(
 	return
 }
 
-func evaluateFilterByZoneMap(
+func GetExprZoneMap(
 	ctx context.Context,
 	proc *process.Process,
 	expr *plan.Expr,
@@ -852,8 +854,6 @@ func evaluateFilterByZoneMap(
 			args := t.F.Args
 			// `in` is special.
 			if t.F.Func.ObjName == "in" {
-				var firstRun bool
-
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
 					if vecs[args[1].AuxId], err = EvalExpressionOnce(proc, args[1], nil); err != nil {
@@ -862,7 +862,7 @@ func evaluateFilterByZoneMap(
 						return zms[expr.AuxId]
 					}
 
-					firstRun = true
+					SortInFilter(vecs[args[1].AuxId])
 				}
 
 				if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
@@ -870,25 +870,21 @@ func evaluateFilterByZoneMap(
 					return zms[expr.AuxId]
 				}
 
-				lhs := evaluateFilterByZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
 
-				if res, ok := lhs.AnyIn(vecs[rid], firstRun); !ok {
-					zms[expr.AuxId].Reset()
-				} else {
-					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
-				}
-
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.AnyIn(vecs[rid]))
 				return zms[expr.AuxId]
 			}
 
 			for _, arg := range args {
-				zms[arg.AuxId] = evaluateFilterByZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
+				zms[arg.AuxId] = GetExprZoneMap(ctx, proc, arg, meta, columnMap, zms, vecs)
 				if !zms[arg.AuxId].IsInited() {
 					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
 				}
 			}
 
@@ -984,6 +980,136 @@ func evaluateFilterByZoneMap(
 	}
 
 	return zms[expr.AuxId]
+}
+
+func SortInFilter(vec *vector.Vector) {
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		col := vector.MustFixedCol[bool](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return !col[i] && col[j]
+		})
+
+	case types.T_int8:
+		col := vector.MustFixedCol[int8](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_int16:
+		col := vector.MustFixedCol[int16](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_int32:
+		col := vector.MustFixedCol[int32](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_int64:
+		col := vector.MustFixedCol[int64](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_uint8:
+		col := vector.MustFixedCol[uint8](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_uint16:
+		col := vector.MustFixedCol[uint16](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_uint32:
+		col := vector.MustFixedCol[uint32](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_uint64:
+		col := vector.MustFixedCol[uint64](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_float32:
+		col := vector.MustFixedCol[float32](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_float64:
+		col := vector.MustFixedCol[float64](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_date:
+		col := vector.MustFixedCol[types.Date](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_datetime:
+		col := vector.MustFixedCol[types.Datetime](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_time:
+		col := vector.MustFixedCol[types.Time](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_timestamp:
+		col := vector.MustFixedCol[types.Timestamp](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+
+	case types.T_decimal64:
+		col := vector.MustFixedCol[types.Decimal64](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+
+	case types.T_decimal128:
+		col := vector.MustFixedCol[types.Decimal128](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+
+	case types.T_TS:
+		col := vector.MustFixedCol[types.TS](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+
+	case types.T_uuid:
+		col := vector.MustFixedCol[types.Uuid](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Lt(col[j])
+		})
+
+	case types.T_Rowid:
+		col := vector.MustFixedCol[types.Rowid](vec)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		col, area := vector.MustVarlenaRawData(vec)
+		sort.Slice(col, func(i, j int) bool {
+			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
+		})
+	}
 }
 
 // RewriteFilterExprList will convert an expression list to be an AndExpr
