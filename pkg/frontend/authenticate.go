@@ -1319,6 +1319,8 @@ const (
 
 	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
+	getAllVariables = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d;`
+
 	getSystemVariableValueWithAccountFromat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and variable_name = '%s' and system_variables = true;`
 
 	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s';`
@@ -8250,7 +8252,7 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 			}
 
 			//==========
-			sql = getSystemVariablesWithAccount(uint64(accountId))
+			sql = fmt.Sprintf(getAllVariables, uint64(accountId))
 
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sql)

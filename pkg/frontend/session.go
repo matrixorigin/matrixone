@@ -1930,7 +1930,7 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	}
 
 	//==========
-	sql = getSystemVariablesWithAccount(uint64(accountId))
+	sql = fmt.Sprintf(getAllVariables, uint64(accountId))
 
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
