@@ -17,7 +17,6 @@ package single
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -75,7 +75,7 @@ func TestString(t *testing.T) {
 func TestJoin(t *testing.T) {
 	for _, tc := range tcs {
 		bat := hashBuild(t, tc)
-		if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+		if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
 			jm.SetDupCount(int64(1))
 		}
 		err := Prepare(tc.proc, tc.arg)

@@ -1283,6 +1283,12 @@ func makeOneDeletePlan(
 		FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
 		LockTable:          delNodeInfo.lockTable,
 	}
+
+	if delNodeInfo.tableDef.Partition != nil {
+		lockTarget.IsPartitionTable = true
+		lockTarget.PartitionTableIds = delNodeInfo.partTableIDs
+	}
+
 	lockNode := &Node{
 		NodeType:    plan.Node_LOCK_OP,
 		Children:    []int32{lastNodeId},
@@ -1717,7 +1723,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
 	}
 	// Get table partition information
-	partitionIdx, _ := getPartSubTableIdsAndPartIndex(builder.compCtx, objRef, tableDef)
+	partitionIdx, partTableIds := getPartSubTableIdsAndPartIndex(builder.compCtx, objRef, tableDef)
 
 	// todo: append lock
 	pkPos, pkTyp := getPkPos(tableDef, false)
@@ -1728,6 +1734,12 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		RefreshTsIdxInBat:  -1, //unsupport now
 		FilterColIdxInBat:  int32(partitionIdx),
 	}
+
+	if tableDef.Partition != nil {
+		lockTarget.IsPartitionTable = true
+		lockTarget.PartitionTableIds = partTableIds
+	}
+
 	lockNode := &Node{
 		NodeType:    plan.Node_LOCK_OP,
 		Children:    []int32{lastNodeId},

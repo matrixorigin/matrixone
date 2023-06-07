@@ -229,6 +229,7 @@ func (tbl *txnTable) recurTransferDelete(
 	}
 	blockID, offset := rowID.Decode()
 	newID := &common.ID{
+		DbID:    id.DbID,
 		TableID: id.TableID,
 		BlockID: blockID,
 	}

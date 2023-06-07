@@ -51,6 +51,7 @@ func Prepare(proc *process.Process, arg any) (err error) {
 	if ap.Cond != nil {
 		ap.ctr.expr, err = colexec.NewExpressionExecutor(proc, ap.Cond)
 	}
+	ap.ctr.handledLast = false
 	return err
 }
 
@@ -64,7 +65,6 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 		switch ctr.state {
 		case Build:
 			if err := ctr.build(ap, proc, analyze); err != nil {
-				ap.Free(proc, true)
 				return false, err
 			}
 			if ctr.mp == nil {
@@ -127,7 +127,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 
 	if bat != nil {
 		ctr.bat = bat
-		ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
+		ctr.mp = bat.AuxData.(*hashmap.JoinMap).Dup()
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(bat.Length())
 		analyze.Alloc(ctr.mp.Map().Size())
@@ -136,6 +136,8 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 }
 
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool) (bool, error) {
+	ctr.handledLast = true
+
 	if !ap.IsMerger {
 		ap.Channel <- ctr.matched
 		return true, nil

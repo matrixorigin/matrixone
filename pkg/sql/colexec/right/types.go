@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -61,6 +61,8 @@ type container struct {
 	mp *hashmap.JoinMap
 
 	matched *bitmap.Bitmap
+
+	handledLast bool
 }
 
 type Argument struct {
@@ -76,11 +78,23 @@ type Argument struct {
 	IsMerger bool
 	Channel  chan *bitmap.Bitmap
 	NumCPU   uint64
+
+	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 	ctr := arg.ctr
 	if ctr != nil {
+		if !ctr.handledLast {
+			if arg.IsMerger {
+				for i := uint64(1); i < arg.NumCPU; i++ {
+					<-arg.Channel
+				}
+			} else {
+				arg.Channel <- ctr.matched
+			}
+			ctr.handledLast = true
+		}
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
 		ctr.cleanHashMap()
