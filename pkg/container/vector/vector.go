@@ -2749,19 +2749,19 @@ func (v *Vector) CloneWindow(start, end int, mp *mpool.MPool) (*Vector, error) {
 
 // GetMinMaxValue returns the min and max value of the vector.
 // if the length is 0 or all null, return false
-func (vec *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
-	if vec.Length() == 0 || vec.AllNull() {
+func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
+	if v.Length() == 0 || v.AllNull() {
 		return
 	}
 	ok = true
-	switch vec.typ.Oid {
+	switch v.typ.Oid {
 	case types.T_bool:
 		var minVal, maxVal bool
-		col := MustFixedCol[bool](vec)
-		if vec.HasNull() {
+		col := MustFixedCol[bool](v)
+		if v.HasNull() {
 			first := true
 			for i, j := 0, len(col); i < j; i++ {
-				if vec.IsNull(uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					continue
 				}
 				if first {
@@ -2783,82 +2783,82 @@ func (vec *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeBool(&maxVal)
 
 	case types.T_int8:
-		minVal, maxVal := OrderedGetMinAndMax[int8](vec)
+		minVal, maxVal := OrderedGetMinAndMax[int8](v)
 		minv = types.EncodeInt8(&minVal)
 		maxv = types.EncodeInt8(&maxVal)
 
 	case types.T_int16:
-		minVal, maxVal := OrderedGetMinAndMax[int16](vec)
+		minVal, maxVal := OrderedGetMinAndMax[int16](v)
 		minv = types.EncodeInt16(&minVal)
 		maxv = types.EncodeInt16(&maxVal)
 
 	case types.T_int32:
-		minVal, maxVal := OrderedGetMinAndMax[int32](vec)
+		minVal, maxVal := OrderedGetMinAndMax[int32](v)
 		minv = types.EncodeInt32(&minVal)
 		maxv = types.EncodeInt32(&maxVal)
 
 	case types.T_int64:
-		minVal, maxVal := OrderedGetMinAndMax[int64](vec)
+		minVal, maxVal := OrderedGetMinAndMax[int64](v)
 		minv = types.EncodeInt64(&minVal)
 		maxv = types.EncodeInt64(&maxVal)
 
 	case types.T_uint8:
-		minVal, maxVal := OrderedGetMinAndMax[uint8](vec)
+		minVal, maxVal := OrderedGetMinAndMax[uint8](v)
 		minv = types.EncodeUint8(&minVal)
 		maxv = types.EncodeUint8(&maxVal)
 
 	case types.T_uint16:
-		minVal, maxVal := OrderedGetMinAndMax[uint16](vec)
+		minVal, maxVal := OrderedGetMinAndMax[uint16](v)
 		minv = types.EncodeUint16(&minVal)
 		maxv = types.EncodeUint16(&maxVal)
 
 	case types.T_uint32:
-		minVal, maxVal := OrderedGetMinAndMax[uint32](vec)
+		minVal, maxVal := OrderedGetMinAndMax[uint32](v)
 		minv = types.EncodeUint32(&minVal)
 		maxv = types.EncodeUint32(&maxVal)
 
 	case types.T_uint64:
-		minVal, maxVal := OrderedGetMinAndMax[uint64](vec)
+		minVal, maxVal := OrderedGetMinAndMax[uint64](v)
 		minv = types.EncodeUint64(&minVal)
 		maxv = types.EncodeUint64(&maxVal)
 
 	case types.T_float32:
-		minVal, maxVal := OrderedGetMinAndMax[float32](vec)
+		minVal, maxVal := OrderedGetMinAndMax[float32](v)
 		minv = types.EncodeFloat32(&minVal)
 		maxv = types.EncodeFloat32(&maxVal)
 
 	case types.T_float64:
-		minVal, maxVal := OrderedGetMinAndMax[float64](vec)
+		minVal, maxVal := OrderedGetMinAndMax[float64](v)
 		minv = types.EncodeFloat64(&minVal)
 		maxv = types.EncodeFloat64(&maxVal)
 
 	case types.T_date:
-		minVal, maxVal := OrderedGetMinAndMax[types.Date](vec)
+		minVal, maxVal := OrderedGetMinAndMax[types.Date](v)
 		minv = types.EncodeDate(&minVal)
 		maxv = types.EncodeDate(&maxVal)
 
 	case types.T_datetime:
-		minVal, maxVal := OrderedGetMinAndMax[types.Datetime](vec)
+		minVal, maxVal := OrderedGetMinAndMax[types.Datetime](v)
 		minv = types.EncodeDatetime(&minVal)
 		maxv = types.EncodeDatetime(&maxVal)
 
 	case types.T_time:
-		minVal, maxVal := OrderedGetMinAndMax[types.Time](vec)
+		minVal, maxVal := OrderedGetMinAndMax[types.Time](v)
 		minv = types.EncodeTime(&minVal)
 		maxv = types.EncodeTime(&maxVal)
 
 	case types.T_timestamp:
-		minVal, maxVal := OrderedGetMinAndMax[types.Timestamp](vec)
+		minVal, maxVal := OrderedGetMinAndMax[types.Timestamp](v)
 		minv = types.EncodeTimestamp(&minVal)
 		maxv = types.EncodeTimestamp(&maxVal)
 
 	case types.T_decimal64:
-		col := MustFixedCol[types.Decimal64](vec)
+		col := MustFixedCol[types.Decimal64](v)
 		var minVal, maxVal types.Decimal64
-		if vec.HasNull() {
+		if v.HasNull() {
 			first := true
 			for i, j := 0, len(col); i < j; i++ {
-				if vec.IsNull(uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					continue
 				}
 				if first {
@@ -2890,12 +2890,12 @@ func (vec *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeDecimal64(&maxVal)
 
 	case types.T_decimal128:
-		col := MustFixedCol[types.Decimal128](vec)
+		col := MustFixedCol[types.Decimal128](v)
 		var minVal, maxVal types.Decimal128
-		if vec.HasNull() {
+		if v.HasNull() {
 			first := true
 			for i, j := 0, len(col); i < j; i++ {
-				if vec.IsNull(uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					continue
 				}
 				if first {
@@ -2927,12 +2927,12 @@ func (vec *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeDecimal128(&maxVal)
 
 	case types.T_TS:
-		col := MustFixedCol[types.TS](vec)
+		col := MustFixedCol[types.TS](v)
 		var minVal, maxVal types.TS
-		if vec.HasNull() {
+		if v.HasNull() {
 			first := true
 			for i, j := 0, len(col); i < j; i++ {
-				if vec.IsNull(uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					continue
 				}
 				if first {
@@ -2964,12 +2964,12 @@ func (vec *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeFixed(maxVal)
 
 	case types.T_uuid:
-		col := MustFixedCol[types.Uuid](vec)
+		col := MustFixedCol[types.Uuid](v)
 		var minVal, maxVal types.Uuid
-		if vec.HasNull() {
+		if v.HasNull() {
 			first := true
 			for i, j := 0, len(col); i < j; i++ {
-				if vec.IsNull(uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					continue
 				}
 				if first {
@@ -3001,12 +3001,12 @@ func (vec *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeUuid(&maxVal)
 
 	case types.T_Rowid:
-		col := MustFixedCol[types.Rowid](vec)
+		col := MustFixedCol[types.Rowid](v)
 		var minVal, maxVal types.Rowid
-		if vec.HasNull() {
+		if v.HasNull() {
 			first := true
 			for i, j := 0, len(col); i < j; i++ {
-				if vec.IsNull(uint64(i)) {
+				if v.IsNull(uint64(i)) {
 					continue
 				}
 				if first {
@@ -3038,10 +3038,10 @@ func (vec *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeFixed(maxVal)
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		minv, maxv = VarlenGetMinMax(vec)
+		minv, maxv = VarlenGetMinMax(v)
 
 	default:
-		panic(fmt.Sprintf("unsupported type %s", vec.GetType().String()))
+		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
 	return
 }
