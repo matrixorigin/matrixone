@@ -17,7 +17,6 @@ package db_holder
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -199,18 +198,11 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 			if i != 0 {
 				sb.WriteString(",")
 			}
-			if tbl.Columns[i].ColType == table.TJson {
-				var js interface{}
-				escapedJSON, _ := json.Marshal(js)
-				_ = json.Unmarshal([]byte(field), &js)
-				sb.WriteString(fmt.Sprintf("'%s'", strings.ReplaceAll(strings.ReplaceAll(string(escapedJSON), "\\", "\\\\"), "'", "\\'")))
+			escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
+			if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+				sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
 			} else {
-				escapedStr := strings.ReplaceAll(strings.ReplaceAll(field, "\\", "\\\\'"), "'", "\\'")
-				if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-					sb.WriteString(fmt.Sprintf("'%s'", escapedStr[:tbl.Columns[i].Scale-1]))
-				} else {
-					sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
-				}
+				sb.WriteString(fmt.Sprintf("'%s'", escapedStr))
 			}
 		}
 		sb.WriteString(")")
