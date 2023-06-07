@@ -16,14 +16,20 @@ package stats
 
 import (
 	"go.uber.org/zap"
+	"sync"
 )
 
 // Registry holds mapping between FamilyName and Family
-type Registry map[string]*Family
+type Registry struct {
+	families map[string]*Family
+	sync.RWMutex
+}
 
 func (r *Registry) Register(familyName string, opts ...Options) {
+	r.Lock()
+	defer r.Unlock()
 
-	if _, exists := (*r)[familyName]; exists {
+	if _, exists := r.families[familyName]; exists {
 		panic("Duplicate Family Name " + familyName)
 	}
 
@@ -32,20 +38,26 @@ func (r *Registry) Register(familyName string, opts ...Options) {
 		optFunc(&initOpts)
 	}
 
-	(*r)[familyName] = &Family{
+	r.families[familyName] = &Family{
 		logExporter: initOpts.logExporter,
 	}
 }
 
 // Unregister deletes the item with familyName from map.
 func (r *Registry) Unregister(familyName string) {
-	delete(*r, familyName)
+	r.Lock()
+	defer r.Unlock()
+
+	delete(r.families, familyName)
 }
 
 // ExportLog returns the snapshot of all the Family in the registry
 func (r *Registry) ExportLog() map[string][]zap.Field {
+	r.RLock()
+	defer r.RUnlock()
+
 	families := make(map[string][]zap.Field)
-	for familyName, family := range *r {
+	for familyName, family := range r.families {
 		families[familyName] = family.logExporter.Export()
 	}
 	return families
