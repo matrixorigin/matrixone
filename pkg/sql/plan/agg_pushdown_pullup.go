@@ -44,7 +44,7 @@ func shouldAggPushDown(agg, join, leftChild, rightChild *plan.Node, builder *Que
 		return false
 	}
 
-	if !IsEquiJoin(join.OnList) || len(join.OnList) != 1 {
+	if len(join.OnList) != 1 || !builder.IsEquiJoin(join) {
 		return false
 	}
 	colGroupBy, ok := filterTag(join.OnList[0], leftChildTag).Expr.(*plan.Expr_Col)
@@ -298,7 +298,7 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 		pks[i] = rightBinding.FindColumn(pkNames[i])
 	}
 
-	if !IsEquiJoin(join.OnList) || len(join.OnList) != len(pkNames) || len(join.OnList) != len(agg.GroupBy) {
+	if len(join.OnList) != len(pkNames) || len(join.OnList) != len(agg.GroupBy) || !builder.IsEquiJoin(join) {
 		return false
 	}
 

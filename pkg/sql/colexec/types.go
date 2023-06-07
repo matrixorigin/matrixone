@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -84,4 +86,9 @@ type ReceiverOperator struct {
 	// while Join/Intersect/Minus ... are not
 	aliveMergeReceiver int
 	receiverListener   []reflect.SelectCase
+}
+
+type RuntimeFilterChan struct {
+	Expr *plan.Expr
+	Chan chan *pipeline.RuntimeFilter
 }
