@@ -1950,7 +1950,7 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 				if err != nil {
 					return nil, err
 				}
-				logutil.Infof("getGlobalSystemVariableValue: %s = %s", a, b)
+				logutil.Infof("getGlobalSystemVariableValue 1: %s = %s", a, b)
 			}
 		}
 	}
@@ -1974,7 +1974,7 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 		if err != nil {
 			return nil, err
 		}
-		logutil.Infof("getGlobalSystemVariableValue: %s = %s", varName, variableValue)
+		logutil.Infof("getGlobalSystemVariableValue 2: %s = %s", varName, variableValue)
 		if sv, ok := gSysVarsDefs[varName]; ok {
 			val, err = sv.GetType().ConvertFromString(variableValue)
 			if err != nil {

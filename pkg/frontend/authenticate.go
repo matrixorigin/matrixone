@@ -8216,6 +8216,8 @@ func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[strin
 func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
 	var sql string
 	var accountId uint32
+	var erArray []ExecResult
+	var a, b string
 	tenantInfo := ses.GetTenantInfo()
 
 	varName = strings.ToLower(varName)
@@ -8246,6 +8248,33 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 			if err != nil {
 				return err
 			}
+
+			//==========
+			sql = getSystemVariablesWithAccount(uint64(accountId))
+
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				return err
+			}
+
+			if execResultArrayHasData(erArray) {
+				for _, ea := range erArray {
+					for i := uint64(0); i < ea.GetRowCount(); i++ {
+						a, err = ea.GetString(ctx, i, 0)
+						if err != nil {
+							return err
+						}
+
+						b, err = ea.GetString(ctx, i, 1)
+						if err != nil {
+							return err
+						}
+						logutil.Infof("getGlobalSystemVariableValue 3: %s = %s", a, b)
+					}
+				}
+			}
+			//================
 			return err
 		}
 		err = setGlobalFunc()
