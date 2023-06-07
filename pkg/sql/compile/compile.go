@@ -501,7 +501,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	}
 	switch qry.StmtType {
 	case plan.Query_INSERT:
-		if cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
+		if cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= plan2.BlockNumForceOneCN {
 			c.cnListStrategy()
 		} else {
 			c.cnList = engine.Nodes{engine.Node{
@@ -536,7 +536,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		// 	}
 		// }
 	default:
-		if blkNum < MinBlockNum {
+		if blkNum < plan2.BlockNumForceOneCN {
 			c.cnList = engine.Nodes{engine.Node{
 				Addr: c.addr,
 				Mcpu: c.generateCPUNumber(ncpu, blkNum)},

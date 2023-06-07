@@ -38,10 +38,6 @@ type (
 	TxnOperator = client.TxnOperator
 )
 
-const (
-	MinBlockNum = 200
-)
-
 type magicType int
 
 // type of scope
