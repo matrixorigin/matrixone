@@ -1938,6 +1938,11 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 		return nil, err
 	}
 
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	
 	if execResultArrayHasData(erArray) {
 		for _, ea := range erArray {
 			for i := uint64(0); i < ea.GetRowCount(); i++ {

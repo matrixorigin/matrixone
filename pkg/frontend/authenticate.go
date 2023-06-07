@@ -8260,6 +8260,11 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 				return err
 			}
 
+			erArray, err = getResultSet(ctx, bh)
+			if err != nil {
+				return err
+			}
+
 			if execResultArrayHasData(erArray) {
 				for _, ea := range erArray {
 					for i := uint64(0); i < ea.GetRowCount(); i++ {
