@@ -64,9 +64,15 @@ var (
 // ExpressionExecutor
 // generated from plan.Expr, can evaluate the result from vectors directly.
 type ExpressionExecutor interface {
-	// Eval should include memory reuse logic. it's results cannot be used directly.
-	// If it needs to be modified or saved, it should be copied by vector.Dup().
+	// Eval will return the result vector of expression.
+	// the result memory is reused, so it should not be modified or saved.
+	// If it needs, it should be copied by vector.Dup().
 	Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error)
+
+	// EvalWithoutResultReusing is the same as Eval, but it will not reuse the memory of result vector.
+	// so you can save the result vector directly. but should be careful about memory leak.
+	// and watch out that maybe the vector is one of the input vectors of batches.
+	EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error)
 
 	// Free should release all memory of executor.
 	// it will be called after query has done.
@@ -305,6 +311,15 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	return expr.resultVector.GetResultVector(), nil
 }
 
+func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	vec, err := expr.Eval(proc, batches)
+	if err != nil {
+		return nil, err
+	}
+	expr.resultVector.SetResultVector(nil)
+	return vec, nil
+}
+
 func (expr *FunctionExpressionExecutor) Free() {
 	if expr.resultVector != nil {
 		expr.resultVector.Free()
@@ -343,6 +358,10 @@ func (expr *ColumnExpressionExecutor) Eval(proc *process.Process, batches []*bat
 	return vec, nil
 }
 
+func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	return expr.Eval(proc, batches)
+}
+
 func (expr *ColumnExpressionExecutor) Free() {
 	// Nothing should do.
 }
@@ -356,6 +375,14 @@ func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*b
 		expr.resultVector.SetLength(batches[0].Length())
 	}
 	return expr.resultVector, nil
+}
+
+func (expr *FixedVectorExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	vec, err := expr.Eval(proc, batches)
+	if err != nil {
+		return nil, err
+	}
+	return vec.Dup(proc.Mp())
 }
 
 func (expr *FixedVectorExpressionExecutor) Free() {
@@ -601,8 +628,8 @@ func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
 	return dupSize, nil
 }
 
-// SafeGetResult if executor is function executor, we can get the nulls directly without copied.
-// because next reuse, the nsp will reset.
+// I will remove this function later.
+// do not use this function.
 func SafeGetResult(proc *process.Process, vec *vector.Vector, executor ExpressionExecutor) (*vector.Vector, error) {
 	if executor.ifResultMemoryReuse() {
 		if e, ok := executor.(*FunctionExpressionExecutor); ok {
