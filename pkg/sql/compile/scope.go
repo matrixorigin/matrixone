@@ -239,7 +239,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 						continue
 					}
 
-					exprs = append(exprs, receiver.Expr)
+					exprs = append(exprs, receiver.Spec.Expr)
 					filters = append(filters, filter)
 				}
 			}

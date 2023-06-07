@@ -33,7 +33,8 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		builder.pushdownRuntimeFilters(childID)
 	}
 
-	if node.NodeType != plan.Node_JOIN {
+	// Build runtime filters only for broadcast join
+	if node.NodeType != plan.Node_JOIN || node.Stats.Shuffle {
 		return
 	}
 

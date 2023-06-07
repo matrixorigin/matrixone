@@ -1328,20 +1328,20 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 
 	// Register runtime filters
-	// XXX currently we only implement runtime filter on single CN
-	if len(c.cnList) == 1 {
-		s.DataSource.RuntimeFilterReceivers = make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterProbeList))
+	if len(n.RuntimeFilterProbeList) > 0 {
+		receivers := make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterProbeList))
+		if c.runtimeFilterReceiverMap == nil {
+			c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
+		}
 		for i, rfSpec := range n.RuntimeFilterProbeList {
 			ch := make(chan *pipeline.RuntimeFilter, 1)
-			s.DataSource.RuntimeFilterReceivers[i] = &colexec.RuntimeFilterChan{
-				Expr: rfSpec.Expr,
+			receivers[i] = &colexec.RuntimeFilterChan{
+				Spec: rfSpec,
 				Chan: ch,
 			}
-			if c.runtimeFilterChans == nil {
-				c.runtimeFilterChans = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-			c.runtimeFilterChans[rfSpec.Tag] = ch
+			c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
 		}
+		s.DataSource.RuntimeFilterReceivers = receivers
 	}
 
 	return s
