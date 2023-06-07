@@ -1326,6 +1326,24 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+
+	// Register runtime filters
+	// XXX currently we only implement runtime filter on single CN
+	if len(c.cnList) == 1 {
+		s.DataSource.RuntimeFilterReceivers = make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterList))
+		for i, rfSpec := range n.RuntimeFilterList {
+			ch := make(chan *pipeline.RuntimeFilter, 1)
+			s.DataSource.RuntimeFilterReceivers[i] = &colexec.RuntimeFilterChan{
+				Expr: rfSpec.Expr,
+				Chan: ch,
+			}
+			if c.runtimeFilterChans == nil {
+				c.runtimeFilterChans = make(map[int32]chan *pipeline.RuntimeFilter)
+			}
+			c.runtimeFilterChans[rfSpec.Tag] = ch
+		}
+	}
+
 	return s
 }
 
@@ -1431,7 +1449,7 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	var rs []*Scope
-	isEq := plan2.IsEquiJoin(node.OnList)
+	isEq := plan2.IsEquiJoin2(node.OnList)
 
 	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -2186,7 +2204,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		Op:      vm.HashBuild,
 		Idx:     s.Instructions[0].Idx,
 		IsFirst: true,
-		Arg:     constructHashBuild(s.Instructions[0], c.proc),
+		Arg:     constructHashBuild(c, s.Instructions[0], c.proc),
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -2319,7 +2337,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 	}
 
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList...)
+	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
 	if err != nil {
 		return nil, err
 	}
@@ -2335,7 +2353,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList...)
+			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
 			if err != nil {
 				return nil, err
 			}

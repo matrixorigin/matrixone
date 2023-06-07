@@ -16,12 +16,11 @@ package checkpoint
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -606,12 +605,12 @@ func (r *runner) tryScheduleCheckpoint() {
 
 	if entry.IsPendding() {
 		check := func() (done bool) {
+			if !r.source.IsCommitted(entry.GetStart(), entry.GetEnd()) {
+				return false
+			}
 			tree := r.source.ScanInRangePruned(entry.GetStart(), entry.GetEnd())
 			tree.GetTree().Compact()
-			if tree.IsEmpty() {
-				done = true
-			}
-			return
+			return tree.IsEmpty()
 		}
 
 		if !check() {

@@ -652,11 +652,13 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	cond, conds := extraJoinConditions(n.OnList)
+
 	return &join.Argument{
-		Typs:       typs,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
+		Typs:               typs,
+		Result:             result,
+		Cond:               cond,
+		Conditions:         constructJoinConditions(conds, proc),
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 }
 
@@ -671,10 +673,11 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &semi.Argument{
-		Typs:       typs,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
+		Typs:               typs,
+		Result:             result,
+		Cond:               cond,
+		Conditions:         constructJoinConditions(conds, proc),
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 }
 
@@ -685,10 +688,11 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &left.Argument{
-		Typs:       typs,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
+		Typs:               typs,
+		Result:             result,
+		Cond:               cond,
+		Conditions:         constructJoinConditions(conds, proc),
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 }
 
@@ -699,13 +703,14 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &right.Argument{
-		LeftTypes:  left_typs,
-		RightTypes: right_typs,
-		Nbucket:    Nbucket,
-		Ibucket:    Ibucket,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
+		LeftTypes:          left_typs,
+		RightTypes:         right_typs,
+		Nbucket:            Nbucket,
+		Ibucket:            Ibucket,
+		Result:             result,
+		Cond:               cond,
+		Conditions:         constructJoinConditions(conds, proc),
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 }
 
@@ -716,12 +721,13 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &rightsemi.Argument{
-		RightTypes: right_typs,
-		Nbucket:    Nbucket,
-		Ibucket:    Ibucket,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
+		RightTypes:         right_typs,
+		Nbucket:            Nbucket,
+		Ibucket:            Ibucket,
+		Result:             result,
+		Cond:               cond,
+		Conditions:         constructJoinConditions(conds, proc),
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 }
 
@@ -732,12 +738,13 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &rightanti.Argument{
-		RightTypes: right_typs,
-		Nbucket:    Nbucket,
-		Ibucket:    Ibucket,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
+		RightTypes:         right_typs,
+		Nbucket:            Nbucket,
+		Ibucket:            Ibucket,
+		Result:             result,
+		Cond:               cond,
+		Conditions:         constructJoinConditions(conds, proc),
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 }
 
@@ -748,10 +755,11 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &single.Argument{
-		Typs:       typs,
-		Result:     result,
-		Cond:       cond,
-		Conditions: constructJoinConditions(conds, proc),
+		Typs:               typs,
+		Result:             result,
+		Cond:               cond,
+		Conditions:         constructJoinConditions(conds, proc),
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
 	}
 }
 
@@ -1244,7 +1252,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Argument {
+func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *hashbuild.Argument {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
 
@@ -1256,6 +1264,7 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 		}
+
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
 		return &hashbuild.Argument{
@@ -1263,97 +1272,209 @@ func constructHashBuild(in vm.Instruction, proc *process.Process) *hashbuild.Arg
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 		}
+
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
-		return &hashbuild.Argument{
+		retArg := &hashbuild.Argument{
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 		}
+
+		if arg.RuntimeFilterSpecs != nil {
+			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
+			for _, spec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+						Expr: spec.Expr,
+						Chan: ch,
+					})
+				}
+			}
+		}
+
+		return retArg
+
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
-		return &hashbuild.Argument{
+		retArg := &hashbuild.Argument{
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 		}
+
+		if arg.RuntimeFilterSpecs != nil {
+			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
+			for _, spec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+						Expr: spec.Expr,
+						Chan: ch,
+					})
+				}
+			}
+		}
+
+		return retArg
+
 	case vm.Right:
 		arg := in.Arg.(*right.Argument)
-		return &hashbuild.Argument{
+		retArg := &hashbuild.Argument{
 			Ibucket:     arg.Ibucket,
 			Nbucket:     arg.Nbucket,
 			NeedHashMap: true,
 			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
+
+		if arg.RuntimeFilterSpecs != nil {
+			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
+			for _, spec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+						Expr: spec.Expr,
+						Chan: ch,
+					})
+				}
+			}
+		}
+
+		return retArg
+
 	case vm.RightSemi:
 		arg := in.Arg.(*rightsemi.Argument)
-		return &hashbuild.Argument{
+		retArg := &hashbuild.Argument{
 			Ibucket:     arg.Ibucket,
 			Nbucket:     arg.Nbucket,
 			NeedHashMap: true,
 			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
+
+		if arg.RuntimeFilterSpecs != nil {
+			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
+			for _, spec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+						Expr: spec.Expr,
+						Chan: ch,
+					})
+				}
+			}
+		}
+
+		return retArg
+
 	case vm.RightAnti:
 		arg := in.Arg.(*rightanti.Argument)
-		return &hashbuild.Argument{
+		retArg := &hashbuild.Argument{
 			Ibucket:     arg.Ibucket,
 			Nbucket:     arg.Nbucket,
 			NeedHashMap: true,
 			Typs:        arg.RightTypes,
 			Conditions:  arg.Conditions[1],
 		}
+
+		if arg.RuntimeFilterSpecs != nil {
+			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
+			for _, spec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+						Expr: spec.Expr,
+						Chan: ch,
+					})
+				}
+			}
+		}
+
+		return retArg
+
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
-		return &hashbuild.Argument{
+		retArg := &hashbuild.Argument{
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 		}
+
+		if arg.RuntimeFilterSpecs != nil {
+			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
+			for _, spec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+						Expr: spec.Expr,
+						Chan: ch,
+					})
+				}
+			}
+		}
+
+		return retArg
+
 	case vm.Single:
 		arg := in.Arg.(*single.Argument)
-		return &hashbuild.Argument{
+		retArg := &hashbuild.Argument{
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
 		}
+
+		if arg.RuntimeFilterSpecs != nil {
+			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
+			for _, spec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+						Expr: spec.Expr,
+						Chan: ch,
+					})
+				}
+			}
+		}
+
+		return retArg
+
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
 		}
+
 	case vm.LoopAnti:
 		arg := in.Arg.(*loopanti.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
 		}
+
 	case vm.LoopJoin:
 		arg := in.Arg.(*loopjoin.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
 		}
+
 	case vm.LoopLeft:
 		arg := in.Arg.(*loopleft.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
 		}
+
 	case vm.LoopSemi:
 		arg := in.Arg.(*loopsemi.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
 		}
+
 	case vm.LoopSingle:
 		arg := in.Arg.(*loopsingle.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: false,
 			Typs:        arg.Typs,
 		}
+
 	case vm.LoopMark:
 		arg := in.Arg.(*loopmark.Argument)
 		return &hashbuild.Argument{
