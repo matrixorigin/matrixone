@@ -387,7 +387,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	s = newParallelScope(s, ss)
 
 	if isRight {
-		channel := make(chan *bitmap.Bitmap)
+		channel := make(chan *bitmap.Bitmap, mcpu)
 		for i := range s.PreScopes {
 			switch arg := s.PreScopes[i].Instructions[0].Arg.(type) {
 			case *right.Argument:
