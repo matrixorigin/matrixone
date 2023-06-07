@@ -953,10 +953,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.swapJoinChildren(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 
-		builder.pushdownRuntimeFilters(rootID)
-
-		//this rule should be at last, and can not recalc stats after determine shuffle method
+		//after determine shuffle method, never call ReCalcNodeStats again
 		determineShuffleMethod(rootID, builder)
+		builder.pushdownRuntimeFilters(rootID)
 
 		colRefCnt = make(map[[2]int32]int)
 		rootNode := builder.qry.Nodes[rootID]
