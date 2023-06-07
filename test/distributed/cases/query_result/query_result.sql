@@ -9,7 +9,9 @@ select count(*) from meta_scan(last_query_id()) as u;
 set global save_query_result = off;
 
 select * from tt;
+-- @bvt:issue#9886
 select * from result_scan(last_query_id()) as u;
+-- @bvt:issue
 set global save_query_result = on;
 drop table if exists t2;
 create table t2 (a int, b int, c int);
