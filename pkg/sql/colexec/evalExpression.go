@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -131,7 +132,54 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			typ:      typ,
 		}, nil
 
+	case *plan.Expr_P:
+		val, err := proc.GetPrepareParamsAt(int(t.P.Pos))
+		if err != nil {
+			return nil, err
+		}
+		exprImpl, err := util.AnyToExpr(proc.Ctx, val, planExpr)
+		if err != nil {
+			return nil, err
+		}
+		return NewExpressionExecutor(proc, exprImpl)
+
+	case *plan.Expr_V:
+		exprImpl, err := util.GetVarValue(proc.Ctx, proc, planExpr)
+		if err != nil {
+			return nil, err
+		}
+		return NewExpressionExecutor(proc, exprImpl)
+
 	case *plan.Expr_F:
+		var err error
+		if util.HaveVarOrParam(t) {
+			planExpr = util.DeepCopyExpr(planExpr)
+			t = planExpr.Expr.(*plan.Expr_F)
+			for i, arg := range t.F.Args {
+				if _, ok := arg.Expr.(*plan.Expr_V); ok {
+					t.F.Args[i], err = util.GetVarValue(proc.Ctx, proc, planExpr)
+					if err != nil {
+						return nil, err
+					}
+				} else if pExpr, ok := t.F.Args[i].Expr.(*plan.Expr_P); ok {
+					var val any
+					val, err = proc.GetPrepareParamsAt(int(pExpr.P.Pos))
+					if err != nil {
+						return nil, err
+					}
+					t.F.Args[i], err = util.AnyToExpr(proc.Ctx, val, planExpr)
+					if err != nil {
+						return nil, err
+					}
+				}
+
+			}
+			planExpr, err = util.SimpleBindFuncExpr(proc.Ctx, t.F.Func.GetObjName(), t.F.Args)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		overload, err := function.GetFunctionById(proc.Ctx, t.F.GetFunc().GetObj())
 		if err != nil {
 			return nil, err

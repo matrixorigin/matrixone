@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -185,6 +186,9 @@ type Process struct {
 	DispatchNotifyCh chan WrapCs
 
 	Aicm *defines.AutoIncrCacheManager
+
+	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	prepareParams       []any
 }
 
 type vectorPool struct {
@@ -210,6 +214,25 @@ func (proc *Process) InitSeq() {
 	proc.SessionInfo.SeqLastValue[0] = ""
 	proc.SessionInfo.SeqAddValues = make(map[uint64]string)
 	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
+}
+
+func (proc *Process) SetPrepareParams(prepareParams []any) {
+	proc.prepareParams = prepareParams
+}
+
+func (proc *Process) GetPrepareParamsAt(i int) (any, error) {
+	if i < 0 || i >= len(proc.prepareParams) {
+		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
+	}
+	return proc.prepareParams[i], nil
+}
+
+func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
+	proc.resolveVariableFunc = f
+}
+
+func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	return proc.resolveVariableFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

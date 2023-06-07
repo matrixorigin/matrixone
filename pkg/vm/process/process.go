@@ -87,6 +87,9 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.Aicm = p.Aicm
 	proc.LoadTag = p.LoadTag
 
+	proc.prepareParams = p.prepareParams
+	proc.resolveVariableFunc = p.resolveVariableFunc
+
 	// reg and cancel
 	proc.Ctx = newctx
 	proc.Cancel = cancel

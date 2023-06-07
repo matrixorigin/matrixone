@@ -3244,6 +3244,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		LastInsertID:  ses.GetLastInsertID(),
 		SqlHelper:     ses.GetSqlHelper(),
 	}
+	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
@@ -3412,6 +3413,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 		TimeZone:      ses.GetTimeZone(),
 		StorageEngine: pu.StorageEngine,
 	}
+	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
 	// Deep copy the map, takes some memory.
@@ -3615,23 +3617,27 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(requestCtx context.Context, data [
 	if err != nil {
 		return "", err
 	}
-	names, vars, err := ses.GetMysqlProtocol().ParseExecuteData(requestCtx, preStmt, data, pos)
+
+	sql := fmt.Sprintf("execute %s", stmtName)
+	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+	_, vars, err := ses.GetMysqlProtocol().ParseExecuteData(requestCtx, preStmt, data, pos)
 	if err != nil {
 		return "", err
 	}
-	sql := fmt.Sprintf("execute %s", stmtName)
-	varStrings := make([]string, len(names))
-	if len(names) > 0 {
-		sql = sql + fmt.Sprintf(" using @%s", strings.Join(names, ",@"))
-		for i := 0; i < len(names); i++ {
-			varStrings[i] = fmt.Sprintf("%v", vars[i])
-			err := ses.SetUserDefinedVar(names[i], vars[i])
-			if err != nil {
-				return "", err
-			}
-		}
-	}
-	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
+	ses.UpdatePrepareStmtParam(stmtName, vars)
+	// sql := fmt.Sprintf("execute %s", stmtName)
+	// varStrings := make([]string, len(names))
+	// if len(names) > 0 {
+	// 	sql = sql + fmt.Sprintf(" using @%s", strings.Join(names, ",@"))
+	// 	for i := 0; i < len(names); i++ {
+	// 		varStrings[i] = fmt.Sprintf("%v", vars[i])
+	// 		err := ses.SetUserDefinedVar(names[i], vars[i])
+	// 		if err != nil {
+	// 			return "", err
+	// 		}
+	// 	}
+	// }
+	// logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
 	return sql, nil
 }
 

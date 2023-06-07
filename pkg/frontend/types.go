@@ -92,6 +92,8 @@ type PrepareStmt struct {
 	ParamTypes     []byte
 	IsInsertValues bool
 
+	params []any
+
 	mp        *mpool.MPool
 	InsertBat *batch.Batch
 	ufs       []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion

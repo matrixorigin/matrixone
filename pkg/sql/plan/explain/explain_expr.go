@@ -145,7 +145,7 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			buf.WriteString("@" + exprImpl.V.Name)
 		}
 	case *plan.Expr_P:
-		panic("unimplement Expr_P")
+		buf.WriteString("?")
 	case *plan.Expr_List:
 		exprlist := expr.Expr.(*plan.Expr_List)
 		if exprlist.List.List != nil {

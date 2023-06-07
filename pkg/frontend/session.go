@@ -977,6 +977,16 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
 }
 
+func (ses *Session) UpdatePrepareStmtParam(name string, params []any) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if prepareStmt, ok := ses.prepareStmts[name]; ok {
+		prepareStmt.params = params
+		return nil
+	}
+	return moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
+}
+
 func (ses *Session) RemovePrepareStmt(name string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()

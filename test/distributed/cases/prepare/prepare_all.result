@@ -110,6 +110,7 @@ set @hit_str1='a2';
 set @not_hit_str2='a';
 execute s2 using @hit_str1;
 execute s2 using @not_hit_str1;
+invalid input: Incorrect arguments to EXECUTE
 select * from t1;
 str1	str2
 xx1	b1

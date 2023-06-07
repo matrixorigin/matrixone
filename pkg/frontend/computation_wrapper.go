@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -215,6 +216,36 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		if err != nil {
 			return nil, err
 		}
+		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+
+		if len(prepareStmt.params) > 0 { //use binary protocol
+			if len(prepareStmt.params) != len(preparePlan.ParamTypes) {
+				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+			}
+			cwft.proc.SetPrepareParams(prepareStmt.params)
+		} else if len(executePlan.Args) > 0 {
+			if len(executePlan.Args) != len(preparePlan.ParamTypes) {
+				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+			}
+
+			params := make([]any, len(executePlan.Args))
+			for i, arg := range executePlan.Args {
+				exprImpl := arg.Expr.(*plan.Expr_V)
+				param, err := cwft.proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+				if err != nil {
+					return nil, err
+				}
+				if param == nil {
+					return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+				}
+				params[i] = param
+			}
+			cwft.proc.SetPrepareParams(params)
+		} else {
+			if len(preparePlan.ParamTypes) > 0 {
+				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+			}
+		}
 
 		// TODO check if schema change, obj.Obj is zero all the time in 0.6
 		// for _, obj := range preparePlan.GetSchemas() {
@@ -224,49 +255,48 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 	}
 		// }
 
-		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
-		if len(executePlan.Args) != len(preparePlan.ParamTypes) {
-			return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
-		}
-		if prepareStmt.IsInsertValues {
-			for _, node := range preparePlan.Plan.GetQuery().Nodes {
-				if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
-					tableDef := node.TableDef
-					colCount := len(tableDef.Cols)
-					colsData := node.RowsetData.Cols
-					rowCount := len(colsData[0].Data)
+		// if len(executePlan.Args) != len(preparePlan.ParamTypes) {
+		// 	return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
+		// }
+		// if prepareStmt.IsInsertValues {
+		// 	for _, node := range preparePlan.Plan.GetQuery().Nodes {
+		// 		if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
+		// 			tableDef := node.TableDef
+		// 			colCount := len(tableDef.Cols)
+		// 			colsData := node.RowsetData.Cols
+		// 			rowCount := len(colsData[0].Data)
 
-					bat := prepareStmt.InsertBat
-					bat.CleanOnlyData()
-					for i := 0; i < colCount; i++ {
-						if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
-							colsData[i].Data, bat.Vecs[i], executePlan.Args, prepareStmt.ufs[i]); err != nil {
-							return nil, err
-						}
-					}
-					bat.AddCnt(1)
-					for i := 0; i < rowCount; i++ {
-						bat.Zs = append(bat.Zs, 1)
-					}
-					cwft.proc.SetPrepareBatch(bat)
-					break
-				}
-			}
-			cwft.plan = preparePlan.Plan
-		} else {
-			newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
+		// 			bat := prepareStmt.InsertBat
+		// 			bat.CleanOnlyData()
+		// 			for i := 0; i < colCount; i++ {
+		// 				if err = rowsetDataToVector(cwft.proc.Ctx, cwft.proc, cwft.ses.txnCompileCtx,
+		// 					colsData[i].Data, bat.Vecs[i], executePlan.Args, prepareStmt.ufs[i]); err != nil {
+		// 					return nil, err
+		// 				}
+		// 			}
+		// 			bat.AddCnt(1)
+		// 			for i := 0; i < rowCount; i++ {
+		// 				bat.Zs = append(bat.Zs, 1)
+		// 			}
+		// 			cwft.proc.SetPrepareBatch(bat)
+		// 			break
+		// 		}
+		// 	}
+		// 	cwft.plan = preparePlan.Plan
+		// } else {
+		// 	newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
 
-			// replace ? and @var with their values
-			resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
-			resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
-			constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
-			vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
-			err = vp.Visit(requestCtx)
-			if err != nil {
-				return nil, err
-			}
-			cwft.plan = newPlan
-		}
+		// replace ? and @var with their values
+		// resetParamRule := plan2.NewResetParamRefRule(requestCtx, executePlan.Args)
+		// resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompileCtx(), cwft.ses.GetTxnCompileCtx().GetProcess())
+		// constantFoldRule := plan2.NewConstantFoldRule(cwft.ses.GetTxnCompileCtx())
+		// vp := plan2.NewVisitPlan(newPlan, []plan2.VisitPlanRule{resetParamRule, resetVarRule, constantFoldRule})
+		// err = vp.Visit(requestCtx)
+		// if err != nil {
+		// 	return nil, err
+		// }
+		cwft.plan = preparePlan.Plan
+		// }
 
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
