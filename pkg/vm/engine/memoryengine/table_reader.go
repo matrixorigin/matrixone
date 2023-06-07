@@ -18,14 +18,14 @@ import (
 	"context"
 	"encoding/binary"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -209,7 +209,7 @@ func (t *Table) GetEngineType() engine.EngineType {
 	return engine.Memory
 }
 
-func (t *Table) Ranges(ctx context.Context, _ ...*plan.Expr) ([][]byte, error) {
+func (t *Table) Ranges(_ context.Context, _ []*plan.Expr) ([][]byte, error) {
 	// return encoded shard ids
 	nodes := getDNServices(t.engine.cluster)
 	shards := make([][]byte, 0, len(nodes))
@@ -221,4 +221,8 @@ func (t *Table) Ranges(ctx context.Context, _ ...*plan.Expr) ([][]byte, error) {
 		}
 	}
 	return shards, nil
+}
+
+func (t *Table) ApplyRuntimeFilters(_ context.Context, ranges [][]byte, _ []*plan.Expr, _ []*pipeline.RuntimeFilter) ([][]byte, error) {
+	return ranges, nil
 }

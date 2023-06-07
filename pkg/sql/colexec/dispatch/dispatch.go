@@ -17,11 +17,10 @@ package dispatch
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -121,7 +120,7 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 			return false, moerr.NewInternalErrorNoCtx("wait notify message timeout")
 		case <-proc.Ctx.Done():
 			arg.ctr.prepared = true
-			logutil.Infof("conctx done during dispatch")
+			logutil.Warn("conctx done during dispatch")
 			return true, nil
 		case csinfo := <-proc.DispatchNotifyCh:
 			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{

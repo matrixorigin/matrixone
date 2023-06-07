@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -121,10 +122,19 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var size uint64
 	txn.Lock()
 	defer txn.Unlock()
+	var S3SizeThreshold = colexec.TagS3Size
+	if txn.proc != nil && txn.proc.Ctx != nil {
+		isMoLogger, ok := txn.proc.Ctx.Value(defines.IsMoLogger{}).(bool)
+		if ok && isMoLogger {
+			S3SizeThreshold = colexec.TagS3SizeForMOLogger
+		}
+	}
+
 	if !((offset > 0 && txn.workspaceSize >= colexec.WriteS3Threshold) ||
-		(force && txn.workspaceSize >= colexec.TagS3Size)) {
+		(force && txn.workspaceSize >= S3SizeThreshold)) {
 		return nil
 	}
+
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].bat == nil {
 			continue
@@ -151,7 +161,7 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			mp[key] = append(mp[key], bat)
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
-			// maybe this will cause that the log imcrements unlimitly
+			// maybe this will cause that the log increments unlimitedly
 			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
 			// i--
 			txn.writes[i].bat = nil
