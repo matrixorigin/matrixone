@@ -273,6 +273,7 @@ func WildcardMatch(pattern, target string) bool {
 	return p >= plen
 }
 
+//getExprValue executes the expression and returns the value.
 func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}, error) {
 	/*
 		CORNER CASE:
