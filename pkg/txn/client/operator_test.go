@@ -442,6 +442,13 @@ func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
 	})
 }
 
+func TestRollbackMultiTimes(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		require.NoError(t, tc.Rollback(ctx))
+		require.Error(t, tc.Rollback(ctx))
+	})
+}
+
 func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
