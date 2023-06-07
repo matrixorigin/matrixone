@@ -147,7 +147,8 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 				continue
 			}
 			handleUnsent(proc, bat, refCountAdd, int64(i))
-			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+			logutil.Warnf("the receiver's ctx done during dispatch to all local")
+			return true, nil
 		case reg.Ch <- bat:
 		}
 	}
@@ -204,7 +205,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 			if bat != nil && bat.Length() != 0 {
 				select {
 				case <-reg.Ctx.Done():
-					return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
 				case reg.Ch <- bat:
 				}
 			}
@@ -240,7 +241,7 @@ func sendShuffledBats(ap *Argument, proc *process.Process) (bool, error) {
 		if batToSend != nil && batToSend.Length() != 0 {
 			select {
 			case <-reg.Ctx.Done():
-				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+				logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
 			case reg.Ch <- batToSend:
 			}
 		}
