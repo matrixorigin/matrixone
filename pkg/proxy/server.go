@@ -68,6 +68,9 @@ func NewServer(ctx context.Context, config Config, opts ...Option) (*Server, err
 	if err != nil {
 		return nil, err
 	}
+
+	go h.bootstrap(ctx)
+
 	s.handler = h
 	app, err := goetty.NewApplication(config.ListenAddress, nil,
 		goetty.WithAppLogger(s.runtime.Logger().RawLogger()),
