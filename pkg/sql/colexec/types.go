@@ -89,6 +89,6 @@ type ReceiverOperator struct {
 }
 
 type RuntimeFilterChan struct {
-	Expr *plan.Expr
+	Spec *plan.RuntimeFilterSpec
 	Chan chan *pipeline.RuntimeFilter
 }

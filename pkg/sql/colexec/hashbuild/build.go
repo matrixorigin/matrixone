@@ -120,10 +120,10 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 				}
 
 				runtimeFilter = &pipeline.RuntimeFilter{
-					Typ:  pipeline.RuntimeFilter_In,
+					Typ:  pipeline.RuntimeFilter_IN,
 					Data: data,
 				}
-			} else {
+			} else if len(ctr.sels) <= plan.BloomFilterCardLimit {
 				zm := objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 				for i := range sels {
 					bs := vec.GetRawBytesAt(int(sels[i]))
@@ -131,8 +131,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 				}
 
 				runtimeFilter = &pipeline.RuntimeFilter{
-					Typ:  pipeline.RuntimeFilter_ZoneMap,
+					Typ:  pipeline.RuntimeFilter_MIN_MAX,
 					Data: zm,
+				}
+			} else {
+				runtimeFilter = &pipeline.RuntimeFilter{
+					Typ: pipeline.RuntimeFilter_NO_FILTER,
 				}
 			}
 
