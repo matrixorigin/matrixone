@@ -189,7 +189,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 }
 
 func GetShuffleDop() (dop int) {
-	return 2
+	return MAXShuffleDOP
 }
 
 // default shuffle type for scan is hash

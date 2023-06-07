@@ -478,6 +478,12 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	if err != nil {
 		return nil, err
 	}
+
+	// sort by addr to get fixed order of CN list
+	sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
+
+	logutil.Infof("!!!!!!!!!!!!!current cn addr: %v, cn1 %v cn2 %v", c.addr, c.cnList[0].Addr, c.cnList[1].Addr)
+
 	if c.info.Typ == plan2.ExecTypeAP {
 		c.removeUnavailableCN()
 	}
@@ -557,7 +563,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		}
 		steps = append(steps, scope)
 	}
-	
+
 	debugstr := DebugShowScopes(steps)
 	logutil.Infof("!!!!!!!!!!%v", debugstr)
 
@@ -2485,7 +2491,7 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 			})
 		}
 	}
-	// sort by addr to get fixed order of CN list
+
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
 	if n.Stats.Shuffle && n.Stats.ShuffleType == plan.ShuffleType_Range {
