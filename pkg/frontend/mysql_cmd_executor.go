@@ -402,7 +402,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if bat.Zs[j] <= 0 {
 			continue
 		}
-		row, err := extractRowFromEveryVector(ses, bat, j, oq,false)
+		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
 		if err != nil {
 			return err
 		}
