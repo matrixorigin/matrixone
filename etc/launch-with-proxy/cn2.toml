@@ -51,5 +51,5 @@ listen-address = "0.0.0.0:7003"
 service-address = "127.0.0.1:7003"
 
 [cn.ctl.address]
-listen-address = "0.0.0.0:39958"
-service-address = "127.0.0.1:39958"
+listen-address = "0.0.0.0:9958"
+service-address = "127.0.0.1:9958"
