@@ -17,9 +17,10 @@ package txnimpl
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime/trace"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/RoaringBitmap/roaring"
 
@@ -248,8 +249,8 @@ func (tbl *txnTable) recurTransferDelete(
 	if err := tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
 		return err
 	}
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
 			depth,
 			id.BlockID.String(),
 			row,
@@ -695,8 +696,9 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		// 		start,
 		// 		end)
 		// }
+		// This err also captured by txn's write conflict check.
 		if err != nil {
-			logutil.Infof("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
+			logutil.Debugf("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				id.TableID,
 				id.BlockID.String(),

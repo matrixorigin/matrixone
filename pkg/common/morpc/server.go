@@ -314,18 +314,18 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					timeout := time.Duration(0)
 					for _, f := range responses {
 						if !s.options.filter(f.send.Message) {
-							f.messageSended(messageSkipped)
+							f.messageSent(messageSkipped)
 							continue
 						}
 
 						if f.send.Timeout() {
-							f.messageSended(f.send.Ctx.Err())
+							f.messageSent(f.send.Ctx.Err())
 							continue
 						}
 
 						v, err := f.send.GetTimeoutFromContext()
 						if err != nil {
-							f.messageSended(err)
+							f.messageSent(err)
 							continue
 						}
 
@@ -342,7 +342,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							s.logger.Error("write response failed",
 								zap.Uint64("request-id", f.send.Message.GetID()),
 								zap.Error(err))
-							f.messageSended(err)
+							f.messageSent(err)
 							return
 						}
 						written++
@@ -360,7 +360,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 									s.logger.Error("write response failed",
 										zap.Uint64("request-id", id),
 										zap.Error(err))
-									f.messageSended(err)
+									f.messageSent(err)
 								}
 							}
 						}
@@ -373,7 +373,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					}
 
 					for _, f := range responses {
-						f.messageSended(nil)
+						f.messageSent(nil)
 					}
 				}
 			}
@@ -486,7 +486,7 @@ func (cs *clientSession) cleanSend() {
 			if !ok {
 				return
 			}
-			f.messageSended(backendClosed)
+			f.messageSent(backendClosed)
 		default:
 			return
 		}

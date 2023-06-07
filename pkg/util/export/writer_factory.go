@@ -65,9 +65,9 @@ func (rw *reactWriter) AddAfter(hook table.CheckWriteHook) {
 	rw.afters = append(rw.afters, hook)
 }
 
-func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string) (factory table.WriterFactory) {
+func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext string, enableSqlWriter bool) (factory table.WriterFactory) {
 
-	var extension = table.GetExtension(ext)
+	var extension = table.CsvExtension
 	var cfg = table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
 
 	switch extension {
@@ -76,7 +76,12 @@ func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, ext
 			options := []etl.FSWriterOption{
 				etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
 			}
-			return newWriter(ctx, etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...)))
+			cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
+			if enableSqlWriter {
+				return newWriter(ctx, etl.NewSqlWriter(ctx, tbl, cw))
+			} else {
+				return newWriter(ctx, cw)
+			}
 		}
 	case table.TaeExtension:
 		mp, err := mpool.NewMPool("etl_fs_writer", 0, mpool.NoFixed)

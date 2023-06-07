@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -36,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -401,50 +401,50 @@ type column struct {
 	seqnum          uint16
 }
 
+type withFilterMixin struct {
+	ctx      context.Context
+	fs       fileservice.FileService
+	ts       timestamp.Timestamp
+	tableDef *plan.TableDef
+
+	// columns used for reading
+	columns struct {
+		seqnums  []uint16
+		colTypes []types.Type
+		// colNulls []bool
+
+		compPKPositions []int // composite primary key pos in the columns
+
+		pkPos    int // -1 means no primary key in columns
+		rowidPos int // -1 means no rowid in columns
+
+		indexOfFirstSortedColumn int
+	}
+
+	filterState struct {
+		evaluated bool
+		expr      *plan.Expr
+		filter    blockio.ReadFilter
+	}
+}
+
 type blockReader struct {
-	blks          []*catalog.BlockInfo
-	ctx           context.Context
-	fs            fileservice.FileService
-	ts            timestamp.Timestamp
-	tableDef      *plan.TableDef
-	primarySeqnum int
-	expr          *plan.Expr
+	withFilterMixin
 
-	//used for prefetch
-	infos           [][]*catalog.BlockInfo
-	steps           []int
-	currentStep     int
-	prefetchColIdxs []uint16 //need to remove rowid
+	// used for prefetch
+	infos       [][]*catalog.BlockInfo
+	steps       []int
+	currentStep int
 
-	// cached meta data.
-	seqnums        []uint16
-	colTypes       []types.Type
-	colNulls       []bool
-	pkidxInColIdxs int
-	pkName         string
-	// binary search info
-	init       bool
-	canCompute bool
-	searchFunc func(*vector.Vector) int
-
-	// used for sorted
-	indexOfFirstSortedColumn int
+	// block list to scan
+	blks []*catalog.BlockInfo
 }
 
 type blockMergeReader struct {
-	sels []int64
-	blks []ModifyBlockMeta
-	ctx  context.Context
-	fs   fileservice.FileService
-	ts   timestamp.Timestamp
-	//TODO::remove it, instead, use meta locations
-	table    *txnTable
-	tableDef *plan.TableDef
+	withFilterMixin
 
-	// cached meta data.
-	seqnums  []uint16
-	colTypes []types.Type
-	colNulls []bool
+	table *txnTable
+	blks  []ModifyBlockMeta
 }
 
 type mergeReader struct {
@@ -454,69 +454,9 @@ type mergeReader struct {
 type emptyReader struct {
 }
 
-type BlockMeta struct {
-	Rows    int64
-	Info    catalog.BlockInfo
-	Zonemap []Zonemap
-}
-
-func (a *BlockMeta) MarshalBinary() ([]byte, error) {
-	return a.Marshal()
-}
-
-func (a *BlockMeta) UnmarshalBinary(data []byte) error {
-	return a.Unmarshal(data)
-}
-
-type Zonemap [64]byte
-
-func (z *Zonemap) ProtoSize() int {
-	return 64
-}
-
-func (z *Zonemap) MarshalToSizedBuffer(data []byte) (int, error) {
-	if len(data) < z.ProtoSize() {
-		panic("invalid byte slice")
-	}
-	n := copy(data, z[:])
-	return n, nil
-}
-
-func (z *Zonemap) MarshalTo(data []byte) (int, error) {
-	size := z.ProtoSize()
-	return z.MarshalToSizedBuffer(data[:size])
-}
-
-func (z *Zonemap) Marshal() ([]byte, error) {
-	data := make([]byte, z.ProtoSize())
-	n, err := z.MarshalToSizedBuffer(data)
-	if err != nil {
-		return nil, err
-	}
-	return data[:n], nil
-}
-
-func (z *Zonemap) Unmarshal(data []byte) error {
-	if len(data) < z.ProtoSize() {
-		panic("invalid byte slice")
-	}
-	copy(z[:], data)
-	return nil
-}
-
 type ModifyBlockMeta struct {
 	meta    catalog.BlockInfo
 	deletes []int64
-}
-
-type Columns []column
-
-func (cols Columns) Len() int           { return len(cols) }
-func (cols Columns) Swap(i, j int)      { cols[i], cols[j] = cols[j], cols[i] }
-func (cols Columns) Less(i, j int) bool { return cols[i].num < cols[j].num }
-
-func (a BlockMeta) Eq(b BlockMeta) bool {
-	return a.Info.BlockID == b.Info.BlockID
 }
 
 type pkRange struct {
