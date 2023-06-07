@@ -171,6 +171,7 @@ func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 	buf = AppendChunk(buf, prev.GetPayload())
 
 	for prev.Sequence < prev.MaxSequence {
+		panic("BUG")
 		segment, err := recvFunc()
 		if err != nil {
 			return nil, err
@@ -183,6 +184,26 @@ func (c *LogtailClient) Receive(ctx context.Context) (*LogtailResponse, error) {
 	if err := resp.Unmarshal(buf); err != nil {
 		logutil.Error("logtail client: fail to unmarshal logtail response", zap.Error(err))
 		return nil, err
+	}
+	response := resp
+	ok := false
+	if response.LogtailResponse.GetUpdateResponse() != nil {
+		for _, v := range response.LogtailResponse.GetUpdateResponse().LogtailList {
+			if v.Table.TbId < 4 {
+				ok = true
+				break
+			}
+		}
+	} else if response.LogtailResponse.GetSubscribeResponse() != nil {
+		if response.LogtailResponse.GetSubscribeResponse().Logtail.Table.TbId < 4 {
+			ok = true
+		}
+	}
+	if ok {
+		logutil.Info(">>>> TODO:delete, receive from stream logtail response",
+			zap.String("client", c.stream.(morpc.AddressStream).LocalAddr()),
+			zap.String("response", response.DebugString()),
+		)
 	}
 	return resp, nil
 }

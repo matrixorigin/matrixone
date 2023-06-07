@@ -213,6 +213,10 @@ type Stream interface {
 	Close(closeConn bool) error
 }
 
+type AddressStream interface {
+	LocalAddr() string
+}
+
 // ClientOption client options for create client
 type ClientOption func(*client)
 

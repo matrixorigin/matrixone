@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -325,8 +324,8 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				}
 				if ok {
 					logutil.Info(">>>> TODO:delete, receive logtail response",
-						zap.String("client", fmt.Sprintf("%p", client)),
-						zap.String("response", response.String()),
+						zap.String("client", client.subscriber.localAddr),
+						zap.String("response", response.DebugString()),
 					)
 				}
 
@@ -543,8 +542,8 @@ func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
 type logTailSubscriber struct {
 	dnNodeID      int
 	logTailClient *service.LogtailClient
-
-	ready bool
+	localAddr     string
+	ready         bool
 
 	requestLock   chan bool
 	doSubscribe   func(context.Context, api.TableID) error
@@ -616,7 +615,7 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	if err != nil {
 		return err
 	}
-
+	s.localAddr = stream.(morpc.AddressStream).LocalAddr()
 	s.doSubscribe = s.subscribeTable
 	s.doUnSubscribe = s.unSubscribeTable
 	if s.requestLock == nil {

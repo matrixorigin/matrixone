@@ -340,6 +340,12 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							fields = append(fields, zap.String("response",
 								f.send.Message.DebugString()))
 						}
+						if m, ok := f.send.Message.(DebugMessage); ok && m.Log() {
+							s.logger.Info(">>>> TODO:delete, write response",
+								zap.String("client", cs.conn.RemoteAddress()),
+								zap.Uint32("sequence", f.send.streamSequence),
+								zap.String("response", m.DebugString()))
+						}
 						if err := cs.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
 							s.logger.Error("write response failed",
 								zap.Uint64("request-id", f.send.Message.GetID()),
@@ -348,12 +354,6 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							return
 						}
 						written++
-						if m, ok := f.send.Message.(DebugMessage); ok && m.Log() {
-							s.logger.Info(">>>> TODO:delete, write response",
-								zap.String("client", cs.conn.RemoteAddress()),
-								zap.Uint32("sequence", f.send.streamSequence),
-								zap.String("response", m.DebugString()))
-						}
 					}
 
 					if written > 0 {

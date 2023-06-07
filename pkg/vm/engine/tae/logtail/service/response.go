@@ -100,11 +100,13 @@ func (s *LogtailResponseSegment) GetID() uint64 {
 
 func (s *LogtailResponseSegment) DebugString() string {
 	return fmt.Sprintf(
-		"LogtailResponseSegment: StreamID=%d, MessageSize=%d, Sequence=%d, MaxSequence=%d",
+		"LogtailResponseSegment(%p): StreamID=%d, MessageSize=%d, Sequence=%d, MaxSequence=%d, Payload=%d",
+		s,
 		s.GetStreamID(),
 		s.GetMessageSize(),
 		s.GetSequence(),
 		s.GetMaxSequence(),
+		len(s.GetPayload()),
 	)
 }
 

@@ -159,6 +159,13 @@ func (s *morpcStream) write(
 
 		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
 
+		if response.ok {
+			s.logger.Info(">>>> TODO:delete, send chunks logtail response",
+				zap.String("session", s.remote),
+				zap.String("response-seg", seg.DebugString()),
+			)
+		}
+
 		if err := s.cs.Write(ctx, seg); err != nil {
 			s.segments.Release(seg)
 			return err
@@ -247,25 +254,25 @@ func NewSession(
 
 					ctx, cancel := context.WithTimeout(ss.sessionCtx, msg.timeout)
 					defer cancel()
-					ok := false
+					msg.response.ok = false
 					if msg.response.LogtailResponse.GetUpdateResponse() != nil {
 						for _, v := range msg.response.LogtailResponse.GetUpdateResponse().LogtailList {
 							if v.Table.TbId < 4 {
-								ok = true
+								msg.response.ok = true
 								break
 							}
 						}
 					} else if msg.response.LogtailResponse.GetSubscribeResponse() != nil {
 						if msg.response.LogtailResponse.GetSubscribeResponse().Logtail.Table.TbId < 4 {
-							ok = true
+							msg.response.ok = true
 						}
 					}
-					if ok {
+					if msg.response.ok {
 						ss.logger.Info(">>>> TODO:delete, send logtail response",
 							zap.String("session", ss.stream.remote),
 							zap.String("response", msg.response.String()),
+							zap.Int("size", msg.response.Size()),
 						)
-						msg.response.ok = true
 					}
 
 					err := ss.stream.write(ctx, msg.response)

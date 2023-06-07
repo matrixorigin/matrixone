@@ -267,6 +267,10 @@ func (b *bootstrapper) showTables() bool {
 			find = true
 		}
 	}
-	getLogger().Info("table in mo_tables", zap.Any("tables", tables))
+	if !find {
+		getLogger().Fatal("table in mo_tables, BUGBUGBUGBUGBUGBUGBUGBUGBUGBUGBUG", zap.Any("tables", tables))
+	} else {
+		getLogger().Fatal("table in mo_tables", zap.Any("tables", tables))
+	}
 	return find
 }

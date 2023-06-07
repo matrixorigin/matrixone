@@ -901,6 +901,10 @@ func (s *stream) setFinalizer() {
 	})
 }
 
+func (s *stream) LocalAddr() string {
+	return s.rb.conn.RawConn().LocalAddr().String()
+}
+
 func (s *stream) destroy() {
 	close(s.c)
 	s.cancel()
