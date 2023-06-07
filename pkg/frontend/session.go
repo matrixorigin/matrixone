@@ -1907,6 +1907,7 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	var accountId uint32
 	var variableValue string
 	var val interface{}
+	var a, b string
 
 	ctx := ses.GetRequestContext()
 
@@ -1928,6 +1929,32 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 		return nil, err
 	}
 
+	//==========
+	sql = getSystemVariablesWithAccount(uint64(accountId))
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		for _, ea := range erArray {
+			for i := uint64(0); i < ea.GetRowCount(); i++ {
+				a, err = ea.GetString(ctx, i, 0)
+				if err != nil {
+					return nil, err
+				}
+
+				b, err = ea.GetString(ctx, i, 1)
+				if err != nil {
+					return nil, err
+				}
+				logutil.Infof("getGlobalSystemVariableValue: %s = %s", a, b)
+			}
+		}
+	}
+	//================
 	accountId = tenantInfo.GetTenantID()
 	sql = getSqlForGetSystemVariableValueWithAccount(uint64(accountId), varName)
 
@@ -1947,6 +1974,7 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 		if err != nil {
 			return nil, err
 		}
+		logutil.Infof("getGlobalSystemVariableValue: %s = %s", varName, variableValue)
 		if sv, ok := gSysVarsDefs[varName]; ok {
 			val, err = sv.GetType().ConvertFromString(variableValue)
 			if err != nil {
