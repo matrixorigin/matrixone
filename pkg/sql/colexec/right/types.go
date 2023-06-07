@@ -93,6 +93,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {
 			} else {
 				arg.Channel <- ctr.matched
 			}
+			ctr.handledLast = true
 		}
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
