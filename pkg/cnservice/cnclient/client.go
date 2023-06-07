@@ -16,6 +16,8 @@ package cnclient
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"go.uber.org/zap"
 	"sync"
 	"time"
 
@@ -70,6 +72,12 @@ func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Messa
 func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 	c.Lock()
 	defer c.Unlock()
+	if backend == c.localServiceAddress {
+		runtime.ProcessLevelRuntime().Logger().
+			Fatal("remote run pipeline in local",
+				zap.String("local-address", c.localServiceAddress),
+				zap.String("remote-address", backend))
+	}
 	return c.client.NewStream(backend, true)
 }
 

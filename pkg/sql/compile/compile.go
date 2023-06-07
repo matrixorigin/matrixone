@@ -478,11 +478,8 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	if err != nil {
 		return nil, err
 	}
-
 	// sort by addr to get fixed order of CN list
 	sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
-
-	logutil.Infof("!!!!!!!!!!!!!current cn addr: %v, cn1 %v cn2 %v", c.addr, c.cnList[0].Addr, c.cnList[1].Addr)
 
 	if c.info.Typ == plan2.ExecTypeAP {
 		c.removeUnavailableCN()
@@ -563,10 +560,6 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		}
 		steps = append(steps, scope)
 	}
-
-	debugstr := DebugShowScopes(steps)
-	logutil.Infof("!!!!!!!!!!%v", debugstr)
-
 	return steps, err
 }
 
@@ -2624,7 +2617,17 @@ func isLaunchMode(cnlist engine.Nodes) bool {
 
 func isSameCN(addr string, currentCNAddr string) bool {
 	// just a defensive judgment. In fact, we shouldn't have received such data.
-	return addr == currentCNAddr
+	parts1 := strings.Split(addr, ":")
+	if len(parts1) != 2 {
+		logutil.Debugf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+		return true
+	}
+	parts2 := strings.Split(currentCNAddr, ":")
+	if len(parts2) != 2 {
+		logutil.Debugf("compileScope received a malformed current-cn address '%s', expected 'ip:port'", currentCNAddr)
+		return true
+	}
+	return parts1[0] == parts2[0]
 }
 
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
