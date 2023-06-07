@@ -238,12 +238,12 @@ message ColDef {
 	string comment		= 8;
 	OnUpdate on_update  = 9;
 	bool low_card 		= 10;
-	uint32 seqnum		= 14;
+	uint32 seqnum		= 11;
 
 	// XXX: Deprecated and to be removed soon.
-	bool clusterBy		= 11;
-	bool primary        = 12;
-	int32 pkidx 		= 13;
+	bool clusterBy		= 12;
+	bool primary        = 13;
+	int32 pkidx 		= 14;
 }
 
 message Default {
@@ -692,6 +692,10 @@ message Node {
 	bool IsEnd = 36;
 	repeated LockTarget lock_targets = 37;
 	repeated Expr block_filter_list = 38;
+
+	// Runtime filters
+	repeated RuntimeFilterSpec runtime_filter_list = 39;
+	repeated RuntimeFilterSpec runtime_filter_build_list = 40;
 }
 
 message LockTarget {
@@ -701,6 +705,8 @@ message LockTarget {
   int32 refresh_ts_idx_in_bat   = 4;
   int32 filter_col_idx_in_bat   = 5;
   bool lock_table 				= 6;
+	bool is_partition_table = 7;
+	repeated uint64 partition_table_ids = 8;
 }
 
 message PreInsertUkCtx {
@@ -722,6 +728,11 @@ message PreInsertCtx {
 	TableDef table_def 		= 2;
 	bool has_auto_col		= 3;
 	bool is_update			= 4;
+}
+
+message RuntimeFilterSpec {
+	int32 tag = 1;
+	Expr expr = 2;
 }
 
 message IdList {

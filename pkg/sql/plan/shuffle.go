@@ -173,11 +173,11 @@ func GetShuffleDop() (dop int) {
 	return MAXShuffleDOP
 }
 
-func determinShuffleMethod(nodeID int32, builder *QueryBuilder) {
+func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			determinShuffleMethod(child, builder)
+			determineShuffleMethod(child, builder)
 		}
 	}
 	switch node.NodeType {

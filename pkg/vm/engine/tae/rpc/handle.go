@@ -327,8 +327,8 @@ func (h *Handle) HandleGetLogTail(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *api.SyncLogTailReq,
-	resp *api.SyncLogTailResp) (err error) {
-	res, err := logtail.HandleSyncLogTailReq(
+	resp *api.SyncLogTailResp) (closeCB func(), err error) {
+	res, closeCB, err := logtail.HandleSyncLogTailReq(
 		ctx,
 		h.db.BGCheckpointRunner,
 		h.db.LogtailMgr,
@@ -336,17 +336,17 @@ func (h *Handle) HandleGetLogTail(
 		*req,
 		true)
 	if err != nil {
-		return err
+		return
 	}
 	*resp = res
-	return nil
+	return
 }
 
 func (h *Handle) HandleFlushTable(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.FlushTable,
-	resp *api.SyncLogTailResp) (err error) {
+	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	// We use current TS instead of transaction ts.
 	// Here, the point of this handle function is to trigger a flush
@@ -360,28 +360,28 @@ func (h *Handle) HandleFlushTable(
 		req.DatabaseID,
 		req.TableID,
 		currTs)
-	return err
+	return nil, err
 }
 
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.Checkpoint,
-	resp *api.SyncLogTailResp) (err error) {
+	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	timeout := req.FlushDuration
 
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 
 	err = h.db.ForceCheckpoint(ctx, currTs, timeout)
-	return err
+	return nil, err
 }
 
 func (h *Handle) HandleInspectDN(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *db.InspectDN,
-	resp *db.InspectResp) (err error) {
+	resp *db.InspectResp) (cb func(), err error) {
 	args, _ := shlex.Split(req.Operation)
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("Inspect", zap.Strings("args", args))
@@ -397,7 +397,7 @@ func (h *Handle) HandleInspectDN(
 	}
 	RunInspect(inspectCtx)
 	resp.Message = b.String()
-	return nil
+	return nil, nil
 }
 
 func (h *Handle) prefetchDeleteRowID(ctx context.Context,

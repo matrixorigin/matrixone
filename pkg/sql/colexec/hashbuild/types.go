@@ -26,7 +26,8 @@ import (
 )
 
 const (
-	Build = iota
+	BuildHashMap = iota
+	HandleRuntimeFilter
 	Eval
 	End
 )
@@ -62,6 +63,8 @@ type Argument struct {
 	Nbucket     uint64
 	Typs        []types.Type
 	Conditions  []*plan.Expr
+
+	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool) {

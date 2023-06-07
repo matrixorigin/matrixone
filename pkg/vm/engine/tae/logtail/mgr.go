@@ -37,7 +37,8 @@ const (
 	LogtailHeartbeatDuration = time.Millisecond * 2
 )
 
-func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error {
+func MockCallback(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error {
+	defer closeCB()
 	if len(tails) == 0 {
 		return nil
 	}
@@ -57,13 +58,13 @@ func MockCallback(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) e
 }
 
 type callback struct {
-	cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error
+	cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error
 }
 
-func (cb *callback) call(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error {
+func (cb *callback) call(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error {
 	// for debug
 	// MockCallback(from,to,tails...)
-	return cb.cb(from, to, tails...)
+	return cb.cb(from, to, closeCB, tails...)
 }
 
 // Logtail manager holds sorted txn handles. Its main jobs:
@@ -99,19 +100,21 @@ func NewManager(blockSize int, now func() types.TS) *Manager {
 }
 
 type txnWithLogtails struct {
-	txn   txnif.AsyncTxn
-	tails *[]logtail.TableLogtail
+	txn     txnif.AsyncTxn
+	tails   *[]logtail.TableLogtail
+	closeCB func()
 }
 
 func (mgr *Manager) onCollectTxnLogtails(items ...any) {
-	builder := NewTxnLogtailRespBuilder()
 	for _, item := range items {
+		builder := NewTxnLogtailRespBuilder()
 		txn := item.(txnif.AsyncTxn)
-		entries := builder.CollectLogtail(txn)
+		entries, closeCB := builder.CollectLogtail(txn)
 		txn.GetStore().DoneWaitEvent(1)
 		txnWithLogtails := &txnWithLogtails{
-			txn:   txn,
-			tails: entries,
+			txn:     txn,
+			tails:   entries,
+			closeCB: closeCB,
 		}
 		mgr.waitCommitQueue.Enqueue(txnWithLogtails)
 	}
@@ -152,9 +155,11 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 		// Send ts in order to initialize waterline of logtail service
 		mgr.eventOnce.Do(func() {
 			logutil.Infof("init waterline to %v", from.ToString())
-			callback.call(from.ToTimestamp(), from.ToTimestamp())
+			callback.call(from.ToTimestamp(), from.ToTimestamp(), txn.closeCB)
 		})
-		callback.call(from.ToTimestamp(), to.ToTimestamp(), *txn.tails...)
+		callback.call(from.ToTimestamp(), to.ToTimestamp(), txn.closeCB, *txn.tails...)
+	} else {
+		txn.closeCB()
 	}
 }
 
@@ -207,7 +212,7 @@ func (mgr *Manager) GetTableOperator(
 	)
 }
 
-func (mgr *Manager) RegisterCallback(cb func(from, to timestamp.Timestamp, tails ...logtail.TableLogtail) error) error {
+func (mgr *Manager) RegisterCallback(cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error) error {
 	callbackFn := &callback{
 		cb: cb,
 	}

@@ -25,11 +25,13 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -65,6 +67,10 @@ import (
 const (
 	DistributedThreshold   uint64 = 10 * mpool.MB
 	SingleLineSizeEstimate uint64 = 300 * mpool.B
+)
+
+var (
+	ncpu = runtime.NumCPU()
 )
 
 // New is used to new an object of compile
@@ -413,7 +419,7 @@ func (c *Compile) cnListStrategy() {
 	if len(c.cnList) == 0 {
 		c.cnList = append(c.cnList, engine.Node{
 			Addr: c.addr,
-			Mcpu: c.NumCPU(),
+			Mcpu: ncpu,
 		})
 	} else if len(c.cnList) > c.info.CnNumbers {
 		c.cnList = c.cnList[:c.info.CnNumbers]
@@ -432,6 +438,39 @@ func (c *Compile) cnListStrategy() {
 // 	return attachedScope, nil
 // }
 
+func isAvailable(client morpc.RPCClient, addr string) bool {
+	_, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", addr)
+		return false
+	}
+	logutil.Debugf("ping %s start", addr)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err = client.Ping(ctx, addr)
+	if err != nil {
+		// ping failed
+		logutil.Debugf("ping %s err %+v\n", addr, err)
+		return false
+	}
+	return true
+}
+
+func (c *Compile) removeUnavailableCN() {
+	client := cnclient.GetRPCClient()
+	if client == nil {
+		return
+	}
+	i := 0
+	for _, cn := range c.cnList {
+		if isSameCN(c.addr, cn.Addr) || isAvailable(client, cn.Addr) {
+			c.cnList[i] = cn
+			i++
+		}
+	}
+	c.cnList = c.cnList[:i]
+}
+
 func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, error) {
 	var err error
 	c.cnList, err = c.e.Nodes(c.isInternal, c.tenant, c.uid, c.cnLabel)
@@ -439,27 +478,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		return nil, err
 	}
 	if c.info.Typ == plan2.ExecTypeAP {
-		client := cnclient.GetRPCClient()
-		if client != nil {
-			for i := 0; i < len(c.cnList); i++ {
-				_, _, err := net.SplitHostPort(c.cnList[i].Addr)
-				if err != nil {
-					logutil.Warnf("compileScope received a malformed cn address '%s', expected 'ip:port'", c.cnList[i].Addr)
-				}
-				if isSameCN(c.addr, c.cnList[i].Addr) {
-					continue
-				}
-				logutil.Debugf("ping start")
-				err = client.Ping(ctx, c.cnList[i].Addr)
-				logutil.Debugf("ping err %+v\n", err)
-				// ping failed
-				if err != nil {
-					logutil.Debugf("ping err %+v\n", err)
-					c.cnList = append(c.cnList[:i], c.cnList[i+1:]...)
-					i--
-				}
-			}
-		}
+		c.removeUnavailableCN()
 	}
 
 	c.info.CnNumbers = len(c.cnList)
@@ -483,7 +502,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		} else {
 			c.cnList = engine.Nodes{engine.Node{
 				Addr: c.addr,
-				Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
+				Mcpu: c.generateCPUNumber(ncpu, blkNum)},
 			}
 		}
 		// insertNode := qry.Nodes[qry.Steps[0]]
@@ -516,7 +535,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		if blkNum < MinBlockNum {
 			c.cnList = engine.Nodes{engine.Node{
 				Addr: c.addr,
-				Mcpu: c.generateCPUNumber(c.NumCPU(), blkNum)},
+				Mcpu: c.generateCPUNumber(ncpu, blkNum)},
 			}
 		} else {
 			c.cnListStrategy()
@@ -946,12 +965,12 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	case plan.Node_SINK_SCAN:
 		rs := &Scope{
 			Magic:        Merge,
-			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: c.NumCPU()},
+			NodeInfo:     engine.Node{Addr: c.addr, Mcpu: ncpu},
 			Proc:         process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes()),
 			Instructions: []vm.Instruction{{Op: vm.Merge, Arg: &merge.Argument{}}},
 		}
 		if c.anal.qry.LoadTag {
-			rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, c.NumCPU()) // reset the channel buffer of sink for load
+			rs.Proc.Reg.MergeReceivers[0].Ch = make(chan *batch.Batch, ncpu) // reset the channel buffer of sink for load
 		}
 		c.appendStepRegs(n.SourceStep, rs.Proc.Reg.MergeReceivers[0])
 		return []*Scope{rs}, nil
@@ -996,7 +1015,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	if parallel {
 		ds.Magic = Remote
 	}
-	ds.NodeInfo = engine.Node{Addr: addr, Mcpu: c.NumCPU()}
+	ds.NodeInfo = engine.Node{Addr: addr, Mcpu: ncpu}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	c.proc.LoadTag = c.anal.qry.LoadTag
 	ds.Proc.LoadTag = true
@@ -1101,7 +1120,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 	}
 
 	if param.Parallel && (external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS || param.Local) {
-		return c.compileExternScanParallel(n, param, fileList, fileSize, ctx)
+		return c.compileExternScanParallel(n, param, fileList, fileSize)
 	}
 
 	var fileOffset [][]int64
@@ -1148,7 +1167,7 @@ func (c *Compile) compileExternScan(ctx context.Context, n *plan.Node) ([]*Scope
 }
 
 // construct one thread to read the file data, then dispatch to mcpu thread to get the filedata for insert
-func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64, ctx context.Context) ([]*Scope, error) {
+func (c *Compile) compileExternScanParallel(n *plan.Node, param *tree.ExternParam, fileList []string, fileSize []int64) ([]*Scope, error) {
 	param.Parallel = false
 	mcpu := c.cnList[0].Mcpu
 	ss := make([]*Scope, mcpu)
@@ -1307,6 +1326,24 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 		},
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+
+	// Register runtime filters
+	// XXX currently we only implement runtime filter on single CN
+	if len(c.cnList) == 1 {
+		s.DataSource.RuntimeFilterReceivers = make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterList))
+		for i, rfSpec := range n.RuntimeFilterList {
+			ch := make(chan *pipeline.RuntimeFilter, 1)
+			s.DataSource.RuntimeFilterReceivers[i] = &colexec.RuntimeFilterChan{
+				Expr: rfSpec.Expr,
+				Chan: ch,
+			}
+			if c.runtimeFilterChans == nil {
+				c.runtimeFilterChans = make(map[int32]chan *pipeline.RuntimeFilter)
+			}
+			c.runtimeFilterChans[rfSpec.Tag] = ch
+		}
+	}
+
 	return s
 }
 
@@ -1412,7 +1449,7 @@ func (c *Compile) compileUnionAll(ss []*Scope, children []*Scope) []*Scope {
 
 func (c *Compile) compileJoin(ctx context.Context, node, left, right *plan.Node, ss []*Scope, children []*Scope) []*Scope {
 	var rs []*Scope
-	isEq := plan2.IsEquiJoin(node.OnList)
+	isEq := plan2.IsEquiJoin2(node.OnList)
 
 	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -1911,7 +1948,7 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 		Magic:     Merge,
 		NodeInfo: engine.Node{
 			Addr: c.addr,
-			Mcpu: c.NumCPU(),
+			Mcpu: ncpu,
 		},
 	}
 	cnt := 0
@@ -2029,7 +2066,7 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scop
 		Magic:    Remote,
 		IsJoin:   true,
 		Proc:     process.NewWithAnalyze(c.proc, c.ctx, childrenCount, c.anal.Nodes()),
-		NodeInfo: engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(c.NumCPU(), maxCpuNum)},
+		NodeInfo: engine.Node{Addr: c.addr, Mcpu: c.generateCPUNumber(ncpu, maxCpuNum)},
 	}
 	return ss
 }
@@ -2166,7 +2203,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		Op:      vm.HashBuild,
 		Idx:     s.Instructions[0].Idx,
 		IsFirst: true,
-		Arg:     constructHashBuild(s.Instructions[0], c.proc),
+		Arg:     constructHashBuild(c, s.Instructions[0], c.proc),
 	})
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.Dispatch,
@@ -2196,11 +2233,6 @@ func regTransplant(source, target *Scope, sourceIdx, targetIdx int) {
 		}
 		i++
 	}
-}
-
-// Number of cpu's available on the current machine
-func (c *Compile) NumCPU() int {
-	return runtime.NumCPU()
 }
 
 func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
@@ -2304,7 +2336,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 		}
 	}
 
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList...)
+	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
 	if err != nil {
 		return nil, err
 	}
@@ -2320,7 +2352,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			if err != nil {
 				return nil, err
 			}
-			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList...)
+			subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
 			if err != nil {
 				return nil, err
 			}
@@ -2383,7 +2415,7 @@ func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *pla
 					nodes = append(nodes, engine.Node{
 						Addr: c.addr,
 						Rel:  rel,
-						Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 					})
 				}
 				nodes[0].Data = append(nodes[0].Data, ranges[i:]...)
@@ -2402,7 +2434,7 @@ func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *pla
 					nodes = append(nodes, engine.Node{
 						Rel:  rel,
 						Addr: c.addr,
-						Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+						Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 					})
 				}
 				nodes[0].Data = append(nodes[0].Data, ranges[i:i+step]...)
@@ -2426,7 +2458,7 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
 		Rel:  rel,
-		Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 	})
 	//add memory table block
 	nodes[0].Data = append(nodes[0].Data, ranges[:1]...)
@@ -2490,7 +2522,7 @@ func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *p
 	nodes = append(nodes, engine.Node{
 		Addr: c.addr,
 		Rel:  rel,
-		Mcpu: c.generateCPUNumber(c.NumCPU(), int(n.Stats.BlockNum)),
+		Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
 	})
 	nodes[0].Data = append(nodes[0].Data, ranges...)
 	return nodes
