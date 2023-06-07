@@ -132,7 +132,6 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 
 	// current node get the bootstrap privilege
 	if ok {
-		getLogger().Info("start to bootstrap mo in 2 steps")
 
 		opts := executor.Options{}
 		err := b.exec.ExecTxn(
