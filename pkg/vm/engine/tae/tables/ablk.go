@@ -119,11 +119,13 @@ func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
 }
 
 func (blk *ablock) GetColumnDataByIds(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
 ) (view *model.BlockView, err error) {
 	return blk.resolveColumnDatas(
+		ctx,
 		txn,
 		readSchema.(*catalog.Schema),
 		colIdxes,
@@ -145,6 +147,7 @@ func (blk *ablock) GetColumnDataById(
 }
 
 func (blk *ablock) resolveColumnDatas(
+	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxes []int,
@@ -161,7 +164,7 @@ func (blk *ablock) resolveColumnDatas(
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnDatas(
-			context.Background(),
+			ctx,
 			node.MustPNode(),
 			txn,
 			readSchema,

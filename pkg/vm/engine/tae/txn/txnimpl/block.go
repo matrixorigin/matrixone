@@ -228,7 +228,7 @@ func (blk *txnBlock) GetColumnDataByName(ctx context.Context, attr string) (*mod
 	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, schema, colIdx)
 }
 
-func (blk *txnBlock) GetColumnDataByNames(attrs []string) (*model.BlockView, error) {
+func (blk *txnBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (*model.BlockView, error) {
 	schema := blk.table.GetLocalSchema()
 	attrIds := make([]int, len(attrs))
 	for i, attr := range attrs {
@@ -237,7 +237,7 @@ func (blk *txnBlock) GetColumnDataByNames(attrs []string) (*model.BlockView, err
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetColumnDataByIds(blk.entry, attrIds)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, schema, attrIds)
+	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, schema, attrIds)
 }
 
 func (blk *txnBlock) GetColumnDataById(ctx context.Context, colIdx int) (*model.ColumnView, error) {
@@ -247,11 +247,11 @@ func (blk *txnBlock) GetColumnDataById(ctx context.Context, colIdx int) (*model.
 	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdx)
 }
 
-func (blk *txnBlock) GetColumnDataByIds(colIdxes []int) (*model.BlockView, error) {
+func (blk *txnBlock) GetColumnDataByIds(ctx context.Context, colIdxes []int) (*model.BlockView, error) {
 	if blk.isUncommitted {
 		return blk.table.localSegment.GetColumnDataByIds(blk.entry, colIdxes)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByIds(blk.Txn, blk.table.GetLocalSchema(), colIdxes)
+	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, blk.table.GetLocalSchema(), colIdxes)
 }
 
 func (blk *txnBlock) Prefetch(idxes []uint16) error {

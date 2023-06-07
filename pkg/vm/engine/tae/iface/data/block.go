@@ -74,7 +74,7 @@ type Block interface {
 
 	Rows() int
 	GetColumnDataById(ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int) (*model.ColumnView, error)
-	GetColumnDataByIds(txn txnif.AsyncTxn, readSchema any, colIdxes []int) (*model.BlockView, error)
+	GetColumnDataByIds(ctx context.Context, txn txnif.AsyncTxn, readSchema any, colIdxes []int) (*model.BlockView, error)
 	Prefetch(idxes []uint16) error
 	GetMeta() any
 
