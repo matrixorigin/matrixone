@@ -70,7 +70,7 @@ const (
 	parallelNums = 4
 
 	// each routine's log tail buffer size.
-	bufferLength = 128
+	bufferLength = 256
 )
 
 // pushClient is a structure responsible for all operations related to the log tail push model.
@@ -254,41 +254,80 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 }
 
 func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
-	reconnectErr := make(chan error)
+	connectMsg := make(chan error)
 
-	// init isLastReconnectRoutineClean as true.
-	// and once it was false, we should clean reconnectErr before we do reconnect action.
-	// it means the last reconnection failed but not because we get an error from this channel.
-	// if not clean, it will cause some go-routine hang up.
-	isLastReconnectRoutineClean := false
+	// we should always make sure that we have received connection message from `connectMsg` channel if we want to do reconnect.
+	// if not, it will cause some goroutine leak.
+	hasReceivedConnectionMsg := false
 
 	go func() {
 		for {
 			// new parallelNums routine to consume log tails.
-			errChan := make(chan error, parallelNums)
+			consumeErr := make(chan error, parallelNums)
 			receiver := make([]routineController, parallelNums)
 			for i := range receiver {
-				receiver[i] = createRoutineToConsumeLogTails(ctx, i, bufferLength, e, errChan)
+				receiver[i] = createRoutineToConsumeLogTails(ctx, i, bufferLength, e, consumeErr)
 			}
 
 			ch := make(chan logTailSubscriberResponse, 1)
-			// a dead loop to receive log, if lost connect, should reconnect.
+
+			// A dead loop to receive log tail response from log tail service.
+			// if any error happened, we should do reconnection.
 			for {
 				deadline, cancel := context.WithTimeout(ctx, maxTimeToWaitServerResponse)
 				select {
 				case ch <- client.subscriber.receiveResponse(deadline):
 					// receive a response from log tail service.
+					client.subscriber.receivedResp = nil
 					cancel()
 
-				case err := <-errChan:
+					resp := <-ch
+					if resp.err != nil {
+						// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
+						logutil.Errorf("[log-tail-push-client] receive an error from log tail client, err : '%s'.", resp.err)
+						goto cleanAndReconnect
+					}
+
+					response := resp.response
+					// consume subscribe response
+					if sResponse := response.GetSubscribeResponse(); sResponse != nil {
+						if err := distributeSubscribeResponse(
+							ctx, e, sResponse, receiver); err != nil {
+							logutil.Errorf("[log-tail-push-client] distribute subscribe response failed, err : '%s'.", err)
+							goto cleanAndReconnect
+						}
+						continue
+					}
+
+					// consume update response
+					if upResponse := response.GetUpdateResponse(); upResponse != nil {
+						if err := distributeUpdateResponse(
+							ctx, e, upResponse, receiver); err != nil {
+							logutil.Errorf("[log-tail-push-client] distribute update response failed, err : '%s'.", err)
+							goto cleanAndReconnect
+						}
+						continue
+					}
+
+					// consume unsubscribe response
+					if unResponse := response.GetUnsubscribeResponse(); unResponse != nil {
+						if err := distributeUnSubscribeResponse(
+							ctx, e, unResponse, receiver); err != nil {
+							logutil.Errorf("[log-tail-push-client] distribute unsubscribe response failed, err : '%s'.", err)
+							goto cleanAndReconnect
+						}
+						continue
+					}
+
+				case err := <-consumeErr:
 					// receive an error from sub-routine to consume log.
 					logutil.Errorf("[log-tail-push-client] consume log tail failed. err '%s'", err)
 					cancel()
 					goto cleanAndReconnect
 
-				case err := <-reconnectErr:
+				case err := <-connectMsg:
 					cancel()
-					isLastReconnectRoutineClean = true
+					hasReceivedConnectionMsg = true
 					if err != nil {
 						logutil.Errorf("[log-tail-push-client] connect to dn log tail service failed, reason: %s", err)
 						goto cleanAndReconnect
@@ -299,44 +338,6 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 					logutil.Infof("[log-tail-push-client] connect to dn log tail service succeed.")
 					continue
 				}
-
-				resp := <-ch
-				if resp.err != nil {
-					// POSSIBLE ERROR: context deadline exceeded, rpc closed, decode error.
-					logutil.Errorf("[log-tail-push-client] receive an error from log tail client, err : '%s'.", resp.err)
-					goto cleanAndReconnect
-				}
-
-				response := resp.response
-				// consume subscribe response
-				if sResponse := response.GetSubscribeResponse(); sResponse != nil {
-					if err := distributeSubscribeResponse(
-						ctx, e, sResponse, receiver); err != nil {
-						logutil.Errorf("[log-tail-push-client] distribute subscribe response failed, err : '%s'.", err)
-						goto cleanAndReconnect
-					}
-					continue
-				}
-
-				// consume update response
-				if upResponse := response.GetUpdateResponse(); upResponse != nil {
-					if err := distributeUpdateResponse(
-						ctx, e, upResponse, receiver); err != nil {
-						logutil.Errorf("[log-tail-push-client] distribute update response failed, err : '%s'.", err)
-						goto cleanAndReconnect
-					}
-					continue
-				}
-
-				// consume unsubscribe response
-				if unResponse := response.GetUnsubscribeResponse(); unResponse != nil {
-					if err := distributeUnSubscribeResponse(
-						ctx, e, unResponse, receiver); err != nil {
-						logutil.Errorf("[log-tail-push-client] distribute unsubscribe response failed, err : '%s'.", err)
-						goto cleanAndReconnect
-					}
-					continue
-				}
 			}
 
 		cleanAndReconnect:
@@ -344,8 +345,8 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			for _, r := range receiver {
 				r.close()
 			}
-			if !isLastReconnectRoutineClean {
-				<-reconnectErr
+			if !hasReceivedConnectionMsg {
+				<-connectMsg
 			}
 
 			logutil.Debugf("[log-tail-push-client] clean finished, start to reconnect to dn log tail service")
@@ -360,11 +361,11 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				// once we reconnect succeed, should clean partition here.
 				e.cleanMemoryTable()
 
-				isLastReconnectRoutineClean = false
+				hasReceivedConnectionMsg = false
 
 				go func() {
 					err := client.firstTimeConnectToLogTailServer(ctx)
-					reconnectErr <- err
+					connectMsg <- err
 				}()
 				break
 			}
@@ -372,7 +373,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 	}()
 
 	err := client.firstTimeConnectToLogTailServer(ctx)
-	reconnectErr <- err
+	connectMsg <- err
 }
 
 func (client *pushClient) unusedTableGCTicker(ctx context.Context) {
@@ -522,7 +523,8 @@ type logTailSubscriber struct {
 	dnNodeID      int
 	logTailClient *service.LogtailClient
 
-	ready bool
+	ready        bool
+	receivedResp *logTailSubscriberResponse
 
 	requestLock   chan bool
 	doSubscribe   func(context.Context, api.TableID) error
@@ -569,6 +571,7 @@ func (s *logTailSubscriber) init(serviceAddr string) (err error) {
 	// XXX we assume that we have only 1 dn now.
 	s.dnNodeID = 0
 
+	s.receivedResp = nil
 	// if requestLock is not nil, it's most likely called by reconnect process.
 	// we need to set it not ready first to ensure that no one can subscribe or unsubscribe table during reconnect.
 	if s.requestLock != nil {
@@ -643,11 +646,17 @@ func (s *logTailSubscriber) unSubscribeTable(
 }
 
 func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTailSubscriberResponse {
+	if s.receivedResp != nil {
+		return *s.receivedResp
+	}
+
 	r, err := s.logTailClient.Receive(deadlineCtx)
-	return logTailSubscriberResponse{
+	resp := logTailSubscriberResponse{
 		response: r,
 		err:      err,
 	}
+	s.receivedResp = &resp
+	return resp
 }
 
 func (e *Engine) InitLogTailPushModel(
@@ -795,17 +804,17 @@ func createRoutineToConsumeLogTails(
 	ctx context.Context,
 	routineId int, signalBufferLength int,
 	e *Engine, errOut chan error) routineController {
-	controller := routineController{
-		routineId:  routineId,
-		closeChan:  make(chan bool),
-		signalChan: make(chan routineControlCmd, signalBufferLength),
-	}
 
-	go func(engine *Engine, receiver *routineController, errRet chan error) {
+	singleRoutineToConsumeLogTail := func(ctx context.Context, engine *Engine, receiver *routineController, errRet chan error) {
+		errHappen := false
 		for {
 			select {
 			case cmd := <-receiver.signalChan:
+				if errHappen {
+					continue
+				}
 				if err := cmd.action(ctx, engine, receiver); err != nil {
+					errHappen = true
 					errRet <- err
 				}
 
@@ -815,7 +824,15 @@ func createRoutineToConsumeLogTails(
 				return
 			}
 		}
-	}(e, &controller, errOut)
+	}
+
+	controller := routineController{
+		routineId:  routineId,
+		closeChan:  make(chan bool),
+		signalChan: make(chan routineControlCmd, signalBufferLength),
+	}
+
+	go singleRoutineToConsumeLogTail(ctx, e, &controller, errOut)
 
 	return controller
 }
