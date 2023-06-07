@@ -128,7 +128,15 @@ func (oq *outputQueue) flush() error {
 }
 
 // extractRowFromEveryVector gets the j row from the every vector and outputs the row
-func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq outputPool) ([]interface{}, error) {
+// needCopyBytes : true -- make a copy of the bytes. else not.
+// Case 1: needCopyBytes = false.
+// For responding the client, we do not make a copy of the bytes. Because the data
+// has been written into the tcp conn before the batch.Batch returned to the pipeline.
+// Case 2: needCopyBytes = true.
+// For the background execution, we need to make a copy of the bytes. Because the data
+// has been saved in the session. Later the data will be used but then the batch.Batch has
+// been returned to the pipeline and may be reused and changed by the pipeline.
+func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq outputPool, needCopyBytes bool) ([]interface{}, error) {
 	row, err := oq.getEmptyRow()
 	if err != nil {
 		return nil, err
@@ -144,7 +152,7 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq out
 			rowIndex = 0
 		}
 
-		err = extractRowFromVector(ses, vec, i, row, rowIndex)
+		err = extractRowFromVector(ses, vec, i, row, rowIndex, needCopyBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +172,7 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq out
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int) error {
+func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int, needCopyBytes bool) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
@@ -172,7 +180,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		row[i] = types.DecodeJson(vec.GetBytesAt(rowIndex))
+		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes))
 	case types.T_bool:
 		row[i] = vector.GetFixedAt[bool](vec, rowIndex)
 	case types.T_int8:
@@ -206,7 +214,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			row[i] = strconv.FormatFloat(val, 'f', int(vec.GetType().Scale), 64)
 		}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
-		row[i] = vec.GetBytesAt(rowIndex)
+		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
 	case types.T_date:
 		row[i] = vector.GetFixedAt[types.Date](vec, rowIndex)
 	case types.T_datetime:

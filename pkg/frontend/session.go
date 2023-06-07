@@ -1631,13 +1631,12 @@ func fillResultSet(oq outputPool, dataSet *batch.Batch, ses *Session) error {
 		if dataSet.Zs[j] <= 0 {
 			continue
 		}
-		_, err := extractRowFromEveryVector(ses, dataSet, j, oq)
+		_, err := extractRowFromEveryVector(ses, dataSet, j, oq, true)
 		if err != nil {
 			return err
 		}
 	}
-	err := oq.flush()
-	return err
+	return oq.flush()
 }
 
 // batchFetcher gets the result batches from the pipeline and save the origin batches in the session.
@@ -1942,7 +1941,7 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if execResultArrayHasData(erArray) {
 		for _, ea := range erArray {
 			for i := uint64(0); i < ea.GetRowCount(); i++ {

@@ -712,3 +712,16 @@ func getVariableValue(varDefault interface{}) string {
 func makeServerVersion(pu *mo_config.ParameterUnit, version string) string {
 	return pu.SV.ServerVersionPrefix + version
 }
+
+func copyBytes(src []byte, needCopy bool) []byte {
+	if needCopy {
+		if len(src) > 0 {
+			dst := make([]byte, len(src))
+			copy(dst, src)
+			return dst
+		} else {
+			return []byte{}
+		}
+	}
+	return src
+}
