@@ -1319,8 +1319,6 @@ const (
 
 	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
-	getAllVariables = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode;`
-
 	getSystemVariableValueWithAccountFromat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and variable_name = '%s' and system_variables = true;`
 
 	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s';`
@@ -6784,7 +6782,6 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
-			logutil.Infof("init mo_mysql_compatibility_mode 1 for variable %s %s", variable.Name, getVariableValue(variable.Default))
 			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
@@ -7154,7 +7151,6 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if variable.Scope == ScopeGlobal || variable.Scope == ScopeBoth {
-			logutil.Infof("init mo_mysql_compatibility_mode 2 for variable %s %s", variable.Name, getVariableValue(variable.Default))
 			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
 			addSqlIntoSet(initMoMysqlCompatibilityMode)
 		}
@@ -8218,8 +8214,6 @@ func doGetGlobalSystemVariable(ctx context.Context, ses *Session) (ret map[strin
 func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {
 	var sql string
 	var accountId uint32
-	var erArray []ExecResult
-	var a, b string
 	tenantInfo := ses.GetTenantInfo()
 
 	varName = strings.ToLower(varName)
@@ -8244,44 +8238,11 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 			}
 
 			accountId = tenantInfo.GetTenantID()
-			logutil.Infof("set global system variable %s=%v", varName, getVariableValue(varValue))
 			sql = getSqlForUpdateSystemVariableValue(getVariableValue(varValue), uint64(accountId), varName)
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err
 			}
-
-			//==========
-			sql = fmt.Sprintf(getAllVariables)
-
-			bh.ClearExecResultSet()
-			err = bh.Exec(ctx, sql)
-			if err != nil {
-				return err
-			}
-
-			erArray, err = getResultSet(ctx, bh)
-			if err != nil {
-				return err
-			}
-
-			if execResultArrayHasData(erArray) {
-				for _, ea := range erArray {
-					for i := uint64(0); i < ea.GetRowCount(); i++ {
-						a, err = ea.GetString(ctx, i, 0)
-						if err != nil {
-							return err
-						}
-
-						b, err = ea.GetString(ctx, i, 1)
-						if err != nil {
-							return err
-						}
-						logutil.Infof("getGlobalSystemVariableValue 3: %s = %s", a, b)
-					}
-				}
-			}
-			//================
 			return err
 		}
 		err = setGlobalFunc()

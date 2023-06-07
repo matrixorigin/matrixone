@@ -202,12 +202,8 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool, input *UserInput) context.Context {
+var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
 	if !motrace.GetTracerProvider().IsEnable() {
-		return ctx
-	}
-	//skip record the internal statement
-	if input.isInternal() {
 		return ctx
 	}
 	tenant := ses.GetTenantInfo()
@@ -275,11 +271,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 }
 
 var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *process.Process, envBegin time.Time,
-	envStmt []string, sqlTypes []string, err error, input *UserInput) context.Context {
-	//skip record the internal statement
-	if input.isInternal() {
-		return ctx
-	}
+	envStmt []string, sqlTypes []string, err error) context.Context {
 	retErr := moerr.NewParseError(ctx, err.Error())
 	/*
 		!!!NOTE: the sql may be empty string.
@@ -296,11 +288,11 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 			if i < len(sqlTypes) {
 				sqlType = sqlTypes[i]
 			}
-			ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true, input)
+			ctx = RecordStatement(ctx, ses, proc, nil, envBegin, sql, sqlType, true)
 			motrace.EndStatement(ctx, retErr, 0)
 		}
 	} else {
-		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true, input)
+		ctx = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
 		motrace.EndStatement(ctx, retErr, 0)
 	}
 
@@ -3283,7 +3275,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.sqlSourceType, err, input)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
@@ -3316,7 +3308,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		ses.sentRows.Store(int64(0))
 		stmt := cw.GetAst()
 		sqlType := input.getSqlSourceType(i)
-		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement, input)
+		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
@@ -3442,7 +3434,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.sqlSourceType, err, input)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
 		logStatementStringStatus(requestCtx, ses, input.getSql(), fail, retErr)
 		return retErr

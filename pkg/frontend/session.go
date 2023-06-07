@@ -1909,8 +1909,6 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	var accountId uint32
 	var variableValue string
 	var val interface{}
-	var a, b string
-
 	ctx := ses.GetRequestContext()
 
 	// check the variable name isValid or not
@@ -1930,38 +1928,6 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	if err != nil {
 		return nil, err
 	}
-
-	//==========
-	sql = fmt.Sprintf(getAllVariables)
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
-
-	if execResultArrayHasData(erArray) {
-		for _, ea := range erArray {
-			for i := uint64(0); i < ea.GetRowCount(); i++ {
-				a, err = ea.GetString(ctx, i, 0)
-				if err != nil {
-					return nil, err
-				}
-
-				b, err = ea.GetString(ctx, i, 1)
-				if err != nil {
-					return nil, err
-				}
-				logutil.Infof("getGlobalSystemVariableValue 1: %s = %s", a, b)
-			}
-		}
-	}
-	//================
 	accountId = tenantInfo.GetTenantID()
 	sql = getSqlForGetSystemVariableValueWithAccount(uint64(accountId), varName)
 
