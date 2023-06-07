@@ -219,7 +219,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.Order:
 		t := sourceIns.Arg.(*order.Argument)
 		res.Arg = &order.Argument{
-			Fs: t.Fs,
+			OrderBySpec: t.OrderBySpec,
 		}
 	case vm.Product:
 		t := sourceIns.Arg.(*product.Argument)
@@ -307,7 +307,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.MergeOrder:
 		t := sourceIns.Arg.(*mergeorder.Argument)
 		res.Arg = &mergeorder.Argument{
-			Fs: t.Fs,
+			OrderBySpecs: t.OrderBySpecs,
 		}
 	case vm.Mark:
 		t := sourceIns.Arg.(*mark.Argument)
@@ -815,7 +815,7 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process) *mark
 
 func constructOrder(n *plan.Node) *order.Argument {
 	return &order.Argument{
-		Fs: n.OrderBy,
+		OrderBySpec: n.OrderBy,
 	}
 }
 
@@ -1161,7 +1161,7 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 
 func constructMergeOrder(n *plan.Node) *mergeorder.Argument {
 	return &mergeorder.Argument{
-		Fs: n.OrderBy,
+		OrderBySpecs: n.OrderBy,
 	}
 }
 
@@ -1283,10 +1283,10 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 
 		if arg.RuntimeFilterSpecs != nil {
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, spec := range arg.RuntimeFilterSpecs {
-				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+			for _, rfSpec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
 					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-						Expr: spec.Expr,
+						Spec: rfSpec,
 						Chan: ch,
 					})
 				}
@@ -1305,10 +1305,10 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 
 		if arg.RuntimeFilterSpecs != nil {
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, spec := range arg.RuntimeFilterSpecs {
-				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+			for _, rfSpec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
 					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-						Expr: spec.Expr,
+						Spec: rfSpec,
 						Chan: ch,
 					})
 				}
@@ -1329,10 +1329,10 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 
 		if arg.RuntimeFilterSpecs != nil {
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, spec := range arg.RuntimeFilterSpecs {
-				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+			for _, rfSpec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
 					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-						Expr: spec.Expr,
+						Spec: rfSpec,
 						Chan: ch,
 					})
 				}
@@ -1353,10 +1353,10 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 
 		if arg.RuntimeFilterSpecs != nil {
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, spec := range arg.RuntimeFilterSpecs {
-				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+			for _, rfSpec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
 					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-						Expr: spec.Expr,
+						Spec: rfSpec,
 						Chan: ch,
 					})
 				}
@@ -1377,10 +1377,10 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 
 		if arg.RuntimeFilterSpecs != nil {
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, spec := range arg.RuntimeFilterSpecs {
-				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+			for _, rfSpec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
 					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-						Expr: spec.Expr,
+						Spec: rfSpec,
 						Chan: ch,
 					})
 				}
@@ -1399,10 +1399,10 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 
 		if arg.RuntimeFilterSpecs != nil {
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, spec := range arg.RuntimeFilterSpecs {
-				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+			for _, rfSpec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
 					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-						Expr: spec.Expr,
+						Spec: rfSpec,
 						Chan: ch,
 					})
 				}
@@ -1421,10 +1421,10 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process) *h
 
 		if arg.RuntimeFilterSpecs != nil {
 			retArg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(arg.RuntimeFilterSpecs))
-			for _, spec := range arg.RuntimeFilterSpecs {
-				if ch, ok := c.runtimeFilterChans[spec.Tag]; ok {
+			for _, rfSpec := range arg.RuntimeFilterSpecs {
+				if ch, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
 					retArg.RuntimeFilterSenders = append(retArg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
-						Expr: spec.Expr,
+						Spec: rfSpec,
 						Chan: ch,
 					})
 				}
