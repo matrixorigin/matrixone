@@ -230,6 +230,7 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 		}
 	}
 	if err := tx.Commit(); err != nil {
+		logutil.Error("sqlWriter commit failed", logutil.ErrorField(err))
 		done <- err
 		return
 	}
