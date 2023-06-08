@@ -16,9 +16,8 @@ package tables
 
 import (
 	"context"
-	"time"
-
 	"sync/atomic"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -614,7 +613,7 @@ func (blk *ablock) BatchDedup(
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
+			logutil.Debugf("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
 		}
 	}()
 	node := blk.PinNode()

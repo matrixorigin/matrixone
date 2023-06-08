@@ -160,6 +160,7 @@ show variables like 'tx_isolation';
 set tx_isolation = default;
 show variables like 'tx_isolation';
 
+-- @bvt:issue#9861
 select @@sql_mode;
 set @@sql_mode = ONLY_FULL_GROUP_BY;
 select @@sql_mode;
@@ -167,3 +168,4 @@ set @@sql_mode = "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
 select @@sql_mode;
 set @@sql_mode = default;
 select @@sql_mode;
+-- @bvt:issue

@@ -16,6 +16,7 @@ package vector
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -450,7 +451,7 @@ func (fr *FunctionResult[T]) AppendMustBytesValue(val []byte) error {
 
 func (fr *FunctionResult[T]) AppendMustNullForBytesResult() error {
 	var v T
-	return appendOneFixed[T](fr.vec, v, true, fr.mp)
+	return appendOneFixed(fr.vec, v, true, fr.mp)
 }
 
 func (fr *FunctionResult[T]) GetType() types.Type {

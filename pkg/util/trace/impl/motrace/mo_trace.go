@@ -23,6 +23,7 @@ package motrace
 
 import (
 	"context"
+	"encoding/hex"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"time"
@@ -127,12 +128,12 @@ func (s *MOSpan) GetTable() *table.Table { return spanView.OriginTable }
 func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, table.StringField(spanView.Table))
-	row.SetColumnVal(spanIDCol, table.BytesField(s.SpanID[:]))
+	row.SetColumnVal(spanIDCol, table.StringField(hex.EncodeToString(s.SpanID[:])))
 	row.SetColumnVal(traceIDCol, table.UuidField(s.TraceID[:]))
 	row.SetColumnVal(spanKindCol, table.StringField(s.Kind.String()))
 	psc := s.Parent.SpanContext()
 	if psc.SpanID != trace.NilSpanID {
-		row.SetColumnVal(parentSpanIDCol, table.BytesField(psc.SpanID[:]))
+		row.SetColumnVal(parentSpanIDCol, table.StringField(hex.EncodeToString(psc.SpanID[:])))
 	}
 	row.SetColumnVal(nodeUUIDCol, table.StringField(GetNodeResource().NodeUuid))
 	row.SetColumnVal(nodeTypeCol, table.StringField(GetNodeResource().NodeType))
