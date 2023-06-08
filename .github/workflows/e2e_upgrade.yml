@@ -84,7 +84,18 @@ jobs:
       - name: Dump mo-service goroutines
         if: ${{ always() && !cancelled() }}
         run: |
-          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/upstream-dump-stacks.log; pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
+          max_retry=5
+          retry=0
+          while [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; do
+            curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/workspace/upstream-dump-stacks${retry}.log
+            pkill -9 mo-service
+            retry=$((retry+1))
+            if [ ${retry} -ge ${max_retry} ]; then
+              echo 'after retry, still cannot shutdown mo-service'
+              exit 1
+            fi
+            sleep 2
+          done
 
       - name: Start the Version of Head of MO
         run: |
