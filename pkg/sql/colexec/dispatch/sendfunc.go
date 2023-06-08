@@ -19,18 +19,16 @@ import (
 	"hash/crc32"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -132,7 +130,7 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	refCountAdd := int64(ap.ctr.localRegsCnt - 1)
 	atomic.AddInt64(&bat.Cnt, refCountAdd)
-	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
 		jm.IncRef(refCountAdd)
 		jm.SetDupCount(int64(ap.ctr.localRegsCnt))
 	}
@@ -348,9 +346,6 @@ func getShuffledSelsByRange(ap *Argument, bat *batch.Batch) [][]int32 {
 		groupByCol := vector.MustFixedCol[int32](groupByVec)
 		for row, v := range groupByCol {
 			regIndex := plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), lenRegs)
-			if regIndex >= lenRegs {
-				logutil.Warnf("fail")
-			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_int16:
@@ -622,7 +617,7 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *Wr
 func handleUnsent(proc *process.Process, bat *batch.Batch, refCnt int64, successCnt int64) {
 	diff := successCnt - refCnt
 	atomic.AddInt64(&bat.Cnt, diff)
-	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
 		jm.IncRef(diff)
 		jm.SetDupCount(diff)
 	}

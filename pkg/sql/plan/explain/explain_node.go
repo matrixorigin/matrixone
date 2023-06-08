@@ -298,6 +298,22 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, filterInfo)
 	}
 
+	if len(ndesc.Node.RuntimeFilterProbeList) > 0 {
+		filterInfo, err := ndesc.GetRuntimeFilteProbeInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, filterInfo)
+	}
+
+	if len(ndesc.Node.RuntimeFilterBuildList) > 0 {
+		filterInfo, err := ndesc.GetRuntimeFilterBuildInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, filterInfo)
+	}
+
 	// Get Limit And Offset info
 	if ndesc.Node.Limit != nil {
 		buf := bytes.NewBuffer(make([]byte, 0, 160))
@@ -390,6 +406,52 @@ func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, 
 			}
 			first = false
 			err := describeExpr(ctx, v, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Runtime Filter Probe: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.RuntimeFilterProbeList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v.Expr, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Runtime Filter Build: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.RuntimeFilterBuildList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v.Expr, options, buf)
 			if err != nil {
 				return "", err
 			}

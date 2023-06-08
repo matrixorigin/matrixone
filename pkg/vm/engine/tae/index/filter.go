@@ -86,7 +86,7 @@ func NewBinaryFuseFilterByVectors(datas []containers.Vector) (StaticFilter, erro
 	}
 	var err error
 	for _, data := range datas {
-		if err = containers.ForeachWindowBytes(data, 0, data.Length(), op, nil); err != nil {
+		if err = containers.ForeachWindowBytes(data.GetDownstreamVector(), 0, data.Length(), op, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -111,7 +111,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector) (bool
 		return nil
 	}
 
-	if err := containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil); err != nil {
+	if err := containers.ForeachWindowBytes(keys.GetDownstreamVector(), 0, keys.Length(), op, nil); err != nil {
 		return false, nil, err
 	}
 	return !positive.IsEmpty(), positive, nil

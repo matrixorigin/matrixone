@@ -222,12 +222,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_JOIN:
-		leftTags := make(map[int32]*Binding)
+		leftTags := make(map[int32]any)
 		for _, tag := range builder.enumerateTags(node.Children[0]) {
 			leftTags[tag] = nil
 		}
 
-		rightTags := make(map[int32]*Binding)
+		rightTags := make(map[int32]any)
 		for _, tag := range builder.enumerateTags(node.Children[1]) {
 			rightTags[tag] = nil
 		}
