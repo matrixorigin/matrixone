@@ -694,7 +694,7 @@ message Node {
 	repeated Expr block_filter_list = 38;
 
 	// Runtime filters
-	repeated RuntimeFilterSpec runtime_filter_list = 39;
+	repeated RuntimeFilterSpec runtime_filter_probe_list = 39;
 	repeated RuntimeFilterSpec runtime_filter_build_list = 40;
 }
 
