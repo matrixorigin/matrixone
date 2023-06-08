@@ -133,8 +133,10 @@ func (client *pushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp
 	if ts != nil && ts.GreaterEq(snapshotTS.Prev()) {
 		return
 	}
-	panic(fmt.Sprintf("BUG: all log tail must be applied before %s",
-		snapshotTS.DebugString()))
+	panic(fmt.Sprintf("BUG: all log tail must be applied before %s, received applied %s, last applied %+v",
+		snapshotTS.Prev().DebugString(),
+		client.receivedLogTailTime.getTimestamp().DebugString(),
+		ts))
 }
 
 // TryToSubscribeTable subscribe a table and block until subscribe succeed.
