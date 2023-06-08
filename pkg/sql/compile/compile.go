@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math"
 	"net"
 	"runtime"
@@ -40,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -1328,7 +1328,8 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 
 	// Register runtime filters
-	if len(n.RuntimeFilterProbeList) > 0 {
+	// XXX currently we only enable runtime filter on single CN
+	if len(c.cnList) == 1 && len(n.RuntimeFilterProbeList) > 0 {
 		receivers := make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterProbeList))
 		if c.runtimeFilterReceiverMap == nil {
 			c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
