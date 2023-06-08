@@ -248,13 +248,15 @@ func logRemoteLockFailed(
 func logTxnLockAdded(
 	serviceID string,
 	txn *activeTxn,
-	rows [][]byte) {
+	rows [][]byte,
+	w *waiter) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.DebugLevel) {
 		logger.Debug("lock added to txn",
 			serviceIDField(serviceID),
 			txnField(txn),
-			bytesArrayField("rows", rows))
+			bytesArrayField("rows", rows),
+			zap.String("waiter", w.String()))
 	}
 }
 
@@ -655,7 +657,7 @@ func bytesArrayField(name string, values [][]byte) zap.Field {
 	var buffer bytes.Buffer
 	buffer.WriteString("[")
 	for idx, row := range values {
-		buffer.WriteString(hex.EncodeToString(row))
+		buffer.WriteString(string(row))
 		if idx != len(values)-1 {
 			buffer.WriteString(",")
 		}
