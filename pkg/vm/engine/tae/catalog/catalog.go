@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 
 	// "time"
 
@@ -305,8 +306,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	catalog.OnReplayDBID(dbid)
 	db, err := catalog.GetDatabaseByID(dbid)
 	if err != nil {
-		logutil.Infof("delete %d", dbid)
-		logutil.Info(catalog.SimplePPString(common.PPL3))
+		logutil.Info("delete %d", zap.Uint64("dbid", dbid), zap.String("catalog pp", catalog.SimplePPString(common.PPL3)))
 		panic(err)
 	}
 	dbDeleteAt := db.GetDeleteAt()
@@ -519,7 +519,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 	tbl, err := db.GetTableEntryByID(cmd.ID.TableID)
 	if err != nil {
-		logutil.Infof("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
+		logutil.Debugf("tbl %d-%d", cmd.ID.DbID, cmd.ID.TableID)
 		logutil.Info(catalog.SimplePPString(3))
 		panic(err)
 	}

@@ -23,6 +23,7 @@ package motrace
 
 import (
 	"context"
+	"encoding/hex"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"time"
@@ -82,7 +83,8 @@ type MOSpan struct {
 	Name      string    `json:"name"`
 	StartTime time.Time `json:"start_time"`
 	EndTime   time.Time `jons:"end_time"`
-	Duration  uint64    `json:"duration"`
+	// Duration
+	Duration time.Duration `json:"duration"`
 
 	tracer *MOTracer `json:"-"`
 }
@@ -126,28 +128,30 @@ func (s *MOSpan) GetTable() *table.Table { return spanView.OriginTable }
 func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(rawItemCol, table.StringField(spanView.Table))
-	row.SetColumnVal(spanIDCol, table.BytesField(s.SpanID[:]))
+	row.SetColumnVal(spanIDCol, table.StringField(hex.EncodeToString(s.SpanID[:])))
 	row.SetColumnVal(traceIDCol, table.UuidField(s.TraceID[:]))
 	row.SetColumnVal(spanKindCol, table.StringField(s.Kind.String()))
 	psc := s.Parent.SpanContext()
 	if psc.SpanID != trace.NilSpanID {
-		row.SetColumnVal(parentSpanIDCol, table.BytesField(psc.SpanID[:]))
+		row.SetColumnVal(parentSpanIDCol, table.StringField(hex.EncodeToString(psc.SpanID[:])))
 	}
 	row.SetColumnVal(nodeUUIDCol, table.StringField(GetNodeResource().NodeUuid))
 	row.SetColumnVal(nodeTypeCol, table.StringField(GetNodeResource().NodeType))
 	row.SetColumnVal(spanNameCol, table.StringField(s.Name))
 	row.SetColumnVal(startTimeCol, table.TimeField(s.StartTime))
 	row.SetColumnVal(endTimeCol, table.TimeField(s.EndTime))
-	row.SetColumnVal(durationCol, table.Uint64Field(uint64(s.EndTime.Sub(s.StartTime)))) // Duration
+	row.SetColumnVal(durationCol, table.Uint64Field(uint64(s.Duration)))
 	row.SetColumnVal(resourceCol, table.StringField(s.tracer.provider.resource.String()))
 }
 
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
+	s.EndTime = time.Now()
+	s.Duration = s.EndTime.Sub(s.StartTime)
+	if s.Duration < s.tracer.provider.longSpanTime {
+		return
+	}
 	for _, opt := range options {
 		opt.ApplySpanEnd(&s.SpanConfig)
-	}
-	if s.EndTime.IsZero() {
-		s.EndTime = time.Now()
 	}
 	for _, sp := range s.tracer.provider.spanProcessors {
 		sp.OnEnd(s)

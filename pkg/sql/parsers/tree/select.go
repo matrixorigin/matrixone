@@ -26,11 +26,12 @@ type SelectStatement interface {
 // Select represents a SelectStatement with an ORDER and/or LIMIT.
 type Select struct {
 	statementImpl
-	Select  SelectStatement
-	OrderBy OrderBy
-	Limit   *Limit
-	With    *With
-	Ep      *ExportParam
+	Select         SelectStatement
+	OrderBy        OrderBy
+	Limit          *Limit
+	With           *With
+	Ep             *ExportParam
+	SelectLockInfo *SelectLockInfo
 }
 
 func (node *Select) Format(ctx *FmtCtx) {
@@ -50,6 +51,10 @@ func (node *Select) Format(ctx *FmtCtx) {
 	if node.Ep != nil {
 		ctx.WriteByte(' ')
 		node.Ep.Format(ctx)
+	}
+	if node.SelectLockInfo != nil {
+		ctx.WriteByte(' ')
+		node.SelectLockInfo.Format(ctx)
 	}
 }
 

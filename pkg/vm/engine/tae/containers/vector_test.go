@@ -467,7 +467,7 @@ func TestForeachWindowFixed(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowFixed(vec1, 0, vec1.Length(), op, nil, nil)
+	ForeachWindowFixed(vec1.GetDownstreamVector(), 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -487,7 +487,7 @@ func TestForeachWindowBytes(t *testing.T) {
 		}
 		return
 	}
-	ForeachWindowVarlen(vec1, 0, vec1.Length(), op, nil, nil)
+	ForeachWindowVarlen(vec1.GetDownstreamVector(), 0, vec1.Length(), op, nil, nil)
 	assert.Equal(t, vec1.Length(), cnt)
 }
 
@@ -539,7 +539,7 @@ func BenchmarkForeachVectorBytes(b *testing.B) {
 	b.Run("int64-bytes", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			ForeachWindowBytes(vec, 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
+			ForeachWindowBytes(vec.GetDownstreamVector(), 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
 				return
 			}, nil)
 		}

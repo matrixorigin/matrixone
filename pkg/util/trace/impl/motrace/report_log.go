@@ -16,13 +16,15 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"encoding/hex"
 	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
@@ -88,7 +90,7 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(traceIDCol, table.UuidField(m.SpanContext.TraceID[:]))
 	}
 	if m.SpanContext.SpanID != trace.NilSpanID {
-		row.SetColumnVal(spanIDCol, table.BytesField(m.SpanContext.SpanID[:]))
+		row.SetColumnVal(spanIDCol, table.StringField(hex.EncodeToString(m.SpanContext.SpanID[:])))
 	}
 	row.SetColumnVal(spanKindCol, table.StringField(m.SpanContext.Kind.String()))
 	row.SetColumnVal(nodeUUIDCol, table.StringField(GetNodeResource().NodeUuid))
@@ -139,6 +141,13 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 	}
 	buffer, err := jsonEncoder.EncodeEntry(entry, fields[:endIdx+1])
 	log.Extra = buffer.String()
-	GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+	switch entry.Level {
+	case zap.PanicLevel, zap.DPanicLevel, zap.FatalLevel:
+		syncer := NewItemSyncer(log)
+		GetGlobalBatchProcessor().Collect(DefaultContext(), syncer)
+		syncer.Wait()
+	default:
+		GetGlobalBatchProcessor().Collect(DefaultContext(), log)
+	}
 	return buffer, err
 }
