@@ -173,7 +173,6 @@ execute stmt1 using @a_var;
 select * from seq_table_01;
 drop sequence seq_16;
 drop sequence seq_15;
--- @bvt:issue
 --lastval and setval
 create sequence seq_17 increment 10 start with 20 no cycle;
 select lastval();
