@@ -408,6 +408,18 @@ func (m *MockBackgroundExec) EXPECT() *MockBackgroundExecMockRecorder {
 	return m.recorder
 }
 
+// ClearExecResultBatches mocks base method.
+func (m *MockBackgroundExec) ClearExecResultBatches() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ClearExecResultBatches")
+}
+
+// ClearExecResultBatches indicates an expected call of ClearExecResultBatches.
+func (mr *MockBackgroundExecMockRecorder) ClearExecResultBatches() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearExecResultBatches", reflect.TypeOf((*MockBackgroundExec)(nil).ClearExecResultBatches))
+}
+
 // ClearExecResultSet mocks base method.
 func (m *MockBackgroundExec) ClearExecResultSet() {
 	m.ctrl.T.Helper()
@@ -444,6 +456,34 @@ func (m *MockBackgroundExec) Exec(arg0 context.Context, arg1 string) error {
 func (mr *MockBackgroundExecMockRecorder) Exec(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Exec", reflect.TypeOf((*MockBackgroundExec)(nil).Exec), arg0, arg1)
+}
+
+// ExecStmt mocks base method.
+func (m *MockBackgroundExec) ExecStmt(arg0 context.Context, arg1 tree.Statement) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ExecStmt", arg0, arg1)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ExecStmt indicates an expected call of ExecStmt.
+func (mr *MockBackgroundExecMockRecorder) ExecStmt(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecStmt", reflect.TypeOf((*MockBackgroundExec)(nil).ExecStmt), arg0, arg1)
+}
+
+// GetExecResultBatches mocks base method.
+func (m *MockBackgroundExec) GetExecResultBatches() []*batch.Batch {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetExecResultBatches")
+	ret0, _ := ret[0].([]*batch.Batch)
+	return ret0
+}
+
+// GetExecResultBatches indicates an expected call of GetExecResultBatches.
+func (mr *MockBackgroundExecMockRecorder) GetExecResultBatches() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExecResultBatches", reflect.TypeOf((*MockBackgroundExec)(nil).GetExecResultBatches))
 }
 
 // GetExecResultSet mocks base method.
