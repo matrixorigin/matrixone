@@ -305,7 +305,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
-		for _, rfSpec := range node.RuntimeFilterList {
+		for _, rfSpec := range node.RuntimeFilterProbeList {
 			err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
 			if err != nil {
 				return nil, err

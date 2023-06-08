@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,11 +36,6 @@ import (
 )
 
 const (
-	// each periodToCheckTxnTimestamp, we check if we have received enough log for a new txn.
-	// If still not within maxBlockTimeToNewTransaction, the transaction creation fails.
-	maxBlockTimeToNewTransaction = 1 * time.Minute
-	periodToCheckTxnTimestamp    = 1 * time.Millisecond
-
 	// if we didn't receive response from dn log tail server within time maxTimeToWaitServerResponse.
 	// we assume that client has lost connect to server and will start a reconnect.
 	maxTimeToWaitServerResponse = 60 * time.Second
@@ -116,26 +112,29 @@ func (client *pushClient) init(
 	return nil
 }
 
-func (client *pushClient) checkTxnTimeIsLegal(
-	ctx context.Context, txnTime timestamp.Timestamp) error {
-	if client.receivedLogTailTime.greatEq(txnTime) {
-		return nil
+func (client *pushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
+	// At the time of transaction creation, a ts is obtained as the start timestamp of the transaction.
+	// To ensure that the complete data is visible at the start of the transaction, the logtail of
+	// all < snapshot ts is waited until it is applied when the transaction is created inside the txn client.
+	//
+	// Inside the txn client, there is a waiter waiting for the LogTail to be applied, which will continuously
+	// receive the ts applied by the pushClient, and then the transaction will use the maximum applied LogTail
+	// ts currently received + 1 as the transaction's snapshot ts to ensure that the transaction can see the
+	// log tails corresponding to the max(applied log tail ts in txn client).
+	//
+	// So here we need to use snapshotTS.Prev() to check.
+	if client.receivedLogTailTime.greatEq(snapshotTS.Prev()) {
+		return
 	}
-	ticker := time.NewTicker(periodToCheckTxnTimestamp)
-	defer ticker.Stop()
 
-	for i := maxBlockTimeToNewTransaction; i > 0; i -= periodToCheckTxnTimestamp {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if client.receivedLogTailTime.greatEq(txnTime) {
-				return nil
-			}
-		}
+	// If reconnect, receivedLogTailTime will reset. But latestAppliedLogTailTS is always keep the latest applied
+	// logtail ts.
+	ts := client.receivedLogTailTime.latestAppliedLogTailTS.Load()
+	if ts != nil && ts.GreaterEq(snapshotTS) {
+		return
 	}
-	logutil.Errorf("new txn failed because lack of enough log tail. txn time is [%s]", txnTime.String())
-	return moerr.NewTxnError(ctx, "new txn failed. please retry")
+	panic(fmt.Sprintf("BUG: all log tail must be applied before %s",
+		snapshotTS.DebugString()))
 }
 
 // TryToSubscribeTable subscribe a table and block until subscribe succeed.
@@ -472,12 +471,16 @@ func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
 // syncLogTailTimestamp is a global log tail timestamp for a cn node.
 // support `getTimestamp()` method to get time of last received log.
 type syncLogTailTimestamp struct {
-	timestampWaiter client.TimestampWaiter
-	ready           atomic.Bool
-	tList           []atomic.Pointer[timestamp.Timestamp]
+	timestampWaiter        client.TimestampWaiter
+	ready                  atomic.Bool
+	tList                  []atomic.Pointer[timestamp.Timestamp]
+	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
+	ts := r.getTimestamp()
+	r.latestAppliedLogTailTS.Store(&ts)
+
 	r.timestampWaiter = timestampWaiter
 	r.ready.Store(false)
 	if len(r.tList) == 0 {
@@ -508,7 +511,8 @@ func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 
 func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
 	r.tList[index].Store(&newTimestamp)
-	r.timestampWaiter.NotifyLatestCommitTS(r.getTimestamp())
+	ts := r.getTimestamp()
+	r.timestampWaiter.NotifyLatestCommitTS(ts)
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
