@@ -7028,7 +7028,7 @@ func TestDeduplication(t *testing.T) {
 			txns = append(txns, txn)
 		}
 	}
-	for _,txn:=range txns{
+	for _, txn := range txns {
 		txn.Commit()
 	}
 	tae.checkRowsByScan(rows, false)
