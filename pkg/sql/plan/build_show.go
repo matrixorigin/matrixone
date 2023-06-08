@@ -694,17 +694,24 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	} else if dbName == catalog.MO_CATALOG && tblName == catalog.MO_COLUMNS {
 		keyStr = "case when attname = '" + catalog.SystemColAttr_UniqName + "' then 'PRI' else '' END as `Key`"
 	} else {
+		keyStr += "case"
 		if tableDef.Pkey != nil {
-			keyStr += "case"
 			for _, name := range tableDef.Pkey.Names {
 				keyStr += " when attname = "
 				keyStr += "'" + name + "'"
 				keyStr += " then 'PRI'"
 			}
-			keyStr += " else '' END as `Key`"
-		} else {
-			keyStr = "'' as `Key`"
+
 		}
+
+		if len(tableDef.Fkeys) != 0 {
+			for _, fk := range tableDef.Fkeys {
+				keyStr += " when attname = "
+				keyStr += "'" + tableDef.Cols[fk.Cols[0]].GetName() + "'"
+				keyStr += " then 'MUL'"
+			}
+		}
+		keyStr += " else '' END as `Key`"
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
