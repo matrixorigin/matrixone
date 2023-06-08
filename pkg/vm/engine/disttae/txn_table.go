@@ -1379,9 +1379,7 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	var dirtyblks []catalog.BlockInfo
 	if len(tbl.dirtyBlks) > 0 {
 		dirtyblks = make([]catalog.BlockInfo, 0, len(tbl.dirtyBlks))
-		for i := range tbl.dirtyBlks {
-			dirtyblks = append(dirtyblks, tbl.dirtyBlks[i])
-		}
+		dirtyblks = append(dirtyblks, tbl.dirtyBlks...)
 	}
 
 	rds0, err := tbl.newReader(
