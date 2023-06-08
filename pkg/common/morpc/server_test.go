@@ -387,6 +387,21 @@ func TestCannotGetClosedBackend(t *testing.T) {
 	})
 }
 
+func TestPingError(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		c := newTestClient(t, WithClientMaxBackendPerHost(2))
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
+			return cs.Write(context.Background(), request.Message)
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		cancel()
+		require.Error(t, c.Ping(ctx, testAddr))
+	})
+}
+
 func BenchmarkSend(b *testing.B) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
