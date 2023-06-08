@@ -48,7 +48,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 }
 
 type internalMiniExec interface {
-	doComQuery(requestCtx context.Context, sql string) error
+	doComQuery(requestCtx context.Context, input *UserInput) error
 	SetSession(*Session)
 }
 
@@ -141,7 +141,7 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	defer sess.Close()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
-	return ie.executor.doComQuery(ctx, sql)
+	return ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -152,7 +152,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
 	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
-	err := ie.executor.doComQuery(ctx, sql)
+	err := ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
 	return res

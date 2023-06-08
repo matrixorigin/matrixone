@@ -459,6 +459,17 @@ type ModifyBlockMeta struct {
 	deletes []int64
 }
 
+func (m ModifyBlockMeta) copy() ModifyBlockMeta {
+	c := ModifyBlockMeta{
+		meta: m.meta,
+	}
+	if m.deletes != nil {
+		c.deletes = make([]int64, len(m.deletes))
+		copy(c.deletes, m.deletes)
+	}
+	return c
+}
+
 type pkRange struct {
 	isRange bool
 	items   []int64

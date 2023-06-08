@@ -100,7 +100,7 @@ Disguise the COMMAND CMD_FIELD_LIST as sql query.
 const (
 	cmdFieldListSql    = "__++__internal_cmd_field_list"
 	cmdFieldListSqlLen = len(cmdFieldListSql)
-	intereSql          = "internal_sql"
+	internalSql        = "internal_sql"
 	cloudUserSql       = "cloud_user_sql"
 	cloudNoUserSql     = "cloud_nonuser_sql"
 	externSql          = "external_sql"
@@ -145,8 +145,12 @@ func execResultArrayHasData(arr []ExecResult) bool {
 type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
+	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
 	ClearExecResultSet()
+
+	GetExecResultBatches() []*batch.Batch
+	ClearExecResultBatches()
 }
 
 var _ BackgroundExec = &BackgroundHandler{}
