@@ -26,6 +26,7 @@ import (
 // LogtailResponse wraps logtail.LogtailResponse.
 type LogtailResponse struct {
 	logtail.LogtailResponse
+	closeCB func()
 }
 
 var _ morpc.Message = (*LogtailResponse)(nil)
@@ -37,6 +38,7 @@ func (r *LogtailResponse) SetID(id uint64) {
 func (r *LogtailResponse) GetID() uint64 {
 	return r.ResponseId
 }
+
 func (r *LogtailResponse) DebugString() string {
 	return ""
 }
@@ -73,6 +75,10 @@ func (p *responsePool) Acquire() *LogtailResponse {
 }
 
 func (p *responsePool) Release(resp *LogtailResponse) {
+	if resp.closeCB != nil {
+		resp.closeCB()
+		resp.closeCB = nil
+	}
 	resp.Reset()
 	p.pool.Put(resp)
 }
@@ -113,29 +119,6 @@ type LogtailResponseSegmentPool interface {
 
 	// Release puts item back to pool.
 	Release(*LogtailResponseSegment)
-}
-
-type segmentPool struct {
-	pool *sync.Pool
-}
-
-func NewLogtailResponseSegmentPool() LogtailResponseSegmentPool {
-	return &segmentPool{
-		pool: &sync.Pool{
-			New: func() any {
-				return &LogtailResponseSegment{}
-			},
-		},
-	}
-}
-
-func (p *segmentPool) Acquire() *LogtailResponseSegment {
-	return p.pool.Get().(*LogtailResponseSegment)
-}
-
-func (p *segmentPool) Release(seg *LogtailResponseSegment) {
-	seg.Reset()
-	p.pool.Put(seg)
 }
 
 // LogtailServerSegmentPool describes segment pool for logtail server.

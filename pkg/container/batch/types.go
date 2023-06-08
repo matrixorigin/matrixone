@@ -184,5 +184,6 @@ type Batch struct {
 	// ring
 	Zs   []int64
 	Aggs []agg.Agg[any]
-	Ht   any // hash table
+
+	AuxData any // hash table, runtime filter, etc.
 }

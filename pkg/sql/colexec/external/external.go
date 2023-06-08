@@ -288,15 +288,6 @@ func FilterFileList(ctx context.Context, node *plan.Node, proc *process.Process,
 	return filterByAccountAndFilename(ctx, node, proc, fileList, fileSize)
 }
 
-func IsSysTable(dbName string, tableName string) bool {
-	if dbName == "system" {
-		return tableName == "statement_info" || tableName == "rawlog"
-	} else if dbName == "system_metrics" {
-		return tableName == "metric"
-	}
-	return false
-}
-
 func ReadFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error) {
 	if param.Extern.Local {
 		return io.NopCloser(proc.LoadLocalReader), nil
@@ -451,7 +442,7 @@ func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) *batc
 }
 
 func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
-	close := param.Extern.Tail.Fields.EnclosedBy
+	close := param.Close
 	if close == '"' || close == 0 {
 		return
 	}
@@ -553,14 +544,19 @@ func GetMOcsvReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	plh := &ParseLineHandler{}
 	plh.moCsvGetParsedLinesChan = atomic.Value{}
 	plh.moCsvGetParsedLinesChan.Store(make(chan LineOut, channelSize))
+	var cma byte
 	if param.Extern.Tail.Fields == nil {
-		param.Extern.Tail.Fields = &tree.Fields{Terminated: ","}
+		cma = ','
+		param.Close = 0
+	} else {
+		cma = param.Extern.Tail.Fields.Terminated[0]
+		param.Close = param.Extern.Tail.Fields.EnclosedBy
 	}
 	if param.Extern.Format == tree.JSONLINE {
-		param.Extern.Tail.Fields.Terminated = "\t"
+		cma = '\t'
 	}
 	plh.moCsvReader = NewReaderWithOptions(param.reader,
-		rune(param.Extern.Tail.Fields.Terminated[0]),
+		rune(cma),
 		'#',
 		true,
 		false)
@@ -990,9 +986,9 @@ func getStrFromLine(Line []string, colIdx int, param *ExternalParam) string {
 		return param.Fileparam.Filepath
 	} else {
 		str := Line[param.Name2ColIndex[param.Attrs[colIdx]]]
-		if param.Extern.Tail.Fields.EnclosedBy != 0 {
+		if param.Close != 0 {
 			tmp := strings.TrimSpace(str)
-			if len(tmp) >= 2 && tmp[0] == param.Extern.Tail.Fields.EnclosedBy && tmp[len(tmp)-1] == param.Extern.Tail.Fields.EnclosedBy {
+			if len(tmp) >= 2 && tmp[0] == param.Close && tmp[len(tmp)-1] == param.Close {
 				return tmp[1 : len(tmp)-1]
 			}
 		}

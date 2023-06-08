@@ -48,6 +48,7 @@ type ExParamConst struct {
 	maxBatchSize    uint64
 	Idx             int
 	CreateSql       string
+	Close           byte
 	Attrs           []string
 	Cols            []*plan.ColDef
 	FileList        []string
