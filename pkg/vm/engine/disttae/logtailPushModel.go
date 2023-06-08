@@ -130,7 +130,7 @@ func (client *pushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp
 	// If reconnect, receivedLogTailTime will reset. But latestAppliedLogTailTS is always keep the latest applied
 	// logtail ts.
 	ts := client.receivedLogTailTime.latestAppliedLogTailTS.Load()
-	if ts != nil && ts.GreaterEq(snapshotTS) {
+	if ts != nil && ts.GreaterEq(snapshotTS.Prev()) {
 		return
 	}
 	panic(fmt.Sprintf("BUG: all log tail must be applied before %s",
