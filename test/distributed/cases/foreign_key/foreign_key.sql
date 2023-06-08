@@ -242,3 +242,8 @@ create table fk_an_03(col1 int,col2 char(25),constraint ck foreign key(col1) REF
 --references not primary key
 create table fk_an_04(col1 bigint,col2 varchar(25),col3 tinyint);
 create table fk_an_05(col1 bigint,col2 varchar(25),col3 tinyint,constraint ck foreign key(col1) REFERENCES fk_an_04(col1) on delete CASCADE on update CASCADE);
+
+create table f1 (fa int primary key);
+CREATE TABLE c1 (ca INT, cb INT);
+ALTER TABLE c1 ADD CONSTRAINT ffa FOREIGN KEY (ca) REFERENCES f1(fa);
+desc c1;
