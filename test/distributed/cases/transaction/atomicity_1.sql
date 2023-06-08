@@ -73,9 +73,7 @@ load data infile '$resources/external_table_file/pt_table_data.csv' into table  
 start transaction ;
 update  atomic_table_3 set col2=20;
 select  col1,col2 from atomic_table_3;
--- @bvt:issue#8320
 show create table atomic_table_3;
--- @bvt:issue
 rollback ;
 select  col1,col2 from atomic_table_3;
 

@@ -1,7 +1,7 @@
 service-type = "CN"
 
 [log]
-level = "debug"
+level = "info"
 format = "console"
 max-size = 512
 
@@ -43,7 +43,7 @@ service-addresses = ["logservice:32001"]
 #disableMetric = true
 
 [cn]
-uuid = "dd1dccb8-4d3c-41f9-b482-5251dc7a41bf"
+uuid = "dd1dccb3-4d3c-41f9-b482-5251dc7a41bf"
 listen-address = "0.0.0.0:6002"
 service-address = "cn-0:6002"
 sql-address = "cn-0:6001"
@@ -60,4 +60,4 @@ port = 6001
 
 [cn.txn]
 enable-sacrificing-freshness = false
-enable-cn-based-consistency = true
+enable-cn-based-consistency = false

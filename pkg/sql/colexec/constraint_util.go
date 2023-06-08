@@ -17,7 +17,6 @@ package colexec
 import (
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,25 +27,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.Batch {
+func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) (*batch.Batch, error) {
+	retBatch := batch.New(true, []string{catalog.Row_ID})
+	rowIdMap := make(map[types.Rowid]bool)
+	vecNulls := bat.Vecs[idx].GetNulls()
 	retVec := vector.NewVec(types.T_Rowid.ToType())
-	rowIdMap := make(map[types.Rowid]struct{})
+	err := retVec.PreExtend(bat.Vecs[idx].Length()-vecNulls.Count(), proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	row := 0
 	for i, r := range vector.MustFixedCol[types.Rowid](bat.Vecs[idx]) {
-		if !bat.Vecs[idx].GetNulls().Contains(uint64(i)) {
-			rowIdMap[r] = struct{}{}
+		if !vecNulls.Contains(uint64(i)) {
+			if rowIdMap[r] {
+				continue
+			}
+			rowIdMap[r] = true
+			if err = vector.AppendFixed(retVec, r, false, proc.Mp()); err != nil {
+				retVec.Free(proc.Mp())
+				return nil, err
+			}
+			row++
 		}
 	}
-	rowIdList := make([]types.Rowid, len(rowIdMap))
-	i := 0
-	for rowId := range rowIdMap {
-		rowIdList[i] = rowId
-		i++
-	}
-	vector.AppendFixedList(retVec, rowIdList, nil, proc.Mp())
-	retBatch := batch.New(true, []string{catalog.Row_ID})
 	retBatch.SetZs(retVec.Length(), proc.Mp())
 	retBatch.SetVector(0, retVec)
-	return retBatch
+	return retBatch, nil
 }
 
 // GroupByPartitionForDelete: Group data based on partition and return batch array with the same length as the number of partitions.
@@ -54,7 +60,8 @@ func FilterRowIdForDel(proc *process.Process, bat *batch.Batch, idx int) *batch.
 func GroupByPartitionForDelete(proc *process.Process, bat *batch.Batch, idx int, pIdx int, partitionNum int) ([]*batch.Batch, error) {
 	vecList := make([]*vector.Vector, partitionNum)
 	for i := 0; i < partitionNum; i++ {
-		retVec := vector.NewVec(types.T_Rowid.ToType())
+		//retVec := vector.NewVec(types.T_Rowid.ToType())
+		retVec := proc.GetVector(types.T_Rowid.ToType())
 		vecList[i] = retVec
 	}
 
@@ -96,7 +103,8 @@ func GroupByPartitionForInsert(proc *process.Process, bat *batch.Batch, attrs []
 		partitionBatch.Attrs = attrs
 		for i := range partitionBatch.Attrs {
 			vecType := bat.GetVector(int32(i)).GetType()
-			retVec := vector.NewVec(*vecType)
+			//retVec := vector.NewVec(*vecType)
+			retVec := proc.GetVector(*vecType)
 			partitionBatch.SetVector(int32(i), retVec)
 		}
 		batches[partIdx] = partitionBatch

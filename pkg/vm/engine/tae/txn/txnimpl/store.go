@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
@@ -37,6 +38,7 @@ import (
 )
 
 type txnStore struct {
+	ctx context.Context
 	txnbase.NoopTxnStore
 	mu            sync.RWMutex
 	transferTable *model.HashPageTable
@@ -55,27 +57,32 @@ type txnStore struct {
 }
 
 var TxnStoreFactory = func(
+	ctx context.Context,
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
 	indexCache model.LRUCache,
-	dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
+	dataFactory *tables.DataFactory,
+	maxMessageSize uint64) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
-		return newStore(catalog, driver, transferTable, indexCache, dataFactory)
+		return newStore(ctx, catalog, driver, transferTable, indexCache, dataFactory, maxMessageSize)
 	}
 }
 
 func newStore(
+	ctx context.Context,
 	catalog *catalog.Catalog,
 	driver wal.Driver,
 	transferTable *model.HashPageTable,
 	indexCache model.LRUCache,
-	dataFactory *tables.DataFactory) *txnStore {
+	dataFactory *tables.DataFactory,
+	maxMessageSize uint64) *txnStore {
 	return &txnStore{
+		ctx:           ctx,
 		transferTable: transferTable,
 		dbs:           make(map[uint64]*txnDB),
 		catalog:       catalog,
-		cmdMgr:        newCommandManager(driver),
+		cmdMgr:        newCommandManager(driver, maxMessageSize),
 		driver:        driver,
 		logs:          make([]entry.Entry, 0),
 		dataFactory:   dataFactory,
@@ -532,6 +539,9 @@ func (store *txnStore) CreateNonAppendableBlock(id *common.ID, opts *objectio.Cr
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Block.CreateNonAppendable.Add(1)
+	})
 	return db.CreateNonAppendableBlock(id, opts)
 }
 
@@ -548,6 +558,9 @@ func (store *txnStore) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block,
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Block.Create.Add(1)
+	})
 	return db.CreateBlock(id, is1PC)
 }
 
@@ -556,6 +569,9 @@ func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Block.SoftDelete.Add(1)
+	})
 	return db.SoftDeleteBlock(id)
 }
 
@@ -564,6 +580,9 @@ func (store *txnStore) SoftDeleteSegment(id *common.ID) (err error) {
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
+	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.SoftDelete.Add(1)
+	})
 	return db.SoftDeleteSegment(id)
 }
 
@@ -659,13 +678,18 @@ func (store *txnStore) PrepareWAL() (err error) {
 		return
 	}
 
-	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), store.txn)
-	if err != nil {
-		return
+	// Apply the record from the command list.
+	// Split the commands by max message size.
+	for store.cmdMgr.cmd.MoreCmds() {
+		logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), store.txn)
+		if err != nil {
+			return err
+		}
+		if logEntry != nil {
+			store.logs = append(store.logs, logEntry)
+		}
 	}
-	if logEntry != nil {
-		store.logs = append(store.logs, logEntry)
-	}
+
 	for _, db := range store.dbs {
 		if err = db.Apply1PCCommit(); err != nil {
 			return

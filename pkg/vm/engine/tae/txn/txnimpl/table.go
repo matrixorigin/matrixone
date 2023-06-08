@@ -20,6 +20,8 @@ import (
 	"runtime/trace"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+
 	"github.com/RoaringBitmap/roaring"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -227,6 +229,7 @@ func (tbl *txnTable) recurTransferDelete(
 	}
 	blockID, offset := rowID.Decode()
 	newID := &common.ID{
+		DbID:    id.DbID,
 		TableID: id.TableID,
 		BlockID: blockID,
 	}
@@ -247,8 +250,8 @@ func (tbl *txnTable) recurTransferDelete(
 	if err := tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
 		return err
 	}
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
 			depth,
 			id.BlockID.String(),
 			row,
@@ -385,10 +388,16 @@ func (tbl *txnTable) SoftDeleteSegment(id *types.Segmentid) (err error) {
 }
 
 func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
+	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.Create.Add(1)
+	})
 	return tbl.createSegment(catalog.ES_Appendable, is1PC, nil)
 }
 
 func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
+	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
+		counter.TAE.Segment.CreateNonAppendable.Add(1)
+	})
 	return tbl.createSegment(catalog.ES_NotAppendable, is1PC, opts)
 }
 
@@ -688,8 +697,9 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		// 		start,
 		// 		end)
 		// }
+		// This err also captured by txn's write conflict check.
 		if err != nil {
-			logutil.Infof("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
+			logutil.Debugf("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				id.TableID,
 				id.BlockID.String(),
@@ -772,7 +782,7 @@ func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, 
 	return tbl.localSegment.GetValue(row, col)
 }
 
-func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
+func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
 	if tbl.localSegment != nil && id.SegmentID().Eq(tbl.localSegment.entry.ID) {
 		return tbl.localSegment.GetValue(row, col)
 	}
@@ -785,7 +795,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, isN
 		panic(err)
 	}
 	block := meta.GetBlockData()
-	return block.GetValue(tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col))
+	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col))
 }
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
@@ -895,7 +905,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 			pkType := pkVec.GetType()
 			zm = index.NewZM(pkType.Oid, pkType.Scale)
 		}
-		if err = index.BatchUpdateZM(zm, pkVec); err != nil {
+		if err = index.BatchUpdateZM(zm, pkVec.GetDownstreamVector()); err != nil {
 			pkVec.Close()
 			return err
 		}
@@ -974,7 +984,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 	maxSegmentHint := uint64(0)
 	pkType := keys.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
-	if err = index.BatchUpdateZM(keysZM, keys); err != nil {
+	if err = index.BatchUpdateZM(keysZM, keys.GetDownstreamVector()); err != nil {
 		return
 	}
 	var (

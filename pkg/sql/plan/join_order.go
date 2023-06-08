@@ -15,10 +15,10 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 type joinEdge struct {
@@ -57,12 +57,12 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 			break
 		}
 
-		leftTags := make(map[int32]*Binding)
+		leftTags := make(map[int32]any)
 		for _, tag := range builder.enumerateTags(joinNode.Children[0]) {
 			leftTags[tag] = nil
 		}
 
-		rightTags := make(map[int32]*Binding)
+		rightTags := make(map[int32]any)
 		for _, tag := range builder.enumerateTags(joinNode.Children[1]) {
 			rightTags[tag] = nil
 		}
@@ -106,7 +106,49 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 	return nodeID
 }
 
-func IsEquiJoin(exprs []*plan.Expr) bool {
+func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
+	if node.NodeType != plan.Node_JOIN {
+		return false
+	}
+
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = nil
+	}
+
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = nil
+	}
+
+	for _, expr := range node.OnList {
+		if equi, _ := isEquiCond(expr, leftTags, rightTags); equi {
+			return true
+		}
+	}
+	return false
+}
+
+func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]any) (bool, bool) {
+	if e, ok := expr.Expr.(*plan.Expr_F); ok {
+		if !SupportedJoinCondition(e.F.Func.GetObj()) {
+			return false, false
+		}
+
+		lside, rside := getJoinSide(e.F.Args[0], leftTags, rightTags, 0), getJoinSide(e.F.Args[1], leftTags, rightTags, 0)
+		if lside == JoinSideLeft && rside == JoinSideRight {
+			return true, true
+		} else if lside == JoinSideRight && rside == JoinSideLeft {
+			return true, false
+		}
+	}
+
+	return false, false
+}
+
+// IsEquiJoin2 Judge whether a join node is equi-join (after column remapping)
+// Can only be used after optimizer!!!
+func IsEquiJoin2(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
 		if e, ok := expr.Expr.(*plan.Expr_F); ok {
 			if !SupportedJoinCondition(e.F.Func.GetObj()) {
@@ -119,23 +161,9 @@ func IsEquiJoin(exprs []*plan.Expr) bool {
 			return true
 		}
 	}
-	return false || isEquiJoin0(exprs)
+	return false
 }
 
-func isEquiJoin0(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !SupportedJoinCondition(e.F.Func.GetObj()) {
-				return false
-			}
-			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				return false
-			}
-		}
-	}
-	return true
-}
 func SupportedJoinCondition(id int64) bool {
 	fid, _ := function.DecodeOverloadID(id)
 	return fid == function.EQUAL

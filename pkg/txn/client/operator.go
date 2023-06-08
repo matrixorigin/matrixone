@@ -266,20 +266,19 @@ func (tc *txnOperator) UpdateSnapshot(
 		return nil
 	}
 
+	minTS := ts
 	// we need to waiter the latest snapshot ts which is greater than the current snapshot
-	if ts.IsEmpty() {
-		lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
-			ctx,
-			tc.mu.txn.SnapshotTS)
-		if err != nil {
-			return err
-		}
-		ts = lastSnapshotTS
+	if minTS.IsEmpty() {
+		minTS = tc.mu.txn.SnapshotTS
 	}
 
-	if tc.mu.txn.SnapshotTS.Less(ts) {
-		tc.mu.txn.SnapshotTS = ts
+	lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
+		ctx,
+		minTS)
+	if err != nil {
+		return err
 	}
+	tc.mu.txn.SnapshotTS = lastSnapshotTS
 	return nil
 }
 
@@ -380,10 +379,15 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	util.LogTxnRollback(tc.getTxnMeta(false))
 
 	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	if err := tc.checkStatus(true); err != nil {
+		return err
+	}
+
 	defer func() {
 		tc.mu.txn.Status = txn.TxnStatus_Aborted
 		tc.closeLocked()
-		tc.mu.Unlock()
 	}()
 
 	if tc.needUnlockLocked() {

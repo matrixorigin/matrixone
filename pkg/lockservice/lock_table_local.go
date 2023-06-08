@@ -98,7 +98,7 @@ func (l *localLockTable) doLock(
 			}
 			// no waiter, all locks are added
 			if c.w == nil {
-				c.txn.setBlocked(c.txn.txnID, nil, false)
+				c.txn.clearBlocked(c.txn.txnID, false)
 				logLocalLockAdded(l.bind.ServiceID, c.txn, l.bind.Table, c.rows, c.opts)
 				if c.result.Timestamp.IsEmpty() {
 					c.result.Timestamp = c.lockedTS
@@ -239,15 +239,19 @@ func (l *localLockTable) acquireRowLockLocked(c lockContext) lockContext {
 			// current txn's lock
 			if bytes.Equal(c.txn.txnID, lock.txnID) {
 				if c.w != nil {
+					// txn1 hold lock
+					// txn2/op1 added into txn1's waiting list
+					// txn2/op2 added into txn2/op1's same txn list
+					// txn1 unlock, notify txn2/op1
+					// txn2/op3 get lock before txn2/op1 get notify
 					if len(c.w.sameTxnWaiters) > 0 {
-						panic("BUG: same txn waiters should be empty")
+						c.w.notifySameTxn(l.bind.ServiceID, notifyValue{})
 					}
 					str := c.w.String()
 					if v := c.w.close(l.bind.ServiceID, notifyValue{}); v != nil {
 						panic("BUG: waiters should be empty, " + str + "," + v.String() + ", " + fmt.Sprintf("table(%d)  %+v", l.bind.Table, key))
 					}
 					c.w = nil
-					return c
 				}
 				continue
 			}
@@ -309,7 +313,7 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{row}, true)
+	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{row}, waiter, true)
 	l.mu.store.Add(row, lock)
 
 	// if has same txn's waiters on same key, there must be at wait status.
@@ -358,10 +362,11 @@ func (l *localLockTable) addRangeLockLocked(
 	var confilctKey []byte
 	var prevStartKey []byte
 	rangeStartEncountered := false
+	// TODO: remove mem alloc.
 	upbound := nextKey(end, nil)
 	l.mu.store.Range(
 		start,
-		upbound,
+		nil,
 		func(key []byte, keyLock Lock) bool {
 			if !bytes.Equal(keyLock.txnID, txn.txnID) {
 				conflictWith = keyLock
@@ -372,7 +377,7 @@ func (l *localLockTable) addRangeLockLocked(
 			if keyLock.isLockRangeStart() {
 				prevStartKey = key
 				rangeStartEncountered = true
-				return true
+				return bytes.Compare(key, end) < 0
 			}
 			if rangeStartEncountered &&
 				!keyLock.isLockRangeEnd() {
@@ -388,7 +393,7 @@ func (l *localLockTable) addRangeLockLocked(
 				txn)
 			prevStartKey = nil
 			rangeStartEncountered = false
-			return true
+			return bytes.Compare(key, end) < 0
 		})
 
 	if rangeStartEncountered {
@@ -416,7 +421,7 @@ func (l *localLockTable) addRangeLockLocked(
 	endLock.waiter = w
 
 	// similar to row lock
-	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{start, end}, true)
+	txn.lockAdded(l.bind.ServiceID, l.bind.Table, [][]byte{start, end}, w, true)
 	l.mu.store.Add(start, startLock)
 	l.mu.store.Add(end, endLock)
 
@@ -433,7 +438,12 @@ func (l *localLockTable) mergeRangeLocked(
 	txn *activeTxn) (*waiter, []byte, []byte) {
 	// range lock encounted a row lock
 	if seekLock.isLockRow() {
-		// [1+] + [1, 4] => [1, 4]
+		// 5 + [1, 4] => [1, 4] + [5]
+		if bytes.Compare(seekKey, end) > 0 {
+			return w, start, end
+		}
+
+		// [1~4] + [1, 4] => [1, 4]
 		mc.mergeLocks([][]byte{seekKey})
 		mc.mergeWaiter(l.bind.ServiceID, seekLock.waiter, w)
 		return w, start, end
@@ -445,48 +455,33 @@ func (l *localLockTable) mergeRangeLocked(
 
 	oldStart, oldEnd := prevStartKey, seekKey
 
-	// [start, end] < [oldStart, oldEnd]
-	// [oldStart, oldEnd] < [start, end]
-	if bytes.Compare(end, oldStart) < 0 ||
-		bytes.Compare(oldEnd, start) < 0 {
+	// no overlap
+	if bytes.Compare(oldStart, end) > 0 ||
+		bytes.Compare(start, oldEnd) > 0 {
 		return w, start, end
 	}
 
-	// [oldStart <= start, end <= oldEnd]
-	if bytes.Compare(oldStart, start) <= 0 &&
-		bytes.Compare(end, oldEnd) <= 0 {
-		mc.mergeLocks([][]byte{oldStart, oldEnd})
-		mc.mergeWaiter(l.bind.ServiceID, w, seekLock.waiter)
-		return seekLock.waiter, oldStart, oldEnd
+	v1, _ := l.mu.store.Get(oldStart)
+	v2, _ := l.mu.store.Get(oldEnd)
+	if v1.waiter != v2.waiter {
+		panic(fmt.Sprintf("%+v, %+v, %+v, %+v",
+			v1.isLockRangeStart(),
+			v2.isLockRangeEnd(),
+			v1.waiter.String(),
+			v2.waiter.String()))
 	}
 
-	// [start <= oldStart, oldEnd <= end]
-	if bytes.Compare(start, oldStart) <= 0 &&
-		bytes.Compare(oldEnd, end) <= 0 {
-		mc.mergeLocks([][]byte{oldStart, oldEnd})
-		mc.mergeWaiter(l.bind.ServiceID, seekLock.waiter, w)
-		return w, start, end
+	min, max := oldStart, oldEnd
+	if bytes.Compare(min, start) > 0 {
+		min = start
+	}
+	if bytes.Compare(max, end) < 0 {
+		max = end
 	}
 
-	// [start, end] intersect [oldStart , oldEnd]
-	if between(end, start, oldEnd) &&
-		between(oldStart, start, oldEnd) {
-		mc.mergeLocks([][]byte{start, end, oldStart, oldEnd})
-		mc.mergeWaiter(l.bind.ServiceID, seekLock.waiter, w)
-		return w, start, oldEnd
-	}
-
-	// [oldStart , oldEnd] intersect [start, end]
-	if between(oldEnd, oldStart, end) &&
-		between(start, oldStart, end) {
-		mc.mergeLocks([][]byte{start, end, oldStart, oldEnd})
-		mc.mergeWaiter(l.bind.ServiceID, seekLock.waiter, w)
-		return w, oldStart, end
-	}
-
-	panic(fmt.Sprintf("BUG: missing some case, new [%+v, %+v], old [%+v, %+v]",
-		start, end,
-		oldStart, oldEnd))
+	mc.mergeLocks([][]byte{oldStart, oldEnd})
+	mc.mergeWaiter(l.bind.ServiceID, seekLock.waiter, w)
+	return w, min, max
 }
 
 func (l *localLockTable) mustGetRangeStart(endKey []byte) []byte {
@@ -503,11 +498,6 @@ func nextKey(src, dst []byte) []byte {
 	return dst
 }
 
-func between(target, start, end []byte) bool {
-	return bytes.Compare(target, start) >= 0 &&
-		bytes.Compare(target, end) <= 0
-}
-
 var (
 	mergePool = sync.Pool{
 		New: func() any {
@@ -519,7 +509,6 @@ var (
 )
 
 type mergeContext struct {
-	origin         *waiter
 	waitOnSameKey  []*waiter
 	changedWaiters []*waiter
 	mergedWaiters  []*waiter
@@ -528,7 +517,6 @@ type mergeContext struct {
 
 func newMergeContext(w *waiter) *mergeContext {
 	c := mergePool.Get().(*mergeContext)
-	c.origin = w
 	c.waitOnSameKey = append(c.waitOnSameKey, w.sameTxnWaiters...)
 	return c
 }
@@ -540,7 +528,6 @@ func (c *mergeContext) close() {
 	c.changedWaiters = c.changedWaiters[:0]
 	c.mergedWaiters = c.mergedWaiters[:0]
 	c.waitOnSameKey = c.waitOnSameKey[:0]
-	c.origin = nil
 	mergePool.Put(c)
 }
 

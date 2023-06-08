@@ -74,7 +74,7 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	}
 	logutil.Debugf("Log Service Driver: append end %p", a.client.record.Data)
 	if err != nil {
-		logutil.Debugf("size is %d", size)
+		logutil.Infof("size is %d", size)
 		panic(err)
 	}
 	a.logserviceLsn = lsn

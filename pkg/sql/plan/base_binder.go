@@ -18,23 +18,21 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"go/constant"
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
@@ -326,6 +324,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				Col: &plan.ColRef{
 					RelPos: relPos,
 					ColPos: colPos,
+					Name:   col,
 				},
 			}
 		} else {
@@ -937,7 +936,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					// rewrite count(*) to starcount(col_name)
 					name = "starcount"
 
-					astArgs[0] = tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)
+					astArgs = []tree.Expr{tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)}
 				}
 			}
 		}
@@ -1353,10 +1352,6 @@ func bindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		safe := true
 		if rightList, ok := args[1].Expr.(*plan.Expr_List); ok {
 			typLeft := makeTypeByPlan2Expr(args[0])
-			// for now ,decimal type can not fold constant
-			if typLeft.Oid == types.T_decimal64 || typLeft.Oid == types.T_decimal128 {
-				safe = false
-			}
 			lenList := len(rightList.List.List)
 
 			for i := 0; i < lenList && safe; i++ {

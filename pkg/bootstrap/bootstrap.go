@@ -22,8 +22,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 var (
@@ -96,31 +98,41 @@ var (
 )
 
 type bootstrapper struct {
-	lock  Locker
-	clock clock.Clock
-	exec  executor.SQLExecutor
+	lock   Locker
+	clock  clock.Clock
+	client client.TxnClient
+	exec   executor.SQLExecutor
 }
 
 // NewBootstrapper create bootstrapper to bootstrap mo database
 func NewBootstrapper(
 	lock Locker,
 	clock clock.Clock,
+	client client.TxnClient,
 	exec executor.SQLExecutor) Bootstrapper {
-	return &bootstrapper{clock: clock, exec: exec, lock: lock}
+	return &bootstrapper{clock: clock, exec: exec, lock: lock, client: client}
 }
 
 func (b *bootstrapper) Bootstrap(ctx context.Context) error {
-	if ok, err := b.checkAlreadyBootstrapped(ctx); ok || err != nil {
+	getLogger().Info("start to check bootstrap state")
+
+	ok, err := b.checkAlreadyBootstrapped(ctx)
+	if ok {
+		getLogger().Info("mo already boostrapped")
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 
-	ok, err := b.lock.Get(ctx)
+	ok, err = b.lock.Get(ctx)
 	if err != nil {
 		return err
 	}
 
 	// current node get the bootstrap privilege
 	if ok {
+
 		opts := executor.Options{}
 		err := b.exec.ExecTxn(
 			ctx,
@@ -138,9 +150,13 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+
+		getLogger().Info("bootstrap mo step 1 completed")
+
 		now, _ := b.clock.Now()
-		opts.WithMinCommittedTS(now)
-		return b.exec.ExecTxn(
+		// make sure txn start at now, and make sure can see the data of step1
+		opts = opts.WithMinCommittedTS(now)
+		err = b.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
 				for _, sql := range step2InitSQLs {
@@ -153,6 +169,25 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 				return nil
 			},
 			opts)
+		if err != nil {
+			getLogger().Error("bootstrap mo step 2 failed",
+				zap.Error(err))
+			return err
+		}
+
+		getLogger().Info("bootstrap mo step 2 completed")
+
+		if b.client != nil {
+			getLogger().Info("wait bootstrap logtail applied")
+
+			// if we bootstrapped, in current cn, we must wait logtails to be applied. All subsequence operations need to see the
+			// bootstrap data.
+			now, _ = b.clock.Now()
+			b.client.(client.TxnClientWithCtl).SetLatestCommitTS(now)
+		}
+
+		getLogger().Info("successfully completed bootstrap")
+		return nil
 	}
 
 	// otherwrise, wait bootstrap completed
@@ -162,6 +197,9 @@ func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 			return ctx.Err()
 		case <-time.After(time.Second):
 			if ok, err := b.checkAlreadyBootstrapped(ctx); ok || err != nil {
+				getLogger().Info("waiting bootstrap completed",
+					zap.Bool("result", ok),
+					zap.Error(err))
 				return err
 			}
 		}

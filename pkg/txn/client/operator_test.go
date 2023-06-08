@@ -419,28 +419,6 @@ func TestAddLockTable(t *testing.T) {
 	})
 }
 
-func TestUpdateSnaphotTS(t *testing.T) {
-	runTimestampWaiterTests(t, func(waiter *timestampWaiter) {
-		runOperatorTests(t,
-			func(
-				ctx context.Context,
-				tc *txnOperator,
-				_ *testTxnSender) {
-				tc.timestampWaiter = waiter
-				ts := int64(1000)
-				tc.mu.txn.SnapshotTS = newTestTimestamp(0)
-				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts)))
-				require.Equal(t, newTestTimestamp(ts), tc.Txn().SnapshotTS)
-
-				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts-1)))
-				require.Equal(t, newTestTimestamp(ts), tc.Txn().SnapshotTS)
-
-				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(ts+1)))
-				require.Equal(t, newTestTimestamp(ts+1), tc.Txn().SnapshotTS)
-			})
-	})
-}
-
 func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
 	runTimestampWaiterTests(t, func(waiter *timestampWaiter) {
 		runOperatorTests(t,
@@ -461,6 +439,13 @@ func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
 				require.NoError(t, tc.UpdateSnapshot(context.Background(), newTestTimestamp(0)))
 				require.Equal(t, newTestTimestamp(ts).Next(), tc.Txn().SnapshotTS)
 			})
+	})
+}
+
+func TestRollbackMultiTimes(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		require.NoError(t, tc.Rollback(ctx))
+		require.Error(t, tc.Rollback(ctx))
 	})
 }
 

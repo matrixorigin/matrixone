@@ -15,6 +15,7 @@
 package tasks
 
 import (
+	"context"
 	"hash/fnv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -122,7 +123,7 @@ func NewFnTask(ctx *Context, taskType TaskType, fn FuncT) *FnTask {
 	return task
 }
 
-func (task *FnTask) Execute() error {
+func (task *FnTask) Execute(ctx context.Context) error {
 	return task.Fn()
 }
 

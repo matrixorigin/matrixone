@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -299,6 +298,22 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, filterInfo)
 	}
 
+	if len(ndesc.Node.RuntimeFilterProbeList) > 0 {
+		filterInfo, err := ndesc.GetRuntimeFilteProbeInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, filterInfo)
+	}
+
+	if len(ndesc.Node.RuntimeFilterBuildList) > 0 {
+		filterInfo, err := ndesc.GetRuntimeFilterBuildInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, filterInfo)
+	}
+
 	// Get Limit And Offset info
 	if ndesc.Node.Limit != nil {
 		buf := bytes.NewBuffer(make([]byte, 0, 160))
@@ -403,6 +418,52 @@ func (ndesc *NodeDescribeImpl) GetBlockFilterConditionInfo(ctx context.Context, 
 	return buf.String(), nil
 }
 
+func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Runtime Filter Probe: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.RuntimeFilterProbeList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v.Expr, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Runtime Filter Build: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.RuntimeFilterBuildList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			err := describeExpr(ctx, v.Expr, options, buf)
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
 func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, 300))
 	buf.WriteString("Group Key: ")
@@ -424,12 +485,23 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(ctx context.Context, options *Expl
 		return "", moerr.NewNYI(ctx, "explain format dot")
 	}
 
-	idx := plan2.GetShuffleIndexForGroupBy(ndesc.Node)
-	if idx >= 0 {
-		buf.WriteString(" shuffle: ")
-		err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
-		if err != nil {
-			return "", err
+	if ndesc.Node.Stats.Shuffle {
+		idx := ndesc.Node.Stats.ShuffleColIdx
+		shuffleType := ndesc.Node.Stats.ShuffleType
+		if shuffleType == plan.ShuffleType_Hash {
+			buf.WriteString(" shuffle: hash(")
+			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
+		} else {
+			buf.WriteString(" shuffle: range(")
+			err := describeExpr(ctx, ndesc.Node.GroupBy[idx], options, buf)
+			if err != nil {
+				return "", err
+			}
+			buf.WriteString(")")
 		}
 	}
 	return buf.String(), nil

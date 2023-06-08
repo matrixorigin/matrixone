@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -86,6 +87,7 @@ func (txn *activeTxn) lockAdded(
 	serviceID string,
 	table uint64,
 	locks [][]byte,
+	w *waiter,
 	locked bool) {
 
 	// only in the lockservice node where the transaction was
@@ -108,7 +110,7 @@ func (txn *activeTxn) lockAdded(
 		txn.Lock()
 		defer txn.Unlock()
 	}
-	defer logTxnLockAdded(serviceID, txn, locks)
+	defer logTxnLockAdded(serviceID, txn, locks, w)
 	v, ok := txn.holdLocks[table]
 	if ok {
 		v.append(locks)
@@ -239,7 +241,7 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	return true
 }
 
-func (txn *activeTxn) setBlocked(txnID []byte, w *waiter, locked bool) {
+func (txn *activeTxn) clearBlocked(txnID []byte, locked bool) {
 	if !locked {
 		txn.Lock()
 		defer txn.Unlock()
@@ -250,10 +252,29 @@ func (txn *activeTxn) setBlocked(txnID []byte, w *waiter, locked bool) {
 		panic("invalid set Blocked")
 	}
 
-	txn.blockedWaiter = w
-	if w != nil {
-		return
+	txn.blockedWaiter = nil
+}
+
+func (txn *activeTxn) setBlocked(txnID []byte, w *waiter, locked bool) {
+	if !locked {
+		txn.Lock()
+		defer txn.Unlock()
 	}
+
+	if w == nil {
+		panic("invalid waiter")
+	}
+
+	// txn already closed
+	if !bytes.Equal(txn.txnID, txnID) {
+		panic("invalid set Blocked")
+	}
+
+	if !w.casStatus("", ready, blocking) {
+		panic(fmt.Sprintf("invalid waiter status %d, %s", w.getStatus(), w))
+	}
+
+	txn.blockedWaiter = w
 }
 
 func (txn *activeTxn) isRemoteLocked() bool {

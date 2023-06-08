@@ -42,6 +42,7 @@ const ETLParamTypeAll = MergeLogTypeALL
 const ETLParamAccountAll = "*"
 
 const AccountAll = ETLParamAccountAll
+const AccountSys = "sys"
 
 var ETLParamTSAll = time.Time{}
 
@@ -309,9 +310,27 @@ type RowWriter interface {
 	FlushAndClose() (int, error)
 }
 
+type CheckWriteHook func(context.Context)
+
+// AfterWrite cooperate with RowWriter
+type AfterWrite interface {
+	AddAfter(CheckWriteHook)
+}
+
 type RowField interface {
 	GetTable() *Table
 	FillRow(context.Context, *Row)
+}
+
+// NeedCheckWrite cooperate with AfterWrite and RowField
+type NeedCheckWrite interface {
+	NeedCheckWrite() bool
+	GetCheckWriteHook() CheckWriteHook
+}
+
+type NeedSyncWrite interface {
+	NeedSyncWrite() bool
+	GetCheckWriteHook() CheckWriteHook
 }
 
 type WriteRequest interface {

@@ -14,7 +14,10 @@
 
 package base
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type Observer interface {
 	OnExecDone(any)
@@ -22,12 +25,12 @@ type Observer interface {
 
 type IOpInternal interface {
 	PreExecute() error
-	Execute() error
+	Execute(ctx context.Context) error
 	PostExecute() error
 }
 
 type IOp interface {
-	OnExec() error
+	OnExec(ctx context.Context) error
 	SetError(err error)
 	GetError() error
 	WaitDone() error

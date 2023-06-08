@@ -275,7 +275,7 @@ type initUser struct {
 }
 
 var (
-	specialUser atomic.Value
+	specialUsers atomic.Value
 )
 
 // SetSpecialUser saves the user for initialization
@@ -294,26 +294,32 @@ func SetSpecialUser(userName string, password []byte) {
 		account:  acc,
 		password: password,
 	}
+	users := getSpecialUsers()
+	if users == nil {
+		users = make(map[string]*initUser)
+	}
+	users[userName] = user
 
-	specialUser.Store(user)
+	specialUsers.Store(users)
 }
 
 // isSpecialUser checks the user is the one for initialization
 func isSpecialUser(userName string) (bool, []byte, *TenantInfo) {
-	user := getSpecialUser()
-	if user != nil && user.account.GetUser() == userName {
-		return true, user.password, user.account
+	users := getSpecialUsers()
+
+	if len(users) > 0 && users[userName] != nil {
+		return true, users[userName].password, users[userName].account
 	}
 	return false, nil, nil
 }
 
-// getSpecialUser loads the user for initialization
-func getSpecialUser() *initUser {
-	value := specialUser.Load()
+// getSpecialUsers loads the user for initialization
+func getSpecialUsers() map[string]*initUser {
+	value := specialUsers.Load()
 	if value == nil {
 		return nil
 	}
-	return value.(*initUser)
+	return value.(map[string]*initUser)
 }
 
 const (
@@ -870,7 +876,6 @@ var (
     		database_name varchar(5000),
     		database_id bigint unsigned,
     		all_table bool,
-    		all_account bool,
     		table_list text,
     		account_list text,
     		created_time timestamp,
@@ -1314,6 +1319,8 @@ const (
 
 	getSystemVariablesWithAccountFromat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
+	getSystemVariableValueWithAccountFromat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and variable_name = '%s' and system_variables = true;`
+
 	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s';`
 
 	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
@@ -1321,12 +1328,12 @@ const (
 	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
-	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,all_account,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,%t,'%s','%s',now(),%d,%d,'%s');`
-	getPubInfoFormat            = `select all_account,account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
-	updatePubInfoFormat         = `update mo_catalog.mo_pubs set all_account = %t,account_list = '%s',comment = '%s' where pub_name = '%s';`
+	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
+	getPubInfoFormat            = `select account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
+	updatePubInfoFormat         = `update mo_catalog.mo_pubs set account_list = '%s',comment = '%s' where pub_name = '%s';`
 	dropPubFormat               = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
-	getPubInfoForSubFormat      = `select database_name,all_account,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
+	getPubInfoForSubFormat      = `select database_name,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
 	getDbPubCountFormat         = `select count(1) from mo_catalog.mo_pubs where database_name = '%s';`
 
 	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s';`
@@ -1636,14 +1643,14 @@ func getSqlForGetDbIdAndType(ctx context.Context, dbName string, checkNameValid 
 	return fmt.Sprintf(getDbIdAndTypFormat, dbName, account_id), nil
 }
 
-func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable, allAccount bool, tableList, accountList string, owner, creator uint32, comment string, checkNameValid bool) (string, error) {
+func getSqlForInsertIntoMoPubs(ctx context.Context, pubName, databaseName string, databaseId uint64, allTable bool, tableList, accountList string, owner, creator uint32, comment string, checkNameValid bool) (string, error) {
 	if checkNameValid {
 		err := inputNameIsInvalid(ctx, pubName, databaseName)
 		if err != nil {
 			return "", err
 		}
 	}
-	return fmt.Sprintf(insertIntoMoPubsFormat, pubName, databaseName, databaseId, allTable, allAccount, tableList, accountList, owner, creator, comment), nil
+	return fmt.Sprintf(insertIntoMoPubsFormat, pubName, databaseName, databaseId, allTable, tableList, accountList, owner, creator, comment), nil
 }
 func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
 	if checkNameValid {
@@ -1654,14 +1661,15 @@ func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid boo
 	}
 	return fmt.Sprintf(getPubInfoFormat, pubName), nil
 }
-func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountAll bool, accountList string, comment string, checkNameValid bool) (string, error) {
+
+func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountList string, comment string, checkNameValid bool) (string, error) {
 	if checkNameValid {
 		err := inputNameIsInvalid(ctx, pubName)
 		if err != nil {
 			return "", err
 		}
 	}
-	return fmt.Sprintf(updatePubInfoFormat, accountAll, accountList, comment, pubName), nil
+	return fmt.Sprintf(updatePubInfoFormat, accountList, comment, pubName), nil
 }
 
 func getSqlForDropPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
@@ -1731,6 +1739,12 @@ func getSystemVariablesWithAccount(accountId uint64) string {
 	return fmt.Sprintf(getSystemVariablesWithAccountFromat, accountId)
 }
 
+// getSqlForGetSystemVariableValueWithAccount will get sql for get variable value with specific account
+func getSqlForGetSystemVariableValueWithAccount(accountId uint64, varName string) string {
+	return fmt.Sprintf(getSystemVariableValueWithAccountFromat, accountId, varName)
+}
+
+// getSqlForUpdateSystemVariableValue returns a SQL query to update the value of a system variable for a given account.
 func getSqlForUpdateSystemVariableValue(varValue string, accountId uint64, varName string) string {
 	return fmt.Sprintf(updateSystemVariableValueFormat, varValue, accountId, varName)
 }
@@ -1795,6 +1809,11 @@ func getSqlForGetOwnerOfTable(dbName, tbName string) string {
 // getSqlForGetRolesOfCurrentUser get the sql for get the roles of the user
 func getSqlForGetRolesOfCurrentUser(userId int64) string {
 	return fmt.Sprintf(getRolesOfCurrentUserFormat, userId)
+}
+
+// getSqlForCheckProcedureExistence get the sql for check the procedure exist or not
+func getSqlForCheckProcedureExistence(pdName, dbName string) string {
+	return fmt.Sprintf(checkProcedureExistence, pdName, dbName)
 }
 
 func isBannedDatabase(dbName string) bool {
@@ -2935,8 +2954,8 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn T
 	return nil, nil
 }
 
-func isSubscriptionValid(allAccount bool, accountList string, accName string) bool {
-	if allAccount {
+func isSubscriptionValid(accountList string, accName string) bool {
+	if accountList == "all" {
 		return true
 	}
 	return strings.Contains(accountList, accName)
@@ -2946,12 +2965,12 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
-		sql, accStatus, allAccountStr, accountList, databaseName string
-		erArray                                                  []ExecResult
-		tenantInfo                                               *TenantInfo
-		accId                                                    int64
-		newCtx                                                   context.Context
-		tenantName                                               string
+		sql, accStatus, accountList, databaseName string
+		erArray                                   []ExecResult
+		tenantInfo                                *TenantInfo
+		accId                                     int64
+		newCtx                                    context.Context
+		tenantName                                string
 	)
 
 	tenantInfo = ses.GetTenantInfo()
@@ -3026,11 +3045,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		return nil, err
 	}
 
-	allAccountStr, err = erArray[0].GetString(newCtx, 0, 1)
-	if err != nil {
-		return nil, err
-	}
-	accountList, err = erArray[0].GetString(newCtx, 0, 2)
+	accountList, err = erArray[0].GetString(newCtx, 0, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -3057,18 +3072,18 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 				if err != nil {
 					return nil, err
 				}
-				if !isSubscriptionValid(allAccountStr == "true", accountList, tenantName) {
+				if !isSubscriptionValid(accountList, tenantName) {
 					return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
 				}
 			}
 		} else {
 			return nil, moerr.NewInternalError(newCtx, "the subscribe %s is not valid", pubName)
 		}
-	} else if !isSubscriptionValid(allAccountStr == "true", accountList, tenantInfo.GetTenant()) {
+	} else if !isSubscriptionValid(accountList, tenantInfo.GetTenant()) {
 		logErrorf(ses.GetDebugString(),
-			"subName %s , accName %s, pubName %s, databaseName %s allAccountStr %s accountList %s account %s",
+			"subName %s , accName %s, pubName %s, databaseName %s accountList %s account %s",
 			subName, accName, pubName,
-			databaseName, allAccountStr, accountList,
+			databaseName, accountList,
 			tenantInfo.GetTenant())
 		return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 	}
@@ -3158,7 +3173,6 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		erArray     []ExecResult
 		datId       uint64
 		datType     string
-		allAccount  bool
 		tableList   string
 		accountList string
 		tenantInfo  *TenantInfo
@@ -3170,10 +3184,11 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		return moerr.NewInternalError(ctx, "only admin can create publication")
 	}
 
-	allAccount = len(cp.Accounts) == 0
-	if !allAccount {
-		accts := make([]string, 0, len(cp.Accounts))
-		for _, acct := range cp.Accounts {
+	if cp.AccountsSet == nil || cp.AccountsSet.All {
+		accountList = "all"
+	} else {
+		accts := make([]string, 0, len(cp.AccountsSet.SetAccounts))
+		for _, acct := range cp.AccountsSet.SetAccounts {
 			accName := string(acct)
 			if accountNameIsInvalid(accName) {
 				return moerr.NewInternalError(ctx, "invalid account name '%s'", accName)
@@ -3226,7 +3241,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		return moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
 	}
 	bh.ClearExecResultSet()
-	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, datId, allTable, allAccount, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
+	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, datId, allTable, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
 	if err != nil {
 		return err
 	}
@@ -3242,7 +3257,6 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	defer bh.Close()
 	var (
 		allAccount     bool
-		allAccountStr  string
 		accountList    string
 		accountListSep []string
 		comment        string
@@ -3280,17 +3294,14 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	if !execResultArrayHasData(erArray) {
 		return moerr.NewInternalError(ctx, "publication '%s' does not exist", ap.Name)
 	}
-	allAccountStr, err = erArray[0].GetString(ctx, 0, 0)
-	if err != nil {
-		return err
-	}
-	allAccount = allAccountStr == "true"
-	accountList, err = erArray[0].GetString(ctx, 0, 1)
-	if err != nil {
-		return err
-	}
 
-	comment, err = erArray[0].GetString(ctx, 0, 2)
+	accountList, err = erArray[0].GetString(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+	allAccount = accountList == "all"
+
+	comment, err = erArray[0].GetString(ctx, 0, 1)
 	if err != nil {
 		return err
 	}
@@ -3298,8 +3309,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	if ap.AccountsSet != nil {
 		switch {
 		case ap.AccountsSet.All:
-			allAccount = true
-			accountList = ""
+			accountList = "all"
 		case len(ap.AccountsSet.SetAccounts) > 0:
 			/* do not check accountName if exists here */
 			accts := make([]string, 0, len(ap.AccountsSet.SetAccounts))
@@ -3312,7 +3322,6 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			}
 			sort.Strings(accts)
 			accountList = strings.Join(accts, ",")
-			allAccount = false
 		case len(ap.AccountsSet.DropAccounts) > 0:
 			if allAccount {
 				return moerr.NewInternalError(ctx, "cannot drop accounts from all account option")
@@ -3328,7 +3337,6 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 				}
 			}
 			accountList = strings.Join(accountListSep, ",")
-			allAccount = false
 		case len(ap.AccountsSet.AddAccounts) > 0:
 			if allAccount {
 				return moerr.NewInternalError(ctx, "cannot add account from all account option")
@@ -3343,14 +3351,13 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 					accountListSep = append(accountListSep[:idx], append([]string{string(acct)}, accountListSep[idx:]...)...)
 				}
 			}
-			allAccount = false
 			accountList = strings.Join(accountListSep, ",")
 		}
 	}
 	if ap.Comment != "" {
 		comment = ap.Comment
 	}
-	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), allAccount, accountList, comment, false)
+	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), accountList, comment, false)
 	if err != nil {
 		return err
 	}
@@ -7682,7 +7689,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 
 	// validate duplicate procedure declaration
 	bh.ClearExecResultSet()
-	checkExistence = fmt.Sprintf(checkProcedureExistence, string(cp.Name.Name.ObjectName), dbName)
+	checkExistence = getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), dbName)
 	err = bh.Exec(ctx, checkExistence)
 	if err != nil {
 		return err
@@ -8063,7 +8070,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	argsMap = make(map[string]tree.Expr) // map arg to param
 
 	// build argsAttr and argsMap
-	logutil.Info("Nuo:" + strconv.Itoa(len(argList)))
+	logutil.Info("Interpret procedure call length:" + strconv.Itoa(len(argList)))
 	i := 0
 	for curName, v := range argList {
 		argsAttr[curName] = v.InOutType

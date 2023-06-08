@@ -23,8 +23,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"go.uber.org/zap"
 )
+
+func (s *store) initSqlWriterFactory() {
+	addressFunc := func(ctx context.Context, randomCN bool) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+		details, err := s.hakeeperClient.GetClusterDetails(ctx)
+		if err != nil {
+			return "", err
+		}
+		if len(details.CNStores) == 0 {
+			return "", moerr.NewInvalidState(ctx, "no cn in the cluster")
+		}
+		if randomCN {
+			n := rand.Intn(len(details.CNStores))
+			return details.CNStores[n].SQLAddress, nil
+		}
+		return details.CNStores[len(details.CNStores)-1].SQLAddress, nil
+	}
+
+	db_holder.SetSQLWriterDBAddressFunc(addressFunc)
+}
+func (s *store) createSQLLogger(command *logservicepb.CreateTaskService) {
+	// convert username to "mo_logger"
+	frontend.SetSpecialUser(db_holder.MOLoggerUser, []byte(command.User.Password))
+	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
+}
 
 func (s *store) initTaskHolder() {
 	s.task.Lock()

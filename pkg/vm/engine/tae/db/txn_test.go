@@ -247,7 +247,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 	found := false
 	for blockIt.Valid() {
 		blk := blockIt.GetBlock()
-		view, err = blk.GetColumnDataByName(repertory.ColDefs[1].Name)
+		view, err = blk.GetColumnDataByName(context.Background(), repertory.ColDefs[1].Name)
 		if err != nil {
 			return
 		}
@@ -549,7 +549,7 @@ func TestWarehouse(t *testing.T) {
 		assert.Nil(t, err)
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
-		view, _ := blk.GetColumnDataById(1)
+		view, _ := blk.GetColumnDataById(context.Background(), 1)
 		t.Log(view.GetData().String())
 		defer view.Close()
 		checkAllColRowsByScan(t, rel, 20, false)
@@ -690,7 +690,7 @@ func TestTxn9(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(2)
+			view, err := blk.GetColumnDataById(context.Background(), 2)
 			assert.NoError(t, err)
 			defer view.Close()
 			t.Log(view.GetData().String())
@@ -778,14 +778,14 @@ func TestTxn9(t *testing.T) {
 
 // 	txn1, rel1 := tae.getRelation()
 // 	blk := getOneBlock(rel1)
-// 	view, err := blk.GetColumnDataById(2, nil, nil)
+// 	view, err := blk.GetColumnDataById(context.Background(), 2, nil, nil)
 // 	assert.NoError(t, err)
 // 	defer view.Close()
 // 	t.Log(view.String())
 // 	err = rel1.Append(context.Background(), bat.Window(2, 1))
 // 	assert.NoError(t, err)
 // 	blk = getOneBlock(rel1)
-// 	view, err = blk.GetColumnDataById(2, nil, nil)
+// 	view, err = blk.GetColumnDataById(context.Background(), 2, nil, nil)
 // 	assert.NoError(t, err)
 // 	defer view.Close()
 // 	t.Log(view.String())
@@ -796,7 +796,7 @@ func TestTxn9(t *testing.T) {
 // 		assert.NoError(t, txn.Commit())
 // 		txn, rel = tae.getRelation()
 // 		blk := getOneBlock(rel)
-// 		view, err := blk.GetColumnDataById(2, nil, nil)
+// 		view, err := blk.GetColumnDataById(context.Background(), 2, nil, nil)
 // 		assert.NoError(t, err)
 // 		defer view.Close()
 // 		t.Log(view.String())
@@ -843,10 +843,10 @@ func TestTxn9(t *testing.T) {
 
 // 	txn, rel := tae.getRelation()
 // 	blk := getOneBlock(rel)
-// 	view, err := blk.GetColumnDataById(0, nil, buffer)
+// 	view, err := blk.GetColumnDataById(context.Background(), 0, nil, buffer)
 // 	assert.NoError(t, err)
 // 	defer view.Close()
-// 	view, err = blk.GetColumnDataById(1, nil, buffer)
+// 	view, err = blk.GetColumnDataById(context.Background(), 1, nil, buffer)
 // 	assert.NoError(t, err)
 // 	defer view.Close()
 
@@ -856,11 +856,11 @@ func TestTxn9(t *testing.T) {
 // 	for it.Valid() {
 // 		blk = it.GetBlock()
 // 		t.Log(blk.Fingerprint().String())
-// 		view, err = blk.GetColumnDataById(0, nil, buffer)
+// 		view, err = blk.GetColumnDataById(context.Background(), 0, nil, buffer)
 // 		assert.NoError(t, err)
 // 		defer view.Close()
 // 		t.Log(view.String())
-// 		view, err = blk.GetColumnDataById(1, nil, buffer)
+// 		view, err = blk.GetColumnDataById(context.Background(), 1, nil, buffer)
 // 		assert.NoError(t, err)
 // 		defer view.Close()
 // 		t.Log(view.String())
@@ -875,7 +875,7 @@ func TestTxn9(t *testing.T) {
 // 		it := rel.MakeBlockIt()
 // 		for it.Valid() {
 // 			blk := it.GetBlock()
-// 			view, err := blk.GetColumnDataById(0, nil, buffer)
+// 			view, err := blk.GetColumnDataById(context.Background(), 0, nil, buffer)
 // 			assert.NoError(t, err)
 // 			defer view.Close()
 // 			t.Log(view.String())

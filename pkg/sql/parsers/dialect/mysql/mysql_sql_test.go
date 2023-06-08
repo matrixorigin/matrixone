@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
-		output: "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+		input:  "select day_key,day_date,day,month,quarter,year,week,day_of_week from bi_date where 1=2;",
+		output: "select day_key, day_date, day, month, quarter, year, week, day_of_week from bi_date where 1 = 2",
 	}
 )
 
@@ -78,6 +78,15 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+		output: "select row_number() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+	}, {
+		input:  "select dense_rank() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+		output: "select dense_rank() over (partition by col1, col2 order by col3 desc range unbounded preceding) from t1",
+	}, {
+		input:  "select day_key,day_date,day,month,quarter,year,week,day_of_week from bi_date where 1=2;",
+		output: "select day_key, day_date, day, month, quarter, year, week, day_of_week from bi_date where 1 = 2",
+	}, {
 		input:  "select sum(a) over(partition by a range between interval 1 day preceding and interval 2 day following) from t1",
 		output: "select sum(a) over (partition by a range between interval(1, day) preceding and interval(2, day) following) from t1",
 	}, {
@@ -141,6 +150,9 @@ var (
 	}, {
 		input:  "select algo_alarm_record.* from algo_alarm_record inner join (SELECT id FROM algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) WHERE first_id = 0 AND created_at >= '2022-09-18 00:00:00' AND created_at <= '2022-10-18 00:00:00' and algo_id not in (9808,9809) order by id desc limit 0,10 ) e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc;",
 		output: "select algo_alarm_record.* from algo_alarm_record inner join (select id from algo_alarm_record use index(algo_alarm_record_algo_id_first_id_created_at_index) where first_id = 0 and created_at >= 2022-09-18 00:00:00 and created_at <= 2022-10-18 00:00:00 and algo_id not in (9808, 9809) order by id desc limit 10 offset 0) as e on e.id = algo_alarm_record.id order by algo_alarm_record.id desc",
+	}, {
+		input:  "SELECT * FROM kv WHERE k = 1 FOR UPDATE",
+		output: "select * from kv where k = 1 for update",
 	}, {
 		input: "select a from t1 use index(b)",
 	}, {

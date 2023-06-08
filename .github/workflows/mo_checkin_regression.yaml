@@ -245,7 +245,8 @@ jobs:
         run: |
           export KUBECONFIG=$(pwd)/eks-ci
           mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP"|awk '{print $3}')
-          echo $mo_svc_ip
+          
+          echo mo_svc_ip=$mo_svc_ip
           echo "mo_svc_ip=${mo_svc_ip}" >> $GITHUB_OUTPUT
           
       - name: Start Load SSB 10G Data And Test
@@ -397,11 +398,60 @@ jobs:
           sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
-          ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark.log
-          ./runVerify.sh props_10.mo | tee report/tpcc-verify.sh
+          ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-10.log
+          ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-10.log
           
           if [ -f benchmarksql-error.log ];then
             mv benchmarksql-error.log report/benchmarksql-error-10-10.log
+          fi
+          
+      - name: Start TPCC 10 Warehouses 50 terminals Test
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          set -uo pipefail
+          export LC_ALL="C.UTF-8"
+          locale
+          
+          
+          cd $GITHUB_WORKSPACE/mo-tpcc
+          mkdir -p report
+          cp props.mo props_10.mo
+          sed -i '/.*terminals=*/c\terminals=50' props_10.mo
+          sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
+          sed -i 's/tpcc/tpcc_10/g' props_10.mo
+          sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
+          sed -i '/runMins=*/c\runMins=5' props_10.mo
+          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
+          ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-50.log
+          ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-50.log
+          
+          if [ -f benchmarksql-error.log ];then
+            mv benchmarksql-error.log benchmarksql-error-10-50.log
+          fi
+      - name: Start TPCC 10 Warehouses 100 terminals Test
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          set -uo pipefail
+          export LC_ALL="C.UTF-8"
+          locale
+          
+          
+          cd $GITHUB_WORKSPACE/mo-tpcc
+          mkdir -p report
+          cp props.mo props_10.mo
+          sed -i '/.*terminals=*/c\terminals=100' props_10.mo
+          sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
+          sed -i 's/tpcc/tpcc_10/g' props_10.mo
+          sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
+          sed -i '/runMins=*/c\runMins=5' props_10.mo
+          sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
+          ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
+          ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-100.log
+          
+          if [ -f benchmarksql-error.log ];then
+            mv benchmarksql-error.log benchmarksql-error-10-100.log
           fi
       
       # start large table test

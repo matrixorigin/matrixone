@@ -16,13 +16,13 @@ package mometric
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 

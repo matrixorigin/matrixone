@@ -574,11 +574,11 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	var sql string
 
 	var sub *SubscriptionMeta
-	if obj.PubAccountId != -1 {
-		accountId = uint32(obj.PubAccountId)
+	if obj.PubInfo != nil {
+		accountId = uint32(obj.PubInfo.GetTenantId())
 		dbName = obj.SchemaName
 		sub = &SubscriptionMeta{
-			AccountId: obj.PubAccountId,
+			AccountId: obj.PubInfo.GetTenantId(),
 		}
 		ctx.SetQueryingSubscription(sub)
 		defer func() {
@@ -617,9 +617,9 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		sub := &SubscriptionMeta{
-			AccountId: obj.PubAccountId,
+			AccountId: obj.PubInfo.GetTenantId(),
 		}
 		ctx.SetQueryingSubscription(sub)
 		defer func() {
@@ -675,11 +675,11 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	var sub *SubscriptionMeta
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		dbName = obj.SchemaName
-		accountId = uint32(obj.PubAccountId)
+		accountId = uint32(obj.PubInfo.GetTenantId())
 		sub = &SubscriptionMeta{
-			AccountId: obj.PubAccountId,
+			AccountId: obj.PubInfo.GetTenantId(),
 		}
 		ctx.SetQueryingSubscription(sub)
 		defer func() {
@@ -778,9 +778,9 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
-	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relname != '%s' and relname not like '%s' and (%s)"
+	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relkind != '%s' and relname != '%s' and relname not like '%s' and (%s)"
 
-	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", accountClause)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", accountClause)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -903,9 +903,9 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 
 	ddlType := plan.DataDefinition_SHOW_INDEX
 
-	if obj.PubAccountId != -1 {
+	if obj.PubInfo != nil {
 		sub := &SubscriptionMeta{
-			AccountId: obj.PubAccountId,
+			AccountId: obj.PubInfo.GetTenantId(),
 		}
 		dbName = obj.SchemaName
 		ctx.SetQueryingSubscription(sub)
@@ -1024,6 +1024,12 @@ func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Pla
 func buildShowPublication(stmt *tree.ShowPublications, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
 	sql := "select pub_name as Name,database_name as `Database` from mo_catalog.mo_pubs;"
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := fmt.Sprintf("select pub_name as Publication, 'CREATE PUBLICATION ' || pub_name || ' DATABASE ' || database_name || ' ACCOUNT ' || account_list as 'Create Publication' from mo_catalog.mo_pubs where pub_name='%s';", stmt.Name)
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 

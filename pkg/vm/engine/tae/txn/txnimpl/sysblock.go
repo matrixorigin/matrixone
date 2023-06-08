@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"fmt"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -353,9 +354,9 @@ func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err 
 	return
 }
 
-func (blk *txnSysBlock) GetColumnDataById(colIdx int) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) GetColumnDataById(ctx context.Context, colIdx int) (view *model.ColumnView, err error) {
 	if !blk.isSysTable() {
-		return blk.txnBlock.GetColumnDataById(colIdx)
+		return blk.txnBlock.GetColumnDataById(ctx, colIdx)
 	}
 	if blk.table.GetID() == pkgcatalog.MO_DATABASE_ID {
 		return blk.getDBTableData(colIdx)
@@ -372,9 +373,9 @@ func (blk *txnSysBlock) Prefetch(idxes []uint16) error {
 	return nil
 }
 
-func (blk *txnSysBlock) GetColumnDataByName(attr string) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) GetColumnDataByName(ctx context.Context, attr string) (view *model.ColumnView, err error) {
 	colIdx := blk.entry.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(colIdx)
+	return blk.GetColumnDataById(ctx, colIdx)
 }
 
 func (blk *txnSysBlock) GetColumnDataByNames(attrs []string) (view *model.BlockView, err error) {

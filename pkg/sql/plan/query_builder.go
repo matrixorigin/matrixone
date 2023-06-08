@@ -22,10 +22,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,6 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
@@ -250,6 +248,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			increaseRefCnt(expr, colRefCnt)
 		}
 
+		for _, expr := range node.BlockFilterList {
+			increaseRefCnt(expr, colRefCnt)
+		}
+
 		internalRemapping := &ColRefRemapping{
 			globalToLocal: make(map[[2]int32][2]int32),
 		}
@@ -290,6 +292,21 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		for _, expr := range node.FilterList {
 			decreaseRefCnt(expr, colRefCnt)
 			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for _, expr := range node.BlockFilterList {
+			decreaseRefCnt(expr, colRefCnt)
+			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for _, rfSpec := range node.RuntimeFilterProbeList {
+			err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
 			}
@@ -429,6 +446,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
+		for _, rfSpec := range node.RuntimeFilterBuildList {
+			err := builder.remapColRefForExpr(rfSpec.Expr, internalMap)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		childProjList := builder.qry.Nodes[leftID].ProjectList
 		for i, globalRef := range leftRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
@@ -520,6 +544,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		groupTag := node.BindingTags[0]
 		aggregateTag := node.BindingTags[1]
+		groupSize := int32(len(node.GroupBy))
+
+		for _, expr := range node.FilterList {
+			builder.remapHavingClause(expr, groupTag, aggregateTag, groupSize)
+		}
 
 		for idx, expr := range node.GroupBy {
 			decreaseRefCnt(expr, colRefCnt)
@@ -547,7 +576,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 
-		groupSize := int32(len(node.GroupBy))
 		for idx, expr := range node.AggList {
 			decreaseRefCnt(expr, colRefCnt)
 			err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
@@ -921,8 +949,13 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rewriteFilterListByStats(builder.GetContext(), rootID, builder)
 		builder.qry.Steps[i] = rootID
 
-		// XXX: This will be removed soon, after merging implementation of all join operators
+		// XXX: This will be removed soon, after merging implementation of all hash-join operators
 		builder.swapJoinChildren(rootID)
+		ReCalcNodeStats(rootID, builder, true, false)
+
+		//after determine shuffle method, never call ReCalcNodeStats again
+		determineShuffleMethod(rootID, builder)
+		builder.pushdownRuntimeFilters(rootID)
 
 		colRefCnt = make(map[[2]int32]int)
 		rootNode := builder.qry.Nodes[rootID]
@@ -2083,7 +2116,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					}
 				}
 				defaultDatabase := viewData.DefaultDatabase
-				if obj.PubAccountId != -1 {
+				if obj.PubInfo != nil {
 					defaultDatabase = obj.SubscriptionName
 				}
 				ctx.cteByName[string(viewName)] = &CTERef{
@@ -2155,6 +2188,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			dbName := midNode.ObjRef.SchemaName
 			tableName := midNode.TableDef.Name
 			currentAccountID := builder.compCtx.GetAccountId()
+			acctName := builder.compCtx.GetUserName()
 			if sub := builder.compCtx.GetQueryingSubscription(); sub != nil {
 				currentAccountID = uint32(sub.AccountId)
 				builder.qry.Nodes[nodeID].NotCacheable = true
@@ -2165,6 +2199,22 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					modatabaseFilter := util.BuildMoDataBaseFilter(uint64(currentAccountID))
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(modatabaseFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_SYSTEM_METRICS && tableName == catalog.MO_METRIC {
+					motablesFilter := util.BuildSysMetricFilter(acctName)
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
+					if err != nil {
+						return 0, err
+					}
+					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
+				} else if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
+					motablesFilter := util.BuildSysStatementInfoFilter(acctName)
+					ctx.binder = NewWhereBinder(builder, ctx)
+					accountFilterExprs, err := splitAndBindCondition(motablesFilter, ctx)
 					if err != nil {
 						return 0, err
 					}

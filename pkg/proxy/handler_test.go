@@ -320,11 +320,10 @@ func TestHandler_HandleWithSSL(t *testing.T) {
 		_ = db.Close()
 	}()
 	_, _ = db.Exec("any stmt")
-	// FIXME: Although the functional code is ok, but this test case
-	// occasionally fails.
-	// require.NoError(t, err)
-	// require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
-	// require.Equal(t, int64(1), s.counterSet.connTotal.Load())
+	_, err = db.Exec("any stmt")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
+	require.Equal(t, int64(1), s.counterSet.connTotal.Load())
 }
 
 func testWithServer(t *testing.T, fn func(*testing.T, string, *Server)) {

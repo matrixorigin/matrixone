@@ -138,8 +138,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		lastNodeId = builder.appendNode(projectNode, bindCtx)
 
 		// append sink node
-		lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
-		sourceStep = builder.appendStep(lastNodeId)
+		// lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
+		// sourceStep = builder.appendStep(lastNodeId)
 
 		// append plans like update
 		updateBindCtx := NewBindContext(builder, nil)
@@ -147,7 +147,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		upPlanCtx.objRef = objRef
 		upPlanCtx.tableDef = tableDef
 		upPlanCtx.beginIdx = 0
-		upPlanCtx.sourceStep = sourceStep
+		upPlanCtx.sourceStep = -1
 		upPlanCtx.isMulti = false
 		upPlanCtx.updateColLength = updateColLength
 		upPlanCtx.rowIdPos = rowIdPos
@@ -155,7 +155,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.checkInsertPkDup = checkInsertPkDup
 
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, lastNodeId)
 		if err != nil {
 			return nil, err
 		}
@@ -177,6 +177,20 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool) (p *Pla
 }
 
 func getPkValueExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues int) *Expr {
+	pkPos, pkTyp := getPkPos(tableDef, true)
+	if pkPos == -1 || pkTyp.AutoIncr {
+		return nil
+	}
+	colTyp := makeTypeByPlan2Type(pkTyp)
+	targetTyp := &plan.Expr{
+		Typ: pkTyp,
+		Expr: &plan.Expr_T{
+			T: &plan.TargetType{
+				Typ: pkTyp,
+			},
+		},
+	}
+
 	for _, node := range builder.qry.Nodes {
 		if node.NodeType != plan.Node_VALUE_SCAN {
 			continue
@@ -184,16 +198,12 @@ func getPkValueExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues int
 		if len(node.RowsetData.Cols[0].Data) != 1 {
 			continue
 		}
-		pkPos, pkTyp := getPkPos(tableDef, true)
-		if pkPos == -1 || pkTyp.AutoIncr {
-			continue
-		}
 
 		oldExpr := node.RowsetData.Cols[pkPosInValues].Data[0]
 		if !rule.IsConstant(oldExpr) {
 			return nil
 		}
-		pkValueExpr, err := forceCastExpr(builder.GetContext(), DeepCopyExpr(oldExpr), pkTyp)
+		pkValueExpr, err := forceCastExpr2(builder.GetContext(), DeepCopyExpr(oldExpr), colTyp, targetTyp)
 		if err != nil {
 			return nil
 		}
