@@ -49,7 +49,7 @@ func TestNewTxn(t *testing.T) {
 	tx, err := c.New(ctx, newTestTimestamp(0))
 	assert.Nil(t, err)
 	txnMeta := tx.(*txnOperator).mu.txn
-	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, txnMeta.SnapshotTS.Prev())
+	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
 }
