@@ -27,6 +27,7 @@ import (
 
 func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
 	lexer := NewLexer(dialect.MYSQL, sql, lower)
+	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
@@ -38,6 +39,7 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 
 func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, error) {
 	lexer := NewLexer(dialect.MYSQL, sql, lower)
+	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		return nil, lexer.scanner.LastError
 	}
