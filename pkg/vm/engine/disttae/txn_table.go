@@ -537,7 +537,7 @@ func (tbl *txnTable) reset(newId uint64) {
 	tbl.tableId = newId
 	tbl._partState = nil
 	tbl.blockInfos = nil
-	tbl.modifiedBlocks = nil
+	tbl.dirtyBlks = nil
 	tbl.blockInfosUpdated = false
 	tbl.localState = logtailreplay.NewPartitionState(true)
 }
@@ -575,13 +575,13 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	// Remove me later
 	{
 		tbl.Lock()
-		tbl.modifiedBlocks = nil
+		tbl.dirtyBlks = nil
 		tbl.Unlock()
 	}
 	if len(tbl.blockInfos) == 0 {
 		return
 	}
-	var modifiedBlocks []ModifyBlockMeta
+	var dirtyBlks []catalog.BlockInfo
 	err = tbl.rangesOnePart(
 		ctx,
 		tbl.db.txn.meta.SnapshotTS,
@@ -590,14 +590,14 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		exprs,
 		tbl.blockInfos,
 		&ranges,
-		&modifiedBlocks,
+		&dirtyBlks,
 		tbl.db.txn.proc,
 	)
 	// TODO: workaround for ISSUE #9897
 	// Remove me later
-	if err == nil && len(modifiedBlocks) > 0 {
+	if err == nil && len(dirtyBlks) > 0 {
 		tbl.Lock()
-		tbl.modifiedBlocks = modifiedBlocks
+		tbl.dirtyBlks = dirtyBlks
 		tbl.Unlock()
 	}
 	return
@@ -726,10 +726,10 @@ func (tbl *txnTable) rangesOnePart(
 	exprs []*plan.Expr, // filter expression
 	blocks []catalog.BlockInfo, // whole block list
 	ranges *[][]byte, // output marshaled block list after filtering
-	modifies *[]ModifyBlockMeta, // output modified blocks after filtering
+	dirties *[]catalog.BlockInfo, // output modified blocks after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	deletes := make(map[types.Blockid][]int64)
+	dirtyBlks := make(map[types.Blockid]struct{})
 
 	//collect deletes from PartitionState.dirtyBlocks.
 	{
@@ -737,7 +737,7 @@ func (tbl *txnTable) rangesOnePart(
 		for iter.Next() {
 			entry := iter.Entry()
 			//lazy load deletes for block.
-			deletes[entry.BlockID] = []int64{}
+			dirtyBlks[entry.BlockID] = struct{}{}
 		}
 		iter.Close()
 
@@ -745,7 +745,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	//only collect dirty blocks in PartitionState.blocks into modifies.
 	for _, bid := range tbl.GetDirtyBlksIn(state, true) {
-		deletes[bid] = []int64{}
+		dirtyBlks[bid] = struct{}{}
 	}
 
 	for _, entry := range tbl.writes {
@@ -758,8 +758,8 @@ func (tbl *txnTable) rangesOnePart(
 		if entry.typ == DELETE && entry.fileName == "" {
 			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for _, v := range vs {
-				id, offset := v.Decode()
-				deletes[id] = append(deletes[id], int64(offset))
+				id, _ := v.Decode()
+				dirtyBlks[id] = struct{}{}
 			}
 		}
 	}
@@ -794,7 +794,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
-	hasDeletes := len(deletes) > 0
+	hasDeletes := len(dirtyBlks) > 0
 	for _, blk := range blocks {
 		// if expr is monotonic, we need evaluating expr for each block
 		if auxIdCnt > 0 {
@@ -849,8 +849,8 @@ func (tbl *txnTable) rangesOnePart(
 
 		if hasDeletes {
 			// collect deletes for blocks in partitionState.blocks.
-			if rows, ok := deletes[blk.BlockID]; ok {
-				*modifies = append(*modifies, ModifyBlockMeta{blk, rows})
+			if _, ok := dirtyBlks[blk.BlockID]; ok {
+				*dirties = append(*dirties, blk)
 			} else {
 				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 			}
@@ -1376,22 +1376,20 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 
 	// TODO: workaround for ISSUE #9897
 	// Remove me later
-	var mblks []ModifyBlockMeta
-	tbl.Lock()
-	if len(tbl.modifiedBlocks) > 0 {
-		mblks = make([]ModifyBlockMeta, 0, len(tbl.modifiedBlocks))
-		for i := range tbl.modifiedBlocks {
-			mblks = append(mblks, tbl.modifiedBlocks[i].copy())
+	var dirtyblks []catalog.BlockInfo
+	if len(tbl.dirtyBlks) > 0 {
+		dirtyblks = make([]catalog.BlockInfo, 0, len(tbl.dirtyBlks))
+		for i := range tbl.dirtyBlks {
+			dirtyblks = append(dirtyblks, tbl.dirtyBlks[i])
 		}
 	}
-	tbl.Unlock()
 
 	rds0, err := tbl.newReader(
 		ctx,
 		num,
 		encodedPrimaryKey,
 		expr,
-		mblks,
+		dirtyblks,
 		tbl.writes)
 	if err != nil {
 		return nil, err
@@ -1437,7 +1435,7 @@ func (tbl *txnTable) newReader(
 	readerNumber int,
 	encodedPrimaryKey []byte,
 	expr *plan.Expr,
-	blks []ModifyBlockMeta,
+	blks []catalog.BlockInfo,
 	entries []Entry,
 ) ([]engine.Reader, error) {
 	txn := tbl.db.txn
@@ -1534,7 +1532,7 @@ func (tbl *txnTable) newReader(
 			readers = append(
 				readers,
 				newBlockMergeReader(
-					ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
+					ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs,
 				),
 			)
 		}
@@ -1544,7 +1542,7 @@ func (tbl *txnTable) newReader(
 	if len(blks) < readerNumber-1 {
 		for i := range blks {
 			readers[i+1] = newBlockMergeReader(
-				ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
+				ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs,
 			)
 		}
 		for j := len(blks) + 1; j < readerNumber; j++ {
