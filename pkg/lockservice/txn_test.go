@@ -30,9 +30,9 @@ func TestLockAdded(t *testing.T) {
 	fsp := newFixedSlicePool(2)
 	txn := newActiveTxn(id, string(id), fsp, "")
 
-	txn.lockAdded("s1", 1, [][]byte{[]byte("k1")}, false)
-	txn.lockAdded("s1", 1, [][]byte{[]byte("k11")}, false)
-	txn.lockAdded("s1", 2, [][]byte{[]byte("k2"), []byte("k22")}, false)
+	txn.lockAdded("s1", 1, [][]byte{[]byte("k1")}, nil, false)
+	txn.lockAdded("s1", 1, [][]byte{[]byte("k11")}, nil, false)
+	txn.lockAdded("s1", 2, [][]byte{[]byte("k2"), []byte("k22")}, nil, false)
 
 	assert.Equal(t, 2, len(txn.holdLocks))
 

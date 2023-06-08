@@ -238,7 +238,7 @@ type SetVarExecutor struct {
 }
 
 func (sve *SetVarExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doSetVar(ctx, ses, sve.sv)
+	return doSetVar(ctx, nil, ses, sve.sv)
 }
 
 type DeleteExecutor struct {

@@ -1,0 +1,146 @@
+set @b_var1 = 1 = 0,@b_var2 = 0 = 0;
+select @b_var1,@b_var2;
+@b_var1    @b_var2
+false    true
+set @i8_var1 = 127,@i8_var2 = -128;
+select @i8_var1,@i8_var2;
+@i8_var1    @i8_var2
+127    -128
+set @i16_var1 = 32767,@i16_var2 = -32768;
+select @i16_var1,@i16_var2;
+@i16_var1    @i16_var2
+32767    -32768
+set @i32_var1 = 2147483647,@i32_var2 = -2147483648;
+select @i32_var1,@i32_var2;
+@i32_var1    @i32_var2
+2147483647    -2147483648
+set @i64_var1 = 9223372036854775807,@i64_var2 = -9223372036854775808;
+select @i64_var1,@i64_var2;
+@i64_var1    @i64_var2
+9223372036854775807    -9223372036854775808
+set @u8_var1 = 0,@u8_var2 = 255;
+select @u8_var1,@u8_var2;
+@u8_var1    @u8_var2
+0    255
+set @u16_var1 = 0,@u16_var2 = 65535;
+select @u16_var1,@u16_var2;
+@u16_var1    @u16_var2
+0    65535
+set @u32_var1 = 0,@u32_var2 = 4294967295;
+select @u32_var1,@u32_var2;
+@u32_var1    @u32_var2
+0    4294967295
+set @u64_var1 = 0,@u64_var2 = 18446744073709551615;
+select @u64_var1,@u64_var2;
+@u64_var1    @u64_var2
+0    18446744073709551615
+set @f32_var1 = 1.1754943508222875e-38,@f32_var2 = 99999999999999999999999999999999999999;
+select @f32_var1,@f32_var2;
+@f32_var1    @f32_var2
+0E-37    99999999999999999999999999999999999999
+set @f64_var1 = 2.2250738585072014e-308,@f64_var2 = 99999999999999999999999999999999999999;
+select @f64_var1,@f64_var2;
+@f64_var1    @f64_var2
+0E-37    99999999999999999999999999999999999999
+set @ch_var='abc',@varch_var=cast('def' as varchar),@bin_var=cast('1001' as binary),@varbin_var=cast('1001' as varbinary(6)),@text_var=cast('ghi' as text),@blob_var=cast('1010' as blob);
+select @ch_var,@varch_var,@bin_var,@varbin_var,@text_var,@blob_var;
+@ch_var    @varch_var    @bin_var    @varbin_var    @text_var    @blob_var
+abc    def    1001    1001    ghi    1010
+set @d64_var1 = cast(9223372036854775807 as decimal),@d64_var2 = cast(-9223372036854775808 as decimal);
+select @d64_var1,@d64_var2;
+@d64_var1    @d64_var2
+9223372036854775807    -9223372036854775808
+set @d128_var1 = cast(99999999999999999999999999999999999999 as decimal),@d128_var2 = cast(-99999999999999999999999999999999999999 as decimal);
+select @d128_var1,@d128_var2;
+@d128_var1    @d128_var2
+99999999999999999999999999999999999999    -99999999999999999999999999999999999999
+set @json_var1 = cast('{"a":1,"b":2}' as json),@json_var2 = cast('[1,2,3]' as json);
+select @json_var1,@json_var2;
+@json_var1    @json_var2
+{"a": 1, "b": 2}    [1, 2, 3]
+set @uuid_var1 = cast('00000000-0000-0000-0000-000000000000' as uuid),@uuid_var2 = cast('ffffffff-ffff-ffff-ffff-ffffffffffff' as uuid);
+select @uuid_var1,@uuid_var2;
+@uuid_var1    @uuid_var2
+00000000-0000-0000-0000-000000000000    ffffffff-ffff-ffff-ffff-ffffffffffff
+set @time_var1 = cast('00:00:00' as time),@time_var2 = cast('23:59:59' as time);
+select @time_var1,@time_var2;
+@time_var1    @time_var2
+00:00:00    23:59:59
+set @dt_var1 = cast('1000-01-01 00:00:00' as datetime),@dt_var2 = cast('9999-12-31 23:59:59' as datetime);
+select @dt_var1,@dt_var2;
+@dt_var1    @dt_var2
+1000-01-01 00:00:00    9999-12-31 23:59:59
+set @ts_var1 = cast('1970-01-01 00:00:00' as timestamp),@ts_var2 = cast('2038-01-19 03:14:07' as timestamp);
+select @ts_var1,@ts_var2;
+@ts_var1    @ts_var2
+1970-01-01 00:00:00    2038-01-19 03:14:07
+drop table if exists seq_t1;
+create table seq_t1(a int, b int);
+insert into seq_t1 values (1,2);
+insert into seq_t1 values (1,2);
+set @single_var1 = (select a from seq_t1 limit 1),@single_var2 = (select b from seq_t1 limit 1);
+select @single_var1,@single_var2;
+@single_var1    @single_var2
+1    2
+set @single_var2 = (select a from seq_t1 limit 2);
+internal error: scalar subquery returns more than 1 row
+set @single_var3 = (select a,b from seq_t1 limit 1);
+select @single_var3;
+@single_var3
+1
+set @single_var3 = (select b,a from seq_t1 limit 1);
+select @single_var3;
+@single_var3
+2
+set @single_var4 = (select count(a) from seq_t1 limit 1),@single_var5 = (select min(b) from seq_t1 limit 1),@single_var6 = (select max(a) from seq_t1 limit 1);
+select @single_var4,@single_var5,@single_var6;
+@single_var4    @single_var5    @single_var6
+2    2    1
+set @single_var7 = (select a,b from seq_t1);
+internal error: scalar subquery returns more than 1 row
+set @single_var8 = (select b,a from seq_t1);
+internal error: scalar subquery returns more than 1 row
+drop table if exists seq_t1;
+create sequence seq1;
+set @seq_var1 = nextval('seq1'),@seq_var2 = nextval('seq1'),@seq_var3 = nextval('seq1');
+select @seq_var1,@seq_var2,@seq_var3;
+@seq_var1    @seq_var2    @seq_var3
+1    2    3
+select currval('seq1'),nextval('seq1'),lastval(),currval('seq1'),lastval();
+currval(seq1)    nextval(seq1)    lastval()    currval(seq1)    lastval()
+3    4    4    4    4
+select setval('seq1', 50);
+setval(seq1, 50)
+50
+select currval('seq1'),nextval('seq1'),lastval(),currval('seq1'),lastval();
+currval(seq1)    nextval(seq1)    lastval()    currval(seq1)    lastval()
+50    51    51    51    51
+drop sequence seq1;
+create table seq_table_01(col1 int);
+
+create sequence seq_14  increment 50 start with 126 no cycle;
+
+select nextval('seq_14');
+
+select nextval('seq_14'),currval('seq_14');
+
+insert into seq_table_01 select nextval('seq_14');
+
+select currval('seq_14');
+
+insert into seq_table_01 values(nextval('seq_14'));
+
+insert into seq_table_01 values(nextval('seq_14'));
+
+insert into seq_table_01 values(nextval('seq_14'));
+
+insert into seq_table_01 values(nextval('seq_14'));
+
+select currval('seq_14');
+
+select * from seq_table_01;
+
+drop sequence seq_14;
+
+drop table seq_table_01;
+
