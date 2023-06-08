@@ -101,13 +101,14 @@ type PrepareStmt struct {
 Disguise the COMMAND CMD_FIELD_LIST as sql query.
 */
 const (
-	cmdFieldListSql = "__++__internal_cmd_field_list"
-	internalSql     = "internal_sql"
-	cloudUserSql    = "cloud_user_sql"
-	cloudNoUserSql  = "cloud_nonuser_sql"
-	externSql       = "external_sql"
-	cloudUserTag    = "cloud_user"
-	cloudNoUserTag  = "cloud_nonuser"
+	cmdFieldListSql    = "__++__internal_cmd_field_list"
+	cmdFieldListSqlLen = len(cmdFieldListSql)
+	internalSql        = "internal_sql"
+	cloudUserSql       = "cloud_user_sql"
+	cloudNoUserSql     = "cloud_nonuser_sql"
+	externSql          = "external_sql"
+	cloudUserTag       = "cloud_user"
+	cloudNoUserTag     = "cloud_nonuser"
 )
 
 var _ tree.Statement = &InternalCmdFieldList{}

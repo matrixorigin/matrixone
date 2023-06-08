@@ -545,7 +545,11 @@ func logErrorf(info string, msg string, fields ...interface{}) {
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
 func isCmdFieldListSql(sql string) bool {
-	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
+	if len(sql) < cmdFieldListSqlLen {
+		return false
+	}
+	prefix := sql[:cmdFieldListSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdFieldListSql) == 0
 }
 
 // makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
