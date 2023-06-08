@@ -905,7 +905,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 			pkType := pkVec.GetType()
 			zm = index.NewZM(pkType.Oid, pkType.Scale)
 		}
-		if err = index.BatchUpdateZM(zm, pkVec); err != nil {
+		if err = index.BatchUpdateZM(zm, pkVec.GetDownstreamVector()); err != nil {
 			pkVec.Close()
 			return err
 		}
@@ -984,7 +984,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 	maxSegmentHint := uint64(0)
 	pkType := keys.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
-	if err = index.BatchUpdateZM(keysZM, keys); err != nil {
+	if err = index.BatchUpdateZM(keysZM, keys.GetDownstreamVector()); err != nil {
 		return
 	}
 	var (

@@ -249,12 +249,16 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 					return nil
 
 				case filter := <-receiver.Chan:
-					if filter == nil || filter.Typ == pbpipeline.RuntimeFilter_Empty {
+					if filter == nil {
 						exprs = nil
+						s.NodeInfo.Data = s.NodeInfo.Data[:0]
 						break
 					}
+					if filter.Typ == pbpipeline.RuntimeFilter_NO_FILTER {
+						continue
+					}
 
-					exprs = append(exprs, receiver.Expr)
+					exprs = append(exprs, receiver.Spec.Expr)
 					filters = append(filters, filter)
 				}
 			}
@@ -264,8 +268,6 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				if err != nil {
 					return err
 				}
-			} else {
-				s.NodeInfo.Data = s.NodeInfo.Data[:0]
 			}
 		}
 
@@ -505,7 +507,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 				Op:  vm.MergeOrder,
 				Idx: in.Idx,
 				Arg: &mergeorder.Argument{
-					Fs: arg.Fs,
+					OrderBySpecs: arg.OrderBySpec,
 				},
 			}
 			for j := range ss {
@@ -514,7 +516,7 @@ func newParallelScope(s *Scope, ss []*Scope) *Scope {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: &order.Argument{
-						Fs: arg.Fs,
+						OrderBySpec: arg.OrderBySpec,
 					},
 				})
 			}

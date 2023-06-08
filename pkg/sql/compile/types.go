@@ -38,10 +38,6 @@ type (
 	TxnOperator = client.TxnOperator
 )
 
-const (
-	MinBlockNum = 200
-)
-
 type magicType int
 
 // type of scope
@@ -85,6 +81,7 @@ type Source struct {
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
 	AccountId              *plan.PubInfo
+
 	RuntimeFilterReceivers []*colexec.RuntimeFilterChan
 }
 
@@ -142,6 +139,8 @@ type scopeContext struct {
 	children []*scopeContext
 	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
+
+	//runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
 }
 
 // anaylze information
@@ -204,7 +203,7 @@ type Compile struct {
 
 	stepRegs map[int32][]*process.WaitRegister
 
-	runtimeFilterChans map[int32]chan *pipeline.RuntimeFilter
+	runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
 
 	isInternal bool
 	// cnLabel is the CN labels which is received from proxy when build connection.
