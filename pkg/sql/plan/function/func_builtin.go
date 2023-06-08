@@ -17,6 +17,12 @@ package function
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/rand"
+	"strings"
+	"time"
+	"unsafe"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,11 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"math/rand"
-	"strings"
-	"time"
-	"unsafe"
 )
 
 func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -131,7 +132,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			ret := fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
+			ret := fmt.Sprintf("%s(%d)", typ.String(), typ.Scale)
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
 	}
