@@ -126,7 +126,7 @@ GRANT reference ON table *.* `root`@`localhost`
 GRANT index ON table *.* `root`@`localhost`
 GRANT table all ON table *.* `root`@`localhost`
 GRANT table ownership ON table *.* `root`@`localhost`
-GRANT values ON table *.* `dump`@`localhost`
+GRANT values ON table *.* `root`@`localhost`
 GRANT connect ON account  `root`@`localhost`
 show grants for 'test'@'localhost';
 Grants for test@localhost
