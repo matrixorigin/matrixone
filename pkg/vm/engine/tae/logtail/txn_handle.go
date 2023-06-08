@@ -15,6 +15,7 @@
 package logtail
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -176,7 +177,7 @@ func (b *TxnLogtailRespBuilder) closeInsertBatch(bat *containers.Batch) {
 	bat.Vecs[1].Close()
 }
 
-func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
+func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.DeleteNode) {
 	if b.batches[dataDelBatch] == nil {
 		b.batches[dataDelBatch] = makeRespBatchFromSchema(DelSchema)
 	}
@@ -204,6 +205,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
 		commitTSVec.Append(b.txn.GetPrepareTS(), false)
 	}
 	_ = meta.GetBlockData().Foreach(
+		ctx,
 		pkDef.Idx,
 		func(v any, isNull bool, row int) error {
 			pkVec.Append(v, false)
