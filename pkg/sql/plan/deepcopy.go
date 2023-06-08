@@ -84,14 +84,16 @@ func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
 		return nil
 	}
 	newCtx := &plan.InsertCtx{
-		Ref:               DeepCopyObjectRef(ctx.Ref),
-		AddAffectedRows:   ctx.AddAffectedRows,
-		IsClusterTable:    ctx.IsClusterTable,
-		TableDef:          DeepCopyTableDef(ctx.TableDef),
-		PartitionTableIds: make([]uint64, len(ctx.PartitionTableIds)),
-		PartitionIdx:      ctx.PartitionIdx,
+		Ref:                 DeepCopyObjectRef(ctx.Ref),
+		AddAffectedRows:     ctx.AddAffectedRows,
+		IsClusterTable:      ctx.IsClusterTable,
+		TableDef:            DeepCopyTableDef(ctx.TableDef),
+		PartitionTableIds:   make([]uint64, len(ctx.PartitionTableIds)),
+		PartitionTableNames: make([]string, len(ctx.PartitionTableNames)),
+		PartitionIdx:        ctx.PartitionIdx,
 	}
 	copy(newCtx.PartitionTableIds, ctx.PartitionTableIds)
+	copy(newCtx.PartitionTableNames, ctx.PartitionTableNames)
 	return newCtx
 }
 
@@ -100,15 +102,17 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		return nil
 	}
 	newCtx := &plan.DeleteCtx{
-		CanTruncate:       ctx.CanTruncate,
-		AddAffectedRows:   ctx.AddAffectedRows,
-		RowIdIdx:          ctx.RowIdIdx,
-		Ref:               DeepCopyObjectRef(ctx.Ref),
-		IsClusterTable:    ctx.IsClusterTable,
-		PartitionTableIds: make([]uint64, len(ctx.PartitionTableIds)),
-		PartitionIdx:      ctx.PartitionIdx,
+		CanTruncate:         ctx.CanTruncate,
+		AddAffectedRows:     ctx.AddAffectedRows,
+		RowIdIdx:            ctx.RowIdIdx,
+		Ref:                 DeepCopyObjectRef(ctx.Ref),
+		IsClusterTable:      ctx.IsClusterTable,
+		PartitionTableIds:   make([]uint64, len(ctx.PartitionTableIds)),
+		PartitionTableNames: make([]string, len(ctx.PartitionTableNames)),
+		PartitionIdx:        ctx.PartitionIdx,
 	}
 	copy(newCtx.PartitionTableIds, ctx.PartitionTableIds)
+	copy(newCtx.PartitionTableNames, ctx.PartitionTableNames)
 	return newCtx
 }
 

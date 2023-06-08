@@ -629,12 +629,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			ToWriteS3:         t.ToWriteS3,
-			Ref:               t.InsertCtx.Ref,
-			Attrs:             t.InsertCtx.Attrs,
-			AddAffectedRows:   t.InsertCtx.AddAffectedRows,
-			PartitionTableIds: t.InsertCtx.PartitionTableIDs,
-			PartitionIdx:      int32(t.InsertCtx.PartitionIndexInBatch),
+			ToWriteS3:           t.ToWriteS3,
+			Ref:                 t.InsertCtx.Ref,
+			Attrs:               t.InsertCtx.Attrs,
+			AddAffectedRows:     t.InsertCtx.AddAffectedRows,
+			PartitionTableIds:   t.InsertCtx.PartitionTableIDs,
+			PartitionTableNames: t.InsertCtx.PartitionTableNames,
+			PartitionIdx:        int32(t.InsertCtx.PartitionIndexInBatch),
 		}
 	case *deletion.Argument:
 		in.Delete = &pipeline.Deletion{
@@ -647,6 +648,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			// deleteCtx
 			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
 			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
+			PartitionTableNames:   t.DeleteCtx.PartitionTableNames,
 			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
 			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
 			Ref:                   t.DeleteCtx.Ref,
@@ -990,6 +992,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				CanTruncate:           t.CanTruncate,
 				RowIdIdx:              int(t.RowIdIdx),
 				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionTableNames:   t.PartitionTableNames,
 				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
 				Ref:                   t.Ref,
 				AddAffectedRows:       t.AddAffectedRows,
@@ -1004,6 +1007,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				AddAffectedRows:       t.AddAffectedRows,
 				Attrs:                 t.Attrs,
 				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionTableNames:   t.PartitionTableNames,
 				PartitionIndexInBatch: int(t.PartitionIdx),
 			},
 		}

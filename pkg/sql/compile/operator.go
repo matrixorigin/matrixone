@@ -450,6 +450,7 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		CanTruncate:           oldCtx.CanTruncate,
 		AddAffectedRows:       oldCtx.AddAffectedRows,
 		PartitionTableIDs:     oldCtx.PartitionTableIds,
+		PartitionTableNames:   oldCtx.PartitionTableNames,
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
 	}
 	// get the relation instance of the original table
@@ -458,11 +459,24 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 		return nil, err
 	}
 	delCtx.Source = rel
-	if len(oldCtx.PartitionTableIds) > 0 {
-		delCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableIds))
+	if len(oldCtx.PartitionTableNames) > 0 {
+		if oldCtx.Ref.SchemaName == "" {
+			panic("---------------------------------wuxiliang----------oldCtx.Ref.SchemaName == ''")
+		}
+
+		if oldCtx.Ref == nil {
+			panic("---------------------------------wuxiliang----------oldCtx.Ref == nil")
+		}
+
+		dbSource, err := eg.Database(proc.Ctx, oldCtx.Ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return nil, err
+		}
+
+		delCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableNames))
 		// get the relation instances for each partition sub table
-		for i, pTableId := range oldCtx.PartitionTableIds {
-			_, _, pRel, err := eg.GetRelationById(proc.Ctx, proc.TxnOperator, pTableId)
+		for i, pTableName := range oldCtx.PartitionTableNames {
+			pRel, err := dbSource.Relation(proc.Ctx, pTableName)
 			if err != nil {
 				return nil, err
 			}
@@ -571,14 +585,20 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		Rel:                   originRel,
 		Attrs:                 attrs,
 		PartitionTableIDs:     oldCtx.PartitionTableIds,
+		PartitionTableNames:   oldCtx.PartitionTableNames,
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
 		TableDef:              oldCtx.TableDef,
 	}
-	if len(oldCtx.PartitionTableIds) > 0 {
-		newCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableIds))
+	if len(oldCtx.PartitionTableNames) > 0 {
+		dbSource, err := eg.Database(proc.Ctx, oldCtx.Ref.SchemaName, proc.TxnOperator)
+		if err != nil {
+			return nil, err
+		}
+
+		newCtx.PartitionSources = make([]engine.Relation, len(oldCtx.PartitionTableNames))
 		// get the relation instances for each partition sub table
-		for i, pTableId := range oldCtx.PartitionTableIds {
-			_, _, pRel, err := eg.GetRelationById(proc.Ctx, proc.TxnOperator, pTableId)
+		for i, pTableName := range oldCtx.PartitionTableNames {
+			pRel, err := dbSource.Relation(proc.Ctx, pTableName)
 			if err != nil {
 				return nil, err
 			}
