@@ -530,7 +530,8 @@ message InsertCtx {
 	TableDef table_def		= 4;
 	// Align array index with the partition number
 	repeated uint64 partition_table_ids = 5;
-	int32 partition_idx = 6;
+	repeated string partition_table_names = 6;
+	int32 partition_idx = 7;
 }
 
 message AnalyzeInfo {
@@ -751,7 +752,8 @@ message DeleteCtx {
 	bool is_cluster_table	= 5;
 	// Align array index with the partition number
 	repeated uint64 partition_table_ids = 6;
-	int32 partition_idx = 7;
+	repeated string partition_table_names = 7;
+	int32 partition_idx = 8;
 }
 
 message Query {
