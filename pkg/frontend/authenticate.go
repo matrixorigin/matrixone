@@ -275,7 +275,7 @@ type initUser struct {
 }
 
 var (
-	specialUser atomic.Value
+	specialUsers atomic.Value
 )
 
 // SetSpecialUser saves the user for initialization
@@ -294,26 +294,32 @@ func SetSpecialUser(userName string, password []byte) {
 		account:  acc,
 		password: password,
 	}
+	users := getSpecialUsers()
+	if users == nil {
+		users = make(map[string]*initUser)
+	}
+	users[userName] = user
 
-	specialUser.Store(user)
+	specialUsers.Store(users)
 }
 
 // isSpecialUser checks the user is the one for initialization
 func isSpecialUser(userName string) (bool, []byte, *TenantInfo) {
-	user := getSpecialUser()
-	if user != nil && user.account.GetUser() == userName {
-		return true, user.password, user.account
+	users := getSpecialUsers()
+
+	if len(users) > 0 && users[userName] != nil {
+		return true, users[userName].password, users[userName].account
 	}
 	return false, nil, nil
 }
 
-// getSpecialUser loads the user for initialization
-func getSpecialUser() *initUser {
-	value := specialUser.Load()
+// getSpecialUsers loads the user for initialization
+func getSpecialUsers() map[string]*initUser {
+	value := specialUsers.Load()
 	if value == nil {
 		return nil
 	}
-	return value.(*initUser)
+	return value.(map[string]*initUser)
 }
 
 const (
@@ -6648,7 +6654,13 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) (err
 	defer mpool.DeleteMPool(mp)
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	upstream := &Session{connectCtx: ctx, autoIncrCacheManager: aicm}
+	upstream := &Session{
+		connectCtx:           ctx,
+		autoIncrCacheManager: aicm,
+		protocol:             &FakeProtocol{},
+		seqCurValues:         make(map[uint64]string),
+		seqLastValue:         new(string),
+	}
 	bh := NewBackgroundHandler(ctx, upstream, mp, pu)
 	defer bh.Close()
 

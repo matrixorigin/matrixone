@@ -64,7 +64,7 @@ func (idx ImmutIndex) BatchDedup(
 			return
 		}
 	} else {
-		if exist = idx.zm.FastContainsAny(keys); !exist {
+		if exist = idx.zm.FastContainsAny(keys.GetDownstreamVector()); !exist {
 			// all keys are not in [min, max]. definitely not
 			return
 		}

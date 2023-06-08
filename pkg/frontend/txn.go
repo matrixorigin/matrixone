@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -68,6 +69,7 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 
 	reqCtx := th.ses.GetRequestContext()
 	retTxnCtx := th.txnCtx
+
 	if v := reqCtx.Value(defines.TenantIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.TenantIDKey{}, v)
 	}
@@ -78,6 +80,9 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
 	}
 	retTxnCtx = trace.ContextWithSpan(retTxnCtx, trace.SpanFromContext(reqCtx))
+	if th.ses != nil && th.ses.tenant != nil && th.ses.tenant.User == db_holder.MOLoggerUser {
+		retTxnCtx = context.WithValue(retTxnCtx, defines.IsMoLogger{}, true)
+	}
 
 	if storage, ok := reqCtx.Value(defines.TemporaryDN{}).(*memorystorage.Storage); ok {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryDN{}, storage)
@@ -407,6 +412,12 @@ func (ses *Session) OptionBitsIsSet(bit uint32) bool {
 	return ses.optionBits&bit != 0
 }
 
+func (ses *Session) GetOptionBits() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.optionBits
+}
+
 func (ses *Session) SetServerStatus(bit uint16) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -423,6 +434,12 @@ func (ses *Session) ServerStatusIsSet(bit uint16) bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.serverStatus&bit != 0
+}
+
+func (ses *Session) GetServerStatus() uint16 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.serverStatus
 }
 
 /*
@@ -655,4 +672,9 @@ func (ses *Session) SetAutocommit(on bool) error {
 		ses.SetOptionBits(OPTION_NOT_AUTOCOMMIT)
 	}
 	return nil
+}
+
+func (ses *Session) setAutocommitOn() {
+	ses.ClearOptionBits(OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT)
+	ses.SetServerStatus(SERVER_STATUS_AUTOCOMMIT)
 }

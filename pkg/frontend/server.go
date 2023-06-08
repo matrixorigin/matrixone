@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -45,19 +44,7 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 }
 
 func (mo *MOServer) Start() error {
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	logutil.Infof("Server Listening on : %s ", mo.addr)
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
-	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	return mo.app.Start()
 }
 
@@ -94,7 +81,10 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit, aic
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	initVarByConfig(pu)
+	err = initVarByConfig(ctx, pu)
+	if err != nil {
+		logutil.Panicf("start server failed with %+v", err)
+	}
 	return &MOServer{
 		addr:  addr,
 		app:   app,
@@ -103,12 +93,28 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit, aic
 	}
 }
 
-func initVarByConfig(pu *config.ParameterUnit) {
+func initVarByConfig(ctx context.Context, pu *config.ParameterUnit) error {
+	var err error
 	if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
-		GSysVariables.sysVars["save_query_result"] = int8(1)
+		err = GSysVariables.SetGlobalSysVar(ctx, "save_query_result", pu.SV.SaveQueryResult)
+		if err != nil {
+			return err
+		}
 	}
-	GSysVariables.sysVars["query_result_maxsize"] = pu.SV.QueryResultMaxsize
-	GSysVariables.sysVars["query_result_timeout"] = pu.SV.QueryResultTimeout
-	v, _ := strconv.ParseInt(pu.SV.LowerCaseTableNames, 10, 64)
-	GSysVariables.sysVars["lower_case_table_names"] = v
+
+	err = GSysVariables.SetGlobalSysVar(ctx, "query_result_maxsize", pu.SV.QueryResultMaxsize)
+	if err != nil {
+		return err
+	}
+
+	err = GSysVariables.SetGlobalSysVar(ctx, "query_result_timeout", pu.SV.QueryResultTimeout)
+	if err != nil {
+		return err
+	}
+
+	err = GSysVariables.SetGlobalSysVar(ctx, "lower_case_table_names", pu.SV.LowerCaseTableNames)
+	if err != nil {
+		return err
+	}
+	return err
 }
