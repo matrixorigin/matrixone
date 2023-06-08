@@ -120,6 +120,7 @@ func (txn *Transaction) WriteBatch(
 
 func (txn *Transaction) DumpBatch(force bool, offset int) error {
 	var size uint64
+
 	txn.Lock()
 	defer txn.Unlock()
 	var S3SizeThreshold = colexec.TagS3Size
@@ -130,11 +131,10 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 		}
 	}
 
-	if !((offset > 0 && txn.workspaceSize >= colexec.WriteS3Threshold) ||
-		(force && txn.workspaceSize >= S3SizeThreshold)) {
+	if (!force && txn.workspaceSize < colexec.WriteS3Threshold) ||
+		(force && txn.workspaceSize < S3SizeThreshold) {
 		return nil
 	}
-
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].bat == nil {
 			continue
@@ -143,9 +143,11 @@ func (txn *Transaction) DumpBatch(force bool, offset int) error {
 			size += uint64(txn.writes[i].bat.Size())
 		}
 	}
-	if offset > 0 && size < txn.workspaceSize {
+	if !((!force && size > colexec.WriteS3Threshold) ||
+		(force && size >= S3SizeThreshold)) {
 		return nil
 	}
+
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		// TODO: after shrink, we should update workspace size

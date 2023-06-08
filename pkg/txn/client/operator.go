@@ -379,10 +379,15 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	util.LogTxnRollback(tc.getTxnMeta(false))
 
 	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	if err := tc.checkStatus(true); err != nil {
+		return err
+	}
+
 	defer func() {
 		tc.mu.txn.Status = txn.TxnStatus_Aborted
 		tc.closeLocked()
-		tc.mu.Unlock()
 	}()
 
 	if tc.needUnlockLocked() {

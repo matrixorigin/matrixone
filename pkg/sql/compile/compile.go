@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -477,6 +478,9 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	if err != nil {
 		return nil, err
 	}
+	// sort by addr to get fixed order of CN list
+	sort.Slice(c.cnList, func(i, j int) bool { return c.cnList[i].Addr < c.cnList[j].Addr })
+
 	if c.info.Typ == plan2.ExecTypeAP {
 		c.removeUnavailableCN()
 	}
@@ -497,7 +501,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 	}
 	switch qry.StmtType {
 	case plan.Query_INSERT:
-		if cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= MinBlockNum {
+		if cost*float64(SingleLineSizeEstimate) > float64(DistributedThreshold) || qry.LoadTag || blkNum >= plan2.BlockNumForceOneCN {
 			c.cnListStrategy()
 		} else {
 			c.cnList = engine.Nodes{engine.Node{
@@ -532,7 +536,7 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		// 	}
 		// }
 	default:
-		if blkNum < MinBlockNum {
+		if blkNum < plan2.BlockNumForceOneCN {
 			c.cnList = engine.Nodes{engine.Node{
 				Addr: c.addr,
 				Mcpu: c.generateCPUNumber(ncpu, blkNum)},
@@ -556,10 +560,6 @@ func (c *Compile) compileQuery(ctx context.Context, qry *plan.Query) ([]*Scope, 
 		}
 		steps = append(steps, scope)
 	}
-
-	// str := DebugShowScopes(steps)
-	// fmt.Print(str)
-
 	return steps, err
 }
 
@@ -1234,6 +1234,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
+	var pkey *plan.PrimaryKeyDef
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -1294,6 +1295,13 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 					Seqnum:    uint32(attr.Attr.Seqnum),
 				})
 				i++
+			} else if c, ok := def.(*engine.ConstraintDef); ok {
+				for _, ct := range c.Cts {
+					switch k := ct.(type) {
+					case *engine.PrimaryKeyDef:
+						pkey = k.Pkey
+					}
+				}
 			}
 		}
 		tblDef = &plan.TableDef{
@@ -1302,6 +1310,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			Version:       n.TableDef.Version,
 			Name:          n.TableDef.Name,
 			TableType:     n.TableDef.GetTableType(),
+			Pkey:          pkey,
 		}
 	}
 
@@ -1328,20 +1337,21 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 
 	// Register runtime filters
-	// XXX currently we only implement runtime filter on single CN
-	if len(c.cnList) == 1 {
-		s.DataSource.RuntimeFilterReceivers = make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterList))
-		for i, rfSpec := range n.RuntimeFilterList {
+	// XXX currently we only enable runtime filter on single CN
+	if len(c.cnList) == 1 && len(n.RuntimeFilterProbeList) > 0 {
+		receivers := make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterProbeList))
+		if c.runtimeFilterReceiverMap == nil {
+			c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
+		}
+		for i, rfSpec := range n.RuntimeFilterProbeList {
 			ch := make(chan *pipeline.RuntimeFilter, 1)
-			s.DataSource.RuntimeFilterReceivers[i] = &colexec.RuntimeFilterChan{
-				Expr: rfSpec.Expr,
+			receivers[i] = &colexec.RuntimeFilterChan{
+				Spec: rfSpec,
 				Chan: ch,
 			}
-			if c.runtimeFilterChans == nil {
-				c.runtimeFilterChans = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-			c.runtimeFilterChans[rfSpec.Tag] = ch
+			c.runtimeFilterReceiverMap[rfSpec.Tag] = ch
 		}
+		s.DataSource.RuntimeFilterReceivers = receivers
 	}
 
 	return s
@@ -2397,9 +2407,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	if isLaunchMode(c.cnList) {
 		return putBlocksInCurrentCN(c, ranges, rel, n), nil
 	}
-	// disttae engine , hash s3 objects to fixed CN
+	// disttae engine
 	if engineType == engine.Disttae {
-		return hashBlocksToFixedCN(c, ranges, rel, n), nil
+		return shuffleBlocksToMultiCN(c, ranges, rel, n)
 	}
 	// maybe temp table on memengine , just put payloads in average
 	return putBlocksInAverage(c, ranges, rel, n), nil
@@ -2453,7 +2463,7 @@ func putBlocksInAverage(c *Compile, ranges [][]byte, rel engine.Relation, n *pla
 	return nodes
 }
 
-func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
+func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) (engine.Nodes, error) {
 	var nodes engine.Nodes
 	//add current CN
 	nodes = append(nodes, engine.Node{
@@ -2466,12 +2476,12 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 	ranges = ranges[1:]
 	// only memory table block
 	if len(ranges) == 0 {
-		return nodes
+		return nodes, nil
 	}
 	//only one cn
 	if len(c.cnList) == 1 {
 		nodes[0].Data = append(nodes[0].Data, ranges...)
-		return nodes
+		return nodes, nil
 	}
 	//add the rest of CNs in list
 	for i := range c.cnList {
@@ -2484,18 +2494,18 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 			})
 		}
 	}
-	// sort by addr to get fixed order of CN list
+
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
-	//to maxify locality, put blocks in the same s3 object in the same CN
-	lenCN := len(c.cnList)
-	for i, blk := range ranges {
-		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
-		// get timestamp in objName to make sure it is random enough
-		objTimeStamp := unmarshalledBlockInfo.MetaLocation().Name()[:7]
-		index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(lenCN))
-		nodes[index].Data = append(nodes[index].Data, blk)
+	if n.Stats.Shuffle && n.Stats.ShuffleType == plan.ShuffleType_Range {
+		err := shuffleBlocksByRange(c, ranges, n, nodes)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		shuffleBlocksByHash(c, ranges, nodes)
 	}
+
 	minWorkLoad := math.MaxInt32
 	maxWorkLoad := 0
 	//remove empty node from nodes
@@ -2514,7 +2524,36 @@ func hashBlocksToFixedCN(c *Compile, ranges [][]byte, rel engine.Relation, n *pl
 	if minWorkLoad*2 < maxWorkLoad {
 		logutil.Warnf("workload among CNs not balanced, max %v, min %v", maxWorkLoad, minWorkLoad)
 	}
-	return newNodes
+	return newNodes, nil
+}
+
+func shuffleBlocksByHash(c *Compile, ranges [][]byte, nodes engine.Nodes) {
+	for i, blk := range ranges {
+		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
+		// get timestamp in objName to make sure it is random enough
+		objTimeStamp := unmarshalledBlockInfo.MetaLocation().Name()[:7]
+		index := plan2.SimpleCharHashToRange(objTimeStamp, uint64(len(c.cnList)))
+		nodes[index].Data = append(nodes[index].Data, blk)
+	}
+}
+
+func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engine.Nodes) error {
+	var objMeta objectio.ObjectMeta
+	var err error
+	for i, blk := range ranges {
+		unmarshalledBlockInfo := catalog.DecodeBlockInfo(ranges[i])
+		location := unmarshalledBlockInfo.MetaLocation()
+		if !objectio.IsSameObjectLocVsMeta(location, objMeta) {
+			if objMeta, err = objectio.FastLoadObjectMeta(c.ctx, &location, c.proc.FileService); err != nil {
+				return err
+			}
+		}
+		blkMeta := objMeta.GetBlockMeta(uint32(location.ID()))
+		zm := blkMeta.MustGetColumn(uint16(n.Stats.ShuffleColIdx)).ZoneMap()
+		index := plan2.GetRangeShuffleIndexForZM(n.Stats.ShuffleColMin, n.Stats.ShuffleColMax, zm, uint64(len(c.cnList)))
+		nodes[index].Data = append(nodes[index].Data, blk)
+	}
+	return nil
 }
 
 func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {

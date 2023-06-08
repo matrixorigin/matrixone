@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -46,6 +47,7 @@ type DeleteChain struct {
 	mvcc  *MVCCHandle
 	links map[uint32]*common.GenericSortedDList[*DeleteNode]
 	cnt   atomic.Uint32
+	mask  *nulls.Bitmap
 }
 
 func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
@@ -57,6 +59,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		MVCCChain: txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
 		links:     make(map[uint32]*common.GenericSortedDList[*DeleteNode]),
 		mvcc:      mvcc,
+		mask:      &nulls.Bitmap{},
 	}
 	return chain
 }
@@ -96,16 +99,24 @@ func (chain *DeleteChain) IsDeleted(row uint32, txn txnif.TxnReader, rwlocker *s
 }
 
 func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (err error) {
-	chain.LoopChain(
-		func(n *DeleteNode) bool {
-			overlap := n.HasOverlapLocked(start, end)
-			if overlap {
-				err = txnif.ErrTxnWWConflict
-				return false
-			}
-			return true
-		})
+	if chain.hasOverLap(uint64(start), uint64(end)) {
+		err = txnif.ErrTxnWWConflict
+	}
 	return
+}
+
+func (chain *DeleteChain) hasOverLap(start, end uint64) bool {
+	if chain.mask == nil || chain.mask.IsEmpty() {
+		return false
+	}
+	var yes bool
+	for i := start; i < end+1; i++ {
+		if chain.mask.Contains(i) {
+			yes = true
+			break
+		}
+	}
+	return yes
 }
 
 func (chain *DeleteChain) UpdateLocked(node *DeleteNode) {
@@ -114,6 +125,29 @@ func (chain *DeleteChain) UpdateLocked(node *DeleteNode) {
 
 func (chain *DeleteChain) RemoveNodeLocked(node txnif.DeleteNode) {
 	chain.MVCC.Delete(node.(*DeleteNode).GenericDLNode)
+	chain.deleteInMaskByNode(node)
+}
+
+func (chain *DeleteChain) deleteInMaskByNode(node txnif.DeleteNode) {
+	int32Rows := node.GetRowMaskRefLocked().ToArray()
+	uint64Rows := make([]uint64, len(int32Rows))
+	for i, row := range int32Rows {
+		uint64Rows[i] = uint64(row)
+	}
+	chain.mask.Del(uint64Rows...)
+}
+
+func (chain *DeleteChain) insertInMaskByNode(node txnif.DeleteNode) {
+	int32Rows := node.GetRowMaskRefLocked().ToArray()
+	uint64Rows := make([]uint64, len(int32Rows))
+	for i, row := range int32Rows {
+		uint64Rows[i] = uint64(row)
+	}
+	chain.mask.Add(uint64Rows...)
+}
+
+func (chain *DeleteChain) insertInMaskByRange(start, end uint32) {
+	chain.mask.AddRange(uint64(start), uint64(end+1))
 }
 
 func (chain *DeleteChain) DepthLocked() int { return chain.MVCC.Depth() }
@@ -153,6 +187,7 @@ func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
 	}
 	deleteNode.AttachTo(chain)
 	chain.AddDeleteCnt(uint32(deleteNode.mask.GetCardinality()))
+	chain.insertInMaskByNode(deleteNode)
 	chain.mvcc.IncChangeNodeCnt()
 }
 

@@ -553,7 +553,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	tbl.db.txn.mergeTxnWorkspace()
 	tbl.db.txn.DumpBatch(false, 0)
 	tbl.writes = tbl.writes[:0]
-	tbl.writesOffset = len(tbl.db.txn.writes)
+	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
 
 	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
 
@@ -595,7 +595,7 @@ func (tbl *txnTable) ApplyRuntimeFilters(ctx context.Context, blocks [][]byte, e
 
 	for i, filter := range filters {
 		switch filter.Typ {
-		case pipeline.RuntimeFilter_In:
+		case pipeline.RuntimeFilter_IN:
 			vec := vector.NewVec(types.T_any.ToType())
 			err = vec.UnmarshalBinary(filter.Data)
 			if err != nil {
@@ -605,7 +605,7 @@ func (tbl *txnTable) ApplyRuntimeFilters(ctx context.Context, blocks [][]byte, e
 				InList: vec,
 			}
 
-		case pipeline.RuntimeFilter_ZoneMap:
+		case pipeline.RuntimeFilter_MIN_MAX:
 			evaluators[i] = &RuntimeZonemapFilter{
 				Zm: objectio.ZoneMap(filter.Data),
 			}
@@ -1508,7 +1508,7 @@ func (tbl *txnTable) newReader(
 			readers = append(
 				readers,
 				newBlockMergeReader(
-					ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
+					ctx, tbl, ts, []ModifyBlockMeta{blks[i].copy()}, expr, fs,
 				),
 			)
 		}
@@ -1518,7 +1518,7 @@ func (tbl *txnTable) newReader(
 	if len(blks) < readerNumber-1 {
 		for i := range blks {
 			readers[i+1] = newBlockMergeReader(
-				ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
+				ctx, tbl, ts, []ModifyBlockMeta{blks[i].copy()}, expr, fs,
 			)
 		}
 		for j := len(blks) + 1; j < readerNumber; j++ {
@@ -1533,12 +1533,17 @@ func (tbl *txnTable) newReader(
 	}
 	for i := 1; i < readerNumber; i++ {
 		if i == readerNumber-1 {
+			//var dst []ModifyBlockMeta
+			dst := make([]ModifyBlockMeta, len(blks[(i-1)*step:]))
+			copy(dst, blks[(i-1)*step:])
 			readers[i] = newBlockMergeReader(
-				ctx, tbl, ts, blks[(i-1)*step:], expr, fs,
+				ctx, tbl, ts, dst, expr, fs,
 			)
 		} else {
+			dst := make([]ModifyBlockMeta, len(blks[(i-1)*step:i*step]))
+			copy(dst, blks[(i-1)*step:i*step])
 			readers[i] = newBlockMergeReader(
-				ctx, tbl, ts, blks[(i-1)*step:i*step], expr, fs,
+				ctx, tbl, ts, dst, expr, fs,
 			)
 		}
 	}

@@ -203,6 +203,23 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
+	// set StatementID
+	var stmID uuid.UUID
+	var statement tree.Statement = nil
+	var text string
+	if cw != nil {
+		copy(stmID[:], cw.GetUUID())
+		statement = cw.GetAst()
+		ses.ast = statement
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	} else {
+		stmID = uuid.New()
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	}
+	if sqlType != internalSql {
+		ses.pushQueryId(types.Uuid(stmID).ToString())
+	}
+
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
@@ -229,19 +246,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !useEnv {
 		requestAt = time.Now()
 	}
-	// set StatementID
-	var stmID uuid.UUID
-	var statement tree.Statement = nil
-	var text string
-	if cw != nil {
-		copy(stmID[:], cw.GetUUID())
-		statement = cw.GetAst()
-		ses.ast = statement
-		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	} else {
-		stmID = uuid.New()
-		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	}
+
 	copy(stm.StatementID[:], stmID[:])
 	// END> set StatementID
 	stm.Account = tenant.GetTenant()
@@ -256,9 +261,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
-	if sqlType != "internal_sql" {
+	if sqlType != internalSql {
 		ses.tStmt = stm
-		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -402,7 +406,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if bat.Zs[j] <= 0 {
 			continue
 		}
-		row, err := extractRowFromEveryVector(ses, bat, j, oq)
+		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
 		if err != nil {
 			return err
 		}
@@ -632,7 +636,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 	return err
 }
 
-func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
+func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree.SetVar) error {
 	var err error = nil
 	setVarFunc := func(system, global bool, name string, value interface{}) error {
 		if system {
@@ -679,7 +683,7 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 		name := assign.Name
 		var value interface{}
 
-		value, err = GetSimpleExprValue(assign.Value, ses)
+		value, err = getExprValue(assign.Value, mce, ses)
 		if err != nil {
 			return err
 		}
@@ -726,7 +730,7 @@ handle setvar
 */
 func (mce *MysqlCmdExecutor) handleSetVar(ctx context.Context, sv *tree.SetVar) error {
 	ses := mce.GetSession()
-	err := doSetVar(ctx, ses, sv)
+	err := doSetVar(ctx, mce, ses, sv)
 	if err != nil {
 		return err
 	}
@@ -969,7 +973,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt 
 	ctx.WriteString(" from ")
 	stmt.Table.Format(ctx)
 	sql := ctx.String()
-	return mce.GetDoQueryFunc()(requestCtx, sql)
+	return mce.GetDoQueryFunc()(requestCtx, &UserInput{sql: sql})
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
@@ -1598,9 +1602,9 @@ func checkColModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool 
 /*
 GetComputationWrapper gets the execs from the computation engine
 */
-var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+var GetComputationWrapper = func(db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(sql); cached != nil {
+	if cached := ses.getCachedPlan(input.getSql()); cached != nil {
 		modify := false
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
@@ -1621,8 +1625,11 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
 	var err error
-	if isCmdFieldListSql(sql) {
-		cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, sql)
+	// if the input is an option ast, we should use it directly
+	if input.getStmt() != nil {
+		stmts = append(stmts, input.getStmt())
+	} else if isCmdFieldListSql(input.getSql()) {
+		cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.getSql())
 		if err != nil {
 			return nil, err
 		}
@@ -1633,7 +1640,7 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 		if err != nil {
 			v = int64(1)
 		}
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64))
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64))
 		if err != nil {
 			return nil, err
 		}
@@ -3211,13 +3218,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 }
 
 // execute query
-func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
+func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
 	beginInstant := time.Now()
 	ses := mce.GetSession()
-	ses.getSqlType(sql)
+	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
-	ses.SetSql(sql)
+	ses.SetSql(input.getSql())
 	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	proc := process.New(
@@ -3264,20 +3271,20 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
-	proc.SessionInfo.QueryId = ses.QueryId
+	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 	ses.txnCompileCtx.SetProcess(proc)
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
-		sql,
+		input,
 		ses.GetUserName(),
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(sql), ses.sqlSourceType, err)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
 		}
-		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
+		logStatementStringStatus(requestCtx, ses, input.getSql(), fail, retErr)
 		return retErr
 	}
 
@@ -3288,7 +3295,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	canCache := true
 
 	singleStatement := len(cws) == 1
-	sqlRecord := parsers.HandleSqlForRecord(sql)
+	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
@@ -3304,10 +3311,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		ses.sentRows.Store(int64(0))
 		stmt := cw.GetAst()
-		sqlType := ses.sqlSourceType[0]
-		if i < len(ses.sqlSourceType) {
-			sqlType = ses.sqlSourceType[i]
-		}
+		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
@@ -3346,7 +3350,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 	} // end of for
 
-	if canCache && !ses.isCached(sql) {
+	if canCache && !ses.isCached(input.getSql()) {
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
@@ -3357,7 +3361,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				return nil
 			}
 		}
-		ses.cachePlan(sql, stmts, plans)
+		ses.cachePlan(input.getSql(), stmts, plans)
 	}
 
 	return nil
@@ -3381,14 +3385,14 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 }
 
 // execute query. Currently, it is developing. Finally, it will replace the doComQuery.
-func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sql string) (retErr error) {
+func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, input *UserInput) (retErr error) {
 	var stmtExecs []StmtExecutor
 	var err error
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
-	ses.SetSql(sql)
+	ses.SetSql(input.getSql())
 	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	proc := process.New(
@@ -3429,19 +3433,19 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	}
 
 	stmtExecs, err = GetStmtExecList(ses.GetDatabaseName(),
-		sql,
+		input.getSql(),
 		ses.GetUserName(),
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(sql), ses.sqlSourceType, err)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
-		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
+		logStatementStringStatus(requestCtx, ses, input.getSql(), fail, retErr)
 		return retErr
 	}
 
 	singleStatement := len(stmtExecs) == 1
-	sqlRecord := parsers.HandleSqlForRecord(sql)
+	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 	for i, exec := range stmtExecs {
 		err = Execute(requestCtx, ses, proc, exec, beginInstant, sqlRecord[i], "", singleStatement)
 		if err != nil {
@@ -3505,7 +3509,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
-		err = doComQuery(requestCtx, query)
+		err = doComQuery(requestCtx, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
@@ -3514,7 +3518,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := "use `" + dbname + "`"
-		err = doComQuery(requestCtx, query)
+		err = doComQuery(requestCtx, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		}
@@ -3524,7 +3528,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		var payload = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
-		err = doComQuery(requestCtx, query)
+		err = doComQuery(requestCtx, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 		}
@@ -3546,7 +3550,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
 		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err = doComQuery(requestCtx, sql)
+		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
 		}
@@ -3559,7 +3563,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
 		}
-		err = doComQuery(requestCtx, sql)
+		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, err)
 		}
@@ -3574,7 +3578,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
 		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err = doComQuery(requestCtx, sql)
+		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, err)
 		}
@@ -3588,7 +3592,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("reset prepare %s", stmtName)
 		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
-		err = doComQuery(requestCtx, sql)
+		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_RESET, err)
 		}
