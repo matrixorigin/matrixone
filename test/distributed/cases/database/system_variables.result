@@ -480,3 +480,10 @@ set @@sql_mode = default;
 select @@sql_mode;
 @@sql_mode
 ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+select @@sql_mode;
+@@sql_mode
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+set @@sql_mode ='';
+select @@sql_mode;
+@@sql_mode
+set @@sql_mode = default;
