@@ -101,10 +101,6 @@ func GetPrepareStmtID(ctx context.Context, name string) (int, error) {
 	return strconv.Atoi(name[idx:])
 }
 
-func getPrepareStmtSessionVarName(index int) string {
-	return fmt.Sprintf("%s_%d", prefixPrepareStmtSessionVar, index)
-}
-
 type MysqlCmdExecutor struct {
 	CmdExecutorImpl
 
@@ -3624,24 +3620,10 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(requestCtx context.Context, data [
 
 	sql := fmt.Sprintf("execute %s", stmtName)
 	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
-	_, vars, err := ses.GetMysqlProtocol().ParseExecuteData(requestCtx, preStmt, data, pos)
+	err = ses.GetMysqlProtocol().ParseExecuteData(requestCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
 	if err != nil {
 		return "", err
 	}
-	ses.UpdatePrepareStmtParam(stmtName, vars)
-	// sql := fmt.Sprintf("execute %s", stmtName)
-	// varStrings := make([]string, len(names))
-	// if len(names) > 0 {
-	// 	sql = sql + fmt.Sprintf(" using @%s", strings.Join(names, ",@"))
-	// 	for i := 0; i < len(names); i++ {
-	// 		varStrings[i] = fmt.Sprintf("%v", vars[i])
-	// 		err := ses.SetUserDefinedVar(names[i], vars[i])
-	// 		if err != nil {
-	// 			return "", err
-	// 		}
-	// 	}
-	// }
-	// logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
 	return sql, nil
 }
 

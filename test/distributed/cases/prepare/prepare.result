@@ -323,6 +323,6 @@ pk    ui    si
 SET @si_min = -9223372036854775808;
 PREPARE s1 FROM 'SELECT * FROM numbers WHERE ui=?';
 EXECUTE s1 USING @si_min;
-pk    ui    si
+invalid argument cast to uint64, bad value -9223372036854775808
 DEALLOCATE PREPARE s1;
 drop table numbers;

@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -139,52 +138,31 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}, nil
 
 	case *plan.Expr_P:
-		val, err := proc.GetPrepareParamsAt(int(t.P.Pos))
+		vec, err := proc.GetPrepareParamsAt(int(t.P.Pos))
 		if err != nil {
 			return nil, err
 		}
-		exprImpl, err := util.AnyToExpr(proc.Ctx, val, planExpr)
-		if err != nil {
-			return nil, err
-		}
-		return NewExpressionExecutor(proc, exprImpl)
+		return &FixedVectorExpressionExecutor{
+			m:            proc.Mp(),
+			resultVector: vec,
+		}, nil
 
 	case *plan.Expr_V:
-		exprImpl, err := util.GetVarValue(proc.Ctx, proc, planExpr)
+		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		val, err := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
 		if err != nil {
 			return nil, err
 		}
-		return NewExpressionExecutor(proc, exprImpl)
+		vec, err := generateConstExpressionExecutorByAny(proc, typ, val)
+		if err != nil {
+			return nil, err
+		}
+		return &FixedVectorExpressionExecutor{
+			m:            proc.Mp(),
+			resultVector: vec,
+		}, nil
 
 	case *plan.Expr_F:
-		var err error
-		if util.HaveVarOrParam(t) {
-			planExpr = util.DeepCopyExpr(planExpr)
-			t = planExpr.Expr.(*plan.Expr_F)
-			for i, arg := range t.F.Args {
-				if _, ok := arg.Expr.(*plan.Expr_V); ok {
-					t.F.Args[i], err = util.GetVarValue(proc.Ctx, proc, planExpr)
-					if err != nil {
-						return nil, err
-					}
-				} else if pExpr, ok := t.F.Args[i].Expr.(*plan.Expr_P); ok {
-					var val any
-					val, err = proc.GetPrepareParamsAt(int(pExpr.P.Pos))
-					if err != nil {
-						return nil, err
-					}
-					t.F.Args[i], err = util.AnyToExpr(proc.Ctx, val, planExpr)
-					if err != nil {
-						return nil, err
-					}
-				}
-
-			}
-			planExpr, err = util.SimpleBindFuncExpr(proc.Ctx, t.F.Func.GetObjName(), t.F.Args)
-			if err != nil {
-				return nil, err
-			}
-		}
 
 		overload, err := function.GetFunctionById(proc.Ctx, t.F.GetFunc().GetObj())
 		if err != nil {
@@ -443,6 +421,58 @@ func (expr *FixedVectorExpressionExecutor) Free() {
 
 func (expr *FixedVectorExpressionExecutor) ifResultMemoryReuse() bool {
 	return true
+}
+
+func generateConstExpressionExecutorByAny(proc *process.Process, typ types.Type, val any) (*vector.Vector, error) {
+	var vec *vector.Vector
+
+	if val == nil {
+		vec = vector.NewConstNull(typ, 1, proc.Mp())
+	} else {
+		switch v := val.(type) {
+		case bool:
+			vec = vector.NewConstFixed(constBType, v, 1, proc.Mp())
+		case int8:
+			vec = vector.NewConstFixed(constI8Type, v, 1, proc.Mp())
+		case int16:
+			vec = vector.NewConstFixed(constI16Type, v, 1, proc.Mp())
+		case int32:
+			vec = vector.NewConstFixed(constI32Type, v, 1, proc.Mp())
+		case int64:
+			vec = vector.NewConstFixed(constI64Type, v, 1, proc.Mp())
+		case uint8:
+			vec = vector.NewConstFixed(constU8Type, v, 1, proc.Mp())
+		case uint16:
+			vec = vector.NewConstFixed(constU16Type, v, 1, proc.Mp())
+		case uint32:
+			vec = vector.NewConstFixed(constU32Type, v, 1, proc.Mp())
+		case uint64:
+			vec = vector.NewConstFixed(constU64Type, v, 1, proc.Mp())
+		case float32:
+			vec = vector.NewConstFixed(constFType, v, 1, proc.Mp())
+		case float64:
+			vec = vector.NewConstFixed(constDType, v, 1, proc.Mp())
+		case *types.Date:
+			vec = vector.NewConstFixed(constDateType, v, 1, proc.Mp())
+		case *types.Time:
+			vec = vector.NewConstFixed(constTimeType, v, 1, proc.Mp())
+		case *types.Datetime:
+			vec = vector.NewConstFixed(constDatetimeType, v, 1, proc.Mp())
+		case string:
+			vec = vector.NewConstBytes(constSType, []byte(v), 1, proc.Mp())
+		case *plan.Expr:
+			if e, ok := v.Expr.(*plan.Expr_C); ok {
+				typ := types.New(types.T(v.Typ.Id), v.Typ.Width, v.Typ.Scale)
+				return generateConstExpressionExecutor(proc, typ, e.C)
+			} else {
+				return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("type of var %v", v))
+			}
+		default:
+			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("type of var %v", v))
+		}
+		vec.SetIsBin(false)
+	}
+	return vec, nil
 }
 
 func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Const) (*vector.Vector, error) {

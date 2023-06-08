@@ -188,7 +188,7 @@ type Process struct {
 	Aicm *defines.AutoIncrCacheManager
 
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	prepareParams       []any
+	prepareParams       *vector.Vector
 }
 
 type vectorPool struct {
@@ -216,15 +216,17 @@ func (proc *Process) InitSeq() {
 	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
 }
 
-func (proc *Process) SetPrepareParams(prepareParams []any) {
+func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
 	proc.prepareParams = prepareParams
 }
 
-func (proc *Process) GetPrepareParamsAt(i int) (any, error) {
-	if i < 0 || i >= len(proc.prepareParams) {
+func (proc *Process) GetPrepareParamsAt(i int) (*vector.Vector, error) {
+	if i < 0 || i >= proc.prepareParams.Length() {
 		return nil, moerr.NewInternalError(proc.Ctx, "get prepare params error, index %d not exists", i)
 	}
-	return proc.prepareParams[i], nil
+	val := proc.prepareParams.GetRawBytesAt(i)
+	vec := vector.NewConstBytes(*proc.prepareParams.GetType(), val, 1, proc.Mp())
+	return vec, nil
 }
 
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {

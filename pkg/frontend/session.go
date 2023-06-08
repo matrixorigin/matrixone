@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -916,27 +917,6 @@ func (ses *Session) SetTenantInfo(ti *TenantInfo) {
 	ses.tenant = ti
 }
 
-func checkPlanIsInsertValues(p *plan.Plan) (bool, *batch.Batch) {
-	qry := p.GetQuery()
-	if qry != nil && qry.StmtType == plan.Query_INSERT {
-		for _, node := range qry.Nodes {
-			if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
-				colCount := len(node.TableDef.Cols)
-				bat := batch.NewWithSize(colCount)
-				attrs := make([]string, colCount)
-				for i := 0; i < colCount; i++ {
-					attrs[i] = node.TableDef.Cols[i].Name
-					vec := vector.NewVec(plan2.MakeTypeByPlan2Type(node.TableDef.Cols[i].Typ))
-					bat.SetVector(int32(i), vec)
-				}
-				bat.Attrs = attrs
-				return true, bat
-			}
-		}
-	}
-	return false, nil
-}
-
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -947,24 +927,13 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 	} else {
 		stmt.Close()
 	}
-
-	plan := prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan()
-	isInsertValues, bat := checkPlanIsInsertValues(plan)
-	prepareStmt.IsInsertValues = isInsertValues
-	prepareStmt.InsertBat = bat
-	if prepareStmt.IsInsertValues {
-		mp := ses.mp
-		if mp == nil {
-			mp = mpool.MustNewNoFixed("session-prepare-insert-values")
-		}
-		prepareStmt.mp = mp
-		prepareStmt.ufs = make([]func(*vector.Vector, *vector.Vector, int64) error, len(bat.Vecs))
-		for i, vec := range bat.Vecs {
-			prepareStmt.ufs[i] = vector.GetUnionOneFunction(*vec.GetType(), mp)
-		}
+	if prepareStmt.params == nil {
+		// todo : add pool
+		typ := types.T_varchar.ToType()
+		prepareStmt.params = vector.NewVec(typ)
 	}
-
 	ses.prepareStmts[name] = prepareStmt
+
 	return nil
 }
 
@@ -975,16 +944,6 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 		return prepareStmt, nil
 	}
 	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
-}
-
-func (ses *Session) UpdatePrepareStmtParam(name string, params []any) error {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if prepareStmt, ok := ses.prepareStmts[name]; ok {
-		prepareStmt.params = params
-		return nil
-	}
-	return moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {

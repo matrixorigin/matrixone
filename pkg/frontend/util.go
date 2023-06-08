@@ -287,12 +287,10 @@ func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 			return nil, err
 		}
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
-		bat := batch.NewWithSize(0)
-		bat.Zs = []int64{1}
 		// Here the evalExpr may execute some function that needs engine.Engine.
 		ses.txnCompileCtx.GetProcess().Ctx = context.WithValue(ses.txnCompileCtx.GetProcess().Ctx, defines.EngineKey{}, ses.storage)
 
-		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{bat})
+		vec, err := colexec.EvalExpressionOnce(ses.txnCompileCtx.GetProcess(), planExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
 			return nil, err
 		}
@@ -334,10 +332,10 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 		return vec.GetStringAt(0), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAt[types.Decimal64](vec, 0)
-		return plan2.MakePlan2Decimal64ExprWithType(val, plan2.DeepCopyType(expr.Typ)), nil
+		return val.Format(expr.Typ.Scale), nil
 	case types.T_decimal128:
 		val := vector.GetFixedAt[types.Decimal128](vec, 0)
-		return plan2.MakePlan2Decimal128ExprWithType(val, plan2.DeepCopyType(expr.Typ)), nil
+		return val.Format(expr.Typ.Scale), nil
 	case types.T_json:
 		val := vec.GetBytesAt(0)
 		byteJson := types.DecodeJson(val)

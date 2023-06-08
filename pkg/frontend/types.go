@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -92,11 +91,7 @@ type PrepareStmt struct {
 	ParamTypes     []byte
 	IsInsertValues bool
 
-	params []any
-
-	mp        *mpool.MPool
-	InsertBat *batch.Batch
-	ufs       []func(*vector.Vector, *vector.Vector, int64) error // function pointers for type conversion
+	params *vector.Vector
 }
 
 /*
@@ -190,8 +185,7 @@ type outputPool interface {
 }
 
 func (prepareStmt *PrepareStmt) Close() {
-	if prepareStmt.InsertBat != nil {
-		prepareStmt.InsertBat.Clean(prepareStmt.mp)
-		prepareStmt.InsertBat = nil
-	}
+	// if prepareStmt.params != nil {
+	// todo: clean params vector
+	// }
 }
