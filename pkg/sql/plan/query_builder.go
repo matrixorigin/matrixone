@@ -1477,6 +1477,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var selectList tree.SelectExprs
 	var resultLen int
 	var havingBinder *HavingBinder
+	var lockNode *plan.Node
 
 	if clause == nil {
 		rowCount := len(valuesClause.Rows)
@@ -1672,14 +1673,17 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				RefreshTsIdxInBat:  -1, //unsupport now
 				FilterColIdxInBat:  -1, //unsupport now
 			}
-			lockNode := &Node{
+			lockNode = &Node{
 				NodeType:    plan.Node_LOCK_OP,
 				Children:    []int32{nodeID},
 				TableDef:    tableDef,
 				LockTargets: []*plan.LockTarget{lockTarget},
 				BindingTags: []int32{builder.genNewTag()},
 			}
-			nodeID = builder.appendNode(lockNode, ctx)
+
+			if astLimit == nil {
+				nodeID = builder.appendNode(lockNode, ctx)
+			}
 		}
 
 		// rewrite right join to left join
@@ -1843,6 +1847,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				}
 			}
 		}
+		if builder.isForUpdate {
+			nodeID = builder.appendNode(lockNode, ctx)
+		}
 	}
 
 	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(projectionBinder.boundCols) > 0 {
@@ -1863,6 +1870,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	// append AGG node
 	if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
+		if builder.isForUpdate {
+			return 0, moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
+		}
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_AGG,
 			Children:    []int32{nodeID},

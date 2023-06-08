@@ -506,6 +506,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
 		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
+		"select count(n_name) from nation limit 10 for update",
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
 	}
