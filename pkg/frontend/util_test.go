@@ -16,7 +16,13 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/assert"
 	"math"
 	"sort"
 	"testing"
@@ -492,6 +498,279 @@ func TestGetSimpleExprValue(t *testing.T) {
 			sv, ok := stmt.(*tree.SetVar)
 			cvey.So(ok, cvey.ShouldBeTrue)
 			value, err := GetSimpleExprValue(sv.Assignments[0].Value, ses)
+			if kase.wantErr {
+				cvey.So(err, cvey.ShouldNotBeNil)
+			} else {
+				cvey.So(err, cvey.ShouldBeNil)
+				cvey.So(value, cvey.ShouldResemble, kase.want)
+			}
+		}
+
+	})
+}
+
+func TestGetExprValue(t *testing.T) {
+	ctx := context.TODO()
+	cvey.Convey("", t, func() {
+		type args struct {
+			sql     string
+			wantErr bool
+			want    interface{}
+		}
+
+		dec1280, _, err := types.Parse128("-9223372036854775808")
+		assert.NoError(t, err)
+
+		dec1281, _, err := types.Parse128("99999999999999999999999999999999999999")
+		assert.NoError(t, err)
+
+		dec1282, _, err := types.Parse128("-99999999999999999999999999999999999999")
+		assert.NoError(t, err)
+
+		dec1283, _, err := types.Parse128("9223372036854775807")
+		assert.NoError(t, err)
+
+		kases := []args{
+			{"set @@x=1", false, 1},
+			{"set @@x=-1", false, -1},
+			{fmt.Sprintf("set @@x=%d", math.MaxInt64), false, math.MaxInt64},
+			{fmt.Sprintf("set @@x=%d", -math.MaxInt64), false, -math.MaxInt64},
+			{"set @@x=true", false, true},
+			{"set @@x=false", false, false},
+			{"set @@x=on", false, "on"},
+			{"set @@x=off", false, "off"},
+			{"set @@x=abc", false, "abc"},
+			{"set @@x=null", false, nil},
+			{"set @@x=-null", false, nil},
+			{"set @@x=-x", true, nil},
+			{"set @@x=(select -t.b from t)", true, nil},
+			{"set @@x=(select 1)", false, 1},
+			{"set @@x=(select -1)", false, -1},
+			{fmt.Sprintf("set @@x=(select %d)", math.MaxInt64), false, math.MaxInt64},
+			{fmt.Sprintf("set @@x=(select %d)", -math.MaxInt64), false, -math.MaxInt64},
+			{"set @@x=(select true)", false, true},
+			{"set @@x=(select false)", false, false},
+			{"set @@x=(select 'on')", false, "on"},
+			{"set @@x=(select 'off')", false, "off"},
+			{"set @@x=(select 'abc')", false, "abc"},
+			{"set @@x=(select null)", false, nil},
+			{"set @@x=(select -null)", false, nil},
+			{"set @@x=(select true != false)", false, true},
+			{"set @@x=(select true = false)", false, false},
+			{"set @@x=(" +
+				"select true = (" +
+				"				select 1 = (select 0 + (" +
+				"											select (select 1 + (select 2 - 0))" +
+				"										)" +
+				"							)" +
+				"				)" +
+				")", false, false},
+			{"set @@x=(" +
+				"			(select (3 < 4))" +
+				" = " +
+				"			(select (1 > 4))" +
+				"		)", false, false},
+			{"set @@x=(select 127)", false, 127},
+			{"set @@x=(select -128)", false, -128},
+			{"set @@x=(select -2147483648)", false, -2147483648},
+			{"set @@x=(select -9223372036854775808)", false, dec1280},
+			{"set @@x=(select 18446744073709551615)", false, uint64(math.MaxUint64)},
+			{"set @@x=(select 1.1754943508222875e-38)", false, float32(1.1754943508222875e-38)},
+			{"set @@x=(select 3.4028234663852886e+38)", false, float32(3.4028234663852886e+38)},
+			{"set @@x=(select  2.2250738585072014e-308)", false, float64(2.2250738585072014e-308)},
+			{"set @@x=(select  1.7976931348623157e+308)", false, float64(1.7976931348623157e+308)},
+			{"set @@x=(select cast(9223372036854775807 as decimal))", false, dec1283},
+			{"set @@x=(select cast(99999999999999999999999999999999999999 as decimal))", false, dec1281},
+			{"set @@x=(select cast(-99999999999999999999999999999999999999 as decimal))", false, dec1282},
+			{"set @@x=(select cast('{\"a\":1,\"b\":2}' as json))", false, "{\"a\": 1, \"b\": 2}"},
+			{"set @@x=(select cast('00000000-0000-0000-0000-000000000000' as uuid))", false, "00000000-0000-0000-0000-000000000000"},
+			{"set @@x=(select cast('00:00:00' as time))", false, "00:00:00"},
+			{"set @@x=(select cast('1000-01-01 00:00:00' as datetime))", false, "1000-01-01 00:00:00"},
+			{"set @@x=(select cast('1970-01-01 00:00:00' as timestamp))", false, "1970-01-01 00:00:00"},
+			{"set @@x=(select 1 into outfile './test.csv')", false, 1}, //!!!NOTE: there is no file './test.csv'.
+			{"set @@x=(((select true = false)))", false, false},
+		}
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		db := mock_frontend.NewMockDatabase(ctrl)
+		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
+		db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+
+		table := mock_frontend.NewMockRelation(ctrl)
+		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(0xABC)).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), "t").Return(table, moerr.NewInternalErrorNoCtx("no such table")).AnyTimes()
+		defs := []engine.TableDef{
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: types.T_char.ToType()}},
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Type: types.T_int32.ToType()}},
+		}
+
+		table.EXPECT().TableDefs(gomock.Any()).Return(defs, nil).AnyTimes()
+		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
+		table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(false).AnyTimes()
+
+		var ranges [][]byte
+		id := make([]byte, 8)
+		binary.LittleEndian.PutUint64(id, 1)
+		ranges = append(ranges, id)
+
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(ranges, nil).AnyTimes()
+		table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
+
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+
+		ws := mock_frontend.NewMockWorkspace(ctrl)
+		ws.EXPECT().IncrStatemenetID(gomock.Any()).Return(nil).AnyTimes()
+
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv := &config.FrontendParameters{
+			SessionTimeout: toml.Duration{Duration: 10 * time.Second},
+		}
+
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+
+		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), pu, GSysVariables, true, nil, nil)
+		ses.txnCompileCtx.SetProcess(testutil.NewProc())
+		ses.requestCtx = ctx
+		ses.connectCtx = ctx
+		ses.SetDatabaseName("db")
+		exe := NewMysqlCmdExecutor()
+		exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
+		exe.SetSession(ses)
+		for _, kase := range kases {
+			fmt.Println("++++>", kase.sql)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			cvey.So(err, cvey.ShouldBeNil)
+
+			sv, ok := stmt.(*tree.SetVar)
+			cvey.So(ok, cvey.ShouldBeTrue)
+			value, err := getExprValue(sv.Assignments[0].Value, exe, ses)
+			if kase.wantErr {
+				cvey.So(err, cvey.ShouldNotBeNil)
+			} else {
+				cvey.So(err, cvey.ShouldBeNil)
+				switch ret := value.(type) {
+				case *plan.Expr:
+					if types.T(ret.GetTyp().GetId()) == types.T_decimal64 {
+						cvey.So(ret.GetC().GetDecimal64Val().GetA(), cvey.ShouldEqual, kase.want)
+					} else if types.T(ret.GetTyp().GetId()) == types.T_decimal128 {
+						temp := kase.want.(types.Decimal128)
+						cvey.So(uint64(ret.GetC().GetDecimal128Val().GetA()), cvey.ShouldEqual, temp.B0_63)
+						cvey.So(uint64(ret.GetC().GetDecimal128Val().GetB()), cvey.ShouldEqual, temp.B64_127)
+					} else {
+						panic(fmt.Sprintf("unknown expr type %v", ret.GetTyp()))
+					}
+				default:
+					cvey.So(value, cvey.ShouldEqual, kase.want)
+				}
+			}
+		}
+
+	})
+
+	cvey.Convey("", t, func() {
+		type args struct {
+			sql     string
+			wantErr bool
+			want    interface{}
+		}
+
+		dec1, _, _ := types.Parse64("1.0")
+		dec2, _, _ := types.Parse64("-1.0")
+		dec3, _, _ := types.Parse64("-1.2345670")
+
+		kases := []args{
+			{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       18,
+				Scale:       1,
+				NotNullable: true,
+			})},
+			{"set @@x=-1.0", false, plan.MakePlan2Decimal64ExprWithType(dec2, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       18,
+				Scale:       1,
+				NotNullable: true,
+			})},
+			{"set @@x=-1.2345670", false, plan.MakePlan2Decimal64ExprWithType(dec3, &plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       18,
+				Scale:       7,
+				NotNullable: true,
+			})},
+		}
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		db := mock_frontend.NewMockDatabase(ctrl)
+		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
+
+		table := mock_frontend.NewMockRelation(ctrl)
+		db.EXPECT().Relation(ctx, "t").Return(table, nil).AnyTimes()
+		defs := []engine.TableDef{
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "a", Type: types.T_char.ToType()}},
+			&engine.AttributeDef{Attr: engine.Attribute{Name: "b", Type: types.T_int32.ToType()}},
+		}
+
+		table.EXPECT().TableDefs(ctx).Return(defs, nil).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		eng.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+
+		ws := mock_frontend.NewMockWorkspace(ctrl)
+		ws.EXPECT().IncrStatemenetID(gomock.Any()).Return(nil).AnyTimes()
+
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		sv := &config.FrontendParameters{
+			SessionTimeout: toml.Duration{Duration: 5 * time.Minute},
+		}
+
+		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+
+		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), pu, GSysVariables, true, nil, nil)
+		ses.txnCompileCtx.SetProcess(testutil.NewProc())
+		ses.requestCtx = ctx
+		ses.connectCtx = ctx
+		exe := NewMysqlCmdExecutor()
+		exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
+		exe.SetSession(ses)
+		for _, kase := range kases {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			cvey.So(err, cvey.ShouldBeNil)
+
+			sv, ok := stmt.(*tree.SetVar)
+			cvey.So(ok, cvey.ShouldBeTrue)
+			value, err := getExprValue(sv.Assignments[0].Value, exe, ses)
 			if kase.wantErr {
 				cvey.So(err, cvey.ShouldNotBeNil)
 			} else {
