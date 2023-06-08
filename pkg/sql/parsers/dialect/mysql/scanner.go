@@ -15,15 +15,25 @@
 package mysql
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
 const eofChar = 0x100
+
+var scannerPool = sync.Pool{
+	New: func() any {
+		return &Scanner{
+			strBuilder: new(bytes.Buffer),
+		}
+	},
+}
 
 type Scanner struct {
 	LastToken           string
@@ -37,13 +47,28 @@ type Scanner struct {
 	Col    int
 	PrePos int
 	buf    string
+
+	strBuilder *bytes.Buffer
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
+	scanner := scannerPool.Get().(*Scanner)
+	scanner.dialectType = dialectType
+	scanner.LastToken = ""
+	scanner.LastError = nil
+	scanner.posVarIndex = 0
+	scanner.MysqlSpecialComment = nil
+	scanner.Pos = 0
+	scanner.Line = 0
+	scanner.Col = 0
+	scanner.PrePos = 0
+	scanner.buf = sql
+	scanner.strBuilder.Reset()
+	return scanner
+}
 
-	return &Scanner{
-		buf: sql,
-	}
+func PutScanner(scanner *Scanner) {
+	scannerPool.Put(scanner)
 }
 
 func (s *Scanner) Scan() (int, string) {
@@ -269,7 +294,8 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 		s.inc() // advance the first '$'
 	}
 	ch := s.cur()
-	buf := new(strings.Builder)
+	buf := s.strBuilder
+	defer s.strBuilder.Reset()
 	for s.Pos < len(s.buf) {
 		if ch == delim {
 			if delim != '$' {
@@ -295,7 +321,7 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 	return LEX_ERROR, buf.String()
 }
 
-func handleEscape(s *Scanner, buf *strings.Builder) uint16 {
+func handleEscape(s *Scanner, buf *bytes.Buffer) uint16 {
 	s.inc()
 	ch0 := s.cur()
 	switch ch0 {

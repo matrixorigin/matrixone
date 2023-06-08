@@ -85,7 +85,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 		moCollector = newMetricCollector(ieFactory, WithFlushInterval(initOpts.exportInterval))
 	}
 	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
-	statsLogWriter = newStatsLogWriter(&stats.DefaultRegistry, runtime.ProcessLevelRuntime().Logger().Named("StatsLog"), metric.GetStatsGatherInterval())
+	statsLogWriter = newStatsLogWriter(stats.DefaultRegistry, runtime.ProcessLevelRuntime().Logger().Named("StatsLog"), metric.GetStatsGatherInterval())
 
 	// register metrics and create tables
 	registerAllMetrics()
