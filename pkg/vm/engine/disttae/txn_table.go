@@ -571,10 +571,17 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 
-	tbl.modifiedBlocks = make([]ModifyBlockMeta, 0)
+	// TODO: workaround for ISSUE #9897
+	// Remove me later
+	{
+		tbl.Lock()
+		tbl.modifiedBlocks = nil
+		tbl.Unlock()
+	}
 	if len(tbl.blockInfos) == 0 {
 		return
 	}
+	var modifiedBlocks []ModifyBlockMeta
 	err = tbl.rangesOnePart(
 		ctx,
 		tbl.db.txn.meta.SnapshotTS,
@@ -583,9 +590,16 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		exprs,
 		tbl.blockInfos,
 		&ranges,
-		&tbl.modifiedBlocks,
+		&modifiedBlocks,
 		tbl.db.txn.proc,
 	)
+	// TODO: workaround for ISSUE #9897
+	// Remove me later
+	if err == nil && len(modifiedBlocks) > 0 {
+		tbl.Lock()
+		tbl.modifiedBlocks = modifiedBlocks
+		tbl.Unlock()
+	}
 	return
 }
 
@@ -1360,12 +1374,24 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 
+	// TODO: workaround for ISSUE #9897
+	// Remove me later
+	var mblks []ModifyBlockMeta
+	tbl.Lock()
+	if len(tbl.modifiedBlocks) > 0 {
+		mblks = make([]ModifyBlockMeta, 0, len(tbl.modifiedBlocks))
+		for i := range tbl.modifiedBlocks {
+			mblks = append(mblks, tbl.modifiedBlocks[i].copy())
+		}
+	}
+	tbl.Unlock()
+
 	rds0, err := tbl.newReader(
 		ctx,
 		num,
 		encodedPrimaryKey,
 		expr,
-		tbl.modifiedBlocks,
+		mblks,
 		tbl.writes)
 	if err != nil {
 		return nil, err
@@ -1508,7 +1534,7 @@ func (tbl *txnTable) newReader(
 			readers = append(
 				readers,
 				newBlockMergeReader(
-					ctx, tbl, ts, []ModifyBlockMeta{blks[i].copy()}, expr, fs,
+					ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
 				),
 			)
 		}
@@ -1518,7 +1544,7 @@ func (tbl *txnTable) newReader(
 	if len(blks) < readerNumber-1 {
 		for i := range blks {
 			readers[i+1] = newBlockMergeReader(
-				ctx, tbl, ts, []ModifyBlockMeta{blks[i].copy()}, expr, fs,
+				ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
 			)
 		}
 		for j := len(blks) + 1; j < readerNumber; j++ {
@@ -1533,17 +1559,12 @@ func (tbl *txnTable) newReader(
 	}
 	for i := 1; i < readerNumber; i++ {
 		if i == readerNumber-1 {
-			//var dst []ModifyBlockMeta
-			dst := make([]ModifyBlockMeta, len(blks[(i-1)*step:]))
-			copy(dst, blks[(i-1)*step:])
 			readers[i] = newBlockMergeReader(
-				ctx, tbl, ts, dst, expr, fs,
+				ctx, tbl, ts, blks[(i-1)*step:], expr, fs,
 			)
 		} else {
-			dst := make([]ModifyBlockMeta, len(blks[(i-1)*step:i*step]))
-			copy(dst, blks[(i-1)*step:i*step])
 			readers[i] = newBlockMergeReader(
-				ctx, tbl, ts, dst, expr, fs,
+				ctx, tbl, ts, blks[(i-1)*step:i*step], expr, fs,
 			)
 		}
 	}
