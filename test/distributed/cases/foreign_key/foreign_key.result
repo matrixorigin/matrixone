@@ -487,3 +487,6 @@ create table f1 (fa int primary key);
 CREATE TABLE c1 (ca INT, cb INT);
 ALTER TABLE c1 ADD CONSTRAINT ffa FOREIGN KEY (ca) REFERENCES f1(fa);
 desc c1;
+Field    Type    Null    Key    Default    Extra    Comment
+ca    INT(32)    YES        null
+cb    INT(32)    YES    MUL    null
