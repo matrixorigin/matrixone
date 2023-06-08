@@ -6654,7 +6654,13 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) (err
 	defer mpool.DeleteMPool(mp)
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	upstream := &Session{connectCtx: ctx, autoIncrCacheManager: aicm}
+	upstream := &Session{
+		connectCtx:           ctx,
+		autoIncrCacheManager: aicm,
+		protocol:             &FakeProtocol{},
+		seqCurValues:         make(map[uint64]string),
+		seqLastValue:         new(string),
+	}
 	bh := NewBackgroundHandler(ctx, upstream, mp, pu)
 	defer bh.Close()
 
