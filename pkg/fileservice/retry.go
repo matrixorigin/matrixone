@@ -14,16 +14,32 @@
 
 package fileservice
 
+import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
+)
+
 func retry[T any](
+	what string,
 	fn func() (T, error),
 	maxAttemps int,
 	isRetryable func(error) bool,
 ) (res T, err error) {
+	numRetries := 0
 	for {
 		res, err = fn()
 		if err != nil {
 			if isRetryable(err) {
 				maxAttemps--
+
+				numRetries++
+				if numRetries%5 == 0 {
+					logutil.Info("file service retry",
+						zap.Any("times", numRetries),
+						zap.Any("what", what),
+					)
+				}
+
 				if maxAttemps <= 0 {
 					return
 				}
