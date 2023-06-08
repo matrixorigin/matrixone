@@ -460,14 +460,6 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (*
 	}
 	delCtx.Source = rel
 	if len(oldCtx.PartitionTableNames) > 0 {
-		if oldCtx.Ref.SchemaName == "" {
-			panic("---------------------------------wuxiliang----------oldCtx.Ref.SchemaName == ''")
-		}
-
-		if oldCtx.Ref == nil {
-			panic("---------------------------------wuxiliang----------oldCtx.Ref == nil")
-		}
-
 		dbSource, err := eg.Database(proc.Ctx, oldCtx.Ref.SchemaName, proc.TxnOperator)
 		if err != nil {
 			return nil, err
