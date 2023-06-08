@@ -101,13 +101,13 @@ type Block interface {
 
 	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
-	Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error
+	Foreach(ctx context.Context, colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error
 	PPString(level common.PPLevel, depth int, prefix string) string
 
 	Init() error
 	TryUpgrade() error
 	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.BatchWithVersion, error)
-	CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
+	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool) (*containers.Batch, error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS

@@ -136,7 +136,7 @@ func (l *LogtailerImpl) RangeLogtail(
 	// collect resp for the three system tables
 	if reader.HasCatalogChanges() {
 		for _, scope := range []Scope{ScopeDatabases, ScopeTables, ScopeColumns} {
-			resp, err := l.getCatalogRespBuilder(scope, reader, ckpLoc).build()
+			resp, err := l.getCatalogRespBuilder(scope, reader, ckpLoc).build(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -148,7 +148,7 @@ func (l *LogtailerImpl) RangeLogtail(
 	dirties, _ := reader.GetDirty()
 	for _, table := range dirties.Tables {
 		did, tid := table.DbID, table.ID
-		resp, err := l.getTableRespBuilder(did, tid, reader, ckpLoc).build()
+		resp, err := l.getTableRespBuilder(did, tid, reader, ckpLoc).build(ctx)
 		if err != nil {
 			return resps, err
 		}
@@ -194,8 +194,8 @@ type tableRespBuilder struct {
 	c        *catalog.Catalog
 }
 
-func (b *tableRespBuilder) build() (logtail.TableLogtail, error) {
-	resp, err := b.collect()
+func (b *tableRespBuilder) build(ctx context.Context) (logtail.TableLogtail, error) {
+	resp, err := b.collect(ctx)
 	if err != nil {
 		return logtail.TableLogtail{}, err
 	}
@@ -208,7 +208,7 @@ func (b *tableRespBuilder) build() (logtail.TableLogtail, error) {
 	return ret, nil
 }
 
-func (b *tableRespBuilder) collect() (api.SyncLogTailResp, error) {
+func (b *tableRespBuilder) collect(ctx context.Context) (api.SyncLogTailResp, error) {
 	var builder RespBuilder
 	if b.scope == ScopeUserTables {
 		dbEntry, err := b.c.GetDatabaseByID(b.did)
@@ -221,9 +221,9 @@ func (b *tableRespBuilder) collect() (api.SyncLogTailResp, error) {
 			logutil.Info("[Logtail] not found", zap.Any("t_id", b.tid))
 			return api.SyncLogTailResp{}, nil
 		}
-		builder = NewTableLogtailRespBuilder(b.ckpLoc, b.reader.from, b.reader.to, tableEntry)
+		builder = NewTableLogtailRespBuilder(ctx, b.ckpLoc, b.reader.from, b.reader.to, tableEntry)
 	} else {
-		builder = NewCatalogLogtailRespBuilder(b.ctx, b.scope, b.ckpLoc, b.reader.from, b.reader.to)
+		builder = NewCatalogLogtailRespBuilder(ctx, b.scope, b.ckpLoc, b.reader.from, b.reader.to)
 	}
 	op := NewBoundTableOperator(b.c, b.reader, b.scope, b.did, b.tid, builder)
 	err := op.Run()

@@ -361,7 +361,7 @@ func (store *txnStore) ObserveTxn(
 	visitMetadata func(block any),
 	visitSegment func(seg any),
 	visitAppend func(bat any),
-	visitDelete func(vnode txnif.DeleteNode)) {
+	visitDelete func(ctx context.Context, vnode txnif.DeleteNode)) {
 	for _, db := range store.dbs {
 		if db.createEntry != nil || db.dropEntry != nil {
 			visitDatabase(db.entry)
@@ -382,7 +382,7 @@ func (store *txnStore) ObserveTxn(
 				case *catalog.BlockEntry:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
-					visitDelete(txnEntry)
+					visitDelete(store.ctx, txnEntry)
 				case *catalog.TableEntry:
 					if tbl.createEntry != nil || tbl.dropEntry != nil {
 						continue

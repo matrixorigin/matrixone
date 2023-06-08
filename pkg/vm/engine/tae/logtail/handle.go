@@ -162,7 +162,7 @@ func HandleSyncLogTailReq(
 	var visitor RespBuilder
 
 	if scope == ScopeUserTables {
-		visitor = NewTableLogtailRespBuilder(ckpLoc, start, end, tableEntry)
+		visitor = NewTableLogtailRespBuilder(ctx, ckpLoc, start, end, tableEntry)
 	} else {
 		visitor = NewCatalogLogtailRespBuilder(ctx, scope, ckpLoc, start, end)
 	}
@@ -400,6 +400,7 @@ func catalogEntry2Batch[
 // CatalogLogtailRespBuilder knows how to make api-entry from block entry.
 // impl catalog.Processor interface, driven by BoundTableOperator
 type TableLogtailRespBuilder struct {
+	ctx context.Context
 	*catalog.LoopProcessor
 	start, end      types.TS
 	did, tid        uint64
@@ -412,8 +413,9 @@ type TableLogtailRespBuilder struct {
 	dataDelBatch    *containers.Batch
 }
 
-func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.TableEntry) *TableLogtailRespBuilder {
+func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end types.TS, tbl *catalog.TableEntry) *TableLogtailRespBuilder {
 	b := &TableLogtailRespBuilder{
+		ctx:           ctx,
 		LoopProcessor: new(catalog.LoopProcessor),
 		start:         start,
 		end:           end,
@@ -549,7 +551,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 }
 
 // visitBlkData collects logtail in memory
-func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error) {
+func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.BlockEntry) (err error) {
 	block := e.GetBlockData()
 	insBatch, err := block.CollectAppendInRange(b.start, b.end, false)
 	if err != nil {
@@ -566,7 +568,7 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 			// insBatch is freed, don't use anymore
 		}
 	}
-	delBatch, err := block.CollectDeleteInRange(b.start, b.end, false)
+	delBatch, err := block.CollectDeleteInRange(ctx, b.start, b.end, false)
 	if err != nil {
 		return
 	}
@@ -583,7 +585,7 @@ func (b *TableLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) error {
 		// data has been flushed, no need to collect data
 		return nil
 	}
-	return b.visitBlkData(entry)
+	return b.visitBlkData(b.ctx, entry)
 }
 
 type TableRespKind int

@@ -443,7 +443,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	it = tbH.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		bv, err := blk.GetColumnDataByNames([]string{hideDef[0].Name})
+		bv, err := blk.GetColumnDataByNames(context.Background(), []string{hideDef[0].Name})
 		assert.NoError(t, err)
 		physicals = append(physicals, bv)
 		it.Next()
