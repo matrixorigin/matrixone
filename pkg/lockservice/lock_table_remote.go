@@ -90,7 +90,7 @@ func (l *remoteLockTable) lock(
 		// mechanism reading an incorrect data.
 		txn.Lock()
 		defer txn.Unlock()
-		txn.lockAdded(l.serviceID, l.bind.Table, rows, true)
+		txn.lockAdded(l.serviceID, l.bind.Table, rows, nil, true)
 		logRemoteLockAdded(l.serviceID, txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, nil)
 		return
