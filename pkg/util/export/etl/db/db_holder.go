@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -48,19 +47,18 @@ var (
 	prepareSQLMap sync.Map
 )
 
-const multiPrepareSQLRows = 10
-
 const MOLoggerUser = "mo_logger"
 const MaxConnectionNumber = 1
 
 const DBConnRetryThreshold = 8
 
-const MAX_CHUNK_SIZE = 1024 * 1024 * 4
+const MaxInsertLen = 100
 
 type prepareSQLs struct {
-	tenRows string
-	oneRow  string
-	columns int
+	rowNum    int
+	multiRows string
+	oneRow    string
+	columns   int
 }
 
 type DBUser struct {
@@ -164,7 +162,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	defer cancel()
 
 	done := make(chan error)
-	go bulkInsert(ctx, done, dbConn, records, tbl, MAX_CHUNK_SIZE)
+	go bulkInsert(ctx, done, dbConn, records, tbl, MaxInsertLen)
 
 	select {
 	case err := <-done:
@@ -182,7 +180,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	return 0, err
 }
 
-func getPrepareSQL(tbl *table.Table, columns int) *prepareSQLs {
+func getPrepareSQL(tbl *table.Table, columns int, rowNum int) *prepareSQLs {
 	prefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", tbl.Database, tbl.Table)
 	buf := new(bytes.Buffer)
 	for i := 0; i < columns; i++ {
@@ -194,25 +192,26 @@ func getPrepareSQL(tbl *table.Table, columns int) *prepareSQLs {
 	}
 	oneRow := fmt.Sprintf("%s (%s)", prefix, buf.String())
 
-	tenBuf := new(bytes.Buffer)
-	tenBuf.WriteString(prefix)
-	for i := 0; i < multiPrepareSQLRows; i++ {
+	multiRowBuf := new(bytes.Buffer)
+	multiRowBuf.WriteString(prefix)
+	for i := 0; i < rowNum; i++ {
 		if i == 0 {
-			tenBuf.WriteByte('(')
+			multiRowBuf.WriteByte('(')
 		} else {
-			tenBuf.WriteString(",(")
+			multiRowBuf.WriteString(",(")
 		}
-		tenBuf.Write(buf.Bytes())
-		tenBuf.WriteByte(')')
+		multiRowBuf.Write(buf.Bytes())
+		multiRowBuf.WriteByte(')')
 	}
 	return &prepareSQLs{
-		tenRows: tenBuf.String(),
-		oneRow:  oneRow,
-		columns: columns,
+		rowNum:    rowNum,
+		multiRows: multiRowBuf.String(),
+		oneRow:    oneRow,
+		columns:   columns,
 	}
 }
 
-func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, maxLen int) {
+func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][]string, tbl *table.Table, batchLen int) {
 	if len(records) == 0 {
 		done <- nil
 		return
@@ -223,11 +222,11 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 	if val, ok := prepareSQLMap.Load(key); ok {
 		sqls = val.(*prepareSQLs)
 		if sqls.columns != len(records[0]) {
-			sqls = getPrepareSQL(tbl, len(records[0]))
+			sqls = getPrepareSQL(tbl, len(records[0]), batchLen)
 			prepareSQLMap.Store(key, sqls)
 		}
 	} else {
-		sqls = getPrepareSQL(tbl, len(records[0]))
+		sqls = getPrepareSQL(tbl, len(records[0]), batchLen)
 		prepareSQLMap.Store(key, sqls)
 	}
 
@@ -243,43 +242,37 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 	for {
 		if len(records) == 0 {
 			break
-		} else if len(records) >= multiPrepareSQLRows {
+		} else if len(records) >= batchLen {
 			if stmt10 == nil {
-				stmt10, err = tx.PrepareContext(ctx, sqls.tenRows)
+				stmt10, err = tx.PrepareContext(ctx, sqls.multiRows)
 				if err != nil {
 					tx.Rollback()
 					done <- err
 					return
 				}
 			}
-			vals := make([]any, sqls.columns*multiPrepareSQLRows)
+			vals := make([]any, sqls.columns*batchLen)
 			idx := 0
-			for _, row := range records[:multiPrepareSQLRows] {
+			for _, row := range records[:batchLen] {
 				for i, field := range row {
-					if tbl.Columns[i].ColType == table.TJson {
-						var js interface{}
-						escapedJSON, _ := json.Marshal(js)
-						_ = json.Unmarshal([]byte(field), &js)
-						vals[idx] = escapedJSON
+					escapedStr := field
+					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+						vals[idx] = field[:tbl.Columns[i].Scale-1]
 					} else {
-						escapedStr := field
-						if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-							vals[idx] = field[:tbl.Columns[i].Scale-1]
-						} else {
-							vals[idx] = field
-						}
+						vals[idx] = field
 					}
 					idx++
 				}
 			}
 			_, err := stmt10.ExecContext(ctx, vals...)
 			if err != nil {
+				logutil.Error("sqlWriter batchInsert failed", zap.Error(err))
 				tx.Rollback()
 				done <- err
 				return
 			}
 
-			records = records[multiPrepareSQLRows:]
+			records = records[batchLen:]
 		} else {
 			if stmt10 != nil {
 				err = stmt10.Close()
@@ -301,18 +294,11 @@ func bulkInsert(ctx context.Context, done chan error, sqlDb *sql.DB, records [][
 			vals := make([]any, sqls.columns)
 			for _, row := range records {
 				for i, field := range row {
-					if tbl.Columns[i].ColType == table.TJson {
-						var js interface{}
-						escapedJSON, _ := json.Marshal(js)
-						_ = json.Unmarshal([]byte(field), &js)
-						vals[i] = escapedJSON
+					escapedStr := field
+					if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
+						vals[i] = field[:tbl.Columns[i].Scale-1]
 					} else {
-						escapedStr := field
-						if tbl.Columns[i].ColType == table.TVarchar && tbl.Columns[i].Scale < len(escapedStr) {
-							vals[i] = field[:tbl.Columns[i].Scale-1]
-						} else {
-							vals[i] = field
-						}
+						vals[i] = field
 					}
 				}
 				_, err := stmt1.ExecContext(ctx, vals...)
