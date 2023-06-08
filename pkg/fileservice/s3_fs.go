@@ -1086,6 +1086,7 @@ func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, o
 		counter.FileService.S3.List.Add(1)
 	}, s.perfCounterSets...)
 	return retry(
+		"s3 list objects",
 		func() (*s3.ListObjectsOutput, error) {
 			return s.s3Client.ListObjects(ctx, params, optFns...)
 		},
@@ -1100,6 +1101,7 @@ func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, opt
 		counter.FileService.S3.Head.Add(1)
 	}, s.perfCounterSets...)
 	return retry(
+		"s3 head object",
 		func() (*s3.HeadObjectOutput, error) {
 			return s.s3Client.HeadObject(ctx, params, optFns...)
 		},
@@ -1132,6 +1134,7 @@ func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3
 			}
 			params.Range = &rang
 			output, err := retry(
+				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
 					return s.s3Client.GetObject(ctx, params, optFns...)
 				},
@@ -1158,6 +1161,7 @@ func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInpu
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, s.perfCounterSets...)
 	return retry(
+		"s3 delete objects",
 		func() (*s3.DeleteObjectsOutput, error) {
 			return s.s3Client.DeleteObjects(ctx, params, optFns...)
 		},
@@ -1172,6 +1176,7 @@ func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput,
 		counter.FileService.S3.Delete.Add(1)
 	}, s.perfCounterSets...)
 	return retry(
+		"s3 delete object",
 		func() (*s3.DeleteObjectOutput, error) {
 			return s.s3Client.DeleteObject(ctx, params, optFns...)
 		},
