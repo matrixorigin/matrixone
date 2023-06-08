@@ -791,6 +791,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 
 func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, forwardCh chan *batch.Batch) error {
 	var val morpc.Message
+	var dataBuffer []byte
 	var ok bool
 	var m *pbpipeline.Message
 	for {
@@ -820,14 +821,15 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 		}
 
 		// normal receive
+		dataBuffer = append(dataBuffer, m.Data...)
 		switch m.GetSid() {
 		case pbpipeline.WaitingNext:
 			continue
 		case pbpipeline.Last:
-			if m.Checksum != crc32.ChecksumIEEE(m.Data) {
+			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
 			}
-			bat, err := decodeBatch(proc.Mp(), nil, m.Data)
+			bat, err := decodeBatch(proc.Mp(), nil, dataBuffer)
 			if err != nil {
 				return err
 			}
@@ -838,6 +840,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 				// used for BroadCastJoin
 				forwardCh <- bat
 			}
+			dataBuffer = nil
 		}
 	}
 }

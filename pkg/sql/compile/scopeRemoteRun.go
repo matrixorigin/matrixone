@@ -188,6 +188,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var err error
+	var dataBuffer []byte
 	var sequence uint64
 
 	if sender.receiveCh == nil {
@@ -225,19 +226,22 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 		}
 		sequence++
 
+		dataBuffer = append(dataBuffer, m.Data...)
 		if m.WaitingNextToMerge() {
 			continue
 		}
-		if m.Checksum != crc32.ChecksumIEEE(m.Data) {
+		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
-		bat, err := decodeBatch(c.proc.Mp(), c.proc, m.Data)
+		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
 		if err != nil {
 			return err
 		}
 		nextAnalyze.Network(bat)
 		sendToConnectOperator(nextOperator, bat)
+
+		dataBuffer = nil
 	}
 }
 
