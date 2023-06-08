@@ -27,11 +27,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -202,6 +203,23 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
+	// set StatementID
+	var stmID uuid.UUID
+	var statement tree.Statement = nil
+	var text string
+	if cw != nil {
+		copy(stmID[:], cw.GetUUID())
+		statement = cw.GetAst()
+		ses.ast = statement
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	} else {
+		stmID = uuid.New()
+		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
+	}
+	if sqlType != intereSql {
+		ses.pushQueryId(types.Uuid(stmID).ToString())
+	}
+
 	if !motrace.GetTracerProvider().IsEnable() {
 		return ctx
 	}
@@ -228,19 +246,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !useEnv {
 		requestAt = time.Now()
 	}
-	// set StatementID
-	var stmID uuid.UUID
-	var statement tree.Statement = nil
-	var text string
-	if cw != nil {
-		copy(stmID[:], cw.GetUUID())
-		statement = cw.GetAst()
-		ses.ast = statement
-		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	} else {
-		stmID = uuid.New()
-		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	}
+
 	copy(stm.StatementID[:], stmID[:])
 	// END> set StatementID
 	stm.Account = tenant.GetTenant()
@@ -255,9 +261,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	stm.RequestAt = requestAt
 	stm.StatementType = getStatementType(statement).GetStatementType()
 	stm.QueryType = getStatementType(statement).GetQueryType()
-	if sqlType != "internal_sql" {
+	if sqlType != intereSql {
 		ses.tStmt = stm
-		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -466,7 +471,7 @@ func doUse(ctx context.Context, ses *Session, db string) error {
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
 
-	logInfof(ses.GetDebugString(), "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
+	logDebugf(ses.GetDebugString(), "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
 
 	return nil
 }
@@ -523,7 +528,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr, cwIndex, cw
 	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.GetRequestContext(), resp); err != nil {
-		return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed. error:%v ", err)
+		return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed.")
 	}
 	return err
 }
@@ -2393,12 +2398,12 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 			}
 		}
 		if epoch%printEvery == 0 {
-			logInfof(ses.GetDebugString(), "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
+			logDebugf(ses.GetDebugString(), "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
 			minReadTime, maxReadTime, minWriteTime, maxWriteTime = 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 		}
 		epoch += 1
 	}
-	logInfof(ses.GetDebugString(), "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
+	logDebugf(ses.GetDebugString(), "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
 	return
 }
 
@@ -2555,7 +2560,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			ses.cleanCache()
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
-		logError(ses.GetDebugString(), err.Error())
+		logError(ses, ses.GetDebugString(), err.Error())
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
@@ -3001,6 +3006,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				return err
 			}
 		}
+		// todo: add trace
 		if err = runner.Run(0); err != nil {
 			return err
 		}
@@ -3111,7 +3117,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		rspLen = cw.GetAffectedRows()
 		echoTime := time.Now()
 
-		logInfof(ses.GetDebugString(), "time of SendResponse %s", time.Since(echoTime).String())
+		logDebugf(ses.GetDebugString(), "time of SendResponse %s", time.Since(echoTime).String())
 
 		/*
 			Step 4: Serialize the execution plan by json
@@ -3502,7 +3508,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logInfo(ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
+		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
 		err = doComQuery(requestCtx, query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
@@ -3542,7 +3548,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
-		logInfo(ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err = doComQuery(requestCtx, sql)
 		if err != nil {
@@ -3570,7 +3576,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
-		logInfo(ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
 		err = doComQuery(requestCtx, sql)
 		if err != nil {
@@ -3585,7 +3591,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("reset prepare %s", stmtName)
-		logInfo(ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 		err = doComQuery(requestCtx, sql)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_RESET, err)
@@ -3629,7 +3635,7 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(requestCtx context.Context, data [
 			}
 		}
 	}
-	logInfo(ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
+	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
 	return sql, nil
 }
 

@@ -70,10 +70,11 @@ Main workflow:
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -120,7 +121,7 @@ func HandleSyncLogTailReq(
 	mgr *Manager,
 	c *catalog.Catalog,
 	req api.SyncLogTailReq,
-	canRetry bool) (resp api.SyncLogTailResp, err error) {
+	canRetry bool) (resp api.SyncLogTailResp, closeCB func(), err error) {
 	now := time.Now()
 	logutil.Debugf("[Logtail] begin handle %+v", req)
 	defer func() {
@@ -152,7 +153,7 @@ func HandleSyncLogTailReq(
 	if checkpointed.GreaterEq(end) {
 		return api.SyncLogTailResp{
 			CkpLocation: ckpLoc,
-		}, err
+		}, nil, err
 	} else if ckpLoc != "" {
 		start = checkpointed.Next()
 	}
@@ -166,11 +167,11 @@ func HandleSyncLogTailReq(
 	} else {
 		visitor = NewCatalogLogtailRespBuilder(ctx, scope, ckpLoc, start, end)
 	}
-	defer visitor.Close()
+	closeCB = visitor.Close
 
 	operator := mgr.GetTableOperator(start, end, c, did, tid, scope, visitor)
 	if err := operator.Run(); err != nil {
-		return api.SyncLogTailResp{}, err
+		return api.SyncLogTailResp{}, visitor.Close, err
 	}
 	resp, err = visitor.BuildResp()
 
@@ -179,9 +180,9 @@ func HandleSyncLogTailReq(
 		if (forceFlush && name == tableEntry.GetLastestSchema().Name) || resp.ProtoSize() > Size90M {
 			_ = ckpClient.FlushTable(ctx, did, tid, end)
 			// try again after flushing
-			newResp, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
+			newResp, closeCB, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
 			logutil.Infof("[logtail] flush result: %d -> %d err: %v", resp.ProtoSize(), newResp.ProtoSize(), err)
-			return newResp, err
+			return newResp, closeCB, err
 		}
 	}
 	return
@@ -611,15 +612,15 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		switch kind {
 		case TableRespKind_Data:
 			tableName = b.tname
-			logutil.Infof("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
+			logutil.Debugf("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
 				DebugBatchToString("data", batch, false, zap.InfoLevel))
 		case TableRespKind_Blk:
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
-			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
 		case TableRespKind_Seg:
 			tableName = fmt.Sprintf("_%d_seg", b.tid)
-			logutil.Infof("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("segmeta", batch, false, zap.InfoLevel))
 		}
 
@@ -678,10 +679,10 @@ func LoadCheckpointEntries(
 	}
 	now := time.Now()
 	defer func() {
-		logutil.Infof("LoadCheckpointEntries latency: %v", time.Since(now))
+		logutil.Debugf("LoadCheckpointEntries latency: %v", time.Since(now))
 	}()
 	locations := strings.Split(metLoc, ";")
-	datas := make([]*CheckpointData, len(locations))
+	datas := make([]*CNCheckpointData, len(locations))
 
 	readers := make([]*blockio.BlockReader, len(locations))
 	objectLocations := make([]objectio.Location, len(locations))
@@ -703,35 +704,16 @@ func LoadCheckpointEntries(
 	}
 
 	for i := range locations {
-		pref, err := blockio.BuildPrefetchParams(fs, objectLocations[i])
+		data := NewCNCheckpointData()
+		err := data.PrefetchFrom(ctx, fs, objectLocations[i])
 		if err != nil {
 			return nil, err
-		}
-		for idx, item := range checkpointDataRefer {
-			idxes := make([]uint16, len(item.attrs))
-			for col := range item.attrs {
-				idxes[col] = uint16(col)
-			}
-			pref.AddBlock(idxes, []uint16{uint16(idx)})
-		}
-		err = blockio.PrefetchWithMerged(pref)
-		if err != nil {
-			return nil, err
-		}
-
-	}
-
-	for i := range locations {
-		data := NewCheckpointData()
-		for idx, item := range checkpointDataRefer {
-			var bat *containers.Batch
-			bat, err := LoadBlkColumnsByMeta(ctx, item.types, item.attrs, uint16(idx), readers[i])
-			if err != nil {
-				return nil, err
-			}
-			data.bats[idx] = bat
 		}
 		datas[i] = data
+	}
+
+	for i, data := range datas {
+		data.ReadFrom(ctx, readers[i], nil)
 	}
 
 	entries := make([]*api.Entry, 0)

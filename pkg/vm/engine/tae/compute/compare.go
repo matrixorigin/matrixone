@@ -32,14 +32,12 @@ func CompareOrdered[T types.OrderedT](a, b T) int64 {
 }
 
 func CompareBool(a, b bool) int64 {
-	if a && b {
-		return 0
-	} else if !a && !b {
+	if a == b {
 		return 0
 	} else if a {
 		return 1
 	}
-	return 0
+	return -1
 }
 
 func CompareBytes(a, b []byte) int64 {

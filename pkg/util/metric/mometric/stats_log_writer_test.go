@@ -16,6 +16,10 @@ package mometric
 
 import (
 	"context"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -25,9 +29,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"sync"
-	"testing"
-	"time"
 )
 
 // MockService for testing stats Registry
@@ -105,7 +106,7 @@ func TestStatsLogWriter(t *testing.T) {
 	}))
 
 	// 2.3 Start the LogWriter
-	c := newStatsLogWriter(&stats.DefaultRegistry, customLogger, 100*time.Millisecond)
+	c := newStatsLogWriter(stats.DefaultRegistry, customLogger, 100*time.Millisecond)
 	serviceCtx := context.Background()
 	assert.True(t, c.Start(serviceCtx))
 
@@ -131,7 +132,7 @@ func TestStatsLogWriter(t *testing.T) {
 	defer writtenLogs.Unlock()
 	assert.True(t, len(writtenLogs.content) >= 10)
 	for _, log := range writtenLogs.content {
-		assert.Contains(t, log.Message, "stats ")
+		assert.Contains(t, log.Message, "Stats")
 	}
 
 	// 7. (Optional) Read from the console and validate the log. Example log:

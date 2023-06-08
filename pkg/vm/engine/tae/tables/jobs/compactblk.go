@@ -17,8 +17,9 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -335,7 +336,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	if err != nil {
 		return
 	}
-	logutil.Infof("update metaloc for %s", id.String())
+	logutil.Debugf("update metaloc for %s", id.String())
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
 	}

@@ -324,6 +324,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				Col: &plan.ColRef{
 					RelPos: relPos,
 					ColPos: colPos,
+					Name:   col,
 				},
 			}
 		} else {
