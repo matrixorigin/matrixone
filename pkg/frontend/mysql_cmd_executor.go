@@ -3567,6 +3567,15 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		}
 		return resp, nil
 
+	case COM_STMT_SEND_LONG_DATA:
+		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
+		data := req.GetData().([]byte)
+		err = mce.parseStmtSendLongData(requestCtx, data)
+		if err != nil {
+			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, err)
+		}
+		return nil, nil
+
 	case COM_STMT_CLOSE:
 		data := req.GetData().([]byte)
 
@@ -3625,6 +3634,32 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(requestCtx context.Context, data [
 		return "", err
 	}
 	return sql, nil
+}
+
+func (mce *MysqlCmdExecutor) parseStmtSendLongData(requestCtx context.Context, data []byte) error {
+	// see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_send_long_data.html
+	pos := 0
+	if len(data) < 4 {
+		return moerr.NewInvalidInput(requestCtx, "sql command contains malformed packet")
+	}
+	stmtID := binary.LittleEndian.Uint32(data[0:4])
+	pos += 4
+
+	stmtName := fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+	ses := mce.GetSession()
+	preStmt, err := ses.GetPrepareStmt(stmtName)
+	if err != nil {
+		return err
+	}
+
+	sql := fmt.Sprintf("send long data for stmt %s", stmtName)
+	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+
+	err = ses.GetMysqlProtocol().ParseSendLongData(requestCtx, ses.GetTxnCompileCtx().GetProcess(), preStmt, data, pos)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {

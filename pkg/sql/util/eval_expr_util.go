@@ -29,3 +29,13 @@ func AppendAnyToStringVector(proc *process.Process, val any, vec *vector.Vector)
 		return vector.AppendBytes(vec, []byte(strVal), false, proc.Mp())
 	}
 }
+
+func SetAnyToStringVector(proc *process.Process, val any, vec *vector.Vector, idx int) error {
+	if val == nil {
+		vec.GetNulls().Set(uint64(idx))
+		return nil
+	} else {
+		strVal := fmt.Sprintf("%v", val)
+		return vector.SetBytesAt(vec, idx, []byte(strVal), proc.Mp())
+	}
+}

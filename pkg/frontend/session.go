@@ -24,9 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
@@ -404,7 +401,6 @@ func (ses *Session) Close() {
 	ses.gSysVars = nil
 	for _, stmt := range ses.prepareStmts {
 		stmt.Close()
-
 	}
 	ses.prepareStmts = nil
 	ses.requestCtx = nil
@@ -926,11 +922,6 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 		}
 	} else {
 		stmt.Close()
-	}
-	if prepareStmt.params == nil {
-		// todo : add pool
-		typ := types.T_varchar.ToType()
-		prepareStmt.params = vector.NewVec(typ)
 	}
 	ses.prepareStmts[name] = prepareStmt
 

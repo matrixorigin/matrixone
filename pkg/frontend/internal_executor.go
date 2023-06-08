@@ -250,6 +250,10 @@ func (ip *internalProtocol) IsEstablished() bool {
 	return true
 }
 
+func (ip *internalProtocol) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
 func (ip *internalProtocol) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	return nil
 }

@@ -228,13 +228,14 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 	}
 		// }
 
-		if prepareStmt.params.Length() > 0 { //use binary protocol
-			if prepareStmt.params.Length() != len(preparePlan.ParamTypes) {
+		numParams := len(preparePlan.ParamTypes)
+		if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { //use binary protocol
+			if prepareStmt.params.Length() != numParams {
 				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 			}
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		} else if len(executePlan.Args) > 0 {
-			if len(executePlan.Args) != len(preparePlan.ParamTypes) {
+			if len(executePlan.Args) != numParams {
 				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 			}
 
@@ -255,7 +256,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			}
 			cwft.proc.SetPrepareParams(params)
 		} else {
-			if len(preparePlan.ParamTypes) > 0 {
+			if numParams > 0 {
 				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 			}
 		}

@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -188,6 +189,8 @@ type MysqlProtocol interface {
 	GetStats() string
 
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+
+	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 }
 
 var _ MysqlProtocol = &MysqlProtocolImpl{}
@@ -492,14 +495,66 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	return nil
 }
 
-func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	var err error
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
-	stmt.params.CleanOnlyData()
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
 	}
 	numParams := len(dcPrepare.Prepare.ParamTypes)
+
+	paramIdx, newPos, ok := mp.io.ReadUint16(data, pos)
+	if !ok {
+		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+	}
+	pos = newPos
+	if int(paramIdx) >= numParams {
+		return moerr.NewInternalError(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
+	}
+
+	// todo : add pool
+	if stmt.params == nil {
+		typ := types.T_varchar.ToType()
+		stmt.params = vector.NewVec(typ)
+		for i := 0; i < numParams; i++ {
+			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		stmt.params.GetNulls().Reset()
+	}
+
+	length := len(data) - pos
+	val, _, ok := mp.readCountOfBytes(data, pos, length)
+	if !ok {
+		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+	}
+	return util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx))
+}
+
+func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	var err error
+	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
+	if !ok {
+		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
+	}
+	numParams := len(dcPrepare.Prepare.ParamTypes)
+
+	// todo : add pool
+	if stmt.params == nil {
+		typ := types.T_varchar.ToType()
+		stmt.params = vector.NewVec(typ)
+		for i := 0; i < numParams; i++ {
+			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		stmt.params.GetNulls().Reset()
+	}
 
 	var flag uint8
 	flag, pos, ok = mp.io.ReadUint8(data, pos)
@@ -543,7 +598,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 			// ref https://dev.mysql.com/doc/internals/en/com-stmt-send-long-data.html
 
 			if nullBitmaps[i>>3]&(1<<(uint(i)%8)) > 0 {
-				err = util.AppendAnyToStringVector(proc, nil, stmt.params)
+				err = util.SetAnyToStringVector(proc, nil, stmt.params, i)
 				if err != nil {
 					return err
 				}
@@ -559,7 +614,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 			switch defines.MysqlType(tp) {
 			case defines.MYSQL_TYPE_NULL:
-				err = util.AppendAnyToStringVector(proc, nil, stmt.params)
+				err = util.SetAnyToStringVector(proc, nil, stmt.params, i)
 
 			case defines.MYSQL_TYPE_TINY:
 				val, newPos, ok := mp.io.ReadUint8(data, pos)
@@ -571,10 +626,10 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				pos = newPos
 				if isUnsigned {
 					// vars[i] = val
-					err = util.AppendAnyToStringVector(proc, val, stmt.params)
+					err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 				} else {
 					// vars[i] = int8(val)
-					err = util.AppendAnyToStringVector(proc, int8(val), stmt.params)
+					err = util.SetAnyToStringVector(proc, int8(val), stmt.params, i)
 				}
 
 			case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
@@ -585,9 +640,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 				pos = newPos
 				if isUnsigned {
-					err = util.AppendAnyToStringVector(proc, val, stmt.params)
+					err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 				} else {
-					err = util.AppendAnyToStringVector(proc, int16(val), stmt.params)
+					err = util.SetAnyToStringVector(proc, int16(val), stmt.params, i)
 				}
 
 			case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
@@ -598,9 +653,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 				pos = newPos
 				if isUnsigned {
-					err = util.AppendAnyToStringVector(proc, val, stmt.params)
+					err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 				} else {
-					err = util.AppendAnyToStringVector(proc, int32(val), stmt.params)
+					err = util.SetAnyToStringVector(proc, int32(val), stmt.params, i)
 				}
 
 			case defines.MYSQL_TYPE_LONGLONG:
@@ -611,9 +666,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 				pos = newPos
 				if isUnsigned {
-					err = util.AppendAnyToStringVector(proc, val, stmt.params)
+					err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 				} else {
-					err = util.AppendAnyToStringVector(proc, int64(val), stmt.params)
+					err = util.SetAnyToStringVector(proc, int64(val), stmt.params, i)
 				}
 
 			case defines.MYSQL_TYPE_FLOAT:
@@ -623,7 +678,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 				}
 				pos = newPos
-				err = util.AppendAnyToStringVector(proc, math.Float32frombits(val), stmt.params)
+				err = util.SetAnyToStringVector(proc, math.Float32frombits(val), stmt.params, i)
 
 			case defines.MYSQL_TYPE_DOUBLE:
 				val, newPos, ok := mp.io.ReadUint64(data, pos)
@@ -631,7 +686,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
 				pos = newPos
-				err = util.AppendAnyToStringVector(proc, math.Float64frombits(val), stmt.params)
+				err = util.SetAnyToStringVector(proc, math.Float64frombits(val), stmt.params, i)
 
 			// Binary/varbinary has mysql_type_varchar.
 			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_DECIMAL,
@@ -642,7 +697,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 				}
 				pos = newPos
-				err = util.AppendAnyToStringVector(proc, val, stmt.params)
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_TEXT:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
@@ -651,7 +706,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				}
 				pos = newPos
 				// vars[i] = []byte(val)
-				err = util.AppendAnyToStringVector(proc, val, stmt.params)
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			case defines.MYSQL_TYPE_TIME:
 				// See https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
@@ -670,7 +725,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				default:
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
-				err = util.AppendAnyToStringVector(proc, val, stmt.params)
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
 				// See https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_binary_resultset.html
@@ -695,7 +750,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 
 				}
-				err = util.AppendAnyToStringVector(proc, val, stmt.params)
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			case defines.MYSQL_TYPE_NEWDECIMAL:
 				// use string for decimal.  Not tested
@@ -705,7 +760,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 				}
 				pos = newPos
-				err = util.AppendAnyToStringVector(proc, val, stmt.params)
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
 			default:
 				return moerr.NewInternalError(ctx, "unsupport parameter type")

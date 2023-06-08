@@ -464,6 +464,10 @@ func (fp *FakeProtocol) SendPrepareResponse(ctx context.Context, stmt *PrepareSt
 	return nil
 }
 
+func (fp *FakeProtocol) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
+	return nil
+}
+
 func (fp *FakeProtocol) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	return nil
 }
