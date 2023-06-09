@@ -668,6 +668,9 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 	}
 
 	bldString := bld.String()
+	if len(bldString) == 0 {
+		return bldString, nil
+	}
 	return bldString[:len(bldString)-1], nil
 }
 

@@ -450,8 +450,9 @@ func insertAutoValues[T constraints.Integer](
 		manuals := roaring64.NewBitmap()
 		maxValue := uint64(0)
 		col.lockDo(func() {
-			for _, v := range vs {
-				if v > 0 {
+			for idx, v := range vs {
+				// vector maybe has some invalid value, must use null bitmap to check the manual value
+				if !nulls.Contains(vec.GetNulls(), uint64(idx)) && v > 0 {
 					manuals.Add(uint64(v))
 				}
 			}

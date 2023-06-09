@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -114,7 +115,11 @@ func (builder *QueryBuilder) buildMetaScan(tbl *tree.TableFunction, ctx *BindCon
 	if err == nil {
 		if v, _ := val.(int8); v == 0 {
 			return 0, moerr.NewNoConfig(builder.GetContext(), "save query result")
+		} else {
+			logutil.Infof("buildMetaScan : save query result: %v", v)
 		}
+	} else {
+		return 0, err
 	}
 	exprs[0], err = appendCastBeforeExpr(builder.GetContext(), exprs[0], &plan.Type{
 		Id:          int32(types.T_uuid),
