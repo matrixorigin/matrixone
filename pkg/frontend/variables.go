@@ -43,7 +43,6 @@ var (
 	errorConvertFromStringToUintFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable uint type failed")
 	errorConvertFromStringToDoubleFailed = moerr.NewInternalError(context.Background(), "convert from string to the system variable double type failed")
 	errorConvertFromStringToEnumFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable enum type failed")
-	errorConvertFromStringToSetFailed    = moerr.NewInternalError(context.Background(), "convert from string to the system variable set type failed")
 	errorConvertFromStringToNullFailed   = moerr.NewInternalError(context.Background(), "convert from string to the system variable null type failed")
 )
 
