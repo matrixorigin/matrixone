@@ -8662,13 +8662,12 @@ time_type:
                 } else {
                 $$ = &tree.T{
                     InternalType: tree.InternalType{
-                Family:             tree.TimeFamily,
-                Scale:          $2,
+                    Family: tree.TimeFamily,
                     FamilyString: $1,
-                    DisplayWith: 26,
-                TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_TIME),
+                    DisplayWith: $2,
+                    TimePrecisionIsSet: true,
+                    Locale: &locale,
+                    Oid: uint32(defines.MYSQL_TYPE_TIME),
             },
         }
         }
@@ -8682,13 +8681,12 @@ time_type:
                 } else {
                 $$ = &tree.T{
                     InternalType: tree.InternalType{
-                Family:             tree.TimestampFamily,
-                Scale:          $2,
+                    Family: tree.TimestampFamily,
                     FamilyString: $1,
-                    DisplayWith: 26,
-                TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
+                    DisplayWith: $2,
+                    TimePrecisionIsSet: true,
+                    Locale:  &locale,
+                    Oid:  uint32(defines.MYSQL_TYPE_TIMESTAMP),
             },
         }
         }
@@ -8702,13 +8700,12 @@ time_type:
                 } else {
                 $$ = &tree.T{
                     InternalType: tree.InternalType{
-                Family:             tree.TimestampFamily,
-                Scale:          $2,
+                    Family: tree.TimestampFamily,
                     FamilyString: $1,
-                    DisplayWith: 26,
-                TimePrecisionIsSet: true,
-                Locale:             &locale,
-                Oid:                uint32(defines.MYSQL_TYPE_DATETIME),
+                    DisplayWith: $2,
+                    TimePrecisionIsSet: true,
+                    Locale: &locale,
+                    Oid: uint32(defines.MYSQL_TYPE_DATETIME),
             },
         }
         }

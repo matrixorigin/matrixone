@@ -132,7 +132,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			ret := fmt.Sprintf("%s(%d)", typ.String(), typ.Scale)
+			ret := fmt.Sprintf("%s(%d)", typ.String(), typ.Width)
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
 	}
