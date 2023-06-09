@@ -78,7 +78,7 @@ type ExpressionExecutor interface {
 	// it will be called after query has done.
 	Free()
 
-	ifResultMemoryReuse() bool
+	IfResultMemoryReuse() bool
 }
 
 func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs []*plan.Expr) (executors []ExpressionExecutor, err error) {
@@ -334,7 +334,7 @@ func (expr *FunctionExpressionExecutor) SetParameter(index int, executor Express
 	expr.parameterExecutor[index] = executor
 }
 
-func (expr *FunctionExpressionExecutor) ifResultMemoryReuse() bool {
+func (expr *FunctionExpressionExecutor) IfResultMemoryReuse() bool {
 	return true
 }
 
@@ -366,7 +366,7 @@ func (expr *ColumnExpressionExecutor) Free() {
 	// Nothing should do.
 }
 
-func (expr *ColumnExpressionExecutor) ifResultMemoryReuse() bool {
+func (expr *ColumnExpressionExecutor) IfResultMemoryReuse() bool {
 	return false
 }
 
@@ -393,7 +393,7 @@ func (expr *FixedVectorExpressionExecutor) Free() {
 	expr.resultVector = nil
 }
 
-func (expr *FixedVectorExpressionExecutor) ifResultMemoryReuse() bool {
+func (expr *FixedVectorExpressionExecutor) IfResultMemoryReuse() bool {
 	return true
 }
 
@@ -577,7 +577,7 @@ func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
 			if oldVec.GetType().Oid == types.T_any {
 				newVec = vector.NewConstNull(types.T_any.ToType(), oldVec.Length(), proc.Mp())
 			} else {
-				if executors[i].ifResultMemoryReuse() {
+				if executors[i].IfResultMemoryReuse() {
 					if e, ok := executors[i].(*FunctionExpressionExecutor); ok {
 						// if projection, we can get the result directly
 						newVec = e.resultVector.GetResultVector()
@@ -631,7 +631,7 @@ func FixProjectionResult(proc *process.Process, executors []ExpressionExecutor,
 // I will remove this function later.
 // do not use this function.
 func SafeGetResult(proc *process.Process, vec *vector.Vector, executor ExpressionExecutor) (*vector.Vector, error) {
-	if executor.ifResultMemoryReuse() {
+	if executor.IfResultMemoryReuse() {
 		if e, ok := executor.(*FunctionExpressionExecutor); ok {
 			nv := e.resultVector.GetResultVector()
 			e.resultVector.SetResultVector(nil)
