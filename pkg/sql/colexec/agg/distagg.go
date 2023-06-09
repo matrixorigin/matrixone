@@ -147,9 +147,6 @@ func (a *UnaryDistAgg[T1, T2]) Grows(size int, m *mpool.MPool) error {
 }
 
 func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector) error {
-	if a.err != nil {
-		return nil
-	}
 	ok, err := a.maps[i].Insert(vecs, int(sel))
 	if err != nil {
 		return err
@@ -170,7 +167,10 @@ func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector
 		v = vector.GetFixedAt[T1](vec, int(sel))
 	}
 	a.srcs[i] = append(a.srcs[i], v)
-	a.vs[i], a.es[i], a.err = a.fill(i, v, a.vs[i], z, a.es[i], hasNull)
+	a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], z, a.es[i], hasNull)
+	if a.err == nil {
+		a.err = err
+	}
 	return nil
 }
 
@@ -196,10 +196,10 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 				}
 				v := (any)(str).(T1)
 				a.srcs[j] = append(a.srcs[j], v)
-				if a.err != nil {
-					return nil
+				a.vs[j], a.es[j], err = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+				if a.err == nil {
+					a.err = err
 				}
-				a.vs[j], a.es[j], a.err = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 			}
 		}
 		return nil
@@ -220,10 +220,10 @@ func (a *UnaryDistAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, 
 				continue
 			}
 			a.srcs[j] = append(a.srcs[j], v)
-			if a.err != nil {
-				return nil
+			a.vs[j], a.es[j], err = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
+			if a.err == nil {
+				a.err = err
 			}
-			a.vs[j], a.es[j], a.err = a.fill(int64(j), v, a.vs[j], zs[int64(i)+start], a.es[j], hasNull)
 		}
 	}
 	return nil
@@ -248,10 +248,10 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 				}
 				v := any(str).(T1)
 				a.srcs[i] = append(a.srcs[i], v)
-				if a.err != nil {
-					return nil
+				a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
+				if a.err == nil {
+					a.err = err
 				}
-				a.vs[i], a.es[i], a.err = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
 			}
 		}
 		return nil
@@ -267,10 +267,10 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 				continue
 			}
 			a.srcs[i] = append(a.srcs[i], v)
-			if a.err != nil {
-				return nil
+			a.vs[i], a.es[i], err = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
+			if a.err == nil {
+				a.err = err
 			}
-			a.vs[i], a.es[i], a.err = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
 		}
 	}
 	return nil
@@ -293,10 +293,10 @@ func (a *UnaryDistAgg[T1, T2]) Merge(b Agg[any], x, y int64) error {
 			return err
 		}
 		if ok {
-			if a.err != nil {
-				return nil
+			a.vs[x], a.es[x], err = a.fill(x, v, a.vs[x], 1, a.es[x], false)
+			if a.err == nil {
+				a.err = err
 			}
-			a.vs[x], a.es[x], a.err = a.fill(x, v, a.vs[x], 1, a.es[x], false)
 			a.srcs[x] = append(a.srcs[x], b0.srcs[y][i])
 		}
 	}
@@ -325,10 +325,10 @@ func (a *UnaryDistAgg[T1, T2]) BatchMerge(b Agg[any], start int64, os []uint8, v
 				return err
 			}
 			if ok {
-				if a.err != nil {
-					return nil
+				a.vs[j], a.es[j], err = a.fill(int64(j), v, a.vs[j], 1, a.es[j], false)
+				if a.err == nil {
+					a.err = err
 				}
-				a.vs[j], a.es[j], a.err = a.fill(int64(j), v, a.vs[j], 1, a.es[j], false)
 				a.srcs[j] = append(a.srcs[j], b0.srcs[k][h])
 			}
 		}
