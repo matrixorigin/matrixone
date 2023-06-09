@@ -513,8 +513,8 @@ func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 
 func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
 	r.tList[index].Store(&newTimestamp)
-	ts := r.getTimestamp()
 	if r.ready.Load() {
+		ts := r.getTimestamp()
 		r.timestampWaiter.NotifyLatestCommitTS(ts)
 	}
 }
