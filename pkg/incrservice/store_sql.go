@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -49,8 +51,9 @@ func NewSQLStore(exec executor.SQLExecutor) (IncrValueStore, error) {
 func (s *sqlStore) Create(
 	ctx context.Context,
 	tableID uint64,
-	cols []AutoColumn) error {
-	opts := executor.Options{}.WithDatabase(database)
+	cols []AutoColumn,
+	txnOp client.TxnOperator) error {
+	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
 	return s.exec.ExecTxn(
 		ctx,
 		func(te executor.TxnExecutor) error {
@@ -70,7 +73,8 @@ func (s *sqlStore) Alloc(
 	ctx context.Context,
 	tableID uint64,
 	colName string,
-	count int) (uint64, uint64, error) {
+	count int,
+	txnOp client.TxnOperator) (uint64, uint64, error) {
 	var curr, next, step uint64
 	ok := false
 
@@ -78,7 +82,7 @@ func (s *sqlStore) Alloc(
 		incrTableName,
 		tableID,
 		colName)
-	opts := executor.Options{}.WithDatabase(database)
+	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
 	for {
 		err := s.exec.ExecTxn(
 			ctx,
@@ -129,8 +133,9 @@ func (s *sqlStore) UpdateMinValue(
 	ctx context.Context,
 	tableID uint64,
 	col string,
-	minValue uint64) error {
-	opts := executor.Options{}.WithDatabase(database)
+	minValue uint64,
+	txnOp client.TxnOperator) error {
+	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf("update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
@@ -149,8 +154,9 @@ func (s *sqlStore) UpdateMinValue(
 
 func (s *sqlStore) Delete(
 	ctx context.Context,
-	tableID uint64) error {
-	opts := executor.Options{}.WithDatabase(database)
+	tableID uint64,
+	op client.TxnOperator) error {
+	opts := executor.Options{}.WithDatabase(database).WithTxn(op)
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf("delete from %s where table_id = %d",
@@ -197,6 +203,9 @@ func (s *sqlStore) GetCloumns(
 			Offset:   offsets[idx],
 			Step:     steps[idx],
 		}
+	}
+	if len(cols) == 0 {
+		return nil, moerr.NewNoSuchTableNoCtx(database, fmt.Sprintf("%d", tableID))
 	}
 	return cols, nil
 }

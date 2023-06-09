@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
 )
 
@@ -53,7 +54,8 @@ func (a *allocator) alloc(
 	ctx context.Context,
 	tableID uint64,
 	key string,
-	count int) (uint64, uint64, error) {
+	count int,
+	txnOp client.TxnOperator) (uint64, uint64, error) {
 	c := make(chan struct{})
 	var from, to uint64
 	var err error
@@ -62,6 +64,7 @@ func (a *allocator) alloc(
 		tableID,
 		key,
 		count,
+		txnOp,
 		func(
 			v1, v2 uint64,
 			e error) {
@@ -79,11 +82,13 @@ func (a *allocator) asyncAlloc(
 	tableID uint64,
 	col string,
 	count int,
+	txnOp client.TxnOperator,
 	apply func(uint64, uint64, error)) {
 	select {
 	case <-ctx.Done():
 		apply(0, 0, ctx.Err())
 	case a.c <- action{
+		txnOp:         txnOp,
 		accountID:     getAccountID(ctx),
 		actionType:    allocType,
 		tableID:       tableID,
@@ -97,7 +102,8 @@ func (a *allocator) updateMinValue(
 	ctx context.Context,
 	tableID uint64,
 	col string,
-	minValue uint64) error {
+	minValue uint64,
+	txnOp client.TxnOperator) error {
 	var err error
 	c := make(chan struct{})
 	fn := func(e error) {
@@ -108,6 +114,7 @@ func (a *allocator) updateMinValue(
 	case <-ctx.Done():
 		fn(ctx.Err())
 	case a.c <- action{
+		txnOp:       txnOp,
 		accountID:   getAccountID(ctx),
 		actionType:  updateType,
 		tableID:     tableID,
@@ -145,7 +152,8 @@ func (a *allocator) doAllocate(act action) {
 		ctx,
 		act.tableID,
 		act.col,
-		act.count)
+		act.count,
+		act.txnOp)
 	if a.logger.Enabled(zap.DebugLevel) {
 		a.logger.Debug(
 			"allocate new range",
@@ -167,7 +175,8 @@ func (a *allocator) doUpdate(act action) {
 		ctx,
 		act.tableID,
 		act.col,
-		act.minValue)
+		act.minValue,
+		act.txnOp)
 	if a.logger.Enabled(zap.DebugLevel) {
 		a.logger.Debug(
 			"update range min value",
@@ -190,6 +199,7 @@ var (
 )
 
 type action struct {
+	txnOp         client.TxnOperator
 	accountID     uint32
 	actionType    int
 	tableID       uint64

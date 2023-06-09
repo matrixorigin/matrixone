@@ -91,6 +91,7 @@ type AutoIncrementService interface {
 // allocations for one write.
 type incrTableCache interface {
 	table() uint64
+	commit()
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
@@ -99,9 +100,9 @@ type incrTableCache interface {
 }
 
 type valueAllocator interface {
-	alloc(ctx context.Context, tableID uint64, col string, count int) (uint64, uint64, error)
-	asyncAlloc(ctx context.Context, tableID uint64, col string, count int, cb func(uint64, uint64, error))
-	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64) error
+	alloc(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error)
+	asyncAlloc(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, error))
+	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
 	close()
 }
 
@@ -110,13 +111,13 @@ type IncrValueStore interface {
 	// GetCloumns return auto columns of table.
 	GetCloumns(ctx context.Context, tableID uint64) ([]AutoColumn, error)
 	// Create add metadata records into catalog.AutoIncrTableName.
-	Create(ctx context.Context, tableID uint64, cols []AutoColumn) error
+	Create(ctx context.Context, tableID uint64, cols []AutoColumn, txnOp client.TxnOperator) error
 	// Alloc alloc new range for auto-increment column.
-	Alloc(ctx context.Context, tableID uint64, col string, count int) (uint64, uint64, error)
+	Alloc(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error)
 	// UpdateMinValue update auto column min value to specified value.
-	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64) error
+	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.
-	Delete(ctx context.Context, tableID uint64) error
+	Delete(ctx context.Context, tableID uint64, txnOp client.TxnOperator) error
 	// Close the store
 	Close()
 }

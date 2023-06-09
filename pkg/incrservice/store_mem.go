@@ -19,27 +19,51 @@ import (
 	"math"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 type memStore struct {
 	sync.Mutex
-	caches map[uint64][]AutoColumn
+	caches      map[uint64][]AutoColumn
+	uncommitted map[string]map[uint64][]AutoColumn
 }
 
 // NewMemStore new mem store
 func NewMemStore() IncrValueStore {
 	return &memStore{
-		caches: make(map[uint64][]AutoColumn),
+		caches:      make(map[uint64][]AutoColumn),
+		uncommitted: make(map[string]map[uint64][]AutoColumn),
 	}
 }
 
 func (s *memStore) Create(
 	ctx context.Context,
 	tableID uint64,
-	cols []AutoColumn) error {
+	cols []AutoColumn,
+	txnOp client.TxnOperator) error {
 	s.Lock()
 	defer s.Unlock()
-	caches := s.caches[tableID]
+	m := s.caches
+	if txnOp != nil {
+		m = make(map[uint64][]AutoColumn)
+		s.uncommitted[string(txnOp.Txn().ID)] = m
+		txnOp.(client.EventableTxnOperator).AppendEventCallback(
+			client.ClosedEvent,
+			func(txnMeta txn.TxnMeta) {
+				s.Lock()
+				defer s.Unlock()
+				delete(s.uncommitted, string(txnMeta.ID))
+				if txnMeta.Status == txn.TxnStatus_Committed {
+					for k, v := range m {
+						s.caches[k] = v
+					}
+				}
+			})
+	}
+
+	caches := m[tableID]
 	for _, col := range cols {
 		has := false
 		for _, cache := range caches {
@@ -52,7 +76,7 @@ func (s *memStore) Create(
 			caches = append(caches, col)
 		}
 	}
-	s.caches[tableID] = caches
+	m[tableID] = caches
 	return nil
 }
 
@@ -68,10 +92,16 @@ func (s *memStore) Alloc(
 	ctx context.Context,
 	tableID uint64,
 	key string,
-	count int) (uint64, uint64, error) {
+	count int,
+	txnOp client.TxnOperator) (uint64, uint64, error) {
 	s.Lock()
 	defer s.Unlock()
-	cols, ok := s.caches[tableID]
+	m := s.caches
+	if txnOp != nil {
+		m = s.uncommitted[string(txnOp.Txn().ID)]
+	}
+
+	cols, ok := m[tableID]
 	if !ok {
 		panic("missing incr column record")
 	}
@@ -98,10 +128,16 @@ func (s *memStore) UpdateMinValue(
 	ctx context.Context,
 	tableID uint64,
 	col string,
-	minValue uint64) error {
+	minValue uint64,
+	txnOp client.TxnOperator) error {
 	s.Lock()
 	defer s.Unlock()
-	cols, ok := s.caches[tableID]
+	m := s.caches
+	if txnOp != nil {
+		m = s.uncommitted[string(txnOp.Txn().ID)]
+	}
+
+	cols, ok := m[tableID]
 	if !ok {
 		panic("missing incr column record")
 	}
@@ -124,10 +160,17 @@ func (s *memStore) UpdateMinValue(
 
 func (s *memStore) Delete(
 	ctx context.Context,
-	tableID uint64) error {
-	s.Lock()
-	defer s.Unlock()
-	delete(s.caches, tableID)
+	tableID uint64,
+	op client.TxnOperator) error {
+	op.(client.EventableTxnOperator).AppendEventCallback(
+		client.ClosedEvent,
+		func(txnMeta txn.TxnMeta) {
+			if txnMeta.Status == txn.TxnStatus_Committed {
+				s.Lock()
+				defer s.Unlock()
+				delete(s.caches, tableID)
+			}
+		})
 	return nil
 }
 
