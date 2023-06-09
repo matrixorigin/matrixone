@@ -6987,9 +6987,9 @@ func TestDeduplication(t *testing.T) {
 	)
 
 	txn, rel := tae.getRelation()
-	err = rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc})
+	err = rel.AddBlksWithMetaLoc(context.Background(), []objectio.Location{metaLoc})
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -7012,7 +7012,7 @@ func TestDeduplication(t *testing.T) {
 	assert.NoError(t, err)
 	txn.GetStore().AddTxnEntry(txnif.TxnType_Normal, seg)
 	txn.GetStore().IncreateWriteCnt()
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	assert.NoError(t, blk.PrepareCommit())
 	assert.NoError(t, blk.ApplyCommit())
 	assert.NoError(t, seg.PrepareCommit())
@@ -7029,7 +7029,7 @@ func TestDeduplication(t *testing.T) {
 		}
 	}
 	for _, txn := range txns {
-		txn.Commit()
+		txn.Commit(context.Background())
 	}
 	tae.checkRowsByScan(rows, false)
 	t.Logf(tae.Catalog.SimplePPString(3))
