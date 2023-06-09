@@ -222,12 +222,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 
 	case plan.Node_JOIN:
-		leftTags := make(map[int32]*Binding)
+		leftTags := make(map[int32]any)
 		for _, tag := range builder.enumerateTags(node.Children[0]) {
 			leftTags[tag] = nil
 		}
 
-		rightTags := make(map[int32]*Binding)
+		rightTags := make(map[int32]any)
 		for _, tag := range builder.enumerateTags(node.Children[1]) {
 			rightTags[tag] = nil
 		}
@@ -414,7 +414,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		//when onlist is empty, it will be a cross join, performance will be very poor
 		//in this situation, we put the non equal conds in the onlist and go loop join
 		//todo: when equal conds and non equal conds both exists, put them in the on list and go hash equal join
-		if len(node.OnList) == 0 {
+		if node.JoinType == plan.Node_INNER && len(node.OnList) == 0 {
 			// for tpch q22, do not change the plan for now. will fix in the future
 			leftStats := builder.qry.Nodes[node.Children[0]].Stats
 			rightStats := builder.qry.Nodes[node.Children[1]].Stats

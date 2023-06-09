@@ -27,11 +27,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -202,30 +203,7 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, envBegin time.Time, envStmt, sqlType string, useEnv bool) context.Context {
-	if !motrace.GetTracerProvider().IsEnable() {
-		return ctx
-	}
-	tenant := ses.GetTenantInfo()
-	if tenant == nil {
-		tenant, _ = GetTenantInfo(ctx, "internal")
-	}
-	var txnID uuid.UUID
-	var txn TxnOperator
-	var err error
-	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
-		_, txn, err = handler.GetTxn()
-		if err != nil {
-			logErrorf(ses.GetDebugString(), "RecordStatement. error:%v", err)
-		} else {
-			copy(txnID[:], txn.Txn().ID)
-		}
-	}
-	var sesID uuid.UUID
-	copy(sesID[:], ses.GetUUID())
-	requestAt := envBegin
-	if !useEnv {
-		requestAt = time.Now()
-	}
+	// set StatementID
 	var stmID uuid.UUID
 	var statement tree.Statement = nil
 	var text string
@@ -238,26 +216,53 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		stmID = uuid.New()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
-	stm := &motrace.StatementInfo{
-		StatementID:          stmID,
-		TransactionID:        txnID,
-		SessionID:            sesID,
-		Account:              tenant.GetTenant(),
-		RoleId:               proc.SessionInfo.RoleId,
-		User:                 tenant.GetUser(),
-		Host:                 ses.protocol.Peer(),
-		Database:             ses.GetDatabaseName(),
-		Statement:            text,
-		StatementFingerprint: "", // fixme: (Reserved)
-		StatementTag:         "", // fixme: (Reserved)
-		SqlSourceType:        sqlType,
-		RequestAt:            requestAt,
-		StatementType:        getStatementType(statement).GetStatementType(),
-		QueryType:            getStatementType(statement).GetQueryType(),
-	}
-	if sqlType != "internal_sql" {
-		ses.tStmt = stm
+	if sqlType != internalSql {
 		ses.pushQueryId(types.Uuid(stmID).ToString())
+	}
+
+	if !motrace.GetTracerProvider().IsEnable() {
+		return ctx
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil {
+		tenant, _ = GetTenantInfo(ctx, "internal")
+	}
+	stm := motrace.NewStatementInfo()
+	// set TransactionID
+	var txn TxnOperator
+	var err error
+	if handler := ses.GetTxnHandler(); handler.IsValidTxnOperator() {
+		_, txn, err = handler.GetTxn()
+		if err != nil {
+			logErrorf(ses.GetDebugString(), "RecordStatement. error:%v", err)
+			copy(stm.TransactionID[:], motrace.NilTxnID[:])
+		} else {
+			copy(stm.TransactionID[:], txn.Txn().ID)
+		}
+	}
+	// set SessionID
+	copy(stm.SessionID[:], ses.GetUUID())
+	requestAt := envBegin
+	if !useEnv {
+		requestAt = time.Now()
+	}
+
+	copy(stm.StatementID[:], stmID[:])
+	// END> set StatementID
+	stm.Account = tenant.GetTenant()
+	stm.RoleId = proc.SessionInfo.RoleId
+	stm.User = tenant.GetUser()
+	stm.Host = ses.protocol.Peer()
+	stm.Database = ses.GetDatabaseName()
+	stm.Statement = text
+	stm.StatementFingerprint = "" // fixme= (Reserved)
+	stm.StatementTag = ""         // fixme= (Reserved)
+	stm.SqlSourceType = sqlType
+	stm.RequestAt = requestAt
+	stm.StatementType = getStatementType(statement).GetStatementType()
+	stm.QueryType = getStatementType(statement).GetQueryType()
+	if sqlType != internalSql {
+		ses.tStmt = stm
 	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
@@ -401,7 +406,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if bat.Zs[j] <= 0 {
 			continue
 		}
-		row, err := extractRowFromEveryVector(ses, bat, j, oq)
+		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
 		if err != nil {
 			return err
 		}
@@ -466,7 +471,7 @@ func doUse(ctx context.Context, ses *Session, db string) error {
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
 
-	logInfof(ses.GetDebugString(), "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
+	logDebugf(ses.GetDebugString(), "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
 
 	return nil
 }
@@ -523,7 +528,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr, cwIndex, cw
 	resp := SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
 
 	if err := proto.SendResponse(ses.GetRequestContext(), resp); err != nil {
-		return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed. error:%v ", err)
+		return moerr.NewInternalError(ses.GetRequestContext(), "routine send response failed.")
 	}
 	return err
 }
@@ -631,7 +636,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 	return err
 }
 
-func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
+func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree.SetVar) error {
 	var err error = nil
 	setVarFunc := func(system, global bool, name string, value interface{}) error {
 		if system {
@@ -678,7 +683,7 @@ func doSetVar(ctx context.Context, ses *Session, sv *tree.SetVar) error {
 		name := assign.Name
 		var value interface{}
 
-		value, err = GetSimpleExprValue(assign.Value, ses)
+		value, err = getExprValue(assign.Value, mce, ses)
 		if err != nil {
 			return err
 		}
@@ -725,7 +730,7 @@ handle setvar
 */
 func (mce *MysqlCmdExecutor) handleSetVar(ctx context.Context, sv *tree.SetVar) error {
 	ses := mce.GetSession()
-	err := doSetVar(ctx, ses, sv)
+	err := doSetVar(ctx, mce, ses, sv)
 	if err != nil {
 		return err
 	}
@@ -968,7 +973,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt 
 	ctx.WriteString(" from ")
 	stmt.Table.Format(ctx)
 	sql := ctx.String()
-	return mce.GetDoQueryFunc()(requestCtx, sql)
+	return mce.GetDoQueryFunc()(requestCtx, &UserInput{sql: sql})
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
@@ -1597,9 +1602,9 @@ func checkColModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool 
 /*
 GetComputationWrapper gets the execs from the computation engine
 */
-var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
+var GetComputationWrapper = func(db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	var cw []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(sql); cached != nil {
+	if cached := ses.getCachedPlan(input.getSql()); cached != nil {
 		modify := false
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
@@ -1620,8 +1625,11 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	var stmts []tree.Statement = nil
 	var cmdFieldStmt *InternalCmdFieldList
 	var err error
-	if isCmdFieldListSql(sql) {
-		cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, sql)
+	// if the input is an option ast, we should use it directly
+	if input.getStmt() != nil {
+		stmts = append(stmts, input.getStmt())
+	} else if isCmdFieldListSql(input.getSql()) {
+		cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.getSql())
 		if err != nil {
 			return nil, err
 		}
@@ -1632,7 +1640,7 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 		if err != nil {
 			v = int64(1)
 		}
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64))
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64))
 		if err != nil {
 			return nil, err
 		}
@@ -2393,12 +2401,12 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 			}
 		}
 		if epoch%printEvery == 0 {
-			logInfof(ses.GetDebugString(), "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
+			logDebugf(ses.GetDebugString(), "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
 			minReadTime, maxReadTime, minWriteTime, maxWriteTime = 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 		}
 		epoch += 1
 	}
-	logInfof(ses.GetDebugString(), "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
+	logDebugf(ses.GetDebugString(), "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
 	return
 }
 
@@ -2555,7 +2563,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			ses.cleanCache()
 			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
-		logError(ses.GetDebugString(), err.Error())
+		logError(ses, ses.GetDebugString(), err.Error())
 		txnErr = ses.TxnRollbackSingleStatement(stmt)
 		if txnErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
@@ -3001,6 +3009,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				return err
 			}
 		}
+		// todo: add trace
 		if err = runner.Run(0); err != nil {
 			return err
 		}
@@ -3111,7 +3120,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		rspLen = cw.GetAffectedRows()
 		echoTime := time.Now()
 
-		logInfof(ses.GetDebugString(), "time of SendResponse %s", time.Since(echoTime).String())
+		logDebugf(ses.GetDebugString(), "time of SendResponse %s", time.Since(echoTime).String())
 
 		/*
 			Step 4: Serialize the execution plan by json
@@ -3209,13 +3218,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 }
 
 // execute query
-func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
+func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserInput) (retErr error) {
 	beginInstant := time.Now()
 	ses := mce.GetSession()
-	ses.getSqlType(sql)
+	input.genSqlSourceType(ses)
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
-	ses.SetSql(sql)
+	ses.SetSql(input.getSql())
 	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	proc := process.New(
@@ -3262,20 +3271,20 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		proc.SessionInfo.RoleId = moAdminRoleID
 		proc.SessionInfo.UserId = rootID
 	}
-	proc.SessionInfo.QueryId = ses.QueryId
+	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 	ses.txnCompileCtx.SetProcess(proc)
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
-		sql,
+		input,
 		ses.GetUserName(),
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(sql), ses.sqlSourceType, err)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		retErr = err
 		if _, ok := err.(*moerr.Error); !ok {
 			retErr = moerr.NewParseError(requestCtx, err.Error())
 		}
-		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
+		logStatementStringStatus(requestCtx, ses, input.getSql(), fail, retErr)
 		return retErr
 	}
 
@@ -3286,7 +3295,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	canCache := true
 
 	singleStatement := len(cws) == 1
-	sqlRecord := parsers.HandleSqlForRecord(sql)
+	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 	for i, cw := range cws {
 		if cwft, ok := cw.(*TxnComputationWrapper); ok {
 			if cwft.stmt.GetQueryType() == tree.QueryTypeDDL || cwft.stmt.GetQueryType() == tree.QueryTypeDCL ||
@@ -3302,10 +3311,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		ses.sentRows.Store(int64(0))
 		stmt := cw.GetAst()
-		sqlType := ses.sqlSourceType[0]
-		if i < len(ses.sqlSourceType) {
-			sqlType = ses.sqlSourceType[i]
-		}
+		sqlType := input.getSqlSourceType(i)
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant, sqlRecord[i], sqlType, singleStatement)
 		tenant := ses.GetTenantName(stmt)
 		//skip PREPARE statement here
@@ -3344,7 +3350,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 	} // end of for
 
-	if canCache && !ses.isCached(sql) {
+	if canCache && !ses.isCached(input.getSql()) {
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
 		for i, cw := range cws {
@@ -3355,7 +3361,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				return nil
 			}
 		}
-		ses.cachePlan(sql, stmts, plans)
+		ses.cachePlan(input.getSql(), stmts, plans)
 	}
 
 	return nil
@@ -3379,14 +3385,14 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 }
 
 // execute query. Currently, it is developing. Finally, it will replace the doComQuery.
-func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sql string) (retErr error) {
+func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, input *UserInput) (retErr error) {
 	var stmtExecs []StmtExecutor
 	var err error
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	ses.SetShowStmtType(NotShowStatement)
 	proto := ses.GetMysqlProtocol()
-	ses.SetSql(sql)
+	ses.SetSql(input.getSql())
 	ses.GetExportParam().Outfile = false
 	pu := ses.GetParameterUnit()
 	proc := process.New(
@@ -3427,19 +3433,19 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, sq
 	}
 
 	stmtExecs, err = GetStmtExecList(ses.GetDatabaseName(),
-		sql,
+		input.getSql(),
 		ses.GetUserName(),
 		pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(sql), ses.sqlSourceType, err)
+		requestCtx = RecordParseErrorStatement(requestCtx, ses, proc, beginInstant, parsers.HandleSqlForRecord(input.getSql()), input.getSqlSourceTypes(), err)
 		retErr = moerr.NewParseError(requestCtx, err.Error())
-		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
+		logStatementStringStatus(requestCtx, ses, input.getSql(), fail, retErr)
 		return retErr
 	}
 
 	singleStatement := len(stmtExecs) == 1
-	sqlRecord := parsers.HandleSqlForRecord(sql)
+	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
 	for i, exec := range stmtExecs {
 		err = Execute(requestCtx, ses, proc, exec, beginInstant, sqlRecord[i], "", singleStatement)
 		if err != nil {
@@ -3502,8 +3508,8 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logInfo(ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
-		err = doComQuery(requestCtx, query)
+		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))))
+		err = doComQuery(requestCtx, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
@@ -3512,7 +3518,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		var dbname = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := "use `" + dbname + "`"
-		err = doComQuery(requestCtx, query)
+		err = doComQuery(requestCtx, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		}
@@ -3522,7 +3528,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		var payload = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		query := makeCmdFieldListSql(payload)
-		err = doComQuery(requestCtx, query)
+		err = doComQuery(requestCtx, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 		}
@@ -3542,9 +3548,9 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
-		logInfo(ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err = doComQuery(requestCtx, sql)
+		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
 		}
@@ -3557,7 +3563,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		if err != nil {
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
 		}
-		err = doComQuery(requestCtx, sql)
+		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, err)
 		}
@@ -3570,9 +3576,9 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("deallocate prepare %s", stmtName)
-		logInfo(ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
 
-		err = doComQuery(requestCtx, sql)
+		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, err)
 		}
@@ -3585,8 +3591,8 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql = fmt.Sprintf("reset prepare %s", stmtName)
-		logInfo(ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
-		err = doComQuery(requestCtx, sql)
+		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql))
+		err = doComQuery(requestCtx, &UserInput{sql: sql})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_RESET, err)
 		}
@@ -3629,7 +3635,7 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(requestCtx context.Context, data [
 			}
 		}
 	}
-	logInfo(ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
+	logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(sql), logutil.VarsField(strings.Join(varStrings, " , ")))
 	return sql, nil
 }
 
@@ -3733,41 +3739,110 @@ func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	return buffer.Bytes()
 }
 
-type marshalPlanHandler struct {
-	marshalPlan *explain.ExplainData
-	uuid        uuid.UUID
+type jsonPlanHandler struct {
+	jsonBytes      []byte
+	statsJsonBytes []byte
+	stats          motrace.Statistic
+	buffer         *bytes.Buffer
 }
 
-func NewMarshalPlanHandler(ctx context.Context, uuid uuid.UUID, plan *plan2.Plan) *marshalPlanHandler {
+func NewJsonPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *jsonPlanHandler {
+	h := NewMarshalPlanHandler(ctx, stmt, plan)
+	jsonBytes, statsJsonBytes, stats := h.Marshal(ctx)
+	return &jsonPlanHandler{
+		jsonBytes:      jsonBytes,
+		statsJsonBytes: statsJsonBytes,
+		stats:          stats,
+		buffer:         h.handoverBuffer(),
+	}
+}
+
+func (h *jsonPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJsonBytes []byte, stats motrace.Statistic) {
+	return h.jsonBytes, h.statsJsonBytes, h.stats
+}
+
+func (h *jsonPlanHandler) Free() {
+	if h.buffer != nil {
+		releaseMarshalPlanBufferPool(h.buffer)
+		h.buffer = nil
+		h.jsonBytes = nil
+		h.statsJsonBytes = nil
+	}
+}
+
+type marshalPlanHandler struct {
+	marshalPlan *explain.ExplainData
+	stmt        *motrace.StatementInfo
+	uuid        uuid.UUID
+	buffer      *bytes.Buffer
+}
+
+func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, plan *plan2.Plan) *marshalPlanHandler {
 	// TODO: need mem improvement
+	uuid := uuid.UUID(stmt.StatementID)
 	if plan == nil || plan.GetQuery() == nil {
 		return &marshalPlanHandler{
 			marshalPlan: nil,
+			stmt:        stmt,
 			uuid:        uuid,
+			buffer:      getMarshalPlanBufferPool(),
 		}
 	}
 	return &marshalPlanHandler{
 		marshalPlan: explain.BuildJsonPlan(ctx, uuid, &explain.MarshalPlanOptions, plan.GetQuery()),
+		stmt:        stmt,
 		uuid:        uuid,
+		buffer:      getMarshalPlanBufferPool(),
 	}
 }
 
-func (h *marshalPlanHandler) Free() {}
+func (h *marshalPlanHandler) Free() {
+	h.stmt = nil
+	if h.buffer != nil {
+		releaseMarshalPlanBufferPool(h.buffer)
+		h.buffer = nil
+	}
+}
+
+func (h *marshalPlanHandler) handoverBuffer() *bytes.Buffer {
+	b := h.buffer
+	h.buffer = nil
+	return b
+}
+
+var marshalPlanBufferPool = sync.Pool{New: func() any {
+	return bytes.NewBuffer(make([]byte, 0, 8192))
+}}
+
+// get buffer from marshalPlanBufferPool
+func getMarshalPlanBufferPool() *bytes.Buffer {
+	return marshalPlanBufferPool.Get().(*bytes.Buffer)
+}
+
+func releaseMarshalPlanBufferPool(b *bytes.Buffer) {
+	marshalPlanBufferPool.Put(b)
+}
 
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, statsJonsBytes []byte, stats motrace.Statistic) {
+	var err error
 	if h.marshalPlan != nil {
+		var jsonBytesLen, statsJonsBytesLen = 0, 0
+		h.buffer.Reset()
 		stats.RowsRead, stats.BytesScan = h.marshalPlan.StatisticsRead()
 		// XXX, `buffer` can be used repeatedly as a global variable in the future
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
-		buffer := bytes.NewBuffer(make([]byte, 0, 8192))
-		encoder := json.NewEncoder(buffer)
+		encoder := json.NewEncoder(h.buffer)
 		encoder.SetEscapeHTML(false)
-		err := encoder.Encode(h.marshalPlan)
-		if err != nil {
-			moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
-			jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
+		if time.Since(h.stmt.RequestAt) > motrace.GetLongQueryTime() {
+			err = encoder.Encode(h.marshalPlan)
+			if err != nil {
+				moError := moerr.NewInternalError(ctx, "serialize plan to json error: %s", err.Error())
+				jsonBytes = buildErrorJsonPlan(h.uuid, moError.ErrorCode(), moError.Error())
+			} else {
+				jsonBytesLen = h.buffer.Len()
+			}
 		} else {
-			jsonBytes = buffer.Bytes()
+			jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
 		}
 		// data transform Global to json
 		if len(h.marshalPlan.Steps) > 0 {
@@ -3775,16 +3850,22 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte, sta
 			// logutil.Fatalf("need handle multi execPlan trees, cnt: %d", len(h.marshalPlan.Steps))
 			// }
 			// XXX, `buffer` can be used repeatedly as a global variable in the future
-			buffer := &bytes.Buffer{}
-			encoder := json.NewEncoder(buffer)
-			encoder.SetEscapeHTML(false)
 			global := h.marshalPlan.Steps[0].GraphData.Global
 			err = encoder.Encode(&global)
 			if err != nil {
 				statsJonsBytes = []byte(fmt.Sprintf(`{"code":200,"message":"%q"}`, err.Error()))
 			} else {
-				statsJonsBytes = buffer.Bytes()
+				statsJonsBytesLen = h.buffer.Len()
 			}
+		}
+		// BG: bytes.Buffer maintain buf []byte.
+		// if buf[off:] not enough but len(buf) is enough place, then it will reset off = 0.
+		// So, in here, we need call Next(...) after all data has been written
+		if jsonBytesLen > 0 {
+			jsonBytes = h.buffer.Next(jsonBytesLen)
+		}
+		if statsJonsBytesLen > 0 {
+			statsJonsBytes = h.buffer.Next(statsJonsBytesLen - jsonBytesLen)
 		}
 	} else {
 		jsonBytes = buildErrorJsonPlan(h.uuid, moerr.ErrWarn, "sql query no record execution plan")

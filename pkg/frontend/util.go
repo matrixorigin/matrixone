@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -272,6 +273,102 @@ func WildcardMatch(pattern, target string) bool {
 	return p >= plen
 }
 
+// getExprValue executes the expression and returns the value.
+func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}, error) {
+	/*
+		CORNER CASE:
+			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
+
+			tree.UnresolvedName{'utf8'} can not be resolved as the column of some table.
+	*/
+	switch v := e.(type) {
+	case *tree.UnresolvedName:
+		// set @a = on, type of a is bool.
+		return v.Parts[0], nil
+	}
+
+	var err error
+
+	table := &tree.TableName{}
+	table.ObjectName = "dual"
+
+	//1.composite the 'select (expr) from dual'
+	compositedSelect := &tree.Select{
+		Select: &tree.SelectClause{
+			Exprs: tree.SelectExprs{
+				tree.SelectExpr{
+					Expr: e,
+				},
+			},
+			From: &tree.From{
+				Tables: tree.TableExprs{
+					&tree.JoinTableExpr{
+						JoinType: tree.JOIN_TYPE_CROSS,
+						Left: &tree.AliasedTableExpr{
+							Expr: table,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	//2.run the select
+	ctx := ses.GetRequestContext()
+
+	//run the statement in the same session
+	ses.ClearResultBatches()
+	err = executeStmtInSameSession(ctx, mce, ses, compositedSelect)
+	if err != nil {
+		return nil, err
+	}
+
+	batches := ses.GetResultBatches()
+	if len(batches) == 0 {
+		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+	}
+
+	if batches[0].VectorCount() > 1 {
+		return nil, moerr.NewInternalError(ctx, "the expr %s generates multi columns value", e.String())
+	}
+
+	//evaluate the count of rows, the count of columns
+	count := 0
+	var resultVec *vector.Vector
+	for _, b := range batches {
+		if b.Length() == 0 {
+			continue
+		}
+		count += b.Length()
+		if count > 1 {
+			return nil, moerr.NewInternalError(ctx, "the expr %s generates multi rows value", e.String())
+		}
+		if resultVec == nil && b.GetVector(0).Length() != 0 {
+			resultVec = b.GetVector(0)
+		}
+	}
+
+	if resultVec == nil {
+		return nil, moerr.NewInternalError(ctx, "the expr %s does not generate a value", e.String())
+	}
+
+	// for the decimal type, we need the type of expr
+	//!!!NOTE: the type here may be different from the one in the result vector.
+	var planExpr *plan.Expr
+	oid := resultVec.GetType().Oid
+	if oid == types.T_decimal64 || oid == types.T_decimal128 {
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx())
+		bindContext := plan2.NewBindContext(builder, nil)
+		binder := plan2.NewSetVarBinder(builder, bindContext)
+		planExpr, err = binder.BindExpr(e, 0, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return getValueFromVector(resultVec, ses, planExpr)
+}
+
 // only support single value and unary minus
 func GetSimpleExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	switch v := e.(type) {
@@ -397,29 +494,41 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	if status == success {
 		motrace.EndStatement(ctx, nil, ses.sentRows.Load())
-		logInfo(ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
+		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 	} else {
 		motrace.EndStatement(ctx, err, ses.sentRows.Load())
-		logError(ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
+		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 }
 
-func logInfo(info string, msg string, fields ...zap.Field) {
+func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
 	fields = append(fields, zap.String("session_info", info))
 	logutil.Info(msg, fields...)
 }
 
-//func logDebug(info string, msg string, fields ...zap.Field) {
-//	fields = append(fields, zap.String("session_info", info))
-//	logutil.Debug(msg, fields...)
-//}
+func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
+	fields = append(fields, zap.String("session_info", info))
+	logutil.Debug(msg, fields...)
+}
 
-func logError(info string, msg string, fields ...zap.Field) {
+func logError(ses *Session, info string, msg string, fields ...zap.Field) {
+	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
+		return
+	}
 	fields = append(fields, zap.String("session_info", info))
 	logutil.Error(msg, fields...)
 }
 
 func logInfof(info string, msg string, fields ...interface{}) {
+	if strings.Contains(info, "sys:mo_logger") {
+		return
+	}
 	fields = append(fields, info)
 	logutil.Infof(msg+" %s", fields...)
 }
@@ -436,7 +545,11 @@ func logErrorf(info string, msg string, fields ...interface{}) {
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.
 func isCmdFieldListSql(sql string) bool {
-	return strings.HasPrefix(strings.ToLower(sql), cmdFieldListSql)
+	if len(sql) < cmdFieldListSqlLen {
+		return false
+	}
+	prefix := sql[:cmdFieldListSqlLen]
+	return strings.Compare(strings.ToLower(prefix), cmdFieldListSql) == 0
 }
 
 // makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
@@ -603,4 +716,17 @@ func getVariableValue(varDefault interface{}) string {
 
 func makeServerVersion(pu *mo_config.ParameterUnit, version string) string {
 	return pu.SV.ServerVersionPrefix + version
+}
+
+func copyBytes(src []byte, needCopy bool) []byte {
+	if needCopy {
+		if len(src) > 0 {
+			dst := make([]byte, len(src))
+			copy(dst, src)
+			return dst
+		} else {
+			return []byte{}
+		}
+	}
+	return src
 }

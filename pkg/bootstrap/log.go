@@ -12,25 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package disttae
+package bootstrap
 
 import (
-	"testing"
+	"sync"
 
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 )
 
-func TestZonemapMarshalAndUnmarshal(t *testing.T) {
-	var z Zonemap
-	for i := 0; i < len(z); i++ {
-		z[i] = byte(i)
+var (
+	logger *log.MOLogger
+	once   sync.Once
+)
+
+func getLogger() *log.MOLogger {
+	once.Do(initLogger)
+	return logger
+}
+
+func initLogger() {
+	rt := runtime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = runtime.DefaultRuntime()
 	}
-
-	data, err := z.Marshal()
-	require.NoError(t, err)
-
-	var ret Zonemap
-	err = ret.Unmarshal(data)
-	require.NoError(t, err)
-	require.Equal(t, z, ret)
+	logger = rt.Logger()
 }

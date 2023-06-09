@@ -133,6 +133,11 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			writerMap[row.GetAccount()] = w
 		}
 		w.WriteRow(row)
+		if check, is := item.(table.NeedCheckWrite); is && check.NeedCheckWrite() {
+			if writer, support := w.(table.AfterWrite); support {
+				writer.AddAfter(check.GetCheckWriteHook())
+			}
+		}
 		row.Free()
 	}
 

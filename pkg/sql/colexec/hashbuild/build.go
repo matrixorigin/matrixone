@@ -20,7 +20,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -64,7 +68,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 	ctr := ap.ctr
 	for {
 		switch ctr.state {
-		case Build:
+		case BuildHashMap:
 			if err := ctr.build(ap, proc, anal, isFirst); err != nil {
 				ctr.cleanHashMap()
 				return false, err
@@ -72,11 +76,82 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 			if ap.ctr.mp != nil {
 				anal.Alloc(ap.ctr.mp.Size())
 			}
-			ctr.state = Eval
+			ctr.state = HandleRuntimeFilter
+
+		case HandleRuntimeFilter:
+			if len(ap.RuntimeFilterSenders) == 0 {
+				ctr.state = Eval
+				continue
+			}
+
+			var runtimeFilter *pipeline.RuntimeFilter
+
+			sels := make([]int32, 0, len(ctr.sels))
+			for _, sel := range ctr.sels {
+				if len(sel) > 0 {
+					sels = append(sels, sel[0])
+				}
+			}
+
+			vec := ctr.vecs[0]
+			if len(sels) == 0 || vec == nil || vec.Length() == 0 {
+				select {
+				case <-proc.Ctx.Done():
+					ctr.state = End
+
+				case ap.RuntimeFilterSenders[0].Chan <- nil:
+					ctr.state = Eval
+				}
+				continue
+			}
+
+			if len(ctr.sels) <= plan.InFilterCardLimit {
+				inList := vector.NewVec(*vec.GetType())
+				if err := inList.Union(vec, sels, proc.Mp()); err != nil {
+					return false, err
+				}
+
+				defer inList.Free(proc.Mp())
+
+				colexec.SortInFilter(inList)
+				data, err := inList.MarshalBinary()
+				if err != nil {
+					return false, err
+				}
+
+				runtimeFilter = &pipeline.RuntimeFilter{
+					Typ:  pipeline.RuntimeFilter_IN,
+					Data: data,
+				}
+			} else if len(ctr.sels) <= plan.BloomFilterCardLimit {
+				zm := objectio.NewZM(vec.GetType().Oid, vec.GetType().Scale)
+				for i := range sels {
+					bs := vec.GetRawBytesAt(int(sels[i]))
+					index.UpdateZM(zm, bs)
+				}
+
+				runtimeFilter = &pipeline.RuntimeFilter{
+					Typ:  pipeline.RuntimeFilter_MIN_MAX,
+					Data: zm,
+				}
+			} else {
+				runtimeFilter = &pipeline.RuntimeFilter{
+					Typ: pipeline.RuntimeFilter_NO_FILTER,
+				}
+			}
+
+			select {
+			case <-proc.Ctx.Done():
+				ctr.state = End
+
+			case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
+				ctr.state = Eval
+			}
+
 		case Eval:
 			if ctr.bat != nil && ctr.bat.Length() != 0 {
 				if ap.NeedHashMap {
-					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
+					ctr.bat.AuxData = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
 				}
 				proc.SetInputBatch(ctr.bat)
 				ctr.mp = nil
@@ -88,6 +163,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, _ bool) (bool, 
 			}
 			ctr.state = End
 			return false, nil
+
 		default:
 			proc.SetInputBatch(nil)
 			return true, nil

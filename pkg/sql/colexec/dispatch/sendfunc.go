@@ -16,20 +16,19 @@ package dispatch
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"hash/crc32"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -131,7 +130,7 @@ func genShuffledBatsByHash(ap *Argument, bat *batch.Batch, proc *process.Process
 func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (bool, error) {
 	refCountAdd := int64(ap.ctr.localRegsCnt - 1)
 	atomic.AddInt64(&bat.Cnt, refCountAdd)
-	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
 		jm.IncRef(refCountAdd)
 		jm.SetDupCount(int64(ap.ctr.localRegsCnt))
 	}
@@ -140,7 +139,7 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		select {
 		case <-proc.Ctx.Done():
 			handleUnsent(proc, bat, refCountAdd, int64(i))
-			logutil.Infof("proc context done during dispatch to local")
+			logutil.Debugf("proc context done during dispatch to local")
 			return true, nil
 		case <-reg.Ctx.Done():
 			if ap.IsSink {
@@ -148,7 +147,8 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 				continue
 			}
 			handleUnsent(proc, bat, refCountAdd, int64(i))
-			return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+			logutil.Warnf("the receiver's ctx done during dispatch to all local")
+			return true, nil
 		case reg.Ch <- bat:
 		}
 	}
@@ -205,7 +205,7 @@ func sendBatToIndex(ap *Argument, proc *process.Process, bat *batch.Batch, regIn
 			if bat != nil && bat.Length() != 0 {
 				select {
 				case <-reg.Ctx.Done():
-					return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+					logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
 				case reg.Ch <- bat:
 				}
 			}
@@ -241,7 +241,7 @@ func sendShuffledBats(ap *Argument, proc *process.Process) (bool, error) {
 		if batToSend != nil && batToSend.Length() != 0 {
 			select {
 			case <-reg.Ctx.Done():
-				return false, moerr.NewInternalError(proc.Ctx, "pipeline context has done.")
+				logutil.Warnf("the receiver's ctx done during shuffle dispatch to all local")
 			case reg.Ch <- batToSend:
 			}
 		}
@@ -347,9 +347,6 @@ func getShuffledSelsByRange(ap *Argument, bat *batch.Batch) [][]int32 {
 		groupByCol := vector.MustFixedCol[int32](groupByVec)
 		for row, v := range groupByCol {
 			regIndex := plan2.GetRangeShuffleIndexSigned(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), lenRegs)
-			if regIndex >= lenRegs {
-				logutil.Infof("fail")
-			}
 			sels[regIndex] = append(sels[regIndex], int32(row))
 		}
 	case types.T_int16:
@@ -481,10 +478,10 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Argument, proc *process.Process) (
 		reg := ap.LocalRegs[sendto]
 		select {
 		case <-proc.Ctx.Done():
-			logutil.Infof("proc context done during dispatch to any")
+			logutil.Debugf("proc context done during dispatch to any")
 			return true, nil
 		case <-reg.Ctx.Done():
-			logutil.Infof("reg.Ctx done during dispatch to any")
+			logutil.Debugf("reg.Ctx done during dispatch to any")
 			ap.LocalRegs = append(ap.LocalRegs[:sendto], ap.LocalRegs[sendto+1:]...)
 			ap.ctr.localRegsCnt--
 			ap.ctr.aliveRegCnt--
@@ -515,7 +512,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Argument, proc *process.Process) 
 	}
 	select {
 	case <-proc.Ctx.Done():
-		logutil.Infof("conctx done during dispatch")
+		logutil.Debugf("conctx done during dispatch")
 		return true, nil
 	default:
 	}
@@ -621,7 +618,7 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs *Wr
 func handleUnsent(proc *process.Process, bat *batch.Batch, refCnt int64, successCnt int64) {
 	diff := successCnt - refCnt
 	atomic.AddInt64(&bat.Cnt, diff)
-	if jm, ok := bat.Ht.(*hashmap.JoinMap); ok {
+	if jm, ok := bat.AuxData.(*hashmap.JoinMap); ok {
 		jm.IncRef(diff)
 		jm.SetDupCount(diff)
 	}

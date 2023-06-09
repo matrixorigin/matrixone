@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -32,7 +33,7 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Stats(ctx context.Context, statsInfoMap any) bool {
+func (t *Table) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
 	return false
 }
 
@@ -375,6 +376,6 @@ func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) 
 	return nil, nil, nil
 }
 
-func (t *Table) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
+func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
 	return nil, nil
 }

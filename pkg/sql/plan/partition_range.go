@@ -78,7 +78,7 @@ func (rpb *rangePartitionBuilder) build(ctx context.Context, partitionBinder *Pa
 	}
 
 	partitionInfo.PartitionMsg = tree.String(partitionOp, dialect.MYSQL)
-	//tableDef.Partition = partitionInfo
+	tableDef.Partition = partitionInfo
 	return nil
 }
 

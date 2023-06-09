@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -203,7 +202,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if err != nil {
 		tmpTable, e := tcc.getTmpRelation(txnCtx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
-			logutil.Errorf("get table %v error %v", tableName, err)
+			logErrorf(ses.GetDebugString(), "get table %v error %v", tableName, err)
 			return nil, nil, err
 		} else {
 			table = tmpTable
@@ -220,7 +219,7 @@ func (tcc *TxnCompilerContext) getTmpRelation(_ context.Context, tableName strin
 	}
 	db, err := e.Database(txnCtx, defines.TEMPORARY_DBNAME, txn)
 	if err != nil {
-		logutil.Errorf("get temp database error %v", err)
+		logErrorf(tcc.GetSession().GetDebugString(), "get temp database error %v", err)
 		return nil, err
 	}
 	table, err := db.Relation(txnCtx, tableName)
@@ -543,7 +542,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	if isSystemVar {
 		if isGlobalVar {
-			return tcc.GetSession().GetGlobalVar(varName)
+			return tcc.GetSession().getGlobalSystemVariableValue(varName)
 		} else {
 			return tcc.GetSession().GetSessionVar(varName)
 		}
@@ -662,7 +661,33 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	}
 	tableName := obj.GetObjName()
 	ctx, table, _ := tcc.getRelation(dbName, tableName, sub)
-	return table.Stats(ctx, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
+
+	var partitionInfo *plan2.PartitionByDef
+	engineDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return false
+	}
+	for _, def := range engineDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan2.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return false
+				}
+				partitionInfo = p
+			}
+		}
+	}
+	var ptables []any
+	if partitionInfo != nil {
+		ptables = make([]any, len(partitionInfo.PartitionTableNames))
+		for i, PartitionTableName := range partitionInfo.PartitionTableNames {
+			_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil)
+			ptables[i] = ptable
+		}
+	}
+	return table.Stats(ctx, ptables, tcc.GetSession().statsCache.GetStatsInfoMap(table.GetTableID(ctx)))
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {

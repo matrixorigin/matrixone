@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -35,10 +36,6 @@ import (
 
 type (
 	TxnOperator = client.TxnOperator
-)
-
-const (
-	MinBlockNum = 200
 )
 
 type magicType int
@@ -84,6 +81,8 @@ type Source struct {
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
 	AccountId              *plan.PubInfo
+
+	RuntimeFilterReceivers []*colexec.RuntimeFilterChan
 }
 
 // Col is the information of attribute
@@ -140,6 +139,8 @@ type scopeContext struct {
 	children []*scopeContext
 	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
+
+	//runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
 }
 
 // anaylze information
@@ -167,6 +168,7 @@ func (a *anaylze) Nodes() []*process.AnalyzeInfo {
 type Compile struct {
 	scope []*Scope
 
+	pn   *plan.Plan
 	info plan2.ExecInfo
 
 	u any
@@ -200,6 +202,8 @@ type Compile struct {
 	s3CounterSet perfcounter.CounterSet
 
 	stepRegs map[int32][]*process.WaitRegister
+
+	runtimeFilterReceiverMap map[int32]chan *pipeline.RuntimeFilter
 
 	isInternal bool
 	// cnLabel is the CN labels which is received from proxy when build connection.

@@ -13,6 +13,7 @@ import (
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	types "github.com/matrixorigin/matrixone/pkg/container/types"
 	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
+	pipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -73,17 +74,17 @@ func (mr *MockStatisticsMockRecorder) Size(ctx, columnName interface{}) *gomock.
 }
 
 // Stats mocks base method.
-func (m *MockStatistics) Stats(ctx context.Context, statsInfoMap any) bool {
+func (m *MockStatistics) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", ctx, statsInfoMap)
+	ret := m.ctrl.Call(m, "Stats", ctx, partitionTables, statsInfoMap)
 	ret0, _ := ret[0].(bool)
 	return ret0
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockStatisticsMockRecorder) Stats(ctx, statsInfoMap interface{}) *gomock.Call {
+func (mr *MockStatisticsMockRecorder) Stats(ctx, partitionTables, statsInfoMap interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockStatistics)(nil).Stats), ctx, statsInfoMap)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockStatistics)(nil).Stats), ctx, partitionTables, statsInfoMap)
 }
 
 // MockTableDef is a mock of TableDef interface.
@@ -235,6 +236,21 @@ func (mr *MockRelationMockRecorder) AlterTable(ctx, c, constraint interface{}) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AlterTable", reflect.TypeOf((*MockRelation)(nil).AlterTable), ctx, c, constraint)
 }
 
+// ApplyRuntimeFilters mocks base method.
+func (m *MockRelation) ApplyRuntimeFilters(arg0 context.Context, arg1 [][]byte, arg2 []*plan.Expr, arg3 []*pipeline.RuntimeFilter) ([][]byte, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplyRuntimeFilters", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].([][]byte)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ApplyRuntimeFilters indicates an expected call of ApplyRuntimeFilters.
+func (mr *MockRelationMockRecorder) ApplyRuntimeFilters(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyRuntimeFilters", reflect.TypeOf((*MockRelation)(nil).ApplyRuntimeFilters), arg0, arg1, arg2, arg3)
+}
+
 // DelTableDef mocks base method.
 func (m *MockRelation) DelTableDef(arg0 context.Context, arg1 engine.TableDef) error {
 	m.ctrl.T.Helper()
@@ -382,23 +398,18 @@ func (mr *MockRelationMockRecorder) NewReader(arg0, arg1, arg2, arg3 interface{}
 }
 
 // Ranges mocks base method.
-func (m *MockRelation) Ranges(arg0 context.Context, arg1 ...*plan.Expr) ([][]byte, error) {
+func (m *MockRelation) Ranges(arg0 context.Context, arg1 []*plan.Expr) ([][]byte, error) {
 	m.ctrl.T.Helper()
-	varargs := []interface{}{arg0}
-	for _, a := range arg1 {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "Ranges", varargs...)
+	ret := m.ctrl.Call(m, "Ranges", arg0, arg1)
 	ret0, _ := ret[0].([][]byte)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Ranges indicates an expected call of Ranges.
-func (mr *MockRelationMockRecorder) Ranges(arg0 interface{}, arg1 ...interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Ranges(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	varargs := append([]interface{}{arg0}, arg1...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), varargs...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Ranges", reflect.TypeOf((*MockRelation)(nil).Ranges), arg0, arg1)
 }
 
 // Rows mocks base method.
@@ -432,17 +443,17 @@ func (mr *MockRelationMockRecorder) Size(ctx, columnName interface{}) *gomock.Ca
 }
 
 // Stats mocks base method.
-func (m *MockRelation) Stats(ctx context.Context, statsInfoMap any) bool {
+func (m *MockRelation) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", ctx, statsInfoMap)
+	ret := m.ctrl.Call(m, "Stats", ctx, partitionTables, statsInfoMap)
 	ret0, _ := ret[0].(bool)
 	return ret0
 }
 
 // Stats indicates an expected call of Stats.
-func (mr *MockRelationMockRecorder) Stats(ctx, statsInfoMap interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Stats(ctx, partitionTables, statsInfoMap interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockRelation)(nil).Stats), ctx, statsInfoMap)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockRelation)(nil).Stats), ctx, partitionTables, statsInfoMap)
 }
 
 // TableColumns mocks base method.
@@ -509,6 +520,21 @@ func (m *MockRelation) Write(arg0 context.Context, arg1 *batch.Batch) error {
 	ret := m.ctrl.Call(m, "Write", arg0, arg1)
 	ret0, _ := ret[0].(error)
 	return ret0
+}
+
+// MaxAndMinValues mocks base method.
+func (m *MockRelation) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetColumMetadataScanInfo", ctx)
+	ret0, _ := ret[0].([]*plan.MetadataScanInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// MaxAndMinValues indicates an expected call of MaxAndMinValues.
+func (mr *MockRelationMockRecorder) GetColumMetadataScanInfo(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumMetadataScanInfo", reflect.TypeOf((*MockRelation)(nil).GetColumMetadataScanInfo), ctx)
 }
 
 // Write indicates an expected call of Write.

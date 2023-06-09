@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -39,6 +40,15 @@ type columnCache struct {
 	allocating  bool
 	allocatingC chan struct{}
 	overflow    bool
+	// For the load scenario, if the machine is good enough, there will be very many goroutines to
+	// concurrently fetch the value of the self-increasing column, which will immediately trigger
+	// the cache of the self-increasing column to be insufficient and thus go to the store to allocate
+	// a new cache, which causes the load to block all due to this allocation being slow. The idea of
+	// our optimization here is to reduce the number of allocations as much as possible, add an atomic
+	// counter, check how many concurrent requests are waiting when allocating (of course this is
+	// imprecise, but it doesn't matter), and then allocate more than one at a time.
+	concurrencyApply atomic.Uint64
+	allocateCount    atomic.Uint64
 }
 
 func newColumnCache(
@@ -243,6 +253,8 @@ func (col *columnCache) applyAutoValues(
 	skipped *ranges,
 	filter func(i int) bool,
 	apply func(int, uint64) error) error {
+	cul := col.concurrencyApply.Load()
+	col.concurrencyApply.Add(1)
 	col.Lock()
 	defer col.Unlock()
 
@@ -256,7 +268,7 @@ func (col *columnCache) applyAutoValues(
 		}
 
 		if col.ranges.empty() {
-			if err := col.allocateLocked(ctx, tableID, rows); err != nil {
+			if err := col.allocateLocked(ctx, tableID, rows, cul); err != nil {
 				return false, err
 			}
 		}
@@ -324,7 +336,8 @@ func (col *columnCache) preAllocate(
 func (col *columnCache) allocateLocked(
 	ctx context.Context,
 	tableID uint64,
-	count int) error {
+	count int,
+	beforeApplyCount uint64) error {
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
 	}
@@ -334,13 +347,18 @@ func (col *columnCache) allocateLocked(
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
+	n := int(col.concurrencyApply.Load() - beforeApplyCount)
+	if n == 0 {
+		n = 1
+	}
 	for {
 		from, to, err := col.allocator.alloc(
 			ctx,
 			tableID,
 			col.col.ColName,
-			count)
+			count*n)
 		if err == nil {
+			col.allocateCount.Add(1)
 			col.applyAllocateLocked(from, to)
 			return nil
 		}
@@ -387,9 +405,13 @@ func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
 			return nil
 		}
 		c := col.allocatingC
+		// we must unlock here, becase we may wait for a long time. And Lock will added
+		// before return, because the caller holds the lock and call this method and use
+		// defer to unlock.
 		col.Unlock()
 		select {
 		case <-ctx.Done():
+			col.Lock()
 			return ctx.Err()
 		case <-c:
 		}
@@ -428,8 +450,9 @@ func insertAutoValues[T constraints.Integer](
 		manuals := roaring64.NewBitmap()
 		maxValue := uint64(0)
 		col.lockDo(func() {
-			for _, v := range vs {
-				if v > 0 {
+			for idx, v := range vs {
+				// vector maybe has some invalid value, must use null bitmap to check the manual value
+				if !nulls.Contains(vec.GetNulls(), uint64(idx)) && v > 0 {
 					manuals.Add(uint64(v))
 				}
 			}

@@ -17,28 +17,12 @@ package types
 import (
 	"encoding/binary"
 	"fmt"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )
 
 type T uint8
-
-var typesPool = sync.Pool{
-	New: func() any {
-		return &Type{}
-	},
-}
-
-func GetTypeFromPool() Type {
-	typ := typesPool.Get().(*Type)
-	return *typ
-}
-
-func PutTypeToPool(typ Type) {
-	typesPool.Put(&typ)
-}
 
 const (
 	// any family
@@ -386,7 +370,7 @@ var Types map[string]T = map[string]T{
 }
 
 func New(oid T, width, scale int32) Type {
-	typ := GetTypeFromPool()
+	typ := Type{}
 	typ.Oid = oid
 	typ.Size = int32(oid.TypeLen())
 	typ.Width = width
@@ -812,6 +796,22 @@ func (t T) FixedLength() int {
 		return -24
 	}
 	panic(moerr.NewInternalErrorNoCtx(fmt.Sprintf("unknown type %d", t)))
+}
+
+func (t T) IsFixedLen() bool {
+	return t.FixedLength() > 0
+}
+
+func (t T) IsOrdered() bool {
+	switch t {
+	case T_int8, T_int16, T_int32, T_int64,
+		T_uint8, T_uint16, T_uint32, T_uint64,
+		T_float32, T_float64,
+		T_date, T_time, T_datetime, T_timestamp:
+		return true
+	default:
+		return false
+	}
 }
 
 // IsUnsignedInt return true if the types.T is UnSigned integer type

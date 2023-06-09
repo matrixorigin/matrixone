@@ -170,6 +170,7 @@ func NewService(
 
 func (s *service) Start() error {
 	s.initTaskServiceHolder()
+	s.initSqlWriterFactory()
 
 	if err := s.ctlservice.Start(); err != nil {
 		return err
@@ -601,11 +602,12 @@ func (s *service) bootstrap() error {
 			panic("missing internal sql executor")
 		}
 
-		ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
 		b := bootstrap.NewBootstrapper(
 			&locker{hakeeperClient: s._hakeeperClient},
 			rt.Clock(),
+			s._txnClient,
 			v.(executor.SQLExecutor))
 		// bootstrap can not failed. We panic here to make sure the service can not start.
 		// If bootstrap failed, need clean all data to retry.

@@ -93,6 +93,7 @@ func TestBuildAlterView(t *testing.T) {
 	}
 
 	ctx := NewMockCompilerContext2(ctrl)
+	ctx.EXPECT().GetUserName().Return("sys:dump").AnyTimes()
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(schemaName string, tableName string) (*ObjectRef, *TableDef) {

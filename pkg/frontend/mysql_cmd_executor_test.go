@@ -839,7 +839,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 		proc := &process.Process{}
 		InitGlobalSystemVariables(GSysVariables)
 		ses := &Session{planCache: newPlanCache(1), gSysVars: GSysVariables}
-		cw, err := GetComputationWrapper(db, sql, user, eng, proc, ses)
+		cw, err := GetComputationWrapper(db, &UserInput{sql: sql}, user, eng, proc, ses)
 		convey.So(cw, convey.ShouldNotBeEmpty)
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -910,6 +910,7 @@ func Test_HandleDeallocate(t *testing.T) {
 func Test_CMD_FIELD_LIST(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("cmd field list", t, func() {
+		runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 		queryData := []byte("A")
 		queryData = append(queryData, 0)
 		query := string(queryData)
@@ -974,10 +975,11 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
 		ses.SetDatabaseName("t")
+		ses.seqLastValue = new(string)
 		mce := &MysqlCmdExecutor{}
 		mce.SetSession(ses)
 
-		err = mce.doComQuery(ctx, cmdFieldListQuery)
+		err = mce.doComQuery(ctx, &UserInput{sql: cmdFieldListQuery})
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -1054,7 +1056,8 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), uuid.New(), plan)
+		stm := &motrace.StatementInfo{StatementID: uuid.New(), Statement: sql, RequestAt: time.Now()}
+		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
 		json, _, stats := h.Marshal(mock.CurrentContext().GetContext())
 		require.Equal(t, int64(0), stats.RowsRead)
 		require.Equal(t, int64(0), stats.BytesScan)
@@ -1073,11 +1076,12 @@ func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, e
 }
 
 func Test_getSqlType(t *testing.T) {
-	convey.Convey("call getSqlType func", t, func() {
+	convey.Convey("call genSqlSourceType func", t, func() {
 		sql := "use db"
 		ses := &Session{}
-		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, intereSql)
+		ui := &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, internalSql)
 
 		user := "special_user"
 		tenant := &TenantInfo{
@@ -1085,24 +1089,29 @@ func Test_getSqlType(t *testing.T) {
 		}
 		ses.SetTenantInfo(tenant)
 		SetSpecialUser(user, nil)
-		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, intereSql)
+		ui = &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, internalSql)
 
 		tenant.User = "dump"
-		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
+		ui = &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, externSql)
 
 		sql = "/* cloud_user */ use db"
-		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudUserSql)
+		ui = &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, cloudUserSql)
 
 		sql = "/* cloud_nonuser */ use db"
-		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, cloudNoUserSql)
+		ui = &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, cloudNoUserSql)
 
 		sql = "/* json */ use db"
-		ses.getSqlType(sql)
-		convey.So(ses.sqlSourceType[0], convey.ShouldEqual, externSql)
+		ui = &UserInput{sql: sql}
+		ui.genSqlSourceType(ses)
+		convey.So(ui.getSqlSourceTypes()[0], convey.ShouldEqual, externSql)
 	})
 }
 

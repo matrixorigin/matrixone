@@ -25,12 +25,15 @@ import (
 	"testing"
 	"time"
 
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -2464,7 +2467,7 @@ func TestSegDelLogtail(t *testing.T) {
 	mergeBlocks(t, 0, tae.DB, "db", schema, false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	resp, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.TS{}),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: did, TbId: tid},
@@ -2483,6 +2486,8 @@ func TestSegDelLogtail(t *testing.T) {
 	require.Equal(t, api.Entry_Delete, resp.Commands[2].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[2].TableName, "seg"))
 	require.Equal(t, uint32(1), resp.Commands[2].Bat.Vecs[0].Len) /* 1 old segment */
+
+	close()
 
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -3820,7 +3825,7 @@ func TestLogtailBasic(t *testing.T) {
 	ctx := context.Background()
 
 	// get db catalog change
-	resp, err := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, err := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
@@ -3840,8 +3845,10 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, fixedColCnt, len(resp.Commands[1].Bat.Vecs))
 	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
 
+	close()
+
 	// get table catalog change
-	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -3855,9 +3862,10 @@ func TestLogtailBasic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, schema.Name, relname.GetStringAt(0))
 	require.Equal(t, schema.Name, relname.GetStringAt(1))
+	close()
 
 	// get columns catalog change
-	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -3868,9 +3876,10 @@ func TestLogtailBasic(t *testing.T) {
 	require.Equal(t, len(catalog.SystemColumnSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
 	// sysColumnsCount := len(catalog.SystemDBSchema.ColDefs) + len(catalog.SystemTableSchema.ColDefs) + len(catalog.SystemColumnSchema.ColDefs)
 	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
+	close()
 
 	// get user table change
-	resp, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, err = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
@@ -3916,6 +3925,7 @@ func TestLogtailBasic(t *testing.T) {
 	for _, v := range rowidMap {
 		require.Equal(t, 2, v)
 	}
+	close()
 }
 
 // txn1: create relation and append, half blk
@@ -4351,7 +4361,7 @@ func TestBlockRead(t *testing.T) {
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
 		context.Background(), info, nil, colIdxs, colTyps,
-		beforeDel, fs, pool, nil,
+		beforeDel, nil, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, len(columns), len(b1.Vecs))
@@ -4359,13 +4369,13 @@ func TestBlockRead(t *testing.T) {
 
 	b2, err := blockio.BlockReadInner(
 		context.Background(), info, nil, colIdxs, colTyps,
-		afterFirstDel, fs, pool, nil,
+		afterFirstDel, nil, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, 19, b2.Vecs[0].Length())
 	b3, err := blockio.BlockReadInner(
 		context.Background(), info, nil, colIdxs, colTyps,
-		afterSecondDel, fs, pool, nil,
+		afterSecondDel, nil, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, len(columns), len(b2.Vecs))
@@ -4377,7 +4387,7 @@ func TestBlockRead(t *testing.T) {
 		nil,
 		[]uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
-		afterSecondDel, fs, pool, nil,
+		afterSecondDel, nil, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(b4.Vecs))
@@ -4389,7 +4399,7 @@ func TestBlockRead(t *testing.T) {
 		context.Background(), info,
 		nil, []uint16{2},
 		[]types.Type{types.T_Rowid.ToType()},
-		afterSecondDel, fs, pool, nil,
+		afterSecondDel, nil, fs, pool, nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(b5.Vecs))
@@ -5637,7 +5647,7 @@ func TestAlterTableBasic(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	resp, _ := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, _ := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -5656,9 +5666,11 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
 
+	close()
+
 	tae.restart()
 
-	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -5676,6 +5688,7 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, []byte("comment version"), commetCol.Get(0).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(1).([]byte))
 	require.Equal(t, []byte("comment version 1"), commetCol.Get(2).([]byte))
+	close()
 
 	logutil.Info(tae.Catalog.SimplePPString(common.PPL2))
 
@@ -5685,7 +5698,7 @@ func TestAlterTableBasic(t *testing.T) {
 	require.NoError(t, err)
 	txn.Commit()
 
-	resp, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -5694,6 +5707,7 @@ func TestAlterTableBasic(t *testing.T) {
 	require.Equal(t, 2, len(resp.Commands)) // create and drop
 	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
+	close()
 }
 
 func TestAlterColumnAndFreeze(t *testing.T) {
@@ -5818,7 +5832,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	checkAllColRowsByScan(t, rel, 20, true)
 	require.NoError(t, txn.Commit())
 
-	resp, _ := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+	resp, close, _ := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
 		Table:  &api.TableID{DbId: did, TbId: tid},
@@ -5838,6 +5852,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	require.Equal(t, "mock_9", bat2.Attrs[2+schema2.GetSeqnum("mock_9")])
 	require.Equal(t, "xyz", bat2.Attrs[2+schema1.GetSeqnum("xyz")])
 	require.Equal(t, "xyz", bat2.Attrs[2+schema2.GetSeqnum("xyz")])
+	close()
 	logutil.Infof(tae.Catalog.SimplePPString(common.PPL1))
 }
 
@@ -6878,7 +6893,6 @@ func TestDedupSnapshot2(t *testing.T) {
 }
 
 func TestDedupSnapshot3(t *testing.T) {
-	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -6932,4 +6946,91 @@ func TestDedupSnapshot3(t *testing.T) {
 	wg.Wait()
 
 	tae.checkRowsByScan(totalRows, false)
+}
+
+func TestDeduplication(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(60, 3)
+	schema.BlockMaxRows = 2
+	schema.SegmentMaxBlocks = 10
+	tae.bindSchema(schema)
+	createRelation(t, tae.DB, "db", schema, true)
+
+	rows := 10
+	bat := catalog.MockBatch(schema, rows)
+	bats := bat.Split(rows)
+
+	segmentIDs := make([]*types.Uuid, 2)
+	segmentIDs[0] = objectio.NewSegmentid()
+	segmentIDs[1] = objectio.NewSegmentid()
+	sort.Slice(segmentIDs, func(i, j int) bool {
+		return segmentIDs[i].Le(*segmentIDs[j])
+	})
+
+	blk1Name := objectio.BuildObjectName(segmentIDs[1], 0)
+	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+	assert.NoError(t, err)
+	writer.SetPrimaryKey(3)
+	writer.WriteBatch(containers.ToCNBatch(bats[0]))
+	blocks, _, err := writer.Sync(context.TODO())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(blocks))
+
+	metaLoc := blockio.EncodeLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(bats[0].Length()),
+		blocks[0].GetID(),
+	)
+
+	txn, rel := tae.getRelation()
+	err = rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc})
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := tae.Catalog.TxnGetDBEntryByName("db", txn)
+	assert.NoError(t, err)
+	tbl, err := db.TxnGetTableEntryByName(schema.Name, txn)
+	assert.NoError(t, err)
+	dataFactory := tables.NewDataFactory(
+		tae.Fs,
+		tae.IndexCache,
+		tae.Scheduler,
+		tae.Dir)
+	seg, err := tbl.CreateSegment(
+		txn,
+		catalog.ES_Appendable,
+		dataFactory.MakeSegmentFactory(),
+		new(objectio.CreateSegOpt).WithId(segmentIDs[0]))
+	assert.NoError(t, err)
+	blk, err := seg.CreateBlock(txn, catalog.ES_Appendable, dataFactory.MakeBlockFactory(), nil)
+	assert.NoError(t, err)
+	txn.GetStore().AddTxnEntry(txnif.TxnType_Normal, seg)
+	txn.GetStore().IncreateWriteCnt()
+	assert.NoError(t, txn.Commit())
+	assert.NoError(t, blk.PrepareCommit())
+	assert.NoError(t, blk.ApplyCommit())
+	assert.NoError(t, seg.PrepareCommit())
+	assert.NoError(t, seg.ApplyCommit())
+
+	txns := make([]txnif.AsyncTxn, 0)
+	for i := 0; i < 5; i++ {
+		for j := 1; j < rows; j++ {
+			txn, _ := tae.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ = database.GetRelationByName(schema.Name)
+			_ = rel.Append(context.Background(), bats[j])
+			txns = append(txns, txn)
+		}
+	}
+	for _, txn := range txns {
+		txn.Commit()
+	}
+	tae.checkRowsByScan(rows, false)
+	t.Logf(tae.Catalog.SimplePPString(3))
 }

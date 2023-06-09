@@ -23,13 +23,17 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-var nilTxnID [16]byte
+var NilStmtID [16]byte
+var NilTxnID [16]byte
+var NilSesID [16]byte
 
 // StatementInfo implement export.IBuffer2SqlItem and export.CsvFields
 type StatementInfo struct {
@@ -81,6 +85,19 @@ type StatementInfo struct {
 	reported bool
 	// mark exported
 	exported bool
+
+	// keep []byte as elem
+	jsonByte, statsJsonByte []byte
+}
+
+var stmtPool = sync.Pool{
+	New: func() any {
+		return &StatementInfo{}
+	},
+}
+
+func NewStatementInfo() *StatementInfo {
+	return stmtPool.Get().(*StatementInfo)
 }
 
 type Statistic struct {
@@ -92,25 +109,52 @@ func (s *StatementInfo) GetName() string {
 	return SingleStatementTable.GetName()
 }
 
+// deltaContentLength approximate value that may gen as table record
+// stmtID, txnID, sesID: 36 * 3
+// timestamp: 26 * 2
+// status: 7
+// spanInfo: 36+16
+const deltaStmtContentLength = int64(36*3 + 26*2 + 7 + 36 + 16)
+const jsonByteLength = int64(4096)
+
 func (s *StatementInfo) Size() int64 {
-	return int64(unsafe.Sizeof(s)) + int64(
+	num := int64(unsafe.Sizeof(s)) + deltaStmtContentLength + int64(
 		len(s.Account)+len(s.User)+len(s.Host)+
-			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag),
+			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag)+
+			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsJsonByte),
 	)
+	if s.jsonByte == nil {
+		return num + jsonByteLength
+	}
+	return num
 }
 
 func (s *StatementInfo) Free() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if s.end && s.exported { // cooperate with s.mux
+		s.RoleId = 0
 		s.Statement = ""
 		s.StatementFingerprint = ""
 		s.StatementTag = ""
 		if s.ExecPlan != nil {
 			s.ExecPlan.Free()
 		}
+		s.RequestAt = time.Time{}
+		s.ResponseAt = time.Time{}
 		s.ExecPlan = nil
+		s.Status = StatementStatusRunning
 		s.Error = nil
+		s.RowsRead = 0
+		s.BytesScan = 0
+		s.ResultCount = 0
+		s.end = false
+		s.reported = false
+		s.exported = false
+		// clean []byte
+		s.jsonByte = nil
+		s.statsJsonByte = nil
+		stmtPool.Put(s)
 	}
 }
 
@@ -151,10 +195,16 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(errorCol, table.StringField(fmt.Sprintf("%s", s.Error)))
 	}
 	execPlan, stats := s.ExecPlan2Json(ctx)
-	row.SetColumnVal(execPlanCol, table.StringField(execPlan))
+	if GetTracerProvider().disableSqlWriter {
+		// Be careful, this two string is unsafe, will be free after Free
+		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
+		row.SetColumnVal(statsCol, table.StringField(util.UnsafeBytesToString(stats)))
+	} else {
+		row.SetColumnVal(execPlanCol, table.BytesField(execPlan))
+		row.SetColumnVal(statsCol, table.BytesField(stats))
+	}
 	row.SetColumnVal(rowsReadCol, table.Int64Field(s.RowsRead))
 	row.SetColumnVal(bytesScanCol, table.Int64Field(s.BytesScan))
-	row.SetColumnVal(statsCol, table.StringField(stats))
 	row.SetColumnVal(stmtTypeCol, table.StringField(s.StatementType))
 	row.SetColumnVal(queryTypeCol, table.StringField(s.QueryType))
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
@@ -164,27 +214,32 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 // and set RowsRead, BytesScan from ExecPlan
 //
 // please used in s.mux.Lock()
-func (s *StatementInfo) ExecPlan2Json(ctx context.Context) (string, string) {
-	var jsonByte []byte
-	var statsJsonByte []byte
+func (s *StatementInfo) ExecPlan2Json(ctx context.Context) ([]byte, []byte) {
 	var stats Statistic
 
-	if s.ExecPlan == nil {
+	if s.jsonByte != nil {
+		goto endL
+	} else if s.ExecPlan == nil {
 		uuidStr := uuid.UUID(s.StatementID).String()
-		return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr),
-			`{"code":200,"message":"NO ExecPlan"}`
+		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)),
+			[]byte(`{"code":200,"message":"NO ExecPlan"}`)
 	} else {
-		jsonByte, statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
+		s.jsonByte, s.statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
 		s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 		//	// get nil ExecPlan json-str
 		//	jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		//}
 	}
-	if len(statsJsonByte) == 0 {
-		statsJsonByte = []byte("{}")
+	if len(s.statsJsonByte) == 0 {
+		s.statsJsonByte = []byte("{}")
 	}
-	return string(jsonByte), string(statsJsonByte)
+endL:
+	return s.jsonByte, s.statsJsonByte
+}
+
+func GetLongQueryTime() time.Duration {
+	return time.Duration(GetTracerProvider().longQueryTime)
 }
 
 type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
@@ -205,7 +260,7 @@ func (s *StatementInfo) SetTxnID(id []byte) {
 }
 
 func (s *StatementInfo) IsZeroTxnID() bool {
-	return bytes.Equal(s.TransactionID[:], nilTxnID[:])
+	return bytes.Equal(s.TransactionID[:], NilTxnID[:])
 }
 
 func (s *StatementInfo) Report(ctx context.Context) {
@@ -271,5 +326,17 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
+	// Filter out the MO_LOGGER SQL statements
+	if s.User == db_holder.MOLoggerUser {
+		return nil
+	}
+	// Filter out part of the internal SQL statements
+	// Todo: review how to aggregate the internal SQL statements logging
+	if s.User == "internal" {
+		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
+			return nil
+		}
+	}
+
 	return GetGlobalBatchProcessor().Collect(ctx, s)
 }
