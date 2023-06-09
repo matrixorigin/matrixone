@@ -514,7 +514,9 @@ func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
 	r.tList[index].Store(&newTimestamp)
 	ts := r.getTimestamp()
-	r.timestampWaiter.NotifyLatestCommitTS(ts)
+	if r.ready.Load() {
+		r.timestampWaiter.NotifyLatestCommitTS(ts)
+	}
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
