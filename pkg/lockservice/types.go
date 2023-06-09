@@ -53,7 +53,7 @@ type LockStorage interface {
 	Seek(key []byte) ([]byte, Lock, bool)
 	// Prev returns the first KV Pair that is < the given key
 	Prev(key []byte) ([]byte, Lock, bool)
-	// Range range in [start, end)
+	// Range range in [start, end), if end == nil, no upperbound
 	Range(start []byte, end []byte, fn func([]byte, Lock) bool)
 	// Iter iter all values
 	Iter(func([]byte, Lock) bool)
