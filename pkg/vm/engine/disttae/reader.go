@@ -336,7 +336,7 @@ func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
 	ts timestamp.Timestamp,
-	blks []ModifyBlockMeta,
+	blks []catalog.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
 ) *blockMergeReader {
@@ -375,12 +375,12 @@ func (r *blockMergeReader) Read(
 
 	// move to the next block at the end of this call
 	defer func() {
-		r.blks[0].deletes = nil
+		r.buffer = r.buffer[:0]
 		r.blks = r.blks[1:]
 	}()
 
 	// get the current block to be read
-	info := &r.blks[0].meta
+	info := &r.blks[0]
 
 	// try to update the columns
 	r.tryUpdateColumns(cols)
@@ -392,7 +392,7 @@ func (r *blockMergeReader) Read(
 			return nil, err
 		}
 		//TODO:: need to optimize .
-		r.blks[0].deletes = append(r.blks[0].deletes, deletes...)
+		r.buffer = append(r.buffer, deletes...)
 	}
 
 	// load deletes from partition state for the specified block
@@ -406,15 +406,35 @@ func (r *blockMergeReader) Read(
 		for iter.Next() {
 			entry := iter.Entry()
 			_, offset := entry.RowID.Decode()
-			r.blks[0].deletes = append(r.blks[0].deletes, int64(offset))
+			r.buffer = append(r.buffer, int64(offset))
 		}
 		iter.Close()
+	}
+
+	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
+	//load deletes from txn.writes for the specified block
+	for _, entry := range r.table.writes {
+		if entry.isGeneratedByTruncate() {
+			continue
+		}
+		//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks,
+		// but at the end of this function, only collect deletes which comes from PartitionState.blocks
+		// into modifies.
+		if entry.typ == DELETE && entry.fileName == "" {
+			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+			for _, v := range vs {
+				id, offset := v.Decode()
+				if id == info.BlockID {
+					r.buffer = append(r.buffer, int64(offset))
+				}
+			}
+		}
 	}
 
 	filter := r.getReadFilter()
 
 	bat, err := blockio.BlockRead(
-		r.ctx, info, r.blks[0].deletes, r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
+		r.ctx, info, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts, filter, r.fs, mp, vp,
 	)
 	if err != nil {
 		return nil, err

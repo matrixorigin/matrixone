@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -226,16 +225,21 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 
 // Get all neede column exclude the hidden size
 func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
+	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return 0, err
+	}
+
 	ret := int64(0)
-	neededColumnName := make(map[string]string)
-	attr, _ := tbl.TableColumns(ctx)
+	neededCols := make(map[string]*plan.ColDef)
+	cols := tbl.getTableDef().Cols
 	found := false
-	for i := range attr {
-		if !attr[i].IsHidden {
-			if name == AllColumns || attr[i].Name == name {
-				neededColumnName[attr[i].Name] = attr[i].Name
-				found = true
-			}
+
+	for i := range cols {
+		if !cols[i].Hidden && (name == AllColumns || cols[i].Name == name) {
+			neededCols[cols[i].Name] = cols[i]
+			found = true
 		}
 	}
 
@@ -250,7 +254,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 	for _, entry := range writes {
 		if entry.typ == INSERT {
 			for i, s := range entry.bat.Attrs {
-				if _, ok := neededColumnName[s]; ok {
+				if _, ok := neededCols[s]; ok {
 					ret += int64(entry.bat.Vecs[i].Size())
 				}
 			}
@@ -276,15 +280,12 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		}
 	}
 
-	ts := types.TimestampToTS(tbl.db.txn.meta.SnapshotTS)
-	part, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return 0, err
-	}
 	// Different rows may belong to same batch. So we have
 	// to record the batch which we have already handled to avoid
 	// repetitive computation
 	handled := make(map[*batch.Batch]struct{})
+	var meta objectio.ObjectMeta
+	// Calculate the in mem size
 	// TODO: It might includ some deleted row size
 	iter := part.NewRowsIter(ts, nil, false)
 	for iter.Next() {
@@ -295,136 +296,120 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		if _, ok := handled[entry.Batch]; ok {
 			continue
 		}
+
 		for i, s := range entry.Batch.Attrs {
-			if _, ok := neededColumnName[s]; ok {
+			if _, ok := neededCols[s]; ok {
 				ret += int64(entry.Batch.Vecs[i].Size())
 			}
 		}
+
 		handled[entry.Batch] = struct{}{}
 	}
 	iter.Close()
 
-	if len(tbl.blockInfos) > 0 {
-		for _, s := range neededColumnName {
-			list, err := tbl.GetColumMetadataScanInfo(ctx, s)
-			if err != nil {
-				return 0, err
-			}
-			for _, info := range list {
-				ret += info.CompressSize
-			}
+	// Calculate the block size
+	biter := part.NewBlocksIter(ts)
+	for biter.Next() {
+		blk := biter.Entry()
+		location := blk.MetaLocation()
+		if objectio.IsSameObjectLocVsMeta(location, meta) {
+			continue
+		}
+
+		if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+			biter.Close()
+			return 0, err
+		}
+
+		for _, col := range neededCols {
+			colmata := meta.MustGetColumn(uint16(col.Seqnum))
+			ret += int64(colmata.Location().Length())
 		}
 	}
+	biter.Close()
 
 	return ret, nil
 }
 
-func (tbl *txnTable) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
-	attr, _ := tbl.TableColumns(ctx)
-	found := false
-	for i := 0; i < len(attr); {
-		if !attr[i].IsHidden && (name == AllColumns || attr[i].Name == name) {
-			found = true
-			i++
-			continue
-		}
-		attr = append(attr[:i], attr[i+1:]...)
+func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
+	var (
+		err  error
+		part *logtailreplay.PartitionState
+	)
+	if part, err = tbl.getPartitionState(ctx); err != nil {
+		return nil, err
 	}
+
+	var needCols []*plan.ColDef
+	found := false
+	cols := tbl.getTableDef().GetCols()
+	for _, c := range cols {
+		// TODO: We can keep hidden column but need a better way to know
+		// whether it has the colmeta or not
+		if !c.Hidden && (c.Name == name || name == AllColumns) {
+			needCols = append(needCols, c)
+			found = true
+		}
+	}
+
 	if !found {
 		return nil, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
 	}
 
-	ret := make([][]byte, 0, len(attr))
-	for i := range attr {
-		infoList, err := tbl.GetColumMetadataScanInfo(ctx, attr[i].Name)
-		if err != nil {
-			return nil, err
-		}
-
-		for j := range infoList {
-			ret = append(ret, catalog.EncodeMetadataScanInfo(infoList[j]))
-		}
-	}
-
-	return ret, nil
-}
-
-func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*catalog.MetadataScanInfo, error) {
-	if len(tbl.blockInfos) == 0 {
-		logutil.Debugf("meta info is nil")
-		return nil, nil
-	}
-
-	infoList := make([]*catalog.MetadataScanInfo, 0, len(tbl.blockInfos))
-	var (
-		meta    objectio.ObjectMeta
-		loadErr error
-	)
-	col, err := tbl.getColByName(ctx, name)
-	if err != nil {
-		return nil, err
-	}
-
-	for j := range tbl.blockInfos {
-		blk := tbl.blockInfos[j]
+	var meta objectio.ObjectMeta
+	infoList := make([]*plan.MetadataScanInfo, 0, len(tbl.blockInfos))
+	eachBlkFn := func(blk logtailreplay.BlockEntry) error {
+		var err error
 		location := blk.MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, meta) {
-			if meta, loadErr = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); loadErr != nil {
-				return nil, loadErr
+			if meta, err = objectio.FastLoadObjectMeta(ctx, &location, tbl.db.txn.proc.FileService); err != nil {
+				return err
 			}
 		}
 
-		get, err := tbl.genMetadataScanInfo(ctx, &blk, location, &meta, col)
-		if err != nil {
-			return nil, err
+		bid := location.ID()
+		for _, col := range needCols {
+			newInfo := &plan.MetadataScanInfo{
+				ColName:    col.Name,
+				EntryState: blk.EntryState,
+				Sorted:     blk.Sorted,
+				IsHidden:   col.Hidden,
+			}
+			FillByteFamilyTypeForBlockInfo(newInfo, blk)
+			blkmeta := meta.GetBlockMeta(uint32(bid))
+			colmeta := blkmeta.ColumnMeta(uint16(col.Seqnum))
+
+			newInfo.RowCnt = int64(blkmeta.GetRows())
+			newInfo.NullCnt = int64(colmeta.NullCnt())
+			newInfo.CompressSize = int64(colmeta.Location().Length())
+			newInfo.OriginSize = int64(colmeta.Location().OriginSize())
+
+			zm := colmeta.ZoneMap()
+			newInfo.Max = zm.GetMaxBuf()
+			newInfo.Min = zm.GetMinBuf()
+
+			infoList = append(infoList, newInfo)
 		}
-		infoList = append(infoList, get)
+
+		return nil
+	}
+
+	if err = tbl.ForeachBlock(part, eachBlkFn); err != nil {
+		return nil, err
 	}
 
 	return infoList, nil
 }
 
-func (tbl *txnTable) genMetadataScanInfo(ctx context.Context, blk *catalog.BlockInfo, location objectio.Location, meta *objectio.ObjectMeta, col *plan.ColDef) (*catalog.MetadataScanInfo, error) {
-	ret := &catalog.MetadataScanInfo{
-		ColName: col.Name,
-	}
-
-	ret.FillBlockInfo(blk)
-	if err := tbl.fillMetadataScanWithCol(col, &location, meta, ret); err != nil {
-		return nil, err
-	}
-	return ret, nil
-}
-
-func (tbl *txnTable) getColByName(ctx context.Context, name string) (*plan.ColDef, error) {
-	cols := tbl.getTableDef().GetCols()
-	for i := range cols {
-		if cols[i].Name == name {
-			return cols[i], nil
-		}
-	}
-	return nil, moerr.NewInvalidInputNoCtx("bad input column name %v", name)
-}
-
-func (tbl *txnTable) fillMetadataScanWithCol(col *plan.ColDef, location *objectio.Location, meta *objectio.ObjectMeta, info *catalog.MetadataScanInfo) error {
-	colmeta := meta.MustGetColumn(uint16(col.Seqnum))
-
-	// row cnt
-	info.RowCnt = int64(location.Rows())
-
-	// null cnt
-	info.NullCnt = int64(colmeta.NullCnt())
-
-	// compress size and origin size
-	e := colmeta.Location()
-	info.CompressSize = int64(e.Length())
-	info.OriginSize = int64(e.OriginSize())
-
-	// min & max
-	zm := colmeta.ZoneMap()
-	info.Min = zm.GetMinBuf()
-	info.Max = zm.GetMaxBuf()
-
+func FillByteFamilyTypeForBlockInfo(info *plan.MetadataScanInfo, blk logtailreplay.BlockEntry) error {
+	// It is better to use the Marshal() method
+	info.BlockId = blk.BlockID[:]
+	info.MetaLoc = blk.MetaLoc[:]
+	info.DelLoc = blk.DeltaLoc[:]
+	info.SegId = blk.SegmentID[:]
+	info.CommitTs = blk.CommitTs[:]
+	info.CreateTs = blk.CreateTime[:]
+	info.DeleteTs = blk.DeleteTime[:]
 	return nil
 }
 
@@ -537,7 +522,7 @@ func (tbl *txnTable) reset(newId uint64) {
 	tbl.tableId = newId
 	tbl._partState = nil
 	tbl.blockInfos = nil
-	tbl.modifiedBlocks = nil
+	tbl.dirtyBlks = nil
 	tbl.blockInfosUpdated = false
 	tbl.localState = logtailreplay.NewPartitionState(true)
 }
@@ -571,10 +556,17 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	ranges = make([][]byte, 0, 1)
 	ranges = append(ranges, []byte{})
 
-	tbl.modifiedBlocks = make([]ModifyBlockMeta, 0)
+	// TODO: workaround for ISSUE #9897
+	// Remove me later
+	{
+		tbl.Lock()
+		tbl.dirtyBlks = nil
+		tbl.Unlock()
+	}
 	if len(tbl.blockInfos) == 0 {
 		return
 	}
+	var dirtyBlks []catalog.BlockInfo
 	err = tbl.rangesOnePart(
 		ctx,
 		tbl.db.txn.meta.SnapshotTS,
@@ -583,9 +575,16 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		exprs,
 		tbl.blockInfos,
 		&ranges,
-		&tbl.modifiedBlocks,
+		&dirtyBlks,
 		tbl.db.txn.proc,
 	)
+	// TODO: workaround for ISSUE #9897
+	// Remove me later
+	if err == nil && len(dirtyBlks) > 0 {
+		tbl.Lock()
+		tbl.dirtyBlks = dirtyBlks
+		tbl.Unlock()
+	}
 	return
 }
 
@@ -712,10 +711,10 @@ func (tbl *txnTable) rangesOnePart(
 	exprs []*plan.Expr, // filter expression
 	blocks []catalog.BlockInfo, // whole block list
 	ranges *[][]byte, // output marshaled block list after filtering
-	modifies *[]ModifyBlockMeta, // output modified blocks after filtering
+	dirties *[]catalog.BlockInfo, // output modified blocks after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	deletes := make(map[types.Blockid][]int64)
+	dirtyBlks := make(map[types.Blockid]struct{})
 
 	//collect deletes from PartitionState.dirtyBlocks.
 	{
@@ -723,7 +722,7 @@ func (tbl *txnTable) rangesOnePart(
 		for iter.Next() {
 			entry := iter.Entry()
 			//lazy load deletes for block.
-			deletes[entry.BlockID] = []int64{}
+			dirtyBlks[entry.BlockID] = struct{}{}
 		}
 		iter.Close()
 
@@ -731,7 +730,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	//only collect dirty blocks in PartitionState.blocks into modifies.
 	for _, bid := range tbl.GetDirtyBlksIn(state, true) {
-		deletes[bid] = []int64{}
+		dirtyBlks[bid] = struct{}{}
 	}
 
 	for _, entry := range tbl.writes {
@@ -744,8 +743,8 @@ func (tbl *txnTable) rangesOnePart(
 		if entry.typ == DELETE && entry.fileName == "" {
 			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for _, v := range vs {
-				id, offset := v.Decode()
-				deletes[id] = append(deletes[id], int64(offset))
+				id, _ := v.Decode()
+				dirtyBlks[id] = struct{}{}
 			}
 		}
 	}
@@ -780,7 +779,7 @@ func (tbl *txnTable) rangesOnePart(
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
-	hasDeletes := len(deletes) > 0
+	hasDeletes := len(dirtyBlks) > 0
 	for _, blk := range blocks {
 		// if expr is monotonic, we need evaluating expr for each block
 		if auxIdCnt > 0 {
@@ -835,8 +834,8 @@ func (tbl *txnTable) rangesOnePart(
 
 		if hasDeletes {
 			// collect deletes for blocks in partitionState.blocks.
-			if rows, ok := deletes[blk.BlockID]; ok {
-				*modifies = append(*modifies, ModifyBlockMeta{blk, rows})
+			if _, ok := dirtyBlks[blk.BlockID]; ok {
+				*dirties = append(*dirties, blk)
 			} else {
 				*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 			}
@@ -1360,12 +1359,20 @@ func (tbl *txnTable) newMergeReader(ctx context.Context, num int,
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 
+	// TODO: workaround for ISSUE #9897
+	// Remove me later
+	var dirtyblks []catalog.BlockInfo
+	if len(tbl.dirtyBlks) > 0 {
+		dirtyblks = make([]catalog.BlockInfo, 0, len(tbl.dirtyBlks))
+		dirtyblks = append(dirtyblks, tbl.dirtyBlks...)
+	}
+
 	rds0, err := tbl.newReader(
 		ctx,
 		num,
 		encodedPrimaryKey,
 		expr,
-		tbl.modifiedBlocks,
+		dirtyblks,
 		tbl.writes)
 	if err != nil {
 		return nil, err
@@ -1411,7 +1418,7 @@ func (tbl *txnTable) newReader(
 	readerNumber int,
 	encodedPrimaryKey []byte,
 	expr *plan.Expr,
-	blks []ModifyBlockMeta,
+	blks []catalog.BlockInfo,
 	entries []Entry,
 ) ([]engine.Reader, error) {
 	txn := tbl.db.txn
@@ -1508,7 +1515,7 @@ func (tbl *txnTable) newReader(
 			readers = append(
 				readers,
 				newBlockMergeReader(
-					ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
+					ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs,
 				),
 			)
 		}
@@ -1518,7 +1525,7 @@ func (tbl *txnTable) newReader(
 	if len(blks) < readerNumber-1 {
 		for i := range blks {
 			readers[i+1] = newBlockMergeReader(
-				ctx, tbl, ts, []ModifyBlockMeta{blks[i]}, expr, fs,
+				ctx, tbl, ts, []catalog.BlockInfo{blks[i]}, expr, fs,
 			)
 		}
 		for j := len(blks) + 1; j < readerNumber; j++ {

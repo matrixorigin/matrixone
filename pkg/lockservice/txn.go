@@ -87,6 +87,7 @@ func (txn *activeTxn) lockAdded(
 	serviceID string,
 	table uint64,
 	locks [][]byte,
+	w *waiter,
 	locked bool) {
 
 	// only in the lockservice node where the transaction was
@@ -109,7 +110,7 @@ func (txn *activeTxn) lockAdded(
 		txn.Lock()
 		defer txn.Unlock()
 	}
-	defer logTxnLockAdded(serviceID, txn, locks)
+	defer logTxnLockAdded(serviceID, txn, locks, w)
 	v, ok := txn.holdLocks[table]
 	if ok {
 		v.append(locks)
