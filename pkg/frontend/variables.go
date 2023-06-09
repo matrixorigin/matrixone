@@ -763,11 +763,7 @@ func (svst SystemVariableSetType) Zero() interface{} {
 }
 
 func (svst SystemVariableSetType) ConvertFromString(value string) (interface{}, error) {
-	bits, err := svst.string2bits(value)
-	if err != nil {
-		return nil, errorConvertFromStringToSetFailed
-	}
-	return svst.bits2string(bits)
+	return value, nil
 }
 
 func InitSystemVariableSetType(name string, values ...string) SystemVariableSetType {
