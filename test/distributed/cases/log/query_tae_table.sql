@@ -2,7 +2,9 @@
 -- this case only success in linux, not in drawin
 create account if not exists `query_tae_table` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 
+
 -- @session:id=1&user=query_tae_table:admin:accountadmin&password=123456
+set @ts=now();
 drop database if exists `query_tae_table`;
 create database `query_tae_table`;
 /*issue_8168*/use query_tae_table;select syntax error stmt;
@@ -34,13 +36,14 @@ select account from system.statement_info where statement_id = @uuid_create_tabl
 select statement from system.statement_info where statement_id in (@uuid_hide_1, @uuid_hide_2, @uuid_hide_3, @uuid_hide_4);
 
 select account, statement from system.statement_info where statement = 'insert into query_tae_table values (1)' and statement_id = @uuid_insert_table limit 1;
+
+-- case: fix issue 8168, with syntax error
+select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt', '/*issue_8168*/use query_tae_table') and status != 'Running' and request_at > @ts order by request_at desc limit 3;
+
 -- @session
 
 -- case: select span_kind issue #7571
 select IF(span_kind="internal", 1, IF(span_kind="statement", 1, IF(span_kind="session", 1, IF(span_kind="remote", 1, 0)))) as exist from system.rawlog where `raw_item` = "log_info" limit 1;
-
--- case: fix issue 8168, with syntax error
-select status, err_code, error from system.statement_info where account = 'query_tae_table' and statement in ('use query_tae_table', 'select syntax error stmt', '/*issue_8168*/use query_tae_table') and status != 'Running' order by request_at desc limit 3;
 
 -- clean
 drop account `query_tae_table`;
