@@ -412,6 +412,12 @@ func (ses *Session) OptionBitsIsSet(bit uint32) bool {
 	return ses.optionBits&bit != 0
 }
 
+func (ses *Session) GetOptionBits() uint32 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.optionBits
+}
+
 func (ses *Session) SetServerStatus(bit uint16) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -428,6 +434,12 @@ func (ses *Session) ServerStatusIsSet(bit uint16) bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.serverStatus&bit != 0
+}
+
+func (ses *Session) GetServerStatus() uint16 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.serverStatus
 }
 
 /*
@@ -660,4 +672,9 @@ func (ses *Session) SetAutocommit(on bool) error {
 		ses.SetOptionBits(OPTION_NOT_AUTOCOMMIT)
 	}
 	return nil
+}
+
+func (ses *Session) setAutocommitOn() {
+	ses.ClearOptionBits(OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT)
+	ses.SetServerStatus(SERVER_STATUS_AUTOCOMMIT)
 }
