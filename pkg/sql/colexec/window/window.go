@@ -474,6 +474,14 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	if err := bat.Shuffle(sels, proc.Mp()); err != nil {
 		panic(err)
 	}
+
+	// shuffle agg vector
+	if ctr.aggVecs[idx].vec != nil && ctr.aggVecs[idx].executor.IfResultMemoryReuse() {
+		if err := ctr.aggVecs[idx].vec.Shuffle(sels, proc.Mp()); err != nil {
+			panic(err)
+		}
+	}
+
 	return false, nil
 }
 

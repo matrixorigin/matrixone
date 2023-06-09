@@ -70,3 +70,15 @@ drop table if exists t1;
 create table t1 (a int, b decimal(7, 2));
 insert into t1 values(1, 12.12), (2, 123.13), (3, 456.66), (4, 1111.34);
 select a, sum(b) over (partition by a order by a) from t1;
+
+drop table if exists wf01;
+create table wf01(i int,j int);
+insert into wf01 values(1,1);
+insert into wf01 values(1,4);
+insert into wf01 values(1,2);
+insert into wf01 values(1,4);
+select * from wf01;
+select i, j, sum(i+j) over (order by j desc rows unbounded preceding) foo from wf01;
+select i, j, sum(i+j) over (order by j desc rows between 2 preceding and 2 following) as foo from wf01;
+select i, j, sum(i+j) over (order by j desc rows unbounded preceding) foo from wf01 order by foo;
+select i, j, sum(i+j) over (order by j desc rows unbounded preceding) foo from wf01 order by foo desc;
