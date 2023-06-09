@@ -448,3 +448,39 @@ a    sum(b) over (partition by a order by a)
 2    123.13
 3    456.66
 4    1111.34
+drop table if exists wf01;
+create table wf01(i int,j int);
+insert into wf01 values(1,1);
+insert into wf01 values(1,4);
+insert into wf01 values(1,2);
+insert into wf01 values(1,4);
+select * from wf01;
+i    j
+1    1
+1    4
+1    2
+1    4
+select i, j, sum(i+j) over (order by j desc rows unbounded preceding) foo from wf01;
+i    j    foo
+1    4    5
+1    4    10
+1    2    13
+1    1    15
+select i, j, sum(i+j) over (order by j desc rows between 2 preceding and 2 following) as foo from wf01;
+i    j    foo
+1    4    13
+1    4    15
+1    2    15
+1    1    10
+select i, j, sum(i+j) over (order by j desc rows unbounded preceding) foo from wf01 order by foo;
+i    j    foo
+1    4    5
+1    4    10
+1    2    13
+1    1    15
+select i, j, sum(i+j) over (order by j desc rows unbounded preceding) foo from wf01 order by foo desc;
+i    j    foo
+1    1    15
+1    2    13
+1    4    10
+1    4    5
