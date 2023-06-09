@@ -427,6 +427,23 @@ func TestMergeAllocate(t *testing.T) {
 	)
 }
 
+func TestIssue9840(t *testing.T) {
+	fillValues := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
+	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	input := newTestVector[uint64](8, types.New(types.T_uint64, 0, 0), nil, nil)
+	// index 0 is manual, others is null, but index 1 has a invalid value
+	vector.SetFixedAt[uint64](input, 0, 1)
+	vector.SetFixedAt[uint64](input, 1, 5)
+	input.GetNulls().Del(0)
+	testColumnCacheInsert[uint64](
+		t,
+		8,
+		8,
+		input,
+		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
+	)
+}
+
 func testColumnCacheInsert[T constraints.Integer](
 	t *testing.T,
 	rows int,
