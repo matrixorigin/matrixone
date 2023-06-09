@@ -42,6 +42,8 @@ type Replayer struct {
 	wg            sync.WaitGroup
 	applyDuration time.Duration
 	txnCmdChan    chan *txnbase.TxnCmd
+	readCount     int
+	applyCount    int
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS) *Replayer {
@@ -89,7 +91,9 @@ func (replayer *Replayer) Replay() {
 	replayer.wg.Wait()
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("wal"),
-		common.AnyField("apply logentries cost", replayer.applyDuration))
+		common.AnyField("apply logentries cost", replayer.applyDuration),
+		common.AnyField("read count", replayer.readCount),
+		common.AnyField("apply count", replayer.applyCount))
 }
 
 func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
@@ -133,10 +137,12 @@ func (replayer *Replayer) OnTimeStamp(ts types.TS) {
 
 func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	var err error
+	replayer.readCount++
 	txnCmd := cmd.(*txnbase.TxnCmd)
 	if txnCmd.PrepareTS.LessEq(replayer.maxTs) {
 		return
 	}
+	replayer.applyCount++
 	txn := txnimpl.MakeReplayTxn(replayer.db.TxnMgr, txnCmd.TxnCtx, lsn,
 		txnCmd, replayer, replayer.db.Catalog, replayer.DataFactory, replayer.db.Wal)
 	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {

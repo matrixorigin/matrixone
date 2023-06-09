@@ -123,7 +123,11 @@ func (d *LogServiceDriver) Replay(h driver.ApplyHandle) error {
 		common.OperandField("wal"),
 		common.AnyField("backend", "logservice"),
 		common.AnyField("apply cost", r.applyDuration),
-		common.AnyField("read cost", d.readDuration))
+		common.AnyField("read cost", d.readDuration),
+		common.AnyField("read count", r.readCount),
+		common.AnyField("internal count", r.internalCount),
+		common.AnyField("apply count", r.applyCount),
+	)
 
 	return nil
 }
