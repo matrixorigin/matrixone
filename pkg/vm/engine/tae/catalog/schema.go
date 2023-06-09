@@ -109,17 +109,19 @@ func (cpk *SortKey) HasColumn(idx int) (found bool) { _, found = cpk.search[idx]
 func (cpk *SortKey) GetSingleIdx() int              { return cpk.Defs[0].Idx }
 
 type Schema struct {
-	Version     uint32
-	AcInfo      accessInfo
-	Name        string
-	ColDefs     []*ColDef
-	Comment     string
-	Partitioned int8   // 1: the table has partitions ; 0: no partition
-	Partition   string // the info about partitions when the table has partitions
-	Relkind     string
-	Createsql   string
-	View        string
-	Constraint  []byte
+	Version             uint32
+	AcInfo              accessInfo
+	Name                string
+	ColDefs             []*ColDef
+	Comment             string
+	PartitionType       string
+	PartitionExpression string
+	Partitioned         int8   // 1: the table has partitions ; 0: no partition
+	Partition           string // the info about partitions when the table has partitions
+	Relkind             string
+	Createsql           string
+	View                string
+	Constraint          []byte
 
 	// do not send to cn
 	BlockMaxRows     uint32

@@ -191,6 +191,8 @@ func genCreateTables(rows [][]any) []CreateTable {
 		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
 		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
 		cmds[i].Comment = string(row[MO_TABLES_REL_COMMENT_IDX].([]byte))
+		cmds[i].PartitionType = string(row[MO_TABLES_PARTITION_TYPE_IDX].([]byte))
+		cmds[i].PartitionExpression = string(row[MO_TABLES_PARTITION_EXPRESSION_IDX].([]byte))
 		cmds[i].Partitioned = row[MO_TABLES_PARTITIONED_IDX].(int8)
 		cmds[i].Partition = string(row[MO_TABLES_PARTITION_INFO_IDX].([]byte))
 		cmds[i].Viewdef = string(row[MO_TABLES_VIEWDEF_IDX].([]byte))

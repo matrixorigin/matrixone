@@ -101,13 +101,15 @@ type TableItem struct {
 	Rowids []types.Rowid
 
 	// table def
-	Kind        string
-	ViewDef     string
-	Constraint  []byte
-	Comment     string
-	Partitioned int8
-	Partition   string
-	CreateSql   string
+	Kind                string
+	ViewDef             string
+	Constraint          []byte
+	Comment             string
+	PartitionType       string
+	PartitionExpression string
+	Partitioned         int8
+	Partition           string
+	CreateSql           string
 
 	// primary index
 	PrimaryIdx    int
@@ -238,6 +240,8 @@ func copyTableItem(dst, src *TableItem) {
 	dst.ViewDef = src.ViewDef
 	dst.TableDef = src.TableDef
 	dst.Constraint = src.Constraint
+	dst.PartitionType = src.PartitionType
+	dst.PartitionExpression = src.PartitionExpression
 	dst.Partitioned = src.Partitioned
 	dst.Partition = src.Partition
 	dst.CreateSql = src.CreateSql

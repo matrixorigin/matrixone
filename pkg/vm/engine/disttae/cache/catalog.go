@@ -335,6 +335,10 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 	comments := bat.GetVector(catalog.MO_TABLES_REL_COMMENT_IDX + MO_OFF)
 	createSqls := bat.GetVector(catalog.MO_TABLES_REL_CREATESQL_IDX + MO_OFF)
 	viewDefs := bat.GetVector(catalog.MO_TABLES_VIEWDEF_IDX + MO_OFF)
+
+	partitionTypes := bat.GetVector(catalog.MO_TABLES_PARTITION_TYPE_IDX + MO_OFF)
+	partitionExpressions := bat.GetVector(catalog.MO_TABLES_PARTITION_EXPRESSION_IDX + MO_OFF)
+
 	partitioneds := vector.MustFixedCol[int8](bat.GetVector(catalog.MO_TABLES_PARTITIONED_IDX + MO_OFF))
 	paritions := bat.GetVector(catalog.MO_TABLES_PARTITION_INFO_IDX + MO_OFF)
 	constraints := bat.GetVector(catalog.MO_TABLES_CONSTRAINT_IDX + MO_OFF)
@@ -351,6 +355,8 @@ func (cc *CatalogCache) InsertTable(bat *batch.Batch) {
 		item.ViewDef = viewDefs.GetStringAt(i)
 		item.Constraint = append(item.Constraint, constraints.GetBytesAt(i)...)
 		item.Comment = comments.GetStringAt(i)
+		item.PartitionType = partitionTypes.GetStringAt(i)
+		item.PartitionExpression = partitionExpressions.GetStringAt(i)
 		item.Partitioned = partitioneds[i]
 		item.Partition = paritions.GetStringAt(i)
 		item.CreateSql = createSqls.GetStringAt(i)

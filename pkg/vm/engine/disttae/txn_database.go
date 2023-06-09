@@ -147,24 +147,26 @@ func (db *txnDatabase) Relation(ctx context.Context, name string) (engine.Relati
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 	tbl := &txnTable{
-		db:            db,
-		tableId:       item.Id,
-		version:       item.Version,
-		tableName:     item.Name,
-		defs:          item.Defs,
-		tableDef:      item.TableDef,
-		primaryIdx:    item.PrimaryIdx,
-		primarySeqnum: item.PrimarySeqnum,
-		clusterByIdx:  item.ClusterByIdx,
-		relKind:       item.Kind,
-		viewdef:       item.ViewDef,
-		comment:       item.Comment,
-		partitioned:   item.Partitioned,
-		partition:     item.Partition,
-		createSql:     item.CreateSql,
-		constraint:    item.Constraint,
-		rowid:         item.Rowid,
-		rowids:        item.Rowids,
+		db:                  db,
+		tableId:             item.Id,
+		version:             item.Version,
+		tableName:           item.Name,
+		defs:                item.Defs,
+		tableDef:            item.TableDef,
+		primaryIdx:          item.PrimaryIdx,
+		primarySeqnum:       item.PrimarySeqnum,
+		clusterByIdx:        item.ClusterByIdx,
+		relKind:             item.Kind,
+		viewdef:             item.ViewDef,
+		comment:             item.Comment,
+		partitionType:       item.PartitionType,
+		partitionExpression: item.PartitionExpression,
+		partitioned:         item.Partitioned,
+		partition:           item.Partition,
+		createSql:           item.CreateSql,
+		constraint:          item.Constraint,
+		rowid:               item.Rowid,
+		rowids:              item.Rowids,
 	}
 	db.txn.tableMap.Store(genTableKey(ctx, name, db.databaseId), tbl)
 	return tbl, nil
@@ -332,6 +334,8 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 			case *engine.ViewDef:
 				tbl.viewdef = defVal.View
 			case *engine.PartitionDef:
+				tbl.partitionType = defVal.PartitionType
+				tbl.partitionExpression = defVal.PartitionExpression
 				tbl.partitioned = defVal.Partitioned
 				tbl.partition = defVal.Partition
 			case *engine.ConstraintDef:

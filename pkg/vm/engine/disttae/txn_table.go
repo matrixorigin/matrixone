@@ -912,6 +912,8 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	}
 	if tbl.partitioned > 0 || tbl.partition != "" {
 		partitionDef := new(engine.PartitionDef)
+		partitionDef.PartitionType = tbl.partitionType
+		partitionDef.PartitionExpression = tbl.partitionExpression
 		partitionDef.Partitioned = tbl.partitioned
 		partitionDef.Partition = tbl.partition
 		defs = append(defs, partitionDef)

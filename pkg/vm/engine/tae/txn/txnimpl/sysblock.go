@@ -255,6 +255,10 @@ func FillTableRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.Tab
 		colData.Append(table.GetDB().GetID(), false)
 	case pkgcatalog.SystemRelAttr_Comment:
 		colData.Append([]byte(schema.Comment), false)
+	case pkgcatalog.SystemRelAttr_PartitionType:
+		colData.Append([]byte(schema.PartitionType), false)
+	case pkgcatalog.SystemRelAttr_PartitionExpression:
+		colData.Append([]byte(schema.PartitionExpression), false)
 	case pkgcatalog.SystemRelAttr_Partitioned:
 		colData.Append(schema.Partitioned, false)
 	case pkgcatalog.SystemRelAttr_Partition:
