@@ -50,7 +50,7 @@ func (a *allocator) adjust() {
 	}
 }
 
-func (a *allocator) alloc(
+func (a *allocator) allocate(
 	ctx context.Context,
 	tableID uint64,
 	key string,
@@ -59,7 +59,7 @@ func (a *allocator) alloc(
 	c := make(chan struct{})
 	var from, to uint64
 	var err error
-	a.asyncAlloc(
+	a.asyncAllocate(
 		ctx,
 		tableID,
 		key,
@@ -77,7 +77,7 @@ func (a *allocator) alloc(
 	return from, to, err
 }
 
-func (a *allocator) asyncAlloc(
+func (a *allocator) asyncAllocate(
 	ctx context.Context,
 	tableID uint64,
 	col string,
@@ -148,7 +148,7 @@ func (a *allocator) doAllocate(act action) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 
-	from, to, err := a.store.Alloc(
+	from, to, err := a.store.Allocate(
 		ctx,
 		act.tableID,
 		act.col,

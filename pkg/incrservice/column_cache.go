@@ -333,7 +333,7 @@ func (col *columnCache) preAllocate(
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
 	}
-	col.allocator.asyncAlloc(
+	col.allocator.asyncAllocate(
 		ctx,
 		tableID,
 		col.col.ColName,
@@ -367,7 +367,7 @@ func (col *columnCache) allocateLocked(
 		n = 1
 	}
 	for {
-		from, to, err := col.allocator.alloc(
+		from, to, err := col.allocator.allocate(
 			ctx,
 			tableID,
 			col.col.ColName,

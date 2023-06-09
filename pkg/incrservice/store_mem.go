@@ -80,7 +80,7 @@ func (s *memStore) Create(
 	return nil
 }
 
-func (s *memStore) GetCloumns(
+func (s *memStore) GetColumns(
 	ctx context.Context,
 	tableID uint64) ([]AutoColumn, error) {
 	s.Lock()
@@ -88,7 +88,7 @@ func (s *memStore) GetCloumns(
 	return s.caches[tableID], nil
 }
 
-func (s *memStore) Alloc(
+func (s *memStore) Allocate(
 	ctx context.Context,
 	tableID uint64,
 	key string,

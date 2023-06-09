@@ -17,9 +17,11 @@ package incrservice
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -105,7 +107,7 @@ func (s *service) Reset(
 	newTableID uint64,
 	keep bool,
 	txnOp client.TxnOperator) error {
-	cols, err := s.store.GetCloumns(ctx, oldTableID)
+	cols, err := s.store.GetColumns(ctx, oldTableID)
 	if err != nil {
 		return err
 	}
@@ -228,9 +230,12 @@ func (s *service) getCommittedTableCache(
 		return c, nil
 	}
 
-	cols, err := s.store.GetCloumns(ctx, tableID)
+	cols, err := s.store.GetColumns(ctx, tableID)
 	if err != nil {
 		return nil, err
+	}
+	if len(cols) == 0 {
+		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
 
 	c, err = newTableCache(

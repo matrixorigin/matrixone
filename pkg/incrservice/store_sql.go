@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -69,7 +68,7 @@ func (s *sqlStore) Create(
 		opts)
 }
 
-func (s *sqlStore) Alloc(
+func (s *sqlStore) Allocate(
 	ctx context.Context,
 	tableID uint64,
 	colName string,
@@ -169,7 +168,7 @@ func (s *sqlStore) Delete(
 	return nil
 }
 
-func (s *sqlStore) GetCloumns(
+func (s *sqlStore) GetColumns(
 	ctx context.Context,
 	tableID uint64) ([]AutoColumn, error) {
 	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s where table_id = %d order by col_index`,
@@ -203,9 +202,6 @@ func (s *sqlStore) GetCloumns(
 			Offset:   offsets[idx],
 			Step:     steps[idx],
 		}
-	}
-	if len(cols) == 0 {
-		return nil, moerr.NewNoSuchTableNoCtx(database, fmt.Sprintf("%d", tableID))
 	}
 	return cols, nil
 }
