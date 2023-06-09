@@ -127,11 +127,11 @@ var (
 	// defaultMetricStorageUsageCheckNewInterval default: 1 min
 	defaultMetricStorageUsageCheckNewInterval = time.Minute
 
-	// defaultMergeCycle default: 4 hours
-	defaultMergeCycle = 4 * time.Hour
+	// defaultMergeCycle default: 15 minute
+	defaultMergeCycle = 15 * time.Minute
 
-	// defaultMaxFileSize default: 128 MB
-	defaultMaxFileSize = 128
+	// defaultMaxFileSize default: 10 MB
+	defaultMaxFileSize = 10
 
 	// defaultPathBuilder, val in [DBTable, AccountDate]
 	defaultPathBuilder = "AccountDate"
@@ -302,7 +302,7 @@ type FrontendParameters struct {
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames string `toml:"lowerCaseTableNames"`
+	LowerCaseTableNames int64 `toml:"lowerCaseTableNames"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -440,8 +440,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.AutoIncrCacheSize = 3000000
 	}
 
-	if fp.LowerCaseTableNames == "" {
-		fp.LowerCaseTableNames = "1"
+	if fp.LowerCaseTableNames == 0 {
+		fp.LowerCaseTableNames = 1
 	}
 
 	if fp.PrintDebugInterval == 0 {
@@ -570,7 +570,7 @@ type ObservabilityParameters struct {
 	// MetricStorageUsageCheckNewInterval, default: 1 min
 	MetricStorageUsageCheckNewInterval toml.Duration `toml:"metricStorageUsageCheckNewInterval"`
 
-	// MergeCycle default: 14400 sec (4 hours).
+	// MergeCycle default: 900 sec (15 minutes).
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"mergeCycle"`
 
@@ -591,6 +591,9 @@ type ObservabilityParameters struct {
 
 	// LongSpanTime default: 500 ms. Only record span, which duration > LongSpanTime
 	LongSpanTime toml.Duration `toml:"longSpanTime"`
+
+	// If disabled, the logs will be written to files stored in s3
+	DisableSqlWriter bool `toml:"disableSqlWriter"`
 
 	OBCollectorConfig
 }

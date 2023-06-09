@@ -17,15 +17,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -60,7 +61,7 @@ func TestMetric(t *testing.T) {
 		const (
 			none      = "--None"
 			createDB  = "create database"
-			createTbl = "create EXTERNAL table"
+			createTbl = "create table"
 			insertRow = "insert into"
 		)
 		prevSqlKind := none
@@ -173,7 +174,7 @@ func TestMetricSingleTable(t *testing.T) {
 		const (
 			none       = "--None"
 			createDB   = "create database"
-			createTbl  = "CREATE EXTERNAL TABLE"
+			createTbl  = "CREATE TABLE"
 			createView = "CREATE VIEW"
 			insertRow  = "insert into"
 		)
@@ -228,7 +229,7 @@ func TestGetSchemaForAccount(t *testing.T) {
 			args: args{
 				account: "user1",
 			},
-			wantPath: "/user1/*/*/*/*/metric/*",
+			wantPath: "CREATE TABLE IF NOT EXISTS",
 			wantSche: 7,
 		},
 	}
@@ -237,16 +238,8 @@ func TestGetSchemaForAccount(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			schemas := GetSchemaForAccount(ctx, tt.args.account)
 			found := false
-			for _, sche := range schemas {
-				t.Logf("schma: %s", sche)
-				if strings.Contains(sche, tt.wantPath) {
-					found = true
-				}
-			}
-			require.Equal(t, tt.wantSche, len(schemas))
-			require.Equal(t, true, found)
-			found = false
-			if strings.Contains(SingleMetricTable.ToCreateSql(ctx, true), "/*/*/*/*/*/metric/*") {
+
+			if strings.Contains(schemas[0], tt.wantPath) {
 				found = true
 			}
 			require.Equal(t, true, found)

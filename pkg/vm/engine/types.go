@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -515,7 +516,9 @@ func (def *IndexDef) ToPBVersion() ConstraintPB {
 type Relation interface {
 	Statistics
 
-	Ranges(context.Context, ...*plan.Expr) ([][]byte, error)
+	Ranges(context.Context, []*plan.Expr) ([][]byte, error)
+
+	ApplyRuntimeFilters(context.Context, [][]byte, []*plan.Expr, []*pipeline.RuntimeFilter) ([][]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
@@ -552,7 +555,7 @@ type Relation interface {
 
 	GetEngineType() EngineType
 
-	GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error)
+	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
 }
 
 type Reader interface {

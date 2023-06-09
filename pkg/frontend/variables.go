@@ -243,6 +243,12 @@ func (svbt SystemVariableBoolType) Zero() interface{} {
 }
 
 func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{}, error) {
+	if value == "on" {
+		return int8(1), nil
+	} else if value == "off" {
+		return int8(0), nil
+	}
+
 	convertVal, err := strconv.ParseInt(value, 10, 8)
 	if err != nil {
 		return nil, errorConvertFromStringToBoolFailed
@@ -251,6 +257,7 @@ func (svbt SystemVariableBoolType) ConvertFromString(value string) (interface{},
 		return nil, errorConvertFromStringToBoolFailed
 	}
 	return int8(convertVal), nil
+
 }
 
 type SystemVariableIntType struct {
@@ -661,6 +668,9 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 	}
 
 	bldString := bld.String()
+	if len(bldString) == 0 {
+		return bldString, nil
+	}
 	return bldString[:len(bldString)-1], nil
 }
 

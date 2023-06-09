@@ -48,7 +48,7 @@ func openSaveQueryResult(ses *Session) bool {
 	if ses.ast == nil || ses.tStmt == nil {
 		return false
 	}
-	if ses.tStmt.SqlSourceType == "internal_sql" {
+	if ses.tStmt.SqlSourceType == internalSql {
 		return false
 	}
 	val, err := ses.GetGlobalVar("save_query_result")
@@ -543,7 +543,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				if tmpBatch.Zs[j] <= 0 {
 					continue
 				}
-				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq)
+				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq, false)
 				if err != nil {
 					return err
 				}

@@ -50,6 +50,7 @@ func (s *Service) handleCommands(cmds []pb.ScheduleCommand) {
 			s.handleShutdownStore(cmd)
 		} else if cmd.GetCreateTaskService() != nil {
 			s.createTaskService(cmd.CreateTaskService)
+			s.createSQLLogger(cmd.CreateTaskService)
 		} else {
 			panic("unknown schedule command type")
 		}

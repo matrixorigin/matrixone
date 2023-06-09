@@ -238,12 +238,12 @@ message ColDef {
 	string comment		= 8;
 	OnUpdate on_update  = 9;
 	bool low_card 		= 10;
-	uint32 seqnum		= 14;
+	uint32 seqnum		= 11;
 
 	// XXX: Deprecated and to be removed soon.
-	bool clusterBy		= 11;
-	bool primary        = 12;
-	int32 pkidx 		= 13;
+	bool clusterBy		= 12;
+	bool primary        = 13;
+	int32 pkidx 		= 14;
 }
 
 message Default {
@@ -530,7 +530,8 @@ message InsertCtx {
 	TableDef table_def		= 4;
 	// Align array index with the partition number
 	repeated uint64 partition_table_ids = 5;
-	int32 partition_idx = 6;
+	repeated string partition_table_names = 6;
+	int32 partition_idx = 7;
 }
 
 message AnalyzeInfo {
@@ -692,6 +693,10 @@ message Node {
 	bool IsEnd = 36;
 	repeated LockTarget lock_targets = 37;
 	repeated Expr block_filter_list = 38;
+
+	// Runtime filters
+	repeated RuntimeFilterSpec runtime_filter_probe_list = 39;
+	repeated RuntimeFilterSpec runtime_filter_build_list = 40;
 }
 
 message LockTarget {
@@ -701,6 +706,8 @@ message LockTarget {
   int32 refresh_ts_idx_in_bat   = 4;
   int32 filter_col_idx_in_bat   = 5;
   bool lock_table 				= 6;
+	bool is_partition_table = 7;
+	repeated uint64 partition_table_ids = 8;
 }
 
 message PreInsertUkCtx {
@@ -724,6 +731,11 @@ message PreInsertCtx {
 	bool is_update			= 4;
 }
 
+message RuntimeFilterSpec {
+	int32 tag = 1;
+	Expr expr = 2;
+}
+
 message IdList {
 	repeated int64 list = 1;
 }
@@ -740,7 +752,8 @@ message DeleteCtx {
 	bool is_cluster_table	= 5;
 	// Align array index with the partition number
 	repeated uint64 partition_table_ids = 6;
-	int32 partition_idx = 7;
+	repeated string partition_table_names = 7;
+	int32 partition_idx = 8;
 }
 
 message Query {
@@ -1161,3 +1174,42 @@ message LockTables {
 }
 
 message UnLockTables{}
+
+message MetadataScanInfo {
+	enum MetadataScanInfoType {
+		COL_NAME      = 0;
+		BLOCK_ID      = 1;
+		ENTRY_STATE   = 2;
+		SORTED        = 3;
+		IS_HIDDEN = 4;
+		META_LOC      = 5;
+		DELTA_LOC     = 6;
+		COMMIT_TS     = 7;
+		CREATE_TS     = 8;
+		DELETE_TS     = 9;
+		SEG_ID         = 10;
+		ROWS_CNT      = 11;
+		NULL_CNT      = 12;
+		COMPRESS_SIZE = 13;
+		ORIGIN_SIZE   = 14;
+		MIN           = 15;
+		MAX           = 16;	
+	} 
+	string ColName  =1;
+	bytes BlockId =2;
+	bool EntryState=3;
+	bool Sorted     =4;
+	bool IsHidden =5;
+	bytes MetaLoc     =6;
+	bytes DelLoc      =7;
+	bytes CommitTs    =8;
+	bytes CreateTs    =9;
+	bytes DeleteTs    = 10;
+	bytes SegId        = 11;
+	int64 RowCnt      = 12;
+	int64 NullCnt     = 13;
+	int64 CompressSize= 14;
+	int64 OriginSize  = 15;
+	bytes Min          = 16;
+	bytes Max          =17;
+}

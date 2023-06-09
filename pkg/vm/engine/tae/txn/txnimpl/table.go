@@ -17,9 +17,10 @@ package txnimpl
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime/trace"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/RoaringBitmap/roaring"
 
@@ -228,6 +229,7 @@ func (tbl *txnTable) recurTransferDelete(
 	}
 	blockID, offset := rowID.Decode()
 	newID := &common.ID{
+		DbID:    id.DbID,
 		TableID: id.TableID,
 		BlockID: blockID,
 	}
@@ -248,8 +250,8 @@ func (tbl *txnTable) recurTransferDelete(
 	if err := tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
 		return err
 	}
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
+	common.DoIfDebugEnabled(func() {
+		logutil.Debugf("depth-%d transfer delete from blk-%s row-%d to blk-%s row-%d",
 			depth,
 			id.BlockID.String(),
 			row,
@@ -695,8 +697,9 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		// 		start,
 		// 		end)
 		// }
+		// This err also captured by txn's write conflict check.
 		if err != nil {
-			logutil.Infof("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
+			logutil.Debugf("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				id.TableID,
 				id.BlockID.String(),
@@ -902,7 +905,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 			pkType := pkVec.GetType()
 			zm = index.NewZM(pkType.Oid, pkType.Scale)
 		}
-		if err = index.BatchUpdateZM(zm, pkVec); err != nil {
+		if err = index.BatchUpdateZM(zm, pkVec.GetDownstreamVector()); err != nil {
 			pkVec.Close()
 			return err
 		}
@@ -914,22 +917,19 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	}
 	return
 }
-func (tbl *txnTable) updateDedupedSegmentHint(hint uint64) {
+
+func (tbl *txnTable) updateDedupedSegmentHintAndBlockID(hint uint64, id *types.Blockid) {
 	if tbl.dedupedSegmentHint == 0 {
 		tbl.dedupedSegmentHint = hint
+		tbl.dedupedBlockID = id
 		return
 	}
 	if tbl.dedupedSegmentHint > hint {
 		tbl.dedupedSegmentHint = hint
-	}
-}
-
-func (tbl *txnTable) updateDedupedBlockID(id *types.Blockid) {
-	if tbl.dedupedBlockID == nil {
-		tbl.dedupedBlockID = id
+		tbl.dedupedSegmentHint = hint
 		return
 	}
-	if tbl.dedupedBlockID.Compare(*id) > 0 {
+	if tbl.dedupedSegmentHint == hint && tbl.dedupedBlockID.Compare(*id) > 0 {
 		tbl.dedupedBlockID = id
 	}
 }
@@ -981,7 +981,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 	maxSegmentHint := uint64(0)
 	pkType := keys.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
-	if err = index.BatchUpdateZM(keysZM, keys); err != nil {
+	if err = index.BatchUpdateZM(keysZM, keys.GetDownstreamVector()); err != nil {
 		return
 	}
 	var (
@@ -996,6 +996,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		segmentHint := blk.GetSegment().SortHint
 		if segmentHint > maxSegmentHint {
 			maxSegmentHint = segmentHint
+			maxBlockID = &blk.ID
 		}
 		if blk.ID.Compare(*maxBlockID) > 0 {
 			maxBlockID = &blk.ID
@@ -1051,8 +1052,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		}
 		it.Next()
 	}
-	tbl.updateDedupedSegmentHint(maxSegmentHint)
-	tbl.updateDedupedBlockID(maxBlockID)
+	tbl.updateDedupedSegmentHintAndBlockID(maxSegmentHint, maxBlockID)
 	return
 }
 
@@ -1071,6 +1071,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			segmentHint := blk.GetSegment().SortHint
 			if segmentHint > maxSegmentHint {
 				maxSegmentHint = segmentHint
+				maxBlockID = &blk.ID
 			}
 			if blk.ID.Compare(*maxBlockID) > 0 {
 				maxBlockID = &blk.ID
@@ -1127,8 +1128,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 		if v, ok := loaded[i]; ok {
 			v.Close()
 		}
-		tbl.updateDedupedSegmentHint(maxSegmentHint)
-		tbl.updateDedupedBlockID(maxBlockID)
+		tbl.updateDedupedSegmentHintAndBlockID(maxSegmentHint, maxBlockID)
 	}
 	return
 }
