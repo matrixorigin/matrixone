@@ -146,6 +146,7 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 	// 	start,
 	// 	end)
 	node.mask.AddRange(uint64(start), uint64(end+1))
+	node.chain.insertInMaskByRange(start, end)
 	for i := start; i < end+1; i++ {
 		node.chain.InsertInDeleteView(i, node)
 	}

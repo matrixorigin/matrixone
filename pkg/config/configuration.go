@@ -302,7 +302,7 @@ type FrontendParameters struct {
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames string `toml:"lowerCaseTableNames"`
+	LowerCaseTableNames int64 `toml:"lowerCaseTableNames"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -440,8 +440,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.AutoIncrCacheSize = 3000000
 	}
 
-	if fp.LowerCaseTableNames == "" {
-		fp.LowerCaseTableNames = "1"
+	if fp.LowerCaseTableNames == 0 {
+		fp.LowerCaseTableNames = 1
 	}
 
 	if fp.PrintDebugInterval == 0 {
