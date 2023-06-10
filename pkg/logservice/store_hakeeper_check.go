@@ -111,32 +111,23 @@ func (l *store) updateIDAlloc(count uint64) error {
 	return nil
 }
 
-func (l *store) getCheckerStateFromLeader() (*pb.CheckerState, uint64) {
+func (l *store) hakeeperCheck() {
 	isLeader, term, err := l.isLeaderHAKeeper()
 	if err != nil {
 		l.runtime.Logger().Error("failed to get HAKeeper Leader ID", zap.Error(err))
-		return nil, term
+		return
 	}
 
 	if !isLeader {
 		l.taskScheduler.StopScheduleCronTask()
-		return nil, term
+		return
 	}
 	state, err := l.getCheckerState()
 	if err != nil {
 		// TODO: check whether this is temp error
 		l.runtime.Logger().Error("failed to get checker state", zap.Error(err))
-		return nil, term
-	}
-	return state, term
-}
-
-func (l *store) hakeeperCheck() {
-	state, term := l.getCheckerStateFromLeader()
-	if state == nil {
 		return
 	}
-
 	switch state.State {
 	case pb.HAKeeperCreated:
 		l.runtime.Logger().Warn("waiting for initial cluster info to be set, check skipped")
@@ -149,6 +140,7 @@ func (l *store) hakeeperCheck() {
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
 		l.healthCheck(term, state)
+		l.taskSchedule(state)
 	default:
 		panic("unknown HAKeeper state")
 	}
