@@ -30,9 +30,9 @@ func TestLockAdded(t *testing.T) {
 	fsp := newFixedSlicePool(2)
 	txn := newActiveTxn(id, string(id), fsp, "")
 
-	txn.lockAdded("s1", 1, [][]byte{[]byte("k1")}, nil, false)
-	txn.lockAdded("s1", 1, [][]byte{[]byte("k11")}, nil, false)
-	txn.lockAdded("s1", 2, [][]byte{[]byte("k2"), []byte("k22")}, nil, false)
+	txn.lockAdded("s1", 1, [][]byte{[]byte("k1")}, nil)
+	txn.lockAdded("s1", 1, [][]byte{[]byte("k11")}, nil)
+	txn.lockAdded("s1", 2, [][]byte{[]byte("k2"), []byte("k22")}, nil)
 
 	assert.Equal(t, 2, len(txn.holdLocks))
 
@@ -80,7 +80,7 @@ func TestClose(t *testing.T) {
 		})
 	assert.Empty(t, txn.txnID)
 	assert.Empty(t, txn.txnKey)
-	assert.Nil(t, txn.blockedWaiter)
+	assert.Empty(t, txn.blockedWaiters)
 	assert.Empty(t, txn.holdLocks)
 	assert.Equal(t, 0, tables[1].(*localLockTable).mu.store.Len())
 	assert.Equal(t, 0, tables[2].(*localLockTable).mu.store.Len())
