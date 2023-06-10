@@ -109,10 +109,9 @@ func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
 		return
 	}
 	ts := opts.Txn().Txn().CommitTS
-	if ts.IsEmpty() {
-		panic("invalid committed ts")
+	if !ts.IsEmpty() {
+		s.txnClient.(client.TxnClientWithCtl).SetLatestCommitTS(ts)
 	}
-	s.txnClient.(client.TxnClientWithCtl).SetLatestCommitTS(ts)
 }
 
 func (s *sqlExecutor) getCompileContext(
