@@ -82,10 +82,17 @@ func (s *memStore) Create(
 
 func (s *memStore) GetColumns(
 	ctx context.Context,
-	tableID uint64) ([]AutoColumn, error) {
+	tableID uint64,
+	txnOp client.TxnOperator) ([]AutoColumn, error) {
 	s.Lock()
 	defer s.Unlock()
-	return s.caches[tableID], nil
+	s.Lock()
+	defer s.Unlock()
+	m := s.caches
+	if txnOp != nil {
+		m = s.uncommitted[string(txnOp.Txn().ID)]
+	}
+	return m[tableID], nil
 }
 
 func (s *memStore) Allocate(

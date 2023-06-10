@@ -107,7 +107,7 @@ func (s *service) Reset(
 	newTableID uint64,
 	keep bool,
 	txnOp client.TxnOperator) error {
-	cols, err := s.store.GetColumns(ctx, oldTableID)
+	cols, err := s.store.GetColumns(ctx, oldTableID, txnOp)
 	if err != nil {
 		return err
 	}
@@ -230,7 +230,7 @@ func (s *service) getCommittedTableCache(
 		return c, nil
 	}
 
-	cols, err := s.store.GetColumns(ctx, tableID)
+	cols, err := s.store.GetColumns(ctx, tableID, nil)
 	if err != nil {
 		return nil, err
 	}

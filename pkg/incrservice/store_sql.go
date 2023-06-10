@@ -170,11 +170,12 @@ func (s *sqlStore) Delete(
 
 func (s *sqlStore) GetColumns(
 	ctx context.Context,
-	tableID uint64) ([]AutoColumn, error) {
+	tableID uint64,
+	txnOp client.TxnOperator) ([]AutoColumn, error) {
 	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s where table_id = %d order by col_index`,
 		incrTableName,
 		tableID)
-	opts := executor.Options{}.WithDatabase(database)
+	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)
 	if err != nil {
 		return nil, err
