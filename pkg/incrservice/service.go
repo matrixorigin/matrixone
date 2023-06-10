@@ -338,12 +338,13 @@ func (s *service) destroyTables(ctx context.Context) {
 			s.mu.Unlock()
 
 			for _, dc := range deletes {
-				ctx := context.WithValue(ctx, defines.TenantIDKey{}, dc.accountID)
+				ctx, cancel := context.WithTimeout(context.WithValue(ctx, defines.TenantIDKey{}, dc.accountID), time.Second*30)
 				if err := s.store.Delete(ctx, dc.tableID); err == nil {
 					s.mu.Lock()
 					delete(s.mu.destroyed, dc.tableID)
 					s.mu.Unlock()
 				}
+				cancel()
 			}
 		}
 	}
