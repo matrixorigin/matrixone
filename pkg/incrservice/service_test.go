@@ -119,6 +119,7 @@ func TestCreateWithTxnAborted(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
+	lazyDeleteInterval = time.Millisecond * 10
 	runServiceTests(
 		t,
 		2,
@@ -138,11 +139,12 @@ func TestDelete(t *testing.T) {
 			op2 := ops[1]
 			require.NoError(t, s.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
-			checkStoreCachesCommitted(t, s2.store.(*memStore), 0)
+			waitStoreCachesCommitted(t, s2.store.(*memStore), 0)
 		})
 }
 
 func TestDeleteWithTxnAborted(t *testing.T) {
+	lazyDeleteInterval = time.Millisecond * 10
 	runServiceTests(
 		t,
 		2,
@@ -166,6 +168,7 @@ func TestDeleteWithTxnAborted(t *testing.T) {
 }
 
 func TestDeleteOnOtherService(t *testing.T) {
+	lazyDeleteInterval = time.Millisecond * 10
 	runServiceTests(
 		t,
 		2,
@@ -185,7 +188,7 @@ func TestDeleteOnOtherService(t *testing.T) {
 			op2 := ops[1]
 			require.NoError(t, s2.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
-			checkStoreCachesCommitted(t, s2.store.(*memStore), 0)
+			waitStoreCachesCommitted(t, s2.store.(*memStore), 0)
 		})
 }
 
@@ -231,6 +234,21 @@ func newTestTableDef(autoCols int) []AutoColumn {
 		})
 	}
 	return cols
+}
+
+func waitStoreCachesCommitted(
+	t *testing.T,
+	store *memStore,
+	n int) {
+	for {
+		store.Lock()
+		if len(store.caches[0]) == n {
+			store.Unlock()
+			return
+		}
+		store.Unlock()
+		time.Sleep(time.Millisecond * 10)
+	}
 }
 
 func checkStoreCachesCommitted(
