@@ -106,6 +106,12 @@ func (h *Handle) HandleCommit(
 			string(meta.GetID()))
 	})
 	defer func() {
+		if ok {
+			//delete the txn's context.
+			h.mu.Lock()
+			delete(h.mu.txnCtxs, string(meta.GetID()))
+			h.mu.Unlock()
+		}
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
 				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
@@ -180,11 +186,6 @@ func (h *Handle) HandleCommit(
 	}
 	err = txn.Commit()
 	cts = txn.GetCommitTS().ToTimestamp()
-
-	//delete the txn's context.
-	h.mu.Lock()
-	delete(h.mu.txnCtxs, string(meta.GetID()))
-	h.mu.Unlock()
 	return
 }
 

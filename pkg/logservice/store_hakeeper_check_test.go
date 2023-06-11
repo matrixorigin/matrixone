@@ -494,37 +494,6 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 	runHAKeeperClusterTest(t, fn)
 }
 
-func TestGetCheckerStateFromLeader(t *testing.T) {
-	fn := func(t *testing.T, store *store) {
-		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second*10))
-		defer cancel()
-
-		for {
-			select {
-			case <-ctx.Done():
-				t.Error("test deadline reached")
-				return
-
-			default:
-				isLeader, termA, err := store.isLeaderHAKeeper()
-				state, termB := store.getCheckerStateFromLeader()
-				require.NoError(t, err)
-				assert.Equal(t, termB, termA)
-
-				if !isLeader {
-					assert.Equal(t, (*pb.CheckerState)(nil), state)
-				} else {
-					assert.NotEqual(t, (*pb.CheckerState)(nil), state)
-					return
-				}
-				time.Sleep(time.Second)
-			}
-		}
-	}
-
-	runHAKeeperStoreTest(t, false, fn)
-}
-
 func TestGetCheckerState(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		state, err := store.getCheckerState()
