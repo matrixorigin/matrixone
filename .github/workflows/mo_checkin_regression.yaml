@@ -453,16 +453,6 @@ jobs:
           if [ -f benchmarksql-error.log ];then
             mv benchmarksql-error.log benchmarksql-error-10-100.log
           fi
-          
-      - name : ISSUE Notice
-        if: ${{ failure() || cancelled() }}
-        uses: chf007/action-wechat-work@master
-        env:
-          WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_MO_CHECKIN_BOT_WEBHOOK }}
-        with:
-          msgtype: markdown
-          content: "MO Checkin Regression On EKS failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})  <@shuqi.qin><@JiejieJia><@SuDong>"
-
       
       # start large table test
       # TODO(sudong)
@@ -515,6 +505,7 @@ jobs:
 
       - name: Collect and Check SSB Test Result
         if: ${{ always() && !cancelled() }}
+        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
           grep SSB config.yml
@@ -523,12 +514,14 @@ jobs:
       
       - name: Collect and Check TPCH Test Result
         if: ${{ always() && !cancelled() }}
+        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
           grep TPCH config.yml
           python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} TPCH
           python Checker.py TPCH
       - name: Collect and Check SYSBENCH Test Result
+        continue-on-error: true
         if: ${{ always() && !cancelled() }}
         run: |
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
@@ -537,6 +530,7 @@ jobs:
           python Checker.py SYSBENCH
       - name: Collect and Check TPCC Test Result
         if: ${{ always() && !cancelled() }}
+        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
           grep TPCC config.yml
@@ -551,6 +545,16 @@ jobs:
           path: |
              ${{ github.workspace }}/reports
           retention-days: 7
+
+      - name : ISSUE Notice
+        if: ${{ failure() || cancelled() }}
+        uses: chf007/action-wechat-work@master
+        env:
+          WECHAT_WORK_BOT_WEBHOOK: ${{ secrets.WECHAT_MO_CHECKIN_BOT_WEBHOOK }}
+        with:
+          msgtype: markdown
+          content: "MO Checkin Regression On EKS failed: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nCreator:<font color=\"warning\">${{ github.event.pull_request.user.login }}</font>\nAction Link: [Link](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})  <@shuqi.qin><@JiejieJia><@SuDong>"
+
 
   clean_up_env:
     if: ${{ always() && !cancelled() && github.event.pull_request.merged == true }} #
