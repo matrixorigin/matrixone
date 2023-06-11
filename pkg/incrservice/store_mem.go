@@ -167,17 +167,10 @@ func (s *memStore) UpdateMinValue(
 
 func (s *memStore) Delete(
 	ctx context.Context,
-	tableID uint64,
-	op client.TxnOperator) error {
-	op.(client.EventableTxnOperator).AppendEventCallback(
-		client.ClosedEvent,
-		func(txnMeta txn.TxnMeta) {
-			if txnMeta.Status == txn.TxnStatus_Committed {
-				s.Lock()
-				defer s.Unlock()
-				delete(s.caches, tableID)
-			}
-		})
+	tableID uint64) error {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.caches, tableID)
 	return nil
 }
 

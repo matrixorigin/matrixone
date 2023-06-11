@@ -19,13 +19,20 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
+)
+
+var (
+	lazyDeleteInterval = time.Second * 10
 )
 
 type service struct {
@@ -33,13 +40,15 @@ type service struct {
 	cfg       Config
 	store     IncrValueStore
 	allocator valueAllocator
+	stopper   *stopper.Stopper
 
 	mu struct {
 		sync.Mutex
-		closed  bool
-		tables  map[uint64]incrTableCache
-		creates map[string][]uint64
-		deletes map[string][]uint64
+		closed    bool
+		destroyed map[uint64]deleteCtx
+		tables    map[uint64]incrTableCache
+		creates   map[string][]uint64
+		deletes   map[string][]deleteCtx
 	}
 }
 
@@ -53,10 +62,15 @@ func NewIncrService(
 		cfg:       cfg,
 		store:     store,
 		allocator: newValueAllocator(store),
+		stopper:   stopper.NewStopper("incr-service", stopper.WithLogger(getLogger().RawLogger())),
 	}
+	s.mu.destroyed = make(map[uint64]deleteCtx)
 	s.mu.tables = make(map[uint64]incrTableCache, 1024)
 	s.mu.creates = make(map[string][]uint64, 1024)
-	s.mu.deletes = make(map[string][]uint64, 1024)
+	s.mu.deletes = make(map[string][]deleteCtx, 1024)
+	if err := s.stopper.RunTask(s.destroyTables); err != nil {
+		panic(err)
+	}
 	return s
 }
 
@@ -149,12 +163,8 @@ func (s *service) Delete(
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.store.Delete(ctx, tableID, txnOp); err != nil {
-		return err
-	}
-
 	key := string(txnOp.Txn().ID)
-	s.mu.deletes[key] = append(s.mu.deletes[key], tableID)
+	s.mu.deletes[key] = append(s.mu.deletes[key], newDeleteCtx(ctx, tableID))
 	if s.logger.Enabled(zap.DebugLevel) {
 		s.logger.Debug("ready to delete auto increment table cache",
 			zap.Uint64("table-id", tableID),
@@ -190,6 +200,8 @@ func (s *service) CurrentValue(
 }
 
 func (s *service) Close() {
+	s.stopper.Stop()
+
 	s.mu.Lock()
 	if s.mu.closed {
 		s.mu.Unlock()
@@ -228,6 +240,10 @@ func (s *service) getCommittedTableCache(
 	c, ok := s.mu.tables[tableID]
 	if ok {
 		return c, nil
+	}
+
+	if _, ok := s.mu.destroyed[tableID]; ok {
+		return nil, moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
 	}
 
 	cols, err := s.store.GetColumns(ctx, tableID, nil)
@@ -290,10 +306,11 @@ func (s *service) handleDeletesLocked(txnMeta txn.TxnMeta) {
 	}
 
 	if txnMeta.Status == txn.TxnStatus_Committed {
-		for _, id := range tables {
-			if tc, ok := s.mu.tables[id]; ok {
+		for _, ctx := range tables {
+			if tc, ok := s.mu.tables[ctx.tableID]; ok {
 				_ = tc.close()
-				delete(s.mu.tables, id)
+				delete(s.mu.tables, ctx.tableID)
+				s.mu.destroyed[ctx.tableID] = ctx
 			}
 		}
 	}
@@ -305,4 +322,42 @@ func (s *service) getTableCache(tableID uint64) incrTableCache {
 	defer s.mu.Unlock()
 
 	return s.mu.tables[tableID]
+}
+
+func (s *service) destroyTables(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(lazyDeleteInterval):
+			deletes := make([]deleteCtx, 0, len(s.mu.destroyed))
+			s.mu.Lock()
+			for _, ctx := range s.mu.destroyed {
+				deletes = append(deletes, ctx)
+			}
+			s.mu.Unlock()
+
+			for _, dc := range deletes {
+				ctx, cancel := context.WithTimeout(context.WithValue(ctx, defines.TenantIDKey{}, dc.accountID), time.Second*30)
+				if err := s.store.Delete(ctx, dc.tableID); err == nil {
+					s.mu.Lock()
+					delete(s.mu.destroyed, dc.tableID)
+					s.mu.Unlock()
+				}
+				cancel()
+			}
+		}
+	}
+}
+
+type deleteCtx struct {
+	accountID uint32
+	tableID   uint64
+}
+
+func newDeleteCtx(ctx context.Context, tableID uint64) deleteCtx {
+	return deleteCtx{
+		tableID:   tableID,
+		accountID: getAccountID(ctx),
+	}
 }
