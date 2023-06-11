@@ -86,8 +86,9 @@ func TestAlloc(t *testing.T) {
 								Offset:  0,
 								Step:    uint64(c.step),
 							},
-						}))
-				from, to, err := a.alloc(ctx, 0, c.key, c.count)
+						},
+						nil))
+				from, to, err := a.allocate(ctx, 0, c.key, c.count, nil)
 				require.NoError(t, err)
 				require.Equal(t, c.expectFrom, from)
 				require.Equal(t, c.expectTo, to)
@@ -157,14 +158,16 @@ func TestAsyncAlloc(t *testing.T) {
 								Offset:  0,
 								Step:    uint64(c.step),
 							},
-						}))
+						},
+						nil))
 				var wg sync.WaitGroup
 				wg.Add(1)
-				a.asyncAlloc(
+				a.asyncAllocate(
 					ctx,
 					0,
 					c.key,
 					c.count,
+					nil,
 					func(from, to uint64, err error) {
 						defer wg.Done()
 						require.NoError(t, err)

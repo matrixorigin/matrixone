@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -78,7 +79,18 @@ func (s *service) handleRemoteLock(
 		writeResponse(ctx, resp, err, cs)
 		return
 	}
+
 	txn := s.activeTxnHolder.getActiveTxn(req.Lock.TxnID, true, req.Lock.ServiceID)
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, req.Lock.TxnID) {
+		writeResponse(ctx, resp, ErrTxnNotFound, cs)
+		return
+	}
+	if txn.deadlockFound {
+		writeResponse(ctx, resp, ErrDeadLockDetected, cs)
+		return
+	}
 
 	l.lock(
 		ctx,

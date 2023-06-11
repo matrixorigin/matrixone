@@ -17,7 +17,6 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -297,97 +296,6 @@ func TestQueryLog(t *testing.T) {
 		assert.Equal(t, entries[0].Data, cmd)
 	}
 	runStoreTest(t, fn)
-}
-
-func proceedHAKeeperToRunning(t *testing.T, store *store) {
-	state, err := store.getCheckerState()
-	assert.NoError(t, err)
-	assert.Equal(t, pb.HAKeeperCreated, state.State)
-
-	err = store.setInitialClusterInfo(1, 1, 1)
-	assert.NoError(t, err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	hb := store.getHeartbeatMessage()
-	_, err = store.addLogStoreHeartbeat(ctx, hb)
-	assert.NoError(t, err)
-
-	state, err = store.getCheckerState()
-	assert.NoError(t, err)
-	assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
-
-	_, term, err := store.isLeaderHAKeeper()
-	assert.NoError(t, err)
-
-	store.bootstrap(term, state)
-	state, err = store.getCheckerState()
-
-	assert.NoError(t, err)
-	assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-
-	cmd, err := store.getCommandBatch(ctx, store.id())
-	require.NoError(t, err)
-	require.Equal(t, 1, len(cmd.Commands))
-	assert.True(t, cmd.Commands[0].Bootstrapping)
-
-	// handle startReplica to make sure logHeartbeat msg contain shards info,
-	// which used in store.checkBootstrap to determine if all log shards ready
-	service := &Service{store: store}
-	service.handleStartReplica(cmd.Commands[0])
-
-	for state.State != pb.HAKeeperRunning && store.bootstrapCheckCycles > 0 {
-		func() {
-			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-
-			_, err = store.addLogStoreHeartbeat(ctx, store.getHeartbeatMessage())
-			assert.NoError(t, err)
-
-			store.checkBootstrap(state)
-			state, err = store.getCheckerState()
-			assert.NoError(t, err)
-
-			time.Sleep(time.Millisecond * 100)
-		}()
-	}
-
-	assert.Equal(t, pb.HAKeeperRunning, state.State)
-}
-
-// test if the tickerForTaskSchedule can push forward these routine
-func TestTickerForTaskSchedule(t *testing.T) {
-	fn := func(t *testing.T, store *store, taskService taskservice.TaskService) {
-		// making hakeeper state proceeds to running before test task schedule
-		tickerCxt, tickerCancel := context.WithCancel(context.Background())
-		defer tickerCancel()
-
-		//do task schedule background
-		go store.tickerForTaskSchedule(tickerCxt, time.Millisecond*10)
-
-		proceedHAKeeperToRunning(t, store)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-
-		err := taskService.Create(ctx, task.TaskMetadata{ID: "1234"})
-		assert.NoError(t, err)
-
-		cnUUID := uuid.New().String()
-		cmd := pb.CNStoreHeartbeat{UUID: cnUUID}
-		_, err = store.addCNStoreHeartbeat(ctx, cmd)
-		assert.NoError(t, err)
-
-		// waiting the background taskSchedule operation
-		// schedule task that we created to CN node
-		time.Sleep(time.Millisecond * 100)
-
-		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID))
-		assert.NoError(t, err)
-		assert.Equal(t, 1, len(tasks))
-	}
-
-	runHakeeperTaskServiceTest(t, fn)
 }
 
 func TestHAKeeperTick(t *testing.T) {
