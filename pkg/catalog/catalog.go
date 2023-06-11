@@ -117,8 +117,10 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 			}
 			if cmds[i].Partitioned > 0 || len(cmds[i].Partition) > 0 {
 				cmds[i].Defs = append(cmds[i].Defs, &engine.PartitionDef{
-					Partitioned: cmds[i].Partitioned,
-					Partition:   cmds[i].Partition,
+					PartitionType:       cmds[i].PartitionType,
+					PartitionExpression: cmds[i].PartitionExpression,
+					Partitioned:         cmds[i].Partitioned,
+					Partition:           cmds[i].Partition,
 				})
 			}
 			pro := new(engine.PropertiesDef)

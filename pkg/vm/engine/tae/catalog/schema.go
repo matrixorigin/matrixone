@@ -319,6 +319,15 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+
+	if s.PartitionType, sn, err = objectio.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	if s.PartitionExpression, sn, err = objectio.ReadString(r); err != nil {
+		return
+	}
+	n += sn
 	if _, err = r.Read(types.EncodeInt8(&s.Partitioned)); err != nil {
 		return
 	}
@@ -441,6 +450,12 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	if _, err = objectio.WriteString(s.Comment, &w); err != nil {
+		return
+	}
+	if _, err = objectio.WriteString(s.PartitionType, &w); err != nil {
+		return
+	}
+	if _, err = objectio.WriteString(s.PartitionExpression, &w); err != nil {
 		return
 	}
 	if _, err = w.Write(types.EncodeInt8(&s.Partitioned)); err != nil {
