@@ -31,7 +31,8 @@ const maxBatchSizeToSend = 64 * mpool.MB
 
 const (
 	receiving = iota
-	sending   = 1
+	normalSending
+	pickUpSending
 )
 
 type Argument struct {
@@ -265,8 +266,12 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 			if end {
-				ctr.status = sending
+				// if number of block is less than 2, no need to do merge sort.
+				ctr.status = normalSending
+
 				if len(ctr.batchList) > 1 {
+					ctr.status = pickUpSending
+
 					// evaluate the first batch's order column.
 					if err = ctr.evaluateOrderColumn(proc, 0); err != nil {
 						return false, err
@@ -281,7 +286,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return false, err
 			}
 
-		case sending:
+		case normalSending:
 			if len(ctr.batchList) == 0 {
 				proc.SetInputBatch(nil)
 				return true, nil
@@ -294,6 +299,7 @@ func Call(idx int, proc *process.Process, arg any, isFirst bool, isLast bool) (b
 				return true, nil
 			}
 
+		case pickUpSending:
 			return ctr.pickAndSend(proc)
 		}
 	}

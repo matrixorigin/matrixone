@@ -130,11 +130,13 @@ func (client *pushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp
 	// If reconnect, receivedLogTailTime will reset. But latestAppliedLogTailTS is always keep the latest applied
 	// logtail ts.
 	ts := client.receivedLogTailTime.latestAppliedLogTailTS.Load()
-	if ts != nil && ts.GreaterEq(snapshotTS) {
+	if ts != nil && ts.GreaterEq(snapshotTS.Prev()) {
 		return
 	}
-	panic(fmt.Sprintf("BUG: all log tail must be applied before %s",
-		snapshotTS.DebugString()))
+	panic(fmt.Sprintf("BUG: all log tail must be applied before %s, received applied %s, last applied %+v",
+		snapshotTS.Prev().DebugString(),
+		client.receivedLogTailTime.getTimestamp().DebugString(),
+		ts))
 }
 
 // TryToSubscribeTable subscribe a table and block until subscribe succeed.
@@ -511,8 +513,10 @@ func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 
 func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
 	r.tList[index].Store(&newTimestamp)
-	ts := r.getTimestamp()
-	r.timestampWaiter.NotifyLatestCommitTS(ts)
+	if r.ready.Load() {
+		ts := r.getTimestamp()
+		r.timestampWaiter.NotifyLatestCommitTS(ts)
+	}
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {
