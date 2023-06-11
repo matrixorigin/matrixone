@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -114,6 +115,9 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
 		arg.TableDef.TblId,
 		bat)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return moerr.NewNoSuchTableNoCtx(arg.SchemaName, arg.TableDef.Name)
+		}
 		return err
 	}
 	proc.SetLastInsertID(lastInsertValue)
