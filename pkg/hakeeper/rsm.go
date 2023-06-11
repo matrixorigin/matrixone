@@ -26,10 +26,8 @@ import (
 	"github.com/lni/dragonboat/v4/logger"
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/mohae/deepcopy"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -388,8 +386,6 @@ func (s *stateMachine) handleSetStateCmd(cmd []byte) sm.Result {
 	case pb.HAKeeperBootstrapCommandsReceived:
 		if state == pb.HAKeeperBootstrapFailed || state == pb.HAKeeperRunning {
 			s.state.State = state
-			runtime.DefaultRuntime().Logger().Info("HAKeeper is ready",
-				zap.String("state", s.state.String()))
 			return sm.Result{}
 		}
 		return re()
@@ -558,6 +554,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		State:              s.state.State,
 		TaskSchedulerState: s.state.TaskSchedulerState,
 		TaskTableUser:      s.state.TaskTableUser,
+		NextId:             s.state.NextID,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)
