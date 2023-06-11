@@ -135,6 +135,12 @@ func (s *sqlStore) UpdateMinValue(
 	minValue uint64,
 	txnOp client.TxnOperator) error {
 	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	// txnOp is nil means the auto increment metadata is already insert into catalog.MOAutoIncrTable and committed.
+	// So updateMinValue will use a new txn to update the min value. To avoid w-w conflict, we need to wait this
+	// committed log tail applied to ensure subsequence txn must get a snapshot ts which is large than this commit.
+	if txnOp == nil {
+		opts = opts.WithWaitCommittedLogApplied()
+	}
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf("update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
@@ -153,9 +159,10 @@ func (s *sqlStore) UpdateMinValue(
 
 func (s *sqlStore) Delete(
 	ctx context.Context,
-	tableID uint64,
-	op client.TxnOperator) error {
-	opts := executor.Options{}.WithDatabase(database).WithTxn(op)
+	tableID uint64) error {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithWaitCommittedLogApplied()
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf("delete from %s where table_id = %d",

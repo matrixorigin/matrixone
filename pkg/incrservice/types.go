@@ -117,7 +117,7 @@ type IncrValueStore interface {
 	// UpdateMinValue update auto column min value to specified value.
 	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.
-	Delete(ctx context.Context, tableID uint64, txnOp client.TxnOperator) error
+	Delete(ctx context.Context, tableID uint64) error
 	// Close the store
 	Close()
 }
