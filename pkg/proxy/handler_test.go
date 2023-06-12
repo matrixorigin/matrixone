@@ -247,6 +247,70 @@ func TestHandler_Handle(t *testing.T) {
 	require.Equal(t, int64(1), s.counterSet.connTotal.Load())
 }
 
+func TestHandler_HandleErr(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	temp := os.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
+	listenAddr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(listenAddr))
+	cfg := Config{
+		ListenAddress:     "unix://" + listenAddr,
+		RebalanceDisabled: true,
+	}
+	hc := &mockHAKeeperClient{}
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
+	defer mc.Close()
+	rt.SetGlobalVariables(runtime.ClusterService, mc)
+	addr := fmt.Sprintf("%s/%d.sock", temp, time.Now().Nanosecond())
+	require.NoError(t, os.RemoveAll(addr))
+
+	// start proxy.
+	s, err := NewServer(ctx, cfg, WithRuntime(runtime.DefaultRuntime()),
+		WithHAKeeperClient(hc))
+	defer func() {
+		err := s.Close()
+		require.NoError(t, err)
+	}()
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	err = s.Start()
+	require.NoError(t, err)
+
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", listenAddr))
+	// connect to server.
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer func() {
+		_ = db.Close()
+		timeout := time.NewTimer(time.Second * 15)
+		tick := time.NewTicker(time.Millisecond * 100)
+		var connTotal int64
+		tt := false
+		for {
+			select {
+			case <-tick.C:
+				connTotal = s.counterSet.connTotal.Load()
+			case <-timeout.C:
+				tt = true
+			}
+			if connTotal == 0 || tt {
+				break
+			}
+		}
+		tick.Stop()
+		timeout.Stop()
+		require.Equal(t, int64(0), connTotal)
+	}()
+	_, err = db.Exec("anystmt")
+	require.Error(t, err)
+
+	require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
+}
+
 func TestHandler_HandleWithSSL(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
