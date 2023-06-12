@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -796,4 +798,19 @@ func IsTpQuery(qry *plan.Query) bool {
 		}
 	}
 	return true
+}
+
+func PrintStats(qry *plan.Query) string {
+	buf := bytes.NewBuffer(make([]byte, 0, 1024*64))
+	buf.WriteString("Print Stats: \n")
+	for _, node := range qry.GetNodes() {
+		stats := node.Stats
+		buf.WriteString(fmt.Sprintf("Node ID: %v, Node Type %v, ", node.NodeId, node.NodeType))
+		if stats == nil {
+			buf.WriteString("Stats: nil\n")
+		} else {
+			buf.WriteString(fmt.Sprintf("blocknum %v, outcnt %v \n", node.Stats.BlockNum, node.Stats.Outcnt))
+		}
+	}
+	return buf.String()
 }
