@@ -153,39 +153,12 @@ func (n *anode) GetSpace() uint32 {
 	return MaxNodeRows - n.rows
 }
 
-func (n *anode) RowsWithoutDeletes() uint32 {
-	deletes := uint32(0)
-	if n.data != nil && n.data.Deletes != nil {
-		deletes = uint32(n.data.DeleteCnt())
+func (n *anode) Compact() {
+	if n.data == nil {
+		return
 	}
-	return uint32(n.data.Length()) - deletes
-}
-
-func (n *anode) LengthWithDeletes(appended, toAppend uint32) uint32 {
-	if !n.data.HasDelete() {
-		return toAppend
-	}
-	appendedOffset := n.OffsetWithDeletes(appended)
-	toAppendOffset := n.OffsetWithDeletes(toAppend + appended)
-	// logutil.Infof("appened:%d, toAppend:%d, off1=%d, off2=%d", appended, toAppend, appendedOffset, toAppendOffset)
-	return toAppendOffset - appendedOffset
-}
-
-func (n *anode) OffsetWithDeletes(count uint32) uint32 {
-	// TODO: YYY
-	return 0
-	// if !n.data.HasDelete() {
-	// 	return count
-	// }
-	// offset := count
-	// for offset < n.rows {
-	// 	deletes := n.data.Deletes.Rank(offset)
-	// 	if offset == count+uint32(deletes) {
-	// 		break
-	// 	}
-	// 	offset = count + uint32(deletes)
-	// }
-	// return offset
+	n.data.Compact()
+	n.rows = uint32(n.data.Length())
 }
 
 func (n *anode) GetValue(col int, row uint32) (any, bool, error) {
