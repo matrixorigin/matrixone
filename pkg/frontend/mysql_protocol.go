@@ -522,8 +522,6 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 				return err
 			}
 		}
-	} else {
-		stmt.params.GetNulls().Reset()
 	}
 
 	length := len(data) - pos
@@ -552,8 +550,6 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				return err
 			}
 		}
-	} else {
-		stmt.params.GetNulls().Reset()
 	}
 
 	var flag uint8
