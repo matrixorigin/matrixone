@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -58,6 +59,7 @@ type Vector interface {
 
 	Update(i int, v any, isNull bool)
 	Compact(*roaring.Bitmap)
+	CompactByBitmap(*nulls.Bitmap)
 
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)

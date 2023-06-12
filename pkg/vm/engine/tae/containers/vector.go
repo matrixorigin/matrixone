@@ -22,6 +22,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -353,6 +354,21 @@ func (vec *vectorWrapper) extendWithOffset(src *cnVector.Vector, srcOff, srcLen 
 	}
 	err = vec.downstreamVector.Union(src, sels, vec.mpool)
 	return
+}
+
+func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Bitmap) {
+	if mask.IsEmpty() {
+		return
+	}
+	vec.tryCoW()
+
+	dels := vec.mpool.GetSels()
+	mask.Foreach(func(i uint64) bool {
+		dels = append(dels, int64(i))
+		return true
+	})
+	vec.downstreamVector.Shrink(dels, true)
+	vec.mpool.PutSels(dels)
 }
 
 func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {
