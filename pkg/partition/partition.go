@@ -195,7 +195,54 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 			diffs[i] = diffs[i] || (v != w)
 			v = w
 		}
+	case types.T_decimal64:
+		var n bool
+		var v types.Decimal64
 
+		vs := vector.MustFixedCol[types.Decimal64](vec)
+		if nulls.Any(vec.GetNulls()) {
+			for i, sel := range sels {
+				w := vs[sel]
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
+				if n != isNull {
+					diffs[i] = true
+				} else {
+					diffs[i] = diffs[i] || (v != vs[sel])
+				}
+				v = w
+				n = isNull
+			}
+			break
+		}
+		for i, sel := range sels {
+			w := vs[sel]
+			diffs[i] = diffs[i] || (v != w)
+			v = w
+		}
+	case types.T_decimal128:
+		var n bool
+		var v types.Decimal128
+
+		vs := vector.MustFixedCol[types.Decimal128](vec)
+		if nulls.Any(vec.GetNulls()) {
+			for i, sel := range sels {
+				w := vs[sel]
+				isNull := nulls.Contains(vec.GetNulls(), uint64(sel))
+				if n != isNull {
+					diffs[i] = true
+				} else {
+					diffs[i] = diffs[i] || (v != vs[sel])
+				}
+				v = w
+				n = isNull
+			}
+			break
+		}
+		for i, sel := range sels {
+			w := vs[sel]
+			diffs[i] = diffs[i] || (v != w)
+			v = w
+		}
 	case types.T_uint8:
 		var n bool
 		var v uint8

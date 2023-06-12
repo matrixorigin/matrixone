@@ -645,8 +645,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
-		i := 0
-		for _, globalRef := range childRemapping.localToGlobal {
+		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
 			}
@@ -663,7 +662,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				},
 			})
-			i++
 		}
 
 		windowTag := node.BindingTags[0]
@@ -682,12 +680,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 			remapping.addColRef(globalRef)
 
+			l := len(childProjList)
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
-						ColPos: int32(idx + i),
+						ColPos: int32(idx + l),
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
