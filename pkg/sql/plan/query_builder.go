@@ -1000,6 +1000,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
+		rootID = builder.removeRedundantJoinCond(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
