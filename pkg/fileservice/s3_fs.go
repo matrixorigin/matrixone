@@ -938,15 +938,16 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	}
 
 	// credentials for 3rd-party services
-	if credentialProvider == nil && endpointURL != nil {
-		hostname := endpointURL.Hostname()
-		if strings.Contains(hostname, "aliyuncs.com") {
-			credentialProvider = newAliyunCredentialsProvider()
-		} else if strings.Contains(hostname, "myqcloud.com") ||
-			strings.Contains(hostname, "tencentcos.cn") {
-			credentialProvider = newTencentCloudCredentialsProvider()
-		}
-	}
+	//TODO fix this
+	//if credentialProvider == nil && endpointURL != nil {
+	//	hostname := endpointURL.Hostname()
+	//	if strings.Contains(hostname, "aliyuncs.com") {
+	//		credentialProvider = newAliyunCredentialsProvider()
+	//	} else if strings.Contains(hostname, "myqcloud.com") ||
+	//		strings.Contains(hostname, "tencentcos.cn") {
+	//		credentialProvider = newTencentCloudCredentialsProvider()
+	//	}
+	//}
 
 	// role arn credential
 	if roleARN != "" {
