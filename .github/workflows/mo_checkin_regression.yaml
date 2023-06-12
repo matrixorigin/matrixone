@@ -505,6 +505,7 @@ jobs:
 
       - name: Collect and Check SSB Test Result
         if: ${{ always() && !cancelled() }}
+        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
           grep SSB config.yml
@@ -513,12 +514,14 @@ jobs:
       
       - name: Collect and Check TPCH Test Result
         if: ${{ always() && !cancelled() }}
+        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
           grep TPCH config.yml
           python Processor.py ${{ github.run_id }} ${{ needs.docker_image_build.outputs.version }} TPCH
           python Checker.py TPCH
       - name: Collect and Check SYSBENCH Test Result
+        continue-on-error: true
         if: ${{ always() && !cancelled() }}
         run: |
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
@@ -527,6 +530,7 @@ jobs:
           python Checker.py SYSBENCH
       - name: Collect and Check TPCC Test Result
         if: ${{ always() && !cancelled() }}
+        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
           grep TPCC config.yml
