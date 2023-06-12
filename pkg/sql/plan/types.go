@@ -157,6 +157,7 @@ type QueryBuilder struct {
 
 	mysqlCompatible    bool
 	haveOnDuplicateKey bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
+	isForUpdate        bool // if it's a query plan for update
 }
 
 type CTERef struct {

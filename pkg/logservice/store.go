@@ -667,34 +667,6 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 	}
 }
 
-func (l *store) tickerForTaskSchedule(ctx context.Context, duration time.Duration) {
-	ticker := time.NewTicker(duration)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			state, _ := l.getCheckerStateFromLeader()
-			if state != nil && state.State == pb.HAKeeperRunning {
-				l.taskSchedule(state)
-			}
-
-		case <-ctx.Done():
-			return
-		}
-
-		// l.taskSchedule could be blocking a long time, this extra select
-		// can give a chance immediately to check the ctx status when it resumes.
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			// nothing to do
-		}
-	}
-
-}
-
 func (l *store) ticker(ctx context.Context) {
 	if l.cfg.HAKeeperTickInterval.Duration == 0 {
 		panic("invalid HAKeeperTickInterval")
@@ -712,12 +684,6 @@ func (l *store) ticker(ctx context.Context) {
 	}()
 	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval.Duration)
 	defer haTicker.Stop()
-
-	// moving task schedule from the ticker normal routine to a
-	// separate goroutine can avoid the hakeeper's health check and tick update
-	// operations being blocked by task schedule, or the tick will be skipped and
-	// can not correctly estimate the time passing.
-	go l.tickerForTaskSchedule(ctx, l.cfg.HAKeeperCheckInterval.Duration)
 
 	for {
 		select {
