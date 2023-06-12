@@ -84,7 +84,8 @@ func (tw *timestampWaiter) Close() {
 func (tw *timestampWaiter) addToWait(ts timestamp.Timestamp) *waiter {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
-	if tw.mu.lastNotified.GreaterEq(ts) {
+	if !tw.mu.lastNotified.IsEmpty() &&
+		tw.mu.lastNotified.GreaterEq(ts) {
 		return nil
 	}
 

@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -49,8 +50,9 @@ func NewSQLStore(exec executor.SQLExecutor) (IncrValueStore, error) {
 func (s *sqlStore) Create(
 	ctx context.Context,
 	tableID uint64,
-	cols []AutoColumn) error {
-	opts := executor.Options{}.WithDatabase(database)
+	cols []AutoColumn,
+	txnOp client.TxnOperator) error {
+	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
 	return s.exec.ExecTxn(
 		ctx,
 		func(te executor.TxnExecutor) error {
@@ -66,11 +68,12 @@ func (s *sqlStore) Create(
 		opts)
 }
 
-func (s *sqlStore) Alloc(
+func (s *sqlStore) Allocate(
 	ctx context.Context,
 	tableID uint64,
 	colName string,
-	count int) (uint64, uint64, error) {
+	count int,
+	txnOp client.TxnOperator) (uint64, uint64, error) {
 	var curr, next, step uint64
 	ok := false
 
@@ -78,7 +81,7 @@ func (s *sqlStore) Alloc(
 		incrTableName,
 		tableID,
 		colName)
-	opts := executor.Options{}.WithDatabase(database)
+	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
 	for {
 		err := s.exec.ExecTxn(
 			ctx,
@@ -129,8 +132,15 @@ func (s *sqlStore) UpdateMinValue(
 	ctx context.Context,
 	tableID uint64,
 	col string,
-	minValue uint64) error {
-	opts := executor.Options{}.WithDatabase(database)
+	minValue uint64,
+	txnOp client.TxnOperator) error {
+	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	// txnOp is nil means the auto increment metadata is already insert into catalog.MOAutoIncrTable and committed.
+	// So updateMinValue will use a new txn to update the min value. To avoid w-w conflict, we need to wait this
+	// committed log tail applied to ensure subsequence txn must get a snapshot ts which is large than this commit.
+	if txnOp == nil {
+		opts = opts.WithWaitCommittedLogApplied()
+	}
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf("update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
@@ -150,7 +160,9 @@ func (s *sqlStore) UpdateMinValue(
 func (s *sqlStore) Delete(
 	ctx context.Context,
 	tableID uint64) error {
-	opts := executor.Options{}.WithDatabase(database)
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithWaitCommittedLogApplied()
 	res, err := s.exec.Exec(
 		ctx,
 		fmt.Sprintf("delete from %s where table_id = %d",
@@ -163,13 +175,14 @@ func (s *sqlStore) Delete(
 	return nil
 }
 
-func (s *sqlStore) GetCloumns(
+func (s *sqlStore) GetColumns(
 	ctx context.Context,
-	tableID uint64) ([]AutoColumn, error) {
+	tableID uint64,
+	txnOp client.TxnOperator) ([]AutoColumn, error) {
 	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s where table_id = %d order by col_index`,
 		incrTableName,
 		tableID)
-	opts := executor.Options{}.WithDatabase(database)
+	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)
 	if err != nil {
 		return nil, err

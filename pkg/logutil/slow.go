@@ -12,41 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package logutil
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"sync/atomic"
+	"time"
+
 	"go.uber.org/zap"
 )
 
-func doWithRetry[T any](
-	what string,
-	fn func() (T, error),
-	maxAttemps int,
-	isRetryable func(error) bool,
-) (res T, err error) {
-	numRetries := 0
-	for {
-		res, err = fn()
-		if err != nil {
-			if isRetryable(err) {
-				maxAttemps--
-
-				numRetries++
-				if numRetries%5 == 0 {
-					logutil.Info("file service retry",
-						zap.Any("times", numRetries),
-						zap.Any("what", what),
-					)
-				}
-
-				if maxAttemps <= 0 {
-					return
-				}
-				continue
-			}
-			return
+// Slow logs if operation not done in timeout duration
+func Slow(timeout time.Duration, msg string, fields ...zap.Field) (doneFunc func() bool) {
+	state := new(atomic.Int32) // 0: pending, 1: logged, 2: do not log
+	timer := time.AfterFunc(timeout, func() {
+		if state.CompareAndSwap(0, 1) {
+			GetGlobalLogger().Info(msg, fields...)
 		}
-		return
+	})
+	doneFunc = func() (logged bool) {
+		if timer.Stop() {
+			// timer stopped
+			return false
+		}
+		if state.CompareAndSwap(0, 2) {
+			// will not log
+			return false
+		}
+		// logged or logging
+		return true
 	}
+	return
 }

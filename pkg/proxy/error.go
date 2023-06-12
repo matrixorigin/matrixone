@@ -17,6 +17,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"io"
 )
 
 // errorCode indicates the errors.
@@ -69,6 +70,17 @@ func getErrorCode(err error) errorCode {
 		return e.code
 	}
 	return codeNone
+}
+
+func isEOFErr(err error) bool {
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	e, ok := err.(*errWithCode)
+	if ok && errors.Is(e.cause, io.EOF) {
+		return true
+	}
+	return false
 }
 
 // connectErr is the error when it is failed to connect to
