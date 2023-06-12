@@ -23,6 +23,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -100,28 +101,25 @@ func (bat *Batch) GetVectorByName(name string) Vector {
 
 func (bat *Batch) RangeDelete(start, end int) {
 	if bat.Deletes == nil {
-		bat.Deletes = roaring.New()
+		bat.Deletes = nulls.NewWithSize(end)
 	}
 	bat.Deletes.AddRange(uint64(start), uint64(end))
 }
 
 func (bat *Batch) Delete(i int) {
 	if bat.Deletes == nil {
-		bat.Deletes = roaring.BitmapOf(uint32(i))
+		bat.Deletes = nulls.NewWithSize(i)
 	} else {
-		bat.Deletes.Add(uint32(i))
+		bat.Deletes.Add(uint64(i))
 	}
 }
 
 func (bat *Batch) HasDelete() bool {
-	return bat.Deletes != nil && !bat.Deletes.IsEmpty()
+	return !bat.Deletes.IsEmpty()
 }
 
 func (bat *Batch) IsDeleted(i int) bool {
-	if !bat.HasDelete() {
-		return false
-	}
-	return bat.Deletes.ContainsInt(i)
+	return bat.Deletes.Contains(uint64(i))
 }
 
 func (bat *Batch) DeleteCnt() int {
@@ -136,7 +134,7 @@ func (bat *Batch) Compact() {
 		return
 	}
 	for _, vec := range bat.Vecs {
-		vec.Compact(bat.Deletes)
+		vec.CompactByBitmap(bat.Deletes)
 	}
 	bat.Deletes = nil
 }
@@ -153,22 +151,28 @@ func (bat *Batch) Allocated() int {
 	return allocated
 }
 
-func (bat *Batch) WindowDeletes(offset, length int) *roaring.Bitmap {
-	if bat.Deletes != nil && offset+length != bat.Length() {
-		return common.BM32Window(bat.Deletes, offset, offset+length)
+func (bat *Batch) WindowDeletes(offset, length int, deep bool) *nulls.Bitmap {
+	if bat.Deletes.IsEmpty() || length <= 0 {
+		return nil
 	}
-	return bat.Deletes
+	start := offset
+	end := offset + length
+	if end > bat.Length() {
+		panic(fmt.Errorf("out of range: %d, %d", offset, length))
+	}
+	if start == 0 && end == bat.Length() && !deep {
+		return bat.Deletes
+	}
+	ret := nulls.NewWithSize(length)
+	nulls.Range(bat.Deletes, uint64(start), uint64(end), uint64(start), ret)
+	return ret
 }
 
 func (bat *Batch) Window(offset, length int) *Batch {
 	win := new(Batch)
 	win.Attrs = bat.Attrs
 	win.Nameidx = bat.Nameidx
-	if bat.Deletes != nil && offset+length != bat.Length() {
-		win.Deletes = common.BM32Window(bat.Deletes, offset, offset+length)
-	} else {
-		win.Deletes = bat.Deletes
-	}
+	win.Deletes = bat.WindowDeletes(offset, length, false)
 	win.Vecs = make([]Vector, len(bat.Vecs))
 	for i := range win.Vecs {
 		win.Vecs[i] = bat.Vecs[i].Window(offset, length)
@@ -184,9 +188,7 @@ func (bat *Batch) CloneWindow(offset, length int, allocator ...*mpool.MPool) (cl
 	for k, v := range bat.Nameidx {
 		cloned.Nameidx[k] = v
 	}
-	if bat.Deletes != nil {
-		cloned.Deletes = common.BM32Window(bat.Deletes, offset, offset+length)
-	}
+	cloned.Deletes = bat.WindowDeletes(offset, length, true)
 	cloned.Vecs = make([]Vector, len(bat.Vecs))
 	for i := range cloned.Vecs {
 		cloned.Vecs[i] = bat.Vecs[i].CloneWindow(offset, length, allocator...)
@@ -221,10 +223,8 @@ func (bat *Batch) Equals(o *Batch) bool {
 	if bat.DeleteCnt() != o.DeleteCnt() {
 		return false
 	}
-	if bat.HasDelete() {
-		if !bat.Deletes.Equals(o.Deletes) {
-			return false
-		}
+	if !common.BitmapEqual(bat.Deletes, o.Deletes) {
+		return false
 	}
 	for i := range bat.Vecs {
 		if bat.Attrs[i] != o.Attrs[i] {
