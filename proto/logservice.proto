@@ -510,6 +510,7 @@ message CheckerState {
   HAKeeperState State     = 6;
   TaskSchedulerState TaskSchedulerState = 7;
   TaskTableUser TaskTableUser           = 8 [(gogoproto.nullable) = false];
+  uint64 NextId                         = 9;
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.
