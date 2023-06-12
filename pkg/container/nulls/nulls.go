@@ -396,6 +396,13 @@ func (nsp *Nulls) Merge(o *Nulls) {
 	}
 }
 
+func (nsp *Nulls) String() string {
+	if nsp.IsEmpty() {
+		return fmt.Sprintf("%v", []uint64{})
+	}
+	return nsp.np.String()
+}
+
 func ToArray[T constraints.Integer](nsp *Nulls) []T {
 	if nsp.IsEmpty() {
 		return []T{}

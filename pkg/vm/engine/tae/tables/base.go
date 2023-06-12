@@ -104,7 +104,7 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
-func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels []uint32) error {
+func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -336,7 +336,7 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	blk.RLock()
 	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
-	if view.BaseView.DeleteMask != nil {
+	if view.DeleteMask != nil {
 		view.SetData(vec.CloneWindow(0, vec.Length(), nil))
 		vec.Close()
 	}
@@ -371,13 +371,16 @@ func (blk *baseBlock) dedupWithLoad(
 	}
 	defer view.Close()
 	var dedupFn any
-	dels := nulls.ToArray[uint32](view.DeleteMask)
 	if isAblk {
-		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupAlkFunctions, view.GetData(), dels, def, blk.LoadPersistedCommitTS, txn)
+		dedupFn = containers.MakeForeachVectorOp(
+			keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn,
+		)
 	} else {
-		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), dels, def)
+		dedupFn = containers.MakeForeachVectorOp(
+			keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def,
+		)
 	}
-	err = containers.ForeachVector(keys, dedupFn, dels)
+	err = containers.ForeachVector(keys, dedupFn, sels)
 	return
 }
 
@@ -507,7 +510,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	blk.Foreach(pkIdx, func(v any, isNull bool, row int) error {
 		pkVec.Append(v, false)
 		return nil
-	}, nulls.ToArray[uint32](deletes))
+	}, deletes)
 	// batch: rowID, ts, pkVec, abort
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)

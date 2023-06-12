@@ -109,9 +109,8 @@ func (bat *Batch) RangeDelete(start, end int) {
 func (bat *Batch) Delete(i int) {
 	if bat.Deletes == nil {
 		bat.Deletes = nulls.NewWithSize(i)
-	} else {
-		bat.Deletes.Add(uint64(i))
 	}
+	bat.Deletes.Add(uint64(i))
 }
 
 func (bat *Batch) HasDelete() bool {

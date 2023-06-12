@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -96,7 +97,7 @@ func (node *persistedNode) GetColumnDataWindow(
 
 func (node *persistedNode) Foreach(
 	readSchema *catalog.Schema,
-	colIdx int, op func(v any, isNull bool, row int) error, sel []uint32) (err error) {
+	colIdx int, op func(v any, isNull bool, row int) error, sel *nulls.Bitmap) (err error) {
 	var data containers.Vector
 	if data, err = node.block.LoadPersistedColumnData(
 		context.Background(),

@@ -237,11 +237,11 @@ func (vec *vectorWrapper) TryConvertConst() Vector {
 	return vec
 }
 
-func (vec *vectorWrapper) Foreach(op ItOp, sels []uint32) error {
+func (vec *vectorWrapper) Foreach(op ItOp, sels *nulls.Bitmap) error {
 	return vec.ForeachWindow(0, vec.downstreamVector.Length(), op, sels)
 }
 
-func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels []uint32) (err error) {
+func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls.Bitmap) (err error) {
 	return ForeachVectorWindow(vec, offset, length, nil, op, sels)
 }
 

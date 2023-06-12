@@ -234,8 +234,10 @@ func (n *MVCCHandle) GetVisibleRowLocked(
 			}
 		}
 	}
-	if holes != nil {
-		nulls.RemoveRange(holes, uint64(maxrow), uint64(holesMax)+1)
+	if !holes.IsEmpty() {
+		for i := uint64(maxrow); i < uint64(holesMax); i++ {
+			holes.Del(i)
+		}
 	}
 	return
 }

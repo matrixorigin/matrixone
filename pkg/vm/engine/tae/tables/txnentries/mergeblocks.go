@@ -210,9 +210,6 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		return
 	}
 
-	view.DeleteMask = compute.ShuffleByDeletes(
-		view.DeleteMask, entry.deletes[fromPos])
-
 	view.DeleteMask = compute.ShuffleByDeletes(view.DeleteMask, entry.deletes[fromPos])
 	if !view.DeleteMask.IsEmpty() {
 		it := view.DeleteMask.GetBitmap().Iterator()

@@ -104,7 +104,10 @@ func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *nulls.Bitmap, def
 }
 
 func parseADedeupArgs(args ...any) (
-	vec containers.Vector, mask *nulls.Bitmap, def *catalog.ColDef, scan func() (containers.Vector, error), txn txnif.TxnReader) {
+	vec containers.Vector, mask *nulls.Bitmap, def *catalog.ColDef,
+	scan func() (containers.Vector, error),
+	txn txnif.TxnReader,
+) {
 	vec = args[0].(containers.Vector)
 	if args[1] != nil {
 		mask = args[1].(*nulls.Bitmap)

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -101,7 +102,7 @@ type Block interface {
 
 	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
-	Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels []uint32) error
+	Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error
 	PPString(level common.PPLevel, depth int, prefix string) string
 
 	Init() error
