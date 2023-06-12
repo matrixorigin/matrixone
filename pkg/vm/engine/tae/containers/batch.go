@@ -273,7 +273,7 @@ func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	// 4. Deletes
 	var buf []byte
 	if bat.Deletes != nil {
-		if buf, err = bat.Deletes.ToBytes(); err != nil {
+		if buf, err = bat.Deletes.Show(); err != nil {
 			return
 		}
 	}
@@ -334,11 +334,15 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	if size == 0 {
 		return
 	}
-	bat.Deletes = roaring.New()
-	if tmpn, err = bat.Deletes.ReadFrom(r); err != nil {
+	bat.Deletes = &nulls.Bitmap{}
+	buf = make([]byte, size)
+	if _, err = r.Read(buf); err != nil {
 		return
 	}
-	n += tmpn
+	if err = bat.Deletes.ReadNoCopy(buf); err != nil {
+		return
+	}
+	n += int64(size)
 
 	return
 }

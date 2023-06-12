@@ -15,6 +15,8 @@
 package txnimpl
 
 import (
+	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -176,7 +178,11 @@ func (n *anode) OffsetWithDeletes(count uint32) uint32 {
 	}
 	offset := count
 	for offset < n.rows {
-		deletes := n.data.Deletes.Rank(offset)
+		b := &roaring.Bitmap{}
+		b.Rank()
+
+		n.data.Deletes.
+			deletes := n.data.Deletes.Rank(offset)
 		if offset == count+uint32(deletes) {
 			break
 		}
@@ -203,15 +209,15 @@ func (n *anode) PrintDeletes() string {
 	if !n.data.HasDelete() {
 		return "NoDeletes"
 	}
-	return n.data.Deletes.String()
+	return nulls.String(n.data.Deletes)
 }
 
 func (n *anode) WindowColumn(start, end uint32, pos int) (vec containers.Vector, err error) {
 	data := n.data
-	deletes := data.WindowDeletes(int(start), int(end-start))
+	deletes := data.WindowDeletes(int(start), int(end-start), false)
 	if deletes != nil {
 		vec = data.Vecs[pos].CloneWindow(int(start), int(end-start))
-		vec.Compact(deletes)
+		vec.CompactByBitmap(deletes)
 	} else {
 		vec = data.Vecs[pos].Window(int(start), int(end-start))
 	}

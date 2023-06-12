@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -244,7 +245,7 @@ func (n *MVCCHandle) CollectAppendLocked(
 	start, end types.TS) (
 	minRow, maxRow uint32,
 	commitTSVec, abortVec containers.Vector,
-	abortedBitmap *roaring.Bitmap) {
+	abortedBitmap *nulls.Bitmap) {
 	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
 	if node != nil && node.GetPrepare().Less(start) {
 		startOffset++
@@ -256,7 +257,7 @@ func (n *MVCCHandle) CollectAppendLocked(
 	minRow = n.appends.GetNodeByOffset(startOffset).startRow
 	maxRow = node.maxRow
 
-	abortedBitmap = roaring.NewBitmap()
+	abortedBitmap = &nulls.Bitmap{}
 	commitTSVec = containers.MakeVector(types.T_TS.ToType())
 	abortVec = containers.MakeVector(types.T_bool.ToType())
 	n.appends.LoopOffsetRange(
@@ -281,7 +282,7 @@ func (n *MVCCHandle) CollectAppendLocked(
 	return
 }
 
-func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap, deletes *roaring.Bitmap) {
+func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap *nulls.Bitmap, deletes *roaring.Bitmap) {
 	n.RLock()
 	defer n.RUnlock()
 	if n.deletes.IsEmpty() {
@@ -294,7 +295,7 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 	rowIDVec = containers.MakeVector(types.T_Rowid.ToType())
 	commitTSVec = containers.MakeVector(types.T_TS.ToType())
 	abortVec = containers.MakeVector(types.T_bool.ToType())
-	abortedBitmap = roaring.NewBitmap()
+	abortedBitmap = &nulls.Bitmap{}
 	id := n.meta.ID
 
 	n.deletes.LoopChain(
@@ -309,12 +310,17 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 			if in {
 				it := node.mask.Iterator()
 				if node.IsAborted() {
-					abortedBitmap.AddMany(node.mask.ToArray())
+					uint32Arroy := node.mask.ToArray()
+					uint64Arror := make([]uint64, len(uint32Arroy))
+					for i := range uint32Arroy {
+						uint64Arror[i] = uint64(uint32Arroy[i])
+					}
+					nulls.Add(abortedBitmap, uint64Arror...)
 				}
 				for it.HasNext() {
 					row := it.Next()
 					if deletes == nil {
-						deletes = roaring.New()
+						deletes = &roaring.Bitmap{}
 					}
 					deletes.Add(row)
 					rowIDVec.Append(*objectio.NewRowid(&id, row), false)

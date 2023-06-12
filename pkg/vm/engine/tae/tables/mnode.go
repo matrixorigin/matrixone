@@ -157,7 +157,7 @@ func (node *memoryNode) GetDataWindow(
 	// manually clone data
 	bat = containers.NewBatchWithCapacity(len(readSchema.ColDefs))
 	if node.data.Deletes != nil {
-		bat.Deletes = common.BM32Window(bat.Deletes, int(from), int(to))
+		bat.Deletes = bat.WindowDeletes(int(from), int(to-from), false)
 	}
 	for _, col := range readSchema.ColDefs {
 		idx, ok := node.writeSchema.SeqnumMap[col.SeqNum]
