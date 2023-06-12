@@ -52,7 +52,7 @@ const MaxConnectionNumber = 1
 
 const DBConnRetryThreshold = 8
 
-const MaxInsertLen = 10
+const MaxInsertLen = 100
 
 type prepareSQLs struct {
 	rowNum    int

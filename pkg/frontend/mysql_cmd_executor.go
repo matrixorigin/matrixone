@@ -1054,9 +1054,10 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt) (*Pr
 	}
 
 	prepareStmt := &PrepareStmt{
-		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
-		PreparePlan: preparePlan,
-		PrepareStmt: st.Stmt,
+		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
+		PreparePlan:         preparePlan,
+		PrepareStmt:         st.Stmt,
+		getFromSendLongData: make(map[int]struct{}),
 	}
 
 	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
@@ -3568,6 +3569,9 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		}
 		if prepareStmt.params != nil {
 			prepareStmt.params.GetNulls().Reset()
+			for k := range prepareStmt.getFromSendLongData {
+				delete(prepareStmt.getFromSendLongData, k)
+			}
 		}
 		return resp, nil
 
@@ -3616,7 +3620,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 }
 
 func (mce *MysqlCmdExecutor) parseStmtExecute(requestCtx context.Context, data []byte) (string, *PrepareStmt, error) {
-	// see https://dev.mysql.com/doc/internals/en/com-stmt-execute.html
+	// see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_execute.html
 	pos := 0
 	if len(data) < 4 {
 		return "", nil, moerr.NewInvalidInput(requestCtx, "sql command contains malformed packet")

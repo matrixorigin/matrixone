@@ -529,6 +529,7 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 	if !ok {
 		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 	}
+	stmt.getFromSendLongData[int(paramIdx)] = struct{}{}
 	return util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx))
 }
 
@@ -590,8 +591,11 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 		// get paramters and set value to session variables
 		for i := 0; i < numParams; i++ {
-			// TODO :if params had received via COM_STMT_SEND_LONG_DATA, use them directly.
+			// if params had received via COM_STMT_SEND_LONG_DATA, use them directly(we set the params when deal with COM_STMT_SEND_LONG_DATA).
 			// ref https://dev.mysql.com/doc/internals/en/com-stmt-send-long-data.html
+			if _, ok := stmt.getFromSendLongData[i]; ok {
+				continue
+			}
 
 			if nullBitmaps[i>>3]&(1<<(uint(i)%8)) > 0 {
 				err = util.SetAnyToStringVector(proc, nil, stmt.params, i)
@@ -690,7 +694,6 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
-
 				}
 				pos = newPos
 				err = util.SetAnyToStringVector(proc, val, stmt.params, i)

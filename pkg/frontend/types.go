@@ -91,7 +91,8 @@ type PrepareStmt struct {
 	ParamTypes     []byte
 	IsInsertValues bool
 
-	params *vector.Vector
+	params              *vector.Vector
+	getFromSendLongData map[int]struct{}
 }
 
 /*
