@@ -209,7 +209,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
 			pkVec.Append(v, false)
 			return nil
 		},
-		deletes,
+		deletes.ToArray(),
 	)
 }
 

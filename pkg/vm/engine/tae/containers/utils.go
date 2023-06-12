@@ -261,7 +261,7 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	return bat
 }
 
-func ForeachVector(vec Vector, op any, sel *nulls.Bitmap) (err error) {
+func ForeachVector(vec Vector, op any, sel []uint32) (err error) {
 	return ForeachVectorWindow(vec, 0, vec.Length(), op, nil, sel)
 }
 
@@ -270,7 +270,7 @@ func ForeachVectorWindow(
 	start, length int,
 	op1 any,
 	op2 ItOp,
-	sel *nulls.Bitmap,
+	sel []uint32,
 ) (err error) {
 	typ := vec.GetType()
 	col := vec.GetDownstreamVector()
@@ -561,7 +561,7 @@ func ForeachWindowBytes(
 	vec *movec.Vector,
 	start, length int,
 	op ItOpT[[]byte],
-	sels *nulls.Bitmap,
+	sels []uint32,
 ) (err error) {
 	typ := vec.GetType()
 	if typ.IsVarlen() {
@@ -569,16 +569,15 @@ func ForeachWindowBytes(
 	}
 	tsize := typ.TypeSize()
 	data := vec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
-	if sels == nil || sels.IsEmpty() {
+	if len(sels) == 0 {
 		for i := 0; i < length; i++ {
 			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(uint64(i+start)), i+start); err != nil {
 				break
 			}
 		}
 	} else {
-		idxes := sels.ToArray()
 		end := start + length
-		for _, idx := range idxes {
+		for _, idx := range sels {
 			if int(idx) < start {
 				continue
 			} else if int(idx) >= end {
@@ -599,7 +598,7 @@ func ForeachWindowFixed[T any](
 	start, length int,
 	op ItOpT[T],
 	opAny ItOp,
-	sels *nulls.Bitmap,
+	sels []uint32,
 ) (err error) {
 	if vec.IsConst() {
 		var v T
@@ -624,7 +623,7 @@ func ForeachWindowFixed[T any](
 		return
 	}
 	slice := movec.MustFixedCol[T](vec)[start : start+length]
-	if sels == nil || sels.IsEmpty() {
+	if len(sels) == 0 {
 		for i, v := range slice {
 			if op != nil {
 				if err = op(v, vec.IsNull(uint64(i+start)), i+start); err != nil {
@@ -638,9 +637,8 @@ func ForeachWindowFixed[T any](
 			}
 		}
 	} else {
-		idxes := sels.ToArray()
 		end := start + length
-		for _, idx := range idxes {
+		for _, idx := range sels {
 			if int(idx) < start {
 				continue
 			} else if int(idx) >= end {
@@ -667,7 +665,7 @@ func ForeachWindowVarlen(
 	start, length int,
 	op ItOpT[[]byte],
 	opAny ItOp,
-	sels *nulls.Bitmap,
+	sels []uint32,
 ) (err error) {
 	if vec.IsConst() {
 		var v []byte
@@ -693,7 +691,7 @@ func ForeachWindowVarlen(
 	}
 	slice, area := movec.MustVarlenaRawData(vec)
 	slice = slice[start : start+length]
-	if sels == nil || sels.IsEmpty() {
+	if len(sels) == 0 {
 		for i, v := range slice {
 			if op != nil {
 				if err = op(v.GetByteSlice(area), vec.IsNull(uint64(i+start)), i+start); err != nil {
@@ -707,9 +705,8 @@ func ForeachWindowVarlen(
 			}
 		}
 	} else {
-		idxes := sels.ToArray()
 		end := start + length
-		for _, idx := range idxes {
+		for _, idx := range sels {
 			if int(idx) < start {
 				continue
 			} else if int(idx) >= end {

@@ -172,18 +172,20 @@ func (n *anode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 }
 
 func (n *anode) OffsetWithDeletes(count uint32) uint32 {
-	if !n.data.HasDelete() {
-		return count
-	}
-	offset := count
-	for offset < n.rows {
-		deletes := n.data.Deletes.Rank(offset)
-		if offset == count+uint32(deletes) {
-			break
-		}
-		offset = count + uint32(deletes)
-	}
-	return offset
+	// TODO: YYY
+	return 0
+	// if !n.data.HasDelete() {
+	// 	return count
+	// }
+	// offset := count
+	// for offset < n.rows {
+	// 	deletes := n.data.Deletes.Rank(offset)
+	// 	if offset == count+uint32(deletes) {
+	// 		break
+	// 	}
+	// 	offset = count + uint32(deletes)
+	// }
+	// return offset
 }
 
 func (n *anode) GetValue(col int, row uint32) (any, bool, error) {

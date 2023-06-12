@@ -19,7 +19,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -113,7 +112,7 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 	return vec.Get(row), vec.IsNull(row)
 }
 
-func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels []uint32) error {
 	return node.data.Vecs[colIdx].Foreach(op, sels)
 }
 
