@@ -554,6 +554,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		State:              s.state.State,
 		TaskSchedulerState: s.state.TaskSchedulerState,
 		TaskTableUser:      s.state.TaskTableUser,
+		NextId:             s.state.NextID,
 	}
 	copied := deepcopy.Copy(internal)
 	result, ok := copied.(*pb.CheckerState)

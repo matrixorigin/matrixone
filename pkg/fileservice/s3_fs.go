@@ -932,19 +932,22 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	// static credential
 	if apiKey != "" && apiSecret != "" {
 		// static
-		credentialProvider = credentials.NewStaticCredentialsProvider(apiKey, apiSecret, "")
+		credentialProvider = aws.NewCredentialsCache(
+			credentials.NewStaticCredentialsProvider(apiKey, apiSecret, ""),
+		)
 	}
 
 	// credentials for 3rd-party services
-	if credentialProvider == nil && endpointURL != nil {
-		hostname := endpointURL.Hostname()
-		if strings.Contains(hostname, "aliyuncs.com") {
-			credentialProvider = newAliyunCredentialsProvider()
-		} else if strings.Contains(hostname, "myqcloud.com") ||
-			strings.Contains(hostname, "tencentcos.cn") {
-			credentialProvider = newTencentCloudCredentialsProvider()
-		}
-	}
+	//TODO fix this
+	//if credentialProvider == nil && endpointURL != nil {
+	//	hostname := endpointURL.Hostname()
+	//	if strings.Contains(hostname, "aliyuncs.com") {
+	//		credentialProvider = newAliyunCredentialsProvider()
+	//	} else if strings.Contains(hostname, "myqcloud.com") ||
+	//		strings.Contains(hostname, "tencentcos.cn") {
+	//		credentialProvider = newTencentCloudCredentialsProvider()
+	//	}
+	//}
 
 	// role arn credential
 	if roleARN != "" {
@@ -961,25 +964,22 @@ func newS3FS(arguments []string) (*S3FS, error) {
 				options.Region = region
 			}
 		})
-		credentialProvider = stscreds.NewAssumeRoleProvider(
-			stsSvc,
-			roleARN,
-			func(opts *stscreds.AssumeRoleOptions) {
-				if externalID != "" {
-					opts.ExternalID = &externalID
-				}
-			},
+		credentialProvider = aws.NewCredentialsCache(
+			stscreds.NewAssumeRoleProvider(
+				stsSvc,
+				roleARN,
+				func(opts *stscreds.AssumeRoleOptions) {
+					if externalID != "" {
+						opts.ExternalID = &externalID
+					}
+				},
+			),
 		)
 		// validate
 		_, err = credentialProvider.Retrieve(ctx)
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	// credential cache
-	if credentialProvider != nil {
-		credentialProvider = aws.NewCredentialsCache(credentialProvider)
 	}
 
 	// load configs
