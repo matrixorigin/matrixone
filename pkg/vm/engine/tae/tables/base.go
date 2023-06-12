@@ -294,8 +294,8 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	}
 
 	blk.RLock()
-	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
+	blk.RUnlock()
 	if view.BaseView.DeleteMask != nil {
 		for _, colIdx := range colIdxs {
 			vec := view.Columns[colIdx].GetData()
