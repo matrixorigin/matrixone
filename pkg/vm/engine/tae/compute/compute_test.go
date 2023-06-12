@@ -20,7 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -39,13 +41,13 @@ func TestShuffleByDeletes(t *testing.T) {
 	origMask.Add(30)
 	origVals[30] = 30
 
-	deletes := roaring.New()
+	deletes := nulls.NewWithSize(1)
 	deletes.Add(0)
 	deletes.Add(8)
 	deletes.Add(22)
 
 	destDelets := ShuffleByDeletes(deletes, deletes)
-	t.Log(destDelets.String())
+	t.Log(common.BitmapString(destDelets))
 }
 
 func TestCheckRowExists(t *testing.T) {
@@ -66,8 +68,8 @@ func TestCheckRowExists(t *testing.T) {
 	_, exist = GetOffsetByVal(vec, int32(114514), nil)
 	require.False(t, exist)
 
-	dels := roaring.NewBitmap()
-	dels.Add(uint32(55))
+	dels := nulls.NewWithSize(1)
+	dels.Add(uint64(55))
 	_, exist = GetOffsetByVal(vec, int32(55), dels)
 	require.False(t, exist)
 }

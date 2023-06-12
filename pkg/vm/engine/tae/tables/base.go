@@ -23,6 +23,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -103,7 +104,7 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
-func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -141,17 +142,14 @@ func (blk *baseBlock) FillInMemoryDeletesLocked(
 	view *model.BaseView,
 	rwlocker *sync.RWMutex) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
-	n, err := chain.CollectDeletesLocked(txn, rwlocker)
-	if err != nil {
+	deletes, err := chain.CollectDeletesLocked(txn, rwlocker)
+	if err != nil || deletes.IsEmpty() {
 		return
 	}
-	dnode := n.(*updates.DeleteNode)
-	if dnode != nil {
-		if view.DeleteMask == nil {
-			view.DeleteMask = dnode.GetDeleteMaskLocked()
-		} else {
-			view.DeleteMask.Or(dnode.GetDeleteMaskLocked())
-		}
+	if view.DeleteMask == nil {
+		view.DeleteMask = deletes
+	} else {
+		view.DeleteMask.Or(deletes)
 	}
 	return
 }
@@ -246,9 +244,9 @@ func (blk *baseBlock) FillPersistedDeletes(
 		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
 		row := rowid.GetRowOffset()
 		if view.DeleteMask == nil {
-			view.DeleteMask = roaring.NewBitmap()
+			view.DeleteMask = nulls.NewWithSize(int(row) + 1)
 		}
-		view.DeleteMask.Add(row)
+		view.DeleteMask.Add(uint64(row))
 	}
 	return nil
 }
@@ -349,7 +347,7 @@ func (blk *baseBlock) dedupWithLoad(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	keys containers.Vector,
-	sels *roaring.Bitmap,
+	sels *nulls.Bitmap,
 	rowmask *roaring.Bitmap,
 	isAblk bool,
 ) (err error) {
@@ -366,9 +364,9 @@ func (blk *baseBlock) dedupWithLoad(
 	}
 	if rowmask != nil {
 		if view.DeleteMask == nil {
-			view.DeleteMask = rowmask
+			view.DeleteMask = common.RoaringToMOBitmap(rowmask)
 		} else {
-			view.DeleteMask.Or(rowmask)
+			common.MOOrRoaringBitmap(view.DeleteMask, rowmask)
 		}
 	}
 	defer view.Close()
@@ -432,7 +430,7 @@ func (blk *baseBlock) getPersistedValue(
 			return
 		}
 	}
-	if view.DeleteMask != nil && view.DeleteMask.ContainsInt(row) {
+	if view.DeleteMask.Contains(uint64(row)) {
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}

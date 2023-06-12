@@ -20,7 +20,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -65,8 +64,8 @@ type Vector interface {
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
 	ExtendVec(o *cnVector.Vector) error
 
-	Foreach(op ItOp, sels *roaring.Bitmap) error
-	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
+	Foreach(op ItOp, sels *nulls.Bitmap) error
+	ForeachWindow(offset, length int, op ItOp, sels *nulls.Bitmap) error
 
 	Length() int
 	Allocated() int
@@ -74,7 +73,7 @@ type Vector interface {
 
 	IsNull(i int) bool
 	HasNull() bool
-	NullMask() *cnNulls.Nulls
+	NullMask() *nulls.Nulls
 	// NullCount will consider ConstNull and Const vector
 	NullCount() int
 

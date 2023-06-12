@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -185,7 +184,10 @@ func (n *MVCCHandle) CollectUncommittedANodesPreparedBefore(
 	return
 }
 
-func (n *MVCCHandle) GetVisibleRowLocked(txn txnif.TxnReader) (maxrow uint32, visible bool, holes *roaring.Bitmap, err error) {
+func (n *MVCCHandle) GetVisibleRowLocked(
+	txn txnif.TxnReader,
+) (maxrow uint32, visible bool, holes *nulls.Bitmap, err error) {
+	var holesMax uint32
 	anToWait := make([]*AppendNode, 0)
 	txnToWait := make([]txnif.TxnReader, 0)
 	n.appends.ForEach(func(an *AppendNode) bool {
@@ -200,9 +202,12 @@ func (n *MVCCHandle) GetVisibleRowLocked(txn txnif.TxnReader) (maxrow uint32, vi
 			maxrow = an.maxRow
 		} else {
 			if holes == nil {
-				holes = roaring.NewBitmap()
+				holes = nulls.NewWithSize(int(an.maxRow) + 1)
 			}
 			holes.AddRange(uint64(an.startRow), uint64(an.maxRow))
+			if holesMax < an.maxRow {
+				holesMax = an.maxRow
+			}
 		}
 		return !an.Prepare.Greater(txn.GetStartTS())
 	}, true)
@@ -221,13 +226,16 @@ func (n *MVCCHandle) GetVisibleRowLocked(txn txnif.TxnReader) (maxrow uint32, vi
 			}
 		} else {
 			if holes == nil {
-				holes = roaring.NewBitmap()
+				holes = nulls.NewWithSize(int(an.maxRow) + 1)
 			}
 			holes.AddRange(uint64(an.startRow), uint64(an.maxRow))
+			if holesMax < an.maxRow {
+				holesMax = an.maxRow
+			}
 		}
 	}
 	if holes != nil {
-		holes.RemoveRange(uint64(maxrow), uint64(holes.Maximum())+1)
+		nulls.RemoveRange(holes, uint64(maxrow), uint64(holesMax)+1)
 	}
 	return
 }
@@ -282,7 +290,9 @@ func (n *MVCCHandle) CollectAppendLocked(
 	return
 }
 
-func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap *nulls.Bitmap, deletes *roaring.Bitmap) {
+func (n *MVCCHandle) CollectDelete(
+	start, end types.TS,
+) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap *nulls.Bitmap, deletes *nulls.Bitmap) {
 	n.RLock()
 	defer n.RUnlock()
 	if n.deletes.IsEmpty() {
@@ -320,9 +330,9 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 				for it.HasNext() {
 					row := it.Next()
 					if deletes == nil {
-						deletes = &roaring.Bitmap{}
+						deletes = nulls.NewWithSize(int(row))
 					}
-					deletes.Add(row)
+					deletes.Add(uint64(row))
 					rowIDVec.Append(*objectio.NewRowid(&id, row), false)
 					commitTSVec.Append(node.GetEnd(), false)
 					abortVec.Append(node.IsAborted(), false)

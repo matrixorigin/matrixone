@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -178,11 +177,7 @@ func (n *anode) OffsetWithDeletes(count uint32) uint32 {
 	}
 	offset := count
 	for offset < n.rows {
-		b := &roaring.Bitmap{}
-		b.Rank()
-
-		n.data.Deletes.
-			deletes := n.data.Deletes.Rank(offset)
+		deletes := n.data.Deletes.Rank(offset)
 		if offset == count+uint32(deletes) {
 			break
 		}
