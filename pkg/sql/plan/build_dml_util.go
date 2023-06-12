@@ -65,6 +65,7 @@ func getDeleteNodeInfo() *deleteNodeInfo {
 	info.IsClusterTable = false
 	info.deleteIndex = 0
 	info.partTableIDs = info.partTableIDs[:0]
+	info.partTableNames = info.partTableNames[:0]
 	info.partitionIdx = 0
 	info.addAffectedRows = false
 	info.pkPos = 0
@@ -102,6 +103,7 @@ type deleteNodeInfo struct {
 	IsClusterTable  bool
 	deleteIndex     int      // The array index position of the rowid column
 	partTableIDs    []uint64 // Align array index with the partition number
+	partTableNames  []string // Align array index with the partition number
 	partitionIdx    int      // The array index position of the partition expression column
 	addAffectedRows bool
 	pkPos           int
@@ -737,7 +739,7 @@ func makeInsertPlan(
 	{
 		lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 		// Get table partition information
-		partitionIdx, paritionTableIds := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
+		partitionIdx, paritionTableIds, paritionTableNames := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
 		// append project node
 		projectProjection := getProjectionByLastNode(builder, lastNodeId)
 		if len(projectProjection) > len(tableDef.Cols) || tableDef.Partition != nil {
@@ -769,12 +771,13 @@ func makeInsertPlan(
 			Children: []int32{lastNodeId},
 			ObjRef:   objRef,
 			InsertCtx: &plan.InsertCtx{
-				Ref:               objRef,
-				AddAffectedRows:   addAffectedRows,
-				IsClusterTable:    tableDef.TableType == catalog.SystemClusterRel,
-				TableDef:          tableDef,
-				PartitionTableIds: paritionTableIds,
-				PartitionIdx:      int32(partitionIdx),
+				Ref:                 objRef,
+				AddAffectedRows:     addAffectedRows,
+				IsClusterTable:      tableDef.TableType == catalog.SystemClusterRel,
+				TableDef:            tableDef,
+				PartitionTableIds:   paritionTableIds,
+				PartitionTableNames: paritionTableNames,
+				PartitionIdx:        int32(partitionIdx),
 			},
 			ProjectList: insertProjection,
 		}
@@ -1302,13 +1305,14 @@ func makeOneDeletePlan(
 		Children: []int32{lastNodeId},
 		// ProjectList: getProjectionByLastNode(builder, lastNodeId),
 		DeleteCtx: &plan.DeleteCtx{
-			RowIdIdx:          int32(delNodeInfo.deleteIndex),
-			Ref:               delNodeInfo.objRef,
-			CanTruncate:       false,
-			AddAffectedRows:   delNodeInfo.addAffectedRows,
-			IsClusterTable:    delNodeInfo.IsClusterTable,
-			PartitionTableIds: delNodeInfo.partTableIDs,
-			PartitionIdx:      int32(delNodeInfo.partitionIdx),
+			RowIdIdx:            int32(delNodeInfo.deleteIndex),
+			Ref:                 delNodeInfo.objRef,
+			CanTruncate:         false,
+			AddAffectedRows:     delNodeInfo.addAffectedRows,
+			IsClusterTable:      delNodeInfo.IsClusterTable,
+			PartitionTableIds:   delNodeInfo.partTableIDs,
+			PartitionTableNames: delNodeInfo.partTableNames,
+			PartitionIdx:        int32(delNodeInfo.partitionIdx),
 		},
 	}
 	lastNodeId = builder.appendNode(deleteNode, bindCtx)
@@ -1367,31 +1371,37 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 
 	if tableDef.Partition != nil {
 		partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
+		partTableNames := make([]string, tableDef.Partition.PartitionNum)
 		for i, partition := range tableDef.Partition.Partitions {
 			_, partTableDef := ctx.Resolve(objRef.SchemaName, partition.PartitionTableName)
 			partTableIds[i] = partTableDef.TblId
+			partTableNames[i] = partition.PartitionTableName
 		}
 		delNodeInfo.partTableIDs = partTableIds
+		delNodeInfo.partTableNames = partTableNames
 	}
 	return delNodeInfo
 }
 
 // Calculate the offset index of partition expression, and the sub tableIds of the partition table
-func getPartSubTableIdsAndPartIndex(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef) (int, []uint64) {
+func getPartSubTableIdsAndPartIndex(ctx CompilerContext, objRef *ObjectRef, tableDef *TableDef) (int, []uint64, []string) {
 	var partitionIdx int
 	var partTableIds []uint64
+	var partTableNames []string
 	if tableDef.Partition != nil {
 		partTableIds = make([]uint64, tableDef.Partition.PartitionNum)
+		partTableNames = make([]string, tableDef.Partition.PartitionNum)
 		for i, partition := range tableDef.Partition.Partitions {
 			_, partTableDef := ctx.Resolve(objRef.SchemaName, partition.PartitionTableName)
 			partTableIds[i] = partTableDef.TblId
+			partTableNames[i] = partition.PartitionTableName
 		}
 		//Calculate Partition Expression Location
 		partitionIdx = len(tableDef.Cols)
 	} else {
 		partitionIdx = -1
 	}
-	return partitionIdx, partTableIds
+	return partitionIdx, partTableIds, partTableNames
 }
 
 func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep int32) int32 {
@@ -1723,7 +1733,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
 	}
 	// Get table partition information
-	partitionIdx, partTableIds := getPartSubTableIdsAndPartIndex(builder.compCtx, objRef, tableDef)
+	partitionIdx, partTableIds, _ := getPartSubTableIdsAndPartIndex(builder.compCtx, objRef, tableDef)
 
 	// todo: append lock
 	pkPos, pkTyp := getPkPos(tableDef, false)
@@ -2180,7 +2190,7 @@ func appendInsertNode(
 	addAffectedRows bool) int32 {
 
 	// Get table partition information
-	partitionIdx, paritionTableIds := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
+	partitionIdx, paritionTableIds, paritionTableNames := getPartSubTableIdsAndPartIndex(ctx, objRef, tableDef)
 	// append project node
 	projectProjection := getProjectionByLastNode(builder, lastNodeId)
 	if len(projectProjection) > len(tableDef.Cols) || tableDef.Partition != nil {
@@ -2212,12 +2222,13 @@ func appendInsertNode(
 		Children: []int32{lastNodeId},
 		ObjRef:   objRef,
 		InsertCtx: &plan.InsertCtx{
-			Ref:               objRef,
-			AddAffectedRows:   addAffectedRows,
-			IsClusterTable:    tableDef.TableType == catalog.SystemClusterRel,
-			TableDef:          tableDef,
-			PartitionTableIds: paritionTableIds,
-			PartitionIdx:      int32(partitionIdx),
+			Ref:                 objRef,
+			AddAffectedRows:     addAffectedRows,
+			IsClusterTable:      tableDef.TableType == catalog.SystemClusterRel,
+			TableDef:            tableDef,
+			PartitionTableIds:   paritionTableIds,
+			PartitionTableNames: paritionTableNames,
+			PartitionIdx:        int32(partitionIdx),
 		},
 		ProjectList: insertProjection,
 	}

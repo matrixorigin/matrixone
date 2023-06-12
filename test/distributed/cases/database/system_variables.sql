@@ -169,3 +169,8 @@ select @@sql_mode;
 set @@sql_mode = default;
 select @@sql_mode;
 -- @bvt:issue
+
+select @@sql_mode;
+set @@sql_mode ='';
+select @@sql_mode;
+set @@sql_mode = default;
