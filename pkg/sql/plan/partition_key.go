@@ -93,6 +93,11 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 		return err
 	}
 
+	err = buildKeyPartitionExpr(partitionBinder, stmt, partitionDef)
+	if err != nil {
+		return err
+	}
+
 	partitionDef.PartitionMsg = tree.String(partitionSyntaxDef, dialect.MYSQL)
 	tableDef.Partition = partitionDef
 	return nil
@@ -131,5 +136,44 @@ func (kpb *keyPartitionBuilder) buildEvalPartitionExpression(ctx context.Context
 		return err
 	}
 	partitionDef.PartitionExpression = partitionExpression
+	return nil
+}
+
+func buildKeyPartitionExpr(partitionBinder *PartitionBinder, stmt *tree.CreateTable, partitionDef *plan.PartitionByDef) error {
+	partitionOp := stmt.PartitionOption
+	partitionType := partitionOp.PartBy.PType.(*tree.KeyType)
+	keyList := partitionType.ColumnList
+	astExprs := make([]tree.Expr, len(keyList))
+	exprList := make([]*Expr, len(keyList))
+	var exprStr string
+	isFirst := true
+	for i, expr := range keyList {
+		astExprs[i] = expr
+		if isFirst {
+			isFirst = false
+			exprStr += "`" + tree.String(expr, dialect.MYSQL) + "`"
+		} else {
+			exprStr += ",`" + tree.String(expr, dialect.MYSQL) + "`"
+		}
+
+		planExpr, err := partitionBinder.BindExpr(expr, 0, true)
+		if err != nil {
+			return err
+		}
+		exprList[i] = planExpr
+	}
+
+	expr := &plan.Expr{
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{
+				List: exprList,
+			},
+		},
+	}
+
+	partitionDef.PartitionExpr = &plan.PartitionExpr{
+		Expr:    expr,
+		ExprStr: exprStr,
+	}
 	return nil
 }
