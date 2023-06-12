@@ -22,6 +22,11 @@ import (
 	tencentcommon "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 )
 
+func init() {
+	_ = newAliyunCredentialsProvider
+	_ = newTencentCloudCredentialsProvider
+}
+
 func newAliyunCredentialsProvider() aws.CredentialsProvider {
 	return aws.CredentialsProviderFunc(
 		func(_ context.Context) (cs aws.Credentials, err error) {
