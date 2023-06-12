@@ -188,6 +188,7 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextAnalyze process.Analyze, nextOperator *connector.Argument) error {
 	var val morpc.Message
 	var err error
+	var dataBuffer []byte
 	var sequence uint64
 
 	if sender.receiveCh == nil {
@@ -225,19 +226,22 @@ func receiveMessageFromCnServer(c *Compile, sender *messageSenderOnClient, nextA
 		}
 		sequence++
 
+		dataBuffer = append(dataBuffer, m.Data...)
 		if m.WaitingNextToMerge() {
 			continue
 		}
-		if m.Checksum != crc32.ChecksumIEEE(m.Data) {
+		if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 			return moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
-		bat, err := decodeBatch(c.proc.Mp(), c.proc, m.Data)
+		bat, err := decodeBatch(c.proc.Mp(), c.proc, dataBuffer)
 		if err != nil {
 			return err
 		}
 		nextAnalyze.Network(bat)
 		sendToConnectOperator(nextOperator, bat)
+
+		dataBuffer = nil
 	}
 }
 
@@ -440,13 +444,13 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			}
 			p.DataSource.Block = string(data)
 		}
-		if len(s.DataSource.RuntimeFilterReceivers) > 0 {
-			rfSpecs := make([]*plan.RuntimeFilterSpec, len(s.DataSource.RuntimeFilterReceivers))
-			for i, recv := range s.DataSource.RuntimeFilterReceivers {
-				rfSpecs[i] = recv.Spec
-			}
-			p.DataSource.RuntimeFilterList = rfSpecs
-		}
+		//if len(s.DataSource.RuntimeFilterReceivers) > 0 {
+		//	rfSpecs := make([]*plan.RuntimeFilterSpec, len(s.DataSource.RuntimeFilterReceivers))
+		//	for i, recv := range s.DataSource.RuntimeFilterReceivers {
+		//		rfSpecs[i] = recv.Spec
+		//	}
+		//	p.DataSource.RuntimeFilterList = rfSpecs
+		//}
 	}
 	// PreScope
 	p.Children = make([]*pipeline.Pipeline, len(s.PreScopes))
@@ -556,21 +560,21 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			bat.Cnt = 1
 			s.DataSource.Bat = bat
 		}
-		if len(dsc.RuntimeFilterList) > 0 {
-			rfReceivers := make([]*colexec.RuntimeFilterChan, len(dsc.RuntimeFilterList))
-			if ctx.runtimeFilterReceiverMap == nil {
-				ctx.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
-			}
-			for i, rfSpec := range dsc.RuntimeFilterList {
-				ch := make(chan *pipeline.RuntimeFilter, 1)
-				rfReceivers[i] = &colexec.RuntimeFilterChan{
-					Spec: rfSpec,
-					Chan: ch,
-				}
-				ctx.runtimeFilterReceiverMap[rfSpec.Tag] = ch
-			}
-			s.DataSource.RuntimeFilterReceivers = rfReceivers
-		}
+		//if len(dsc.RuntimeFilterList) > 0 {
+		//	rfReceivers := make([]*colexec.RuntimeFilterChan, len(dsc.RuntimeFilterList))
+		//	if ctx.runtimeFilterReceiverMap == nil {
+		//		ctx.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
+		//	}
+		//	for i, rfSpec := range dsc.RuntimeFilterList {
+		//		ch := make(chan *pipeline.RuntimeFilter, 1)
+		//		rfReceivers[i] = &colexec.RuntimeFilterChan{
+		//			Spec: rfSpec,
+		//			Chan: ch,
+		//		}
+		//		ctx.runtimeFilterReceiverMap[rfSpec.Tag] = ch
+		//	}
+		//	s.DataSource.RuntimeFilterReceivers = rfReceivers
+		//}
 	}
 	if p.Node != nil {
 		s.NodeInfo.Id = p.Node.Id
@@ -629,12 +633,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
-			ToWriteS3:         t.ToWriteS3,
-			Ref:               t.InsertCtx.Ref,
-			Attrs:             t.InsertCtx.Attrs,
-			AddAffectedRows:   t.InsertCtx.AddAffectedRows,
-			PartitionTableIds: t.InsertCtx.PartitionTableIDs,
-			PartitionIdx:      int32(t.InsertCtx.PartitionIndexInBatch),
+			ToWriteS3:           t.ToWriteS3,
+			Ref:                 t.InsertCtx.Ref,
+			Attrs:               t.InsertCtx.Attrs,
+			AddAffectedRows:     t.InsertCtx.AddAffectedRows,
+			PartitionTableIds:   t.InsertCtx.PartitionTableIDs,
+			PartitionTableNames: t.InsertCtx.PartitionTableNames,
+			PartitionIdx:        int32(t.InsertCtx.PartitionIndexInBatch),
 		}
 	case *deletion.Argument:
 		in.Delete = &pipeline.Deletion{
@@ -647,6 +652,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			// deleteCtx
 			RowIdIdx:              int32(t.DeleteCtx.RowIdIdx),
 			PartitionTableIds:     t.DeleteCtx.PartitionTableIDs,
+			PartitionTableNames:   t.DeleteCtx.PartitionTableNames,
 			PartitionIndexInBatch: int32(t.DeleteCtx.PartitionIndexInBatch),
 			AddAffectedRows:       t.DeleteCtx.AddAffectedRows,
 			Ref:                   t.DeleteCtx.Ref,
@@ -944,13 +950,13 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Types:    convertToPlanTypes(t.Typs),
 			Conds:    t.Conditions,
 		}
-		if len(t.RuntimeFilterSenders) > 0 {
-			rfSpecs := make([]*plan.RuntimeFilterSpec, len(t.RuntimeFilterSenders))
-			for i, sender := range t.RuntimeFilterSenders {
-				rfSpecs[i] = sender.Spec
-			}
-			in.HashBuild.RuntimeFilterList = rfSpecs
-		}
+		//if len(t.RuntimeFilterSenders) > 0 {
+		//	rfSpecs := make([]*plan.RuntimeFilterSpec, len(t.RuntimeFilterSenders))
+		//	for i, sender := range t.RuntimeFilterSenders {
+		//		rfSpecs[i] = sender.Spec
+		//	}
+		//	in.HashBuild.RuntimeFilterList = rfSpecs
+		//}
 	case *external.Argument:
 		name2ColIndexSlice := make([]*pipeline.ExternalName2ColIndex, len(t.Es.Name2ColIndex))
 		i := 0
@@ -990,6 +996,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				CanTruncate:           t.CanTruncate,
 				RowIdIdx:              int(t.RowIdIdx),
 				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionTableNames:   t.PartitionTableNames,
 				PartitionIndexInBatch: int(t.PartitionIndexInBatch),
 				Ref:                   t.Ref,
 				AddAffectedRows:       t.AddAffectedRows,
@@ -1004,6 +1011,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 				AddAffectedRows:       t.AddAffectedRows,
 				Attrs:                 t.Attrs,
 				PartitionTableIDs:     t.PartitionTableIds,
+				PartitionTableNames:   t.PartitionTableNames,
 				PartitionIndexInBatch: int(t.PartitionIdx),
 			},
 		}
@@ -1307,26 +1315,26 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.HashBuild:
 		t := opr.GetHashBuild()
-		var rfSenders []*colexec.RuntimeFilterChan
-		if t.RuntimeFilterList != nil {
-			rfSenders = make([]*colexec.RuntimeFilterChan, 0, len(t.RuntimeFilterList))
-			for _, rfSpec := range t.RuntimeFilterList {
-				if ch, ok := ctx.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
-					rfSenders = append(rfSenders, &colexec.RuntimeFilterChan{
-						Spec: rfSpec,
-						Chan: ch,
-					})
-				}
-			}
-		}
+		//var rfSenders []*colexec.RuntimeFilterChan
+		//if t.RuntimeFilterList != nil {
+		//	rfSenders = make([]*colexec.RuntimeFilterChan, 0, len(t.RuntimeFilterList))
+		//	for _, rfSpec := range t.RuntimeFilterList {
+		//		if ch, ok := ctx.runtimeFilterReceiverMap[rfSpec.Tag]; ok {
+		//			rfSenders = append(rfSenders, &colexec.RuntimeFilterChan{
+		//				Spec: rfSpec,
+		//				Chan: ch,
+		//			})
+		//		}
+		//	}
+		//}
 		v.Arg = &hashbuild.Argument{
-			Ibucket:              t.Ibucket,
-			Nbucket:              t.Nbucket,
-			NeedHashMap:          t.NeedHash,
-			NeedExpr:             t.NeedExpr,
-			Typs:                 convertToTypes(t.Types),
-			Conditions:           t.Conds,
-			RuntimeFilterSenders: rfSenders,
+			Ibucket:     t.Ibucket,
+			Nbucket:     t.Nbucket,
+			NeedHashMap: t.NeedHash,
+			NeedExpr:    t.NeedExpr,
+			Typs:        convertToTypes(t.Types),
+			Conditions:  t.Conds,
+			//RuntimeFilterSenders: rfSenders,
 		}
 	case vm.External:
 		t := opr.GetExternalScan()

@@ -435,7 +435,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 		if err := v.nsp.ReadNoCopy(data[:nspLen]); err != nil {
 			return err
 		}
-		//data = data[nspLen:]
+		data = data[nspLen:]
 	} else {
 		v.nsp.Reset()
 	}
@@ -495,7 +495,7 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 		if err := v.nsp.Read(data[:nspLen]); err != nil {
 			return err
 		}
-		//data = data[nspLen:]
+		data = data[nspLen:]
 	} else {
 		v.nsp.Reset()
 	}

@@ -361,7 +361,7 @@ drop sequence seq_15;
 create sequence seq_17 increment 10 start with 20 no cycle;
 select lastval();
 lastval()
-176
+1
 select nextval('seq_17');
 nextval(seq_17)
 20
