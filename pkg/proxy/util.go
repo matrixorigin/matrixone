@@ -30,12 +30,12 @@ var (
 	commit   = "[cC][oO][mM][mM][iI][tT]"
 	rollback = "[rR][oO][lL][lL][bB][aA][cC][kK]"
 
-	beginPattern = fmt.Sprintf("^%s(%s)%s%s%s$",
-		spaceAtLeastZero, begin, spaceAtLeastZero, end, spaceAtLeastZero)
-	commitPattern = fmt.Sprintf("^%s(%s)%s%s%s$",
-		spaceAtLeastZero, commit, spaceAtLeastZero, end, spaceAtLeastZero)
-	rollbackPattern = fmt.Sprintf("^%s(%s)%s%s%s$",
-		spaceAtLeastZero, rollback, spaceAtLeastZero, end, spaceAtLeastZero)
+	beginRegex = regexp.MustCompile(fmt.Sprintf("^%s(%s)%s%s%s$",
+		spaceAtLeastZero, begin, spaceAtLeastZero, end, spaceAtLeastZero))
+	commitRegex = regexp.MustCompile(fmt.Sprintf("^%s(%s)%s%s%s$",
+		spaceAtLeastZero, commit, spaceAtLeastZero, end, spaceAtLeastZero))
+	rollbackRegex = regexp.MustCompile(fmt.Sprintf("^%s(%s)%s%s%s$",
+		spaceAtLeastZero, rollback, spaceAtLeastZero, end, spaceAtLeastZero))
 )
 
 // makeOKPacket returns an OK packet
@@ -130,20 +130,17 @@ func pickTunnels(tuns tunnelSet, n int) []*tunnel {
 
 // isStmtBegin returns true iff it is begin statement.
 func isStmtBegin(c []byte) bool {
-	matched, _ := regexp.MatchString(beginPattern, string(c))
-	return matched
+	return beginRegex.Match(c)
 }
 
 // isStmtCommit returns true iff it is commit statement.
 func isStmtCommit(c []byte) bool {
-	matched, _ := regexp.MatchString(commitPattern, string(c))
-	return matched
+	return commitRegex.Match(c)
 }
 
 // isStmtRollback returns true iff it is rollback statement.
 func isStmtRollback(c []byte) bool {
-	matched, _ := regexp.MatchString(rollbackPattern, string(c))
-	return matched
+	return rollbackRegex.Match(c)
 }
 
 // sortMap sorts a complex map instance.
