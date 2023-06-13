@@ -299,6 +299,9 @@ func (chain *DeleteChain) CollectDeletesLocked(
 		if !n.IsVisible(txn) {
 			uint32Array := n.GetDeleteMaskLocked().ToArray()
 			uint64Array := make([]uint64, len(uint32Array))
+			for i := range uint32Array {
+				uint64Array[i] = uint64(uint32Array[i])
+			}
 			merged.Del(uint64Array...)
 		}
 		return true
