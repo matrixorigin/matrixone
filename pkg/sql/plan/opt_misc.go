@@ -603,3 +603,69 @@ func (builder *QueryBuilder) remapHavingClause(expr *plan.Expr, groupTag, aggreg
 		}
 	}
 }
+
+func getJoinCondLeftCol(cond *Expr, leftTags map[int32]any) *plan.Expr_Col {
+	fun, ok := cond.Expr.(*plan.Expr_F)
+	if !ok || fun.F.Func.ObjName != "=" {
+		return nil
+	}
+	leftCol, ok := fun.F.Args[0].Expr.(*plan.Expr_Col)
+	if !ok {
+		return nil
+	}
+	rightCol, ok := fun.F.Args[1].Expr.(*plan.Expr_Col)
+	if !ok {
+		return nil
+	}
+	if _, ok := leftTags[leftCol.Col.RelPos]; ok {
+		return leftCol
+	}
+	if _, ok := leftTags[rightCol.Col.RelPos]; ok {
+		return rightCol
+	}
+	return nil
+}
+
+// if join cond is a=b and a=c, we can remove a=c to improve join performance
+func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32) int32 {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for i, child := range node.Children {
+			node.Children[i] = builder.removeRedundantJoinCond(child)
+		}
+	} else {
+		return nodeID
+	}
+	if !builder.IsEquiJoin(node) {
+		return nodeID
+	}
+
+	leftTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = nil
+	}
+
+	rightTags := make(map[int32]any)
+	for _, tag := range builder.enumerateTags(node.Children[1]) {
+		rightTags[tag] = nil
+	}
+
+	newOnList := make([]*Expr, 0, len(node.OnList))
+	colMap := make(map[[2]int32]int32)
+	for _, expr := range node.OnList {
+		if equi, _ := isEquiCond(expr, leftTags, rightTags); equi {
+			col := getJoinCondLeftCol(expr, leftTags)
+			if col != nil {
+				if _, ok := colMap[[2]int32{col.Col.RelPos, col.Col.ColPos}]; ok {
+					continue
+				} else {
+					colMap[[2]int32{col.Col.RelPos, col.Col.ColPos}] = 0
+				}
+			}
+		}
+		newOnList = append(newOnList, expr)
+	}
+
+	node.OnList = newOnList
+	return nodeID
+}
