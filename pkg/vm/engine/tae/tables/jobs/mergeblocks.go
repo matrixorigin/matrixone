@@ -109,26 +109,26 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 
 func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
-func (task *mergeBlocksTask) mergeColumn(
-	vecs []containers.Vector,
+func (task *mergeBlocksTask) mergeColumns(
+	srcVecs []containers.Vector,
 	sortedIdx *[]uint32,
 	isPrimary bool,
 	fromLayout,
 	toLayout []uint32,
-	sort bool) (column []containers.Vector, mapping []uint32) {
-	if len(vecs) == 0 {
+	sort bool) (retVecs []containers.Vector, mapping []uint32) {
+	if len(srcVecs) == 0 {
 		return
 	}
 	if sort {
 		if isPrimary {
-			column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
+			retVecs, mapping = mergesort.MergeSortedColumn(srcVecs, sortedIdx, fromLayout, toLayout)
 		} else {
-			column = mergesort.ShuffleColumn(vecs, *sortedIdx, fromLayout, toLayout)
+			retVecs = mergesort.ShuffleColumn(srcVecs, *sortedIdx, fromLayout, toLayout)
 		}
 	} else {
-		column, mapping = task.mergeColumnWithOutSort(vecs, fromLayout, toLayout)
+		retVecs, mapping = task.mergeColumnWithOutSort(srcVecs, fromLayout, toLayout)
 	}
-	for _, vec := range vecs {
+	for _, vec := range srcVecs {
 		vec.Close()
 	}
 	return
@@ -275,7 +275,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	defer common.DefaultAllocator.Free(node)
 	sortedIdx := unsafe.Slice((*uint32)(unsafe.Pointer(&node[0])), length)
 
-	vecs, mapping := task.mergeColumn(sortVecs, &sortedIdx, true, rows, to, schema.HasSortKey())
+	vecs, mapping := task.mergeColumns(sortVecs, &sortedIdx, true, rows, to, schema.HasSortKey())
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
 	length = 0
@@ -326,7 +326,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 			defer vec.Close()
 			vecs = append(vecs, vec)
 		}
-		vecs, _ := task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
+		vecs, _ := task.mergeColumns(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
 		for i := range vecs {
 			defer vecs[i].Close()
 		}
