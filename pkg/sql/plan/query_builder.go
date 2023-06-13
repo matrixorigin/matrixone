@@ -252,6 +252,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			increaseRefCnt(expr, colRefCnt)
 		}
 
+		for _, rfSpec := range node.RuntimeFilterProbeList {
+			increaseRefCnt(rfSpec.Expr, colRefCnt)
+		}
+
 		internalRemapping := &ColRefRemapping{
 			globalToLocal: make(map[[2]int32][2]int32),
 		}
@@ -306,6 +310,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for _, rfSpec := range node.RuntimeFilterProbeList {
+			decreaseRefCnt(rfSpec.Expr, colRefCnt)
 			err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -441,13 +446,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		for _, expr := range node.OnList {
 			decreaseRefCnt(expr, colRefCnt)
 			err := builder.remapColRefForExpr(expr, internalMap)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		for _, rfSpec := range node.RuntimeFilterBuildList {
-			err := builder.remapColRefForExpr(rfSpec.Expr, internalMap)
 			if err != nil {
 				return nil, err
 			}
