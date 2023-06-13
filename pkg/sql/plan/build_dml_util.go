@@ -1732,8 +1732,24 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 		tableDef.Cols = append(tableDef.Cols, MakeHiddenColDefByName(tableDef.ClusterBy.Name))
 	}
+
 	// Get table partition information
 	partitionIdx, partTableIds, _ := getPartSubTableIdsAndPartIndex(builder.compCtx, objRef, tableDef)
+	// append project node
+	projectProjection := getProjectionByLastNode(builder, lastNodeId)
+	if tableDef.Partition != nil {
+		if tableDef.Partition != nil {
+			partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
+			projectProjection = append(projectProjection, partitionExpr)
+		}
+
+		projectNode := &Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeId},
+			ProjectList: projectProjection,
+		}
+		lastNodeId = builder.appendNode(projectNode, bindCtx)
+	}
 
 	// todo: append lock
 	pkPos, pkTyp := getPkPos(tableDef, false)
