@@ -166,7 +166,7 @@ jobs:
     if: ${{ needs.setup_mo_test_env.result == 'success' && github.event.pull_request.merged == true }}  #
     name: MO CHECKIN REGRESSION TEST
     runs-on: arm64-runner
-    timeout-minutes: 120
+    timeout-minutes: 180
     needs: [setup_mo_test_env,docker_image_build]
     steps:
       - name: Clone mo-load-data Repo
