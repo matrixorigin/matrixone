@@ -94,7 +94,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			for i := len(*tmpScope) - 1; i >= 0; i-- {
 				curScope := (*tmpScope)[i]
 				if _, ok := curScope[strings.ToLower(exprImpl.Parts[0])]; ok {
-					typ := types.T_varchar.ToType()
+					typ := types.T_text.ToType()
 					expr = &Expr{
 						Typ: makePlan2Type(&typ),
 						Expr: &plan.Expr_V{
@@ -240,7 +240,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 }
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
-	typ := types.T_varchar.ToType()
+	typ := types.T_text.ToType()
 	return &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_P{
@@ -252,7 +252,7 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 }
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
-	typ := types.T_varchar.ToType()
+	typ := types.T_text.ToType()
 	return &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_V{

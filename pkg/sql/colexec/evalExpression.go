@@ -139,33 +139,18 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}, nil
 
 	case *plan.Expr_P:
-		/*
-			vec, err := proc.GetPrepareParamsAt(int(t.P.Pos))
-			if err != nil {
-				return nil, err
-			}
-			return &FixedVectorExpressionExecutor{
-				m:            proc.Mp(),
-				resultVector: vec,
-			}, nil
-		*/
 		return &ParamExpressionExecutor{
 			pos: int(t.P.Pos),
 			typ: types.T_text.ToType(),
 		}, nil
+
 	case *plan.Expr_V:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		val, err := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
-		if err != nil {
-			return nil, err
-		}
-		vec, err := util.GenVectorByVarValue(proc, typ, val)
-		if err != nil {
-			return nil, err
-		}
-		return &FixedVectorExpressionExecutor{
-			m:            proc.Mp(),
-			resultVector: vec,
+		return &VarExpressionExecutor{
+			name:   t.V.Name,
+			system: t.V.System,
+			global: t.V.Global,
+			typ:    typ,
 		}, nil
 
 	case *plan.Expr_F:
@@ -322,6 +307,32 @@ func (expr *ParamExpressionExecutor) Free() {
 }
 
 func (expr *ParamExpressionExecutor) IfResultMemoryReuse() bool {
+	return false
+}
+
+type VarExpressionExecutor struct {
+	name   string
+	system bool
+	global bool
+	typ    types.Type
+}
+
+func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	val, err := proc.GetResolveVariableFunc()(expr.name, expr.system, expr.global)
+	if err != nil {
+		return nil, err
+	}
+	return util.GenVectorByVarValue(proc, expr.typ, val)
+}
+
+func (expr *VarExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	return expr.Eval(proc, batches)
+}
+
+func (expr *VarExpressionExecutor) Free() {
+}
+
+func (expr *VarExpressionExecutor) IfResultMemoryReuse() bool {
 	return false
 }
 

@@ -3688,6 +3688,9 @@ func strToTimestamp(
 			}
 		} else {
 			s := convertByteSliceToString(v)
+			if zone == nil {
+				fmt.Print("dddd")
+			}
 			val, err := types.ParseTimestamp(zone, s, totype.Scale)
 			if err != nil {
 				return err

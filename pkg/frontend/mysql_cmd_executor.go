@@ -3278,6 +3278,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	}
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 	ses.txnCompileCtx.SetProcess(proc)
+	ses.proc.SessionInfo = proc.SessionInfo
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		input,
 		ses.GetUserName(),
@@ -3590,6 +3591,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Sessio
 		err = mce.parseStmtSendLongData(requestCtx, data)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, err)
+			return resp, nil
 		}
 		return nil, nil
 

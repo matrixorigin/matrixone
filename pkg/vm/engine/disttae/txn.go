@@ -492,10 +492,10 @@ func (txn *Transaction) mergeTableWrites(proc *process.Process) bool {
 	merged := false
 	for k, tes := range txn.tableWrites.tableEntries {
 		for _, te := range tes {
-			if te.rows > INSERT_MERGE_THRESHOLD && te.rows/len(te.entries) > INSERT_MERGE_THRESHOLD {
+			if len(te.entries) <= 1 {
 				continue
 			}
-			if len(te.entries) == 1 {
+			if te.rows > INSERT_MERGE_THRESHOLD && te.rows/len(te.entries) > INSERT_MERGE_THRESHOLD {
 				continue
 			}
 			merged = true

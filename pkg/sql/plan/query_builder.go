@@ -1420,17 +1420,16 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewInternalError(builder.GetContext(), "values statement have not rows")
 		}
 		bat := batch.NewWithSize(len(valuesClause.Rows[0]))
-		strTyp := &plan.Expr{
-			Typ: &plan.Type{
-				Id:          int32(types.T_text),
-				NotNullable: false,
-			},
+		strTyp := &plan.Type{
+			Id:          int32(types.T_text),
+			NotNullable: false,
+		}
+		strColTyp := makeTypeByPlan2Type(strTyp)
+		strColTargetTyp := &plan.Expr{
+			Typ: strTyp,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{
-					Typ: &plan.Type{
-						Id:          int32(types.T_text),
-						NotNullable: false,
-					},
+					Typ: strTyp,
 				},
 			},
 		}
@@ -1463,8 +1462,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				if err != nil {
 					return 0, err
 				}
-				planExpr, err = forceCastExpr2(builder.GetContext(), planExpr,
-					makeTypeByPlan2Expr(planExpr), strTyp)
+				planExpr, err = forceCastExpr2(builder.GetContext(), planExpr, strColTyp, strColTargetTyp)
 				if err != nil {
 					return 0, err
 				}
@@ -1488,19 +1486,19 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			tableDef.Cols[i] = &plan.ColDef{
 				ColId: 0,
 				Name:  colName,
-				Typ:   strTyp.Typ,
+				Typ:   strTyp,
 			}
 		}
 		bat.SetZs(rowCount, proc.Mp())
-		nodeId, _ := uuid.NewUUID()
+		nodeUUID, _ := uuid.NewUUID()
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_VALUE_SCAN,
 			RowsetData:  rowSetData,
 			TableDef:    tableDef,
 			BindingTags: []int32{builder.genNewTag()},
-			Uuid:        nodeId[:],
+			Uuid:        nodeUUID[:],
 		}, ctx)
-		proc.SetValueScanBatch(nodeId, bat)
+		proc.SetValueScanBatch(nodeUUID, bat)
 
 		err = builder.addBinding(nodeID, tree.AliasClause{
 			Alias: "_ValueScan",

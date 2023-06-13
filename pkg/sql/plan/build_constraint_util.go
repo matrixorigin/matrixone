@@ -868,17 +868,16 @@ func buildValueScan(
 	}
 	projectList := make([]*Expr, colCount)
 	bat := batch.NewWithSize(len(slt.Rows[0]))
-	strTyp := &plan.Expr{
-		Typ: &plan.Type{
-			Id:          int32(types.T_text),
-			NotNullable: false,
-		},
+	strTyp := &plan.Type{
+		Id:          int32(types.T_text),
+		NotNullable: false,
+	}
+	strColTyp := makeTypeByPlan2Type(strTyp)
+	strColTargetTyp := &plan.Expr{
+		Typ: strTyp,
 		Expr: &plan.Expr_T{
 			T: &plan.TargetType{
-				Typ: &plan.Type{
-					Id:          int32(types.T_text),
-					NotNullable: false,
-				},
+				Typ: strTyp,
 			},
 		},
 	}
@@ -902,7 +901,7 @@ func buildValueScan(
 			if err != nil {
 				return err
 			}
-			defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, strTyp)
+			defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, strColTyp, strColTargetTyp)
 			if err != nil {
 				return err
 			}
@@ -935,6 +934,7 @@ func buildValueScan(
 					}
 					continue
 				}
+
 				if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
 					bat.Clean(proc.Mp())
 					return err
@@ -952,7 +952,7 @@ func buildValueScan(
 						return err
 					}
 				}
-				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, strTyp)
+				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, strColTyp, strColTargetTyp)
 				if err != nil {
 					return err
 				}
@@ -966,10 +966,10 @@ func buildValueScan(
 		valueScanTableDef.Cols[i] = &plan.ColDef{
 			ColId: 0,
 			Name:  colName,
-			Typ:   strTyp.Typ,
+			Typ:   strTyp,
 		}
 		expr := &plan.Expr{
-			Typ: strTyp.Typ,
+			Typ: strTyp,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: lastTag,
@@ -977,12 +977,13 @@ func buildValueScan(
 				},
 			},
 		}
-		castExpr, err := forceCastExpr2(builder.GetContext(), expr, types.T_text.ToType(), targetTyp)
+		castExpr, err := forceCastExpr2(builder.GetContext(), expr, colTyp, targetTyp)
 		if err != nil {
 			return err
 		}
 		projectList[i] = castExpr
 	}
+
 	bat.SetZs(len(slt.Rows), proc.Mp())
 	nodeId, _ := uuid.NewUUID()
 	scanNode := &plan.Node{

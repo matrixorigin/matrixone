@@ -2,7 +2,7 @@ service-type = "DN"
 data-dir = "./mo-data"
 
 [log]
-level = "fatal"
+level = "info"
 format = "console"
 max-size = 512
 
@@ -61,6 +61,3 @@ logtail-collect-interval = "2ms"
 logtail-response-send-timeout = "10s"
 max-logtail-fetch-failure = 5
 
-[observability]
-disableTrace = true
-disableMetric = true
