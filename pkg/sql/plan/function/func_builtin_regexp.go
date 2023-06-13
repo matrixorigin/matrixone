@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"regexp"
 	"unicode/utf8"
 
@@ -30,6 +31,8 @@ import (
 
 const (
 	DefaultEscapeChar = '\\'
+
+	mapSizeForRegexp = 100
 )
 
 type opBuiltInRegexp struct {
@@ -39,12 +42,12 @@ type opBuiltInRegexp struct {
 func newOpBuiltInRegexp() *opBuiltInRegexp {
 	return &opBuiltInRegexp{
 		regMap: regexpSet{
-			mp: make(map[string]*regexp.Regexp),
+			mp: make(map[string]*regexp.Regexp, mapSizeForRegexp),
 		},
 	}
 }
 
-func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
@@ -59,23 +62,12 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 		}
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			rs.AppendMustNull()
-		} else {
-			match, err := op.regMap.regularMatchForLikeOp(v2, v1)
-			if err != nil {
-				return err
-			}
-			rs.AppendMustValue(match)
-		}
-	}
-	return nil
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return op.regMap.regularMatchForLikeOp(v2, v1)
+	})
 }
 
-func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
@@ -90,31 +82,16 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 		}
 	}
 
-	for i := uint64(0); i < uint64(length); i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			rs.AppendMustNull()
-		} else {
-			match, err := op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1))
-			if err != nil {
-				return err
-			}
-			rs.AppendMustValue(match)
-		}
-	}
-	return nil
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
+		return op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1))
+	})
 }
 
 func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], length int,
 	specialFnForV func([]byte) []byte) (bool, error) {
 	pat, null := p2.GetStrValue(0)
 	if null {
-		for i := uint64(0); i < uint64(length); i++ {
-			if err := rs.Append(false, true); err != nil {
-				return true, err
-			}
-		}
+		nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
 		return true, nil
 	}
 	pat = specialFnForV(pat)
@@ -303,11 +280,23 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 }
 
 func (op *opBuiltInRegexp) builtInRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return generalRegMatch(op, parameters, result, proc, uint64(length), true)
+	return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
+		reg, err := op.regMap.getRegularMatcher(v2)
+		if err != nil {
+			return false, err
+		}
+		return reg.MatchString(v1), nil
+	})
 }
 
 func (op *opBuiltInRegexp) builtInNotRegMatch(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	return generalRegMatch(op, parameters, result, proc, uint64(length), false)
+	return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
+		reg, err := op.regMap.getRegularMatcher(v2)
+		if err != nil {
+			return false, err
+		}
+		return !reg.MatchString(v1), nil
+	})
 }
 
 func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
@@ -630,65 +619,29 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 	return nil
 }
 
-func generalRegMatch(
-	op *opBuiltInRegexp,
-	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length uint64, isReg bool) error {
-	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	p2 := vector.GenerateFunctionStrParameter(parameters[1])
-	rs := vector.MustFunctionResult[bool](result)
-	if parameters[1].IsConst() {
-		v, null := p2.GetStrValue(0)
-		if null {
-			for i := uint64(0); i < length; i++ {
-				if err := rs.Append(false, true); err != nil {
-					return err
-				}
-			}
-			return nil
-		} else {
-			reg, err := regexp.Compile(functionUtil.QuickBytesToStr(v))
-			if err != nil {
-				return err
-			}
-			for i := uint64(0); i < length; i++ {
-				v1, null1 := p1.GetStrValue(i)
-				if null1 {
-					if err = rs.Append(false, null1); err != nil {
-						return err
-					}
-				} else {
-					err = rs.Append(reg.MatchString(functionUtil.QuickBytesToStr(v1)) == isReg, false)
-					if err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	for i := uint64(0); i < length; i++ {
-		v1, null1 := p1.GetStrValue(i)
-		v2, null2 := p2.GetStrValue(i)
-		if null1 || null2 {
-			if err := rs.Append(false, true); err != nil {
-				return err
-			}
-		} else {
-			rval, err := op.regMap.regularMatch(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(rval == isReg, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 type regexpSet struct {
 	mp map[string]*regexp.Regexp
+}
+
+func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
+	var err error
+
+	reg, ok := rs.mp[pat]
+	if !ok {
+		if len(rs.mp) == mapSizeForRegexp {
+			for key := range rs.mp {
+				delete(rs.mp, key)
+				break
+			}
+		}
+
+		reg, err = regexp.Compile(pat)
+		if err != nil {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("%s is not a regexp expression", pat))
+		}
+		rs.mp[pat] = reg
+	}
+	return reg, nil
 }
 
 func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, err error) {
@@ -729,26 +682,18 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, 
 	}
 
 	realPat := convert(pat)
-	reg, ok := rs.mp[realPat]
-	if !ok {
-		reg, err = regexp.Compile(realPat)
-		if err != nil {
-			return false, err
-		}
-		rs.mp[realPat] = reg
+	reg, err := rs.getRegularMatcher(realPat)
+	if err != nil {
+		return false, nil
 	}
 	return reg.Match(str), nil
 }
 
 // return if str matched pat.
 func (rs *regexpSet) regularMatch(pat string, str string) (match bool, err error) {
-	reg, ok := rs.mp[pat]
-	if !ok {
-		reg, err = regexp.Compile(pat)
-		if err != nil {
-			return false, moerr.NewInternalErrorNoCtx(fmt.Sprintf("%s is not a regexp expression", pat))
-		}
-		rs.mp[pat] = reg
+	reg, err := rs.getRegularMatcher(pat)
+	if err != nil {
+		return false, err
 	}
 	return reg.MatchString(str), nil
 }
@@ -760,13 +705,9 @@ func (rs *regexpSet) regularSubstr(pat string, str string, pos, occurrence int64
 		return false, "", moerr.NewInvalidInputNoCtx("regexp_substr have invalid input")
 	}
 
-	reg, ok := rs.mp[pat]
-	if !ok {
-		reg, err = regexp.Compile(pat)
-		if err != nil {
-			return false, "", moerr.NewInvalidArgNoCtx("regexp_substr have invalid regexp pattern arg", pat)
-		}
-		rs.mp[pat] = reg
+	reg, err := rs.getRegularMatcher(pat)
+	if err != nil {
+		return false, "", err
 	}
 
 	// match and return
@@ -781,15 +722,13 @@ func (rs *regexpSet) regularReplace(pat string, str string, repl string, pos, oc
 	if pos < 1 || occurrence < 0 || pos >= int64(len(str)) {
 		return "", moerr.NewInvalidInputNoCtx("regexp_replace have invalid input")
 	}
-	reg, ok := rs.mp[pat]
-	if !ok {
-		reg, err = regexp.Compile(pat)
-		if err != nil {
-			pat = "[" + pat + "]"
-			return "", moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
-		}
-		rs.mp[pat] = reg
+
+	reg, err := rs.getRegularMatcher(pat)
+	if err != nil {
+		pat = "[" + pat + "]"
+		return "", moerr.NewInvalidArgNoCtx("regexp_replace have invalid regexp pattern arg", pat)
 	}
+
 	//match result indexs
 	matchRes := reg.FindAllStringIndex(str, -1)
 	if matchRes == nil {
@@ -832,15 +771,12 @@ func (rs *regexpSet) regularInstr(pat string, str string, pos, occurrence int64,
 		return 0, moerr.NewInvalidInputNoCtx("regexp_instr have invalid input")
 	}
 
-	reg, ok := rs.mp[pat]
-	if !ok {
-		reg, err = regexp.Compile(pat)
-		if err != nil {
-			pat = "[" + pat + "]"
-			return 0, moerr.NewInvalidArgNoCtx("regexp_instr have invalid regexp pattern arg", pat)
-		}
-		rs.mp[pat] = reg
+	reg, err := rs.getRegularMatcher(pat)
+	if err != nil {
+		pat = "[" + pat + "]"
+		return 0, moerr.NewInvalidArgNoCtx("regexp_instr have invalid regexp pattern arg", pat)
 	}
+
 	matches := reg.FindAllStringIndex(str[pos-1:], -1)
 	if int64(len(matches)) < occurrence {
 		return 0, nil
@@ -854,14 +790,12 @@ func (rs *regexpSet) regularLike(pat string, str string, matchType string) (bool
 		return false, err
 	}
 	rule := fmt.Sprintf("(?%s)%s", mt, pat)
-	reg, ok := rs.mp[rule]
-	if !ok {
-		reg, err = regexp.Compile(rule)
-		if err != nil {
-			return false, err
-		}
-		rs.mp[rule] = reg
+
+	reg, err := rs.getRegularMatcher(rule)
+	if err != nil {
+		return false, err
 	}
+
 	match := reg.MatchString(str)
 	return match, nil
 }
