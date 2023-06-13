@@ -108,7 +108,7 @@
 /pkg/pb/metadata @zhangxu19830126
 /pkg/pb/metric @aptend
 /pkg/pb/pipeline @nnsgmsone
-/pkg/pb/plan @nnsgmsone
+/pkg/pb/plan @nnsgmsone @aunjgr
 /pkg/pb/timestamp @zhangxu19830126
 /pkg/pb/txn @zhangxu19830126 
 
@@ -123,7 +123,7 @@
 /pkg/sql/colexec @m-schen
 /pkg/sql/compile @nnsgmsone
 /pkg/sql/parsers @iamlinjunhong
-/pkg/sql/plan @ouyuanning @aunjgr
+/pkg/sql/plan @ouyuanning @aunjgr @badboynt1
 /pkg/sql/plan/function @m-schen
 
 # pkg/taskservice
