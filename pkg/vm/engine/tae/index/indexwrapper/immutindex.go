@@ -17,8 +17,8 @@ package indexwrapper
 import (
 	"context"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -56,7 +56,7 @@ func (idx ImmutIndex) BatchDedup(
 	ctx context.Context,
 	keys containers.Vector,
 	keysZM index.ZM,
-) (sels *roaring.Bitmap, err error) {
+) (sels *nulls.Bitmap, err error) {
 	var exist bool
 	if keysZM.Valid() {
 		if exist = idx.zm.FastIntersect(keysZM); !exist {

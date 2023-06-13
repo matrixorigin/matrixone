@@ -33,6 +33,7 @@ type timestampWaiter struct {
 	stopper   stopper.Stopper
 	notifiedC chan timestamp.Timestamp
 	latestTS  atomic.Pointer[timestamp.Timestamp]
+	epoch     atomic.Uint64
 	mu        struct {
 		sync.Mutex
 		waiters      []*waiter
@@ -53,23 +54,31 @@ func NewTimestampWaiter() TimestampWaiter {
 	return tw
 }
 
+func (tw *timestampWaiter) Epoch() uint64 {
+	return tw.epoch.Load()
+}
+
+func (tw *timestampWaiter) UpdateEpoch(epoch uint64) {
+	tw.epoch.Store(epoch)
+}
+
 func (tw *timestampWaiter) GetTimestamp(
 	ctx context.Context,
-	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	ts timestamp.Timestamp) (uint64, timestamp.Timestamp, error) {
 	latest := tw.latestTS.Load()
 	if latest != nil && latest.GreaterEq(ts) {
-		return latest.Next(), nil
+		return tw.epoch.Load(), latest.Next(), nil
 	}
 
 	w := tw.addToWait(ts)
 	if w != nil {
 		defer w.close()
 		if err := w.wait(ctx); err != nil {
-			return timestamp.Timestamp{}, err
+			return 0, timestamp.Timestamp{}, err
 		}
 	}
 	v := tw.latestTS.Load()
-	return v.Next(), nil
+	return tw.epoch.Load(), v.Next(), nil
 }
 
 func (tw *timestampWaiter) NotifyLatestCommitTS(ts timestamp.Timestamp) {
@@ -149,7 +158,7 @@ var (
 	waitersPool = sync.Pool{
 		New: func() any {
 			w := &waiter{
-				c: make(chan struct{}),
+				c: make(chan struct{}, 1),
 			}
 			runtime.SetFinalizer(w, func(w *waiter) {
 				close(w.c)
@@ -173,7 +182,9 @@ func newWaiter(ts timestamp.Timestamp) *waiter {
 
 func (w *waiter) init(ts timestamp.Timestamp) {
 	w.waitAfter = ts
-	w.ref()
+	if w.ref() != 1 {
+		panic("BUG: waiter init must has ref count 1")
+	}
 }
 
 func (w *waiter) wait(ctx context.Context) error {
@@ -189,12 +200,16 @@ func (w *waiter) notify() {
 	w.c <- struct{}{}
 }
 
-func (w *waiter) ref() {
-	w.refCount.Add(1)
+func (w *waiter) ref() int32 {
+	return w.refCount.Add(1)
 }
 
 func (w *waiter) unref() {
-	if w.refCount.Add(-1) == 0 {
+	n := w.refCount.Add(-1)
+	if n < 0 {
+		panic("BUG: negative ref count")
+	}
+	if n == 0 {
 		w.reset()
 		waitersPool.Put(w)
 	}

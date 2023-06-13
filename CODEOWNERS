@@ -65,7 +65,7 @@
 /pkg/config @daviszhen
 
 # pkg/container
-/pkg/container @nnsgmsone
+/pkg/container @nnsgmsone @XuPeng-SH 
 /pkg/container/vector @aunjgr
 
 # pkg/defines
@@ -108,7 +108,7 @@
 /pkg/pb/metadata @zhangxu19830126
 /pkg/pb/metric @aptend
 /pkg/pb/pipeline @nnsgmsone
-/pkg/pb/plan @nnsgmsone
+/pkg/pb/plan @nnsgmsone @aunjgr
 /pkg/pb/timestamp @zhangxu19830126
 /pkg/pb/txn @zhangxu19830126 
 
@@ -123,7 +123,7 @@
 /pkg/sql/colexec @m-schen
 /pkg/sql/compile @nnsgmsone
 /pkg/sql/parsers @iamlinjunhong
-/pkg/sql/plan @ouyuanning @aunjgr
+/pkg/sql/plan @ouyuanning @aunjgr @badboynt1
 /pkg/sql/plan/function @m-schen
 
 # pkg/taskservice
@@ -155,7 +155,7 @@
 # engines and engine related stuff
 /pkg/vm @nnsgmsone @XuPeng-SH 
 /pkg/vm/engine @nnsgmsone
-/pkg/vm/engine/disttae @nnsgmsone
+/pkg/vm/engine/disttae @nnsgmsone @XuPeng-SH @triump2020
 /pkg/vm/engine/disttae/logtailreplay @reusee
 /pkg/vm/engine/tae @XuPeng-SH 
 /pkg/vm/engine/memoryengine @reusee
