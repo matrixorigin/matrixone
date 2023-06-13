@@ -454,11 +454,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 
 		case plan.Node_LEFT:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-				outcnt += leftStats.Outcnt
-			}
+			outcnt := leftStats.Outcnt
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
@@ -467,11 +463,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 
 		case plan.Node_RIGHT:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-				outcnt += rightStats.Outcnt
-			}
+			outcnt := rightStats.Outcnt
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
@@ -480,11 +472,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 
 		case plan.Node_OUTER:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-				outcnt += leftStats.Outcnt + rightStats.Outcnt
-			}
+			outcnt := leftStats.Outcnt + rightStats.Outcnt
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
