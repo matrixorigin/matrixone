@@ -234,7 +234,7 @@ func (c *AppendCmd) UnmarshalBinary(buf []byte) error {
 
 func (c *AppendCmd) UnmarshalBinaryV1(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
-	_, err := c.ReadFrom(bbuf)
+	_, err := c.ReadFromV1(bbuf)
 	return err
 }
 
