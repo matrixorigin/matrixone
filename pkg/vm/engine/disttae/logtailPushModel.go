@@ -81,6 +81,10 @@ const (
 //	 6. receiveTableLogTailContinuously   : start (1 + parallelNums) routine to receive log tail from service.
 //	-----------------------------------------------------------------------------------------------------
 type pushClient struct {
+	// epoch whenever the connection between push client and dn is reset, the epoch is incremented and  all transactions
+	// generated on the old epoch need to be aborted
+	epoch atomic.Uint64
+
 	// Responsible for sending subscription / unsubscription requests to the service
 	// and receiving the log tail from service.
 	subscriber *logTailSubscriber
@@ -99,6 +103,12 @@ func (client *pushClient) init(
 	serviceAddr string,
 	timestampWaiter client.TimestampWaiter) error {
 	client.timestampWaiter = timestampWaiter
+
+	// init means that the connection between push client and dn is reset, than we will clear memory table.
+	// any all transactions generated on the old epoch need to be aborted
+	client.epoch.Add(1)
+	client.timestampWaiter.UpdateEpoch(client.epoch.Load())
+
 	client.receivedLogTailTime.initLogTailTimestamp(timestampWaiter)
 	client.subscribed.initTableSubscribeRecord()
 
@@ -481,7 +491,9 @@ type syncLogTailTimestamp struct {
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
 	ts := r.getTimestamp()
-	r.latestAppliedLogTailTS.Store(&ts)
+	if !ts.IsEmpty() {
+		r.latestAppliedLogTailTS.Store(&ts)
+	}
 
 	r.timestampWaiter = timestampWaiter
 	r.ready.Store(false)
