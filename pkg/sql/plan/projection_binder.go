@@ -154,7 +154,7 @@ func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, 
 	case tree.Following:
 		return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
 	case tree.CurrentRow:
-		if ws.Frame.End.Type != tree.CurrentRow {
+		if ws.Frame.End.Type == tree.Preceding {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
 		}
 	}
