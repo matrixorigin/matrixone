@@ -54,6 +54,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *Q
 		nameByColRef:    make(map[[2]int32]string),
 		nextTag:         0,
 		mysqlCompatible: mysqlCompatible,
+		tag2Table:       make(map[int32]*TableDef),
 	}
 }
 

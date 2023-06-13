@@ -344,6 +344,11 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 						goto cleanAndReconnect
 					}
 
+					// we should always make sure that all the log tail consume routines have updated its timestamp.
+					for client.receivedLogTailTime.getTimestamp().IsEmpty() {
+						time.Sleep(time.Millisecond * 2)
+					}
+
 					client.receivedLogTailTime.ready.Store(true)
 					client.subscriber.setReady()
 					logutil.Infof("[log-tail-push-client] connect to dn log tail service succeed.")

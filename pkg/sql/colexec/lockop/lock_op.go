@@ -176,7 +176,7 @@ func LockTable(
 	opts := DefaultLockOptions(parker).
 		WithLockTable(true).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
-	_, err := doLock(
+	refreshTS, err := doLock(
 		proc.Ctx,
 		tableID,
 		proc.TxnOperator,
@@ -184,7 +184,14 @@ func LockTable(
 		nil,
 		pkType,
 		opts)
-	return err
+	if err != nil {
+		return err
+	}
+	// If the returned timestamp is not empty, we should return a retry error,
+	if !refreshTS.IsEmpty() {
+		return moerr.NewTxnNeedRetry(proc.Ctx)
+	}
+	return nil
 }
 
 // doLock locks a set of data so that no other transaction can modify it.
