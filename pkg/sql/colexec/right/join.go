@@ -157,9 +157,6 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 
 	count := ctr.bat.Length() - ctr.matched.Count()
 	ctr.matched.Negate()
-	if count == 0 {
-		return true, nil
-	}
 	sels := make([]int32, 0, count)
 	itr := ctr.matched.Iterator()
 	for itr.HasNext() {
