@@ -24,6 +24,7 @@ package motrace
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/prashantv/gostub"
 	"go.uber.org/zap"
 	"runtime"
 	"sync"
@@ -206,6 +207,9 @@ func TestSpanContext_MarshalTo(t *testing.T) {
 
 func TestMOSpan_End(t *testing.T) {
 
+	s := gostub.Stub(&freeMOSpan, func(span *MOSpan) {})
+	defer s.Reset()
+
 	ctx := context.TODO()
 	p := newMOTracerProvider(WithLongSpanTime(time.Hour), EnableTracer(true))
 	tracer := &MOTracer{
@@ -228,18 +232,23 @@ func TestMOSpan_End(t *testing.T) {
 	require.Equal(t, 0, len(shortTimeSpan.(*MOSpan).ExtraFields))
 
 	// span with LongTimeThreshold
+	// and set ExtraFields
 	var longTimeSpan trace.Span
 	WG.Add(1)
+	extraFields := []zap.Field{zap.String("str", "field"), zap.Int64("int", 0)}
 	go func() {
 		_, longTimeSpan = tracer.Start(ctx, "longTimeSpan", trace.WithLongTimeThreshold(time.Millisecond))
 		defer WG.Done()
 		defer longTimeSpan.End()
 
+		longTimeSpan.AddExtraFields(extraFields...)
+
 		time.Sleep(10 * time.Millisecond)
 	}()
 	WG.Wait()
 	require.Equal(t, true, longTimeSpan.(*MOSpan).needRecord)
-	require.Equal(t, 0, len(longTimeSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, 2, len(longTimeSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, extraFields, longTimeSpan.(*MOSpan).ExtraFields)
 
 	// span with deadline context
 	deadlineCtx, _ := context.WithTimeout(ctx, time.Millisecond)

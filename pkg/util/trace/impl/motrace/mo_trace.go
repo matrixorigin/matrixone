@@ -126,6 +126,7 @@ func (s *MOSpan) Free() {
 	s.tracer = nil
 	s.ctx = nil
 	s.needRecord = false
+	s.ExtraFields = nil
 	s.StartTime = table.ZeroTime
 	s.EndTime = table.ZeroTime
 	spanPool.Put(s)
@@ -186,7 +187,7 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 		s.ExtraFields = append(s.ExtraFields, zap.Error(s.ctx.Err()))
 	}
 	if !s.needRecord {
-		go s.Free()
+		go freeMOSpan(s)
 		return
 	}
 	// do record
@@ -196,6 +197,10 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	for _, sp := range s.tracer.provider.spanProcessors {
 		sp.OnEnd(s)
 	}
+}
+
+var freeMOSpan = func(s *MOSpan) {
+	s.Free()
 }
 
 func (s *MOSpan) AddExtraFields(fields ...zap.Field) {

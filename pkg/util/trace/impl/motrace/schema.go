@@ -131,8 +131,6 @@ var (
 	startTimeCol    = table.DatetimeColumn("start_time", "start time")
 	endTimeCol      = table.DatetimeColumn("end_time", "end time")
 	resourceCol     = table.TextDefaultColumn("resource", `{}`, "static resource information")
-	goroutineCol    = table.TextColumn("goroutine", "progress goroutine info (Reserved)")
-	runtimeMemCol   = table.TextColumn("runtimeMem", "progress runtime memory info (Reserved)")
 
 	SingleRowLogTable = &table.Table{
 		Account:  table.AccountSys,
@@ -160,8 +158,6 @@ var (
 			durationCol,
 			resourceCol,
 			spanKindCol,
-			goroutineCol,
-			runtimeMemCol,
 		},
 		PrimaryKeyColumn: nil,
 		ClusterBy:        []table.Column{timestampCol, rawItemCol},
@@ -231,8 +227,6 @@ var (
 			durationCol,
 			resourceCol,
 			extraCol,
-			goroutineCol,
-			runtimeMemCol,
 		},
 		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: spanInfoTbl},
 	}
