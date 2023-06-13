@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -129,21 +128,19 @@ func (chain *DeleteChain) RemoveNodeLocked(node txnif.DeleteNode) {
 }
 
 func (chain *DeleteChain) deleteInMaskByNode(node txnif.DeleteNode) {
-	int32Rows := node.GetRowMaskRefLocked().ToArray()
-	uint64Rows := make([]uint64, len(int32Rows))
-	for i, row := range int32Rows {
-		uint64Rows[i] = uint64(row)
+	it := node.GetRowMaskRefLocked().Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		chain.mask.Del(uint64(row))
 	}
-	chain.mask.Del(uint64Rows...)
 }
 
 func (chain *DeleteChain) insertInMaskByNode(node txnif.DeleteNode) {
-	int32Rows := node.GetRowMaskRefLocked().ToArray()
-	uint64Rows := make([]uint64, len(int32Rows))
-	for i, row := range int32Rows {
-		uint64Rows[i] = uint64(row)
+	it := node.GetRowMaskRefLocked().Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		chain.mask.Add(uint64(row))
 	}
-	chain.mask.Add(uint64Rows...)
 }
 
 func (chain *DeleteChain) insertInMaskByRange(start, end uint32) {
@@ -224,18 +221,17 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 // CollectDeletesInRange collects [startTs, endTs)
 func (chain *DeleteChain) CollectDeletesInRange(
 	startTs, endTs types.TS,
-	rwlocker *sync.RWMutex) (mask *roaring.Bitmap, err error) {
-	var merged *DeleteNode
+	rwlocker *sync.RWMutex) (mask *nulls.Bitmap, err error) {
 	chain.LoopChain(func(n *DeleteNode) bool {
 		// Merged node is a loop breaker
 		if n.IsMerged() {
 			if n.GetCommitTSLocked().Greater(endTs) {
 				return true
 			}
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
+			if mask == nil {
+				mask = nulls.NewWithSize(int(n.mask.Maximum()))
 			}
-			merged.MergeLocked(n)
+			mergeDelete(mask, n)
 			return false
 		}
 		needWait, txnToWait := n.NeedWaitCommitting(endTs)
@@ -245,17 +241,13 @@ func (chain *DeleteChain) CollectDeletesInRange(
 			rwlocker.RLock()
 		}
 		if n.IsVisibleByTS(endTs) && !n.IsVisibleByTS(startTs) {
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
+			if mask == nil {
+				mask = nulls.NewWithSize(int(n.mask.Maximum()))
 			}
-			merged.MergeLocked(n)
+			mergeDelete(mask, n)
 		}
 		return true
 	})
-	if merged == nil {
-		return
-	}
-	mask = merged.mask
 	return
 }
 
@@ -281,34 +273,33 @@ func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (f
 	return
 }
 
+func mergeDelete(mask *nulls.Bitmap, node *DeleteNode) {
+	if node == nil || node.mask == nil {
+		return
+	}
+	it := node.mask.Iterator()
+	for it.HasNext() {
+		mask.Add(uint64(it.Next()))
+	}
+}
+
 func (chain *DeleteChain) CollectDeletesLocked(
 	txn txnif.TxnReader,
-	rwlocker *sync.RWMutex) (txnif.DeleteNode, error) {
-	var merged *DeleteNode
-	var err error
+	rwlocker *sync.RWMutex) (merged *nulls.Bitmap, err error) {
+	merged = chain.mask.Clone()
 	chain.LoopChain(func(n *DeleteNode) bool {
-		// Merged node is a loop breaker
-		if n.IsMerged() {
-			if n.GetCommitTSLocked().Greater(txn.GetStartTS()) {
-				return true
-			}
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
-			}
-			merged.MergeLocked(n)
-			return false
-		}
 		needWait, txnToWait := n.NeedWaitCommitting(txn.GetStartTS())
 		if needWait {
 			rwlocker.RUnlock()
 			txnToWait.GetTxnState(true)
 			rwlocker.RLock()
 		}
-		if n.IsVisible(txn) {
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
+		if !n.IsVisible(txn) {
+			it := n.GetDeleteMaskLocked().Iterator()
+			for it.HasNext() {
+				row := it.Next()
+				merged.Del(uint64(row))
 			}
-			merged.MergeLocked(n)
 		}
 		return true
 	})

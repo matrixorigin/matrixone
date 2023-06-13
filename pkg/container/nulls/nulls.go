@@ -22,6 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"golang.org/x/exp/constraints"
 )
 
 type Bitmap = Nulls
@@ -393,4 +394,24 @@ func (nsp *Nulls) Merge(o *Nulls) {
 		r := itr.Next()
 		nsp.Add(r)
 	}
+}
+
+func (nsp *Nulls) String() string {
+	if nsp.IsEmpty() {
+		return fmt.Sprintf("%v", []uint64{})
+	}
+	return nsp.np.String()
+}
+
+func ToArray[T constraints.Integer](nsp *Nulls) []T {
+	if nsp.IsEmpty() {
+		return []T{}
+	}
+	ret := make([]T, 0, nsp.Count())
+	it := nsp.np.Iterator()
+	for it.HasNext() {
+		r := it.Next()
+		ret = append(ret, T(r))
+	}
+	return ret
 }
