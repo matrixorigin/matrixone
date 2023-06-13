@@ -54,7 +54,7 @@ type compactBlockTask struct {
 	meta      *catalog.BlockEntry
 	scheduler tasks.TaskScheduler
 	scopes    []common.ID
-	mapping   []uint32
+	mapping   []int32
 	deletes   *nulls.Bitmap
 }
 
@@ -263,9 +263,9 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	// sortkey does not change, nerver mind the schema version
 	if !task.schema.HasSortKey() && task.created != nil {
 		n := task.created.Rows()
-		task.mapping = make([]uint32, n)
+		task.mapping = make([]int32, n)
 		for i := 0; i < n; i++ {
-			task.mapping[i] = uint32(i)
+			task.mapping[i] = int32(i)
 		}
 	}
 	txnEntry := txnentries.NewCompactBlockEntry(
