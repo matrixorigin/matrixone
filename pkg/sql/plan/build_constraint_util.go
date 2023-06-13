@@ -867,7 +867,7 @@ func buildValueScan(
 		Cols:  make([]*plan.ColDef, colCount),
 	}
 	projectList := make([]*Expr, colCount)
-	bat := batch.NewWithSize(len(slt.Rows[0]))
+	bat := batch.NewWithSize(len(updateColumns))
 	strTyp := &plan.Type{
 		Id:          int32(types.T_text),
 		NotNullable: false,

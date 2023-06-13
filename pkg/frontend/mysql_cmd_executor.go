@@ -3487,19 +3487,18 @@ func SetNewResponse(category int, status uint16, cmd int, d interface{}, cwIndex
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Session, req *Request) (resp *Response, err error) {
-	/*
-		defer func() {
-			if e := recover(); e != nil {
-				moe, ok := e.(*moerr.Error)
-				if !ok {
-					err = moerr.ConvertPanicError(requestCtx, e)
-					resp = NewGeneralErrorResponse(COM_QUERY, err)
-				} else {
-					resp = NewGeneralErrorResponse(COM_QUERY, moe)
-				}
+
+	defer func() {
+		if e := recover(); e != nil {
+			moe, ok := e.(*moerr.Error)
+			if !ok {
+				err = moerr.ConvertPanicError(requestCtx, e)
+				resp = NewGeneralErrorResponse(COM_QUERY, err)
+			} else {
+				resp = NewGeneralErrorResponse(COM_QUERY, moe)
 			}
-		}()
-	*/
+		}
+	}()
 
 	var sql string
 	logDebugf(ses.GetDebugString(), "cmd %v", req.GetCmd())
