@@ -21,7 +21,10 @@
 
 package trace
 
-import "context"
+import (
+	"context"
+	"go.uber.org/zap"
+)
 
 type TracerProvider interface {
 	Tracer(instrumentationName string, opts ...TracerOption) Tracer
@@ -42,6 +45,9 @@ type Span interface {
 	// is called. Therefore, updates to the Span are not allowed after this
 	// method has been called.
 	End(options ...SpanEndOption)
+
+	// AddExtraFields inject more details for span.
+	AddExtraFields(fields ...zap.Field)
 
 	// SpanContext returns the SpanContext of the Span. The returned SpanContext
 	// is usable even after the End method has been called for the Span.

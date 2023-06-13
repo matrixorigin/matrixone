@@ -24,12 +24,16 @@ package motrace
 import (
 	"context"
 	"encoding/hex"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"sync"
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 //nolint:revive // revive complains about stutter of `trace.TraceFlags`.
@@ -47,8 +51,8 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanOpt
 		return ctx, trace.NoopSpan{}
 	}
 	span := newMOSpan()
-	span.init(name, opts...)
 	span.tracer = t
+	span.init(name, opts...)
 
 	parent := trace.SpanFromContext(ctx)
 	psc := parent.SpanContext()
@@ -85,6 +89,8 @@ type MOSpan struct {
 	EndTime   time.Time `jons:"end_time"`
 	// Duration
 	Duration time.Duration `json:"duration"`
+	// ExtraFields
+	ExtraFields []zap.Field `json:"extra"`
 
 	tracer *MOTracer `json:"-"`
 }
@@ -100,6 +106,7 @@ func newMOSpan() *MOSpan {
 func (s *MOSpan) init(name string, opts ...trace.SpanOption) {
 	s.Name = name
 	s.StartTime = time.Now()
+	s.LongTimeThreshold = s.tracer.provider.longSpanTime
 	for _, opt := range opts {
 		opt.ApplySpanStart(&s.SpanConfig)
 	}
@@ -140,14 +147,28 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(spanNameCol, table.StringField(s.Name))
 	row.SetColumnVal(startTimeCol, table.TimeField(s.StartTime))
 	row.SetColumnVal(endTimeCol, table.TimeField(s.EndTime))
+	row.SetColumnVal(timestampCol, table.TimeField(s.EndTime))
 	row.SetColumnVal(durationCol, table.Uint64Field(uint64(s.Duration)))
 	row.SetColumnVal(resourceCol, table.StringField(s.tracer.provider.resource.String()))
+	// fill extra fields
+	if len(s.ExtraFields) > 0 {
+		encoder := getEncoder()
+		buf, err := encoder.EncodeEntry(zapcore.Entry{}, s.ExtraFields)
+		if buf != nil {
+			defer buf.Free()
+		}
+		if err != nil {
+			moerr.ConvertGoError(ctx, err)
+		} else {
+			row.SetColumnVal(extraCol, table.StringField(buf.String()))
+		}
+	}
 }
 
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	s.EndTime = time.Now()
 	s.Duration = s.EndTime.Sub(s.StartTime)
-	if s.Duration < s.tracer.provider.longSpanTime {
+	if s.Duration < s.GetLongTimeThreshold() {
 		return
 	}
 	for _, opt := range options {
@@ -156,6 +177,10 @@ func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	for _, sp := range s.tracer.provider.spanProcessors {
 		sp.OnEnd(s)
 	}
+}
+
+func (s *MOSpan) AddExtraFields(fields ...zap.Field) {
+	s.ExtraFields = append(s.ExtraFields, fields...)
 }
 
 func (s *MOSpan) SpanContext() trace.SpanContext {
@@ -170,4 +195,23 @@ const timestampFormatter = "2006-01-02 15:04:05.000000"
 
 func Time2DatetimeString(t time.Time) string {
 	return t.Format(timestampFormatter)
+}
+
+var jsonEncoder zapcore.Encoder
+var jsonEncoderInit sync.Once
+
+func getEncoder() zapcore.Encoder {
+	jsonEncoderInit.Do(func() {
+		jsonEncoder = zapcore.NewJSONEncoder(zapcore.EncoderConfig{
+			TimeKey:        "",
+			LevelKey:       "",
+			NameKey:        "",
+			CallerKey:      "",
+			FunctionKey:    zapcore.OmitKey,
+			MessageKey:     "",
+			StacktraceKey:  "",
+			SkipLineEnding: true,
+		})
+	})
+	return jsonEncoder.Clone()
 }

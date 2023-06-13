@@ -23,6 +23,7 @@ package trace
 
 import (
 	"context"
+	"go.uber.org/zap"
 )
 
 var _ TracerProvider = &noopTracerProvider{}
@@ -67,6 +68,8 @@ func (NoopSpan) ParentSpanContext() SpanContext { return SpanContext{} }
 
 // End does nothing.
 func (NoopSpan) End(...SpanEndOption) {}
+
+func (NoopSpan) AddExtraFields(...zap.Field) {}
 
 // SetName does nothing.
 func (NoopSpan) SetName(string) {}
