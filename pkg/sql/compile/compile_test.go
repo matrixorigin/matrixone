@@ -89,6 +89,8 @@ func (w *Ws) RollbackLastStatement(ctx context.Context) error {
 	return nil
 }
 
+func (w *Ws) DeleteTable(ctx context.Context, dbID uint64, tableName string) {}
+
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	ctrl := gomock.NewController(t)
