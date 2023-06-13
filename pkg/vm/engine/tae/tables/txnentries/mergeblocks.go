@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -34,7 +34,7 @@ type mergeBlocksEntry struct {
 	txn         txnif.AsyncTxn
 	relation    handle.Relation
 	droppedSegs []*catalog.SegmentEntry
-	deletes     []*roaring.Bitmap
+	deletes     []*nulls.Bitmap
 	createdSegs []*catalog.SegmentEntry
 	droppedBlks []*catalog.BlockEntry
 	createdBlks []*catalog.BlockEntry
@@ -51,7 +51,7 @@ func NewMergeBlocksEntry(
 	droppedSegs, createdSegs []*catalog.SegmentEntry,
 	droppedBlks, createdBlks []*catalog.BlockEntry,
 	mapping, fromAddr, toAddr []uint32,
-	deletes []*roaring.Bitmap,
+	deletes []*nulls.Bitmap,
 	skipBlks []int,
 	scheduler tasks.TaskScheduler) *mergeBlocksEntry {
 	return &mergeBlocksEntry{
@@ -185,7 +185,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		delCnt = uint32(deleteMap.GetCardinality())
 	}
 	for ; offsetInOldBlkBeforeApplyDel < delCnt+length; offsetInOldBlkBeforeApplyDel++ {
-		if deleteMap != nil && deleteMap.Contains(offsetInOldBlkBeforeApplyDel) {
+		if deleteMap != nil && deleteMap.Contains(uint64(offsetInOldBlkBeforeApplyDel)) {
 			continue
 		}
 		// add a record
@@ -210,23 +210,12 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		return
 	}
 
-	deletes := view.DeleteMask
-	for colIdx, column := range view.Columns {
-		view.DeleteMask = compute.ShuffleByDeletes(
-			deletes, entry.deletes[fromPos])
-		for row, v := range column.UpdateVals {
-			toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
-			if err = blks[toPos].Update(toRow, uint16(colIdx), v); err != nil {
-				return
-			}
-		}
-	}
 	view.DeleteMask = compute.ShuffleByDeletes(view.DeleteMask, entry.deletes[fromPos])
-	if view.DeleteMask != nil {
-		it := view.DeleteMask.Iterator()
+	if !view.DeleteMask.IsEmpty() {
+		it := view.DeleteMask.GetBitmap().Iterator()
 		for it.HasNext() {
 			row := it.Next()
-			toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, row)
+			toPos, toRow := entry.resolveAddr(fromPos-skippedCnt, uint32(row))
 			if err = blks[toPos].RangeDelete(toRow, toRow, handle.DT_MergeCompact); err != nil {
 				return
 			}
