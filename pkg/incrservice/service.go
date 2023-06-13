@@ -330,8 +330,8 @@ func (s *service) destroyTables(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(lazyDeleteInterval):
-			deletes := make([]deleteCtx, 0, len(s.mu.destroyed))
 			s.mu.Lock()
+			deletes := make([]deleteCtx, 0, len(s.mu.destroyed))
 			for _, ctx := range s.mu.destroyed {
 				deletes = append(deletes, ctx)
 			}
