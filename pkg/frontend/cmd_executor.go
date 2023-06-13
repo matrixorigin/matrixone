@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -45,7 +47,84 @@ type CmdExecutorImpl struct {
 	CmdExecutor
 }
 
-type doComQueryFunc func(context.Context, string) error
+// UserInput
+// normally, just use the sql.
+// for some special statement, like 'set_var', we need to use the stmt.
+// if the stmt is not nil, we neglect the sql.
+type UserInput struct {
+	sql           string
+	stmt          tree.Statement
+	sqlSourceType []string
+}
+
+func (ui *UserInput) getSql() string {
+	return ui.sql
+}
+
+// getStmt if the stmt is not nil, we neglect the sql.
+func (ui *UserInput) getStmt() tree.Statement {
+	return ui.stmt
+}
+
+func (ui *UserInput) getSqlSourceTypes() []string {
+	return ui.sqlSourceType
+}
+
+// isInternal return true if the stmt is not nil.
+// it means the statement is not from any client.
+// currently, we use it to handle the 'set_var' statement.
+func (ui *UserInput) isInternal() bool {
+	return ui.getStmt() != nil
+}
+
+func (ui *UserInput) genSqlSourceType(ses *Session) {
+	sql := ui.getSql()
+	ui.sqlSourceType = nil
+	if ui.getStmt() != nil {
+		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		return
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
+		if tenant != nil {
+			tenant.SetUser("")
+		}
+		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		return
+	}
+	flag, _, _ := isSpecialUser(tenant.User)
+	if flag {
+		ui.sqlSourceType = append(ui.sqlSourceType, internalSql)
+		return
+	}
+	for len(sql) > 0 {
+		p1 := strings.Index(sql, "/*")
+		p2 := strings.Index(sql, "*/")
+		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
+			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
+			return
+		}
+		source := strings.TrimSpace(sql[p1+2 : p2])
+		if source == cloudUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, cloudUserSql)
+		} else if source == cloudNoUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, cloudNoUserSql)
+		} else {
+			ui.sqlSourceType = append(ui.sqlSourceType, externSql)
+		}
+		sql = sql[p2+2:]
+	}
+}
+
+func (ui *UserInput) getSqlSourceType(i int) string {
+	sqlType := ui.sqlSourceType[0]
+	if i < len(ui.sqlSourceType) {
+		sqlType = ui.sqlSourceType[i]
+	}
+	return sqlType
+}
+
+type doComQueryFunc func(context.Context, *UserInput) error
 
 type stmtExecStatus int
 

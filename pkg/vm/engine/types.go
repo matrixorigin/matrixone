@@ -543,6 +543,9 @@ type Relation interface {
 
 	GetTableID(context.Context) uint64
 
+	// GetTableName returns the name of the table.
+	GetTableName() string
+
 	GetDBID(context.Context) uint64
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
@@ -555,7 +558,7 @@ type Relation interface {
 
 	GetEngineType() EngineType
 
-	GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error)
+	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
 }
 
 type Reader interface {

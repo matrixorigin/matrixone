@@ -64,6 +64,9 @@ func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ct
 		}
 
 	case *plan.Expr_Sub:
+		if builder.isForUpdate {
+			return 0, nil, moerr.NewInternalError(builder.GetContext(), "not support subquery for update")
+		}
 		nodeID, expr, err = builder.flattenSubquery(nodeID, exprImpl.Sub, ctx)
 	}
 

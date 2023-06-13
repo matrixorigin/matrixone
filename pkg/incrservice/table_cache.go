@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 type tableCache struct {
@@ -29,7 +30,9 @@ type tableCache struct {
 
 	mu struct {
 		sync.RWMutex
-		cols map[string]*columnCache
+		committed bool
+		txnOp     client.TxnOperator
+		cols      map[string]*columnCache
 	}
 }
 
@@ -38,20 +41,25 @@ func newTableCache(
 	tableID uint64,
 	cols []AutoColumn,
 	cfg Config,
-	allocator valueAllocator) (incrTableCache, error) {
+	allocator valueAllocator,
+	txnOp client.TxnOperator,
+	committed bool) (incrTableCache, error) {
 	c := &tableCache{
 		logger:  getLogger(),
 		tableID: tableID,
 		cols:    cols,
 	}
 	c.mu.cols = make(map[string]*columnCache, 1)
+	c.mu.txnOp = txnOp
+	c.mu.committed = committed
 	for _, col := range cols {
 		cc, err := newColumnCache(
 			ctx,
 			tableID,
 			col,
 			cfg,
-			allocator)
+			allocator,
+			txnOp)
 		if err != nil {
 			return nil, err
 		}
@@ -60,11 +68,28 @@ func newTableCache(
 	return c, nil
 }
 
+func (c *tableCache) commit() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mu.committed {
+		panic("commit already committed cache")
+	}
+	c.mu.committed = true
+	c.mu.txnOp = nil
+}
+
+func (c *tableCache) getTxn() client.TxnOperator {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mu.txnOp
+}
+
 func (c *tableCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
 	bat *batch.Batch) (uint64, error) {
 	lastInsert := uint64(0)
+	txnOp := c.getTxn()
 	for _, col := range c.cols {
 		cc := c.getColumnCache(col.ColName)
 		if cc == nil {
@@ -72,7 +97,7 @@ func (c *tableCache) insertAutoValues(
 		}
 		rows := bat.Length()
 		vec := bat.GetVector(int32(col.ColIndex))
-		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows); err != nil {
+		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows, txnOp); err != nil {
 			return 0, err
 		} else {
 			lastInsert = v

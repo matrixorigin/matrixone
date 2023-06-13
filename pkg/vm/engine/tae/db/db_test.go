@@ -25,12 +25,15 @@ import (
 	"testing"
 	"time"
 
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -579,7 +582,7 @@ func TestCompactBlock1(t *testing.T) {
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(2), changes.DeleteMask.GetCardinality())
+		assert.Equal(t, 2, changes.DeleteMask.GetCardinality())
 
 		destBlock, err := seg.CreateNonAppendableBlock(nil)
 		assert.Nil(t, err)
@@ -878,7 +881,7 @@ func TestCompactBlock2(t *testing.T) {
 		// read generated column from nablk-1
 		newColumnView, err := blk.GetColumnDataById(context.Background(), 3)
 		require.NoError(t, err)
-		require.Equal(t, uint64(2), newColumnView.DeleteMask.GetCardinality())
+		require.Equal(t, 2, newColumnView.DeleteMask.GetCardinality())
 		require.Equal(t, 20, newColumnView.GetData().Length())
 		newData := newColumnView.ApplyDeletes()
 		cnt := 0
@@ -1049,7 +1052,7 @@ func TestCompactBlock2(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, types.T_int32, view.GetData().GetType().Oid)
 				require.Equal(t, 16, view.Length())
-				require.Equal(t, uint64(1), view.DeleteMask.GetCardinality())
+				require.Equal(t, 1, view.DeleteMask.GetCardinality())
 				require.True(t, view.GetData().GetDownstreamVector().IsConstNull())
 			case 2:
 				// ablk-5 10 rows
@@ -1648,7 +1651,7 @@ func TestLogIndex1(t *testing.T) {
 		view, err := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx())
 		assert.Nil(t, err)
 		defer view.Close()
-		assert.True(t, view.DeleteMask.Contains(offset))
+		assert.True(t, view.DeleteMask.Contains(uint64(offset)))
 		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Scheduler)
 		assert.Nil(t, err)
 		err = task.OnExec(context.Background())
@@ -2101,7 +2104,7 @@ func TestADA(t *testing.T) {
 		assert.NoError(t, err)
 		defer view.Close()
 		assert.Equal(t, 4, view.Length())
-		assert.Equal(t, uint64(3), view.DeleteMask.GetCardinality())
+		assert.Equal(t, 3, view.DeleteMask.GetCardinality())
 		it.Next()
 	}
 	assert.NoError(t, txn.Commit())
@@ -2266,7 +2269,7 @@ func TestChaos1(t *testing.T) {
 	mask := view.DeleteMask
 	view.ApplyDeletes()
 	t.Log(view.String())
-	assert.Equal(t, uint64(deleteCnt), mask.GetCardinality())
+	assert.Equal(t, int(deleteCnt), mask.GetCardinality())
 }
 
 // Testing Steps
@@ -2556,7 +2559,6 @@ func TestMergeblocks2(t *testing.T) {
 
 	{
 		v := getSingleSortKeyValue(bat, schema, 1)
-		t.Logf("v is %v**********", v)
 		filter := handle.NewEQFilter(v)
 		txn2, rel := tae.getRelation()
 		t.Log("********before delete******************")
@@ -2594,7 +2596,6 @@ func TestMergeblocks2(t *testing.T) {
 
 		{
 			v := getSingleSortKeyValue(bat, schema, 2)
-			t.Logf("v is %v**********", v)
 			filter := handle.NewEQFilter(v)
 			txn2, rel := tae.getRelation()
 			t.Log("********before delete******************")
@@ -6890,7 +6891,6 @@ func TestDedupSnapshot2(t *testing.T) {
 }
 
 func TestDedupSnapshot3(t *testing.T) {
-	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -6944,4 +6944,91 @@ func TestDedupSnapshot3(t *testing.T) {
 	wg.Wait()
 
 	tae.checkRowsByScan(totalRows, false)
+}
+
+func TestDeduplication(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(60, 3)
+	schema.BlockMaxRows = 2
+	schema.SegmentMaxBlocks = 10
+	tae.bindSchema(schema)
+	createRelation(t, tae.DB, "db", schema, true)
+
+	rows := 10
+	bat := catalog.MockBatch(schema, rows)
+	bats := bat.Split(rows)
+
+	segmentIDs := make([]*types.Uuid, 2)
+	segmentIDs[0] = objectio.NewSegmentid()
+	segmentIDs[1] = objectio.NewSegmentid()
+	sort.Slice(segmentIDs, func(i, j int) bool {
+		return segmentIDs[i].Le(*segmentIDs[j])
+	})
+
+	blk1Name := objectio.BuildObjectName(segmentIDs[1], 0)
+	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+	assert.NoError(t, err)
+	writer.SetPrimaryKey(3)
+	writer.WriteBatch(containers.ToCNBatch(bats[0]))
+	blocks, _, err := writer.Sync(context.TODO())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(blocks))
+
+	metaLoc := blockio.EncodeLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(bats[0].Length()),
+		blocks[0].GetID(),
+	)
+
+	txn, rel := tae.getRelation()
+	err = rel.AddBlksWithMetaLoc([]objectio.Location{metaLoc})
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := tae.Catalog.TxnGetDBEntryByName("db", txn)
+	assert.NoError(t, err)
+	tbl, err := db.TxnGetTableEntryByName(schema.Name, txn)
+	assert.NoError(t, err)
+	dataFactory := tables.NewDataFactory(
+		tae.Fs,
+		tae.IndexCache,
+		tae.Scheduler,
+		tae.Dir)
+	seg, err := tbl.CreateSegment(
+		txn,
+		catalog.ES_Appendable,
+		dataFactory.MakeSegmentFactory(),
+		new(objectio.CreateSegOpt).WithId(segmentIDs[0]))
+	assert.NoError(t, err)
+	blk, err := seg.CreateBlock(txn, catalog.ES_Appendable, dataFactory.MakeBlockFactory(), nil)
+	assert.NoError(t, err)
+	txn.GetStore().AddTxnEntry(txnif.TxnType_Normal, seg)
+	txn.GetStore().IncreateWriteCnt()
+	assert.NoError(t, txn.Commit())
+	assert.NoError(t, blk.PrepareCommit())
+	assert.NoError(t, blk.ApplyCommit())
+	assert.NoError(t, seg.PrepareCommit())
+	assert.NoError(t, seg.ApplyCommit())
+
+	txns := make([]txnif.AsyncTxn, 0)
+	for i := 0; i < 5; i++ {
+		for j := 1; j < rows; j++ {
+			txn, _ := tae.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ = database.GetRelationByName(schema.Name)
+			_ = rel.Append(context.Background(), bats[j])
+			txns = append(txns, txn)
+		}
+	}
+	for _, txn := range txns {
+		txn.Commit()
+	}
+	tae.checkRowsByScan(rows, false)
+	t.Logf(tae.Catalog.SimplePPString(3))
 }

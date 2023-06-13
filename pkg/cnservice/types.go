@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -187,6 +188,9 @@ type Config struct {
 
 	// AutoIncrement auto increment config
 	AutoIncrement incrservice.Config `toml:"auto-increment"`
+
+	// PrimaryKeyCheck
+	PrimaryKeyCheck bool `toml:"primary-key-check"`
 }
 
 func (c *Config) Validate() error {
@@ -265,6 +269,11 @@ func (c *Config) Validate() error {
 	c.Ctl.Adjust(foundMachineHost, defaultCtlListenAddress)
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
+	if c.PrimaryKeyCheck {
+		plan.CNPrimaryCheck = true
+	} else {
+		plan.CNPrimaryCheck = false
+	}
 	return nil
 }
 

@@ -15,115 +15,83 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 var (
-	MetadataScanColDefs = []*plan.ColDef{
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.COL_NAME],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.COL_NAME].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.BLOCK_ID],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.BLOCK_ID].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.ENTRY_STATE],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ENTRY_STATE].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.SORTED],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.SORTED].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.META_LOC],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.META_LOC].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.DELTA_LOC],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.DELTA_LOC].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.COMMIT_TS],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.COMMIT_TS].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.SEG_ID],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.SEG_ID].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.ROWS_CNT],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ROWS_CNT].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.NULL_CNT],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.NULL_CNT].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.COMPRESS_SIZE],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.COMPRESS_SIZE].Oid),
-				NotNullable: true,
-			},
-		},
-		{
-			Name: catalog.MetadataScanInfoNames[catalog.ORIGIN_SIZE],
-			Typ: &plan.Type{
-				Id:          int32(catalog.MetadataScanInfoTypes[catalog.ORIGIN_SIZE].Oid),
-				NotNullable: true,
-			},
-		},
-		/*
-			{
-				Name: catalog.MetadataScanInfoNames[catalog.MIN],
-				Typ: &plan.Type{
-					Id:          int32(catalog.MetadataScanInfoTypes[catalog.MIN].Oid),
-					NotNullable: false,
-				},
-			},
-			{
-				Name: catalog.MetadataScanInfoNames[catalog.MAX],
-				Typ: &plan.Type{
-					Id:          int32(catalog.MetadataScanInfoTypes[catalog.MAX].Oid),
-					NotNullable: false,
-				},
-			},
-		*/
-	}
+	MetadataScanColDefs  = []*plan.ColDef{}
+	MetadataScanColTypes = []types.Type{}
 )
+
+func init() {
+	// MAKE SURE THE TYPE ENUM BEGIN FROM 0 OR YOU WILL GET WRONG
+	// WHEN YOU FILL THE SLICE
+	mlen := len(plan.MetadataScanInfo_MetadataScanInfoType_name)
+	MetadataScanColTypes = make([]types.Type, mlen)
+	MetadataScanColDefs = make([]*plan.ColDef, mlen)
+	for i := range plan.MetadataScanInfo_MetadataScanInfoType_name {
+		var tp types.Type
+		switch plan.MetadataScanInfo_MetadataScanInfoType(i) {
+		case plan.MetadataScanInfo_COL_NAME:
+			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_BLOCK_ID:
+			tp = types.New(types.T_Blockid, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_ENTRY_STATE:
+			tp = types.New(types.T_bool, 0, 0)
+		case plan.MetadataScanInfo_SORTED:
+			tp = types.New(types.T_bool, 0, 0)
+		case plan.MetadataScanInfo_IS_HIDDEN:
+			tp = types.New(types.T_bool, 0, 0)
+		case plan.MetadataScanInfo_META_LOC:
+			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_DELTA_LOC:
+			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_COMMIT_TS:
+			tp = types.New(types.T_TS, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_CREATE_TS:
+			tp = types.New(types.T_TS, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_DELETE_TS:
+			tp = types.New(types.T_TS, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_SEG_ID:
+			tp = types.New(types.T_uuid, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_ROWS_CNT:
+			tp = types.New(types.T_int64, 0, 0)
+		case plan.MetadataScanInfo_NULL_CNT:
+			tp = types.New(types.T_int64, 0, 0)
+		case plan.MetadataScanInfo_COMPRESS_SIZE:
+			tp = types.New(types.T_int64, 0, 0)
+		case plan.MetadataScanInfo_ORIGIN_SIZE:
+			tp = types.New(types.T_int64, 0, 0)
+		case plan.MetadataScanInfo_MIN: // TODO: find a way to show this info
+			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		case plan.MetadataScanInfo_MAX: // TODO: find a way to show this info
+			tp = types.New(types.T_varchar, types.MaxVarcharLen, 0)
+		default:
+			panic("unknow types when gen metadata scan info")
+		}
+
+		colname := plan.MetadataScanInfo_MetadataScanInfoType_name[i]
+		coldef := &plan.ColDef{
+			Name: strings.ToLower(colname),
+			Typ: &plan.Type{
+				Id:          int32(tp.Oid),
+				NotNullable: true,
+			},
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+
+		MetadataScanColTypes[i] = tp
+		MetadataScanColDefs[i] = coldef
+	}
+}
 
 func (builder *QueryBuilder) buildMetadataScan(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, childId int32) int32 {
 	node := &plan.Node{

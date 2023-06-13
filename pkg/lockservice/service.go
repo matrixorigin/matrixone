@@ -85,11 +85,28 @@ func (s *service) Lock(
 		return pb.Result{}, err
 	}
 
+	// All txn lock op must be serial. And avoid dead lock between doAcquireLock
+	// and getLock. The doAcquireLock and getLock operations of the same transaction
+	// will be concurrent (deadlock detection), which may lead to a deadlock in mutex.
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return pb.Result{}, ErrTxnNotFound
+	}
+	if txn.deadlockFound {
+		return pb.Result{}, ErrDeadLockDetected
+	}
+
 	var result pb.Result
-	l.lock(ctx, txn, rows, LockOptions{LockOptions: options}, func(r pb.Result, e error) {
-		result = r
-		err = e
-	})
+	l.lock(
+		ctx,
+		txn,
+		rows,
+		LockOptions{LockOptions: options},
+		func(r pb.Result, e error) {
+			result = r
+			err = e
+		})
 	return result, err
 }
 
@@ -105,6 +122,12 @@ func (s *service) Unlock(
 	if txn == nil {
 		return nil
 	}
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return nil
+	}
+
 	defer logUnlockTxn(s.cfg.ServiceID, txn)()
 	txn.close(s.cfg.ServiceID, txnID, commitTS, s.getLockTable)
 	// The deadlock detector will hold the deadlocked transaction that is aborted

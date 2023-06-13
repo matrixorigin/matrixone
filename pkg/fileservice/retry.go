@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func retry[T any](
+func doWithRetry[T any](
 	what string,
 	fn func() (T, error),
 	maxAttemps int,

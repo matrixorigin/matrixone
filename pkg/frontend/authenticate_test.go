@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"strings"
 	"testing"
 	"time"
@@ -7349,6 +7350,21 @@ func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) Background
 type backgroundExecTest struct {
 	currentSql string
 	sql2result map[string]ExecResult
+}
+
+func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (bt *backgroundExecTest) GetExecResultBatches() []*batch.Batch {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (bt *backgroundExecTest) ClearExecResultBatches() {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (bt *backgroundExecTest) init() {

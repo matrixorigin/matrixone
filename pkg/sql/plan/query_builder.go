@@ -252,6 +252,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			increaseRefCnt(expr, colRefCnt)
 		}
 
+		for _, rfSpec := range node.RuntimeFilterProbeList {
+			increaseRefCnt(rfSpec.Expr, colRefCnt)
+		}
+
 		internalRemapping := &ColRefRemapping{
 			globalToLocal: make(map[[2]int32][2]int32),
 		}
@@ -306,6 +310,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		for _, rfSpec := range node.RuntimeFilterProbeList {
+			decreaseRefCnt(rfSpec.Expr, colRefCnt)
 			err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal)
 			if err != nil {
 				return nil, err
@@ -441,13 +446,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		for _, expr := range node.OnList {
 			decreaseRefCnt(expr, colRefCnt)
 			err := builder.remapColRefForExpr(expr, internalMap)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		for _, rfSpec := range node.RuntimeFilterBuildList {
-			err := builder.remapColRefForExpr(rfSpec.Expr, internalMap)
 			if err != nil {
 				return nil, err
 			}
@@ -645,8 +643,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
-		i := 0
-		for _, globalRef := range childRemapping.localToGlobal {
+		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
 			}
@@ -663,7 +660,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				},
 			})
-			i++
 		}
 
 		windowTag := node.BindingTags[0]
@@ -682,12 +678,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 			remapping.addColRef(globalRef)
 
+			l := len(childProjList)
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
-						ColPos: int32(idx + i),
+						ColPos: int32(idx + l),
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -921,6 +918,67 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			}
 		}
 
+	case plan.Node_LOCK_OP:
+
+		// get pk expr
+		pkexpr := &plan.Expr{
+			Typ: node.LockTargets[0].GetPrimaryColTyp(),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: node.LockTargets[0].PrimaryColIdxInBat,
+				},
+			},
+		}
+
+		increaseRefCnt(pkexpr, colRefCnt)
+		childRemapping, err := builder.remapAllColRefs(node.Children[0], colRefCnt)
+		if err != nil {
+			return nil, err
+		}
+
+		decreaseRefCnt(pkexpr, colRefCnt)
+		err = builder.remapColRefForExpr(pkexpr, childRemapping.globalToLocal)
+		if err != nil {
+			return nil, err
+		}
+
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		for i, globalRef := range childRemapping.localToGlobal {
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+
+		if len(node.ProjectList) == 0 {
+			if len(childRemapping.localToGlobal) > 0 {
+				remapping.addColRef(childRemapping.localToGlobal[0])
+			}
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: childProjList[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+					},
+				},
+			})
+		}
+
 	default:
 		return nil, moerr.NewInternalError(builder.GetContext(), "unsupport node type")
 	}
@@ -939,6 +997,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPushDown(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.determineJoinOrder(rootID)
+		rootID = builder.removeRedundantJoinCond(rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false)
@@ -1367,6 +1426,10 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
 
+	if stmt.SelectLockInfo != nil && stmt.SelectLockInfo.LockType == tree.SelectLockForUpdate {
+		builder.isForUpdate = true
+	}
+
 	// strip parentheses
 	// ((select a from t1)) order by b  [ is equal ] select a from t1 order by b
 	// (((select a from t1)) order by b) [ is equal ] select a from t1 order by b
@@ -1397,6 +1460,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	case *tree.SelectClause:
 		clause = selectClause
 	case *tree.UnionClause:
+		if builder.isForUpdate {
+			return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
+		}
 		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
 	case *tree.ValuesClause:
 		valuesClause = selectClause
@@ -1409,6 +1475,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var selectList tree.SelectExprs
 	var resultLen int
 	var havingBinder *HavingBinder
+	var lockNode *plan.Node
 
 	if clause == nil {
 		rowCount := len(valuesClause.Rows)
@@ -1594,6 +1661,29 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
 		}
 
+		if builder.isForUpdate {
+			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+			pkPos, pkTyp := getPkPos(tableDef, false)
+			lockTarget := &plan.LockTarget{
+				TableId:            tableDef.TblId,
+				PrimaryColIdxInBat: int32(pkPos),
+				PrimaryColTyp:      pkTyp,
+				RefreshTsIdxInBat:  -1, //unsupport now
+				FilterColIdxInBat:  -1, //unsupport now
+			}
+			lockNode = &Node{
+				NodeType:    plan.Node_LOCK_OP,
+				Children:    []int32{nodeID},
+				TableDef:    tableDef,
+				LockTargets: []*plan.LockTarget{lockTarget},
+				BindingTags: []int32{builder.genNewTag()},
+			}
+
+			if astLimit == nil {
+				nodeID = builder.appendNode(lockNode, ctx)
+			}
+		}
+
 		// rewrite right join to left join
 		builder.rewriteRightJoinToLeftJoin(nodeID)
 
@@ -1755,6 +1845,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				}
 			}
 		}
+		if builder.isForUpdate {
+			nodeID = builder.appendNode(lockNode, ctx)
+		}
 	}
 
 	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(projectionBinder.boundCols) > 0 {
@@ -1775,6 +1868,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	// append AGG node
 	if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
+		if builder.isForUpdate {
+			return 0, moerr.NewInternalError(builder.GetContext(), "not support select aggregate function for update")
+		}
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_AGG,
 			Children:    []int32{nodeID},
@@ -1976,6 +2072,9 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
+		if builder.isForUpdate {
+			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from derived table for update")
+		}
 		subCtx := NewBindContext(builder, ctx)
 		nodeID, err = builder.buildSelect(tbl, subCtx, false)
 		if subCtx.isCorrelated {
@@ -2152,6 +2251,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.JoinTableExpr:
 		if tbl.Right == nil {
 			return builder.buildTable(tbl.Left, ctx, preNodeId, leftCtx)
+		} else if builder.isForUpdate {
+			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from join table for update")
 		}
 		return builder.buildJoinTable(tbl, ctx)
 

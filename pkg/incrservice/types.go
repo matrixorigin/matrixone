@@ -32,7 +32,7 @@ func GetAutoIncrementService() AutoIncrementService {
 	return v.(AutoIncrementService)
 }
 
-// AutoIncrementService provides data service for the columns of auto-incremenet.
+// AutoIncrementService provides data service for the columns of auto-increment.
 // Each CN contains a service instance. Whenever a table containing an auto-increment
 // column is created, the service internally creates a data cache for the auto-increment
 // column to avoid updating the sequence values of these auto-increment columns each
@@ -91,6 +91,7 @@ type AutoIncrementService interface {
 // allocations for one write.
 type incrTableCache interface {
 	table() uint64
+	commit()
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, bat *batch.Batch) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
@@ -99,22 +100,22 @@ type incrTableCache interface {
 }
 
 type valueAllocator interface {
-	alloc(ctx context.Context, tableID uint64, col string, count int) (uint64, uint64, error)
-	asyncAlloc(ctx context.Context, tableID uint64, col string, count int, cb func(uint64, uint64, error))
-	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64) error
+	allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error)
+	asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, error))
+	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
 	close()
 }
 
 // IncrValueStore is used to add and delete metadata records for auto-increment columns.
 type IncrValueStore interface {
-	// GetCloumns return auto columns of table.
-	GetCloumns(ctx context.Context, tableID uint64) ([]AutoColumn, error)
+	// GetColumns return auto columns of table.
+	GetColumns(ctx context.Context, tableID uint64, txnOp client.TxnOperator) ([]AutoColumn, error)
 	// Create add metadata records into catalog.AutoIncrTableName.
-	Create(ctx context.Context, tableID uint64, cols []AutoColumn) error
-	// Alloc alloc new range for auto-increment column.
-	Alloc(ctx context.Context, tableID uint64, col string, count int) (uint64, uint64, error)
+	Create(ctx context.Context, tableID uint64, cols []AutoColumn, txnOp client.TxnOperator) error
+	// Allocate allocate new range for auto-increment column.
+	Allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, error)
 	// UpdateMinValue update auto column min value to specified value.
-	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64) error
+	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.
 	Delete(ctx context.Context, tableID uint64) error
 	// Close the store
