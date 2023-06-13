@@ -439,20 +439,19 @@ func (p *Packer) EncodeTimestamp(e Timestamp) {
 func (p *Packer) EncodeDecimal64(e Decimal64) {
 	p.putByte(decimal64Code)
 	b := *(*[8]byte)(unsafe.Pointer(&e))
-	b[0] ^= 0x80
-	p.putBytes(b[:])
+	b[7] ^= 0x80
+	for i := 7; i >= 0; i-- {
+		p.putByte(b[i])
+	}
 }
 
 func (p *Packer) EncodeDecimal128(e Decimal128) {
 	p.putByte(decimal128Code)
 	b := *(*[16]byte)(unsafe.Pointer(&e))
-	for i := 0; i < 8; i++ {
-		b[i] ^= b[i+8]
-		b[i+8] ^= b[i]
-		b[i] ^= b[i+8]
+	b[15] ^= 0x80
+	for i := 15; i >= 0; i-- {
+		p.putByte(b[i])
 	}
-	b[0] ^= 0x80
-	p.putBytes(b[:])
 }
 
 func (p *Packer) EncodeStringType(e []byte) {
@@ -614,22 +613,27 @@ func decodeFloat64(b []byte) (float64, int) {
 
 func decodeDecimal64(b []byte) (Decimal64, int) {
 	bp := make([]byte, 8)
-	copy(bp, b[1:])
+	copy(bp, b[:])
 	bp[0] ^= 0x80
-	ret := *(*Decimal64)(unsafe.Pointer(&bp))
+	for i := 0; i < 4; i++ {
+		bp[i] ^= bp[7-i]
+		bp[7-i] ^= bp[i]
+		bp[i] ^= bp[7-i]
+	}
+	ret := *(*Decimal64)(unsafe.Pointer(&bp[0]))
 	return ret, 9
 }
 
 func decodeDecimal128(b []byte) (Decimal128, int) {
 	bp := make([]byte, 16)
-	copy(bp, b[1:])
+	copy(bp, b[:])
 	bp[0] ^= 0x80
 	for i := 0; i < 8; i++ {
-		bp[i] ^= bp[i+8]
-		bp[i+8] ^= bp[i]
-		bp[i] ^= bp[i+8]
+		bp[i] ^= bp[15-i]
+		bp[15-i] ^= bp[i]
+		bp[i] ^= bp[15-i]
 	}
-	ret := *(*Decimal128)(unsafe.Pointer(&bp))
+	ret := *(*Decimal128)(unsafe.Pointer(&bp[0]))
 	return ret, 17
 }
 
