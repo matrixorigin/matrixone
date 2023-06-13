@@ -966,6 +966,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			})
 		}
 
+		node.LockTargets[0].PrimaryColIdxInBat = int32(len(childProjList) - 1)
+
 		if len(node.ProjectList) == 0 {
 			if len(childRemapping.localToGlobal) > 0 {
 				remapping.addColRef(childRemapping.localToGlobal[0])
