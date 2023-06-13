@@ -19,6 +19,7 @@ jobs:
     name: BUILD MO DOCKER IMAGE
     outputs:
        version: ${{ steps.prep.outputs.version }}
+       commit_id: ${{ steps.prep.outputs.commit_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -42,6 +43,7 @@ jobs:
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
           echo "docker_image=${DOCKER_IMAGE}" >> $GITHUB_OUTPUT
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "commit_id=${LAST_COMMIT_ID}" >> $GITHUB_OUTPUT
           
           echo ${TAGS}
           echo ${{ secrets.DOCKERHUB_TOKEN }} | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
@@ -56,6 +58,8 @@ jobs:
     runs-on: arm64-runner
     timeout-minutes: 120
     name: SETUP MO TEST ENV
+    outputs:
+      mo_svc_ip: ${{ steps.get_mo_addr.outputs.mo_svc_ip }}
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -63,25 +67,11 @@ jobs:
           repository: matrixorigin/matrixone
           ref: ${{ env.branch }}
           path: ./matrixone
-
-      - name: Prepare Test EVN
-        run: |
-          sudo apt-get update
-          sudo apt-get install git vim net-tools mysql-client openjdk-8-jdk sysbench bc pip -y
-          sudo pip3 install PyYAML==6.0
-          sudo pip3 install shyaml==0.6.2
-          
           
       - name: Prepare AWS Tools
         run: |
           sudo apt-get update && sudo apt-get install awscli -y
           sudo apt-get install -y ca-certificates curl
-      - name: Prepare AWS Kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'v1.23.6'
-        id: install
-                   
       - name: Prepare AWS Config
         run: |
            aws configure<<EOF
@@ -91,6 +81,12 @@ jobs:
            json
            exit
            EOF
+
+      - name: Prepare Kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.23.6'
+        id: install
            
       - name: Prepare Kubeconfig
         run: |
@@ -129,6 +125,41 @@ jobs:
           while true; do if [ "$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods --field-selector status.phase=Running|grep "mo-checkin-regression-*"|wc -l)" -eq 6 ]; then break; else sleep 15s; continue; fi; done
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod
           if [ ! -d $GITHUB_WORKSPACE/mo-server-log ]; then mkdir $GITHUB_WORKSPACE/mo-server-log;fi;
+
+      - name: Get MO Cluster Addr
+        id: get_mo_addr
+        run: |
+          export KUBECONFIG=$(pwd)/eks-ci
+          mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP"|awk '{print $3}')
+          
+          echo mo_svc_ip=$mo_svc_ip
+          echo "mo_svc_ip=${mo_svc_ip}" >> $GITHUB_OUTPUT
+      
+      - name: Prepare Data in cn-0
+        run: |
+          export KUBECONFIG=$(pwd)/eks-ci
+          kubectl exec -it mo-checkin-regression-tp-cn-0 -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
+          apt-get update
+          apt-get install git -y
+          git clone -b ${{ env.branch }} https://github.com/matrixorigin/matrixone.git
+          cd matrixone
+          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }} 
+          exit
+          EOF
+          exit
+
+      - name: Prepare Data in cn-1
+        run: |
+          export KUBECONFIG=$(pwd)/eks-ci
+          kubectl exec -it mo-checkin-regression-tp-cn-1 -n mo-checkin-regression-${{ github.event.pull_request.number }} -- /bin/sh<<EOF
+          apt-get update
+          apt-get install git -y
+          git clone -b ${{ env.branch }} https://github.com/matrixorigin/matrixone.git
+          cd matrixone
+          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }} 
+          exit
+          EOF
+          exit
 
 
   test:
@@ -174,15 +205,6 @@ jobs:
           path: ./mo-load
           ref: main
 
-#       - name: Clone mo-sysbench Repo
-#         if: ${{ always() && !cancelled() }}
-#         uses: actions/checkout@v3
-#         with:
-#           repository: matrixorigin/mo-sysbench
-#           token: ${{secrets.TOKEN_ACTION}}
-#           path: ./mo-sysbench
-#           ref: main
-
       - name: Clone mo-tpcc Repo
         if: ${{ always() && !cancelled() }}
         uses: actions/checkout@v3
@@ -193,12 +215,30 @@ jobs:
           ref: main
 
       - name: Clone mo-night-regression Repo
+        if: ${{ always() && !cancelled() }}
         uses: actions/checkout@v3
         with:
           repository: matrixorigin/mo-nightly-regression
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-nightly-regression
           ref: main
+      
+      - name: Clone mo-tester Repo
+        if: ${{ always() && !cancelled() }}
+        uses: actions/checkout@v3
+        with:
+          repository: matrixorigin/mo-tester
+          token: ${{secrets.TOKEN_ACTION}}
+          path: ./mo-tester
+          ref: main
+
+      - name: Clone matrixone Repo
+        if: ${{ always() && !cancelled() }}
+        run: |
+          cd $GITHUB_WORKSPACE
+          git clone -b ${{ env.branch }} https://github.com/matrixorigin/matrixone.git
+          cd $GITHUB_WORKSPACE/matrixone
+          git reset --hard ${{ needs.docker_image_build.outputs.commit_id }} 
           
       - name: Prepare Test EVN
         run: |
@@ -208,49 +248,23 @@ jobs:
           sudo pip3 install shyaml==0.6.2
           sudo pip3 install PyMySQL==1.0.2
 
-      - name: Prepare AWS Tools
+      - name: Generate MO-Tester Config and Start BVT Test
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 40
         run: |
-          sudo apt-get update && sudo apt-get install awscli -y 
-          sudo apt-get install -y ca-certificates curl
+          export LC_ALL="C.UTF-8"
+          locale
 
-      - name: Prepare AWS Kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'v1.23.6'
-        id: install
-
-      - name: Prepare AWS Config
-        run: |
-           aws configure<<EOF
-           ${{ secrets.AWS_ACCESSKEY_ID }}
-           ${{ secrets.AWS_SECRETACCESS_KEY }}
-           us-west-2
-           json
-           exit
-           EOF
-      
-      - name: Prepare Kubeconfig
-        run: |
-           # set docker login info
-           DOCKER_REGISTRY_SERVER=docker.io
-           DOCKER_USER=${{ secrets.DOCKERHUB_USERNAME }}
-           DOCKER_PASSWORD=${{ secrets.DOCKERHUB_TOKEN }}
-
-           aws eks --region us-west-2 update-kubeconfig --name eks-ci --kubeconfig eks-ci
-           export KUBECONFIG=$(pwd)/eks-ci
-           if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then export KUBECONFIG=$(pwd)/eks-ci; kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }} ;kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret generic aws-secret --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESSKEY_ID }} --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRETACCESS_KEY }};kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret docker-registry dockerhub --docker-server=$DOCKER_REGISTRY_SERVER --docker-username=$DOCKER_USER --docker-password=$DOCKER_PASSWORD;fi 
-
-      - name: Get MO Cluster Addr
-        id: get_mo_addr
-        run: |
-          export KUBECONFIG=$(pwd)/eks-ci
-          mo_svc_ip=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get svc | grep "6001/TCP"|awk '{print $3}')
+          sed -i "s/127.0.0.1:6001/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}:6001/" ./mo-tester/mo.yml
+          sed -i "s/60000/300000/" ./mo-tester/mo.yml
+          cat ./mo-tester/mo.yml
           
-          echo mo_svc_ip=$mo_svc_ip
-          echo "mo_svc_ip=${mo_svc_ip}" >> $GITHUB_OUTPUT
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/matrixone/test/distributed/cases -s /matrixone/test/distributed/resources 2>&1
+          rm -rf .git lib
           
       - name: Start Load SSB 10G Data And Test
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           set -uo pipefail
@@ -259,15 +273,15 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
-          ./load.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -c cases/00_from_s3/ssb_10 -r -m -g | tee report/mo-load-data-ssb.log
+          ./load.sh -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/ssb_10 -r -m -g | tee report/mo-load-data-ssb.log
           # start test
           cd $GITHUB_WORKSPACE/mo-ssb
           mkdir -p report
-          ./run.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/mo-ssb.log
+          ./run.sh -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/mo-ssb.log
 
       # start tpch test
       - name: Load TPCH 10G Test Data
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -275,10 +289,10 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
-          ./load.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -c cases/00_from_s3/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
+          ./load.sh -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
 
       - name: Start TPCH 10G Test
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         timeout-minutes: 15
         run: |
           set -uo pipefail
@@ -287,11 +301,11 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tpch
           mkdir -p report
-          ./run.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/tpch.log
+          ./run.sh -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -q all -s 10 -t 5 | tee report/tpch.log
 
       # start sysbench test
       - name: Start OLTP Insert Test With 100 Threads
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           set -uo pipefail
@@ -301,7 +315,7 @@ jobs:
 
           cd $GITHUB_WORKSPACE/mo-load
           mkdir -p report
-          sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' mo.yml
+          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' mo.yml
           
           echo 'Start Prepare Data of 10-tables-100000-per-table'
           ./start.sh -m SYSBENCH -n 10 -s 100000 | tee report/load-oltp-insert.log
@@ -312,7 +326,7 @@ jobs:
           ./start.sh -c cases/sysbench/simple_insert_10_100000 -t 100 -d 5 -g | tee report/oltp-insert.log
 
       - name: Start OLTP Delete Test With 100 Threads
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           set -uo pipefail
@@ -331,7 +345,7 @@ jobs:
           ./start.sh -c cases/sysbench/delete_pk_10_100000 -t 100 -d 5 -g | tee report/oltp-delete.log
           
       - name: Start OLTP Update Test With 100 Threads
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           set -uo pipefail
@@ -350,7 +364,7 @@ jobs:
           ./start.sh -c cases/sysbench/update_pk_10_100000 -t 100 -d 5 -g | tee report/oltp-update.log
 
       - name: Start OLTP Point Select Test With 100 Threads
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           set -uo pipefail
@@ -370,7 +384,7 @@ jobs:
      
      # start tpcc test
       - name: Load TPCC 10 Warehouse Data
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         run: |
           set -uo pipefail
           export LC_ALL="C.UTF-8"
@@ -378,10 +392,10 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
-          ./load.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
+          ./load.sh -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
 
       - name: Start TPCC 10 Warehouses 10 terminals Test
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         timeout-minutes: 10
         run: |
           set -uo pipefail
@@ -395,7 +409,7 @@ jobs:
           sed -i '/.*terminals=*/c\terminals=10' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
-          sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
+          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-10.log
@@ -420,7 +434,7 @@ jobs:
           sed -i '/.*terminals=*/c\terminals=50' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
-          sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
+          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-50.log
@@ -444,7 +458,7 @@ jobs:
           sed -i '/.*terminals=*/c\terminals=100' props_10.mo
           sed -i '/.*warehouses=*/c\warehouses=10' props_10.mo
           sed -i 's/tpcc/tpcc_10/g' props_10.mo
-          sed -i 's/127.0.0.1/${{ steps.get_mo_addr.outputs.mo_svc_ip }}/g' props_10.mo
+          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' props_10.mo
           sed -i '/runMins=*/c\runMins=5' props_10.mo
           sed -i '/.*expectedErrorCodes=*/c\expectedErrorCodes=20619,1062' props_10.mo
           ./runBenchmark.sh props_10.mo | tee report/tpcc-benchmark-10-100.log
@@ -453,25 +467,7 @@ jobs:
           if [ -f benchmarksql-error.log ];then
             mv benchmarksql-error.log benchmarksql-error-10-100.log
           fi
-      
-      # start large table test
-      # TODO(sudong)
-      # - name: Load TPCH 10G Test Data
-      #   if: ${{ always() && !cancelled() }}
-      #   run: |
-      #     export LC_ALL="C.UTF-8"
-      #     locale
-      #     sleep 50s
-      #     cd $GITHUB_WORKSPACE/mo-load-data
-      #     ./load.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -c cases/00_from_s3/tpch_10 -r -m -g
 
-      # - name: Start Large Table Update And Delete
-      #   if: ${{ always() && !cancelled() }}
-      #   timeout-minutes: 1
-      #   run: |
-      #     # export LC_ALL="C.UTF-8"
-      #     # cd $GITHUB_WORKSPACE/mo-tpch
-      #     # ./run.sh -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -q all -s 10 -t 5
       - name: Modify Report Database Config
         if: ${{ always() && !cancelled() }}
         run: |
@@ -482,11 +478,13 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/reports/mo-tpcc
           mkdir -p $GITHUB_WORKSPACE/reports/mo-load
           mkdir -p $GITHUB_WORKSPACE/reports/mo-tpch
+          mkdir -p $GITHUB_WORKSPACE/reports/mo-tester
           cp -r $GITHUB_WORKSPACE/mo-ssb/report $GITHUB_WORKSPACE/reports/mo-ssb
           cp -r $GITHUB_WORKSPACE/mo-load-data/report $GITHUB_WORKSPACE/reports/mo-load-data
           cp -r $GITHUB_WORKSPACE/mo-tpcc/report $GITHUB_WORKSPACE/reports/mo-tpcc
           cp -r $GITHUB_WORKSPACE/mo-load/report $GITHUB_WORKSPACE/reports/mo-load
           cp -r $GITHUB_WORKSPACE/mo-tpch/report $GITHUB_WORKSPACE/reports/mo-tpch
+          cp -r $GITHUB_WORKSPACE/mo-tester $GITHUB_WORKSPACE/reports/mo-tester/
 
           cd $GITHUB_WORKSPACE/mo-nightly-regression/result
           sed -i '/  host:*/c\  host: "${{secrets.REPORT_DB_ADDR}}"' config.yml
