@@ -1059,8 +1059,11 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt) (*Pr
 		PrepareStmt:         st.Stmt,
 		getFromSendLongData: make(map[int]struct{}),
 	}
-
+	if bats := ses.GetTxnCompileCtx().GetProcess().GetValueScanBatchs(); len(bats) > 0 {
+		prepareStmt.InsertBat = bats[0]
+	}
 	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
+
 	return prepareStmt, err
 }
 
@@ -1083,11 +1086,13 @@ func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) 
 	if err != nil {
 		return nil, err
 	}
-
 	prepareStmt := &PrepareStmt{
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 		PreparePlan: preparePlan,
 		PrepareStmt: stmts[0],
+	}
+	if bats := ses.GetTxnCompileCtx().GetProcess().GetValueScanBatchs(); len(bats) > 0 {
+		prepareStmt.InsertBat = bats[0]
 	}
 
 	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
@@ -3232,6 +3237,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		pu.FileService,
 		pu.LockService,
 		ses.GetAutoIncrCacheManager())
+	proc.CopyVectorPool(ses.proc)
+	proc.CopyValueScanBatch(ses.proc)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
@@ -3479,17 +3486,19 @@ func SetNewResponse(category int, status uint16, cmd int, d interface{}, cwIndex
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, ses *Session, req *Request) (resp *Response, err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			moe, ok := e.(*moerr.Error)
-			if !ok {
-				err = moerr.ConvertPanicError(requestCtx, e)
-				resp = NewGeneralErrorResponse(COM_QUERY, err)
-			} else {
-				resp = NewGeneralErrorResponse(COM_QUERY, moe)
+	/*
+		defer func() {
+			if e := recover(); e != nil {
+				moe, ok := e.(*moerr.Error)
+				if !ok {
+					err = moerr.ConvertPanicError(requestCtx, e)
+					resp = NewGeneralErrorResponse(COM_QUERY, err)
+				} else {
+					resp = NewGeneralErrorResponse(COM_QUERY, moe)
+				}
 			}
-		}
-	}()
+		}()
+	*/
 
 	var sql string
 	logDebugf(ses.GetDebugString(), "cmd %v", req.GetCmd())

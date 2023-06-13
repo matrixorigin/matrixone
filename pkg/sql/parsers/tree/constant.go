@@ -58,6 +58,10 @@ type NumVal struct {
 	ValType  P_TYPE
 }
 
+func (n *NumVal) OrigString() string {
+	return n.origString
+}
+
 func (n *NumVal) Format(ctx *FmtCtx) {
 	if n.origString != "" {
 		ctx.WriteValue(n.ValType, FormatString(n.origString))

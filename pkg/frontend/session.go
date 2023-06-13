@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/google/uuid"
@@ -74,6 +75,9 @@ type Session struct {
 
 	// mpool
 	mp *mpool.MPool
+
+	// the process of the session
+	proc *process.Process
 
 	pu *config.ParameterUnit
 
@@ -415,6 +419,14 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 			panic(err)
 		}
 	}
+	ses.proc = process.New(
+		context.TODO(),
+		ses.mp,
+		ses.GetTxnHandler().GetTxnClient(),
+		nil,
+		pu.FileService,
+		pu.LockService,
+		ses.GetAutoIncrCacheManager())
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Close()
@@ -458,6 +470,13 @@ func (ses *Session) Close() {
 	ses.sqlHelper = nil
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
+	if ses.proc != nil {
+		ses.proc.FreeVectors()
+		bats := ses.proc.GetValueScanBatchs()
+		for _, bat := range bats {
+			bat.Clean(ses.proc.Mp())
+		}
+	}
 	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
 		mpool.DeleteMPool(mp)
@@ -973,6 +992,12 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 	} else {
 		stmt.Close()
 	}
+	isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
+		prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+	if isInsertValues {
+		prepareStmt.proc = ses.proc
+		prepareStmt.exprList = exprList
+	}
 	ses.prepareStmts[name] = prepareStmt
 
 	return nil
@@ -1042,6 +1067,7 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	ses.txnCompileCtx.proc = ses.proc
 	return ses.txnCompileCtx
 }
 
@@ -1917,4 +1943,29 @@ func (ses *Session) getGlobalSystemVariableValue(varName string) (interface{}, e
 	}
 
 	return nil, moerr.NewInternalError(ctx, "can not resolve global system variable %s", varName)
+}
+
+func checkPlanIsInsertValues(proc *process.Process,
+	p *plan.Plan) (bool, [][]colexec.ExpressionExecutor) {
+	var err error
+
+	qry := p.GetQuery()
+	if qry != nil && qry.StmtType == plan.Query_INSERT {
+		for _, node := range qry.Nodes {
+			if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
+				exprList := make([][]colexec.ExpressionExecutor, len(node.RowsetData.Cols))
+				for i, col := range node.RowsetData.Cols {
+					exprList[i] = make([]colexec.ExpressionExecutor, len(col.Data))
+					for j, data := range col.Data {
+						exprList[i][j], err = colexec.NewExpressionExecutor(proc, data.Expr)
+						if err != nil {
+							return false, nil
+						}
+					}
+				}
+				return true, exprList
+			}
+		}
+	}
+	return false, nil
 }

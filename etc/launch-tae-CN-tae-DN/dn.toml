@@ -2,7 +2,7 @@ service-type = "DN"
 data-dir = "./mo-data"
 
 [log]
-level = "info"
+level = "fatal"
 format = "console"
 max-size = 512
 
@@ -60,3 +60,7 @@ rpc-enable-checksum = true
 logtail-collect-interval = "2ms"
 logtail-response-send-timeout = "10s"
 max-logtail-fetch-failure = 5
+
+[observability]
+disableTrace = true
+disableMetric = true

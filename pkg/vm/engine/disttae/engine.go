@@ -373,6 +373,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
+	txn.tableWrites.tableEntries = make(map[uint64][]tableEntry)
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
@@ -394,7 +395,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return nil
 	}
 	txn.mergeTxnWorkspace()
-	err := txn.DumpBatch(true, 0)
+	err := txn.dumpBatch(true, 0)
 	if err != nil {
 		return err
 	}
@@ -502,7 +503,7 @@ func (e *Engine) delTransaction(txn *Transaction) {
 		if txn.writes[i].bat == nil {
 			continue
 		}
-		txn.writes[i].bat.Clean(e.mp)
+		txn.proc.PutBatch(txn.writes[i].bat)
 	}
 	txn.tableMap = nil
 	txn.createMap = nil

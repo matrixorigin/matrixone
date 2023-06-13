@@ -154,9 +154,12 @@ type Process struct {
 	Reg Register
 	Lim Limitation
 
-	vp           *vectorPool
-	mp           *mpool.MPool
-	prepareBatch *batch.Batch
+	vp              *vectorPool
+	mp              *mpool.MPool
+	prepareBatch    *batch.Batch
+	prepareExprList any
+
+	valueScanBatch map[[16]byte]*batch.Batch
 
 	// unix timestamp
 	UnixTime int64
@@ -214,6 +217,30 @@ func (proc *Process) InitSeq() {
 	proc.SessionInfo.SeqLastValue[0] = ""
 	proc.SessionInfo.SeqAddValues = make(map[uint64]string)
 	proc.SessionInfo.SeqDeleteKeys = make([]uint64, 0)
+}
+
+func (proc *Process) SetValueScanBatch(key uuid.UUID, batch *batch.Batch) {
+	proc.valueScanBatch[key] = batch
+}
+
+func (proc *Process) GetValueScanBatch(key uuid.UUID) *batch.Batch {
+	bat, ok := proc.valueScanBatch[key]
+	if ok {
+		delete(proc.valueScanBatch, key)
+	}
+	return bat
+}
+
+func (proc *Process) GetValueScanBatchs() []*batch.Batch {
+	var bats []*batch.Batch
+
+	for k, bat := range proc.valueScanBatch {
+		if bat != nil {
+			bats = append(bats, bat)
+		}
+		delete(proc.valueScanBatch, k)
+	}
+	return bats
 }
 
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {

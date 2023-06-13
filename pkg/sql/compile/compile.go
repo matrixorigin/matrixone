@@ -74,23 +74,51 @@ var (
 	ncpu = runtime.NumCPU()
 )
 
+var pool = sync.Pool{
+	New: func() any {
+		return new(Compile)
+	},
+}
+
+var analPool = sync.Pool{
+	New: func() any {
+		return new(process.AnalyzeInfo)
+	},
+}
+
 // New is used to new an object of compile
 func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
-	return &Compile{
-		e:          e,
-		db:         db,
-		ctx:        ctx,
-		tenant:     tenant,
-		uid:        uid,
-		sql:        sql,
-		proc:       proc,
-		stmt:       stmt,
-		addr:       addr,
-		stepRegs:   make(map[int32][]*process.WaitRegister),
-		isInternal: isInternal,
-		cnLabel:    cnLabel,
-	}
+	c := pool.Get().(*Compile)
+	c.e = e
+	c.db = db
+	c.ctx = ctx
+	c.tenant = tenant
+	c.uid = uid
+	c.sql = sql
+	c.proc = proc
+	c.stmt = stmt
+	c.addr = addr
+	c.stepRegs = make(map[int32][]*process.WaitRegister)
+	c.isInternal = isInternal
+	c.cnLabel = cnLabel
+	/*
+		return &Compile{
+			e:          e,
+			db:         db,
+			ctx:        ctx,
+			tenant:     tenant,
+			uid:        uid,
+			sql:        sql,
+			proc:       proc,
+			stmt:       stmt,
+			addr:       addr,
+			stepRegs:   make(map[int32][]*process.WaitRegister),
+			isInternal: isInternal,
+			cnLabel:    cnLabel,
+		}
+	*/
+	return c
 }
 
 // helper function to judge if init temporary engine is needed
@@ -270,6 +298,15 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) error {
+	defer func() {
+		if c.anal != nil {
+			for i := range c.anal.analInfos {
+				analPool.Put(c.anal.analInfos[i])
+			}
+			c.anal.analInfos = nil
+		}
+		pool.Put(c)
+	}()
 	if err := c.runOnce(); err != nil {
 		//  if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry the statement
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
@@ -322,8 +359,6 @@ func (c *Compile) runOnce() error {
 			wg.Done()
 		}(s)
 	}
-	defer c.proc.FreeVectors()
-
 	wg.Wait()
 	c.scope = nil
 	close(errC)
@@ -588,6 +623,9 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 }
 
 func constructValueScanBatch(ctx context.Context, proc *process.Process, node *plan.Node) (*batch.Batch, error) {
+	var nodeId uuid.UUID
+	var exprList []colexec.ExpressionExecutor
+
 	if node == nil || node.TableDef == nil { // like : select 1, 2
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
@@ -598,17 +636,26 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	tableDef := node.TableDef
 	colCount := len(tableDef.Cols)
 	colsData := node.RowsetData.Cols
-	rowCount := len(colsData[0].Data)
-	bat := batch.NewWithSize(colCount)
-
-	for i := 0; i < colCount; i++ {
-		vec, err := rowsetDataToVector(ctx, proc, colsData[i].Data)
-		if err != nil {
-			return nil, err
+	copy(nodeId[:], node.Uuid)
+	bat := proc.GetPrepareBatch()
+	if bat == nil {
+		bat = proc.GetValueScanBatch(nodeId)
+		if bat == nil {
+			return nil, moerr.NewInfo(ctx, fmt.Sprintf("constructValueScanBatch failed, node id: %s", nodeId.String()))
 		}
-		bat.Vecs[i] = vec
 	}
-	bat.SetZs(rowCount, proc.Mp())
+	if len(colsData) > 0 {
+		exprs := proc.GetPrepareExprList()
+		for i := 0; i < colCount; i++ {
+			if exprs != nil {
+				exprList = exprs.([][]colexec.ExpressionExecutor)[i]
+			}
+			if err := evalRowsetData(ctx, proc, colsData[i].Data, bat.Vecs[i], exprList); err != nil {
+				bat.Clean(proc.Mp())
+				return nil, err
+			}
+		}
+	}
 	return bat, nil
 }
 
@@ -616,13 +663,9 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
-		bat := c.proc.GetPrepareBatch()
-		if bat == nil {
-			var err error
-
-			if bat, err = constructValueScanBatch(ctx, c.proc, n); err != nil {
-				return nil, err
-			}
+		bat, err := constructValueScanBatch(ctx, c.proc, n)
+		if err != nil {
+			return nil, err
 		}
 		ds := &Scope{
 			Magic:      Normal,
@@ -2259,7 +2302,8 @@ func (c *Compile) generateCPUNumber(cpunum, blocks int) int {
 func (c *Compile) initAnalyze(qry *plan.Query) {
 	anals := make([]*process.AnalyzeInfo, len(qry.Nodes))
 	for i := range anals {
-		anals[i] = new(process.AnalyzeInfo)
+		//anals[i] = new(process.AnalyzeInfo)
+		anals[i] = analPool.Get().(*process.AnalyzeInfo)
 	}
 	c.anal = &anaylze{
 		qry:       qry,
@@ -2639,6 +2683,7 @@ func isSameCN(addr string, currentCNAddr string) bool {
 	return parts1[0] == parts2[0]
 }
 
+/*
 func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	rowCount := len(exprs)
 	if rowCount == 0 {
@@ -2725,6 +2770,7 @@ func rowsetDataToVector(ctx context.Context, proc *process.Process, exprs []*pla
 	}
 	return vec, nil
 }
+*/
 
 func (s *Scope) affectedRows() uint64 {
 	affectedRows := uint64(0)
@@ -2758,4 +2804,39 @@ func (c *Compile) runSqlWithResult(sql string) (executor.Result, error) {
 		WithTxn(c.proc.TxnOperator).
 		WithDatabase(c.db)
 	return exec.Exec(c.proc.Ctx, sql, opts)
+}
+
+func evalRowsetData(ctx context.Context, proc *process.Process,
+	exprs []*plan.RowsetExpr, vec *vector.Vector, exprExecs []colexec.ExpressionExecutor) error {
+	var bats []*batch.Batch
+
+	vec.ResetArea()
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	defer bat.Clean(proc.Mp())
+	bats = []*batch.Batch{bat}
+	if len(exprExecs) > 0 {
+		for i, expr := range exprExecs {
+			val, err := expr.Eval(proc, bats)
+			if err != nil {
+				return err
+			}
+			if err := vec.Copy(val, int64(exprs[i].RowPos), 0, proc.Mp()); err != nil {
+				return err
+			}
+		}
+	} else {
+		for _, expr := range exprs {
+			val, err := colexec.EvalExpressionOnce(proc, expr.Expr, bats)
+			if err != nil {
+				return err
+			}
+			if err := vec.Copy(val, int64(expr.RowPos), 0, proc.Mp()); err != nil {
+				val.Free(proc.Mp())
+				return err
+			}
+			val.Free(proc.Mp())
+		}
+	}
+	return nil
 }

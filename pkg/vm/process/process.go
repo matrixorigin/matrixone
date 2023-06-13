@@ -56,6 +56,7 @@ func New(
 		vp: &vectorPool{
 			vecs: make(map[uint8][]*vector.Vector),
 		},
+		valueScanBatch: make(map[[16]byte]*batch.Batch),
 	}
 }
 
@@ -157,6 +158,14 @@ func (proc *Process) GetPrepareBatch() *batch.Batch {
 	return proc.prepareBatch
 }
 
+func (proc *Process) SetPrepareExprList(exprList any) {
+	proc.prepareExprList = exprList
+}
+
+func (proc *Process) GetPrepareExprList() any {
+	return proc.prepareExprList
+}
+
 func (proc *Process) OperatorOutofMemory(size int64) bool {
 	return proc.Mp().Cap() < size
 }
@@ -205,6 +214,14 @@ func (proc *Process) WithSpanContext(sc trace.SpanContext) {
 	proc.Ctx = trace.ContextWithSpanContext(proc.Ctx, sc)
 }
 
+func (proc *Process) CopyValueScanBatch(src *Process) {
+	proc.valueScanBatch = src.valueScanBatch
+}
+
+func (proc *Process) CopyVectorPool(src *Process) {
+	proc.vp = src.vp
+}
+
 func (proc *Process) PutBatch(bat *batch.Batch) {
 	if bat == batch.EmptyBatch {
 		return
@@ -217,7 +234,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	}
 	for i := range bat.Vecs {
 		if bat.Vecs[i] != nil {
-			if !bat.Vecs[i].IsConst() {
+			if !bat.Vecs[i].IsConst() && !bat.Vecs[i].NeedDup() {
 				vec := bat.Vecs[i]
 				bat.ReplaceVector(vec, nil)
 				proc.vp.putVector(vec)

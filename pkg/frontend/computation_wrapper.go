@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -228,6 +227,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 	}
 		// }
 
+		// The default count is 1. Setting it to 2 ensures that memory will not be reclaimed.
+		//  Convenient to reuse memory next time
+		if prepareStmt.InsertBat != nil {
+			prepareStmt.InsertBat.SetCnt(2)
+			cwft.proc.SetPrepareBatch(prepareStmt.InsertBat)
+			cwft.proc.SetPrepareExprList(prepareStmt.exprList)
+		}
 		numParams := len(preparePlan.ParamTypes)
 		if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { //use binary protocol
 			if prepareStmt.params.Length() != numParams {
@@ -238,8 +244,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			if len(executePlan.Args) != numParams {
 				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 			}
-
-			params := vector.NewVec(types.T_varchar.ToType()) // todo add pool
+			params := cwft.proc.GetVector(types.T_varchar.ToType())
 			for _, arg := range executePlan.Args {
 				exprImpl := arg.Expr.(*plan.Expr_V)
 				param, err := cwft.proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)

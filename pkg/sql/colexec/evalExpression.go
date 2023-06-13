@@ -139,15 +139,20 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		}, nil
 
 	case *plan.Expr_P:
-		vec, err := proc.GetPrepareParamsAt(int(t.P.Pos))
-		if err != nil {
-			return nil, err
-		}
-		return &FixedVectorExpressionExecutor{
-			m:            proc.Mp(),
-			resultVector: vec,
+		/*
+			vec, err := proc.GetPrepareParamsAt(int(t.P.Pos))
+			if err != nil {
+				return nil, err
+			}
+			return &FixedVectorExpressionExecutor{
+				m:            proc.Mp(),
+				resultVector: vec,
+			}, nil
+		*/
+		return &ParamExpressionExecutor{
+			pos: int(t.P.Pos),
+			typ: types.T_text.ToType(),
 		}, nil
-
 	case *plan.Expr_V:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		val, err := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
@@ -298,6 +303,26 @@ type ColumnExpressionExecutor struct {
 	colIndex int
 	// result type.
 	typ types.Type
+}
+
+type ParamExpressionExecutor struct {
+	pos int
+	typ types.Type
+}
+
+func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	return proc.GetPrepareParamsAt(int(expr.pos))
+}
+
+func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
+	return expr.Eval(proc, batches)
+}
+
+func (expr *ParamExpressionExecutor) Free() {
+}
+
+func (expr *ParamExpressionExecutor) IfResultMemoryReuse() bool {
+	return false
 }
 
 func (expr *FunctionExpressionExecutor) Init(

@@ -206,6 +206,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		AnalyzeInfo:     DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:           node.IsEnd,
 	}
+	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
 
 	copy(newNode.Children, node.Children)
 	copy(newNode.BindingTags, node.BindingTags)
@@ -518,10 +519,13 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	newCol := &plan.ColData{
-		Data: make([]*plan.Expr, len(col.Data)),
+		Data: make([]*plan.RowsetExpr, len(col.Data)),
 	}
 	for i, e := range col.Data {
-		newCol.Data[i] = DeepCopyExpr(e)
+		newCol.Data[i] = &plan.RowsetExpr{
+			RowPos: e.RowPos,
+			Expr:   DeepCopyExpr(e.Expr),
+		}
 	}
 
 	return newCol

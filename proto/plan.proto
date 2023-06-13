@@ -465,8 +465,13 @@ message Stats {
 	int32   parallelism = 13;
 }
 
+message RowsetExpr {
+    int32 row_pos = 1;
+    Expr expr = 2;
+}
+
 message ColData {
-	repeated Expr data = 1;
+    repeated RowsetExpr data = 1;
 }
 
 message RowsetData {
@@ -697,6 +702,8 @@ message Node {
 	// Runtime filters
 	repeated RuntimeFilterSpec runtime_filter_probe_list = 39;
 	repeated RuntimeFilterSpec runtime_filter_build_list = 40;
+
+    bytes uuid = 41;
 }
 
 message LockTarget {

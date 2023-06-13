@@ -3,7 +3,7 @@ service-type = "LOG"
 data-dir = "./mo-data"
 
 [log]
-level = "info"
+level = "fatal"
 format = "console"
 max-size = 512
 
@@ -30,6 +30,8 @@ backend = "DISK-ETL"
 [observability]
 statusPort = 7001
 enableTraceDebug = false
+disableTrace = true
+disableMetric = true
 
 [hakeeper-client]
 service-addresses = [

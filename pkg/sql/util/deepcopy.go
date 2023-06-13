@@ -514,10 +514,10 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 
 func DeepCopyColData(col *plan.ColData) *plan.ColData {
 	newCol := &plan.ColData{
-		Data: make([]*plan.Expr, len(col.Data)),
+		Data: make([]*plan.RowsetExpr, len(col.Data)),
 	}
 	for i, e := range col.Data {
-		newCol.Data[i] = DeepCopyExpr(e)
+		newCol.Data[i].Expr = DeepCopyExpr(e.Expr)
 	}
 
 	return newCol
