@@ -155,8 +155,8 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 		}
 	}
 
-	ctr.matched.Negate()
 	count := ctr.bat.Length() - ctr.matched.Count()
+	ctr.matched.Negate()
 	if count == 0 {
 		return true, nil
 	}
