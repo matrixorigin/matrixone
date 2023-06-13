@@ -118,7 +118,7 @@ func (txn *Transaction) WriteBatch(
 		truncate:     truncate,
 	}
 	if e.typ == INSERT && databaseId != catalog.MO_CATALOG_ID && !truncate {
-		txn.addTableWrite(tableId, &e)
+		txn.addTableWrite(tableId, e.bat, len(txn.writes))
 	}
 	txn.writes = append(txn.writes, e)
 	return nil
@@ -428,7 +428,7 @@ func (txn *Transaction) genRowId() types.Rowid {
 	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
-func (txn *Transaction) mergeTxnWorkspace() {
+func (txn *Transaction) mergeTxnWorkspace() error {
 	txn.Lock()
 	defer txn.Unlock()
 	if len(txn.batchSelectList) > 0 {
@@ -439,19 +439,7 @@ func (txn *Transaction) mergeTxnWorkspace() {
 			}
 		}
 	}
-	if !txn.mergeTableWrites(txn.proc) {
-		return
-	}
-	writes := txn.writes[:0]
-	for i, write := range txn.writes {
-		if write.typ == INSERT && write.bat == nil &&
-			len(write.fileName) == 0 {
-			continue
-		}
-		writes = append(writes, txn.writes[i])
-	}
-	txn.writes = writes
-	txn.statements[txn.statementID-1] = len(txn.writes)
+	return txn.mergeTableWrites(txn.proc)
 }
 
 func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
@@ -469,65 +457,76 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 	return writes
 }
 
-func (txn *Transaction) addTableWrite(id uint64, e *Entry) {
+func (txn *Transaction) addTableWrite(id uint64, bat *batch.Batch, offset int) {
 	if _, ok := txn.tableWrites.tableEntries[id]; !ok {
 		txn.tableWrites.tableEntries[id] = []tableEntry{
 			{
-				rows:    0,
-				entries: []*Entry{e},
+				entries: []*batch.Batch{bat},
+				offsets: []int{offset},
+				rows:    bat.Length(),
 			},
 		}
+		return
 	}
 	tes := txn.tableWrites.tableEntries[id]
 	te := tes[len(tes)-1]
-	te.rows += e.bat.Length()
-	te.entries = append(te.entries, e)
+	te.rows += bat.Length()
+	te.entries = append(te.entries, bat)
+	te.offsets = append(te.offsets, offset)
+	tes[len(tes)-1] = te
 }
 
 func (txn *Transaction) newTableWriteEntry(id uint64) {
 	txn.tableWrites.tableEntries[id] = append(txn.tableWrites.tableEntries[id], tableEntry{})
 }
 
-func (txn *Transaction) mergeTableWrites(proc *process.Process) bool {
-	merged := false
+func (txn *Transaction) mergeTableWrites(proc *process.Process) error {
 	for k, tes := range txn.tableWrites.tableEntries {
-		for _, te := range tes {
+		for i, te := range tes {
+			if len(te.entries) == 0 {
+				continue
+			}
 			if len(te.entries) <= 1 {
 				continue
 			}
-			if te.rows > INSERT_MERGE_THRESHOLD && te.rows/len(te.entries) > INSERT_MERGE_THRESHOLD {
+			if te.rows < INSERT_MERGE_THRESHOLD || te.rows/len(te.entries) > INSERT_MERGE_THRESHOLD {
 				continue
 			}
-			merged = true
 			var bat *batch.Batch
 			for i := range te.entries {
 				if bat == nil {
-					bat = te.entries[i].bat
+					bat = te.entries[i]
 					continue
 				}
 				if bat.Length() > int(options.DefaultBlockMaxRows) {
-					bat = te.entries[i].bat
+					bat = te.entries[i]
 					continue
 				}
-				for i, vec := range bat.Vecs {
-					if err := vector.GetUnionAllFunction(*vec.GetType(), proc.Mp())(vec, te.entries[i].bat.Vecs[i]); err != nil {
-						return merged
+				if txn.writes[te.offsets[i]].bat != nil {
+					for j, vec := range bat.Vecs {
+						if err := vector.GetUnionAllFunction(*vec.GetType(), proc.Mp())(vec, te.entries[i].Vecs[j]); err != nil {
+							return err
+						}
 					}
+					bat.Zs = append(bat.Zs, te.entries[i].Zs...)
+					proc.PutBatch(te.entries[i])
+					txn.writes[te.offsets[i]].bat = nil
 				}
-				bat.Zs = append(bat.Zs, te.entries[i].bat.Zs...)
-				proc.PutBatch(te.entries[i].bat)
-				te.entries[i].bat = nil
 				te.entries[i] = nil
 			}
+			offsets := te.offsets[:0]
 			entries := te.entries[:0]
 			for i := range te.entries {
 				if te.entries[i] != nil {
+					offsets = append(offsets, te.offsets[i])
 					entries = append(entries, te.entries[i])
 				}
 			}
+			te.offsets = offsets
 			te.entries = entries
+			tes[i] = te
 		}
 		txn.tableWrites.tableEntries[k] = tes[len(tes)-1:]
 	}
-	return merged
+	return nil
 }

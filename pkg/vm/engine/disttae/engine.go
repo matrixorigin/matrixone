@@ -394,9 +394,10 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if txn.readOnly.Load() {
 		return nil
 	}
-	txn.mergeTxnWorkspace()
-	err := txn.dumpBatch(true, 0)
-	if err != nil {
+	if err := txn.mergeTxnWorkspace(); err != nil {
+		return err
+	}
+	if err := txn.dumpBatch(true, 0); err != nil {
 		return err
 	}
 	reqs, err := genWriteReqs(ctx, txn.writes)

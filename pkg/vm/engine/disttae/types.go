@@ -220,8 +220,12 @@ func (txn *Transaction) PutCnBlockDeletes(blockId *types.Blockid, offsets []int6
 }
 
 func (txn *Transaction) IncrStatemenetID(ctx context.Context) error {
-	txn.mergeTxnWorkspace()
-	txn.dumpBatch(false, 0)
+	if err := txn.mergeTxnWorkspace(); err != nil {
+		return err
+	}
+	if err := txn.dumpBatch(false, 0); err != nil {
+		return err
+	}
 	txn.Lock()
 	defer txn.Unlock()
 	if txn.statementID > 0 {
@@ -301,8 +305,10 @@ type Entry struct {
 }
 
 type tableEntry struct {
-	rows    int
-	entries []*Entry
+	rows int
+	// offset in transaction writes
+	offsets []int
+	entries []*batch.Batch
 }
 
 // isGeneratedByTruncate denotes the entry is yielded by the truncate operation.
