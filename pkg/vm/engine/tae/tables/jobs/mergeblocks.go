@@ -17,13 +17,14 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -66,7 +67,7 @@ type mergeBlocksTask struct {
 	rel         handle.Relation
 	scheduler   tasks.TaskScheduler
 	scopes      []common.ID
-	deletes     []*roaring.Bitmap
+	deletes     []*nulls.Bitmap
 }
 
 func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry, scheduler tasks.TaskScheduler) (task *mergeBlocksTask, err error) {
@@ -204,7 +205,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	length := 0
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
-	task.deletes = make([]*roaring.Bitmap, len(task.compacted))
+	task.deletes = make([]*nulls.Bitmap, len(task.compacted))
 
 	// Prepare sort key resources
 	// If there's no sort key, use physical address key

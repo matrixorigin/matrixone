@@ -17,57 +17,56 @@ package compute
 import (
 	"bytes"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func ShuffleByDeletes(deleteMask, deletes *roaring.Bitmap) (destDelets *roaring.Bitmap) {
-	if deletes == nil || deletes.IsEmpty() {
-		return deleteMask
+func ShuffleByDeletes(inputDeletes, deletes *nulls.Bitmap) (outDeletes *nulls.Bitmap) {
+	if deletes.IsEmpty() || inputDeletes.IsEmpty() {
+		return inputDeletes
 	}
-	if deleteMask != nil && !deleteMask.IsEmpty() {
-		delIt := deleteMask.Iterator()
-		destDelets = roaring.New()
-		deleteIt := deletes.Iterator()
-		deleteCnt := uint32(0)
-		for deleteIt.HasNext() {
-			del := deleteIt.Next()
-			for delIt.HasNext() {
-				row := delIt.PeekNext()
-				if row < del {
-					destDelets.Add(row - deleteCnt)
-					delIt.Next()
-				} else if row == del {
-					delIt.Next()
-				} else {
-					break
-				}
-			}
-			deleteCnt++
-		}
+	delIt := inputDeletes.GetBitmap().Iterator()
+	outDeletes = nulls.NewWithSize(1)
+	deleteIt := deletes.GetBitmap().Iterator()
+	deleteCnt := uint64(0)
+	for deleteIt.HasNext() {
+		del := deleteIt.Next()
 		for delIt.HasNext() {
-			row := delIt.Next()
-			destDelets.Add(row - deleteCnt)
+			row := delIt.PeekNext()
+			if row < del {
+				outDeletes.Add(row - deleteCnt)
+				delIt.Next()
+			} else if row == del {
+				delIt.Next()
+			} else {
+				break
+			}
 		}
+		deleteCnt++
 	}
-	return destDelets
+	for delIt.HasNext() {
+		row := delIt.Next()
+		outDeletes.Add(row - deleteCnt)
+	}
+
+	return outDeletes
 }
 
-func GetOffsetMapBeforeApplyDeletes(deletes *roaring.Bitmap) []uint32 {
-	if deletes == nil || deletes.IsEmpty() {
+func GetOffsetMapBeforeApplyDeletes(deletes *nulls.Bitmap) []uint32 {
+	if deletes.IsEmpty() {
 		return nil
 	}
 	prev := -1
 	mapping := make([]uint32, 0)
-	it := deletes.Iterator()
+	it := deletes.GetBitmap().Iterator()
 	for it.HasNext() {
-		delete := it.Next()
-		for i := uint32(prev + 1); i < delete; i++ {
+		del := it.Next()
+		for i := uint32(prev + 1); i < uint32(del); i++ {
 			mapping = append(mapping, i)
 		}
-		prev = int(delete)
+		prev = int(del)
 	}
 	mapping = append(mapping, uint32(prev)+1)
 	return mapping
@@ -76,7 +75,7 @@ func GetOffsetMapBeforeApplyDeletes(deletes *roaring.Bitmap) []uint32 {
 func GetOffsetOfBytes(
 	data *vector.Vector,
 	val []byte,
-	skipmask *roaring.Bitmap,
+	skipmask *nulls.Bitmap,
 ) (offset int, exist bool) {
 	start, end := 0, data.Length()-1
 	var mid int
@@ -88,7 +87,7 @@ func GetOffsetOfBytes(
 		} else if res < 0 {
 			start = mid + 1
 		} else {
-			if skipmask != nil && skipmask.Contains(uint32(mid)) {
+			if skipmask != nil && skipmask.Contains(uint64(mid)) {
 				return
 			}
 			offset = mid
@@ -104,7 +103,7 @@ func GetOffsetWithFunc[T any](
 	vals []T,
 	val T,
 	compare func(a, b T) int64,
-	skipmask *roaring.Bitmap,
+	skipmask *nulls.Bitmap,
 ) (offset int, exist bool) {
 	start, end := 0, len(vals)-1
 	var mid int
@@ -116,7 +115,7 @@ func GetOffsetWithFunc[T any](
 		} else if res < 0 {
 			start = mid + 1
 		} else {
-			if skipmask != nil && skipmask.Contains(uint32(mid)) {
+			if skipmask != nil && skipmask.Contains(uint64(mid)) {
 				return
 			}
 			offset = mid
@@ -127,7 +126,7 @@ func GetOffsetWithFunc[T any](
 	return
 }
 
-func GetOffsetOfOrdered[T types.OrderedT](column []T, val T, skipmask *roaring.Bitmap) (offset int, exist bool) {
+func GetOffsetOfOrdered[T types.OrderedT](column []T, val T, skipmask *nulls.Bitmap) (offset int, exist bool) {
 	start, end := 0, len(column)-1
 	var mid int
 	for start <= end {
@@ -137,7 +136,7 @@ func GetOffsetOfOrdered[T types.OrderedT](column []T, val T, skipmask *roaring.B
 		} else if column[mid] < val {
 			start = mid + 1
 		} else {
-			if skipmask != nil && skipmask.Contains(uint32(mid)) {
+			if skipmask != nil && skipmask.Contains(uint64(mid)) {
 				return
 			}
 			offset = mid
@@ -148,7 +147,7 @@ func GetOffsetOfOrdered[T types.OrderedT](column []T, val T, skipmask *roaring.B
 	return
 }
 
-func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (offset int, exist bool) {
+func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offset int, exist bool) {
 	vec := data.GetDownstreamVector()
 	switch data.GetType().Oid {
 	case types.T_bool:
@@ -247,7 +246,7 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (of
 			} else if res < 0 {
 				start = mid + 1
 			} else {
-				if skipmask != nil && skipmask.Contains(uint32(mid)) {
+				if skipmask != nil && skipmask.Contains(uint64(mid)) {
 					return
 				}
 				offset = mid
