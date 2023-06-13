@@ -15,8 +15,6 @@
 package common
 
 import (
-	"fmt"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -73,14 +71,6 @@ func BitmapEqual(v1, v2 *nulls.Bitmap) bool {
 		}
 	}
 	return true
-}
-
-func BitmapString(bm *nulls.Bitmap) string {
-	if bm.IsEmpty() {
-		return "<empty bitmap>"
-	}
-	ints := bm.ToArray()
-	return fmt.Sprintf("%v", ints)
 }
 
 func RoaringToMOBitmap(bm *roaring.Bitmap) *nulls.Bitmap {

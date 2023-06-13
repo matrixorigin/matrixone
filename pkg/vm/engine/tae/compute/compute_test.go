@@ -47,7 +47,7 @@ func TestShuffleByDeletes(t *testing.T) {
 	deletes.Add(22)
 
 	destDelets := ShuffleByDeletes(deletes, deletes)
-	t.Log(common.BitmapString(destDelets))
+	t.Log(destDelets.String())
 }
 
 func TestCheckRowExists(t *testing.T) {
