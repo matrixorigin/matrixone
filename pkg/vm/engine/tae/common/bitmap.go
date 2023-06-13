@@ -17,6 +17,7 @@ package common
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
 func BM32Window(bm *roaring.Bitmap, start, end int) *roaring.Bitmap {
@@ -53,4 +54,43 @@ func BM64Window(bm *roaring64.Bitmap, start, end int) *roaring64.Bitmap {
 		}
 	}
 	return new
+}
+
+func BitmapEqual(v1, v2 *nulls.Bitmap) bool {
+	if v1 == nil || v2 == nil {
+		return v1 == v2
+	}
+	if v1.GetCardinality() != v2.GetCardinality() {
+		return false
+	}
+	vals1 := v1.ToArray()
+	vals2 := v2.ToArray()
+	for i := range vals1 {
+		if vals1[i] != vals2[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func RoaringToMOBitmap(bm *roaring.Bitmap) *nulls.Bitmap {
+	if bm == nil {
+		return nil
+	}
+	nbm := nulls.NewWithSize(int(bm.Maximum()) + 1)
+	iterator := bm.Iterator()
+	for iterator.HasNext() {
+		nbm.Add(uint64(iterator.Next()))
+	}
+	return nbm
+}
+
+func MOOrRoaringBitmap(bm *nulls.Bitmap, rbm *roaring.Bitmap) {
+	if bm == nil || rbm == nil {
+		return
+	}
+	iterator := rbm.Iterator()
+	for iterator.HasNext() {
+		bm.Add(uint64(iterator.Next()))
+	}
 }

@@ -15,12 +15,12 @@
 package model
 
 import (
-	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type BaseView struct {
-	DeleteMask *roaring.Bitmap
+	DeleteMask *nulls.Bitmap
 }
 
 type BlockView struct {
@@ -60,31 +60,12 @@ func (view *BlockView) SetData(i int, data containers.Vector) {
 	col.SetData(data)
 }
 
-func (view *BlockView) SetUpdates(i int, mask *roaring.Bitmap, vals map[uint32]any) {
-	col := view.Columns[i]
-	if col == nil {
-		col = NewColumnView(i)
-		view.Columns[i] = col
-	}
-	col.UpdateMask = mask
-	col.UpdateVals = vals
-}
-
-func (view *BlockView) Eval(clear bool) (err error) {
-	for _, col := range view.Columns {
-		if err = col.Eval(clear); err != nil {
-			break
-		}
-	}
-	return
-}
-
 func (view *BlockView) ApplyDeletes() {
-	if view.DeleteMask == nil {
+	if view.DeleteMask.IsEmpty() {
 		return
 	}
 	for _, col := range view.Columns {
-		col.data.Compact(view.DeleteMask)
+		col.data.CompactByBitmap(view.DeleteMask)
 	}
 	view.DeleteMask = nil
 }

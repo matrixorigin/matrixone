@@ -19,6 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -112,7 +113,7 @@ func (node *memoryNode) GetValueByRow(readSchema *catalog.Schema, row, col int) 
 	return vec.Get(row), vec.IsNull(row)
 }
 
-func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+func (node *memoryNode) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	return node.data.Vecs[colIdx].Foreach(op, sels)
 }
 
@@ -157,7 +158,7 @@ func (node *memoryNode) GetDataWindow(
 	// manually clone data
 	bat = containers.NewBatchWithCapacity(len(readSchema.ColDefs))
 	if node.data.Deletes != nil {
-		bat.Deletes = common.BM32Window(bat.Deletes, int(from), int(to))
+		bat.Deletes = bat.WindowDeletes(int(from), int(to-from), false)
 	}
 	for _, col := range readSchema.ColDefs {
 		idx, ok := node.writeSchema.SeqnumMap[col.SeqNum]
