@@ -251,7 +251,8 @@ func TestMOSpan_End(t *testing.T) {
 	require.Equal(t, extraFields, longTimeSpan.(*MOSpan).ExtraFields)
 
 	// span with deadline context
-	deadlineCtx, _ := context.WithTimeout(ctx, time.Millisecond)
+	deadlineCtx, cancel := context.WithTimeout(ctx, time.Millisecond)
+	defer cancel()
 	var deadlineSpan trace.Span
 	WG.Add(1)
 	go func() {
