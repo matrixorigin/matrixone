@@ -12,6 +12,7 @@ spec:
       - name: dockerhub
     cacheVolume:
       size: 100Gi
+      storageClassName: gp3
     sharedStorageCache:
       memoryCacheSize: 1Gi
       diskCacheSize: 100Gi
@@ -62,6 +63,7 @@ spec:
     pvcRetentionPolicy: Delete
     volume:
       size: 100Gi
+      storageClassName: gp3
     config: |
       [log]
       level = "info"
@@ -70,6 +72,7 @@ spec:
   tp:
     cacheVolume:
       size: 100Gi
+      storageClassName: gp3
     sharedStorageCache:
       memoryCacheSize: 1Gi
       diskCacheSize: 100Gi
