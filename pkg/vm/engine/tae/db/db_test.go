@@ -582,7 +582,7 @@ func TestCompactBlock1(t *testing.T) {
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(2), changes.DeleteMask.GetCardinality())
+		assert.Equal(t, 2, changes.DeleteMask.GetCardinality())
 
 		destBlock, err := seg.CreateNonAppendableBlock(nil)
 		assert.Nil(t, err)
@@ -881,7 +881,7 @@ func TestCompactBlock2(t *testing.T) {
 		// read generated column from nablk-1
 		newColumnView, err := blk.GetColumnDataById(context.Background(), 3)
 		require.NoError(t, err)
-		require.Equal(t, uint64(2), newColumnView.DeleteMask.GetCardinality())
+		require.Equal(t, 2, newColumnView.DeleteMask.GetCardinality())
 		require.Equal(t, 20, newColumnView.GetData().Length())
 		newData := newColumnView.ApplyDeletes()
 		cnt := 0
@@ -1052,7 +1052,7 @@ func TestCompactBlock2(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, types.T_int32, view.GetData().GetType().Oid)
 				require.Equal(t, 16, view.Length())
-				require.Equal(t, uint64(1), view.DeleteMask.GetCardinality())
+				require.Equal(t, 1, view.DeleteMask.GetCardinality())
 				require.True(t, view.GetData().GetDownstreamVector().IsConstNull())
 			case 2:
 				// ablk-5 10 rows
@@ -1651,7 +1651,7 @@ func TestLogIndex1(t *testing.T) {
 		view, err := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx())
 		assert.Nil(t, err)
 		defer view.Close()
-		assert.True(t, view.DeleteMask.Contains(offset))
+		assert.True(t, view.DeleteMask.Contains(uint64(offset)))
 		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Scheduler)
 		assert.Nil(t, err)
 		err = task.OnExec(context.Background())
@@ -2104,7 +2104,7 @@ func TestADA(t *testing.T) {
 		assert.NoError(t, err)
 		defer view.Close()
 		assert.Equal(t, 4, view.Length())
-		assert.Equal(t, uint64(3), view.DeleteMask.GetCardinality())
+		assert.Equal(t, 3, view.DeleteMask.GetCardinality())
 		it.Next()
 	}
 	assert.NoError(t, txn.Commit())
@@ -2269,7 +2269,7 @@ func TestChaos1(t *testing.T) {
 	mask := view.DeleteMask
 	view.ApplyDeletes()
 	t.Log(view.String())
-	assert.Equal(t, uint64(deleteCnt), mask.GetCardinality())
+	assert.Equal(t, int(deleteCnt), mask.GetCardinality())
 }
 
 // Testing Steps
@@ -2559,7 +2559,6 @@ func TestMergeblocks2(t *testing.T) {
 
 	{
 		v := getSingleSortKeyValue(bat, schema, 1)
-		t.Logf("v is %v**********", v)
 		filter := handle.NewEQFilter(v)
 		txn2, rel := tae.getRelation()
 		t.Log("********before delete******************")
@@ -2597,7 +2596,6 @@ func TestMergeblocks2(t *testing.T) {
 
 		{
 			v := getSingleSortKeyValue(bat, schema, 2)
-			t.Logf("v is %v**********", v)
 			filter := handle.NewEQFilter(v)
 			txn2, rel := tae.getRelation()
 			t.Log("********before delete******************")

@@ -37,7 +37,7 @@ func TestGetTimestamp(t *testing.T) {
 			for i := int64(1); i < 100; i++ {
 				ts := newTestTimestamp(i)
 				tw.latestTS.Store(&ts)
-				v, err := tw.GetTimestamp(ctx, newTestTimestamp(i))
+				_, v, err := tw.GetTimestamp(ctx, newTestTimestamp(i))
 				require.NoError(t, err)
 				assert.Equal(t, ts.Next(), v)
 			}
@@ -53,7 +53,7 @@ func TestGetTimestampWithWaitTimeout(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.TODO(), timeout)
 			defer cancel()
 
-			_, err := tw.GetTimestamp(ctx, newTestTimestamp(10))
+			_, _, err := tw.GetTimestamp(ctx, newTestTimestamp(10))
 			require.Error(t, err)
 		},
 	)
@@ -73,7 +73,7 @@ func TestGetTimestampWithNotified(t *testing.T) {
 				tw.NotifyLatestCommitTS(newTestTimestamp(10))
 			}()
 			<-c
-			ts, err := tw.GetTimestamp(ctx, newTestTimestamp(10))
+			_, ts, err := tw.GetTimestamp(ctx, newTestTimestamp(10))
 			require.NoError(t, err)
 			v := newTestTimestamp(10)
 			assert.Equal(t, v.Next(), ts)
@@ -136,7 +136,7 @@ func BenchmarkGetTimestampWithWaitNotify(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				ts := newTestTimestamp(int64(i))
-				v, err := tw.GetTimestamp(ctx, ts)
+				_, v, err := tw.GetTimestamp(ctx, ts)
 				if err != nil {
 					panic(err)
 				}
@@ -161,7 +161,7 @@ func BenchmarkGetTimestampWithNoWait(b *testing.B) {
 			ts := newTestTimestamp(0)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				v, err := tw.GetTimestamp(ctx, ts)
+				_, v, err := tw.GetTimestamp(ctx, ts)
 				if err != nil {
 					panic(err)
 				}
