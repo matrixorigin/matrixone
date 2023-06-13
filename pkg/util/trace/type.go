@@ -32,9 +32,9 @@ type TracerProvider interface {
 
 type Tracer interface {
 	// Start creates a span and a context.Context containing the newly-created span.
-	Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span)
+	Start(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span)
 	// Debug creates a span only with DebugMode
-	Debug(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span)
+	Debug(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span)
 	// IsEnable return true, means do record
 	IsEnable() bool
 }

@@ -46,12 +46,13 @@ type MOTracer struct {
 	provider *MOTracerProvider
 }
 
-func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanOption) (context.Context, trace.Span) {
+func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	if !t.IsEnable() {
 		return ctx, trace.NoopSpan{}
 	}
 	span := newMOSpan()
 	span.tracer = t
+	span.ctx = ctx
 	span.init(name, opts...)
 
 	parent := trace.SpanFromContext(ctx)
@@ -68,7 +69,7 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...trace.SpanOpt
 	return trace.ContextWithSpan(ctx, span), span
 }
 
-func (t *MOTracer) Debug(ctx context.Context, name string, opts ...trace.SpanOption) (context.Context, trace.Span) {
+func (t *MOTracer) Debug(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	if !t.provider.debugMode {
 		return ctx, trace.NoopSpan{}
 	}
@@ -92,7 +93,9 @@ type MOSpan struct {
 	// ExtraFields
 	ExtraFields []zap.Field `json:"extra"`
 
-	tracer *MOTracer `json:"-"`
+	tracer     *MOTracer       `json:"-"`
+	ctx        context.Context `json:"-"`
+	needRecord bool            `json:"-"`
 }
 
 var spanPool = &sync.Pool{New: func() any {
@@ -103,7 +106,7 @@ func newMOSpan() *MOSpan {
 	return spanPool.Get().(*MOSpan)
 }
 
-func (s *MOSpan) init(name string, opts ...trace.SpanOption) {
+func (s *MOSpan) init(name string, opts ...trace.SpanStartOption) {
 	s.Name = name
 	s.StartTime = time.Now()
 	s.LongTimeThreshold = s.tracer.provider.longSpanTime
@@ -121,6 +124,8 @@ func (s *MOSpan) Free() {
 	s.Parent = nil
 	s.Name = ""
 	s.tracer = nil
+	s.ctx = nil
+	s.needRecord = false
 	s.StartTime = table.ZeroTime
 	s.EndTime = table.ZeroTime
 	spanPool.Put(s)
@@ -150,6 +155,7 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(timestampCol, table.TimeField(s.EndTime))
 	row.SetColumnVal(durationCol, table.Uint64Field(uint64(s.Duration)))
 	row.SetColumnVal(resourceCol, table.StringField(s.tracer.provider.resource.String()))
+
 	// fill extra fields
 	if len(s.ExtraFields) > 0 {
 		encoder := getEncoder()
@@ -165,12 +171,25 @@ func (s *MOSpan) FillRow(ctx context.Context, row *table.Row) {
 	}
 }
 
+// End record span which meets any of the following condition
+// 1. span's duration >= LongTimeThreshold
+// 2. span's ctx, which specified at the MOTracer.Start, encounters the deadline
 func (s *MOSpan) End(options ...trace.SpanEndOption) {
 	s.EndTime = time.Now()
+	deadline, hasDeadline := s.ctx.Deadline()
 	s.Duration = s.EndTime.Sub(s.StartTime)
-	if s.Duration < s.GetLongTimeThreshold() {
+	// check need record
+	if s.Duration >= s.GetLongTimeThreshold() {
+		s.needRecord = true
+	} else if hasDeadline && s.EndTime.After(deadline) {
+		s.needRecord = true
+		s.ExtraFields = append(s.ExtraFields, zap.Error(s.ctx.Err()))
+	}
+	if !s.needRecord {
+		go s.Free()
 		return
 	}
+	// do record
 	for _, opt := range options {
 		opt.ApplySpanEnd(&s.SpanConfig)
 	}
