@@ -637,7 +637,7 @@ func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
 
 		reg, err = regexp.Compile(pat)
 		if err != nil {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("%s is not a regexp expression", pat))
+			return nil, err
 		}
 		rs.mp[pat] = reg
 	}
