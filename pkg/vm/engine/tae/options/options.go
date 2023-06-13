@@ -171,6 +171,12 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CatalogCfg.GCInterval <= 0 {
 		o.CatalogCfg.GCInterval = DefaultCatalogGCInterval
 	}
+	if o.CatalogCfg.MemoryGCInternal <= 0 {
+		o.CatalogCfg.MemoryGCInternal = DefaultCatalogMemoryGCInternal
+	}
+	if o.CatalogCfg.MemoryGCTTL <= 0 {
+		o.CatalogCfg.MemoryGCTTL = DefaultCatalogMemoryGCTTL
+	}
 
 	if o.GCCfg == nil {
 		o.GCCfg = new(GCCfg)

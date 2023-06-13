@@ -91,6 +91,12 @@ func (blk *baseBlock) PinNode() *Node {
 	return n
 }
 
+func (blk *baseBlock) GCMemory() {
+	if blk.mvcc != nil {
+		blk.mvcc = nil
+	}
+}
+
 func (blk *baseBlock) Rows() int {
 	node := blk.PinNode()
 	defer node.Unref()
@@ -498,6 +504,24 @@ func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 func (blk *baseBlock) CollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
+	node := blk.PinNode()
+	defer node.Unref()
+	if !node.IsPersisted() {
+		return blk.inMemoryCollectDeleteInRange(
+			start,
+			end,
+			withAborted)
+	} else {
+		return blk.persistedCollectDeleteInRange(
+			start,
+			end,
+			withAborted)
+	}
+}
+
+func (blk *baseBlock) inMemoryCollectDeleteInRange(
+	start, end types.TS,
+	withAborted bool) (bat *containers.Batch, err error) {
 	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDelete(start, end)
 	if rowID == nil {
 		return
@@ -521,6 +545,13 @@ func (blk *baseBlock) CollectDeleteInRange(
 		bat.Compact()
 	}
 	return
+}
+
+func (blk *baseBlock) persistedCollectDeleteInRange(
+	start, end types.TS,
+	withAborted bool) (bat *containers.Batch, err error) {
+	// logtail should have sent metaloc
+	return nil, nil
 }
 
 func (blk *baseBlock) adjustScore(
