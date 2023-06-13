@@ -238,7 +238,7 @@ func (blk *ablock) resolveInMemoryColumnDatas(
 	if err != nil {
 		return
 	}
-	if deSels != nil && !deSels.IsEmpty() {
+	if !deSels.IsEmpty() {
 		if view.DeleteMask != nil {
 			view.DeleteMask.Or(deSels)
 		} else {
@@ -534,7 +534,8 @@ func (blk *ablock) checkConflictAndDupClosure(
 	txn txnif.TxnReader,
 	isCommitting bool,
 	dupRow *uint32,
-	rowmask *roaring.Bitmap) func(row uint32) error {
+	rowmask *roaring.Bitmap,
+) func(row uint32) error {
 	return func(row uint32) (err error) {
 		if rowmask != nil && rowmask.Contains(row) {
 			return nil
