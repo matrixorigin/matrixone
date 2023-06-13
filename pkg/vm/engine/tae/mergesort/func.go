@@ -135,6 +135,7 @@ func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uin
 	k := 0
 	for i := 0; i < len(toLayout); i++ {
 		ret[i] = containers.MakeVector(*col[0].GetType())
+		ret[i].PreExtend(int(toLayout[i]))
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
 			ret[i].Append(col[s].Get(cursors[s]), col[s].IsNull(cursors[s]))
