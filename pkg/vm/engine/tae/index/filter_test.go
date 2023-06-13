@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -33,7 +33,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	defer data.Close()
 	sf, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)
-	var positive *roaring.Bitmap
+	var positive *nulls.Bitmap
 	var res bool
 	var exist bool
 
@@ -57,7 +57,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
-	require.Equal(t, uint64(2000), positive.GetCardinality())
+	require.Equal(t, 2000, positive.GetCardinality())
 	require.True(t, exist)
 
 	query = containers.MockVector2(typ, 20000, 40000)
@@ -82,7 +82,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
-	require.Equal(t, uint64(40000), positive.GetCardinality())
+	require.Equal(t, 40000, positive.GetCardinality())
 	require.True(t, exist)
 }
 
@@ -113,7 +113,7 @@ func TestStaticFilterString(t *testing.T) {
 	defer data.Close()
 	sf, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)
-	var positive *roaring.Bitmap
+	var positive *nulls.Bitmap
 	var res bool
 	var exist bool
 
@@ -129,7 +129,7 @@ func TestStaticFilterString(t *testing.T) {
 	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
-	require.Equal(t, uint64(2000), positive.GetCardinality())
+	require.Equal(t, 2000, positive.GetCardinality())
 	require.True(t, exist)
 
 	query = containers.MockVector2(typ, 20000, 40000)
@@ -154,6 +154,6 @@ func TestStaticFilterString(t *testing.T) {
 	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query)
 	require.NoError(t, err)
-	require.Equal(t, uint64(40000), positive.GetCardinality())
+	require.Equal(t, 40000, positive.GetCardinality())
 	require.True(t, exist)
 }
