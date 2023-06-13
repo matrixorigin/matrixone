@@ -128,21 +128,19 @@ func (chain *DeleteChain) RemoveNodeLocked(node txnif.DeleteNode) {
 }
 
 func (chain *DeleteChain) deleteInMaskByNode(node txnif.DeleteNode) {
-	int32Rows := node.GetRowMaskRefLocked().ToArray()
-	uint64Rows := make([]uint64, len(int32Rows))
-	for i, row := range int32Rows {
-		uint64Rows[i] = uint64(row)
+	it := node.GetRowMaskRefLocked().Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		chain.mask.Del(uint64(row))
 	}
-	chain.mask.Del(uint64Rows...)
 }
 
 func (chain *DeleteChain) insertInMaskByNode(node txnif.DeleteNode) {
-	int32Rows := node.GetRowMaskRefLocked().ToArray()
-	uint64Rows := make([]uint64, len(int32Rows))
-	for i, row := range int32Rows {
-		uint64Rows[i] = uint64(row)
+	it := node.GetRowMaskRefLocked().Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		chain.mask.Add(uint64(row))
 	}
-	chain.mask.Add(uint64Rows...)
 }
 
 func (chain *DeleteChain) insertInMaskByRange(start, end uint32) {
@@ -297,12 +295,11 @@ func (chain *DeleteChain) CollectDeletesLocked(
 			rwlocker.RLock()
 		}
 		if !n.IsVisible(txn) {
-			uint32Array := n.GetDeleteMaskLocked().ToArray()
-			uint64Array := make([]uint64, len(uint32Array))
-			for i := range uint32Array {
-				uint64Array[i] = uint64(uint32Array[i])
+			it := n.GetDeleteMaskLocked().Iterator()
+			for it.HasNext() {
+				row := it.Next()
+				merged.Del(uint64(row))
 			}
-			merged.Del(uint64Array...)
 		}
 		return true
 	})

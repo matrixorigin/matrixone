@@ -322,12 +322,11 @@ func (n *MVCCHandle) CollectDelete(
 			if in {
 				it := node.mask.Iterator()
 				if node.IsAborted() {
-					uint32Arroy := node.mask.ToArray()
-					uint64Arror := make([]uint64, len(uint32Arroy))
-					for i := range uint32Arroy {
-						uint64Arror[i] = uint64(uint32Arroy[i])
+					it := node.mask.Iterator()
+					for it.HasNext() {
+						row := it.Next()
+						nulls.Add(abortedBitmap, uint64(row))
 					}
-					nulls.Add(abortedBitmap, uint64Arror...)
 				}
 				for it.HasNext() {
 					row := it.Next()
