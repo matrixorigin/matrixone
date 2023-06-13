@@ -86,6 +86,8 @@ spec:
       [cn.txn]
       enable-sacrificing-freshness = true
       enable-cn-based-consistency = false
+      [cn.ctl.address]
+      listen-address = "0.0.0.0:19958"
     replicas: 2
     overlay:
       imagePullSecrets:
