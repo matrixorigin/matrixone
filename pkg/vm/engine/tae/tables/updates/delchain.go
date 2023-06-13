@@ -288,29 +288,18 @@ func mergeDelete(mask *nulls.Bitmap, node *DeleteNode) {
 func (chain *DeleteChain) CollectDeletesLocked(
 	txn txnif.TxnReader,
 	rwlocker *sync.RWMutex) (merged *nulls.Bitmap, err error) {
+	merged = chain.mask.Clone()
 	chain.LoopChain(func(n *DeleteNode) bool {
-		// Merged node is a loop breaker
-		if n.IsMerged() {
-			if n.GetCommitTSLocked().Greater(txn.GetStartTS()) {
-				return true
-			}
-			if merged == nil {
-				merged = nulls.NewWithSize(int(n.mask.Maximum()))
-			}
-			mergeDelete(merged, n)
-			return false
-		}
 		needWait, txnToWait := n.NeedWaitCommitting(txn.GetStartTS())
 		if needWait {
 			rwlocker.RUnlock()
 			txnToWait.GetTxnState(true)
 			rwlocker.RLock()
 		}
-		if n.IsVisible(txn) {
-			if merged == nil {
-				merged = nulls.NewWithSize(int(n.mask.Maximum()))
-			}
-			mergeDelete(merged, n)
+		if !n.IsVisible(txn) {
+			uint32Array := n.GetDeleteMaskLocked().ToArray()
+			uint64Array := make([]uint64, len(uint32Array))
+			merged.Del(uint64Array...)
 		}
 		return true
 	})
