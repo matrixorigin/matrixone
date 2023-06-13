@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -39,7 +39,7 @@ type compactBlockEntry struct {
 	from      handle.Block
 	to        handle.Block
 	scheduler tasks.TaskScheduler
-	deletes   *roaring.Bitmap
+	deletes   *nulls.Bitmap
 }
 
 func NewCompactBlockEntry(
@@ -47,13 +47,14 @@ func NewCompactBlockEntry(
 	from, to handle.Block,
 	scheduler tasks.TaskScheduler,
 	sortIdx []uint32,
-	deletes *roaring.Bitmap) *compactBlockEntry {
+	deletes *nulls.Bitmap,
+) *compactBlockEntry {
 
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
 	if to != nil {
 		toId := to.Fingerprint()
 		offsetMapping := compute.GetOffsetMapBeforeApplyDeletes(deletes)
-		if deletes != nil && !deletes.IsEmpty() {
+		if !deletes.IsEmpty() {
 			delCnt := deletes.GetCardinality()
 			for i, idx := range sortIdx {
 				if int(idx) < len(offsetMapping) {

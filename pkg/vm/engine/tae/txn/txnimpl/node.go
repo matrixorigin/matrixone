@@ -103,18 +103,6 @@ func (n *pnode) AddApplyInfo(
 	panic("not supported ")
 }
 
-func (n *pnode) RowsWithoutDeletes() uint32 {
-	panic("not implemented yet ")
-}
-
-func (n *pnode) LengthWithDeletes(appended, toAppend uint32) uint32 {
-	panic("not supported ")
-}
-
-func (n *pnode) OffsetWithDeletes(count uint32) uint32 {
-	panic("not supported ")
-}
-
 func (n *pnode) GetAppends() []*appendInfo {
 	panic("not supported ")
 }

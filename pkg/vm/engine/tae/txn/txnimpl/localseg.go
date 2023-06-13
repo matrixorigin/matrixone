@@ -159,14 +159,14 @@ func (seg *localSegment) PrepareApply() (err error) {
 }
 
 func (seg *localSegment) prepareApplyANode(node *anode) error {
-	node.data.Compact()
+	node.Compact()
 	tableData := seg.table.entry.GetTableData()
 	if seg.tableHandle == nil {
 		seg.tableHandle = tableData.GetHandle()
 	}
 	appended := uint32(0)
 	vec := containers.MakeVector(objectio.RowidType)
-	for appended < node.RowsWithoutDeletes() {
+	for appended < node.Rows() {
 		appender, err := seg.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
 			segH, err := seg.table.CreateSegment(true)
@@ -195,7 +195,7 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 		//PrepareAppend: It is very important that appending a AppendNode into
 		// block's MVCCHandle before applying data into block.
 		anode, created, toAppend, err := appender.PrepareAppend(
-			node.RowsWithoutDeletes()-appended,
+			node.Rows()-appended,
 			seg.table.store.txn)
 		if err != nil {
 			return err
@@ -213,13 +213,12 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 		if err = vec.ExtendVec(col); err != nil {
 			return err
 		}
-		toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
 		ctx := &appendCtx{
 			driver: appender,
 			node:   node,
 			anode:  anode,
-			start:  node.OffsetWithDeletes(appended),
-			count:  toAppendWithDeletes,
+			start:  appended,
+			count:  toAppend,
 		}
 		if created {
 			seg.table.store.IncreateWriteCnt()
