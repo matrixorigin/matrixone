@@ -23,11 +23,15 @@ import (
 )
 
 func getVal(val any) string {
-	switch val.(type) {
+	switch v := val.(type) {
 	case float32:
 		return fmt.Sprintf("%e", val)
 	case float64:
 		return fmt.Sprintf("%e", val)
+	case []byte:
+		return string(v)
+	case string:
+		return v
 	default:
 		return fmt.Sprintf("%v", val)
 	}
@@ -58,7 +62,7 @@ func SetAnyToStringVector(proc *process.Process, val any, vec *vector.Vector, id
 		vec.GetNulls().Set(uint64(idx))
 		return nil
 	} else {
-		strVal := fmt.Sprintf("%v", val)
+		strVal := getVal(val)
 		return vector.SetBytesAt(vec, idx, []byte(strVal), proc.Mp())
 	}
 }
