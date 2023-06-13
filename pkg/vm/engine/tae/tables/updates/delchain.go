@@ -105,7 +105,7 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (er
 }
 
 func (chain *DeleteChain) hasOverLap(start, end uint64) bool {
-	if chain.mask == nil || chain.mask.IsEmpty() {
+	if chain.mask.IsEmpty() {
 		return false
 	}
 	var yes bool
