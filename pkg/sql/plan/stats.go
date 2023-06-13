@@ -609,7 +609,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
 			node.Stats = calcScanStats(node, builder)
-			builder.tag2Table[node.BindingTags[0]] = node.TableDef
+			if len(node.BindingTags) > 0 {
+				builder.tag2Table[node.BindingTags[0]] = node.TableDef
+			}
 		}
 
 	case plan.Node_FILTER:
