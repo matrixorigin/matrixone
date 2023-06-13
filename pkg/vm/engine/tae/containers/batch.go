@@ -346,6 +346,59 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
+// in version1, batch.Deletes is roaring.Bitmap
+func (bat *Batch) ReadFromV1(r io.Reader) (n int64, err error) {
+	var tmpn int64
+	buffer := MakeVector(types.T_varchar.ToType())
+	defer buffer.Close()
+	if tmpn, err = buffer.ReadFrom(r); err != nil {
+		return
+	}
+	n += tmpn
+	pos := 0
+	buf := buffer.Get(pos).([]byte)
+	pos++
+	cnt := types.DecodeFixed[uint16](buf)
+	vecTypes := make([]types.Type, cnt)
+	bat.Attrs = make([]string, cnt)
+	for i := 0; i < int(cnt); i++ {
+		buf = buffer.Get(pos).([]byte)
+		pos++
+		bat.Attrs[i] = string(buf)
+		bat.Nameidx[bat.Attrs[i]] = i
+		buf = buffer.Get(pos).([]byte)
+		vecTypes[i] = types.DecodeType(buf)
+		pos++
+	}
+	for _, vecType := range vecTypes {
+		vec := MakeVector(vecType)
+		if tmpn, err = vec.ReadFrom(r); err != nil {
+			return
+		}
+		bat.Vecs = append(bat.Vecs, vec)
+		n += tmpn
+	}
+	// XXX Fix the following read, it is a very twisted way of reading uint32.
+	// Read Deletes
+	buf = make([]byte, int(unsafe.Sizeof(uint32(0))))
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	n += int64(len(buf))
+	size := types.DecodeFixed[uint32](buf)
+	if size == 0 {
+		return
+	}
+	deletes := roaring.New()
+	if tmpn, err = deletes.ReadFrom(r); err != nil {
+		return
+	}
+	n += tmpn
+	bat.Deletes = common.RoaringToMOBitmap(deletes)
+
+	return
+}
+
 func (bat *Batch) Split(cnt int) []*Batch {
 	if cnt == 1 {
 		return []*Batch{bat}
