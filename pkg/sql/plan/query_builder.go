@@ -1478,7 +1478,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var selectList tree.SelectExprs
 	var resultLen int
 	var havingBinder *HavingBinder
-	var lockNode *plan.Node
 
 	if clause == nil {
 		rowCount := len(valuesClause.Rows)
@@ -1664,7 +1663,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			return 0, moerr.NewParseError(builder.GetContext(), "No tables used")
 		}
 
-		if builder.isForUpdate {
+		if builder.isForUpdate && astLimit == nil {
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
 			pkPos, pkTyp := getPkPos(tableDef, false)
 			lockTarget := &plan.LockTarget{
@@ -1674,7 +1673,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				RefreshTsIdxInBat:  -1, //unsupport now
 				FilterColIdxInBat:  -1, //unsupport now
 			}
-			lockNode = &Node{
+			lockNode := &Node{
 				NodeType:    plan.Node_LOCK_OP,
 				Children:    []int32{nodeID},
 				TableDef:    tableDef,
@@ -1682,9 +1681,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				BindingTags: []int32{builder.genNewTag()},
 			}
 
-			if astLimit == nil {
-				nodeID = builder.appendNode(lockNode, ctx)
-			}
+			nodeID = builder.appendNode(lockNode, ctx)
 		}
 
 		// rewrite right join to left join
@@ -1849,6 +1846,23 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}
 		}
 		if builder.isForUpdate {
+			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
+			pkPos, pkTyp := getPkPos(tableDef, false)
+			lockTarget := &plan.LockTarget{
+				TableId:            tableDef.TblId,
+				PrimaryColIdxInBat: int32(pkPos),
+				PrimaryColTyp:      pkTyp,
+				RefreshTsIdxInBat:  -1, //unsupport now
+				FilterColIdxInBat:  -1, //unsupport now
+			}
+			lockNode := &Node{
+				NodeType:    plan.Node_LOCK_OP,
+				Children:    []int32{nodeID},
+				TableDef:    tableDef,
+				LockTargets: []*plan.LockTarget{lockTarget},
+				BindingTags: []int32{builder.genNewTag()},
+			}
+
 			nodeID = builder.appendNode(lockNode, ctx)
 		}
 	}
