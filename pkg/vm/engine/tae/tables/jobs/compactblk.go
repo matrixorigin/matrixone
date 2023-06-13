@@ -165,8 +165,9 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	oldBlkData := oldBMeta.GetBlockData()
 	var deletes *containers.Batch
 	if !oldBMeta.IsAppendable() {
-		deletes, err = oldBlkData.CollectDeleteInRange(types.TS{}, task.txn.GetStartTS(), true)
-		if err != nil {
+		if deletes, err = oldBlkData.CollectDeleteInRange(
+			types.TS{}, task.txn.GetStartTS(), true,
+		); err != nil {
 			return
 		}
 		if deletes != nil {
@@ -188,14 +189,16 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
 				return moerr.GetOkExpectedEOB()
 			}
-			createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID)
-			if err != nil {
+			if createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID); err != nil {
 				return err
+			} else {
+				defer createOnSeg.Close()
 			}
-			defer createOnSeg.Close()
 		}
 
-		if _, err = task.createAndFlushNewBlock(createOnSeg, preparer, deletes); err != nil {
+		if _, err = task.createAndFlushNewBlock(
+			createOnSeg, preparer, deletes,
+		); err != nil {
 			return
 		}
 	}
@@ -237,9 +240,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			ablockTask.blocks[0].GetExtent(),
 			uint32(data.Length()),
 			ablockTask.blocks[0].GetID())
-		if err != nil {
-			return
-		}
+
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 			return err
 		}
@@ -249,16 +250,11 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				ablockTask.blocks[1].GetExtent(),
 				uint32(deletes.Length()),
 				ablockTask.blocks[1].GetID())
-			if err != nil {
-				return
-			}
+
 			if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
 				return err
 			}
 		}
-		// if err = oldBlkData.ReplayIndex(); err != nil {
-		// 	return err
-		// }
 	}
 	// sortkey does not change, nerver mind the schema version
 	if !task.schema.HasSortKey() && task.created != nil {
@@ -280,7 +276,8 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		table.GetDB().ID,
 		table.ID,
 		txnEntry,
-		[]*common.ID{task.compacted.Fingerprint()}); err != nil {
+		[]*common.ID{task.compacted.Fingerprint()},
+	); err != nil {
 		return
 	}
 	createdStr := "nil"
@@ -333,9 +330,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		ioTask.blocks[0].GetExtent(),
 		uint32(preparer.Columns.Length()),
 		ioTask.blocks[0].GetID())
-	if err != nil {
-		return
-	}
+
 	logutil.Debugf("update metaloc for %s", id.String())
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
@@ -346,15 +341,12 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 			ioTask.blocks[1].GetExtent(),
 			uint32(deletes.Length()),
 			ioTask.blocks[1].GetID())
-		if err != nil {
-			return
-		}
+
 		if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
 			return
 		}
 	}
-	if err = newBlkData.Init(); err != nil {
-		return
-	}
+
+	err = newBlkData.Init()
 	return
 }
