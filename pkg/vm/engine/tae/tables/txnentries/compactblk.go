@@ -46,7 +46,7 @@ func NewCompactBlockEntry(
 	txn txnif.AsyncTxn,
 	from, to handle.Block,
 	scheduler tasks.TaskScheduler,
-	sortIdx []uint32,
+	sortIdx []int32,
 	deletes *nulls.Bitmap,
 ) *compactBlockEntry {
 
@@ -58,15 +58,15 @@ func NewCompactBlockEntry(
 			delCnt := deletes.GetCardinality()
 			for i, idx := range sortIdx {
 				if int(idx) < len(offsetMapping) {
-					sortIdx[i] = offsetMapping[idx]
+					sortIdx[i] = int32(offsetMapping[idx])
 				} else {
-					sortIdx[i] = idx + uint32(delCnt)
+					sortIdx[i] = idx + int32(delCnt)
 				}
 			}
 		}
 		for i, idx := range sortIdx {
 			rowid := objectio.NewRowid(&toId.BlockID, uint32(i))
-			page.Train(idx, *rowid)
+			page.Train(uint32(idx), *rowid)
 		}
 		_ = scheduler.AddTransferPage(page)
 	}
