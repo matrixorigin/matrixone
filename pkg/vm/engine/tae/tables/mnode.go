@@ -38,7 +38,6 @@ type memoryNode struct {
 	block       *baseBlock
 	writeSchema *catalog.Schema
 	data        *containers.Batch
-	prefix      []byte
 
 	//index for primary key : Art tree + ZoneMap.
 	pkIndex *indexwrapper.MutIndex
@@ -47,7 +46,6 @@ type memoryNode struct {
 func newMemoryNode(block *baseBlock) *memoryNode {
 	impl := new(memoryNode)
 	impl.block = block
-	impl.prefix = block.meta.MakeKey()
 
 	// Get the lastest schema, it will not be modified, so just keep the pointer
 	schema := block.meta.GetSchema()
