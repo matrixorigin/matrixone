@@ -20,6 +20,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -197,11 +198,13 @@ func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
 	}
 
 	it := deletes.Iterator()
+	dels := nulls.Nulls{}
 	for it.HasNext() {
 		del := it.Next()
 		rowid := objectio.NewRowid(&meta.ID, del)
 		rowIDVec.Append(*rowid, false)
 		commitTSVec.Append(b.txn.GetPrepareTS(), false)
+		dels.Add(uint64(del))
 	}
 	_ = meta.GetBlockData().Foreach(
 		pkDef.Idx,
@@ -209,7 +212,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(vnode txnif.DeleteNode) {
 			pkVec.Append(v, false)
 			return nil
 		},
-		deletes,
+		&dels,
 	)
 }
 

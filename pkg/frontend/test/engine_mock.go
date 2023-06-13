@@ -279,6 +279,21 @@ func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2)
 }
 
+// GetColumMetadataScanInfo mocks base method.
+func (m *MockRelation) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetColumMetadataScanInfo", ctx, name)
+	ret0, _ := ret[0].([]*plan.MetadataScanInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetColumMetadataScanInfo indicates an expected call of GetColumMetadataScanInfo.
+func (mr *MockRelationMockRecorder) GetColumMetadataScanInfo(ctx, name interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumMetadataScanInfo", reflect.TypeOf((*MockRelation)(nil).GetColumMetadataScanInfo), ctx, name)
+}
+
 // GetDBID mocks base method.
 func (m *MockRelation) GetDBID(arg0 context.Context) uint64 {
 	m.ctrl.T.Helper()
@@ -322,21 +337,6 @@ func (mr *MockRelationMockRecorder) GetHideKeys(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHideKeys", reflect.TypeOf((*MockRelation)(nil).GetHideKeys), arg0)
 }
 
-// GetMetadataScanInfoBytes mocks base method.
-func (m *MockRelation) GetMetadataScanInfoBytes(ctx context.Context, name string) ([][]byte, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetMetadataScanInfoBytes", ctx, name)
-	ret0, _ := ret[0].([][]byte)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetMetadataScanInfoBytes indicates an expected call of GetMetadataScanInfoBytes.
-func (mr *MockRelationMockRecorder) GetMetadataScanInfoBytes(ctx, name interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMetadataScanInfoBytes", reflect.TypeOf((*MockRelation)(nil).GetMetadataScanInfoBytes), ctx, name)
-}
-
 // GetPrimaryKeys mocks base method.
 func (m *MockRelation) GetPrimaryKeys(arg0 context.Context) ([]*engine.Attribute, error) {
 	m.ctrl.T.Helper()
@@ -364,6 +364,20 @@ func (m *MockRelation) GetTableID(arg0 context.Context) uint64 {
 func (mr *MockRelationMockRecorder) GetTableID(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTableID", reflect.TypeOf((*MockRelation)(nil).GetTableID), arg0)
+}
+
+// GetTableName mocks base method.
+func (m *MockRelation) GetTableName() string {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetTableName")
+	ret0, _ := ret[0].(string)
+	return ret0
+}
+
+// GetTableName indicates an expected call of GetTableName.
+func (mr *MockRelationMockRecorder) GetTableName() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTableName", reflect.TypeOf((*MockRelation)(nil).GetTableName))
 }
 
 // MaxAndMinValues mocks base method.
@@ -520,21 +534,6 @@ func (m *MockRelation) Write(arg0 context.Context, arg1 *batch.Batch) error {
 	ret := m.ctrl.Call(m, "Write", arg0, arg1)
 	ret0, _ := ret[0].(error)
 	return ret0
-}
-
-// MaxAndMinValues mocks base method.
-func (m *MockRelation) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetColumMetadataScanInfo", ctx)
-	ret0, _ := ret[0].([]*plan.MetadataScanInfo)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// MaxAndMinValues indicates an expected call of MaxAndMinValues.
-func (mr *MockRelationMockRecorder) GetColumMetadataScanInfo(ctx interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumMetadataScanInfo", reflect.TypeOf((*MockRelation)(nil).GetColumMetadataScanInfo), ctx)
 }
 
 // Write indicates an expected call of Write.
