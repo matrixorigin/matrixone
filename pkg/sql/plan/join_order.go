@@ -379,12 +379,8 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			parent:   -1,
 		}
 
-		if node.NodeType == plan.Node_TABLE_SCAN {
-			tag2Vert[node.BindingTags[0]] = int32(i)
-		} else if len(node.BindingTags) > 0 {
-			for _, tag := range node.BindingTags {
-				tag2Vert[tag] = int32(i)
-			}
+		for _, tag := range builder.enumerateTags(node.NodeId) {
+			tag2Vert[tag] = int32(i)
 		}
 	}
 
@@ -420,7 +416,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 			}
 
 			leftParent := vertices[leftId].parent
-			if isHighNdvCols(edge.leftCols, vertices[leftId].node.TableDef, builder) {
+			if isHighNdvCols(edge.leftCols, builder.tag2Table[leftCol.RelPos], builder) {
 				if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
 					if vertices[rightId].parent != leftId {
 						setParent(leftId, rightId, vertices)
@@ -431,7 +427,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 				}
 			}
 			rightParent := vertices[rightId].parent
-			if isHighNdvCols(edge.rightCols, vertices[rightId].node.TableDef, builder) {
+			if isHighNdvCols(edge.rightCols, builder.tag2Table[rightCol.RelPos], builder) {
 				if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
 					if vertices[leftId].parent != rightId {
 						setParent(rightId, leftId, vertices)
