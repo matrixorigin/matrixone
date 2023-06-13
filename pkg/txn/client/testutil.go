@@ -25,10 +25,10 @@ import (
 )
 
 // RunTxnTests runs txn tests.
-func RunTxnTests(fn func(TxnClient, rpc.TxnSender)) {
+func RunTxnTests(fn func(TxnClient, rpc.TxnSender), opts ...TxnClientCreateOption) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 	ts := newTestTxnSender()
-	c := NewTxnClient(ts)
+	c := NewTxnClient(ts, opts...)
 	fn(c, ts)
 }
 
