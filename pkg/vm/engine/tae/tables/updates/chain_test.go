@@ -93,10 +93,10 @@ func TestDeleteChain1(t *testing.T) {
 	var startTs1 types.TS
 	collected, err = chain.CollectDeletesLocked(MockTxnWithStartTS(startTs1), nil)
 	assert.NoError(t, err)
-	assert.Nil(t, collected)
+	assert.True(t, collected.IsEmpty())
 	collected, err = chain.CollectDeletesLocked(MockTxnWithStartTS(types.NextGlobalTsForTest()), nil)
 	assert.NoError(t, err)
-	assert.Nil(t, collected)
+	assert.True(t, collected.IsEmpty())
 
 	commitTxn(txn1)
 	assert.Nil(t, n1.PrepareCommit())
@@ -106,7 +106,7 @@ func TestDeleteChain1(t *testing.T) {
 	var startTs2 types.TS
 	collected, err = chain.CollectDeletesLocked(MockTxnWithStartTS(startTs2), nil)
 	assert.NoError(t, err)
-	assert.Nil(t, collected)
+	assert.True(t, collected.IsEmpty())
 	collected, err = chain.CollectDeletesLocked(MockTxnWithStartTS(types.NextGlobalTsForTest()), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 10, collected.GetCardinality())
@@ -196,7 +196,7 @@ func TestDeleteChain2(t *testing.T) {
 	assert.Equal(t, 4, mask.GetCardinality())
 	mask, err = chain.CollectDeletesLocked(MockTxnWithStartTS(txn1.GetCommitTS().Prev()), nil)
 	assert.NoError(t, err)
-	assert.Nil(t, mask)
+	assert.True(t, mask.IsEmpty())
 
 	var startTs1 types.TS
 	mask, err = chain.CollectDeletesInRange(startTs1, txn3.GetCommitTS(), nil)

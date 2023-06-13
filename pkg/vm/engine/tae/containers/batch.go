@@ -157,7 +157,7 @@ func (bat *Batch) WindowDeletes(offset, length int, deep bool) *nulls.Bitmap {
 	start := offset
 	end := offset + length
 	if end > bat.Length() {
-		panic(fmt.Errorf("out of range: %d, %d", offset, length))
+		panic(fmt.Sprintf("out of range: %d, %d", offset, length))
 	}
 	if start == 0 && end == bat.Length() && !deep {
 		return bat.Deletes
