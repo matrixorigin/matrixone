@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"io"
 	"testing"
 
@@ -25,8 +26,9 @@ func TestProfile(t *testing.T) {
 	stop := FSProfileHandler.StartProfile(io.Discard)
 	defer stop()
 	testFileService(t, func(name string) FileService {
+		ctx := context.Background()
 		dir := t.TempDir()
-		fs, err := NewLocalFS(name, dir, DisabledCacheConfig, nil)
+		fs, err := NewLocalFS(ctx, name, dir, DisabledCacheConfig, nil)
 		assert.Nil(t, err)
 		return fs
 	})

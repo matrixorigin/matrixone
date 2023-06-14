@@ -138,9 +138,10 @@ const (
 
 func TestTable(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer c.Close()
 	defer mgr.Stop()
@@ -184,9 +185,10 @@ func TestTable(t *testing.T) {
 
 func TestAppend(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer c.Close()
 	defer mgr.Stop()
@@ -286,9 +288,10 @@ func TestIndex(t *testing.T) {
 
 func TestLoad(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer c.Close()
 	defer mgr.Stop()
@@ -318,9 +321,10 @@ func TestLoad(t *testing.T) {
 
 func TestNodeCommand(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer c.Close()
 	defer mgr.Stop()
@@ -415,12 +419,12 @@ func TestTxnManager1(t *testing.T) {
 	assert.Equal(t, expected, seqs)
 }
 
-func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
+func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
 	c := catalog.MockCatalog(nil)
 	driver := wal.NewDriverWithBatchStore(context.Background(), dir, "store", nil)
 	indexCache := model.NewSimpleLRU(int64(common.G))
 	serviceDir := path.Join(dir, "data")
-	service := objectio.TmpNewFileservice(path.Join(dir, "data"))
+	service := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)
 	factory := tables.NewDataFactory(fs, indexCache, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, nil, indexCache, factory, 0),
@@ -436,9 +440,10 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 // 5. Txn3 commit
 func TestTransaction1(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer c.Close()
 	defer mgr.Stop()
@@ -481,9 +486,10 @@ func TestTransaction1(t *testing.T) {
 
 func TestTransaction2(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer c.Close()
 	defer mgr.Stop()
@@ -532,9 +538,10 @@ func TestTransaction2(t *testing.T) {
 
 func TestTransaction3(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer mgr.Stop()
 	defer c.Close()
@@ -569,9 +576,10 @@ func TestTransaction3(t *testing.T) {
 
 func TestSegment1(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer mgr.Stop()
 	defer c.Close()
@@ -645,9 +653,10 @@ func TestSegment1(t *testing.T) {
 
 func TestSegment2(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer mgr.Stop()
 	defer c.Close()
@@ -677,9 +686,10 @@ func TestSegment2(t *testing.T) {
 
 func TestBlock1(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer mgr.Stop()
 	defer c.Close()
@@ -725,9 +735,10 @@ func TestBlock1(t *testing.T) {
 
 func TestDedup1(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
+	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
 	defer c.Close()
 	defer mgr.Stop()

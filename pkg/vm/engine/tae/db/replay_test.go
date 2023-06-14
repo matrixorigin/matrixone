@@ -36,8 +36,10 @@ import (
 
 func TestReplayCatalog1(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	tae := initDB(ctx, t, nil)
 	schemas := make([]*catalog.Schema, 4)
 	for i := range schemas {
 		schemas[i] = catalog.MockSchema(2, 0)
@@ -98,7 +100,7 @@ func TestReplayCatalog1(t *testing.T) {
 	t.Logf("GetCheckpointed: %d", tae.Scheduler.GetCheckpointedLSN())
 	tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	defer tae2.Close()
 
@@ -114,7 +116,9 @@ func TestReplayCatalog1(t *testing.T) {
 func TestReplayCatalog2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
@@ -176,7 +180,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.NoError(t, err)
 	tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	defer tae2.Close()
 
@@ -192,7 +196,9 @@ func TestReplayCatalog2(t *testing.T) {
 func TestReplayCatalog3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
@@ -260,7 +266,7 @@ func TestReplayCatalog3(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	defer tae2.Close()
 
@@ -278,7 +284,9 @@ func TestReplayCatalog3(t *testing.T) {
 func TestReplay1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
@@ -300,7 +308,7 @@ func TestReplay1(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	c := tae2.Catalog
 	t.Log(c.SimplePPString(common.PPL1))
@@ -342,7 +350,7 @@ func TestReplay1(t *testing.T) {
 	c.Close()
 	tae2.Close()
 
-	tae3, err := Open(tae.Dir, nil)
+	tae3, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	c3 := tae3.Catalog
 	t.Log(c3.SimplePPString(common.PPL1))
@@ -382,7 +390,9 @@ func TestReplay1(t *testing.T) {
 func TestReplay2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
@@ -435,7 +445,7 @@ func TestReplay2(t *testing.T) {
 	tae.Close()
 	//prevTs := tae.TxnMgr.TsAlloc.Get()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
 
@@ -479,7 +489,7 @@ func TestReplay2(t *testing.T) {
 	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
 	tae2.Close()
 
-	tae3, err := Open(tae.Dir, nil)
+	tae3, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 	t.Log(tae3.Catalog.SimplePPString(common.PPL1))
 
@@ -502,7 +512,7 @@ func TestReplay2(t *testing.T) {
 
 	tae3.Close()
 
-	tae4, err := Open(tae.Dir, nil)
+	tae4, err := Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 	tae4.Close()
 }
@@ -517,7 +527,9 @@ func TestReplay2(t *testing.T) {
 func TestReplay3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := newTestEngine(t, nil)
+	ctx := context.Background()
+
+	tae := newTestEngine(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
@@ -567,7 +579,7 @@ func TestReplay3(t *testing.T) {
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel := tae.getRelation()
 	assert.Equal(t, uint64(1), rel.GetMeta().(*catalog.TableEntry).GetRows())
@@ -592,7 +604,9 @@ func TestReplay3(t *testing.T) {
 func TestReplayTableRows(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
@@ -635,7 +649,7 @@ func TestReplayTableRows(t *testing.T) {
 
 	tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 
 	txn, err = tae2.StartTxn(nil)
@@ -650,7 +664,7 @@ func TestReplayTableRows(t *testing.T) {
 	err = tae2.Close()
 	assert.Nil(t, err)
 
-	tae3, err := Open(tae.Dir, nil)
+	tae3, err := Open(ctx, tae.Dir, nil)
 	assert.Nil(t, err)
 
 	txn, err = tae3.StartTxn(nil)
@@ -713,8 +727,10 @@ func TestReplayTableRows(t *testing.T) {
 func TestReplay4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
@@ -730,7 +746,7 @@ func TestReplay4(t *testing.T) {
 
 	_ = tae.Close()
 
-	tae2, err := Open(tae.Dir, nil)
+	tae2, err := Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae2, schema.Name)
@@ -767,7 +783,7 @@ func TestReplay4(t *testing.T) {
 
 	tae2.Close()
 
-	tae3, err := Open(tae.Dir, nil)
+	tae3, err := Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 	defer tae3.Close()
 }
@@ -776,8 +792,10 @@ func TestReplay4(t *testing.T) {
 func TestReplay5(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
@@ -792,7 +810,7 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	_ = tae.Close()
-	tae, err := Open(tae.Dir, nil)
+	tae, err := Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -806,7 +824,7 @@ func TestReplay5(t *testing.T) {
 	t.Logf("LSN=%d", txn.GetLSN())
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, nil)
+	tae, err = Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -831,7 +849,7 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, nil)
+	tae, err = Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -852,7 +870,7 @@ func TestReplay5(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	printCheckpointStats(t, tae)
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, nil)
+	tae, err = Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -868,7 +886,7 @@ func TestReplay5(t *testing.T) {
 	mergeBlocks(t, 0, tae, defaultTestDB, schema, false)
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, nil)
+	tae, err = Open(ctx, tae.Dir, nil)
 	assert.NoError(t, err)
 	defer tae.Close()
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -896,8 +914,10 @@ func TestReplay5(t *testing.T) {
 func TestReplay6(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	schema := catalog.MockSchemaAll(18, 15)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -908,7 +928,7 @@ func TestReplay6(t *testing.T) {
 	createRelationAndAppend(t, 0, tae, defaultTestDB, schema, bats[0], true)
 
 	_ = tae.Close()
-	tae, err := Open(tae.Dir, opts)
+	tae, err := Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
@@ -922,7 +942,7 @@ func TestReplay6(t *testing.T) {
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, opts)
+	tae, err = Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -942,7 +962,7 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, err)
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, opts)
+	tae, err = Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -956,8 +976,10 @@ func TestReplay7(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	schema := catalog.MockSchemaAll(18, 14)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 5
@@ -970,7 +992,7 @@ func TestReplay7(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 
 	_ = tae.Close()
-	tae, err := Open(tae.Dir, opts)
+	tae, err := Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 	defer tae.Close()
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -982,8 +1004,10 @@ func TestReplay7(t *testing.T) {
 func TestReplay8(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 13)
 	schema.BlockMaxRows = 10
@@ -1009,7 +1033,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	_ = txn.Rollback(context.Background())
 
-	tae.restart()
+	tae.restart(ctx)
 
 	// Check the total rows by scan
 	txn, rel = tae.getRelation()
@@ -1033,7 +1057,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	_ = txn.Rollback(context.Background())
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
@@ -1051,7 +1075,7 @@ func TestReplay8(t *testing.T) {
 	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
@@ -1066,7 +1090,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	tae.compactBlocks(false)
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bat.Length(), true)
@@ -1092,7 +1116,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bat.Length()-4, true)
@@ -1116,7 +1140,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS())
 	assert.NoError(t, err)
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bat.Length()-4, true)
@@ -1135,8 +1159,10 @@ func TestReplay8(t *testing.T) {
 func TestReplay9(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 3)
 	schema.BlockMaxRows = 10
@@ -1155,7 +1181,7 @@ func TestReplay9(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 	txn, rel = tae.getRelation()
 	actv, _, err := rel.GetValueByFilter(context.Background(), filter, 2)
 	assert.NoError(t, err)
@@ -1165,7 +1191,7 @@ func TestReplay9(t *testing.T) {
 
 	tae.compactBlocks(false)
 
-	tae.restart()
+	tae.restart(ctx)
 	txn, rel = tae.getRelation()
 	_, _, err = rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
@@ -1188,7 +1214,7 @@ func TestReplay9(t *testing.T) {
 	assert.Equal(t, int16(199), actv)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	actv, _, err = rel.GetValueByFilter(context.Background(), filter2, 1)
@@ -1213,7 +1239,7 @@ func TestReplay9(t *testing.T) {
 	assert.Equal(t, uint16(88), actv)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	actv, _, err = rel.GetValueByFilter(context.Background(), filter, 2)
@@ -1231,8 +1257,10 @@ func TestReplay9(t *testing.T) {
 func TestReplay10(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 5
@@ -1261,7 +1289,7 @@ func TestReplay10(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 
 	_ = tae.Close()
-	tae, err = Open(tae.Dir, opts)
+	tae, err = Open(ctx, tae.Dir, opts)
 	assert.NoError(t, err)
 	defer tae.Close()
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -1295,8 +1323,10 @@ func TestReplay10(t *testing.T) {
 // restart
 func TestReplaySnapshots(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	schema := catalog.MockSchemaAll(1, -1)
 
 	txn, err := tae.StartTxn(nil)
@@ -1328,7 +1358,7 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae.restart()
+	tae.restart(ctx)
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	tae.Close()
@@ -1336,8 +1366,10 @@ func TestReplaySnapshots(t *testing.T) {
 
 func TestReplayDatabaseEntry(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	datypStr := "datyp"
@@ -1350,7 +1382,7 @@ func TestReplayDatabaseEntry(t *testing.T) {
 	dbID := db.GetID()
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 	t.Log(tae.Catalog.SimplePPString(3))
 	dbEntry, err := tae.Catalog.GetDatabaseByID(dbID)
 	assert.NoError(t, err)
@@ -1360,7 +1392,7 @@ func TestReplayDatabaseEntry(t *testing.T) {
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
 	assert.NoError(t, err)
 
-	tae.restart()
+	tae.restart(ctx)
 	dbEntry, err = tae.Catalog.GetDatabaseByID(dbID)
 	assert.NoError(t, err)
 	assert.Equal(t, datypStr, dbEntry.GetDatType())
