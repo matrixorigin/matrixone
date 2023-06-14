@@ -90,6 +90,13 @@ type StatementInfo struct {
 	jsonByte, statsJsonByte []byte
 }
 
+type Key struct {
+	SessionID     [16]byte
+	StatementType string
+	Window        time.Time
+	Status        StatementInfoStatus
+}
+
 var stmtPool = sync.Pool{
 	New: func() any {
 		return &StatementInfo{}
@@ -103,6 +110,10 @@ func NewStatementInfo() *StatementInfo {
 type Statistic struct {
 	RowsRead  int64
 	BytesScan int64
+}
+
+func (s *StatementInfo) Key(duration time.Duration) interface{} {
+	return Key{SessionID: s.SessionID, StatementType: s.StatementType, Window: s.RequestAt.Truncate(duration), Status: s.Status}
 }
 
 func (s *StatementInfo) GetName() string {
