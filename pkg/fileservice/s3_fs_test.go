@@ -91,8 +91,9 @@ func TestS3FS(t *testing.T) {
 
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func(name string) FileService {
-
+			ctx := context.Background()
 			fs, err := NewS3FS(
+				ctx,
 				"",
 				name,
 				config.Endpoint,
@@ -104,13 +105,14 @@ func TestS3FS(t *testing.T) {
 			)
 			assert.Nil(t, err)
 			fs.listMaxKeys = 5 // to test continuation
-
 			return fs
 		})
 	})
 
 	t.Run("list root", func(t *testing.T) {
+		ctx := context.Background()
 		fs, err := NewS3FS(
+			ctx,
 			"",
 			"s3",
 			config.Endpoint,
@@ -121,7 +123,6 @@ func TestS3FS(t *testing.T) {
 			true,
 		)
 		assert.Nil(t, err)
-		ctx := context.Background()
 		var counterSet, counterSet2 perfcounter.CounterSet
 		ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 		ctx = perfcounter.WithCounterSet(ctx, &counterSet2)
@@ -134,7 +135,9 @@ func TestS3FS(t *testing.T) {
 
 	t.Run("mem caching file service", func(t *testing.T) {
 		testCachingFileService(t, func() CachingFileService {
+			ctx := context.Background()
 			fs, err := NewS3FS(
+				ctx,
 				"",
 				"s3",
 				config.Endpoint,
@@ -153,7 +156,9 @@ func TestS3FS(t *testing.T) {
 
 	t.Run("disk caching file service", func(t *testing.T) {
 		testCachingFileService(t, func() CachingFileService {
+			ctx := context.Background()
 			fs, err := NewS3FS(
+				ctx,
 				"",
 				"s3",
 				config.Endpoint,
@@ -409,8 +414,9 @@ func TestS3FSMinioServer(t *testing.T) {
 	t.Run("file service", func(t *testing.T) {
 		cacheDir := t.TempDir()
 		testFileService(t, func(name string) FileService {
-
+			ctx := context.Background()
 			fs, err := NewS3FSOnMinio(
+				ctx,
 				"",
 				name,
 				endpoint,
@@ -423,7 +429,6 @@ func TestS3FSMinioServer(t *testing.T) {
 				true,
 			)
 			assert.Nil(t, err)
-
 			return fs
 		})
 	})
@@ -447,7 +452,9 @@ func BenchmarkS3FS(b *testing.B) {
 	b.ResetTimer()
 
 	benchmarkFileService(b, func() FileService {
+		ctx := context.Background()
 		fs, err := NewS3FS(
+			ctx,
 			"",
 			"s3",
 			config.Endpoint,

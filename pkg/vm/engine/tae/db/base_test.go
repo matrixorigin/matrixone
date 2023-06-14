@@ -57,9 +57,9 @@ type testEngine struct {
 	tenantID uint32 // for almost tests, userID and roleID is not important
 }
 
-func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
+func newTestEngine(ctx context.Context, t *testing.T, opts *options.Options) *testEngine {
 	blockio.Start()
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	return &testEngine{
 		DB: db,
 		t:  t,
@@ -70,10 +70,10 @@ func (e *testEngine) bindSchema(schema *catalog.Schema) { e.schema = schema }
 
 func (e *testEngine) bindTenantID(tenantID uint32) { e.tenantID = tenantID }
 
-func (e *testEngine) restart() {
+func (e *testEngine) restart(ctx context.Context) {
 	_ = e.DB.Close()
 	var err error
-	e.DB, err = Open(e.Dir, e.Opts)
+	e.DB, err = Open(ctx, e.Dir, e.Opts)
 	// only ut executes this checker
 	e.DB.DiskCleaner.AddChecker(
 		func(item any) bool {
@@ -264,9 +264,10 @@ func (e *testEngine) incrementalCheckpoint(
 	}
 	return nil
 }
-func initDB(t *testing.T, opts *options.Options) *DB {
+
+func initDB(ctx context.Context, t *testing.T, opts *options.Options) *DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	db, _ := Open(dir, opts)
+	db, _ := Open(ctx, dir, opts)
 	// only ut executes this checker
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {

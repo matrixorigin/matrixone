@@ -42,12 +42,13 @@ func TestBasicSingleShard(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// A Txn read and write will success.
 	for name, options := range testOptionsSet {
 		t.Run(name, func(t *testing.T) {
-			c, err := NewCluster(t,
+			c, err := NewCluster(ctx, t,
 				getBasicClusterOptions(options...))
 			require.NoError(t, err)
 			defer c.Stop()
@@ -71,6 +72,7 @@ func TestBasicSingleShardCannotReadUncommittedValue(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// 1. start t1
@@ -79,7 +81,7 @@ func TestBasicSingleShardCannotReadUncommittedValue(t *testing.T) {
 	// 4. t2 can not read t1's write
 	for name, options := range testOptionsSet {
 		t.Run(name, func(t *testing.T) {
-			c, err := NewCluster(t,
+			c, err := NewCluster(ctx, t,
 				getBasicClusterOptions(options...))
 			require.NoError(t, err)
 			defer c.Stop()
@@ -116,9 +118,11 @@ func TestWriteSkewIsAllowed(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
+
 	for name, options := range testOptionsSet {
 		t.Run(name, func(t *testing.T) {
-			c, err := NewCluster(t,
+			c, err := NewCluster(ctx, t,
 				getBasicClusterOptions(options...))
 			require.NoError(t, err)
 			defer c.Stop()
@@ -159,12 +163,13 @@ func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// A Txn read and write will success.
 	for name, options := range testOptionsSet {
 		t.Run(name, func(t *testing.T) {
-			c, err := NewCluster(t,
+			c, err := NewCluster(ctx, t,
 				getBasicClusterOptions(options...))
 			require.NoError(t, err)
 			defer c.Stop()
@@ -218,8 +223,9 @@ func TestSingleShardWithCreateTable(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
-	c, err := NewCluster(t,
+	c, err := NewCluster(ctx, t,
 		getBasicClusterOptions(useTAEStorage, useDistributedTAEEngine))
 	require.NoError(t, err)
 	defer c.Stop()
@@ -251,8 +257,9 @@ func TestAggTable(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
-	c, err := NewCluster(t,
+	c, err := NewCluster(ctx, t,
 		getBasicClusterOptions(useTAEStorage, useDistributedTAEEngine))
 	require.NoError(t, err)
 	defer c.Stop()

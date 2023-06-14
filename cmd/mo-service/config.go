@@ -173,7 +173,7 @@ func (c *Config) initMetaCache() {
 	}
 }
 
-func (c *Config) createFileService(defaultName string, perfCounterSet *perfcounter.CounterSet, serviceType metadata.ServiceType, nodeUUID string) (*fileservice.FileServices, error) {
+func (c *Config) createFileService(ctx context.Context, defaultName string, perfCounterSet *perfcounter.CounterSet, serviceType metadata.ServiceType, nodeUUID string) (*fileservice.FileServices, error) {
 	// create all services
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 
@@ -190,6 +190,7 @@ func (c *Config) createFileService(defaultName string, perfCounterSet *perfcount
 
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
+			ctx,
 			config,
 			[]*perfcounter.CounterSet{
 				counterSet,
