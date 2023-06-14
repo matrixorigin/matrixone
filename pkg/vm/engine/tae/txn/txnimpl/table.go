@@ -261,7 +261,27 @@ func (tbl *txnTable) recurTransferDelete(
 	return nil
 }
 
-func (tbl *txnTable) TransferDeleteNode(id *common.ID, node *deleteNode) (transferred bool, err error) {
+func (tbl *txnTable) TransferDeleteNode(
+	id *common.ID, node *deleteNode,
+) (transferred bool, err error) {
+	rows := node.DeletedRows()
+	if transferred, err = tbl.TransferDeleteRows(id, rows); err != nil {
+		return
+	}
+
+	// rollback transferred delete node. should not fail
+	if err = node.PrepareRollback(); err != nil {
+		panic(err)
+	}
+	if err = node.ApplyRollback(); err != nil {
+		panic(err)
+	}
+
+	tbl.commitTransferDeleteNode(id, node)
+	return
+}
+
+func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
@@ -291,7 +311,6 @@ func (tbl *txnTable) TransferDeleteNode(id *common.ID, node *deleteNode) (transf
 	}
 	memo[id.BlockID] = pinned
 
-	rows := node.DeletedRows()
 	// logutil.Infof("TransferDeleteNode deletenode %s", node.DeleteNode.(*updates.DeleteNode).GeneralVerboseString())
 	page := pinned.Item()
 	depth := 0
@@ -301,16 +320,6 @@ func (tbl *txnTable) TransferDeleteNode(id *common.ID, node *deleteNode) (transf
 		}
 	}
 
-	// rollback transferred delete node. should not fail
-	if err = node.PrepareRollback(); err != nil {
-		panic(err)
-	}
-	if err = node.ApplyRollback(); err != nil {
-		panic(err)
-	}
-
-	tbl.commitTransferDeleteNode(id, node)
-	transferred = true
 	return
 }
 
