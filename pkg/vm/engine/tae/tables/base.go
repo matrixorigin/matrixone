@@ -92,8 +92,8 @@ func (blk *baseBlock) PinNode() *Node {
 	return n
 }
 
-func (blk *baseBlock) GCMemoryByTS(ts types.TS) {
-	blk.mvcc.UpgradeMVCCByTS(ts)
+func (blk *baseBlock) GCInMemeoryDeletesByTS(ts types.TS) {
+	blk.mvcc.UpgradeDeleteChainByTS(ts)
 }
 
 func (blk *baseBlock) Rows() int {
@@ -232,27 +232,57 @@ func (blk *baseBlock) FillPersistedDeletes(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	view *model.BaseView) (err error) {
+	blk.fillPersistedDeletesInRange(
+		ctx,
+		types.TS{},
+		txn.GetStartTS(),
+		view)
+	return nil
+}
+
+func (blk *baseBlock) fillPersistedDeletesInRange(
+	ctx context.Context,
+	start, end types.TS,
+	view *model.BaseView) (err error) {
+	blk.foreachPersistedDeletesCommittedInRange(
+		ctx,
+		start,
+		end,
+		true,
+		func(i int, deleteBatch *containers.Batch) {
+			rowid := deleteBatch.Vecs[0].Get(i).(types.Rowid)
+			row := rowid.GetRowOffset()
+			if view.DeleteMask == nil {
+				view.DeleteMask = nulls.NewWithSize(int(row) + 1)
+			}
+			view.DeleteMask.Add(uint64(row))
+		})
+	return nil
+}
+
+func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
+	ctx context.Context,
+	start, end types.TS,
+	skipAbort bool,
+	op func(row int, deleteBatch *containers.Batch),
+) (err error) {
 	deletes, err := blk.LoadPersistedDeletes(ctx)
 	if deletes == nil || err != nil {
 		return nil
 	}
 	for i := 0; i < deletes.Length(); i++ {
-		abort := deletes.Vecs[3].Get(i).(bool)
-		if abort {
-			continue
+		if skipAbort {
+			abort := deletes.Vecs[3].Get(i).(bool)
+			if abort {
+				continue
+			}
 		}
 		commitTS := deletes.Vecs[1].Get(i).(types.TS)
-		if commitTS.Greater(txn.GetStartTS()) {
-			continue
+		if commitTS.GreaterEq(start) && commitTS.LessEq(end) {
+			op(i, deletes)
 		}
-		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
-		row := rowid.GetRowOffset()
-		if view.DeleteMask == nil {
-			view.DeleteMask = nulls.NewWithSize(int(row) + 1)
-		}
-		view.DeleteMask.Add(uint64(row))
 	}
-	return nil
+	return
 }
 
 func (blk *baseBlock) Prefetch(idxes []uint16) error {
@@ -478,13 +508,18 @@ func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool)
 	return
 }
 
-func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *model.BlockView, err error) {
+func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *model.BlockView, err error) {
 	view = model.NewBlockView()
-	blk.RLock()
+	view.DeleteMask, err = blk.inMemoryCollectDeletesInRange(startTs, endTs)
+	blk.fillPersistedDeletesInRange(ctx, startTs, endTs, view.BaseView)
+	return
+}
+
+func (blk *baseBlock) inMemoryCollectDeletesInRange(start, end types.TS) (deletes *nulls.Bitmap, err error) {
 	defer blk.RUnlock()
 	deleteChain := blk.mvcc.GetDeleteChain()
-	view.DeleteMask, err =
-		deleteChain.CollectDeletesInRange(startTs, endTs, blk.RWMutex)
+	deletes, err =
+		deleteChain.CollectDeletesInRange(start, end, blk.RWMutex)
 	return
 }
 
@@ -517,7 +552,7 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
 	blk.RLock()
-	persistedTS = blk.mvcc.GetPersistedTS()
+	persistedTS = blk.mvcc.GetDeletesPersistedTS()
 	if persistedTS.GreaterEq(end) {
 		blk.RUnlock()
 		return

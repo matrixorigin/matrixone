@@ -147,7 +147,7 @@ func (catalog *Catalog) GCMemoryByTS(ctx context.Context, ts types.TS) {
 		needGC := be.DeleteBefore(ts)
 		be.RUnlock()
 		if needGC {
-			be.GetBlockData().GCMemoryByTS(be.GetDeleteAt())
+			be.GetBlockData().GCInMemeoryDeletesByTS(be.GetDeleteAt())
 		}
 		return nil
 	}

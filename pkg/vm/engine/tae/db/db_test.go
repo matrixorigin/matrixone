@@ -600,7 +600,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
+		changes, err := dataBlock.CollectChangesInRange(context.Background(), txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
 		assert.Equal(t, 2, changes.DeleteMask.GetCardinality())
 
@@ -4242,7 +4242,7 @@ func TestCollectDelete(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	blkdata.GCMemoryByTS(p3)
+	blkdata.GCInMemeoryDeletesByTS(p3)
 
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true)
 	assert.NoError(t, err)

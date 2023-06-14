@@ -92,6 +92,8 @@ func newStore(
 	}
 }
 
+func (store *txnStore) GetContext() context.Context { return store.ctx }
+
 func (store *txnStore) IsReadonly() bool {
 	return store.writeOps.Load() == 0
 }

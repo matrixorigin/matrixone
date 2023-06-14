@@ -71,10 +71,15 @@ func (n *MVCCHandle) StringLocked() string {
 	return s
 }
 
-func (n *MVCCHandle) GetPersistedTS() types.TS {
+// ==========================================================
+// *************** All deletes related APIs *****************
+// ==========================================================
+
+func (n *MVCCHandle) GetDeletesPersistedTS() types.TS {
 	return n.persistedTS
 }
-func (n *MVCCHandle) UpgradeMVCCByTS(flushed types.TS) {
+
+func (n *MVCCHandle) UpgradeDeleteChainByTS(flushed types.TS) {
 	n.RLock()
 	if n.persistedTS.Equal(flushed) {
 		n.RUnlock()
@@ -84,15 +89,10 @@ func (n *MVCCHandle) UpgradeMVCCByTS(flushed types.TS) {
 	n.RUnlock()
 
 	n.Lock()
-	n.appends = nil
 	n.deletes = newDeletes
 	n.persistedTS = flushed
 	n.Unlock()
 }
-
-// ==========================================================
-// *************** All deletes related APIs *****************
-// ==========================================================
 
 func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, types.TS) error) {
 	n.deletesListener = l
@@ -139,14 +139,12 @@ func (n *MVCCHandle) IsDeletedLocked(
 }
 
 // it collects all deletes in the range [start, end)
-func (n *MVCCHandle) CollectDelete(
+func (n *MVCCHandle) CollectDeleteLocked(
 	start, end types.TS,
 ) (
 	rowIDVec, commitTSVec, abortVec containers.Vector,
 	aborts, deletes *nulls.Bitmap,
 ) {
-	n.RLock()
-	defer n.RUnlock()
 	if n.deletes.IsEmpty() {
 		return
 	}
