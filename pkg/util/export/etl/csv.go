@@ -30,6 +30,19 @@ import (
 
 const initedSize = mpool.MB
 
+var bufPool = sync.Pool{New: func() any {
+	return bytes.NewBuffer(make([]byte, 0, initedSize))
+}}
+
+func getBuffer() *bytes.Buffer {
+	return bufPool.Get().(*bytes.Buffer)
+}
+
+func putBuffer(buf *bytes.Buffer) {
+	bufPool.Put(buf)
+	buf.Reset()
+}
+
 var _ table.RowWriter = (*CSVWriter)(nil)
 
 type CSVWriter struct {
@@ -41,7 +54,7 @@ type CSVWriter struct {
 func NewCSVWriter(ctx context.Context, writer io.StringWriter) *CSVWriter {
 	w := &CSVWriter{
 		ctx:    ctx,
-		buf:    bytes.NewBuffer(make([]byte, 0, initedSize)),
+		buf:    getBuffer(),
 		writer: writer,
 	}
 	return w
@@ -66,7 +79,8 @@ func (w *CSVWriter) GetContent() string {
 }
 
 func (w *CSVWriter) FlushAndClose() (int, error) {
-	if len(w.buf.String()) == 0 {
+	defer putBuffer(w.buf)
+	if w.buf.Len() == 0 {
 		return 0, nil
 	}
 	n, err := w.writer.WriteString(util.UnsafeBytesToString(w.buf.Bytes()))
