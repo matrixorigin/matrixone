@@ -38,7 +38,9 @@ import (
 func TestTables1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 	txn, _ := db.StartTxn(nil)
 	database, _ := txn.CreateDatabase("db", "", "")
@@ -101,7 +103,9 @@ func TestTables1(t *testing.T) {
 func TestTxn1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchema(3, 2)
@@ -187,7 +191,9 @@ func TestTxn1(t *testing.T) {
 func TestTxn2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	var wg sync.WaitGroup
@@ -211,7 +217,9 @@ func TestTxn2(t *testing.T) {
 func TestTxn4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -238,7 +246,9 @@ func TestTxn4(t *testing.T) {
 func TestTxn5(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -309,7 +319,9 @@ func TestTxn5(t *testing.T) {
 func TestTxn6(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -425,8 +437,10 @@ func TestTxn6(t *testing.T) {
 func TestMergeBlocks1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := new(options.Options)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 5
@@ -529,8 +543,10 @@ func TestMergeBlocks1(t *testing.T) {
 func TestMergeBlocks2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
@@ -576,7 +592,9 @@ func TestMergeBlocks2(t *testing.T) {
 func TestCompaction1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
@@ -636,8 +654,10 @@ func TestCompaction1(t *testing.T) {
 func TestCompaction2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(4, 2)
