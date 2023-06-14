@@ -15,8 +15,8 @@
 package tables
 
 import (
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -92,10 +92,10 @@ var dedupAlkFunctions = map[types.T]any{
 	types.T_text:      dedupABlkBytesFunc,
 }
 
-func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *roaring.Bitmap, def *catalog.ColDef) {
+func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *nulls.Bitmap, def *catalog.ColDef) {
 	vec = args[0].(containers.Vector).GetDownstreamVector()
 	if args[1] != nil {
-		mask = args[1].(*roaring.Bitmap)
+		mask = args[1].(*nulls.Bitmap)
 	}
 	if args[2] != nil {
 		def = args[2].(*catalog.ColDef)
@@ -104,10 +104,13 @@ func parseNADedeupArgs(args ...any) (vec *vector.Vector, mask *roaring.Bitmap, d
 }
 
 func parseADedeupArgs(args ...any) (
-	vec containers.Vector, mask *roaring.Bitmap, def *catalog.ColDef, scan func() (containers.Vector, error), txn txnif.TxnReader) {
+	vec containers.Vector, mask *nulls.Bitmap, def *catalog.ColDef,
+	scan func() (containers.Vector, error),
+	txn txnif.TxnReader,
+) {
 	vec = args[0].(containers.Vector)
 	if args[1] != nil {
-		mask = args[1].(*roaring.Bitmap)
+		mask = args[1].(*nulls.Bitmap)
 	}
 	if args[2] != nil {
 		def = args[2].(*catalog.ColDef)
@@ -190,7 +193,7 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 			vec.Length(),
 			func(v2 []byte, _ bool, row int) (err error) {
 				// logutil.Infof("row=%d,v1=%v,v2=%v", row, v1, v2)
-				if mask != nil && mask.ContainsInt(row) {
+				if mask.Contains(uint64(row)) {
 					return
 				}
 				if compute.CompareBytes(v1, v2) != 0 {
@@ -227,7 +230,7 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 				0,
 				vec.Length(),
 				func(v2 T, _ bool, row int) (err error) {
-					if mask != nil && mask.ContainsInt(row) {
+					if mask.Contains(uint64(row)) {
 						return
 					}
 					if comp(v1, v2) != 0 {
@@ -252,7 +255,7 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int64) func(args .
 func dedupNABlkClosure(
 	vec containers.Vector,
 	txn txnif.TxnReader,
-	mask *roaring.Bitmap,
+	mask *nulls.Bitmap,
 	def *catalog.ColDef) func(any, bool, int) error {
 	return func(v any, _ bool, _ int) (err error) {
 		if _, existed := compute.GetOffsetByVal(vec, v, mask); existed {
@@ -268,10 +271,10 @@ func dedupABlkClosureFactory(
 ) func(
 	containers.Vector,
 	txnif.TxnReader,
-	*roaring.Bitmap,
+	*nulls.Bitmap,
 	*catalog.ColDef,
 ) func(any, bool, int) error {
-	return func(vec containers.Vector, txn txnif.TxnReader, mask *roaring.Bitmap, def *catalog.ColDef) func(any, bool, int) error {
+	return func(vec containers.Vector, txn txnif.TxnReader, mask *nulls.Bitmap, def *catalog.ColDef) func(any, bool, int) error {
 		return func(v1 any, _ bool, _ int) (err error) {
 			var tsVec containers.Vector
 			defer func() {
@@ -282,7 +285,7 @@ func dedupABlkClosureFactory(
 			}()
 			return vec.Foreach(func(v2 any, _ bool, row int) (err error) {
 				// logutil.Infof("%v, %v, %d", v1, v2, row)
-				if mask != nil && mask.ContainsInt(row) {
+				if mask.Contains(uint64(row)) {
 					return
 				}
 				if compute.CompareGeneric(v1, v2, vec.GetType().Oid) != 0 {
