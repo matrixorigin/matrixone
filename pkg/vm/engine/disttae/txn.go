@@ -483,11 +483,13 @@ func (txn *Transaction) newTableWriteEntry(id uint64) {
 }
 
 func (txn *Transaction) mergeTableWrites(proc *process.Process) error {
+	var end int
+
+	if txn.statementID > 0 {
+		end = txn.statements[txn.statementID-1]
+	}
 	for k, tes := range txn.tableWrites.tableEntries {
 		for i, te := range tes {
-			if len(te.entries) == 0 {
-				continue
-			}
 			if len(te.entries) <= 1 {
 				continue
 			}
@@ -503,6 +505,9 @@ func (txn *Transaction) mergeTableWrites(proc *process.Process) error {
 				if bat.Length() > int(options.DefaultBlockMaxRows) {
 					bat = te.entries[i]
 					continue
+				}
+				if te.offsets[i] >= end {
+					break
 				}
 				if txn.writes[te.offsets[i]].bat != nil {
 					for j, vec := range bat.Vecs {
