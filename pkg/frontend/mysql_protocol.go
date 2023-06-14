@@ -512,10 +512,8 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 		return moerr.NewInternalError(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
 	}
 
-	// todo : add pool
 	if stmt.params == nil {
-		typ := types.T_varchar.ToType()
-		stmt.params = vector.NewVec(typ)
+		stmt.params = proc.GetVector(types.T_text.ToType())
 		for i := 0; i < numParams; i++ {
 			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
 			if err != nil {
@@ -541,10 +539,8 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	}
 	numParams := len(dcPrepare.Prepare.ParamTypes)
 
-	// todo : add pool
 	if stmt.params == nil {
-		typ := types.T_varchar.ToType()
-		stmt.params = vector.NewVec(typ)
+		stmt.params = proc.GetVector(types.T_text.ToType())
 		for i := 0; i < numParams; i++ {
 			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
 			if err != nil {

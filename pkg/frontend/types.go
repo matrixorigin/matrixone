@@ -195,6 +195,9 @@ type outputPool interface {
 }
 
 func (prepareStmt *PrepareStmt) Close() {
+	if prepareStmt.params != nil {
+		prepareStmt.params.Free(prepareStmt.proc.Mp())
+	}
 	if prepareStmt.InsertBat != nil {
 		prepareStmt.InsertBat.Clean(prepareStmt.proc.Mp())
 		prepareStmt.InsertBat = nil

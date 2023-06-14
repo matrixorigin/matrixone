@@ -90,6 +90,7 @@ var analPool = sync.Pool{
 func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement, isInternal bool, cnLabel map[string]string) *Compile {
 	c := pool.Get().(*Compile)
+	c.clear()
 	c.e = e
 	c.db = db
 	c.ctx = ctx
@@ -102,23 +103,52 @@ func New(addr, db string, sql string, tenant, uid string, ctx context.Context,
 	c.stepRegs = make(map[int32][]*process.WaitRegister)
 	c.isInternal = isInternal
 	c.cnLabel = cnLabel
-	/*
-		return &Compile{
-			e:          e,
-			db:         db,
-			ctx:        ctx,
-			tenant:     tenant,
-			uid:        uid,
-			sql:        sql,
-			proc:       proc,
-			stmt:       stmt,
-			addr:       addr,
-			stepRegs:   make(map[int32][]*process.WaitRegister),
-			isInternal: isInternal,
-			cnLabel:    cnLabel,
-		}
-	*/
 	return c
+
+	// return &Compile{
+	// 	e:          e,
+	// 	db:         db,
+	// 	ctx:        ctx,
+	// 	tenant:     tenant,
+	// 	uid:        uid,
+	// 	sql:        sql,
+	// 	proc:       proc,
+	// 	stmt:       stmt,
+	// 	addr:       addr,
+	// 	stepRegs:   make(map[int32][]*process.WaitRegister),
+	// 	isInternal: isInternal,
+	// 	cnLabel:    cnLabel,
+	// }
+
+}
+
+func (c *Compile) clear() {
+	c.scope = c.scope[:0]
+	c.pn = nil
+	c.u = nil
+	c.fill = nil
+	c.affectRows.Store(0)
+	c.addr = ""
+	c.db = ""
+	c.tenant = ""
+	c.uid = ""
+	c.sql = ""
+	c.anal = nil
+	c.e = nil
+	c.ctx = nil
+	c.proc = nil
+	c.cnList = nil
+	c.stmt = nil
+	for k := range c.stepRegs {
+		delete(c.stepRegs, k)
+	}
+	for k := range c.runtimeFilterReceiverMap {
+		delete(c.runtimeFilterReceiverMap, k)
+	}
+	c.isInternal = false
+	for k := range c.cnLabel {
+		delete(c.cnLabel, k)
+	}
 }
 
 // helper function to judge if init temporary engine is needed

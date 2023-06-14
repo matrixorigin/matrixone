@@ -477,6 +477,8 @@ func (txn *Transaction) addTableWrite(id uint64, bat *batch.Batch, offset int) {
 }
 
 func (txn *Transaction) newTableWriteEntry(id uint64) {
+	txn.Lock()
+	defer txn.Unlock()
 	txn.tableWrites.tableEntries[id] = append(txn.tableWrites.tableEntries[id], tableEntry{})
 }
 
