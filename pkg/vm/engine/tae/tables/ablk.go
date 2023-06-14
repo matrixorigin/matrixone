@@ -174,7 +174,7 @@ func (blk *ablock) resolveColumnDatas(
 // here we assume that the ts is greater equal than the block's
 // create ts and less than the block's delete ts
 // it is a coarse-grained check
-func (blk *ablock) DataCommittedBefore(ts types.TS) bool {
+func (blk *ablock) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	// if the block is not frozen, always return false
 	if !blk.IsAppendFrozen() {
 		return false
