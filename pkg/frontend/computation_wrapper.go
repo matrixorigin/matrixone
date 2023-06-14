@@ -244,7 +244,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 			if len(executePlan.Args) != numParams {
 				return nil, moerr.NewInvalidInput(requestCtx, "Incorrect arguments to EXECUTE")
 			}
-			params := cwft.proc.GetVector(types.T_varchar.ToType())
+			params := cwft.proc.GetVector(types.T_text.ToType())
 			for _, arg := range executePlan.Args {
 				exprImpl := arg.Expr.(*plan.Expr_V)
 				param, err := cwft.proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)

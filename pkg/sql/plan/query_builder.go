@@ -1523,6 +1523,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		for i := 0; i < colCount; i++ {
 			vec := proc.GetVector(types.T_text.ToType())
 			bat.Vecs[i] = vec
+			rowSetData.Cols[i] = &plan.ColData{}
 			for j := 0; j < rowCount; j++ {
 				if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
 					bat.Clean(proc.Mp())

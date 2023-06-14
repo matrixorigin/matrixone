@@ -1950,7 +1950,7 @@ func checkPlanIsInsertValues(proc *process.Process,
 	var err error
 
 	qry := p.GetQuery()
-	if qry != nil && qry.StmtType == plan.Query_INSERT {
+	if qry != nil {
 		for _, node := range qry.Nodes {
 			if node.NodeType == plan.Node_VALUE_SCAN && node.RowsetData != nil {
 				exprList := make([][]colexec.ExpressionExecutor, len(node.RowsetData.Cols))

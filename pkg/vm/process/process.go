@@ -75,6 +75,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.vp = p.vp
 	proc.mp = p.Mp()
 	proc.prepareBatch = p.prepareBatch
+	proc.prepareExprList = p.prepareExprList
 	proc.Lim = p.Lim
 	proc.TxnClient = p.TxnClient
 	proc.TxnOperator = p.TxnOperator
