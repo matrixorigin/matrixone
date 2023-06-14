@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -62,6 +63,9 @@ type NodeT interface {
 	Rows() uint32
 
 	GetRowByFilter(ctx context.Context, txn txnif.TxnReader, filter *handle.Filter) (row uint32, err error)
+	CollectAppendInRange(
+		start, end types.TS, withAborted bool,
+	) (batWithVer *containers.BatchWithVersion, err error)
 }
 
 type Node struct {

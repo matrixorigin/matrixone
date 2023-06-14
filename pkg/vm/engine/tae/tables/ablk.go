@@ -410,74 +410,12 @@ func (blk *ablock) BatchDedup(
 	}
 }
 
-func (blk *ablock) persistedCollectAppendInRange(
-	pnode *persistedNode,
-	start, end types.TS,
-	withAborted bool) (bat *containers.BatchWithVersion, err error) {
-	// logtail should have sent metaloc
-	return nil, nil
-	// blk.RLock()
-	// minRow, maxRow, commitTSVec, abortVec, abortedMap :=
-	// 	blk.mvcc.CollectAppendLocked(start, end)
-	// blk.RUnlock()
-	// if bat, err = pnode.GetDataWindow(minRow, maxRow); err != nil {
-	// 	return
-	// }
-	// bat.AddVector(catalog.AttrCommitTs, commitTSVec)
-	// if withAborted {
-	// 	bat.AddVector(catalog.AttrAborted, abortVec)
-	// } else {
-	// 	bat.Deletes = abortedMap
-	// 	bat.Compact()
-	// }
-	// return
-}
-
-func (blk *ablock) inMemoryCollectAppendInRange(
-	mnode *memoryNode,
-	start, end types.TS,
-	withAborted bool) (batWithVer *containers.BatchWithVersion, err error) {
-	blk.RLock()
-	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
-		blk.mvcc.CollectAppendLocked(start, end)
-	batWithVer, err = mnode.GetDataWindowOnWriteSchema(minRow, maxRow)
-	if err != nil {
-		blk.RUnlock()
-		return nil, err
-	}
-	blk.RUnlock()
-
-	batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_COMMITTS)
-	batWithVer.AddVector(catalog.AttrCommitTs, commitTSVec)
-	if withAborted {
-		batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_ABORT)
-		batWithVer.AddVector(catalog.AttrAborted, abortVec)
-	} else {
-		batWithVer.Deletes = abortedMap
-		batWithVer.Compact()
-	}
-
-	return
-}
-
 func (blk *ablock) CollectAppendInRange(
 	start, end types.TS,
 	withAborted bool) (*containers.BatchWithVersion, error) {
 	node := blk.PinNode()
 	defer node.Unref()
-	if !node.IsPersisted() {
-		return blk.inMemoryCollectAppendInRange(
-			node.MustMNode(),
-			start,
-			end,
-			withAborted)
-	} else {
-		return blk.persistedCollectAppendInRange(
-			node.MustPNode(),
-			start,
-			end,
-			withAborted)
-	}
+	return node.CollectAppendInRange(start, end, withAborted)
 }
 
 func (blk *ablock) estimateRawScore() (score int, dropped bool) {

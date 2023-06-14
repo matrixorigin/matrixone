@@ -20,6 +20,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -370,5 +371,31 @@ func (node *memoryNode) checkConflictAandVisibility(
 	} else {
 		visible = n.IsVisible(txn)
 	}
+	return
+}
+
+func (node *memoryNode) CollectAppendInRange(
+	start, end types.TS, withAborted bool,
+) (batWithVer *containers.BatchWithVersion, err error) {
+	node.block.RLock()
+	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
+		node.block.mvcc.CollectAppendLocked(start, end)
+	batWithVer, err = node.GetDataWindowOnWriteSchema(minRow, maxRow)
+	if err != nil {
+		node.block.RUnlock()
+		return nil, err
+	}
+	node.block.RUnlock()
+
+	batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_COMMITTS)
+	batWithVer.AddVector(catalog.AttrCommitTs, commitTSVec)
+	if withAborted {
+		batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_ABORT)
+		batWithVer.AddVector(catalog.AttrAborted, abortVec)
+	} else {
+		batWithVer.Deletes = abortedMap
+		batWithVer.Compact()
+	}
+
 	return
 }
