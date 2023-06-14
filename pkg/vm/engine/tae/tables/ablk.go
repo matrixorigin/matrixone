@@ -370,109 +370,6 @@ func (blk *ablock) GetByFilter(
 	return node.GetRowByFilter(ctx, txn, filter)
 }
 
-func (blk *ablock) checkConflictAandVisibility(
-	node txnif.BaseMVCCNode,
-	isCommitting bool,
-	txn txnif.TxnReader) (visible bool, err error) {
-	// if isCommitting check all nodes commit before txn.CommitTS(PrepareTS)
-	// if not isCommitting check nodes commit before txn.StartTS
-	if isCommitting {
-		needWait := node.IsCommitting()
-		if needWait {
-			txn := node.GetTxn()
-			blk.mvcc.RUnlock()
-			txn.GetTxnState(true)
-			blk.mvcc.RLock()
-		}
-	} else {
-		needWait, txn := node.NeedWaitCommitting(txn.GetStartTS())
-		if needWait {
-			blk.mvcc.RUnlock()
-			txn.GetTxnState(true)
-			blk.mvcc.RLock()
-		}
-	}
-	if err = node.CheckConflict(txn); err != nil {
-		return
-	}
-	if isCommitting {
-		visible = node.IsCommitted()
-	} else {
-		visible = node.IsVisible(txn)
-	}
-	return
-}
-
-func (blk *ablock) checkConflictAndDupClosure(
-	txn txnif.TxnReader,
-	isCommitting bool,
-	dupRow *uint32,
-	rowmask *roaring.Bitmap,
-) func(row uint32) error {
-	return func(row uint32) (err error) {
-		if rowmask != nil && rowmask.Contains(row) {
-			return nil
-		}
-		appendnode := blk.mvcc.GetAppendNodeByRow(row)
-		var visible bool
-		if visible, err = blk.checkConflictAandVisibility(
-			appendnode,
-			isCommitting,
-			txn); err != nil {
-			return
-		}
-		if appendnode.IsAborted() || !visible {
-			return nil
-		}
-		deleteNode := blk.mvcc.GetDeleteNodeByRow(row)
-		if deleteNode == nil {
-			*dupRow = row
-			return moerr.GetOkExpectedDup()
-		}
-
-		if visible, err = blk.checkConflictAandVisibility(
-			deleteNode,
-			isCommitting,
-			txn); err != nil {
-			return
-		}
-		if deleteNode.IsAborted() || !visible {
-			return moerr.GetOkExpectedDup()
-		}
-		return nil
-	}
-}
-
-func (blk *ablock) inMemoryBatchDedup(
-	ctx context.Context,
-	mnode *memoryNode,
-	txn txnif.TxnReader,
-	isCommitting bool,
-	keys containers.Vector,
-	keysZM index.ZM,
-	rowmask *roaring.Bitmap,
-	bf objectio.BloomFilter,
-) (err error) {
-	var dupRow uint32
-	blk.RLock()
-	defer blk.RUnlock()
-	_, err = mnode.BatchDedup(
-		ctx,
-		keys,
-		keysZM,
-		blk.checkConflictAndDupClosure(txn, isCommitting, &dupRow, rowmask),
-		bf)
-
-	// definitely no duplicate
-	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
-		return
-	}
-	def := mnode.writeSchema.GetSingleSortKey()
-	v, isNull := mnode.GetValueByRow(mnode.writeSchema, int(dupRow), def.Idx)
-	entry := common.TypeStringValue(*keys.GetType(), v, isNull)
-	return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
-}
-
 func (blk *ablock) BatchDedup(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
@@ -490,7 +387,15 @@ func (blk *ablock) BatchDedup(
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		return blk.inMemoryBatchDedup(ctx, node.MustMNode(), txn, precommit, keys, keysZM, rowmask, bf)
+		return node.BatchDedup(
+			ctx,
+			txn,
+			precommit,
+			keys,
+			keysZM,
+			rowmask,
+			bf,
+		)
 	} else {
 		return blk.PersistedBatchDedup(
 			ctx,

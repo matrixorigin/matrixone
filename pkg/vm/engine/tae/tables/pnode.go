@@ -56,11 +56,13 @@ func (node *persistedNode) Rows() uint32 {
 
 func (node *persistedNode) BatchDedup(
 	ctx context.Context,
+	txn txnif.TxnReader,
+	precommit bool,
 	keys containers.Vector,
 	keysZM index.ZM,
-	skipFn func(row uint32) error,
+	rowmask *roaring.Bitmap,
 	bf objectio.BloomFilter,
-) (sels *roaring.Bitmap, err error) {
+) (err error) {
 	panic("should not be called")
 }
 

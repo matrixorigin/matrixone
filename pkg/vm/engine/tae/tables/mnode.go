@@ -83,7 +83,7 @@ func (node *memoryNode) close() {
 
 func (node *memoryNode) IsPersisted() bool { return false }
 
-func (node *memoryNode) BatchDedup(
+func (node *memoryNode) doBatchDedup(
 	ctx context.Context,
 	keys containers.Vector,
 	keysZM index.ZM,
@@ -268,4 +268,107 @@ func (node *memoryNode) GetRowByFilter(
 		}
 	}
 	return 0, moerr.NewNotFoundNoCtx()
+}
+
+func (node *memoryNode) BatchDedup(
+	ctx context.Context,
+	txn txnif.TxnReader,
+	isCommitting bool,
+	keys containers.Vector,
+	keysZM index.ZM,
+	rowmask *roaring.Bitmap,
+	bf objectio.BloomFilter,
+) (err error) {
+	var dupRow uint32
+	node.block.RLock()
+	defer node.block.RUnlock()
+	_, err = node.doBatchDedup(
+		ctx,
+		keys,
+		keysZM,
+		node.checkConflictAndDupClosure(txn, isCommitting, &dupRow, rowmask),
+		bf)
+
+	// definitely no duplicate
+	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+		return
+	}
+	def := node.writeSchema.GetSingleSortKey()
+	v, isNull := node.GetValueByRow(node.writeSchema, int(dupRow), def.Idx)
+	entry := common.TypeStringValue(*keys.GetType(), v, isNull)
+	return moerr.NewDuplicateEntryNoCtx(entry, def.Name)
+}
+
+func (node *memoryNode) checkConflictAndDupClosure(
+	txn txnif.TxnReader,
+	isCommitting bool,
+	dupRow *uint32,
+	rowmask *roaring.Bitmap,
+) func(row uint32) error {
+	return func(row uint32) (err error) {
+		if rowmask != nil && rowmask.Contains(row) {
+			return nil
+		}
+		appendnode := node.block.mvcc.GetAppendNodeByRow(row)
+		var visible bool
+		if visible, err = node.checkConflictAandVisibility(
+			appendnode,
+			isCommitting,
+			txn); err != nil {
+			return
+		}
+		if appendnode.IsAborted() || !visible {
+			return nil
+		}
+		deleteNode := node.block.mvcc.GetDeleteNodeByRow(row)
+		if deleteNode == nil {
+			*dupRow = row
+			return moerr.GetOkExpectedDup()
+		}
+
+		if visible, err = node.checkConflictAandVisibility(
+			deleteNode,
+			isCommitting,
+			txn); err != nil {
+			return
+		}
+		if deleteNode.IsAborted() || !visible {
+			return moerr.GetOkExpectedDup()
+		}
+		return nil
+	}
+}
+
+func (node *memoryNode) checkConflictAandVisibility(
+	n txnif.BaseMVCCNode,
+	isCommitting bool,
+	txn txnif.TxnReader,
+) (visible bool, err error) {
+	// if isCommitting check all nodes commit before txn.CommitTS(PrepareTS)
+	// if not isCommitting check nodes commit before txn.StartTS
+	if isCommitting {
+		needWait := n.IsCommitting()
+		if needWait {
+			txn := n.GetTxn()
+			node.block.mvcc.RUnlock()
+			txn.GetTxnState(true)
+			node.block.mvcc.RLock()
+		}
+	} else {
+		needWait, txn := n.NeedWaitCommitting(txn.GetStartTS())
+		if needWait {
+			node.block.mvcc.RUnlock()
+			txn.GetTxnState(true)
+			node.block.mvcc.RLock()
+		}
+	}
+	if err = n.CheckConflict(txn); err != nil {
+		return
+	}
+	if isCommitting {
+		visible = n.IsCommitted()
+	} else {
+		visible = n.IsVisible(txn)
+	}
+	return
 }

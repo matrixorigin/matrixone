@@ -50,11 +50,13 @@ type NodeT interface {
 	GetRowsByKey(key any) (rows []uint32, err error)
 	BatchDedup(
 		ctx context.Context,
+		txn txnif.TxnReader,
+		isCommitting bool,
 		keys containers.Vector,
 		keysZM index.ZM,
-		skipFn func(row uint32) error,
+		rowmask *roaring.Bitmap,
 		bf objectio.BloomFilter,
-	) (sels *roaring.Bitmap, err error)
+	) (err error)
 	ContainsKey(ctx context.Context, key any) (ok bool, err error)
 
 	Rows() uint32
