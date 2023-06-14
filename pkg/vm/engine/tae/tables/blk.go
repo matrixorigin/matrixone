@@ -80,6 +80,7 @@ func (blk *block) Pin() *common.PinnedItem[*block] {
 }
 
 func (blk *block) GetColumnDataByIds(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
@@ -88,7 +89,7 @@ func (blk *block) GetColumnDataByIds(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnDatas(
-		context.Background(),
+		ctx,
 		node.MustPNode(),
 		txn,
 		schema,

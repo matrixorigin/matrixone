@@ -32,7 +32,7 @@ func TestDiskCache(t *testing.T) {
 	ctx := context.Background()
 
 	// new
-	cache, err := NewDiskCache(dir, 1024, time.Second, 1, nil)
+	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 
 	// update
@@ -110,12 +110,12 @@ func TestDiskCache(t *testing.T) {
 	testRead(cache)
 
 	// new cache instance and read
-	cache, err = NewDiskCache(dir, 1024, time.Second, 1, nil)
+	cache, err = NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 	testRead(cache)
 
 	// new cache instance and update
-	cache, err = NewDiskCache(dir, 1024, time.Second, 1, nil)
+	cache, err = NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 	testUpdate(cache)
 
@@ -128,7 +128,7 @@ func TestDiskCachePreload(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	// new
-	cache, err := NewDiskCache(dir, 1024, time.Second, 1, nil)
+	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 
 	// set content
@@ -213,7 +213,7 @@ func TestDiskCacheConcurrentSetFileContent(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	// new
-	cache, err := NewDiskCache(dir, 1024, time.Second, 1, nil)
+	cache, err := NewDiskCache(ctx, dir, 1024, time.Second, 1, nil)
 	assert.Nil(t, err)
 
 	n := 128
@@ -244,7 +244,7 @@ func TestDiskCacheEviction(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	// new
-	cache, err := NewDiskCache(dir, 3, time.Second, 1, nil)
+	cache, err := NewDiskCache(ctx, dir, 3, time.Second, 1, nil)
 	assert.Nil(t, err)
 
 	n := 128
@@ -279,7 +279,7 @@ func TestImmediatelyEviction(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	evictInterval := time.Hour * 1
-	cache, err := NewDiskCache(dir, 3, evictInterval, 0.8, nil)
+	cache, err := NewDiskCache(ctx, dir, 3, evictInterval, 0.8, nil)
 	assert.Nil(t, err)
 
 	err = cache.SetFileContent(ctx, "a", func(_ context.Context, vec *IOVector) error {
@@ -310,7 +310,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
 	evictInterval := time.Hour * 1
-	cache, err := NewDiskCache(dir, 3, evictInterval, 0.8, nil)
+	cache, err := NewDiskCache(ctx, dir, 3, evictInterval, 0.8, nil)
 	assert.Nil(t, err)
 	cache.noAutoEviction = true
 

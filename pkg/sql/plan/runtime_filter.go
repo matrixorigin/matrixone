@@ -101,7 +101,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	tag := builder.genNewTag()
+	rfTag := builder.genNewTag()
 
 	if len(probeExprs) == 1 {
 		probeNdv := getExprNdv(probeExprs[0], statsMap.NdvMap, node.Children[0], builder)
@@ -130,12 +130,12 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		}
 
 		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{
-			Tag:  tag,
+			Tag:  rfTag,
 			Expr: DeepCopyExpr(probeExprs[0]),
 		})
 
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
-			Tag: tag,
+			Tag: rfTag,
 			Expr: &plan.Expr{
 				Typ: DeepCopyType(buildExprs[0].Typ),
 				Expr: &plan.Expr_Col{
@@ -195,7 +195,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{
-		Tag: tag,
+		Tag: rfTag,
 		Expr: &plan.Expr{
 			Typ: DeepCopyType(tableDef.Cols[pkIdx].Typ),
 			Expr: &plan.Expr_Col{
@@ -223,7 +223,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 
 	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
 	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
-		Tag:  tag,
+		Tag:  rfTag,
 		Expr: buildExpr,
 	})
 }

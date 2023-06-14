@@ -104,7 +104,7 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
-func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (blk *baseBlock) Foreach(ctx context.Context, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -112,7 +112,7 @@ func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) e
 		defer blk.RUnlock()
 		return node.MustMNode().Foreach(colIdx, op, sels)
 	} else {
-		return node.MustPNode().Foreach(blk.meta.GetSchema(), colIdx, op, sels)
+		return node.MustPNode().Foreach(ctx, blk.meta.GetSchema(), colIdx, op, sels)
 	}
 }
 
@@ -296,13 +296,6 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	blk.RLock()
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
 	blk.RUnlock()
-	if view.BaseView.DeleteMask != nil {
-		for _, colIdx := range colIdxs {
-			vec := view.Columns[colIdx].GetData()
-			view.SetData(colIdx, vec.CloneWindow(0, vec.Length(), nil))
-			vec.Close()
-		}
-	}
 	return
 }
 
@@ -334,12 +327,8 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	}
 
 	blk.RLock()
-	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
-	if view.DeleteMask != nil {
-		view.SetData(vec.CloneWindow(0, vec.Length(), nil))
-		vec.Close()
-	}
+	blk.RUnlock()
 	return
 }
 
@@ -498,6 +487,7 @@ func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 }
 
 func (blk *baseBlock) CollectDeleteInRange(
+	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
 	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDelete(start, end)
@@ -507,7 +497,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	pkDef := blk.meta.GetSchema().GetPrimaryKey()
 	pkVec := containers.MakeVector(pkDef.Type)
 	pkIdx := pkDef.Idx
-	blk.Foreach(pkIdx, func(v any, isNull bool, row int) error {
+	blk.Foreach(ctx, pkIdx, func(v any, isNull bool, row int) error {
 		pkVec.Append(v, false)
 		return nil
 	}, deletes)
