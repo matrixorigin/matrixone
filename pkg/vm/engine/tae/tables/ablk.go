@@ -55,6 +55,7 @@ func newABlock(
 		node := NewNode(pnode)
 		node.Ref()
 		blk.node.Store(node)
+		blk.FreezeAppend()
 	} else {
 		mnode := newMemoryNode(blk.baseBlock)
 		node := NewNode(mnode)
