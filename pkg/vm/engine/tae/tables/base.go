@@ -104,7 +104,7 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
-func (blk *baseBlock) Foreach(ctx context.Context, colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+func (blk *baseBlock) Foreach(ctx context.Context, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
