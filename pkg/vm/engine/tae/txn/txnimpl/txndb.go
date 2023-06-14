@@ -467,7 +467,7 @@ func (db *txnDB) Freeze() (err error) {
 		}
 	}
 	for _, table := range db.tables {
-		if err = table.PrePreareTransfer(); err != nil {
+		if err = table.PrePreareTransfer(txnif.FreezePhase); err != nil {
 			return
 		}
 	}
@@ -476,7 +476,7 @@ func (db *txnDB) Freeze() (err error) {
 
 func (db *txnDB) PrePrepare() (err error) {
 	for _, table := range db.tables {
-		if err = table.PrePreareTransfer(); err != nil {
+		if err = table.PrePreareTransfer(txnif.PrePreparePhase); err != nil {
 			return
 		}
 	}

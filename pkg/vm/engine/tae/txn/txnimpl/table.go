@@ -129,9 +129,9 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) 
 	return tbl, nil
 }
 
-func (tbl *txnTable) PrePreareTransfer() (err error) {
+func (tbl *txnTable) PrePreareTransfer(phase string) (err error) {
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	return tbl.TransferDeletes(ts)
+	return tbl.TransferDeletes(ts, phase)
 }
 
 func (tbl *txnTable) TransferDeleteIntent(
@@ -169,7 +169,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 	return
 }
 
-func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
+func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 	if tbl.store.transferTable == nil {
 		return
 	}
@@ -198,7 +198,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 		// nil: transferred successfully
 		// ErrTxnRWConflict: the target block was also be compacted
 		// ErrTxnWWConflict: w-w error
-		if _, err = tbl.TransferDeleteNode(&id, node); err != nil {
+		if _, err = tbl.TransferDeleteNode(&id, node, phase); err != nil {
 			return
 		}
 	}
@@ -262,10 +262,10 @@ func (tbl *txnTable) recurTransferDelete(
 }
 
 func (tbl *txnTable) TransferDeleteNode(
-	id *common.ID, node *deleteNode,
+	id *common.ID, node *deleteNode, phase string,
 ) (transferred bool, err error) {
 	rows := node.DeletedRows()
-	if transferred, err = tbl.TransferDeleteRows(id, rows); err != nil {
+	if transferred, err = tbl.TransferDeleteRows(id, rows, phase); err != nil {
 		return
 	}
 
@@ -281,13 +281,14 @@ func (tbl *txnTable) TransferDeleteNode(
 	return
 }
 
-func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32) (transferred bool, err error) {
+func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32, phase string) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
 			common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
 			common.OperationField("transfer-deletes"),
-			common.OperandField(id.BlockString()))
+			common.OperandField(id.BlockString()),
+			common.AnyField("phase", phase))
 	})
 	defer func() {
 		common.DoIfInfoEnabled(func() {
@@ -295,6 +296,7 @@ func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32) (transferr
 				common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
 				common.OperationField("transfer-deletes"),
 				common.OperandField(id.BlockString()),
+				common.AnyField("phase", phase),
 				common.ErrorField(err))
 		})
 		for _, m := range memo {
