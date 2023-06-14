@@ -1403,6 +1403,123 @@ func opBinaryBytesBytesToFixed[Tr types.FixedSizeTExceptStrType](
 	return nil
 }
 
+func opBinaryBytesBytesToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	fn func(v1, v2 []byte) (Tr, error)) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[Tr](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[Tr](rsVec)
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 && c2 {
+		v1, null1 := p1.GetStrValue(0)
+		v2, null2 := p2.GetStrValue(0)
+		ifNull := null1 || null2
+		if ifNull {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := fn(v1, v2)
+			if err != nil {
+				return err
+			}
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	var err error
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p2.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, null2 := p2.GetStrValue(i)
+					if null2 {
+						continue
+					}
+					rss[i], err = fn(v1, v2)
+					if err != nil {
+						return err
+					}
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, _ := p2.GetStrValue(i)
+					rss[i], err = fn(v1, v2)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetStrValue(0)
+		if null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					if null1 {
+						continue
+					}
+					rss[i], err = fn(v1, v2)
+					if err != nil {
+						return err
+					}
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, _ := p1.GetStrValue(i)
+					rss[i], err = fn(v1, v2)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			v2, null2 := p2.GetStrValue(i)
+			if null1 || null2 {
+				continue
+			}
+			rss[i], err = fn(v1, v2)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		v2, _ := p2.GetStrValue(i)
+		rss[i], err = fn(v1, v2)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	arithFn func(v1, v2 string) Tr) error {
@@ -1496,6 +1613,125 @@ func opBinaryStrStrToFixed[Tr types.FixedSizeTExceptStrType](
 		v1, _ := p1.GetStrValue(i)
 		v2, _ := p2.GetStrValue(i)
 		rss[i] = arithFn(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
+	}
+	return nil
+}
+
+func opBinaryStrStrToFixedWithErrorCheck[Tr types.FixedSizeTExceptStrType](
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	fn func(v1, v2 string) (Tr, error)) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[Tr](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedCol[Tr](rsVec)
+
+	c1, c2 := parameters[0].IsConst(), parameters[1].IsConst()
+	if c1 && c2 {
+		v1, null1 := p1.GetStrValue(0)
+		v2, null2 := p2.GetStrValue(0)
+		ifNull := null1 || null2
+		if ifNull {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			r, err := fn(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
+			if err != nil {
+				return err
+			}
+			for i := uint64(0); i < uint64(length); i++ {
+				rss[i] = r
+			}
+		}
+		return nil
+	}
+
+	var err error
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			x := functionUtil.QuickBytesToStr(v1)
+			if p2.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, null2 := p2.GetStrValue(i)
+					if null2 {
+						continue
+					}
+					rss[i], err = fn(x, functionUtil.QuickBytesToStr(v2))
+					if err != nil {
+						return err
+					}
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v2, _ := p2.GetStrValue(i)
+					rss[i], err = fn(x, functionUtil.QuickBytesToStr(v2))
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	if c2 {
+		v2, null2 := p2.GetStrValue(0)
+		if null2 {
+			nulls.AddRange(rsVec.GetNulls(), 0, uint64(length))
+		} else {
+			y := functionUtil.QuickBytesToStr(v2)
+			if p1.WithAnyNullValue() {
+				nulls.Or(rsVec.GetNulls(), parameters[0].GetNulls(), rsVec.GetNulls())
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, null1 := p1.GetStrValue(i)
+					if null1 {
+						continue
+					}
+					rss[i], err = fn(functionUtil.QuickBytesToStr(v1), y)
+					if err != nil {
+						return err
+					}
+				}
+			} else {
+				for i := uint64(0); i < uint64(length); i++ {
+					v1, _ := p1.GetStrValue(i)
+					rss[i], err = fn(functionUtil.QuickBytesToStr(v1), y)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	// basic case.
+	if p1.WithAnyNullValue() || p2.WithAnyNullValue() {
+		nulls.Or(parameters[0].GetNulls(), parameters[1].GetNulls(), rsVec.GetNulls())
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetStrValue(i)
+			v2, null2 := p2.GetStrValue(i)
+			if null1 || null2 {
+				continue
+			}
+			rss[i], err = fn(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		v2, _ := p2.GetStrValue(i)
+		rss[i], err = fn(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

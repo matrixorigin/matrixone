@@ -16,11 +16,11 @@ package data
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -75,7 +75,7 @@ type Block interface {
 
 	Rows() int
 	GetColumnDataById(ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int) (*model.ColumnView, error)
-	GetColumnDataByIds(txn txnif.AsyncTxn, readSchema any, colIdxes []int) (*model.BlockView, error)
+	GetColumnDataByIds(ctx context.Context, txn txnif.AsyncTxn, readSchema any, colIdxes []int) (*model.BlockView, error)
 	Prefetch(idxes []uint16) error
 	GetMeta() any
 
@@ -102,14 +102,14 @@ type Block interface {
 
 	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
-	Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error
+	Foreach(ctx context.Context, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error
 	PPString(level common.PPLevel, depth int, prefix string) string
 
 	Init() error
 	TryUpgrade() error
 	GCMemory()
 	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.BatchWithVersion, error)
-	CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
+	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool) (*containers.Batch, error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS

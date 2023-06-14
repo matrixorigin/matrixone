@@ -57,9 +57,9 @@ type BlockReader interface {
 	ID() types.Blockid
 	String() string
 	IsUncommitted() bool
-	GetByFilter(filter *Filter) (uint32, error)
-	GetColumnDataByNames(attrs []string) (*model.BlockView, error)
-	GetColumnDataByIds(colIdxes []int) (*model.BlockView, error)
+	GetByFilter(ctx context.Context, filter *Filter) (uint32, error)
+	GetColumnDataByNames(ctx context.Context, attrs []string) (*model.BlockView, error)
+	GetColumnDataByIds(ctx context.Context, colIdxes []int) (*model.BlockView, error)
 	GetColumnDataByName(context.Context, string) (*model.ColumnView, error)
 	GetColumnDataById(context.Context, int) (*model.ColumnView, error)
 	GetMeta() any
