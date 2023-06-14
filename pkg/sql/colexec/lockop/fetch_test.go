@@ -80,7 +80,7 @@ func TestFetchInt8RowsWithFilter(t *testing.T) {
 			packer.EncodeInt8(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -120,7 +120,7 @@ func TestFetchInt16RowsWithFilter(t *testing.T) {
 			packer.EncodeInt16(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -160,7 +160,7 @@ func TestFetchInt32RowsWithFilter(t *testing.T) {
 			packer.EncodeInt32(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -200,7 +200,7 @@ func TestFetchInt64RowsWithFilter(t *testing.T) {
 			packer.EncodeInt64(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -240,7 +240,7 @@ func TestFetchUint8RowsWithFilter(t *testing.T) {
 			packer.EncodeUint8(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -280,7 +280,7 @@ func TestFetchUint16RowsWithFilter(t *testing.T) {
 			packer.EncodeUint16(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -320,7 +320,7 @@ func TestFetchUint32RowsWithFilter(t *testing.T) {
 			packer.EncodeUint32(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -360,7 +360,7 @@ func TestFetchUint64RowsWithFilter(t *testing.T) {
 			packer.EncodeUint64(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -400,7 +400,7 @@ func TestFetchFloat32RowsWithFilter(t *testing.T) {
 			packer.EncodeFloat32(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -440,7 +440,7 @@ func TestFetchFloat64RowsWithFilter(t *testing.T) {
 			packer.EncodeFloat64(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -480,7 +480,7 @@ func TestFetchDateRowsWithFilter(t *testing.T) {
 			packer.EncodeDate(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -520,7 +520,7 @@ func TestFetchTimeRowsWithFilter(t *testing.T) {
 			packer.EncodeTime(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -560,7 +560,7 @@ func TestFetchDateTimeRowsWithFilter(t *testing.T) {
 			packer.EncodeDatetime(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -600,7 +600,7 @@ func TestFetchTimestampRowsWithFilter(t *testing.T) {
 			packer.EncodeTimestamp(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -640,7 +640,7 @@ func TestFetchDecimal64RowsWithFilter(t *testing.T) {
 			packer.EncodeDecimal64(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -680,7 +680,7 @@ func TestFetchDecimal128RowsWithFilter(t *testing.T) {
 			packer.EncodeDecimal128(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -720,7 +720,7 @@ func TestFetchUUIDRowsWithFilter(t *testing.T) {
 			packer.EncodeStringType(v[:])
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -760,7 +760,7 @@ func TestFetchCharRowsWithFilter(t *testing.T) {
 			packer.EncodeStringType(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -800,7 +800,7 @@ func TestFetchVarcharRowsWithFilter(t *testing.T) {
 			packer.EncodeStringType(v)
 		},
 		getRowsFilter(1, []uint64{1, 2}),
-		[]int{0, 0, 1},
+		[]int32{0, 0, 1},
 	)
 }
 
@@ -834,7 +834,7 @@ func runFetchRowsTest[T any](
 	expectLockTableValues []T,
 	fn func(*types.Packer, T),
 	filter RowsFilter,
-	filterCols []int) {
+	filterCols []int32) {
 	runFetchRowsTestWithAppendFunc(
 		t,
 		tp,
@@ -864,7 +864,7 @@ func runFetchBytesRowsTest(
 	expectLockTableValues [][]byte,
 	fn func(*types.Packer, []byte),
 	filter RowsFilter,
-	filterCols []int) {
+	filterCols []int32) {
 	runFetchRowsTestWithAppendFunc(
 		t,
 		tp,
@@ -897,7 +897,7 @@ func runFetchRowsTestWithAppendFunc[T any](
 	fn func(*types.Packer, T),
 	appendFunc func(vec *vector.Vector, mp *mpool.MPool),
 	filter RowsFilter,
-	filterCols []int) {
+	filterCols []int32) {
 	mp := mpool.MustNew("test")
 	vec := vector.NewVec(tp)
 	appendFunc(vec, mp)
