@@ -920,18 +920,21 @@ func buildValueScan(
 			for j, r := range slt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok {
 					val := nv.OrigString()
-					if nv.ValType == tree.P_null {
+
+					switch nv.ValType {
+					case tree.P_null:
 						if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
 							bat.Clean(proc.Mp())
 							return err
 						}
-					} else {
+					default:
 						if err := vector.AppendBytes(vec, unsafe.Slice(unsafe.StringData(val), len(val)),
 							false, proc.Mp()); err != nil {
 							bat.Clean(proc.Mp())
 							return err
 						}
 					}
+
 					continue
 				}
 

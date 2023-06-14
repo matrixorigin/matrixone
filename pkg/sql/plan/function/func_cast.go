@@ -1529,7 +1529,7 @@ func floatToFixFloat[T1, T2 constraints.Float](
 }
 
 func floatNumToFixFloat[T1 constraints.Float](
-	ctx context.Context, from float64, to *vector.FunctionResult[T1]) (T1, error) {
+	ctx context.Context, from float64, to *vector.FunctionResult[T1], originStr string) (T1, error) {
 
 	pow := math.Pow10(int(to.GetType().Scale))
 	max_value := math.Pow10(int(to.GetType().Width - to.GetType().Scale))
@@ -1538,7 +1538,11 @@ func floatNumToFixFloat[T1 constraints.Float](
 	tmp := math.Round((from-math.Floor(from))*pow) / pow
 	v := math.Floor(from) + tmp
 	if v < -max_value || v > max_value {
-		return 0, moerr.NewOutOfRange(ctx, "float", "value '%v'", from)
+		if originStr == "" {
+			return 0, moerr.NewOutOfRange(ctx, "float", "value '%v'", from)
+		} else {
+			return 0, moerr.NewOutOfRange(ctx, "float", "value '%s'", originStr)
+		}
 	}
 	return T1(v), nil
 }
@@ -2986,7 +2990,7 @@ func decimal64ToFloat[T constraints.Float](
 					return err
 				}
 			} else {
-				v2, err := floatNumToFixFloat(ctx, result, to)
+				v2, err := floatNumToFixFloat(ctx, result, to, xStr)
 				if err != nil {
 					return err
 				}
@@ -3027,7 +3031,7 @@ func decimal128ToFloat[T constraints.Float](
 					return err
 				}
 			} else {
-				v2, err := floatNumToFixFloat(ctx, result, to)
+				v2, err := floatNumToFixFloat(ctx, result, to, xStr)
 				if err != nil {
 					return err
 				}
@@ -3306,14 +3310,19 @@ func strToSigned[T constraints.Signed](
 				}
 				result = T(r)
 			} else {
-				s := convertByteSliceToString(v)
-				r, err := strconv.ParseInt(
-					strings.TrimSpace(s), 10, bitSize)
+				s := strings.TrimSpace(convertByteSliceToString(v))
+				var r int64
+				var err error
+				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+					r, err = strconv.ParseInt(s[2:], 16, bitSize)
+				} else {
+					r, err = strconv.ParseInt(s, 10, bitSize)
+				}
 				if err != nil {
 					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
 					// just return the int. the old code just return the int. too much bvt result needs to update.
 					if strings.Contains(err.Error(), "value out of range") {
-						return moerr.NewOutOfRange(ctx, "int", "value '%s'", s)
+						return moerr.NewOutOfRange(ctx, fmt.Sprintf("int%d", bitSize), "value '%s'", s)
 					}
 					return moerr.NewInvalidArg(ctx, "cast to int", s)
 				}
@@ -3351,9 +3360,13 @@ func strToUnsigned[T constraints.Unsigned](
 				res = &s
 				val, tErr = strconv.ParseUint(s, 16, 64)
 			} else {
-				s := convertByteSliceToString(v)
+				s := strings.TrimSpace(convertByteSliceToString(v))
 				res = &s
-				val, tErr = strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
+				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+					val, tErr = strconv.ParseUint(s[2:], 16, bitSize)
+				} else {
+					val, tErr = strconv.ParseUint(s, 10, bitSize)
+				}
 			}
 			if tErr != nil {
 				if strings.Contains(tErr.Error(), "value out of range") {
@@ -3401,7 +3414,7 @@ func strToFloat[T constraints.Float](
 				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 					result = T(r1)
 				} else {
-					v2, err := floatNumToFixFloat(ctx, float64(r1), to)
+					v2, err := floatNumToFixFloat(ctx, float64(r1), to, "")
 					if err != nil {
 						return err
 					}
@@ -3419,7 +3432,7 @@ func strToFloat[T constraints.Float](
 				if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 					result = T(r2)
 				} else {
-					v2, err := floatNumToFixFloat(ctx, r2, to)
+					v2, err := floatNumToFixFloat(ctx, r2, to, s)
 					if err != nil {
 						return err
 					}

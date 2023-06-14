@@ -57,9 +57,9 @@ select 10E+0+'a';
 select cast('18446744073709551616' as unsigned);
 Data truncation: data out of range: data type uint64, value '18446744073709551616'
 select cast('18446744073709551616' as signed);
-Data truncation: data out of range: data type int, value '18446744073709551616'
+Data truncation: data out of range: data type int64, value '18446744073709551616'
 select cast('9223372036854775809' as signed);
-Data truncation: data out of range: data type int, value '9223372036854775809'
+Data truncation: data out of range: data type int64, value '9223372036854775809'
 select cast('-1' as unsigned);
 invalid argument cast to uint64, bad value -1
 select cast('abc' as signed);
@@ -89,7 +89,7 @@ select cast('18446744073709551615' as unsigned);
 cast('18446744073709551615' as unsigned)
 18446744073709551615
 select cast('18446744073709551615' as signed);
-Data truncation: data out of range: data type int, value '18446744073709551615'
+Data truncation: data out of range: data type int64, value '18446744073709551615'
 select cast('9223372036854775807' as signed);
 cast('9223372036854775807' as signed)
 9223372036854775807
