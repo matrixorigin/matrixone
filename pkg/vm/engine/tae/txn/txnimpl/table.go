@@ -609,7 +609,7 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 	return tbl.localSegment.Append(data)
 }
 
-func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error) {
+func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio.Location) (err error) {
 	var pkVecs []containers.Vector
 	defer func() {
 		for _, v := range pkVecs {
@@ -622,7 +622,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
 				bat, err := blockio.LoadColumns(
-					context.Background(),
+					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
 					tbl.store.dataFactory.Fs.Service,
@@ -641,18 +641,18 @@ func (tbl *txnTable) AddBlksWithMetaLoc(metaLocs []objectio.Location) (err error
 					return
 				}
 				//do PK deduplication check against txn's snapshot data.
-				if err = tbl.DedupSnapByPK(context.Background(), v, false); err != nil {
+				if err = tbl.DedupSnapByPK(ctx, v, false); err != nil {
 					return
 				}
 			}
 		} else if dedupType == txnif.FullSkipWorkSpaceDedup {
 			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupSnapByMetaLocs(context.Background(), metaLocs, false); err != nil {
+			if err = tbl.DedupSnapByMetaLocs(ctx, metaLocs, false); err != nil {
 				return
 			}
 		} else if dedupType == txnif.IncrementalDedup {
 			//do PK deduplication check against txn's snapshot data.
-			if err = tbl.DedupSnapByMetaLocs(context.Background(), metaLocs, true); err != nil {
+			if err = tbl.DedupSnapByMetaLocs(ctx, metaLocs, true); err != nil {
 				return
 			}
 		}
@@ -745,7 +745,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 	return
 }
 
-func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
+func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	if tbl.localSegment != nil {
 		id, offset, err = tbl.localSegment.GetByFilter(filter)
 		if err == nil {
@@ -762,7 +762,7 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 			blockIt.Next()
 			continue
 		}
-		offset, err = h.GetByFilter(filter)
+		offset, err = h.GetByFilter(ctx, filter)
 		if err == nil {
 			id = h.Fingerprint()
 			break
@@ -881,7 +881,7 @@ func (tbl *txnTable) NeedRollback() bool {
 }
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
-func (tbl *txnTable) PrePrepareDedup() (err error) {
+func (tbl *txnTable) PrePrepareDedup(ctx context.Context) (err error) {
 	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
@@ -889,7 +889,7 @@ func (tbl *txnTable) PrePrepareDedup() (err error) {
 	pkColPos := tbl.schema.GetSingleSortKeyIdx()
 	for _, node := range tbl.localSegment.nodes {
 		if node.IsPersisted() {
-			err = tbl.DoPrecommitDedupByNode(node)
+			err = tbl.DoPrecommitDedupByNode(ctx, node)
 			if err != nil {
 				return
 			}
@@ -1221,7 +1221,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 	return
 }
 
-func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
+func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	var pks containers.Vector
 	//loaded := false
@@ -1247,7 +1247,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(node InsertNode) (err error) {
 
 		//TODO::load ZM/BF index first, then load PK column if necessary.
 		if pks == nil {
-			colV, err := node.GetColumnDataById(tbl.schema.GetSingleSortKeyIdx())
+			colV, err := node.GetColumnDataById(ctx, tbl.schema.GetSingleSortKeyIdx())
 			if err != nil {
 				return err
 			}

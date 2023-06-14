@@ -15,12 +15,13 @@
 package txnbase
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-func (txn *Txn) rollback1PC() (err error) {
+func (txn *Txn) rollback1PC(ctx context.Context) (err error) {
 	if txn.IsReplay() {
 		panic(moerr.NewTAERollbackNoCtx("1pc txn %s should not be called here", txn.String()))
 	}
@@ -31,6 +32,7 @@ func (txn *Txn) rollback1PC() (err error) {
 
 	txn.Add(1)
 	err = txn.Mgr.OnOpTxn(&OpTxn{
+		ctx: ctx,
 		Txn: txn,
 		Op:  OpRollback,
 	})
@@ -47,7 +49,7 @@ func (txn *Txn) rollback1PC() (err error) {
 	return txn.Err
 }
 
-func (txn *Txn) commit1PC(_ bool) (err error) {
+func (txn *Txn) commit1PC(ctx context.Context, _ bool) (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
@@ -55,6 +57,7 @@ func (txn *Txn) commit1PC(_ bool) (err error) {
 	}
 	txn.Add(1)
 	err = txn.Mgr.OnOpTxn(&OpTxn{
+		ctx: ctx,
 		Txn: txn,
 		Op:  OpCommit,
 	})
@@ -78,13 +81,14 @@ func (txn *Txn) commit1PC(_ bool) (err error) {
 	return txn.GetError()
 }
 
-func (txn *Txn) rollback2PC() (err error) {
+func (txn *Txn) rollback2PC(ctx context.Context) (err error) {
 	state := txn.GetTxnState(false)
 
 	switch state {
 	case txnif.TxnStateActive:
 		txn.Add(1)
 		err = txn.Mgr.OnOpTxn(&OpTxn{
+			ctx: ctx,
 			Txn: txn,
 			Op:  OpRollback,
 		})

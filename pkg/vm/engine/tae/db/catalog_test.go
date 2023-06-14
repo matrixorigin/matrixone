@@ -15,6 +15,7 @@
 package db
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestCatalog1(t *testing.T) {
 	seg, _ := rel.CreateSegment(false)
 	blk, err := seg.CreateBlock(false)
 	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	txn, rel = getDefaultRelation(t, db, schema.Name)
@@ -56,7 +57,7 @@ func TestCatalog1(t *testing.T) {
 	blk2, err := sseg.CreateBlock(false)
 	assert.Nil(t, err)
 	assert.NotNil(t, blk2)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	{
@@ -86,7 +87,7 @@ func TestShowDatabaseNames(t *testing.T) {
 		names := txn.DatabaseNames()
 		assert.Equal(t, 2, len(names))
 		assert.Equal(t, "db1", names[1])
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
 		txn, _ := tae.StartTxn(nil)
@@ -107,7 +108,7 @@ func TestShowDatabaseNames(t *testing.T) {
 			assert.Equal(t, "db1", names[1])
 			_, err := txn.CreateDatabase("db2", "", "")
 			assert.NotNil(t, err)
-			err = txn.Rollback()
+			err = txn.Rollback(context.Background())
 			assert.Nil(t, err)
 		}
 		{
@@ -117,7 +118,7 @@ func TestShowDatabaseNames(t *testing.T) {
 			names := txn.DatabaseNames()
 			assert.Equal(t, "db1", names[1])
 			assert.Equal(t, "db3", names[2])
-			assert.Nil(t, txn.Commit())
+			assert.Nil(t, txn.Commit(context.Background()))
 		}
 		{
 			txn, _ := tae.StartTxn(nil)
@@ -132,13 +133,13 @@ func TestShowDatabaseNames(t *testing.T) {
 			t.Log(names)
 			assert.Equal(t, 2, len(names))
 			assert.Equal(t, "db3", names[1])
-			assert.Nil(t, txn.Commit())
+			assert.Nil(t, txn.Commit(context.Background()))
 		}
 		names = txn.DatabaseNames()
 		assert.Equal(t, 3, len(names))
 		assert.Equal(t, "db1", names[1])
 		assert.Equal(t, "db2", names[2])
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 }
 
@@ -154,7 +155,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = db.CreateRelation(schema)
 	assert.Nil(t, err)
-	err = txn.Commit()
+	err = txn.Commit(context.Background())
 	assert.Nil(t, err)
 
 	pool, _ := ants.NewPool(20)
@@ -175,7 +176,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 			}
 			assert.Nil(t, err)
 		}
-		err = txn.Commit()
+		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 
 		txn, _ = tae.StartTxn(nil)
@@ -184,7 +185,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 		seg, _ = rel.GetSegment(id.SegmentID())
 		err = seg.SoftDeleteBlock(id.BlockID)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
