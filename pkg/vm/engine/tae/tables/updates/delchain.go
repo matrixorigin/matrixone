@@ -200,7 +200,7 @@ func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
 		return true
 	})
 
-	new.cnt = chain.cnt
+	new.cnt.Store(chain.cnt.Load())
 
 	return new
 }
@@ -345,11 +345,4 @@ func (chain *DeleteChain) GetDeleteNodeByRow(row uint32) (n *DeleteNode) {
 		return n.Aborted
 	}, false)
 	return
-}
-
-func (chain *DeleteChain) isDeletePersistedLocked(row uint32) bool {
-	if chain.persisted == nil {
-		return false
-	}
-	return chain.persisted.Contains(uint64(row))
 }
