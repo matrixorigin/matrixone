@@ -2376,6 +2376,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	logutil.Debugf("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	// If ranges == 0, dont know what type of table is this
+	//FIXME:: if len(ranges) == 0 indicates that it's a temporary table?
 	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
