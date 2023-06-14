@@ -65,7 +65,8 @@ type mathMultiT interface {
 
 type mathMultiFun[T mathMultiT] func(T, int64) T
 
-func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, cb mathMultiFun[T]) (err error) {
+func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
+	cb mathMultiFun[T]) (err error) {
 	digits := int64(0)
 	if len(ivecs) > 1 {
 		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
@@ -74,22 +75,9 @@ func generalMathMulti[T mathMultiT](funcName string, ivecs []*vector.Vector, res
 		digits = vector.MustFixedCol[int64](ivecs[1])[0]
 	}
 
-	rs := vector.MustFunctionResult[T](result)
-	ivec := vector.GenerateFunctionFixedTypeParameter[T](ivecs[0])
-	var t T
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetValue(i)
-		if null {
-			if err = rs.Append(t, true); err != nil {
-				return err
-			}
-		} else {
-			if err = rs.Append(cb(v, digits), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return opUnaryFixedToFixed[T, T](ivecs, result, proc, length, func(x T) T {
+		return cb(x, digits)
+	})
 }
 
 func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
@@ -101,25 +89,13 @@ func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		digits = vector.MustFixedCol[int64](ivecs[1])[0]
 	}
 
-	rs := vector.MustFunctionResult[float64](result)
-	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	for i := uint64(0); i < uint64(length); i++ {
-		v, null := ivec.GetStrValue(i)
-		if null {
-			if err = rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			floatVal, err := strconv.ParseFloat(string(v), 64)
-			if err != nil {
-				return err
-			}
-			if err = rs.Append(ceilFloat64(floatVal, digits), false); err != nil {
-				return err
-			}
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
+		floatVal, err1 := strconv.ParseFloat(v, 64)
+		if err1 != nil {
+			return 0, err1
 		}
-	}
-	return nil
+		return ceilFloat64(floatVal, digits), nil
+	})
 }
 
 func ceilInt64(x, digits int64) int64 {
@@ -232,14 +208,8 @@ func CeilDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return generalMathMulti("ceil", ivecs, result, proc, length, cb)
 }
 
-var MaxUint8digits = numOfDigits(math.MaxUint8)
-var MaxUint16digits = numOfDigits(math.MaxUint16)
-var MaxUint32digits = numOfDigits(math.MaxUint32)
 var MaxUint64digits = numOfDigits(math.MaxUint64) // 20
-var MaxInt8digits = numOfDigits(math.MaxInt8)
-var MaxInt16digits = numOfDigits(math.MaxInt16)
-var MaxInt32digits = numOfDigits(math.MaxInt32)
-var MaxInt64digits = numOfDigits(math.MaxInt64) // 19
+var MaxInt64digits = numOfDigits(math.MaxInt64)   // 19
 
 func numOfDigits(value uint64) int64 {
 	digits := int64(0)

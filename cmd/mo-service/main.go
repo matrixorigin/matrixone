@@ -138,7 +138,7 @@ func startService(ctx context.Context, cfg *Config, stopper *stopper.Stopper, gl
 		return err
 	}
 
-	fs, err := cfg.createFileService(defines.LocalFileServiceName, globalCounterSet, st, uuid)
+	fs, err := cfg.createFileService(ctx, defines.LocalFileServiceName, globalCounterSet, st, uuid)
 	if err != nil {
 		return err
 	}

@@ -55,6 +55,7 @@ const (
 )
 
 func NewLocalFS(
+	ctx context.Context,
 	name string,
 	rootPath string,
 	cacheConfig CacheConfig,
@@ -113,14 +114,14 @@ func NewLocalFS(
 		perfCounterSets: perfCounterSets,
 	}
 
-	if err := fs.initCaches(cacheConfig); err != nil {
+	if err := fs.initCaches(ctx, cacheConfig); err != nil {
 		return nil, err
 	}
 
 	return fs, nil
 }
 
-func (l *LocalFS) initCaches(config CacheConfig) error {
+func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.SetDefaults()
 
 	if config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
@@ -138,6 +139,7 @@ func (l *LocalFS) initCaches(config CacheConfig) error {
 		if config.DiskCapacity > DisableCacheCapacity && config.DiskPath != "" {
 			var err error
 			l.diskCache, err = NewDiskCache(
+				ctx,
 				config.DiskPath,
 				int64(config.DiskCapacity),
 				config.DiskMinEvictInterval.Duration,

@@ -158,6 +158,8 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	return r, err
 }
 
+// RunFunctionDirectly runs a function directly without any protections.
+// It is dangerous and should be used only when you are sure that the overloadID is correct and the inputs are valid.
 func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vector.Vector, length int) (*vector.Vector, error) {
 	f, err := GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
