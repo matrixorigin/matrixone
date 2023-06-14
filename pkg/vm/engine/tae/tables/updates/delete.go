@@ -43,11 +43,12 @@ func (node *DeleteNode) Less(b *DeleteNode) int {
 type DeleteNode struct {
 	*common.GenericDLNode[*DeleteNode]
 	*txnbase.TxnMVCCNode
-	chain *DeleteChain
-	mask  *roaring.Bitmap
-	nt    NodeType
-	id    *common.ID
-	dt    handle.DeleteType
+	chain     *DeleteChain
+	mask      *roaring.Bitmap
+	nt        NodeType
+	id        *common.ID
+	dt        handle.DeleteType
+	viewNodes map[uint32]*common.GenericDLNode[*DeleteNode]
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
@@ -55,6 +56,7 @@ func NewMergedNode(commitTs types.TS) *DeleteNode {
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(commitTs),
 		mask:        roaring.New(),
 		nt:          NT_Merge,
+		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
 	}
 	return n
 }
@@ -63,6 +65,7 @@ func NewEmptyDeleteNode() *DeleteNode {
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
+		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
 		id:          &common.ID{},
 	}
 	return n
@@ -73,6 +76,7 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 		mask:        roaring.New(),
 		nt:          NT_Normal,
 		dt:          dt,
+		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
 	}
 	if n.dt == handle.DT_MergeCompact {
 		_, err := n.TxnMVCCNode.PrepareCommit()
