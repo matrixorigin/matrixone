@@ -140,20 +140,6 @@ func (catalog *Catalog) InitSystemDB() {
 	}
 }
 
-func (catalog *Catalog) GCMemoryByTS(ctx context.Context, ts types.TS) {
-	processor := &LoopProcessor{}
-	processor.BlockFn = func(be *BlockEntry) error {
-		be.RLock()
-		needGC := be.DeleteBefore(ts)
-		be.RUnlock()
-		if needGC {
-			be.GetBlockData().GCInMemeoryDeletesByTS(be.GetDeleteAt())
-		}
-		return nil
-	}
-	catalog.RecurLoop(processor)
-}
-
 func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	logutil.Infof("GC Catalog %v", ts.ToString())
 	processor := LoopProcessor{}

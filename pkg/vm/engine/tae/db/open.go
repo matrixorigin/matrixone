@@ -215,16 +215,6 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 				return nil
 			}),
 		gc.WithCronJob(
-			"memory-gc",
-			time.Millisecond,
-			func(ctx context.Context) error {
-				ts := types.BuildTS(
-					time.Now().UTC().UnixNano(),
-					0)
-				db.Catalog.GCMemoryByTS(ctx, ts)
-				return nil
-			}),
-		gc.WithCronJob(
 			"logtail-gc",
 			opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) error {

@@ -187,8 +187,8 @@ func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
 	new.persisted = chain.mask
 
 	chain.LoopChain(func(n *DeleteNode) bool {
-		if n.IsVisibleByTS(flushed) {
-			n.AttachTo(chain)
+		if !n.IsVisibleByTS(flushed) {
+			n.AttachTo(new)
 			it := n.mask.Iterator()
 			for it.HasNext() {
 				row := it.Next()

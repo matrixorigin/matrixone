@@ -516,6 +516,7 @@ func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs 
 }
 
 func (blk *baseBlock) inMemoryCollectDeletesInRange(start, end types.TS) (deletes *nulls.Bitmap, err error) {
+	blk.RLock()
 	defer blk.RUnlock()
 	deleteChain := blk.mvcc.GetDeleteChain()
 	deletes, err =

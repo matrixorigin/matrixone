@@ -4200,6 +4200,11 @@ func TestCollectDelete(t *testing.T) {
 		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 1, vec.Length())
 	}
+	view, err := blkdata.CollectChangesInRange(context.Background(), types.TS{}, p1)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 1, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p2, true)
 	assert.NoError(t, err)
 	t.Logf(logtail.BatchToString("", batch, false))
@@ -4207,6 +4212,11 @@ func TestCollectDelete(t *testing.T) {
 		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 4, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), types.TS{}, p2)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 4, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p2, true)
 	assert.NoError(t, err)
 	t.Logf(logtail.BatchToString("", batch, false))
@@ -4214,6 +4224,11 @@ func TestCollectDelete(t *testing.T) {
 		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 3, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p2)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 3, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true)
 	assert.NoError(t, err)
 	t.Logf(logtail.BatchToString("", batch, false))
@@ -4221,6 +4236,11 @@ func TestCollectDelete(t *testing.T) {
 		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 5, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p3)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 5, view.DeleteMask.GetCardinality())
+
 
 	blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
@@ -4251,6 +4271,11 @@ func TestCollectDelete(t *testing.T) {
 		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 5, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p3)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 5, view.DeleteMask.GetCardinality())
+
 }
 
 func TestAppendnode(t *testing.T) {
