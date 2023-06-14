@@ -145,7 +145,7 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteT
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.RangeDelete(id, start, end, dt)
+	return table.RangeDelete(id, start, end, dt, true)
 	// if start == end {
 	// 	return db.DeleteOne(table, id, start, dt)
 	// }

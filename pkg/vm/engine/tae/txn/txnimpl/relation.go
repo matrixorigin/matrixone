@@ -254,7 +254,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any, i
 		vec.Append(colVal, colValIsNull)
 		bat.AddVector(def.Name, vec)
 	}
-	if err = h.table.RangeDelete(id, row, row, handle.DT_Normal); err != nil {
+	if err = h.table.RangeDelete(id, row, row, handle.DT_Normal, true); err != nil {
 		return
 	}
 	err = h.Append(context.Background(), bat)
