@@ -155,16 +155,12 @@ func (blk *ablock) resolveColumnDatas(
 	defer node.Unref()
 
 	if !node.IsPersisted() {
-		return blk.resolveInMemoryColumnDatas(
-			node.MustMNode(),
-			txn,
-			readSchema,
-			colIdxes,
-			skipDeletes)
+		return node.MustMNode().resolveInMemoryColumnDatas(
+			txn, readSchema, colIdxes, skipDeletes,
+		)
 	} else {
 		return blk.ResolvePersistedColumnDatas(
 			ctx,
-			node.MustPNode(),
 			txn,
 			readSchema,
 			colIdxes,
@@ -192,12 +188,9 @@ func (blk *ablock) resolveColumnData(
 	defer node.Unref()
 
 	if !node.IsPersisted() {
-		return blk.resolveInMemoryColumnData(
-			node.MustMNode(),
-			txn,
-			readSchema,
-			col,
-			skipDeletes)
+		return node.MustMNode().resolveInMemoryColumnData(
+			txn, readSchema, col, skipDeletes,
+		)
 	} else {
 		return blk.ResolvePersistedColumnData(
 			ctx,
@@ -207,96 +200,6 @@ func (blk *ablock) resolveColumnData(
 			skipDeletes,
 		)
 	}
-}
-
-// Note: With PinNode Context
-func (blk *ablock) resolveInMemoryColumnDatas(
-	mnode *memoryNode,
-	txn txnif.TxnReader,
-	readSchema *catalog.Schema,
-	colIdxes []int,
-	skipDeletes bool) (view *model.BlockView, err error) {
-	blk.RLock()
-	defer blk.RUnlock()
-	maxRow, visible, deSels, err := blk.mvcc.GetVisibleRowLocked(txn)
-	if !visible || err != nil {
-		// blk.RUnlock()
-		return
-	}
-	data, err := mnode.GetDataWindow(readSchema, 0, maxRow)
-	if err != nil {
-		return
-	}
-	view = model.NewBlockView()
-	for _, colIdx := range colIdxes {
-		view.SetData(colIdx, data.Vecs[colIdx])
-	}
-	if skipDeletes {
-		// blk.RUnlock()
-		return
-	}
-
-	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
-	// blk.RUnlock()
-	if err != nil {
-		return
-	}
-	if !deSels.IsEmpty() {
-		if view.DeleteMask != nil {
-			view.DeleteMask.Or(deSels)
-		} else {
-			view.DeleteMask = deSels
-		}
-	}
-	return
-}
-
-// Note: With PinNode Context
-func (blk *ablock) resolveInMemoryColumnData(
-	mnode *memoryNode,
-	txn txnif.TxnReader,
-	readSchema *catalog.Schema,
-	col int,
-	skipDeletes bool) (view *model.ColumnView, err error) {
-	blk.RLock()
-	defer blk.RUnlock()
-	maxRow, visible, deSels, err := blk.mvcc.GetVisibleRowLocked(txn)
-	if !visible || err != nil {
-		// blk.RUnlock()
-		return
-	}
-
-	view = model.NewColumnView(col)
-	var data containers.Vector
-	data, err = mnode.GetColumnDataWindow(
-		readSchema,
-		0,
-		maxRow,
-		col)
-	if err != nil {
-		// blk.RUnlock()
-		return
-	}
-	view.SetData(data)
-	if skipDeletes {
-		// blk.RUnlock()
-		return
-	}
-
-	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
-	// blk.RUnlock()
-	if err != nil {
-		return
-	}
-	if deSels != nil && !deSels.IsEmpty() {
-		if view.DeleteMask != nil {
-			view.DeleteMask.Or(deSels)
-		} else {
-			view.DeleteMask = deSels
-		}
-	}
-
-	return
 }
 
 func (blk *ablock) GetValue(
@@ -312,7 +215,6 @@ func (blk *ablock) GetValue(
 	} else {
 		return blk.getPersistedValue(
 			ctx,
-			node.MustPNode(),
 			txn,
 			schema,
 			row,
@@ -337,7 +239,7 @@ func (blk *ablock) getInMemoryValue(
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	view, err := blk.resolveInMemoryColumnData(mnode, txn, readSchema, col, true)
+	view, err := mnode.resolveInMemoryColumnData(txn, readSchema, col, true)
 	if err != nil {
 		return
 	}
