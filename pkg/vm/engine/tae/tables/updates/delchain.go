@@ -44,7 +44,7 @@ type DeleteChain struct {
 	*sync.RWMutex
 	*txnbase.MVCCChain[*DeleteNode]
 	mvcc  *MVCCHandle
-	nodes map[uint32]*DeleteNode
+	links map[uint32]*common.GenericSortedDList[*DeleteNode]
 	cnt   atomic.Uint32
 	mask  *nulls.Bitmap
 }
@@ -56,7 +56,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 	chain := &DeleteChain{
 		RWMutex:   rwlocker,
 		MVCCChain: txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
-		nodes:     make(map[uint32]*DeleteNode),
+		links:     make(map[uint32]*common.GenericSortedDList[*DeleteNode]),
 		mvcc:      mvcc,
 		mask:      &nulls.Bitmap{},
 	}
@@ -105,7 +105,7 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (er
 }
 
 func (chain *DeleteChain) hasOverLap(start, end uint64) bool {
-	if chain.mask.IsEmpty() {
+	if chain.mask == nil || chain.mask.IsEmpty() {
 		return false
 	}
 	var yes bool
@@ -155,19 +155,25 @@ func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.De
 	return node
 }
 func (chain *DeleteChain) InsertInDeleteView(row uint32, deleteNode *DeleteNode) {
-	if chain.nodes[row] != nil {
-		panic(fmt.Sprintf("row %d already in delete view", row))
+	var link *common.GenericSortedDList[*DeleteNode]
+	if link = chain.links[row]; link == nil {
+		link = common.NewGenericSortedDList((*DeleteNode).Less)
+		n := link.Insert(deleteNode)
+		deleteNode.viewNodes[row] = n
+		chain.links[row] = link
+		return
 	}
-	chain.nodes[row] = deleteNode
+	link.Insert(deleteNode)
 }
 func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
 	it := deleteNode.mask.Iterator()
 	for it.HasNext() {
 		row := it.Next()
-		if chain.nodes[row] != deleteNode {
-			panic(fmt.Sprintf("row %d not in delete view", row))
+		link := chain.links[row]
+		link.Delete(deleteNode.viewNodes[row])
+		if link.Depth() == 0 {
+			delete(chain.links, row)
 		}
-		delete(chain.nodes, row)
 	}
 }
 func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
@@ -301,5 +307,13 @@ func (chain *DeleteChain) CollectDeletesLocked(
 }
 
 func (chain *DeleteChain) GetDeleteNodeByRow(row uint32) (n *DeleteNode) {
-	return chain.nodes[row]
+	link := chain.links[row]
+	if link == nil {
+		return
+	}
+	link.Loop(func(vn *common.GenericDLNode[*DeleteNode]) bool {
+		n = vn.GetPayload()
+		return n.Aborted
+	}, false)
+	return
 }
