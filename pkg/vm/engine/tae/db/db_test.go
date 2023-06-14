@@ -7315,7 +7315,7 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 	blkData := blkMeta.GetBlockData()
 	assert.NoError(t, txn.Commit(context.Background()))
 	ctx, cancel := context.WithCancel(context.Background())
-	wg:=sync.WaitGroup{}
+	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
