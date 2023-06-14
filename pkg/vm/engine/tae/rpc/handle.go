@@ -890,7 +890,6 @@ func (h *Handle) HandleWrite(
 		return
 	}
 
-	checkTs := h.db.TxnMgr.Now()
 	//handle delete
 	if req.FileName != "" {
 		//wait for loading deleted row-id done.
@@ -919,7 +918,7 @@ func (h *Handle) HandleWrite(
 			}
 			vec := containers.ToDNVector(bat.Vecs[0])
 			defer vec.Close()
-			if err = tb.DeleteByPhyAddrKeys(vec, checkTs); err != nil {
+			if err = tb.DeleteByPhyAddrKeys(vec, types.TS{}); err != nil {
 				return
 			}
 		}
@@ -927,7 +926,7 @@ func (h *Handle) HandleWrite(
 	}
 	vec := containers.ToDNVector(req.Batch.GetVector(0))
 	defer vec.Close()
-	err = tb.DeleteByPhyAddrKeys(vec, checkTs)
+	err = tb.DeleteByPhyAddrKeys(vec, types.TS{})
 	return
 }
 

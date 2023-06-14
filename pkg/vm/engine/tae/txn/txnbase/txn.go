@@ -371,6 +371,10 @@ func (txn *Txn) PrePrepare() error {
 	return txn.Store.PrePrepare()
 }
 
+func (txn *Txn) Freeze() error {
+	return txn.Store.Freeze()
+}
+
 func (txn *Txn) PrepareRollback() (err error) {
 	logutil.Debugf("Prepare Rollbacking %X", txn.ID)
 	if txn.PrepareRollbackFn != nil {

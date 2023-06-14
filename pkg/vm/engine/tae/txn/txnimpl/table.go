@@ -758,7 +758,6 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 			for i := start; i <= end; i++ {
 				rows = append(rows, i)
 			}
-			logutil.Infof("Transfer delete rows: %v", rows)
 			_, err = tbl.TransferDeleteRows(id, rows)
 			return
 		}

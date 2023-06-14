@@ -31,7 +31,8 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
-func (store *NoopTxnStore) WaitPrepared() (err error)  { return }
+func (store *NoopTxnStore) Freeze() error              { return nil }
+func (store *NoopTxnStore) WaitPrepared() error        { return nil }
 func (store *NoopTxnStore) GetLSN() uint64             { return 0 }
 func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn) {}
 func (store *NoopTxnStore) Close() error               { return nil }

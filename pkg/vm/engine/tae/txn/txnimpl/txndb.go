@@ -467,7 +467,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 	return
 }
 
-func (db *txnDB) PrePrepare() (err error) {
+func (db *txnDB) Freeze() (err error) {
 	for _, table := range db.tables {
 		if table.NeedRollback() {
 			if err = table.PrepareRollback(); err != nil {
@@ -476,6 +476,15 @@ func (db *txnDB) PrePrepare() (err error) {
 			delete(db.tables, table.GetID())
 		}
 	}
+	for _, table := range db.tables {
+		if err = table.PrePreareTransfer(); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (db *txnDB) PrePrepare() (err error) {
 	for _, table := range db.tables {
 		if err = table.PrePreareTransfer(); err != nil {
 			return
