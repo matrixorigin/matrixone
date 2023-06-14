@@ -2483,6 +2483,16 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		nodes[0].Data = append(nodes[0].Data, ranges...)
 		return nodes, nil
 	}
+	// add dirty blocks in current CN.
+	for i, blk := range ranges {
+		blkInfo := catalog.DecodeBlockInfo(blk)
+		if blkInfo.CanRemote {
+			ranges = ranges[i+1:]
+			break
+		}
+		nodes[0].Data = append(nodes[0].Data, blk)
+	}
+
 	//add the rest of CNs in list
 	for i := range c.cnList {
 		if c.cnList[i].Addr != c.addr {

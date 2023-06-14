@@ -223,7 +223,7 @@ func (p *PartitionReader) Read(ctx context.Context, colNames []string, expr *pla
 				srcVec := bat.Vecs[i]
 				uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
 				for j := 0; j < bat.Length(); j++ {
-					//FIXME::it seems that redundant to check rowIds[j] in p.deletes.
+					//FIXME::Is the check necessary ? in case where drop a table etc.
 					if _, ok := p.deletes[rowIds[j]]; ok {
 						continue
 					}

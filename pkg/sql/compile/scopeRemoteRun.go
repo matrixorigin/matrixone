@@ -416,7 +416,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	ctx.scope = s
 	{
 		for i := range s.NodeInfo.Data {
-			//TODO:: p.node.Payload[i] = string(EncodeBlockInfo(s.NodeInfo.Data[i]))
 			p.Node.Payload[i] = string(s.NodeInfo.Data[i])
 		}
 	}
@@ -583,7 +582,6 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 		s.NodeInfo.Mcpu = int(p.Node.Mcpu)
 		s.NodeInfo.Data = make([][]byte, len(p.Node.Payload))
 		for i := range p.Node.Payload {
-			//TODO::s.NodeInfo.Data[i] = *DecodeBlockInfo([]byte(p.Node.Payload[i]))
 			s.NodeInfo.Data[i] = []byte(p.Node.Payload[i])
 		}
 	}
