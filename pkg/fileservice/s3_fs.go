@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -938,15 +939,16 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	}
 
 	// credentials for 3rd-party services
-	if credentialProvider == nil && endpointURL != nil {
-		hostname := endpointURL.Hostname()
-		if strings.Contains(hostname, "aliyuncs.com") {
-			credentialProvider = newAliyunCredentialsProvider()
-		} else if strings.Contains(hostname, "myqcloud.com") ||
-			strings.Contains(hostname, "tencentcos.cn") {
-			credentialProvider = newTencentCloudCredentialsProvider()
-		}
-	}
+	//TODO fix this
+	//if credentialProvider == nil && endpointURL != nil {
+	//	hostname := endpointURL.Hostname()
+	//	if strings.Contains(hostname, "aliyuncs.com") {
+	//		credentialProvider = newAliyunCredentialsProvider()
+	//	} else if strings.Contains(hostname, "myqcloud.com") ||
+	//		strings.Contains(hostname, "tencentcos.cn") {
+	//		credentialProvider = newTencentCloudCredentialsProvider()
+	//	}
+	//}
 
 	// role arn credential
 	if roleARN != "" {
@@ -997,8 +999,10 @@ func newS3FS(arguments []string) (*S3FS, error) {
 	// options for s3 client
 	s3Options := []func(*s3.Options){
 		func(opts *s3.Options) {
-			opts.RetryMaxAttempts = 128
-			opts.RetryMode = aws.RetryModeAdaptive
+			opts.Retryer = retry.NewStandard(func(o *retry.StandardOptions) {
+				o.MaxAttempts = maxRetryAttemps
+				o.RateLimiter = noOpRateLimit{}
+			})
 		},
 	}
 
@@ -1084,7 +1088,7 @@ func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, o
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, s.perfCounterSets...)
-	return retry(
+	return doWithRetry(
 		"s3 list objects",
 		func() (*s3.ListObjectsOutput, error) {
 			return s.s3Client.ListObjects(ctx, params, optFns...)
@@ -1099,7 +1103,7 @@ func (s *S3FS) s3HeadObject(ctx context.Context, params *s3.HeadObjectInput, opt
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Head.Add(1)
 	}, s.perfCounterSets...)
-	return retry(
+	return doWithRetry(
 		"s3 head object",
 		func() (*s3.HeadObjectOutput, error) {
 			return s.s3Client.HeadObject(ctx, params, optFns...)
@@ -1132,7 +1136,7 @@ func (s *S3FS) s3GetObject(ctx context.Context, min int64, max int64, params *s3
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
 			params.Range = &rang
-			output, err := retry(
+			output, err := doWithRetry(
 				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
 					return s.s3Client.GetObject(ctx, params, optFns...)
@@ -1159,7 +1163,7 @@ func (s *S3FS) s3DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInpu
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, s.perfCounterSets...)
-	return retry(
+	return doWithRetry(
 		"s3 delete objects",
 		func() (*s3.DeleteObjectsOutput, error) {
 			return s.s3Client.DeleteObjects(ctx, params, optFns...)
@@ -1174,7 +1178,7 @@ func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput,
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, s.perfCounterSets...)
-	return retry(
+	return doWithRetry(
 		"s3 delete object",
 		func() (*s3.DeleteObjectOutput, error) {
 			return s.s3Client.DeleteObject(ctx, params, optFns...)
@@ -1183,3 +1187,12 @@ func (s *S3FS) s3DeleteObject(ctx context.Context, params *s3.DeleteObjectInput,
 		isRetryableError,
 	)
 }
+
+// from https://github.com/aws/aws-sdk-go-v2/issues/543
+type noOpRateLimit struct{}
+
+func (noOpRateLimit) AddTokens(uint) error { return nil }
+func (noOpRateLimit) GetToken(context.Context, uint) (func() error, error) {
+	return noOpToken, nil
+}
+func noOpToken() error { return nil }

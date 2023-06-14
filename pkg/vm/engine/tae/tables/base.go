@@ -23,6 +23,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -109,7 +110,7 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
-func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error {
+func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -147,17 +148,14 @@ func (blk *baseBlock) FillInMemoryDeletesLocked(
 	view *model.BaseView,
 	rwlocker *sync.RWMutex) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
-	n, err := chain.CollectDeletesLocked(txn, rwlocker)
-	if err != nil {
+	deletes, err := chain.CollectDeletesLocked(txn, rwlocker)
+	if err != nil || deletes.IsEmpty() {
 		return
 	}
-	dnode := n.(*updates.DeleteNode)
-	if dnode != nil {
-		if view.DeleteMask == nil {
-			view.DeleteMask = dnode.GetDeleteMaskLocked()
-		} else {
-			view.DeleteMask.Or(dnode.GetDeleteMaskLocked())
-		}
+	if view.DeleteMask == nil {
+		view.DeleteMask = deletes
+	} else {
+		view.DeleteMask.Or(deletes)
 	}
 	return
 }
@@ -252,9 +250,9 @@ func (blk *baseBlock) FillPersistedDeletes(
 		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
 		row := rowid.GetRowOffset()
 		if view.DeleteMask == nil {
-			view.DeleteMask = roaring.NewBitmap()
+			view.DeleteMask = nulls.NewWithSize(int(row) + 1)
 		}
-		view.DeleteMask.Add(row)
+		view.DeleteMask.Add(uint64(row))
 	}
 	return nil
 }
@@ -302,15 +300,8 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	}
 
 	blk.RLock()
-	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
-	if view.BaseView.DeleteMask != nil {
-		for _, colIdx := range colIdxs {
-			vec := view.Columns[colIdx].GetData()
-			view.SetData(colIdx, vec.CloneWindow(0, vec.Length(), nil))
-			vec.Close()
-		}
-	}
+	blk.RUnlock()
 	return
 }
 
@@ -342,12 +333,8 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	}
 
 	blk.RLock()
-	defer blk.RUnlock()
 	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
-	if view.BaseView.DeleteMask != nil {
-		view.SetData(vec.CloneWindow(0, vec.Length(), nil))
-		vec.Close()
-	}
+	blk.RUnlock()
 	return
 }
 
@@ -355,7 +342,7 @@ func (blk *baseBlock) dedupWithLoad(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	keys containers.Vector,
-	sels *roaring.Bitmap,
+	sels *nulls.Bitmap,
 	rowmask *roaring.Bitmap,
 	isAblk bool,
 ) (err error) {
@@ -372,17 +359,21 @@ func (blk *baseBlock) dedupWithLoad(
 	}
 	if rowmask != nil {
 		if view.DeleteMask == nil {
-			view.DeleteMask = rowmask
+			view.DeleteMask = common.RoaringToMOBitmap(rowmask)
 		} else {
-			view.DeleteMask.Or(rowmask)
+			common.MOOrRoaringBitmap(view.DeleteMask, rowmask)
 		}
 	}
 	defer view.Close()
 	var dedupFn any
 	if isAblk {
-		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn)
+		dedupFn = containers.MakeForeachVectorOp(
+			keys.GetType().Oid, dedupAlkFunctions, view.GetData(), view.DeleteMask, def, blk.LoadPersistedCommitTS, txn,
+		)
 	} else {
-		dedupFn = containers.MakeForeachVectorOp(keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def)
+		dedupFn = containers.MakeForeachVectorOp(
+			keys.GetType().Oid, dedupNABlkFunctions, view.GetData(), view.DeleteMask, def,
+		)
 	}
 	err = containers.ForeachVector(keys, dedupFn, sels)
 	return
@@ -438,7 +429,7 @@ func (blk *baseBlock) getPersistedValue(
 			return
 		}
 	}
-	if view.DeleteMask != nil && view.DeleteMask.ContainsInt(row) {
+	if view.DeleteMask.Contains(uint64(row)) {
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}

@@ -368,6 +368,11 @@ func (t *Table) GetTableID(ctx context.Context) uint64 {
 	return uint64(t.id)
 }
 
+// GetTableName implements the engine.Relation interface.
+func (t *Table) GetTableName() string {
+	return t.tableName
+}
+
 func (t *Table) GetDBID(ctx context.Context) uint64 {
 	return 0
 }

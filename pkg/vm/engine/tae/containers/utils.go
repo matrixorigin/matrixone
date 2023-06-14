@@ -17,11 +17,10 @@ package containers
 import (
 	"fmt"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -125,7 +124,7 @@ var mockMp = common.DefaultAllocator
 
 func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, v any, isNull bool) {
 	if isNull {
-		cnNulls.Add(vec.GetNulls(), uint64(row))
+		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
 		err := movec.SetFixedAt(vec, int(row), v.(T))
 		if err != nil {
@@ -139,7 +138,7 @@ func GenericUpdateFixedValue[T types.FixedSizeT](vec *movec.Vector, row uint32, 
 
 func GenericUpdateBytes(vec *movec.Vector, row uint32, v any, isNull bool) {
 	if isNull {
-		cnNulls.Add(vec.GetNulls(), uint64(row))
+		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
 		err := movec.SetBytesAt(vec, int(row), v.([]byte), mockMp)
 		if err != nil {
@@ -262,7 +261,7 @@ func NewNonNullBatchWithSharedMemory(b *batch.Batch) *Batch {
 	return bat
 }
 
-func ForeachVector(vec Vector, op any, sel *roaring.Bitmap) (err error) {
+func ForeachVector(vec Vector, op any, sel *nulls.Bitmap) (err error) {
 	return ForeachVectorWindow(vec, 0, vec.Length(), op, nil, sel)
 }
 
@@ -271,7 +270,7 @@ func ForeachVectorWindow(
 	start, length int,
 	op1 any,
 	op2 ItOp,
-	sel *roaring.Bitmap,
+	sel *nulls.Bitmap,
 ) (err error) {
 	typ := vec.GetType()
 	col := vec.GetDownstreamVector()
@@ -562,7 +561,7 @@ func ForeachWindowBytes(
 	vec *movec.Vector,
 	start, length int,
 	op ItOpT[[]byte],
-	sels *roaring.Bitmap,
+	sels *nulls.Bitmap,
 ) (err error) {
 	typ := vec.GetType()
 	if typ.IsVarlen() {
@@ -570,16 +569,17 @@ func ForeachWindowBytes(
 	}
 	tsize := typ.TypeSize()
 	data := vec.UnsafeGetRawData()[start*tsize : (start+length)*tsize]
-	if sels == nil || sels.IsEmpty() {
+	if sels.IsEmpty() {
 		for i := 0; i < length; i++ {
 			if err = op(data[i*tsize:(i+1)*tsize], vec.IsNull(uint64(i+start)), i+start); err != nil {
 				break
 			}
 		}
 	} else {
-		idxes := sels.ToArray()
 		end := start + length
-		for _, idx := range idxes {
+		it := sels.GetBitmap().Iterator()
+		for it.HasNext() {
+			idx := uint32(it.Next())
 			if int(idx) < start {
 				continue
 			} else if int(idx) >= end {
@@ -600,7 +600,7 @@ func ForeachWindowFixed[T any](
 	start, length int,
 	op ItOpT[T],
 	opAny ItOp,
-	sels *roaring.Bitmap,
+	sels *nulls.Bitmap,
 ) (err error) {
 	if vec.IsConst() {
 		var v T
@@ -625,7 +625,7 @@ func ForeachWindowFixed[T any](
 		return
 	}
 	slice := movec.MustFixedCol[T](vec)[start : start+length]
-	if sels == nil || sels.IsEmpty() {
+	if sels.IsEmpty() {
 		for i, v := range slice {
 			if op != nil {
 				if err = op(v, vec.IsNull(uint64(i+start)), i+start); err != nil {
@@ -639,9 +639,10 @@ func ForeachWindowFixed[T any](
 			}
 		}
 	} else {
-		idxes := sels.ToArray()
 		end := start + length
-		for _, idx := range idxes {
+		it := sels.GetBitmap().Iterator()
+		for it.HasNext() {
+			idx := uint32(it.Next())
 			if int(idx) < start {
 				continue
 			} else if int(idx) >= end {
@@ -668,7 +669,7 @@ func ForeachWindowVarlen(
 	start, length int,
 	op ItOpT[[]byte],
 	opAny ItOp,
-	sels *roaring.Bitmap,
+	sels *nulls.Bitmap,
 ) (err error) {
 	if vec.IsConst() {
 		var v []byte
@@ -694,7 +695,7 @@ func ForeachWindowVarlen(
 	}
 	slice, area := movec.MustVarlenaRawData(vec)
 	slice = slice[start : start+length]
-	if sels == nil || sels.IsEmpty() {
+	if sels.IsEmpty() {
 		for i, v := range slice {
 			if op != nil {
 				if err = op(v.GetByteSlice(area), vec.IsNull(uint64(i+start)), i+start); err != nil {
@@ -708,9 +709,10 @@ func ForeachWindowVarlen(
 			}
 		}
 	} else {
-		idxes := sels.ToArray()
 		end := start + length
-		for _, idx := range idxes {
+		it := sels.GetBitmap().Iterator()
+		for it.HasNext() {
+			idx := uint32(it.Next())
 			if int(idx) < start {
 				continue
 			} else if int(idx) >= end {
