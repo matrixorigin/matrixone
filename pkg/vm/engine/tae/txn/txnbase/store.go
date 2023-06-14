@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -29,6 +30,7 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
+func (store *NoopTxnStore) Freeze() error                                { return nil }
 func (store *NoopTxnStore) WaitPrepared(ctx context.Context) (err error) { return }
 func (store *NoopTxnStore) GetLSN() uint64                               { return 0 }
 func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                   {}

@@ -138,7 +138,9 @@ func (db *txnDB) AddBlksWithMetaLoc(
 // 	return table.RangeDelete(nid, nrow, nrow, dt)
 // }
 
-func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+func (db *txnDB) RangeDelete(
+	id *common.ID, start, end uint32, dt handle.DeleteType,
+) (err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return err
@@ -147,15 +149,6 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteT
 		return moerr.NewNotFoundNoCtx()
 	}
 	return table.RangeDelete(id, start, end, dt)
-	// if start == end {
-	// 	return db.DeleteOne(table, id, start, dt)
-	// }
-	// for i := start; i <= end; i++ {
-	// 	if err = db.DeleteOne(table, id, i, dt); err != nil {
-	// 		return
-	// 	}
-	// }
-	// return
 }
 
 func (db *txnDB) GetByFilter(ctx context.Context, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
@@ -465,7 +458,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 	return
 }
 
-func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
+func (db *txnDB) Freeze() (err error) {
 	for _, table := range db.tables {
 		if table.NeedRollback() {
 			if err = table.PrepareRollback(); err != nil {
@@ -475,7 +468,16 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 		}
 	}
 	for _, table := range db.tables {
-		if err = table.PrePreareTransfer(); err != nil {
+		if err = table.PrePreareTransfer(txnif.FreezePhase); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
+	for _, table := range db.tables {
+		if err = table.PrePreareTransfer(txnif.PrePreparePhase); err != nil {
 			return
 		}
 	}

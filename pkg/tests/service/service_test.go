@@ -36,9 +36,10 @@ func TestClusterStart(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// initialize cluster
-	c, err := NewCluster(t, DefaultOptions())
+	c, err := NewCluster(ctx, t, DefaultOptions())
 	require.NoError(t, err)
 	// close the cluster
 	defer func(c Cluster) {
@@ -54,9 +55,10 @@ func TestAllocateID(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// initialize cluster
-	c, err := NewCluster(t, DefaultOptions())
+	c, err := NewCluster(ctx, t, DefaultOptions())
 	require.NoError(t, err)
 
 	// close the cluster
@@ -98,9 +100,10 @@ func TestAllocateIDByKey(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// initialize cluster
-	c, err := NewCluster(t, DefaultOptions())
+	c, err := NewCluster(ctx, t, DefaultOptions())
 	require.NoError(t, err)
 
 	// close the cluster
@@ -148,6 +151,7 @@ func TestClusterAwareness(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	if !supportMultiDN {
 		t.Skip("skipping, multi db not support")
@@ -161,7 +165,7 @@ func TestClusterAwareness(t *testing.T) {
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt)
+	c, err := NewCluster(ctx, t, opt)
 	require.NoError(t, err)
 
 	// close the cluster
@@ -215,6 +219,7 @@ func TestClusterOperation(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	if !supportMultiDN {
 		t.Skip("skipping, multi db not support")
@@ -228,7 +233,7 @@ func TestClusterOperation(t *testing.T) {
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt)
+	c, err := NewCluster(ctx, t, opt)
 	require.NoError(t, err)
 
 	// close the cluster
@@ -377,6 +382,7 @@ func TestClusterState(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	if !supportMultiDN {
 		t.Skip("skipping, multi db not support")
@@ -390,7 +396,7 @@ func TestClusterState(t *testing.T) {
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt)
+	c, err := NewCluster(ctx, t, opt)
 	require.NoError(t, err)
 
 	// close the cluster
@@ -509,6 +515,7 @@ func TestClusterWaitState(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	if !supportMultiDN {
 		t.Skip("skipping, multi db not support")
@@ -522,7 +529,7 @@ func TestClusterWaitState(t *testing.T) {
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt)
+	c, err := NewCluster(ctx, t, opt)
 	require.NoError(t, err)
 
 	// close the cluster
@@ -590,6 +597,7 @@ func TestNetworkPartition(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	if !supportMultiDN {
 		t.Skip("skipping, multi db not support")
@@ -603,7 +611,7 @@ func TestNetworkPartition(t *testing.T) {
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt)
+	c, err := NewCluster(ctx, t, opt)
 	require.NoError(t, err)
 
 	// close the cluster
