@@ -376,31 +376,16 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 
 	rs := vector.MustFunctionResult[int64](result)
 	switch len(parameters) {
 	case 2:
-		for i := uint64(0); i < uint64(length); i++ {
-			v1, null1 := p1.GetStrValue(i)
-			v2, null2 := p2.GetStrValue(i)
-			if null1 || null2 {
-				if err := rs.Append(0, true); err != nil {
-					return err
-				}
-			} else {
-				expr, pat := functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)
-				index, err := op.regMap.regularInstr(pat, expr, 1, 1, 0)
-				if err != nil {
-					return err
-				}
-				if err = rs.Append(index, false); err != nil {
-					return err
-				}
-			}
-		}
+		return opBinaryStrStrToFixedWithErrorCheck[int64](parameters, result, proc, length, func(v1, v2 string) (int64, error) {
+			return op.regMap.regularInstr(v2, v1, 1, 1, 0)
+		})
 
 	case 3:
 		positions := vector.GenerateFunctionFixedTypeParameter[int64](parameters[2])
@@ -478,36 +463,19 @@ func (op *opBuiltInRegexp) builtInRegexpInstr(parameters []*vector.Vector, resul
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
 
 	if len(parameters) == 2 {
-		for i := uint64(0); i < uint64(length); i++ {
-			expr, null1 := p1.GetStrValue(i)
-			pat, null2 := p2.GetStrValue(i)
-			if null1 || null2 {
-				if err := rs.Append(false, true); err != nil {
-					return err
-				}
-			} else {
-				match, err := op.regMap.regularLike(string(pat), string(expr), "c")
-				if err != nil {
-					return err
-				}
-				if err = rs.Append(match, false); err != nil {
-					return err
-				}
-			}
-		}
+		return opBinaryStrStrToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 string) (bool, error) {
+			match, err := op.regMap.regularLike(v2, v1, "c")
+			return match, err
+		})
 	} else if len(parameters) == 3 {
 		if parameters[2].IsConstNull() {
-			for i := uint64(0); i < uint64(length); i++ {
-				if err := rs.Append(false, true); err != nil {
-					return err
-				}
-			}
+			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
 			return nil
 		}
 
@@ -687,15 +655,6 @@ func (rs *regexpSet) regularMatchForLikeOp(pat []byte, str []byte) (match bool, 
 		return false, nil
 	}
 	return reg.Match(str), nil
-}
-
-// return if str matched pat.
-func (rs *regexpSet) regularMatch(pat string, str string) (match bool, err error) {
-	reg, err := rs.getRegularMatcher(pat)
-	if err != nil {
-		return false, err
-	}
-	return reg.MatchString(str), nil
 }
 
 // if str[pos:] matched pat.
