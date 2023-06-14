@@ -16,10 +16,11 @@ package txnimpl
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -193,7 +194,9 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	return db.AddBlksWithMetaLoc(ctx, tid, metaLoc)
 }
 
-func (store *txnStore) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+func (store *txnStore) RangeDelete(
+	id *common.ID, start, end uint32, dt handle.DeleteType,
+) (err error) {
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
@@ -627,7 +630,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 	return
 }
 
-func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
+func (store *txnStore) Freeze() (err error) {
 	for _, db := range store.dbs {
 		if db.NeedRollback() {
 			if err = db.PrepareRollback(); err != nil {
@@ -635,6 +638,15 @@ func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 			}
 			delete(store.dbs, db.entry.GetID())
 		}
+		if err = db.Freeze(); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
+	for _, db := range store.dbs {
 		if err = db.PrePrepare(ctx); err != nil {
 			return
 		}
