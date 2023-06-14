@@ -78,11 +78,11 @@ func (h *Handle) GetDB() *db.DB {
 	return h.db
 }
 
-func NewTAEHandle(path string, opt *options.Options) *Handle {
+func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handle {
 	if path == "" {
 		path = "./store"
 	}
-	tae, err := openTAE(path, opt)
+	tae, err := openTAE(ctx, path, opt)
 	if err != nil {
 		panic(err)
 	}
@@ -958,7 +958,7 @@ func (h *Handle) HandleAlterTable(
 	return tbl.AlterTable(ctx, req)
 }
 
-func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
+func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *db.DB, err error) {
 
 	if targetDir != "" {
 		mask := syscall.Umask(0)
@@ -968,7 +968,7 @@ func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 			return nil, err
 		}
 		syscall.Umask(mask)
-		tae, err = db.Open(targetDir+"/tae", opt)
+		tae, err = db.Open(ctx, targetDir+"/tae", opt)
 		if err != nil {
 			logutil.Warnf("Open tae failed. error:%v", err)
 			return nil, err
@@ -976,7 +976,7 @@ func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 		return tae, nil
 	}
 
-	tae, err = db.Open(targetDir, opt)
+	tae, err = db.Open(ctx, targetDir, opt)
 	if err != nil {
 		logutil.Warnf("Open tae failed. error:%v", err)
 		return nil, err

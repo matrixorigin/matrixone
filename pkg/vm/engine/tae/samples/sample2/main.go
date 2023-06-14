@@ -53,7 +53,9 @@ func stopProfile() {
 }
 
 func main() {
-	tae, _ := db.Open(sampleDir, nil)
+	ctx := context.Background()
+
+	tae, _ := db.Open(ctx, sampleDir, nil)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(10, 3)

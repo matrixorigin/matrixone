@@ -28,13 +28,13 @@ type ObjectFS struct {
 	Dir     string
 }
 
-func TmpNewFileservice(dir string) fileservice.FileService {
+func TmpNewFileservice(ctx context.Context, dir string) fileservice.FileService {
 	c := fileservice.Config{
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
 		DataDir: dir,
 	}
-	service, err := fileservice.NewFileService(c, nil)
+	service, err := fileservice.NewFileService(ctx, c, nil)
 	if err != nil {
 		err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("NewFileService failed: %s", err.Error()))
 		panic(any(err))

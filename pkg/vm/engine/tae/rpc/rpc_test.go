@@ -47,6 +47,7 @@ import (
 func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
+	ctx := context.Background()
 
 	//create  file service;
 	//dir := testutils.GetDefaultTestPath(ModuleName, t)
@@ -60,10 +61,10 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		DataDir: dir,
 	}
 	//create dir;
-	fs, err := fileservice.NewFileService(c, nil)
+	fs, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 	opts.Fs = fs
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 
@@ -220,6 +221,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
+	ctx := context.Background()
 
 	//create  file service;
 	//dir := testutils.GetDefaultTestPath(ModuleName, t)
@@ -233,10 +235,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		DataDir: dir,
 	}
 	//create dir;
-	fs, err := fileservice.NewFileService(c, nil)
+	fs, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 	opts.Fs = fs
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 
@@ -557,8 +559,9 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchema(2, 1)
@@ -799,8 +802,9 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 
 func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
@@ -835,7 +839,6 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{typ: CmdCommit},
 	}
 	txnMeta := mock2PCTxn(handle.db)
-	ctx := context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
 
@@ -1094,8 +1097,9 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 
 func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
@@ -1129,7 +1133,6 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{typ: CmdCommit},
 	}
 	txnMeta := mock2PCTxn(handle.db)
-	ctx := context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
 
@@ -1407,8 +1410,9 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 
 func TestHandle_MVCCVisibility(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
@@ -1440,7 +1444,6 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		},
 	}
 	txnMeta := mock2PCTxn(handle.db)
-	ctx := context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
 	var dbTestId uint64
