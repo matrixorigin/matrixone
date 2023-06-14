@@ -43,10 +43,11 @@ func MockTxnWithStartTS(ts types.TS) *txnbase.Txn {
 type DeleteChain struct {
 	*sync.RWMutex
 	*txnbase.MVCCChain[*DeleteNode]
-	mvcc  *MVCCHandle
-	links map[uint32]*common.GenericSortedDList[*DeleteNode]
-	cnt   atomic.Uint32
-	mask  *nulls.Bitmap
+	mvcc      *MVCCHandle
+	links     map[uint32]*common.GenericSortedDList[*DeleteNode]
+	cnt       atomic.Uint32
+	mask      *nulls.Bitmap
+	persisted *nulls.Bitmap
 }
 
 func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
@@ -114,6 +115,10 @@ func (chain *DeleteChain) hasOverLap(start, end uint64) bool {
 			yes = true
 			break
 		}
+		if chain.persisted != nil && chain.persisted.Contains(i) {
+			yes = true
+			break
+		}
 	}
 	return yes
 }
@@ -176,6 +181,30 @@ func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
 		}
 	}
 }
+
+func (chain *DeleteChain) shrinkDeleteChainByTS(flushed types.TS) *DeleteChain {
+	new := NewDeleteChain(chain.RWMutex, chain.mvcc)
+	new.persisted = chain.mask
+
+	chain.LoopChain(func(n *DeleteNode) bool {
+		if n.IsVisibleByTS(flushed) {
+			n.AttachTo(chain)
+			it := n.mask.Iterator()
+			for it.HasNext() {
+				row := it.Next()
+				new.InsertInDeleteView(row, n)
+				new.persisted.Del(uint64(row))
+				new.mask.Add(uint64(row))
+			}
+		}
+		return true
+	})
+
+	new.cnt = chain.cnt
+
+	return new
+}
+
 func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
 	it := deleteNode.mask.Iterator()
 	for it.HasNext() {
@@ -316,4 +345,11 @@ func (chain *DeleteChain) GetDeleteNodeByRow(row uint32) (n *DeleteNode) {
 		return n.Aborted
 	}, false)
 	return
+}
+
+func (chain *DeleteChain) isDeletePersistedLocked(row uint32) bool {
+	if chain.persisted == nil {
+		return false
+	}
+	return chain.persisted.Contains(uint64(row))
 }

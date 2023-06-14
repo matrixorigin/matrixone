@@ -107,7 +107,7 @@ type Block interface {
 
 	Init() error
 	TryUpgrade() error
-	GCMemory()
+	GCMemoryByTS(types.TS)
 	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool) (*containers.Batch, error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)

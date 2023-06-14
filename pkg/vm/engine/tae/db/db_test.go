@@ -3470,7 +3470,9 @@ func TestReadEqualTS(t *testing.T) {
 	defer tae.Close()
 
 	txn, err := tae.StartTxn(nil)
+	tae.Catalog.Lock()
 	tae.Catalog.CreateDBEntryByTS("db", txn.GetStartTS())
+	tae.Catalog.Unlock()
 	assert.Nil(t, err)
 	_, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
@@ -4186,36 +4188,67 @@ func TestCollectDelete(t *testing.T) {
 	p3 := txn3.GetPrepareTS()
 	t.Logf("p3= %v", p3.ToString())
 
-	_, rel = tae.getRelation()
+	txn, rel := tae.getRelation()
 	blkit = rel.MakeBlockIt()
-	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
+	blkhandle := blkit.GetBlock()
+	blkdata := blkhandle.GetMeta().(*catalog.BlockEntry).GetBlockData()
 
 	batch, err := blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p1, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 1, vec.Length())
 	}
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p2, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 4, vec.Length())
 	}
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p2, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 3, vec.Length())
 	}
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
+		assert.Equal(t, 5, vec.Length())
+	}
+
+	blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+	assert.NoError(t, err)
+	writer.SetPrimaryKey(3)
+	writer.WriteBatch(containers.ToCNBatch(batch))
+	blocks, _, err := writer.Sync(context.TODO())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(blocks))
+
+	deltaLoc := blockio.EncodeLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(batch.Length()),
+		blocks[0].GetID(),
+	)
+
+	err = blkhandle.UpdateDeltaLoc(deltaLoc)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	blkdata.GCMemoryByTS(p3)
+
+	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true)
+	assert.NoError(t, err)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 5, vec.Length())
 	}
 }

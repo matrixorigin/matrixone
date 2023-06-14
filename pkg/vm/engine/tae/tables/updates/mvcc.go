@@ -39,6 +39,7 @@ type MVCCHandle struct {
 	changes         atomic.Uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
 	appendListener  func(txnif.AppendNode) error
+	persistedTS     types.TS
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -100,6 +101,7 @@ func (n *MVCCHandle) StringLocked() string {
 	return s
 }
 
+// ac, ad, n, w-w
 func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts types.TS) error {
 	return n.deletes.PrepareRangeDelete(start, end, ts)
 }
@@ -112,6 +114,7 @@ func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
 	n.deletes.OnReplayNode(deleteNode.(*DeleteNode))
 }
 
+// FillInMemoryDeletesLocked(load), HasDeleteIntentsPreparedIn(commit cpct), CollectChangesInRange(merge)
 func (n *MVCCHandle) GetDeleteChain() *DeleteChain {
 	return n.deletes
 }
@@ -149,15 +152,13 @@ func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
 	n.appends.DeleteNode(node)
 }
 
-func (n *MVCCHandle) IsVisibleLocked(row uint32, txn txnif.TxnReader) (bool, error) {
-	an := n.GetAppendNodeByRow(row)
-	return an.IsVisible(txn), nil
-}
-
+// getbyfilter j*
 func (n *MVCCHandle) IsDeletedLocked(row uint32, txn txnif.TxnReader, rwlocker *sync.RWMutex) (bool, error) {
 	return n.deletes.IsDeleted(row, txn, rwlocker)
 }
 
+// getby filter
+//
 //	  1         2        3       4      5       6
 //	[----] [---------] [----][------][-----] [-----]
 //
@@ -184,6 +185,23 @@ func (n *MVCCHandle) CollectUncommittedANodesPreparedBefore(
 	return
 }
 
+func (n *MVCCHandle) UpgradeMVCCByTS(flushed types.TS) {
+	n.RLock()
+	if n.persistedTS.Equal(flushed) {
+		n.RUnlock()
+		return
+	}
+	newDeletes := n.deletes.shrinkDeleteChainByTS(flushed)
+	n.RUnlock()
+
+	n.Lock()
+	n.appends = nil
+	n.deletes = newDeletes
+	n.persistedTS = flushed
+	n.Unlock()
+}
+
+// load ablk, both p,m
 func (n *MVCCHandle) GetVisibleRowLocked(
 	txn txnif.TxnReader,
 ) (maxrow uint32, visible bool, holes *nulls.Bitmap, err error) {
@@ -251,6 +269,7 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 	return an.maxRow - n.deletes.cnt.Load()
 }
 
+// collect m ablk logtail
 func (n *MVCCHandle) CollectAppendLocked(
 	start, end types.TS) (
 	minRow, maxRow uint32,
@@ -291,16 +310,18 @@ func (n *MVCCHandle) CollectAppendLocked(
 		})
 	return
 }
+func (n *MVCCHandle) GetPersistedTS() types.TS {
+	return n.persistedTS
+}
 
-func (n *MVCCHandle) CollectDelete(
+// all logtail
+func (n *MVCCHandle) CollectDeleteLocked(
 	start, end types.TS,
 ) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap *nulls.Bitmap, deletes *nulls.Bitmap) {
-	n.RLock()
-	defer n.RUnlock()
 	if n.deletes.IsEmpty() {
 		return
 	}
-	if !n.ExistDeleteInRange(start, end) {
+	if !n.existDeleteInRange(start, end) {
 		return
 	}
 
@@ -344,7 +365,7 @@ func (n *MVCCHandle) CollectDelete(
 	return
 }
 
-func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
+func (n *MVCCHandle) existDeleteInRange(start, end types.TS) (exist bool) {
 	n.deletes.LoopChain(
 		func(node *DeleteNode) bool {
 			needWait, txn := node.NeedWaitCommitting(end.Next())
@@ -363,6 +384,7 @@ func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
 	return
 }
 
+// dedup mnode, getbyfilter
 func (n *MVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
 	_, an = n.appends.SearchNodeByCompareFn(func(node *AppendNode) int {
 		if node.maxRow <= row {
@@ -375,10 +397,12 @@ func (n *MVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
 	})
 	return
 }
+
 func (n *MVCCHandle) GetDeleteNodeByRow(row uint32) (an *DeleteNode) {
 	return n.deletes.GetDeleteNodeByRow(row)
 }
 
+// dedup mnode
 func (n *MVCCHandle) LastAnodeCommittedBeforeLocked(ts types.TS) bool {
 	anode := n.appends.GetUpdateNodeLocked()
 	if anode == nil {

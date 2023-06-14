@@ -216,10 +216,10 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			}),
 		gc.WithCronJob(
 			"memory-gc",
-			opts.CatalogCfg.MemoryGCInternal,
+			time.Millisecond,
 			func(ctx context.Context) error {
 				ts := types.BuildTS(
-					time.Now().UTC().UnixNano()-int64(opts.CatalogCfg.MemoryGCTTL),
+					time.Now().UTC().UnixNano(),
 					0)
 				db.Catalog.GCMemoryByTS(ctx, ts)
 				return nil

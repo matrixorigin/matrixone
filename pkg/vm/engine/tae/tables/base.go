@@ -92,10 +92,8 @@ func (blk *baseBlock) PinNode() *Node {
 	return n
 }
 
-func (blk *baseBlock) GCMemory() {
-	if blk.mvcc != nil {
-		blk.mvcc = nil
-	}
+func (blk *baseBlock) GCMemoryByTS(ts types.TS) {
+	blk.mvcc.UpgradeMVCCByTS(ts)
 }
 
 func (blk *baseBlock) Rows() int {
@@ -496,25 +494,38 @@ func (blk *baseBlock) CollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	node := blk.PinNode()
-	defer node.Unref()
-	if !node.IsPersisted() {
-		return blk.inMemoryCollectDeleteInRange(
-			start,
-			end,
-			withAborted)
-	} else {
-		return blk.persistedCollectDeleteInRange(
-			start,
-			end,
-			withAborted)
+	bat, persistedTS, err := blk.inMemoryCollectDeleteInRange(
+		ctx,
+		start,
+		end,
+		withAborted)
+	if err != nil {
+		return
 	}
+	if end.Greater(persistedTS) {
+		end = persistedTS
+	}
+	bat, err = blk.persistedCollectDeleteInRange(
+		ctx,
+		bat,
+		start,
+		end,
+		withAborted)
+	return
 }
 
 func (blk *baseBlock) inMemoryCollectDeleteInRange(
+	ctx context.Context,
 	start, end types.TS,
-	withAborted bool) (bat *containers.Batch, err error) {
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDelete(start, end)
+	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
+	blk.RLock()
+	persistedTS = blk.mvcc.GetPersistedTS()
+	if persistedTS.GreaterEq(end) {
+		blk.RUnlock()
+		return
+	}
+	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start, end)
+	blk.RUnlock()
 	if rowID == nil {
 		return
 	}
@@ -539,11 +550,42 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	return
 }
 
+// collect the row if its committs is in [start,end]
 func (blk *baseBlock) persistedCollectDeleteInRange(
+	ctx context.Context,
+	b *containers.Batch,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	// logtail should have sent metaloc
-	return nil, nil
+	if b != nil {
+		bat = b
+	}
+	deletes, err := blk.LoadPersistedDeletes(ctx)
+	if err != nil {
+		return
+	}
+	if deletes == nil {
+		return
+	}
+	for i := 0; i < deletes.Length(); i++ {
+		commitTS := deletes.GetVectorByName(catalog.AttrCommitTs).Get(i).(types.TS)
+		if commitTS.GreaterEq(start) && commitTS.LessEq(end) {
+			abort := deletes.GetVectorByName(catalog.AttrAborted).Get(i).(bool)
+			if withAborted && abort {
+				continue
+			}
+			if bat == nil {
+				bat = containers.NewBatch()
+				for i, name := range deletes.Attrs {
+					vec := containers.MakeVector(*deletes.Vecs[i].GetType())
+					bat.AddVector(name, vec)
+				}
+			}
+			for j, name := range deletes.Attrs {
+				bat.GetVectorByName(name).Append(deletes.GetVectorByName(name).Get(j), false)
+			}
+		}
+	}
+	return bat, nil
 }
 
 func (blk *baseBlock) adjustScore(
