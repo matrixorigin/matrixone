@@ -198,7 +198,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 		// nil: transferred successfully
 		// ErrTxnRWConflict: the target block was also be compacted
 		// ErrTxnWWConflict: w-w error
-		if _, err = tbl.TransferDelete(&id, node); err != nil {
+		if _, err = tbl.TransferDeleteNode(&id, node); err != nil {
 			return
 		}
 	}
@@ -222,7 +222,7 @@ func (tbl *txnTable) recurTransferDelete(
 			id.BlockID,
 			row,
 			depth)
-		logutil.Warnf("[ts=%s]TransferDelete: %v",
+		logutil.Warnf("[ts=%s]TransferDeleteNode: %v",
 			tbl.store.txn.GetStartTS().ToString(),
 			msg)
 		return err
@@ -261,7 +261,7 @@ func (tbl *txnTable) recurTransferDelete(
 	return nil
 }
 
-func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferred bool, err error) {
+func (tbl *txnTable) TransferDeleteNode(id *common.ID, node *deleteNode) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
@@ -292,7 +292,7 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 	memo[id.BlockID] = pinned
 
 	rows := node.DeletedRows()
-	// logutil.Infof("TransferDelete deletenode %s", node.DeleteNode.(*updates.DeleteNode).GeneralVerboseString())
+	// logutil.Infof("TransferDeleteNode deletenode %s", node.DeleteNode.(*updates.DeleteNode).GeneralVerboseString())
 	page := pinned.Item()
 	depth := 0
 	for _, row := range rows {
