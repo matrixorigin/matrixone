@@ -211,47 +211,12 @@ func (blk *ablock) GetValue(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	if !node.IsPersisted() {
-		return blk.getInMemoryValue(node.MustMNode(), txn, schema, row, col)
+		return node.MustMNode().getInMemoryValue(txn, schema, row, col)
 	} else {
 		return blk.getPersistedValue(
-			ctx,
-			txn,
-			schema,
-			row,
-			col,
-			true)
+			ctx, txn, schema, row, col, true,
+		)
 	}
-}
-
-// With PinNode Context
-func (blk *ablock) getInMemoryValue(
-	mnode *memoryNode,
-	txn txnif.TxnReader,
-	readSchema *catalog.Schema,
-	row, col int) (v any, isNull bool, err error) {
-	blk.RLock()
-	deleted, err := blk.mvcc.IsDeletedLocked(uint32(row), txn, blk.RWMutex)
-	blk.RUnlock()
-	if err != nil {
-		return
-	}
-	if deleted {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-	view, err := mnode.resolveInMemoryColumnData(txn, readSchema, col, true)
-	if err != nil {
-		return
-	}
-	defer view.Close()
-	v, isNull = view.GetValue(row)
-	//switch val := v.(type) {
-	//case []byte:
-	//	myVal := make([]byte, len(val))
-	//	copy(myVal, val)
-	//	v = myVal
-	//}
-	return
 }
 
 // GetByFilter will read pk column, which seqnum will not change, no need to pass the read schema.

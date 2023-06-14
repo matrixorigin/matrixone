@@ -484,3 +484,28 @@ func (node *memoryNode) resolveInMemoryColumnData(
 
 	return
 }
+
+// With PinNode Context
+func (node *memoryNode) getInMemoryValue(
+	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
+	row, col int,
+) (v any, isNull bool, err error) {
+	node.block.RLock()
+	deleted, err := node.block.mvcc.IsDeletedLocked(uint32(row), txn, node.block.RWMutex)
+	node.block.RUnlock()
+	if err != nil {
+		return
+	}
+	if deleted {
+		err = moerr.NewNotFoundNoCtx()
+		return
+	}
+	view, err := node.resolveInMemoryColumnData(txn, readSchema, col, true)
+	if err != nil {
+		return
+	}
+	defer view.Close()
+	v, isNull = view.GetValue(row)
+	return
+}
