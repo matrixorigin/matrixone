@@ -85,3 +85,83 @@ jobs:
           path: |
              ${{ github.workspace }}/docker-compose-log
           retention-days: 7
+
+  bvt-docker-compose-pessimistic:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    name: multi cn e2e bvt test docker compose(PESSIMISTIC)
+    timeout-minutes: 60
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '3'
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Print run attempt
+        run: echo "run attempt is ${{ github.run_attempt }}"
+
+      - name: docker compose launch-tae-multi-CN-tae-DN
+        run: |
+          sed -i 's/\[cn.txn\]/\[cn.txn\]\nmode = "Pessimistic"\nisolation = "RC"/g' ./etc/launch-tae-compose/config/cn-0.toml
+          sed -i 's/\[cn.txn\]/\[cn.txn\]\nmode = "Pessimistic"\nisolation = "RC"/g' ./etc/launch-tae-compose/config/cn-1.toml
+          sed -i 's/\[cn\]/\[cn\]\nprimary-key-check = "true"/g' ./etc/launch-tae-compose/config/cn-0.toml
+          sed -i 's/\[cn\]/\[cn\]\nprimary-key-check = "true"/g' ./etc/launch-tae-compose/config/cn-1.toml
+          cat ./etc/launch-tae-compose/config/cn-0.toml
+          cat ./etc/launch-tae-compose/config/cn-1.toml
+
+          mkdir -p ${{ github.workspace }}/docker-compose-log
+          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN up -d --build
+          # wait for ready
+          sleep 10
+
+      - name: Clone test-tool repository
+        # Node.js 12 actions are deprecated.
+        # For more information see:
+        #     - https://github.blog/changelog/2022-09-22-github-actions-all-actions-will-begin-running-on-node16-instead-of-node12/.
+        # Please update the following actions to use Node.js 16: actions/checkout@v3
+        uses: actions/checkout@v3
+        with:
+          repository: matrixorigin/mo-tester
+          path: ./mo-tester
+          ref: main
+
+      - name: Set up JDK 8 for x64
+        uses: actions/setup-java@v3
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          architecture: x64
+
+      - name: Start BVT Test
+        id: bvt_on_pr_version
+        run: |
+          export LC_ALL="C.UTF-8"
+          locale
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/test/distributed/cases -s /test/distributed/resources -e transaction 2>&1
+
+      - name: export log
+        if: ${{ failure() }}
+        run: |
+          mv  ${{ github.workspace }}/mo-tester/report ${{ github.workspace }}/docker-compose-log
+          curl http://localhost:12345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-0-dump-stacks.log
+          curl http://localhost:22345/debug/pprof/goroutine\?debug=2 -o ${{ github.workspace }}/docker-compose-log/cn-1-dump-stacks.log
+
+
+      - name: shutdown containers
+        if: ${{ always() }}
+        run: |
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-tae-multi-CN-tae-DN down --remove-orphans
+          docker volume rm launch-tae-compose_minio_storage
+
+      - uses: actions/upload-artifact@v3
+        if: ${{ failure() || cancelled()}}
+        continue-on-error: true
+        with:
+          name: multi-cn-e2e-push-docker-compose-log
+          path: |
+            ${{ github.workspace }}/docker-compose-log
+          retention-days: 7
