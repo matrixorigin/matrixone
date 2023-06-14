@@ -139,7 +139,6 @@ func (catalog *Catalog) InitSystemDB() {
 		panic(err)
 	}
 }
-
 func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	logutil.Infof("GC Catalog %v", ts.ToString())
 	processor := LoopProcessor{}

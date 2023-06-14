@@ -7315,12 +7315,15 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 	blkData := blkMeta.GetBlockData()
 	assert.NoError(t, txn.Commit(context.Background()))
 	ctx, cancel := context.WithCancel(context.Background())
+	wg:=sync.WaitGroup{}
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		i := 0
 		for {
 			select {
 			case <-ctx.Done():
-				break
+				return
 			default:
 				ts := tae.TxnMgr.StatMaxCommitTS()
 				batch, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true)
@@ -7377,5 +7380,6 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 		assert.Equal(t, offset+1, view.DeleteMask.GetCardinality())
 	}
 	cancel()
+	wg.Wait()
 
 }

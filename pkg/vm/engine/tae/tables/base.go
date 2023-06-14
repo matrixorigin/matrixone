@@ -593,32 +593,22 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 	if b != nil {
 		bat = b
 	}
-	deletes, err := blk.LoadPersistedDeletes(ctx)
-	if err != nil {
-		return
-	}
-	if deletes == nil {
-		return
-	}
-	for i := 0; i < deletes.Length(); i++ {
-		commitTS := deletes.GetVectorByName(catalog.AttrCommitTs).Get(i).(types.TS)
-		if commitTS.GreaterEq(start) && commitTS.LessEq(end) {
-			abort := deletes.GetVectorByName(catalog.AttrAborted).Get(i).(bool)
-			if withAborted && abort {
-				continue
-			}
+	blk.foreachPersistedDeletesCommittedInRange(
+		ctx,
+		start, end,
+		!withAborted,
+		func(row int, deleteBatch *containers.Batch) {
 			if bat == nil {
 				bat = containers.NewBatch()
-				for i, name := range deletes.Attrs {
-					vec := containers.MakeVector(*deletes.Vecs[i].GetType())
+				for i, name := range deleteBatch.Attrs {
+					vec := containers.MakeVector(*deleteBatch.Vecs[i].GetType())
 					bat.AddVector(name, vec)
 				}
 			}
-			for _, name := range deletes.Attrs {
-				bat.GetVectorByName(name).Append(deletes.GetVectorByName(name).Get(i), false)
+			for _, name := range deleteBatch.Attrs {
+				bat.GetVectorByName(name).Append(deleteBatch.GetVectorByName(name).Get(row), false)
 			}
-		}
-	}
+		})
 	return bat, nil
 }
 
