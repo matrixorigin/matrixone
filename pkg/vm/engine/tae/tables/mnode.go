@@ -73,6 +73,7 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 }
 
 func (node *memoryNode) close() {
+	mvcc := node.block.mvcc
 	logutil.Debugf("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
 	node.data.Close()
 	node.data = nil
@@ -81,6 +82,7 @@ func (node *memoryNode) close() {
 		node.pkIndex = nil
 	}
 	node.block = nil
+	mvcc.ReleaseAppends()
 }
 
 func (node *memoryNode) IsPersisted() bool { return false }
@@ -513,5 +515,5 @@ func (node *memoryNode) getInMemoryValue(
 func (node *memoryNode) allRowsCommittedBefore(ts types.TS) bool {
 	node.block.RLock()
 	defer node.block.RUnlock()
-	return node.block.mvcc.LastAnodeCommittedBeforeLocked(ts)
+	return node.block.mvcc.AllAppendsCommittedBefore(ts)
 }
