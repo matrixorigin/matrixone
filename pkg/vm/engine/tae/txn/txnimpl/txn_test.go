@@ -177,7 +177,7 @@ func TestTable(t *testing.T) {
 		assert.False(t, tbl.IsLocalDeleted(1024+31))
 		assert.False(t, tbl.IsLocalDeleted(1024*10+37))
 		assert.False(t, tbl.IsLocalDeleted(1024*40+41))
-		err = txn.Commit()
+		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 	}
 }
@@ -230,7 +230,7 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3*int(brows), int(tbl.UncommittedRows()))
 	assert.Equal(t, 3*int(brows), int(tbl.localSegment.index.Count()))
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 func TestIndex(t *testing.T) {
@@ -313,7 +313,7 @@ func TestLoad(t *testing.T) {
 	v, _, err := tbl.GetLocalValue(100, 0)
 	assert.NoError(t, err)
 	t.Logf("Row %d, Col %d, Val %v", 100, 0, v)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 func TestNodeCommand(t *testing.T) {
@@ -356,7 +356,7 @@ func TestNodeCommand(t *testing.T) {
 			t.Log(cmd.String())
 		}
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 func TestTxnManager1(t *testing.T) {
@@ -364,7 +364,7 @@ func TestTxnManager1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil, nil, nil, 0),
 		TxnFactory(nil), types.NewMockHLCClock(1))
-	mgr.Start()
+	mgr.Start(context.Background())
 	txn, _ := mgr.StartTxn(nil)
 	txn.MockIncWriteCnt()
 
@@ -398,7 +398,7 @@ func TestTxnManager1(t *testing.T) {
 		lock.Lock()
 		seqs = append(seqs, 3)
 		lock.Unlock()
-		err := txn2.Commit()
+		err := txn2.Commit(context.Background())
 		assert.Nil(t, err)
 	}
 
@@ -407,7 +407,7 @@ func TestTxnManager1(t *testing.T) {
 		go short()
 	}
 
-	err := txn.Commit()
+	err := txn.Commit(context.Background())
 	assert.Nil(t, err)
 	wg.Wait()
 	defer mgr.Stop()
@@ -425,7 +425,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	factory := tables.NewDataFactory(fs, indexCache, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, nil, indexCache, factory, 0),
 		TxnFactory(c), types.NewMockHLCClock(1))
-	mgr.Start()
+	mgr.Start(context.Background())
 	return c, mgr, driver
 }
 
@@ -450,7 +450,7 @@ func TestTransaction1(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = db.CreateRelation(schema)
 	assert.Nil(t, err)
-	err = txn1.Commit()
+	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
 	t.Log(c.SimplePPString(common.PPL1))
 
@@ -468,9 +468,9 @@ func TestTransaction1(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(rel.String())
 
-	err = txn2.Commit()
+	err = txn2.Commit(context.Background())
 	assert.Nil(t, err)
-	err = txn3.Commit()
+	err = txn3.Commit(context.Background())
 	assert.NoError(t, err)
 	// assert.Equal(t, txnif.TxnStateRollbacked, txn3.GetTxnState(true))
 	t.Log(txn3.String())
@@ -499,7 +499,7 @@ func TestTransaction2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(rel.String())
 
-	err = txn1.Commit()
+	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
 	t.Log(db.String())
 	assert.Equal(t, txn1.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
@@ -554,7 +554,7 @@ func TestTransaction3(t *testing.T) {
 			schema := catalog.MockSchemaAll(13, 12)
 			_, err = db.CreateRelation(schema)
 			assert.Nil(t, err)
-			err = txn.Commit()
+			err = txn.Commit(context.Background())
 			assert.Nil(t, err)
 		}
 	}
@@ -585,7 +585,7 @@ func TestSegment1(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = rel.CreateSegment(false)
 	assert.Nil(t, err)
-	err = txn1.Commit()
+	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
 
 	txn2, _ := mgr.StartTxn(nil)
@@ -629,7 +629,7 @@ func TestSegment1(t *testing.T) {
 	}
 	assert.Equal(t, 1, cnt)
 
-	err = txn2.Commit()
+	err = txn2.Commit(context.Background())
 	assert.Nil(t, err)
 
 	segIt = rel.MakeSegmentIt()
@@ -704,7 +704,7 @@ func TestBlock1(t *testing.T) {
 	}
 	assert.Equal(t, blkCnt, cnt)
 
-	err := txn1.Commit()
+	err := txn1.Commit(context.Background())
 	assert.Nil(t, err)
 	txn2, _ := mgr.StartTxn(nil)
 	db, _ = txn2.GetDatabase("db")
@@ -745,7 +745,7 @@ func TestDedup1(t *testing.T) {
 		db, _ := txn.CreateDatabase("db", "", "")
 		_, err := db.CreateRelation(schema)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
 		txn, _ := mgr.StartTxn(nil)
@@ -755,7 +755,7 @@ func TestDedup1(t *testing.T) {
 		assert.NoError(t, err)
 		err = rel.Append(context.Background(), bats[0])
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-		assert.Nil(t, txn.Rollback())
+		assert.Nil(t, txn.Rollback(context.Background()))
 	}
 
 	{
@@ -764,7 +764,7 @@ func TestDedup1(t *testing.T) {
 		rel, _ := db.GetRelationByName(schema.Name)
 		err := rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
 		txn, _ := mgr.StartTxn(nil)
@@ -772,7 +772,7 @@ func TestDedup1(t *testing.T) {
 		rel, _ := db.GetRelationByName(schema.Name)
 		err := rel.Append(context.Background(), bats[0])
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
-		assert.Nil(t, txn.Rollback())
+		assert.Nil(t, txn.Rollback(context.Background()))
 	}
 	{
 		txn, _ := mgr.StartTxn(nil)
@@ -788,7 +788,7 @@ func TestDedup1(t *testing.T) {
 		assert.Nil(t, err)
 		err = rel2.Append(context.Background(), bats[3])
 		assert.Nil(t, err)
-		assert.Nil(t, txn2.Commit())
+		assert.Nil(t, txn2.Commit(context.Background()))
 
 		txn3, _ := mgr.StartTxn(nil)
 		db3, _ := txn3.GetDatabase("db")
@@ -797,11 +797,11 @@ func TestDedup1(t *testing.T) {
 		assert.Nil(t, err)
 		err = rel3.Append(context.Background(), bats[5])
 		assert.Nil(t, err)
-		assert.Nil(t, txn3.Commit())
+		assert.Nil(t, txn3.Commit(context.Background()))
 
 		err = rel.Append(context.Background(), bats[3])
 		assert.NoError(t, err)
-		err = txn.Commit()
+		err = txn.Commit(context.Background())
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 	}
 	t.Log(c.SimplePPString(common.PPL1))

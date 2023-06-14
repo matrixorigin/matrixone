@@ -46,7 +46,7 @@ func TestCheckpoint1(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
 		txn, _ := db.StartTxn(nil)
@@ -56,7 +56,7 @@ func TestCheckpoint1(t *testing.T) {
 		blk := it.GetBlock()
 		err := blk.RangeDelete(3, 3, handle.DT_Normal)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 
 	blockCnt := 0
@@ -111,7 +111,7 @@ func TestCheckpoint2(t *testing.T) {
 		meta2 = rel2.GetMeta().(*catalog.TableEntry)
 		t.Log(meta1.String())
 		t.Log(meta2.String())
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	for i, data := range bats[0:8] {
 		var name string
@@ -147,7 +147,7 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, err)
 		err = task.WaitDone()
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 
 	// testutils.WaitExpect(1000, func() bool {
@@ -182,7 +182,7 @@ func TestSchedule1(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	compactBlocks(t, 0, db, "db", schema, false)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))

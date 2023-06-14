@@ -171,7 +171,7 @@ func (h *Handle) HandleCommit(
 			//Need to roll back the txn.
 			if err != nil {
 				txn, _ = h.db.GetTxnByID(meta.GetID())
-				txn.Rollback()
+				txn.Rollback(ctx)
 				return
 			}
 		}
@@ -184,7 +184,7 @@ func (h *Handle) HandleCommit(
 	if txn.Is2PC() {
 		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	}
-	err = txn.Commit()
+	err = txn.Commit(ctx)
 	cts = txn.GetCommitTS().ToTimestamp()
 	return
 }
@@ -205,7 +205,7 @@ func (h *Handle) HandleRollback(
 	if err != nil {
 		return err
 	}
-	err = txn.Rollback()
+	err = txn.Rollback(ctx)
 	return
 }
 
@@ -280,7 +280,7 @@ func (h *Handle) HandlePrepare(
 			//need to rollback the txn
 			if err != nil {
 				txn, _ = h.db.GetTxnByID(meta.GetID())
-				txn.Rollback()
+				txn.Rollback(ctx)
 				return
 			}
 		}
@@ -295,7 +295,7 @@ func (h *Handle) HandlePrepare(
 	}
 	txn.SetParticipants(participants)
 	var ts types.TS
-	ts, err = txn.Prepare()
+	ts, err = txn.Prepare(ctx)
 	pts = ts.ToTimestamp()
 	//delete the txn's context.
 	h.mu.Lock()
@@ -396,7 +396,7 @@ func (h *Handle) HandleInspectDN(
 		out:    b,
 		resp:   resp,
 	}
-	RunInspect(inspectCtx)
+	RunInspect(ctx, inspectCtx)
 	resp.Message = b.String()
 	return nil, nil
 }
@@ -863,7 +863,7 @@ func (h *Handle) HandleWrite(
 				locations = append(locations, location)
 			}
 
-			err = tb.AddBlksWithMetaLoc(locations)
+			err = tb.AddBlksWithMetaLoc(ctx, locations)
 			return
 		}
 		//check the input batch passed by cn is valid.

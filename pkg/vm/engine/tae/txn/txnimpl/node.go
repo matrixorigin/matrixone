@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -116,9 +117,9 @@ func (n *pnode) GetColumnDataByIds([]int) (*model.BlockView, error) {
 	panic("not implemented yet ")
 }
 
-func (n *pnode) GetColumnDataById(idx int) (view *model.ColumnView, err error) {
+func (n *pnode) GetColumnDataById(ctx context.Context, idx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(idx)
-	vec, err := n.LoadPersistedColumnData(idx)
+	vec, err := n.LoadPersistedColumnData(ctx, idx)
 	if err != nil {
 		return
 	}
