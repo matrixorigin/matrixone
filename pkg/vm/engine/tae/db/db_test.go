@@ -7309,20 +7309,52 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 
 	txn, rel := tae.getRelation()
 	blkit := rel.MakeBlockIt()
-	blkMeta := blkit.GetBlock().GetMeta().(*catalog.BlockEntry)
+	blkHandle := blkit.GetBlock()
+	blkMeta := blkHandle.GetMeta().(*catalog.BlockEntry)
 	blkID := blkMeta.AsCommonID()
 	blkData := blkMeta.GetBlockData()
 	assert.NoError(t, txn.Commit(context.Background()))
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
+		i := 0
 		for {
 			select {
 			case <-ctx.Done():
 				break
 			default:
 				ts := tae.TxnMgr.StatMaxCommitTS()
+				batch, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true)
+				assert.NoError(t, err)
+				if batch == nil {
+					continue
+				}
+
+				blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), uint16(i))
+				writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+				assert.NoError(t, err)
+				writer.SetPrimaryKey(3)
+				writer.WriteBatch(containers.ToCNBatch(batch))
+				blocks, _, err := writer.Sync(context.TODO())
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(blocks))
+
+				deltaLoc := blockio.EncodeLocation(
+					writer.GetName(),
+					blocks[0].GetExtent(),
+					uint32(batch.Length()),
+					blocks[0].GetID(),
+				)
+
+				txn, rel := tae.getRelation()
+				blkit := rel.MakeBlockIt()
+				blkHandle := blkit.GetBlock()
+				err = blkHandle.UpdateDeltaLoc(deltaLoc)
+				assert.NoError(t, err)
+				assert.NoError(t, txn.Commit(context.Background()))
+
 				blkData.GCInMemeoryDeletesByTS(ts)
 			}
+			i++
 		}
 	}()
 
@@ -7337,12 +7369,12 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 		t.Logf(logtail.BatchToString("", batch, false))
 		for i, vec := range batch.Vecs {
 			t.Logf(batch.Attrs[i])
-			assert.Equal(t, offset, vec.Length())
+			assert.Equal(t, offset+1, vec.Length())
 		}
 		view, err := blkData.CollectChangesInRange(context.Background(), types.TS{}, ts)
 		assert.NoError(t, err)
 		t.Logf(view.DeleteMask.String())
-		assert.Equal(t, offset, view.DeleteMask.GetCardinality())
+		assert.Equal(t, offset+1, view.DeleteMask.GetCardinality())
 	}
 	cancel()
 

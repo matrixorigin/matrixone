@@ -81,15 +81,13 @@ func (n *MVCCHandle) GetDeletesPersistedTS() types.TS {
 }
 
 func (n *MVCCHandle) UpgradeDeleteChainByTS(flushed types.TS) {
-	n.RLock()
+	n.Lock()
 	if n.persistedTS.Equal(flushed) {
-		n.RUnlock()
+		n.Unlock()
 		return
 	}
 	newDeletes := n.deletes.Load().shrinkDeleteChainByTS(flushed)
-	n.RUnlock()
 
-	n.Lock()
 	n.deletes.Store(newDeletes)
 	n.persistedTS = flushed
 	n.Unlock()

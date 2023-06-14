@@ -614,8 +614,8 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 					bat.AddVector(name, vec)
 				}
 			}
-			for j, name := range deletes.Attrs {
-				bat.GetVectorByName(name).Append(deletes.GetVectorByName(name).Get(j), false)
+			for _, name := range deletes.Attrs {
+				bat.GetVectorByName(name).Append(deletes.GetVectorByName(name).Get(i), false)
 			}
 		}
 	}
