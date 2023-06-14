@@ -46,14 +46,14 @@ func (task *ScheduledTxnTask) Scope() *common.ID {
 	return &task.scopes[0]
 }
 
-func (task *ScheduledTxnTask) Execute(_ context.Context) (err error) {
+func (task *ScheduledTxnTask) Execute(ctx context.Context) (err error) {
 	txn, err := task.db.TxnMgr.StartTxnWithLatestTS(nil)
 	if err != nil {
 		return
 	}
 	txnTask, err := task.factory(nil, txn)
 	if err != nil {
-		err2 := txn.Rollback()
+		err2 := txn.Rollback(ctx)
 		if err2 != nil {
 			panic(err2)
 		}
@@ -62,12 +62,12 @@ func (task *ScheduledTxnTask) Execute(_ context.Context) (err error) {
 	}
 	err = txnTask.OnExec(task.db.Opts.Ctx)
 	if err != nil {
-		err2 := txn.Rollback()
+		err2 := txn.Rollback(ctx)
 		if err2 != nil {
 			panic(err)
 		}
 	} else {
-		err = txn.Commit()
+		err = txn.Commit(ctx)
 		if err != nil {
 			return
 		}

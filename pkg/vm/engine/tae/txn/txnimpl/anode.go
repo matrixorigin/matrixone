@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -213,7 +214,7 @@ func (n *anode) GetColumnDataByIds(
 	return
 }
 
-func (n *anode) GetColumnDataById(colIdx int) (view *model.ColumnView, err error) {
+func (n *anode) GetColumnDataById(ctx context.Context, colIdx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(colIdx)
 	err = n.FillColumnView(view)
 	return

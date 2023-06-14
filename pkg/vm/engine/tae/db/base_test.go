@@ -99,14 +99,14 @@ func (e *testEngine) createRelAndAppend(bat *containers.Batch, createDB bool) (h
 // func (e *testEngine) getRows() int {
 // 	txn, rel := e.getRelation()
 // 	rows := rel.Rows()
-// 	assert.NoError(e.t, txn.Commit())
+// 	assert.NoError(e.t, txn.Commit(context.Background()))
 // 	return int(rows)
 // }
 
 func (e *testEngine) checkRowsByScan(exp int, applyDelete bool) {
 	txn, rel := e.getRelation()
 	checkAllColRowsByScan(e.t, rel, exp, applyDelete)
-	assert.NoError(e.t, txn.Commit())
+	assert.NoError(e.t, txn.Commit(context.Background()))
 }
 func (e *testEngine) dropRelation(t *testing.T) {
 	txn, err := e.StartTxn(nil)
@@ -115,7 +115,7 @@ func (e *testEngine) dropRelation(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = db.DropRelationByName(e.schema.Name)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
 	return getRelation(e.t, e.tenantID, e.DB, defaultTestDB, e.schema.Name)
@@ -149,7 +149,7 @@ func (e *testEngine) DoAppend(bat *containers.Batch) {
 	txn, rel := e.getRelation()
 	err := rel.Append(context.Background(), bat)
 	assert.NoError(e.t, err)
-	assert.NoError(e.t, txn.Commit())
+	assert.NoError(e.t, txn.Commit(context.Background()))
 }
 
 func (e *testEngine) doAppendWithTxn(bat *containers.Batch, txn txnif.AsyncTxn, skipConflict bool) (err error) {
@@ -169,16 +169,16 @@ func (e *testEngine) tryAppend(bat *containers.Batch) {
 	assert.NoError(e.t, err)
 	rel, err := db.GetRelationByName(e.schema.Name)
 	if err != nil {
-		_ = txn.Rollback()
+		_ = txn.Rollback(context.Background())
 		return
 	}
 
 	err = rel.Append(context.Background(), bat)
 	if err != nil {
-		_ = txn.Rollback()
+		_ = txn.Rollback(context.Background())
 		return
 	}
-	_ = txn.Commit()
+	_ = txn.Commit(context.Background())
 }
 func (e *testEngine) deleteAll(skipConflict bool) error {
 	txn, rel := e.getRelation()
@@ -195,7 +195,7 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 		it.Next()
 	}
 	// checkAllColRowsByScan(e.t, rel, 0, true)
-	err := txn.Commit()
+	err := txn.Commit(context.Background())
 	if !skipConflict {
 		checkAllColRowsByScan(e.t, rel, 0, true)
 		assert.NoError(e.t, err)
@@ -207,7 +207,7 @@ func (e *testEngine) truncate() {
 	txn, db := e.getTestDB()
 	_, err := db.TruncateByName(e.schema.Name)
 	assert.NoError(e.t, err)
-	assert.NoError(e.t, txn.Commit())
+	assert.NoError(e.t, txn.Commit(context.Background()))
 }
 func (e *testEngine) globalCheckpoint(
 	endTs types.TS,
@@ -314,7 +314,7 @@ func createDB(t *testing.T, e *DB, dbName string) {
 	assert.NoError(t, err)
 	_, err = txn.CreateDatabase(dbName, "", "")
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 func dropDB(t *testing.T, e *DB, dbName string) {
@@ -322,12 +322,12 @@ func dropDB(t *testing.T, e *DB, dbName string) {
 	assert.NoError(t, err)
 	_, err = txn.DropDatabase(dbName)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 func createRelation(t *testing.T, e *DB, dbName string, schema *catalog.Schema, createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, db, rel := createRelationNoCommit(t, e, dbName, schema, createDB)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	return
 }
 
@@ -368,7 +368,7 @@ func createRelationAndAppend(
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
-	assert.Nil(t, txn.Commit())
+	assert.Nil(t, txn.Commit(context.Background()))
 	return
 }
 
@@ -486,7 +486,7 @@ func appendFailClosure(t *testing.T, data *containers.Batch, name string, e *DB,
 		rel, _ := database.GetRelationByName(name)
 		err := rel.Append(context.Background(), data)
 		assert.NotNil(t, err)
-		assert.Nil(t, txn.Rollback())
+		assert.Nil(t, txn.Rollback(context.Background()))
 	}
 }
 
@@ -500,7 +500,7 @@ func appendClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg 
 		rel, _ := database.GetRelationByName(name)
 		err := rel.Append(context.Background(), data)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 }
 
@@ -513,14 +513,14 @@ func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *DB, 
 		database, _ := txn.GetDatabase("db")
 		rel, err := database.GetRelationByName(name)
 		if err != nil {
-			_ = txn.Rollback()
+			_ = txn.Rollback(context.Background())
 			return
 		}
 		if err = rel.Append(context.Background(), data); err != nil {
-			_ = txn.Rollback()
+			_ = txn.Rollback(context.Background())
 			return
 		}
-		_ = txn.Commit()
+		_ = txn.Commit(context.Background())
 	}
 }
 
@@ -539,25 +539,25 @@ func compactBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *
 		metas = append(metas, meta)
 		it.Next()
 	}
-	_ = txn.Commit()
+	_ = txn.Commit(context.Background())
 	for _, meta := range metas {
 		txn, _ := getRelation(t, tenantID, e, dbName, schema.Name)
 		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
 		if skipConflict && err != nil {
-			_ = txn.Rollback()
+			_ = txn.Rollback(context.Background())
 			continue
 		}
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		if skipConflict {
 			if err != nil {
-				_ = txn.Rollback()
+				_ = txn.Rollback(context.Background())
 			} else {
-				_ = txn.Commit()
+				_ = txn.Commit(context.Background())
 			}
 		} else {
 			assert.NoError(t, err)
-			assert.NoError(t, txn.Commit())
+			assert.NoError(t, txn.Commit(context.Background()))
 		}
 	}
 }
@@ -577,7 +577,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 		}
 		segIt.Next()
 	}
-	_ = txn.Commit()
+	_ = txn.Commit(context.Background())
 	for _, seg := range segs {
 		txn, _ = e.StartTxn(nil)
 		txn.BindAccessInfo(tenantID, 0, 0)
@@ -586,7 +586,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 		segHandle, err := rel.GetSegment(&seg.ID)
 		if err != nil {
 			if skipConflict {
-				_ = txn.Rollback()
+				_ = txn.Rollback(context.Background())
 				continue
 			}
 			assert.NoErrorf(t, err, "Txn Ts=%d", txn.GetStartTS())
@@ -601,20 +601,20 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
 		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Scheduler)
 		if skipConflict && err != nil {
-			_ = txn.Rollback()
+			_ = txn.Rollback(context.Background())
 			continue
 		}
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		if skipConflict {
 			if err != nil {
-				_ = txn.Rollback()
+				_ = txn.Rollback(context.Background())
 			} else {
-				_ = txn.Commit()
+				_ = txn.Commit(context.Background())
 			}
 		} else {
 			assert.NoError(t, err)
-			assert.NoError(t, txn.Commit())
+			assert.NoError(t, txn.Commit(context.Background()))
 		}
 	}
 }
@@ -640,7 +640,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 		err = task.WaitDone()
 		assert.NoError(t, err)
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }*/
 
 func getSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {

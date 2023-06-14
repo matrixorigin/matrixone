@@ -73,7 +73,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		// assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
 	}
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
@@ -97,7 +97,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	}
 
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	err = rel.Append(context.Background(), bats[1])
@@ -110,7 +110,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bats[5])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	compactBlocks(t, 0, tae, "db", schema, false)
 
@@ -145,7 +145,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		}
 	}
 
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	{
 		seg := segMeta.GetSegmentData()
 		factory, taskType, scopes, err := seg.BuildCompactionTaskFactory()
@@ -186,7 +186,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		}
 	}
 
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
@@ -241,7 +241,7 @@ func TestHidden2(t *testing.T) {
 		}
 	}
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
@@ -282,7 +282,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(context.Background(), bats[2])
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
@@ -302,7 +302,7 @@ func TestHidden2(t *testing.T) {
 			assert.NoError(t, err)
 		}
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
@@ -327,7 +327,7 @@ func TestHidden2(t *testing.T) {
 		}
 
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	t.Log(rel.Rows())
@@ -346,6 +346,6 @@ func TestHidden2(t *testing.T) {
 		}
 		assert.Equal(t, 26, rows)
 	}
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
