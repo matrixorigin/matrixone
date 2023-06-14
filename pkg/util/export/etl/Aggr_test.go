@@ -31,7 +31,7 @@ func TestAggregator(t *testing.T) {
 	)
 
 	// Insert StatementInfo instances into the aggregator
-	aggregator.AddItem(&motrace.StatementInfo{
+	_, err := aggregator.AddItem(&motrace.StatementInfo{
 		SessionID:     sessionId,
 		StatementType: "Type1",
 		Status:        motrace.StatementStatusSuccess,
@@ -39,8 +39,11 @@ func TestAggregator(t *testing.T) {
 		Duration:      time.Duration(5 * time.Second),
 		Statement:     "Statement1",
 	})
+	if err != nil {
+		t.Fatalf("Unexpected error when adding item: %v", err)
+	}
 
-	aggregator.AddItem(&motrace.StatementInfo{
+	_, err = aggregator.AddItem(&motrace.StatementInfo{
 		SessionID:     sessionId,
 		StatementType: "Type1",
 		Status:        motrace.StatementStatusSuccess,
@@ -48,25 +51,23 @@ func TestAggregator(t *testing.T) {
 		Duration:      time.Duration(10 * time.Second),
 		Statement:     "Statement2",
 	})
-
-	// Get results from aggregator
-	groupedResults, ungroupedResults := aggregator.GetResults()
-
-	// Test expected behavior
-	if len(groupedResults) != 1 {
-		t.Errorf("Expected 1 aggregated statements, got %d", len(groupedResults))
+	if err != nil {
+		t.Fatalf("Unexpected error when adding item: %v", err)
 	}
 
-	aggregatedStatement := groupedResults[0].(*motrace.StatementInfo)
+	// Get results from aggregator
+	results := aggregator.GetResults()
+
+	// Test expected behavior
+	if len(results) != 1 {
+		t.Errorf("Expected 1 aggregated statements, got %d", len(results))
+	}
+
+	aggregatedStatement := results[0].(*motrace.StatementInfo)
 	if aggregatedStatement.Duration != 15*time.Second {
 		t.Errorf("Unexpected duration in aggregated statement: %d", aggregatedStatement.Duration)
 	}
 	if aggregatedStatement.Statement != "Statement1 Statement2 " {
 		t.Errorf("Unexpected statement in aggregated statement: %s", aggregatedStatement.Statement)
 	}
-
-	if len(ungroupedResults) != 0 {
-		t.Errorf("Expected 0 ungrouped statements, got %d", len(ungroupedResults))
-	}
-
 }

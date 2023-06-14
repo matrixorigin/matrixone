@@ -1,6 +1,7 @@
 package etl
 
 import (
+	"errors"
 	"time"
 )
 
@@ -10,7 +11,6 @@ type Item interface {
 
 type Aggregator struct {
 	Grouped     map[interface{}]Item
-	Ungrouped   []Item
 	WindowSize  time.Duration
 	NewItemFunc func() Item
 	UpdateFunc  func(existing, new Item)
@@ -20,7 +20,6 @@ type Aggregator struct {
 func NewAggregator(windowSize time.Duration, newItemFunc func() Item, updateFunc func(existing, new Item), filterFunc func(i Item) bool) *Aggregator {
 	return &Aggregator{
 		Grouped:     make(map[interface{}]Item),
-		Ungrouped:   []Item{},
 		WindowSize:  windowSize,
 		NewItemFunc: newItemFunc,
 		UpdateFunc:  updateFunc,
@@ -28,24 +27,25 @@ func NewAggregator(windowSize time.Duration, newItemFunc func() Item, updateFunc
 	}
 }
 
-func (a *Aggregator) AddItem(i Item) {
-	if a.FilterFunc(i) {
-		group, exists := a.Grouped[i.Key(a.WindowSize)]
-		if !exists {
-			group = a.NewItemFunc()
-			a.Grouped[i.Key(a.WindowSize)] = group
-		}
-
-		a.UpdateFunc(group, i)
-	} else {
-		a.Ungrouped = append(a.Ungrouped, i)
+func (a *Aggregator) AddItem(i Item) (Item, error) {
+	if !a.FilterFunc(i) {
+		return i, errors.New("item does not pass the filter")
 	}
+
+	group, exists := a.Grouped[i.Key(a.WindowSize)]
+	if !exists {
+		group = a.NewItemFunc()
+		a.Grouped[i.Key(a.WindowSize)] = group
+	}
+
+	a.UpdateFunc(group, i)
+	return nil, nil
 }
 
-func (a *Aggregator) GetResults() ([]Item, []Item) {
+func (a *Aggregator) GetResults() []Item {
 	var results []Item
 	for _, group := range a.Grouped {
 		results = append(results, group)
 	}
-	return results, a.Ungrouped
+	return results
 }

@@ -175,7 +175,14 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		// Check if the item is a StatementInfo
 		if statementInfo, ok := i.(*StatementInfo); ok {
 			// If so, add it to the aggregator
-			aggregator.AddItem(statementInfo)
+			_, err := aggregator.AddItem(statementInfo)
+			if err != nil {
+				item, ok := i.(table.RowField)
+				if !ok {
+					panic("not MalCsv, dont support output CSV")
+				}
+				writeValues(item)
+			}
 		} else {
 			// If not, process as before
 			item, ok := i.(table.RowField)
@@ -187,18 +194,7 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 	}
 
 	// Get the aggregated results
-	groupedResults, ungroupedResults := aggregator.GetResults()
-
-	for _, i := range ungroupedResults {
-
-		// If not, process as before
-		item, ok := i.(table.RowField)
-		if !ok {
-			panic("not MalCsv, dont support output CSV")
-		}
-		writeValues(item)
-
-	}
+	groupedResults := aggregator.GetResults()
 
 	for _, i := range groupedResults {
 
