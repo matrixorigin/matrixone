@@ -918,7 +918,7 @@ func (h *Handle) HandleWrite(
 			}
 			vec := containers.ToDNVector(bat.Vecs[0])
 			defer vec.Close()
-			if err = tb.DeleteByPhyAddrKeys(vec, types.TS{}); err != nil {
+			if err = tb.DeleteByPhyAddrKeys(vec); err != nil {
 				return
 			}
 		}
@@ -926,7 +926,7 @@ func (h *Handle) HandleWrite(
 	}
 	vec := containers.ToDNVector(req.Batch.GetVector(0))
 	defer vec.Close()
-	err = tb.DeleteByPhyAddrKeys(vec, types.TS{})
+	err = tb.DeleteByPhyAddrKeys(vec)
 	return
 }
 

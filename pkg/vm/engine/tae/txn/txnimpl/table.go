@@ -247,7 +247,7 @@ func (tbl *txnTable) recurTransferDelete(
 			offset,
 			depth+1)
 	}
-	if err := tbl.RangeDelete(newID, offset, offset, handle.DT_Normal, types.TS{}); err != nil {
+	if err := tbl.RangeDelete(newID, offset, offset, handle.DT_Normal); err != nil {
 		return err
 	}
 	common.DoIfDebugEnabled(func() {
@@ -694,7 +694,7 @@ func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
 	return tbl.localSegment.IsDeleted(row)
 }
 
-func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType, checkTs types.TS) (err error) {
+func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
 	defer func() {
 		if err == nil {
 			return
@@ -735,32 +735,6 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 			tbl.store.warChecker.Insert(mvcc.GetEntry())
 		}
 		return
-	}
-
-	// check read-write conflict
-	if !checkTs.IsEmpty() {
-		if err = tbl.store.warChecker.dryCheck(
-			id, checkTs,
-		); err != nil {
-			// if it is not a read-write conflict, return error directly.
-			if !moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict) {
-				return
-			}
-
-			// reset error
-			err = nil
-
-			// mark the conflict entry
-			tbl.store.warChecker.Delete(id)
-
-			// transfer delete rows
-			rows := make([]uint32, 0, end+1-start)
-			for i := start; i <= end; i++ {
-				rows = append(rows, i)
-			}
-			_, err = tbl.TransferDeleteRows(id, rows)
-			return
-		}
 	}
 
 	blk, err := tbl.store.warChecker.CacheGet(

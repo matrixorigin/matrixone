@@ -20,7 +20,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -195,13 +194,13 @@ func (store *txnStore) AddBlksWithMetaLoc(
 }
 
 func (store *txnStore) RangeDelete(
-	id *common.ID, start, end uint32, dt handle.DeleteType, checkTs types.TS,
+	id *common.ID, start, end uint32, dt handle.DeleteType,
 ) (err error) {
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
 	}
-	return db.RangeDelete(id, start, end, dt, checkTs)
+	return db.RangeDelete(id, start, end, dt)
 }
 
 func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {

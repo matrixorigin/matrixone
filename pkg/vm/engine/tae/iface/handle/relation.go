@@ -41,7 +41,7 @@ type Relation interface {
 
 	DeleteByPhyAddrKey(key any) error
 	GetValueByPhyAddrKey(key any, col int) (any, bool, error)
-	DeleteByPhyAddrKeys(keys containers.Vector, checkTs types.TS) error
+	DeleteByPhyAddrKeys(keys containers.Vector) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
 	Update(id *common.ID, row uint32, col uint16, v any, isNull bool) error

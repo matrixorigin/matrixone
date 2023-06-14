@@ -190,7 +190,7 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 		assert.NoError(e.t, err)
 		defer view.Close()
 		view.ApplyDeletes()
-		err = rel.DeleteByPhyAddrKeys(view.GetData(), types.TS{})
+		err = rel.DeleteByPhyAddrKeys(view.GetData())
 		assert.NoError(e.t, err)
 		it.Next()
 	}

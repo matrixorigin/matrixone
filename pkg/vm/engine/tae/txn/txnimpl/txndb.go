@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -139,7 +138,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 // }
 
 func (db *txnDB) RangeDelete(
-	id *common.ID, start, end uint32, dt handle.DeleteType, checkTs types.TS,
+	id *common.ID, start, end uint32, dt handle.DeleteType,
 ) (err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
@@ -148,16 +147,7 @@ func (db *txnDB) RangeDelete(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.RangeDelete(id, start, end, dt, checkTs)
-	// if start == end {
-	// 	return db.DeleteOne(table, id, start, dt)
-	// }
-	// for i := start; i <= end; i++ {
-	// 	if err = db.DeleteOne(table, id, i, dt); err != nil {
-	// 		return
-	// 	}
-	// }
-	// return
+	return table.RangeDelete(id, start, end, dt)
 }
 
 func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
