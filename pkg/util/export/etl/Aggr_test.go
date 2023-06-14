@@ -24,6 +24,10 @@ func TestAggregator(t *testing.T) {
 			e.Duration += n.Duration
 			e.Statement += n.Statement + " "
 		},
+		func(i Item) bool {
+			_, ok := i.(*motrace.StatementInfo)
+			return ok
+		},
 	)
 
 	// Insert StatementInfo instances into the aggregator
@@ -46,18 +50,23 @@ func TestAggregator(t *testing.T) {
 	})
 
 	// Get results from aggregator
-	results := aggregator.GetResults()
+	groupedResults, ungroupedResults := aggregator.GetResults()
 
 	// Test expected behavior
-	if len(results) != 1 {
-		t.Errorf("Expected 1 aggregated statements, got %d", len(results))
+	if len(groupedResults) != 1 {
+		t.Errorf("Expected 1 aggregated statements, got %d", len(groupedResults))
 	}
 
-	aggregatedStatement := results[0].(*motrace.StatementInfo)
+	aggregatedStatement := groupedResults[0].(*motrace.StatementInfo)
 	if aggregatedStatement.Duration != 15*time.Second {
 		t.Errorf("Unexpected duration in aggregated statement: %d", aggregatedStatement.Duration)
 	}
 	if aggregatedStatement.Statement != "Statement1 Statement2 " {
 		t.Errorf("Unexpected statement in aggregated statement: %s", aggregatedStatement.Statement)
 	}
+
+	if len(ungroupedResults) != 0 {
+		t.Errorf("Expected 0 ungrouped statements, got %d", len(ungroupedResults))
+	}
+
 }

@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -119,6 +120,34 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		return table.NewRowRequest(nil)
 	}
 
+	// Initialize aggregator
+	var sessionId [16]byte
+	sessionId[0] = 1
+	aggregator := etl.NewAggregator(
+		7*time.Second,
+		func() etl.Item {
+			return &StatementInfo{
+				RequestAt: time.Now(),
+			}
+		},
+		func(existing, new etl.Item) {
+			e := existing.(*StatementInfo)
+			n := new.(*StatementInfo)
+			e.Duration += n.Duration
+			e.Statement += n.Statement + ";"
+		},
+		func(i etl.Item) bool {
+			statementInfo, ok := i.(*StatementInfo)
+			if !ok {
+				return false
+			}
+			if statementInfo.Duration > 200*time.Millisecond {
+				return false
+			}
+			return ok
+		},
+	)
+
 	ts := time.Now()
 	writerMap := make(map[string]table.RowWriter, 2)
 	writeValues := func(item table.RowField) {
@@ -143,6 +172,37 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 	}
 
 	for _, i := range in {
+		// Check if the item is a StatementInfo
+		if statementInfo, ok := i.(*StatementInfo); ok {
+			// If so, add it to the aggregator
+			aggregator.AddItem(statementInfo)
+		} else {
+			// If not, process as before
+			item, ok := i.(table.RowField)
+			if !ok {
+				panic("not MalCsv, dont support output CSV")
+			}
+			writeValues(item)
+		}
+	}
+
+	// Get the aggregated results
+	groupedResults, ungroupedResults := aggregator.GetResults()
+
+	for _, i := range ungroupedResults {
+
+		// If not, process as before
+		item, ok := i.(table.RowField)
+		if !ok {
+			panic("not MalCsv, dont support output CSV")
+		}
+		writeValues(item)
+
+	}
+
+	for _, i := range groupedResults {
+
+		// If not, process as before
 		item, ok := i.(table.RowField)
 		if !ok {
 			panic("not MalCsv, dont support output CSV")

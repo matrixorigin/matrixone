@@ -36,6 +36,9 @@ var NilTxnID [16]byte
 var NilSesID [16]byte
 
 // StatementInfo implement export.IBuffer2SqlItem and export.CsvFields
+
+var _ IBuffer2SqlItem = (*StatementInfo)(nil)
+
 type StatementInfo struct {
 	StatementID          [16]byte  `json:"statement_id"`
 	TransactionID        [16]byte  `json:"transaction_id"`
