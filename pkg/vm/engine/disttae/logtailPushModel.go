@@ -81,6 +81,10 @@ const (
 //	 6. receiveTableLogTailContinuously   : start (1 + parallelNums) routine to receive log tail from service.
 //	-----------------------------------------------------------------------------------------------------
 type pushClient struct {
+	// epoch whenever the connection between push client and dn is reset, the epoch is incremented and  all transactions
+	// generated on the old epoch need to be aborted
+	epoch atomic.Uint64
+
 	// Responsible for sending subscription / unsubscription requests to the service
 	// and receiving the log tail from service.
 	subscriber *logTailSubscriber
@@ -99,6 +103,12 @@ func (client *pushClient) init(
 	serviceAddr string,
 	timestampWaiter client.TimestampWaiter) error {
 	client.timestampWaiter = timestampWaiter
+
+	// init means that the connection between push client and dn is reset, than we will clear memory table.
+	// any all transactions generated on the old epoch need to be aborted
+	client.epoch.Add(1)
+	client.timestampWaiter.UpdateEpoch(client.epoch.Load())
+
 	client.receivedLogTailTime.initLogTailTimestamp(timestampWaiter)
 	client.subscribed.initTableSubscribeRecord()
 
@@ -334,6 +344,11 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 						goto cleanAndReconnect
 					}
 
+					// we should always make sure that all the log tail consume routines have updated its timestamp.
+					for client.receivedLogTailTime.getTimestamp().IsEmpty() {
+						time.Sleep(time.Millisecond * 2)
+					}
+
 					client.receivedLogTailTime.ready.Store(true)
 					client.subscriber.setReady()
 					logutil.Infof("[log-tail-push-client] connect to dn log tail service succeed.")
@@ -481,7 +496,9 @@ type syncLogTailTimestamp struct {
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
 	ts := r.getTimestamp()
-	r.latestAppliedLogTailTS.Store(&ts)
+	if !ts.IsEmpty() {
+		r.latestAppliedLogTailTS.Store(&ts)
+	}
 
 	r.timestampWaiter = timestampWaiter
 	r.ready.Store(false)
@@ -513,8 +530,10 @@ func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 
 func (r *syncLogTailTimestamp) updateTimestamp(index int, newTimestamp timestamp.Timestamp) {
 	r.tList[index].Store(&newTimestamp)
-	ts := r.getTimestamp()
-	r.timestampWaiter.NotifyLatestCommitTS(ts)
+	if r.ready.Load() {
+		ts := r.getTimestamp()
+		r.timestampWaiter.NotifyLatestCommitTS(ts)
+	}
 }
 
 func (r *syncLogTailTimestamp) greatEq(txnTime timestamp.Timestamp) bool {

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -162,7 +163,7 @@ type DeleteChain interface {
 
 	PrepareRangeDelete(start, end uint32, ts types.TS) error
 	DepthLocked() int
-	CollectDeletesLocked(txn TxnReader, rwlocker *sync.RWMutex) (DeleteNode, error)
+	CollectDeletesLocked(txn TxnReader, rwlocker *sync.RWMutex) (*nulls.Bitmap, error)
 }
 type BaseNode[T any] interface {
 	Update(o T)

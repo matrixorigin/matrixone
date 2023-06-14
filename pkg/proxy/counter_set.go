@@ -39,7 +39,7 @@ func (e *counterLogExporter) Export() []zap.Field {
 	fields = append(fields, zap.Int64("accepted connections",
 		e.counter.connAccepted.Load()))
 	fields = append(fields, zap.Int64("total connections",
-		e.counter.connAccepted.Load()))
+		e.counter.connTotal.Load()))
 	fields = append(fields, zap.Int64("client disconnect",
 		e.counter.clientDisconnect.Load()))
 	fields = append(fields, zap.Int64("server disconnect",

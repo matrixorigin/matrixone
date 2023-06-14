@@ -249,14 +249,17 @@ func writeResponse(
 	if err != nil {
 		resp.WrapError(err)
 	}
+	detail := ""
 	if getLogger().Enabled(zap.DebugLevel) {
+		detail = resp.DebugString()
 		getLogger().Debug("handle request completed",
-			zap.String("response", resp.DebugString()))
+			zap.String("response", detail))
 	}
+	// after write, response will be released by rpc
 	if err := cs.Write(ctx, resp); err != nil {
 		getLogger().Error("write response failed",
 			zap.Error(err),
-			zap.String("response", resp.DebugString()))
+			zap.String("response", detail))
 	}
 }
 

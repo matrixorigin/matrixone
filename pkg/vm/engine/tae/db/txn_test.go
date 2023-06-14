@@ -257,7 +257,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			if pk != goodId {
 				return
 			}
-			if view.DeleteMask != nil && view.DeleteMask.Contains(uint32(row)) {
+			if view.DeleteMask.Contains(uint64(row)) {
 				return
 			}
 			id = blk.Fingerprint()

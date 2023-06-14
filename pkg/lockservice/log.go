@@ -172,23 +172,17 @@ func logLocalLockWaitOnResult(
 	key []byte,
 	opts LockOptions,
 	waiter *waiter,
-	err error) {
+	notify notifyValue) {
 	logger := getWithSkipLogger()
-	level := zap.DebugLevel
-	fn := logger.Debug
-	if err != nil {
-		level = zap.ErrorLevel
-		fn = logger.Error
-	}
-	if logger.Enabled(level) {
-		fn("lock wait on local result",
+	if logger.Enabled(zap.DebugLevel) {
+		logger.Debug("lock wait on local result",
 			serviceIDField(serviceID),
 			txnField(txn),
 			zap.Uint64("table", tableID),
 			bytesField("wait-on-key", key),
 			zap.String("opts", opts.DebugString()),
 			zap.Stringer("waiter", waiter),
-			zap.Any("result", err))
+			zap.Any("result", notify))
 	}
 }
 
@@ -331,7 +325,7 @@ func logAbortDeadLock(
 			serviceIDField(serviceID),
 			zap.String("wait-txn", txn.DebugString()),
 			txnField(activeTxn),
-			zap.Stringer("block", activeTxn.blockedWaiter))
+			waiterArrayField("blocked-waiters", activeTxn.blockedWaiters...))
 	}
 }
 

@@ -1359,6 +1359,7 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(ctx context.Context, dat
 	}
 
 	// client connection attributes
+	info.connectAttrs = make(map[string]string)
 	if info.capabilities&CLIENT_CONNECT_ATTRS != 0 {
 		var l uint64
 		var ok bool
@@ -1367,7 +1368,6 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(ctx context.Context, dat
 			return false, info, moerr.NewInternalError(ctx, "get length of client-connect-attrs failed")
 		}
 		endPos := pos + int(l)
-		info.connectAttrs = make(map[string]string)
 		var key, value string
 		for pos < endPos {
 			key, pos, ok = mp.readStringLenEnc(data, pos)

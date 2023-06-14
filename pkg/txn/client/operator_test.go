@@ -342,6 +342,26 @@ func TestWriteOnCommittedTxn(t *testing.T) {
 	})
 }
 
+func TestWriteOnInvalidEpoch(t *testing.T) {
+	runTimestampWaiterTests(
+		t,
+		func(tw *timestampWaiter) {
+			tw.NotifyLatestCommitTS(newTestTimestamp(1))
+			runOperatorTestsWithOptions(
+				t,
+				func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+					tw.UpdateEpoch(1)
+					_, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
+					assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+				},
+				newTestTimestamp(0),
+				[]TxnOption{},
+				WithEnableSacrificingFreshness(),
+				WithTimestampWaiter(tw))
+		},
+	)
+}
+
 func TestWriteOnCommittingTxn(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
@@ -419,7 +439,7 @@ func TestAddLockTable(t *testing.T) {
 	})
 }
 
-func TestUpdateSnaphotTSWithWaiter(t *testing.T) {
+func TestUpdateSnapshotTSWithWaiter(t *testing.T) {
 	runTimestampWaiterTests(t, func(waiter *timestampWaiter) {
 		runOperatorTests(t,
 			func(
@@ -449,17 +469,31 @@ func TestRollbackMultiTimes(t *testing.T) {
 	})
 }
 
-func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
+func runOperatorTests(
+	t *testing.T,
+	tc func(context.Context, *txnOperator, *testTxnSender),
+	options ...TxnOption) {
+	runOperatorTestsWithOptions(t, tc, newTestTimestamp(0), options)
+}
+
+func runOperatorTestsWithOptions(
+	t *testing.T,
+	tc func(context.Context, *txnOperator, *testTxnSender),
+	minTS timestamp.Timestamp,
+	options []TxnOption,
+	clientOptions ...TxnClientCreateOption) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	RunTxnTests(func(
-		c TxnClient,
-		ts rpc.TxnSender) {
-		txn, err := c.New(ctx, newTestTimestamp(0), options...)
-		assert.Nil(t, err)
-		tc(ctx, txn.(*txnOperator), ts.(*testTxnSender))
-	})
+	RunTxnTests(
+		func(
+			c TxnClient,
+			ts rpc.TxnSender) {
+			txn, err := c.New(ctx, minTS, options...)
+			assert.Nil(t, err)
+			tc(ctx, txn.(*txnOperator), ts.(*testTxnSender))
+		},
+		clientOptions...)
 }
 
 func newDNRequest(op uint32, dn uint64) txn.TxnRequest {

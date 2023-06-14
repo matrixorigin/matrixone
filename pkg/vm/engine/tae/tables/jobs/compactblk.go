@@ -22,9 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -54,8 +54,8 @@ type compactBlockTask struct {
 	meta      *catalog.BlockEntry
 	scheduler tasks.TaskScheduler
 	scopes    []common.ID
-	mapping   []uint32
-	deletes   *roaring.Bitmap
+	mapping   []int32
+	deletes   *nulls.Bitmap
 }
 
 func NewCompactBlockTask(
@@ -188,14 +188,16 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
 				return moerr.GetOkExpectedEOB()
 			}
-			createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID)
-			if err != nil {
+			if createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID); err != nil {
 				return err
+			} else {
+				defer createOnSeg.Close()
 			}
-			defer createOnSeg.Close()
 		}
 
-		if _, err = task.createAndFlushNewBlock(createOnSeg, preparer, deletes); err != nil {
+		if _, err = task.createAndFlushNewBlock(
+			createOnSeg, preparer, deletes,
+		); err != nil {
 			return
 		}
 	}
@@ -237,9 +239,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			ablockTask.blocks[0].GetExtent(),
 			uint32(data.Length()),
 			ablockTask.blocks[0].GetID())
-		if err != nil {
-			return
-		}
+
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 			return err
 		}
@@ -249,23 +249,18 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 				ablockTask.blocks[1].GetExtent(),
 				uint32(deletes.Length()),
 				ablockTask.blocks[1].GetID())
-			if err != nil {
-				return
-			}
+
 			if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
 				return err
 			}
 		}
-		// if err = oldBlkData.ReplayIndex(); err != nil {
-		// 	return err
-		// }
 	}
 	// sortkey does not change, nerver mind the schema version
 	if !task.schema.HasSortKey() && task.created != nil {
 		n := task.created.Rows()
-		task.mapping = make([]uint32, n)
+		task.mapping = make([]int32, n)
 		for i := 0; i < n; i++ {
-			task.mapping[i] = uint32(i)
+			task.mapping[i] = int32(i)
 		}
 	}
 	txnEntry := txnentries.NewCompactBlockEntry(
@@ -280,7 +275,8 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		table.GetDB().ID,
 		table.ID,
 		txnEntry,
-		[]*common.ID{task.compacted.Fingerprint()}); err != nil {
+		[]*common.ID{task.compacted.Fingerprint()},
+	); err != nil {
 		return
 	}
 	createdStr := "nil"
@@ -333,9 +329,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		ioTask.blocks[0].GetExtent(),
 		uint32(preparer.Columns.Length()),
 		ioTask.blocks[0].GetID())
-	if err != nil {
-		return
-	}
+
 	logutil.Debugf("update metaloc for %s", id.String())
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
@@ -346,15 +340,12 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 			ioTask.blocks[1].GetExtent(),
 			uint32(deletes.Length()),
 			ioTask.blocks[1].GetID())
-		if err != nil {
-			return
-		}
+
 		if err = task.compacted.UpdateDeltaLoc(deltaLoc); err != nil {
 			return
 		}
 	}
-	if err = newBlkData.Init(); err != nil {
-		return
-	}
+
+	err = newBlkData.Init()
 	return
 }

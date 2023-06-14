@@ -50,9 +50,6 @@ type InsertNode interface {
 	GetValue(col int, row uint32) (any, bool, error)
 	MakeCommand(uint32) (txnif.TxnCmd, error)
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
-	RowsWithoutDeletes() uint32
-	LengthWithDeletes(appended, toAppend uint32) uint32
-	OffsetWithDeletes(count uint32) uint32
 	GetAppends() []*appendInfo
 	GetTxn() txnif.AsyncTxn
 	GetPersistedLoc() (objectio.Location, objectio.Location)
