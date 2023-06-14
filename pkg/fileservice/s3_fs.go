@@ -67,6 +67,7 @@ type S3FS struct {
 var _ FileService = new(S3FS)
 
 func NewS3FS(
+	ctx context.Context,
 	sharedConfigProfile string,
 	name string,
 	endpoint string,
@@ -91,7 +92,7 @@ func NewS3FS(
 	fs.perfCounterSets = perfCounterSets
 
 	if !noCache {
-		if err := fs.initCaches(cacheConfig); err != nil {
+		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
 	}
@@ -102,6 +103,7 @@ func NewS3FS(
 // NewS3FSOnMinio creates S3FS on minio server
 // this is needed because the URL scheme of minio server does not compatible with AWS'
 func NewS3FSOnMinio(
+	ctx context.Context,
 	sharedConfigProfile string,
 	name string,
 	endpoint string,
@@ -127,7 +129,7 @@ func NewS3FSOnMinio(
 	fs.perfCounterSets = perfCounterSets
 
 	if !noCache {
-		if err := fs.initCaches(cacheConfig); err != nil {
+		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
 	}
@@ -135,7 +137,7 @@ func NewS3FSOnMinio(
 	return fs, nil
 }
 
-func (s *S3FS) initCaches(config CacheConfig) error {
+func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.SetDefaults()
 
 	// memory cache
@@ -160,6 +162,7 @@ func (s *S3FS) initCaches(config CacheConfig) error {
 	if config.DiskCapacity > DisableCacheCapacity && config.DiskPath != "" {
 		var err error
 		s.diskCache, err = NewDiskCache(
+			ctx,
 			config.DiskPath,
 			int64(config.DiskCapacity),
 			config.DiskMinEvictInterval.Duration,
