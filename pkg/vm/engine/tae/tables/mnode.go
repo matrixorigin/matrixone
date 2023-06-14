@@ -26,9 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
 var _ NodeT = (*memoryNode)(nil)
@@ -213,4 +215,57 @@ func (node *memoryNode) ApplyAppend(
 		destVec.Extend(bat.Vecs[srcPos])
 	}
 	return
+}
+
+func (node *memoryNode) GetRowByFilter(
+	ctx context.Context,
+	txn txnif.TxnReader,
+	filter *handle.Filter,
+) (row uint32, err error) {
+	node.block.RLock()
+	defer node.block.RUnlock()
+	rows, err := node.GetRowsByKey(filter.Val)
+	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNotFound) {
+		return
+	}
+
+	waitFn := func(n *updates.AppendNode) {
+		txn := n.Txn
+		if txn != nil {
+			node.block.RUnlock()
+			txn.GetTxnState(true)
+			node.block.RLock()
+		}
+	}
+	if anyWaitable := node.block.mvcc.CollectUncommittedANodesPreparedBefore(
+		txn.GetStartTS(),
+		waitFn); anyWaitable {
+		rows, err = node.GetRowsByKey(filter.Val)
+		if err != nil {
+			return
+		}
+	}
+
+	for i := len(rows) - 1; i >= 0; i-- {
+		row = rows[i]
+		appendnode := node.block.mvcc.GetAppendNodeByRow(row)
+		needWait, waitTxn := appendnode.NeedWaitCommitting(txn.GetStartTS())
+		if needWait {
+			node.block.RUnlock()
+			waitTxn.GetTxnState(true)
+			node.block.RLock()
+		}
+		if appendnode.IsAborted() || !appendnode.IsVisible(txn) {
+			continue
+		}
+		var deleted bool
+		deleted, err = node.block.mvcc.IsDeletedLocked(row, txn, node.block.mvcc.RWMutex)
+		if err != nil {
+			return
+		}
+		if !deleted {
+			return
+		}
+	}
+	return 0, moerr.NewNotFoundNoCtx()
 }

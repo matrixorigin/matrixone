@@ -368,11 +368,7 @@ func (blk *ablock) GetByFilter(
 
 	node := blk.PinNode()
 	defer node.Unref()
-	if !node.IsPersisted() {
-		return blk.getInMemoryRowByFilter(node.MustMNode(), txn, filter)
-	} else {
-		return blk.getPersistedRowByFilter(ctx, node.MustPNode(), txn, filter)
-	}
+	return node.GetRowByFilter(ctx, txn, filter)
 }
 
 // only used by tae only
