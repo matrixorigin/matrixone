@@ -42,7 +42,7 @@ const nullFirst = true
 type SortElem[T any] struct {
 	data   T
 	isNull bool
-	idx    uint32
+	idx    int32
 }
 
 type SortSlice[T any] struct {

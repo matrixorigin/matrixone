@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -451,11 +453,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 
 		case plan.Node_LEFT:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-				outcnt += leftStats.Outcnt
-			}
+			outcnt := leftStats.Outcnt
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
@@ -464,11 +462,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 
 		case plan.Node_RIGHT:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-				outcnt += rightStats.Outcnt
-			}
+			outcnt := rightStats.Outcnt
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
@@ -477,11 +471,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 
 		case plan.Node_OUTER:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-				outcnt += leftStats.Outcnt + rightStats.Outcnt
-			}
+			outcnt := leftStats.Outcnt + rightStats.Outcnt
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
@@ -620,6 +610,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
 			node.Stats = calcScanStats(node, builder)
+			if len(node.BindingTags) > 0 {
+				builder.tag2Table[node.BindingTags[0]] = node.TableDef
+			}
 		}
 
 	case plan.Node_FILTER:
@@ -797,4 +790,19 @@ func IsTpQuery(qry *plan.Query) bool {
 		}
 	}
 	return true
+}
+
+func PrintStats(qry *plan.Query) string {
+	buf := bytes.NewBuffer(make([]byte, 0, 1024*64))
+	buf.WriteString("Print Stats: \n")
+	for _, node := range qry.GetNodes() {
+		stats := node.Stats
+		buf.WriteString(fmt.Sprintf("Node ID: %v, Node Type %v, ", node.NodeId, node.NodeType))
+		if stats == nil {
+			buf.WriteString("Stats: nil\n")
+		} else {
+			buf.WriteString(fmt.Sprintf("blocknum %v, outcnt %v \n", node.Stats.BlockNum, node.Stats.Outcnt))
+		}
+	}
+	return buf.String()
 }

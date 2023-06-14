@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -111,6 +112,8 @@ func (l *store) updateIDAlloc(count uint64) error {
 	return nil
 }
 
+var debugPrintHAKeeperState atomic.Bool
+
 func (l *store) hakeeperCheck() {
 	isLeader, term, err := l.isLeaderHAKeeper()
 	if err != nil {
@@ -139,6 +142,10 @@ func (l *store) hakeeperCheck() {
 	case pb.HAKeeperBootstrapFailed:
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
+		if debugPrintHAKeeperState.CompareAndSwap(false, true) {
+			l.runtime.Logger().Info("HAKeeper is running",
+				zap.Uint64("next id", state.NextId))
+		}
 		l.healthCheck(term, state)
 		l.taskSchedule(state)
 	default:

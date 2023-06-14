@@ -284,6 +284,14 @@ func (txn *Transaction) resetSnapshot() error {
 	return nil
 }
 
+// DeleteTable implements the client.Workspace interface.
+func (txn *Transaction) DeleteTable(ctx context.Context, dbID uint64, tableName string) {
+	k := genTableKey(ctx, tableName, dbID)
+	if _, ok := txn.tableMap.Load(k); ok {
+		txn.tableMap.Delete(k)
+	}
+}
+
 // Entry represents a delete/insert
 type Entry struct {
 	typ          int

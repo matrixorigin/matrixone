@@ -12,41 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package logutil
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
-func doWithRetry[T any](
-	what string,
-	fn func() (T, error),
-	maxAttemps int,
-	isRetryable func(error) bool,
-) (res T, err error) {
-	numRetries := 0
-	for {
-		res, err = fn()
-		if err != nil {
-			if isRetryable(err) {
-				maxAttemps--
+func TestSlow(t *testing.T) {
+	done := Slow(time.Millisecond*10, "slow")
+	time.Sleep(time.Millisecond * 50)
+	require.True(t, done())
 
-				numRetries++
-				if numRetries%5 == 0 {
-					logutil.Info("file service retry",
-						zap.Any("times", numRetries),
-						zap.Any("what", what),
-					)
-				}
-
-				if maxAttemps <= 0 {
-					return
-				}
-				continue
-			}
-			return
-		}
-		return
-	}
+	// done before timeout
+	done = Slow(time.Millisecond*500, "slow")
+	require.False(t, done())
 }
