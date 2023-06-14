@@ -104,7 +104,7 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
-func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (blk *baseBlock) Foreach(ctx context.Context, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -112,7 +112,7 @@ func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) e
 		defer blk.RUnlock()
 		return node.MustMNode().Foreach(colIdx, op, sels)
 	} else {
-		return node.MustPNode().Foreach(blk.meta.GetSchema(), colIdx, op, sels)
+		return node.MustPNode().Foreach(ctx, blk.meta.GetSchema(), colIdx, op, sels)
 	}
 }
 
@@ -487,6 +487,7 @@ func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 }
 
 func (blk *baseBlock) CollectDeleteInRange(
+	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
 	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDelete(start, end)
@@ -496,7 +497,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	pkDef := blk.meta.GetSchema().GetPrimaryKey()
 	pkVec := containers.MakeVector(pkDef.Type)
 	pkIdx := pkDef.Idx
-	blk.Foreach(pkIdx, func(v any, isNull bool, row int) error {
+	blk.Foreach(ctx, pkIdx, func(v any, isNull bool, row int) error {
 		pkVec.Append(v, false)
 		return nil
 	}, deletes)

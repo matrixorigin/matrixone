@@ -96,11 +96,12 @@ func (node *persistedNode) GetColumnDataWindow(
 }
 
 func (node *persistedNode) Foreach(
+	ctx context.Context,
 	readSchema *catalog.Schema,
 	colIdx int, op func(v any, isNull bool, row int) error, sel *nulls.Bitmap) (err error) {
 	var data containers.Vector
 	if data, err = node.block.LoadPersistedColumnData(
-		context.Background(),
+		ctx,
 		readSchema,
 		colIdx,
 	); err != nil {
