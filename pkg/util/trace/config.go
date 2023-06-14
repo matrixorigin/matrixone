@@ -30,6 +30,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"io"
+	"time"
 )
 
 type TraceID [16]byte
@@ -168,6 +169,20 @@ type SpanConfig struct {
 	// remote parent span context should be ignored for security.
 	NewRoot bool `json:"NewRoot"` // WithNewRoot
 	Parent  Span `json:"-"`
+
+	// LongTimeThreshold set by WithLongTimeThreshold
+	LongTimeThreshold time.Duration `json:"-"`
+}
+
+func (c *SpanConfig) Reset() {
+	c.SpanContext.Reset()
+	c.NewRoot = false
+	c.Parent = nil
+	c.LongTimeThreshold = 0
+}
+
+func (c *SpanConfig) GetLongTimeThreshold() time.Duration {
+	return c.LongTimeThreshold
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
@@ -205,6 +220,12 @@ func WithNewRoot(newRoot bool) spanOptionFunc {
 func WithKind(kind SpanKind) spanOptionFunc {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.Kind = kind
+	})
+}
+
+func WithLongTimeThreshold(d time.Duration) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.LongTimeThreshold = d
 	})
 }
 

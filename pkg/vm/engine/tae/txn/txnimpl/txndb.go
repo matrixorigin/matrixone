@@ -114,6 +114,7 @@ func (db *txnDB) Append(ctx context.Context, id uint64, bat *containers.Batch) e
 }
 
 func (db *txnDB) AddBlksWithMetaLoc(
+	ctx context.Context,
 	tid uint64,
 	metaLocs []objectio.Location) error {
 	table, err := db.getOrSetTable(tid)
@@ -123,7 +124,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.AddBlksWithMetaLoc(metaLocs)
+	return table.AddBlksWithMetaLoc(ctx, metaLocs)
 }
 
 // func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
@@ -150,7 +151,7 @@ func (db *txnDB) RangeDelete(
 	return table.RangeDelete(id, start, end, dt)
 }
 
-func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
+func (db *txnDB) GetByFilter(ctx context.Context, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	table, err := db.getOrSetTable(tid)
 	if err != nil {
 		return
@@ -159,7 +160,7 @@ func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, 
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	return table.GetByFilter(filter)
+	return table.GetByFilter(ctx, filter)
 }
 
 func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
@@ -474,14 +475,14 @@ func (db *txnDB) Freeze() (err error) {
 	return
 }
 
-func (db *txnDB) PrePrepare() (err error) {
+func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 	for _, table := range db.tables {
 		if err = table.PrePreareTransfer(txnif.PrePreparePhase); err != nil {
 			return
 		}
 	}
 	for _, table := range db.tables {
-		if err = table.PrePrepareDedup(); err != nil {
+		if err = table.PrePrepareDedup(ctx); err != nil {
 			return
 		}
 	}

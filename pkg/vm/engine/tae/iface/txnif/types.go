@@ -40,7 +40,7 @@ type Txn2PC interface {
 	Freeze() error
 	PrepareRollback() error
 	ApplyRollback() error
-	PrePrepare() error
+	PrePrepare(ctx context.Context) error
 	PrepareCommit() error
 	PreApplyCommit() error
 	PrepareWAL() error
@@ -105,17 +105,17 @@ type TxnChanger interface {
 	ToRollbacking(ts types.TS) error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
-	Prepare() (types.TS, error)
+	Prepare(ctx context.Context) (types.TS, error)
 	Committing() error
-	Commit() error
-	Rollback() error
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
 	SetCommitTS(cts types.TS) error
 	SetDedupType(skip DedupType)
 	SetParticipants(ids []uint64) error
 	SetError(error)
 
 	CommittingInRecovery() error
-	CommitInRecovery() error
+	CommitInRecovery(ctx context.Context) error
 }
 
 type TxnWriter interface {
@@ -125,7 +125,7 @@ type TxnWriter interface {
 
 type TxnAsyncer interface {
 	WaitDone(error, bool) error
-	WaitPrepared() error
+	WaitPrepared(ctx context.Context) error
 }
 
 type TxnTest interface {
@@ -233,17 +233,17 @@ type TxnStore interface {
 	io.Closer
 	Txn2PC
 	TxnUnsafe
-	WaitPrepared() error
+	WaitPrepared(ctx context.Context) error
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
 	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error
-	AddBlksWithMetaLoc(dbId, id uint64, metaLocs []objectio.Location) error
+	AddBlksWithMetaLoc(ctx context.Context, dbId, id uint64, metaLocs []objectio.Location) error
 
 	RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error
-	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
+	GetByFilter(ctx context.Context, dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
 	GetValue(id *common.ID, row uint32, col uint16) (any, bool, error)
 
 	CreateRelation(dbId uint64, def any) (handle.Relation, error)
@@ -288,7 +288,7 @@ type TxnStore interface {
 		visitMetadata func(block any),
 		visitSegment func(seg any),
 		visitAppend func(bat any),
-		visitDelete func(deletes DeleteNode))
+		visitDelete func(ctx context.Context, deletes DeleteNode))
 	GetTransactionType() TxnType
 }
 
