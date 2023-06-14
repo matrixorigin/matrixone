@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -137,7 +138,9 @@ func (db *txnDB) AddBlksWithMetaLoc(
 // 	return table.RangeDelete(nid, nrow, nrow, dt)
 // }
 
-func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+func (db *txnDB) RangeDelete(
+	id *common.ID, start, end uint32, dt handle.DeleteType, checkTs types.TS,
+) (err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return err
@@ -145,7 +148,7 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteT
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.RangeDelete(id, start, end, dt, true)
+	return table.RangeDelete(id, start, end, dt, checkTs)
 	// if start == end {
 	// 	return db.DeleteOne(table, id, start, dt)
 	// }

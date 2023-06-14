@@ -4878,7 +4878,7 @@ func TestMergeBlocks3(t *testing.T) {
 		view, err := blk11Handle.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName)
 		view.GetData()
 		require.NoError(t, err)
-		err = rel.DeleteByPhyAddrKeys(view.GetData())
+		err = rel.DeleteByPhyAddrKeys(view.GetData(), types.TS{})
 		require.NoError(t, err)
 
 		require.NoError(t, rel.DeleteByFilter(filter5))

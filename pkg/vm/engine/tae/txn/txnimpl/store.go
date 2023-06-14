@@ -16,10 +16,12 @@ package txnimpl
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -192,12 +194,14 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	return db.AddBlksWithMetaLoc(tid, metaLoc)
 }
 
-func (store *txnStore) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+func (store *txnStore) RangeDelete(
+	id *common.ID, start, end uint32, dt handle.DeleteType, checkTs types.TS,
+) (err error) {
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
 	}
-	return db.RangeDelete(id, start, end, dt)
+	return db.RangeDelete(id, start, end, dt, checkTs)
 }
 
 func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {

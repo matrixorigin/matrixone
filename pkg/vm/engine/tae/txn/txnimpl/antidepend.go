@@ -119,6 +119,26 @@ func (checker *warChecker) Insert(block *catalog.BlockEntry) {
 	checker.readSet[block.ID] = block
 }
 
+func (checker *warChecker) dryCheck(id *common.ID, ts types.TS) (err error) {
+	// defer func() {
+	// 	logutil.Infof("checkOne blk=%s ts=%s err=%v", id.BlockString(), ts.ToString(), err)
+	// }()
+	if checker.HasConflict(id.BlockID) {
+		err = moerr.NewTxnRWConflictNoCtx()
+		return
+	}
+	entry, err := checker.CacheGet(
+		id.DbID,
+		id.TableID,
+		id.SegmentID(),
+		&id.BlockID,
+	)
+	if err != nil {
+		return
+	}
+	return readWriteConfilictCheck(entry.BaseEntryImpl, ts)
+}
+
 func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	// defer func() {
 	// 	logutil.Infof("checkOne blk=%s ts=%s err=%v", id.BlockString(), ts.ToString(), err)

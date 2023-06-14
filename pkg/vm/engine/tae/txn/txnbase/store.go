@@ -16,6 +16,8 @@ package txnbase
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -119,7 +121,7 @@ func (store *NoopTxnStore) BatchDedup(uint64, uint64, containers.Vector) (err er
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }
-func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
+func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType, types.TS) (err error) {
 	return
 }
 func (store *NoopTxnStore) GetByFilter(uint64, uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {

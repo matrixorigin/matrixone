@@ -190,7 +190,7 @@ func (blk *txnBlock) getDBID() uint64 {
 }
 
 func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err error) {
-	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end, dt)
+	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end, dt, types.TS{})
 }
 
 func (blk *txnBlock) GetMetaLoc() (metaLoc objectio.Location) {

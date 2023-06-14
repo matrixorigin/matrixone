@@ -86,7 +86,7 @@ func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, isNull bool
 func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, isNull bool, err error)       { return }
 func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any, bool) (err error)            { return }
 func (rel *TxnRelation) DeleteByPhyAddrKey(any) (err error)                                  { return }
-func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector) (err error)                   { return }
+func (rel *TxnRelation) DeleteByPhyAddrKeys(containers.Vector, types.TS) (err error)         { return }
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32, handle.DeleteType) (err error) {
 	return
 }
