@@ -45,11 +45,11 @@ log-backend = "logservice"
 incremental-dedup = false
 
 [dn.Ckp]
-flush-interval = "10s"
-min-count = 20
+flush-interval = "60s"
+min-count = 100
 scan-interval = "5s"
-incremental-interval = "30s"
-global-min-count = 10
+incremental-interval = "180s"
+global-min-count = 60
 
 [dn.LogtailServer]
 listen-address = "0.0.0.0:32003"
