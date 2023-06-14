@@ -103,10 +103,10 @@ func Call(
 			zap.Bool("filter", target.filter != nil),
 			zap.Int32("filter-col", target.filterColIndexInBatch),
 			zap.Int32("primary-index", target.primaryColumnIndexInBatch))
-		var filterCols []int
+		var filterCols []int32
 		priVec := bat.GetVector(target.primaryColumnIndexInBatch)
 		if target.filter != nil {
-			filterCols = vector.MustFixedCol[int](bat.GetVector(target.filterColIndexInBatch))
+			filterCols = vector.MustFixedCol[int32](bat.GetVector(target.filterColIndexInBatch))
 		}
 		refreshTS, err := doLock(
 			proc.Ctx,
@@ -226,6 +226,7 @@ func doLock(
 		opts.lockTable,
 		opts.filter,
 		opts.filterCols)
+
 	result, err := lockService.Lock(
 		ctx,
 		tableID,
@@ -317,7 +318,7 @@ func (opts LockOptions) WithFetchLockRowsFunc(fetchFunc FetchLockRowsFunc) LockO
 // WithFilterRows set filter rows, filterCols used to rowsFilter func
 func (opts LockOptions) WithFilterRows(
 	filter RowsFilter,
-	filterCols []int) LockOptions {
+	filterCols []int32) LockOptions {
 	opts.filter = filter
 	opts.filterCols = filterCols
 	return opts
@@ -426,7 +427,7 @@ func getRowsFilter(
 	partitionTables []uint64) RowsFilter {
 	return func(
 		row int,
-		fliterCols []int) bool {
+		fliterCols []int32) bool {
 		return partitionTables[fliterCols[row]] == tableID
 	}
 }

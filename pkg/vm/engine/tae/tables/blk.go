@@ -89,12 +89,8 @@ func (blk *block) GetColumnDataByIds(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnDatas(
-		ctx,
-		node.MustPNode(),
-		txn,
-		schema,
-		colIdxes,
-		false)
+		ctx, txn, schema, colIdxes, false,
+	)
 }
 
 // GetColumnDataById Get the snapshot at txn's start timestamp of column data.
@@ -114,7 +110,7 @@ func (blk *block) GetColumnDataById(
 		col,
 		false)
 }
-func (blk *block) DataCommittedBefore(ts types.TS) bool {
+func (blk *block) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	blk.meta.RLock()
 	defer blk.meta.RUnlock()
 	return blk.meta.GetCreatedAt().Less(ts)
@@ -155,13 +151,8 @@ func (blk *block) GetValue(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	return blk.getPersistedValue(
-		ctx,
-		node.MustPNode(),
-		txn,
-		schema,
-		row,
-		col,
-		false)
+		ctx, txn, schema, row, col, false,
+	)
 }
 
 func (blk *block) RunCalibration() (score int) {

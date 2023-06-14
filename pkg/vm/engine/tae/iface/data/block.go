@@ -16,8 +16,9 @@ package data
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -88,7 +89,16 @@ type Block interface {
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
 
-	DataCommittedBefore(ts types.TS) bool
+	// check if all rows are committed before ts
+	// NOTE: here we assume that the block is visible to the ts
+	// if the block is an appendable block:
+	// 1. if the block is not frozen, return false
+	// 2. if the block is frozen and in-memory, check with the max ts committed
+	// 3. if the block is persisted, return false
+	// if the block is not an appendable block:
+	// only check with the created ts
+	CoarseCheckAllRowsCommittedBefore(ts types.TS) bool
+
 	BatchDedup(ctx context.Context,
 		txn txnif.AsyncTxn,
 		pks containers.Vector,
