@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -369,131 +368,6 @@ func (blk *ablock) GetByFilter(
 	node := blk.PinNode()
 	defer node.Unref()
 	return node.GetRowByFilter(ctx, txn, filter)
-}
-
-// only used by tae only
-// not to optimize it
-func (blk *ablock) getPersistedRowByFilter(
-	ctx context.Context,
-	pnode *persistedNode,
-	txn txnif.TxnReader,
-	filter *handle.Filter) (row uint32, err error) {
-	ok, err := pnode.ContainsKey(ctx, filter.Val)
-	if err != nil {
-		return
-	}
-	if !ok {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-	// Note: sort key do not change
-	schema := blk.meta.GetSchema()
-	sortKey, err := blk.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx())
-	if err != nil {
-		return
-	}
-	defer sortKey.Close()
-	rows := make([]uint32, 0)
-	err = sortKey.Foreach(func(v any, _ bool, offset int) error {
-		if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
-			row := uint32(offset)
-			rows = append(rows, row)
-			return nil
-		}
-		return nil
-	}, nil)
-	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
-		return
-	}
-	if len(rows) == 0 {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-
-	// Load persisted commit ts
-	commitTSVec, err := blk.LoadPersistedCommitTS()
-	if err != nil {
-		return
-	}
-	defer commitTSVec.Close()
-
-	// Load persisted deletes
-	view := model.NewColumnView(0)
-	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
-		return
-	}
-
-	exist := false
-	var deleted bool
-	for _, offset := range rows {
-		commitTS := commitTSVec.Get(int(offset)).(types.TS)
-		if commitTS.Greater(txn.GetStartTS()) {
-			break
-		}
-		deleted = view.IsDeleted(int(offset))
-		if !deleted {
-			exist = true
-			row = offset
-			break
-		}
-	}
-	if !exist {
-		err = moerr.NewNotFoundNoCtx()
-	}
-	return
-}
-
-// With PinNode Context
-func (blk *ablock) getInMemoryRowByFilter(
-	mnode *memoryNode,
-	txn txnif.TxnReader,
-	filter *handle.Filter) (row uint32, err error) {
-	blk.RLock()
-	defer blk.RUnlock()
-	rows, err := mnode.GetRowsByKey(filter.Val)
-	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-		return
-	}
-
-	waitFn := func(n *updates.AppendNode) {
-		txn := n.Txn
-		if txn != nil {
-			blk.RUnlock()
-			txn.GetTxnState(true)
-			blk.RLock()
-		}
-	}
-	if anyWaitable := blk.mvcc.CollectUncommittedANodesPreparedBefore(
-		txn.GetStartTS(),
-		waitFn); anyWaitable {
-		rows, err = mnode.GetRowsByKey(filter.Val)
-		if err != nil {
-			return
-		}
-	}
-
-	for i := len(rows) - 1; i >= 0; i-- {
-		row = rows[i]
-		appendnode := blk.mvcc.GetAppendNodeByRow(row)
-		needWait, waitTxn := appendnode.NeedWaitCommitting(txn.GetStartTS())
-		if needWait {
-			blk.RUnlock()
-			waitTxn.GetTxnState(true)
-			blk.RLock()
-		}
-		if appendnode.IsAborted() || !appendnode.IsVisible(txn) {
-			continue
-		}
-		var deleted bool
-		deleted, err = blk.mvcc.IsDeletedLocked(row, txn, blk.mvcc.RWMutex)
-		if err != nil {
-			return
-		}
-		if !deleted {
-			return
-		}
-	}
-	return 0, moerr.NewNotFoundNoCtx()
 }
 
 func (blk *ablock) checkConflictAandVisibility(
