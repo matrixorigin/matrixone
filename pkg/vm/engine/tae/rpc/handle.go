@@ -889,6 +889,7 @@ func (h *Handle) HandleWrite(
 		err = AppendDataToTable(ctx, tb, req.Batch)
 		return
 	}
+
 	//handle delete
 	if req.FileName != "" {
 		//wait for loading deleted row-id done.
