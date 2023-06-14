@@ -66,8 +66,9 @@ func newABlock(
 }
 
 func (blk *ablock) OnApplyAppend(n txnif.AppendNode) (err error) {
-	blk.meta.GetSegment().GetTable().AddRows(uint64(n.GetMaxRow() -
-		n.GetStartRow()))
+	blk.meta.GetSegment().GetTable().AddRows(
+		uint64(n.GetMaxRow() - n.GetStartRow()),
+	)
 	return
 }
 
@@ -169,13 +170,28 @@ func (blk *ablock) resolveColumnDatas(
 	}
 }
 
+// check if all rows are committed before the specified ts
+// here we assume that the ts is greater equal than the block's
+// create ts and less than the block's delete ts
+// it is a coarse-grained check
 func (blk *ablock) DataCommittedBefore(ts types.TS) bool {
+	// if the block is not frozen, always return false
 	if !blk.IsAppendFrozen() {
 		return false
 	}
-	blk.RLock()
-	defer blk.RUnlock()
-	return blk.mvcc.LastAnodeCommittedBeforeLocked(ts)
+
+	node := blk.PinNode()
+	defer node.Unref()
+
+	// if the block is in memory, check with the in-memory node
+	// it is a fine-grained check if the block is in memory
+	if !node.IsPersisted() {
+		return node.MustMNode().allRowsCommittedBefore(ts)
+	}
+
+	// always return false for if the block is persisted
+	// it is a coarse-grained check
+	return false
 }
 
 func (blk *ablock) resolveColumnData(

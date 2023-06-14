@@ -509,3 +509,9 @@ func (node *memoryNode) getInMemoryValue(
 	v, isNull = view.GetValue(row)
 	return
 }
+
+func (node *memoryNode) allRowsCommittedBefore(ts types.TS) bool {
+	node.block.RLock()
+	defer node.block.RUnlock()
+	return node.block.mvcc.LastAnodeCommittedBeforeLocked(ts)
+}
