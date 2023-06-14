@@ -45,7 +45,7 @@ const (
 	WALDir = "wal"
 )
 
-func Open(dirname string, opts *options.Options) (db *DB, err error) {
+func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
 
 	logutil.Info("open-tae", common.OperationField("Start"),
@@ -72,7 +72,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
-		opts.Fs = objectio.TmpNewFileservice(path.Join(dirname, "data"))
+		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 
@@ -114,7 +114,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		db.TxnMgr.Now,
 	)
 	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
-	db.TxnMgr.Start()
+	db.TxnMgr.Start(opts.Ctx)
 	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		opts.Ctx,

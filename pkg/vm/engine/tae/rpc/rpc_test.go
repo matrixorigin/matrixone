@@ -47,6 +47,7 @@ import (
 func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
+	ctx := context.Background()
 
 	//create  file service;
 	//dir := testutils.GetDefaultTestPath(ModuleName, t)
@@ -60,10 +61,10 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 		DataDir: dir,
 	}
 	//create dir;
-	fs, err := fileservice.NewFileService(c, nil)
+	fs, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 	opts.Fs = fs
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 
@@ -220,6 +221,7 @@ func TestHandle_HandleCommitPerformanceForS3Load(t *testing.T) {
 func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
+	ctx := context.Background()
 
 	//create  file service;
 	//dir := testutils.GetDefaultTestPath(ModuleName, t)
@@ -233,10 +235,10 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		DataDir: dir,
 	}
 	//create dir;
-	fs, err := fileservice.NewFileService(c, nil)
+	fs, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
 	opts.Fs = fs
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 
@@ -443,7 +445,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	it = tbH.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		bv, err := blk.GetColumnDataByNames([]string{hideDef[0].Name})
+		bv, err := blk.GetColumnDataByNames(context.Background(), []string{hideDef[0].Name})
 		assert.NoError(t, err)
 		physicals = append(physicals, bv)
 		it.Next()
@@ -452,7 +454,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 
 	//read physical addr column
 	assert.Equal(t, len(taeBats), len(physicals))
-	err = txnR.Commit()
+	err = txnR.Commit(context.Background())
 	assert.Nil(t, err)
 
 	//write deleted row ids into FS
@@ -551,14 +553,15 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 		it.Next()
 	}
 	assert.Equal(t, len(taeBats)*taeBats[0].Length()-5*len(taeBats), rows)
-	err = txnR.Commit()
+	err = txnR.Commit(context.Background())
 	assert.Nil(t, err)
 }
 
 func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchema(2, 1)
@@ -604,7 +607,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	dbH, err := txn.GetDatabase(dbName)
 	assert.Nil(t, err)
 	dbTestId := dbH.GetID()
-	err = txn.Commit()
+	err = txn.Commit(context.Background())
 	assert.Nil(t, err)
 
 	//create table from "dbtest"
@@ -689,7 +692,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	rAttr = rDefs[2].(*engine.AttributeDef).Attr
 	assert.Equal(t, "expr2", rAttr.Default.OriginString)
 
-	err = txn.Commit()
+	err = txn.Commit(context.Background())
 	assert.NoError(t, err)
 
 	//DML: insert batch into table
@@ -746,7 +749,7 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 	cv, err := blk.GetColumnDataByName(context.Background(), hideCol[0].Name)
 	assert.NoError(t, err)
 	defer cv.Close()
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 	delBat := batch.New(true, []string{hideCol[0].Name})
 	delBat.Vecs[0], _ = cv.GetData().GetDownstreamVector().Window(0, 20)
 
@@ -794,13 +797,14 @@ func TestHandle_HandlePreCommit1PC(t *testing.T) {
 		it.Next()
 	}
 	it.Close()
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(context.Background()))
 }
 
 func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
@@ -835,7 +839,6 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		{typ: CmdCommit},
 	}
 	txnMeta := mock2PCTxn(handle.db)
-	ctx := context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
 
@@ -847,7 +850,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	dbH, err := txn.GetDatabase(dbName)
 	assert.Nil(t, err)
 	dbTestId := dbH.GetID()
-	err = txn.Commit()
+	err = txn.Commit(ctx)
 	assert.Nil(t, err)
 
 	//create table from "dbtest"
@@ -929,7 +932,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[1].(*engine.AttributeDef).Attr
 	assert.Equal(t, "expr2", rAttr.Default.OriginString)
-	err = txn.Commit()
+	err = txn.Commit(ctx)
 	assert.NoError(t, err)
 
 	//DML::insert batch into table
@@ -1011,7 +1014,7 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 	delBat := batch.New(true, []string{hideCol[0].Name})
 	delBat.Vecs[0] = cv.GetData().GetDownstreamVector()
 
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(ctx))
 
 	hideBats := containers.SplitBatch(delBat, 5)
 	//delete 20 rows by 2PC txn
@@ -1089,13 +1092,14 @@ func TestHandle_HandlePreCommit2PCForCoordinator(t *testing.T) {
 		it.Next()
 	}
 	_ = it.Close()
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(ctx))
 }
 
 func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
@@ -1129,7 +1133,6 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 		{typ: CmdCommit},
 	}
 	txnMeta := mock2PCTxn(handle.db)
-	ctx := context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
 
@@ -1141,7 +1144,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	dbH, err := txn.GetDatabase(dbName)
 	assert.Nil(t, err)
 	dbTestId := dbH.GetID()
-	err = txn.Commit()
+	err = txn.Commit(ctx)
 	assert.Nil(t, err)
 
 	//create table from "dbtest"
@@ -1222,7 +1225,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[1].(*engine.AttributeDef).Attr
 	assert.Equal(t, "expr2", rAttr.Default.OriginString)
-	err = txn.Commit()
+	err = txn.Commit(ctx)
 	assert.NoError(t, err)
 
 	//DML::insert batch into table
@@ -1322,7 +1325,7 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	delBat := batch.New(true, []string{hideCol[0].Name})
 	delBat.Vecs[0] = v.GetData().GetDownstreamVector()
 
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(ctx))
 
 	hideBats := containers.SplitBatch(delBat, 5)
 	//delete 20 rows by 2PC txn
@@ -1402,13 +1405,14 @@ func TestHandle_HandlePreCommit2PCForParticipant(t *testing.T) {
 	}
 	_ = it.Close()
 
-	assert.NoError(t, txn.Commit())
+	assert.NoError(t, txn.Commit(ctx))
 }
 
 func TestHandle_MVCCVisibility(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	handle := mockTAEHandle(t, opts)
+	handle := mockTAEHandle(ctx, t, opts)
 	defer handle.HandleClose(context.TODO())
 	IDAlloc := catalog.NewIDAllocator()
 	schema := catalog.MockSchemaAll(2, -1)
@@ -1440,7 +1444,6 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		},
 	}
 	txnMeta := mock2PCTxn(handle.db)
-	ctx := context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
 	var dbTestId uint64
@@ -1453,7 +1456,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		txn, err := handle.db.StartTxn(nil)
 		assert.Nil(t, err)
 		dbNames = txn.DatabaseNames()
-		err = txn.Commit()
+		err = txn.Commit(ctx)
 		assert.Nil(t, err)
 		wg.Done()
 
@@ -1476,7 +1479,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		dbH, err := txn.GetDatabase(dbName)
 		assert.Nil(t, err)
 		dbTestId = dbH.GetID()
-		err = txn.Commit()
+		err = txn.Commit(ctx)
 		assert.Nil(t, err)
 		//wg.Done()
 		//To check whether reader had waited.
@@ -1574,7 +1577,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		assert.Equal(t, true, rAttr.Default.NullAbility)
 		rAttr = rDefs[1].(*engine.AttributeDef).Attr
 		assert.Equal(t, "expr2", rAttr.Default.OriginString)
-		err = txn.Commit()
+		err = txn.Commit(ctx)
 		assert.NoError(t, err)
 		//wg.Done()
 		//To check whether reader had waited.
@@ -1628,7 +1631,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 			it.Next()
 		}
 		_ = it.Close()
-		txn.Commit()
+		txn.Commit(ctx)
 		//To check whether reader had waited.
 		assert.True(t, time.Since(startTime) > 1*time.Second)
 		wg.Done()
@@ -1662,7 +1665,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		delBat = batch.New(true, []string{hideCol[0].Name})
 		delBat.Vecs[0] = v.GetData().GetDownstreamVector()
 
-		assert.NoError(t, txn.Commit())
+		assert.NoError(t, txn.Commit(ctx))
 	}
 
 	hideBats := containers.SplitBatch(delBat, 5)
@@ -1712,7 +1715,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 		}
 		_ = it.Close()
 
-		assert.NoError(t, txn.Commit())
+		assert.NoError(t, txn.Commit(ctx))
 		//To check whether reader had waited.
 		assert.True(t, time.Since(startTime) > 1*time.Second)
 		wg.Done()

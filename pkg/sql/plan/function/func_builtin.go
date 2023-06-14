@@ -1472,6 +1472,8 @@ type opBuiltInRand struct {
 	seed *rand.Rand
 }
 
+var _ = newOpBuiltInRand().builtInRand
+
 func newOpBuiltInRand() *opBuiltInRand {
 	return new(opBuiltInRand)
 }

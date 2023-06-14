@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -41,7 +42,7 @@ func TestCreateDB1(t *testing.T) {
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
-	txnMgr.Start()
+	txnMgr.Start(context.Background())
 	defer txnMgr.Stop()
 
 	txn1, _ := txnMgr.StartTxn(nil)
@@ -71,7 +72,7 @@ func TestCreateDB1(t *testing.T) {
 	_, err = txn1.GetDatabase(name)
 	assert.Nil(t, err)
 
-	err = txn1.Commit()
+	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
 
 	assert.Nil(t, err)
@@ -129,7 +130,7 @@ func TestTableEntry1(t *testing.T) {
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
-	txnMgr.Start()
+	txnMgr.Start(context.Background())
 	defer txnMgr.Stop()
 
 	txn1, _ := txnMgr.StartTxn(nil)
@@ -160,7 +161,7 @@ func TestTableEntry1(t *testing.T) {
 	_, err = txn2.DropDatabase(name)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 
-	err = txn1.Commit()
+	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
 
 	_, err = txn2.DropDatabase(name)
@@ -186,7 +187,7 @@ func TestTableEntry1(t *testing.T) {
 	_, err = db.DropRelationByName(schema.Name)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 
-	err = txn3.Commit()
+	err = txn3.Commit(context.Background())
 	assert.Nil(t, err)
 
 	t.Log(tb1.String())
@@ -204,7 +205,7 @@ func TestTableEntry2(t *testing.T) {
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
-	txnMgr.Start()
+	txnMgr.Start(context.Background())
 	defer txnMgr.Stop()
 
 	txn1, _ := txnMgr.StartTxn(nil)
@@ -222,7 +223,7 @@ func TestTableEntry2(t *testing.T) {
 		_, err = db.CreateRelation(s)
 		assert.Nil(t, err)
 	}
-	err = txn1.Commit()
+	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
 
 	txn2, _ := txnMgr.StartTxn(nil)
@@ -268,7 +269,7 @@ func TestDB1(t *testing.T) {
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
-	txnMgr.Start()
+	txnMgr.Start(context.Background())
 	defer txnMgr.Stop()
 	name := "db1"
 	var wg sync.WaitGroup
@@ -287,7 +288,7 @@ func TestDB1(t *testing.T) {
 				return
 			}
 		}
-		err = txn.Commit()
+		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 	}
 
@@ -304,7 +305,7 @@ func TestTable1(t *testing.T) {
 	defer catalog.Close()
 
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
-	txnMgr.Start()
+	txnMgr.Start(context.Background())
 	defer txnMgr.Stop()
 	name := "db1"
 	tbName := "tb1"
@@ -326,7 +327,7 @@ func TestTable1(t *testing.T) {
 				return
 			}
 		}
-		err = txn.Commit()
+		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 		// t.Log(rel.String())
 	}
@@ -334,7 +335,7 @@ func TestTable1(t *testing.T) {
 		txn, _ := txnMgr.StartTxn(nil)
 		_, err := txn.CreateDatabase(name, "", "")
 		assert.Nil(t, err)
-		err = txn.Commit()
+		err = txn.Commit(context.Background())
 		assert.Nil(t, err)
 	}
 	for i := 0; i < 1000; i++ {
@@ -356,7 +357,7 @@ func TestSegment1(t *testing.T) {
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
-	txnMgr.Start()
+	txnMgr.Start(context.Background())
 	defer txnMgr.Stop()
 	name := "db"
 	tbName := "tb"
@@ -369,7 +370,7 @@ func TestSegment1(t *testing.T) {
 	assert.Nil(t, err)
 	seg1, err := tb.CreateSegment(txn1, ES_Appendable, nil, nil)
 	assert.Nil(t, err)
-	err = txn1.Commit()
+	err = txn1.Commit(context.Background())
 	assert.Nil(t, err)
 	t.Log(seg1.String())
 	t.Log(tb.String())

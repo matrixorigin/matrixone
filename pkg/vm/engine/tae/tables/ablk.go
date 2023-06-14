@@ -118,11 +118,13 @@ func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
 }
 
 func (blk *ablock) GetColumnDataByIds(
+	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
 ) (view *model.BlockView, err error) {
 	return blk.resolveColumnDatas(
+		ctx,
 		txn,
 		readSchema.(*catalog.Schema),
 		colIdxes,
@@ -144,6 +146,7 @@ func (blk *ablock) GetColumnDataById(
 }
 
 func (blk *ablock) resolveColumnDatas(
+	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxes []int,
@@ -160,7 +163,7 @@ func (blk *ablock) resolveColumnDatas(
 			skipDeletes)
 	} else {
 		return blk.ResolvePersistedColumnDatas(
-			context.Background(),
+			ctx,
 			node.MustPNode(),
 			txn,
 			readSchema,
@@ -238,7 +241,7 @@ func (blk *ablock) resolveInMemoryColumnDatas(
 	if err != nil {
 		return
 	}
-	if deSels != nil && !deSels.IsEmpty() {
+	if !deSels.IsEmpty() {
 		if view.DeleteMask != nil {
 			view.DeleteMask.Or(deSels)
 		} else {
@@ -534,7 +537,8 @@ func (blk *ablock) checkConflictAndDupClosure(
 	txn txnif.TxnReader,
 	isCommitting bool,
 	dupRow *uint32,
-	rowmask *roaring.Bitmap) func(row uint32) error {
+	rowmask *roaring.Bitmap,
+) func(row uint32) error {
 	return func(row uint32) (err error) {
 		if rowmask != nil && rowmask.Contains(row) {
 			return nil
