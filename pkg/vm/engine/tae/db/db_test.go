@@ -4241,7 +4241,6 @@ func TestCollectDelete(t *testing.T) {
 	t.Logf(view.DeleteMask.String())
 	assert.Equal(t, 5, view.DeleteMask.GetCardinality())
 
-
 	blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
 	assert.NoError(t, err)
@@ -7292,4 +7291,59 @@ func TestDeduplication(t *testing.T) {
 	}
 	tae.checkRowsByScan(rows, false)
 	t.Logf(tae.Catalog.SimplePPString(3))
+}
+
+func TestGCInMemeoryDeletesByTS(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 100
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = uint32(rows)
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	tae.createRelAndAppend(bat, true)
+
+	txn, rel := tae.getRelation()
+	blkit := rel.MakeBlockIt()
+	blkMeta := blkit.GetBlock().GetMeta().(*catalog.BlockEntry)
+	blkID := blkMeta.AsCommonID()
+	blkData := blkMeta.GetBlockData()
+	assert.NoError(t, txn.Commit(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				break
+			default:
+				ts := tae.TxnMgr.StatMaxCommitTS()
+				blkData.GCInMemeoryDeletesByTS(ts)
+			}
+		}
+	}()
+
+	for offset := 0; offset < rows; offset++ {
+		txn, rel := tae.getRelation()
+		assert.NoError(t, rel.RangeDelete(blkID, uint32(offset), uint32(offset), handle.DT_Normal))
+		assert.NoError(t, txn.Commit(context.Background()))
+		ts := txn.GetCommitTS()
+
+		batch, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true)
+		assert.NoError(t, err)
+		t.Logf(logtail.BatchToString("", batch, false))
+		for i, vec := range batch.Vecs {
+			t.Logf(batch.Attrs[i])
+			assert.Equal(t, offset, vec.Length())
+		}
+		view, err := blkData.CollectChangesInRange(context.Background(), types.TS{}, ts)
+		assert.NoError(t, err)
+		t.Logf(view.DeleteMask.String())
+		assert.Equal(t, offset, view.DeleteMask.GetCardinality())
+	}
+	cancel()
+
 }
