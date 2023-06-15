@@ -104,7 +104,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 
 	if len(probeExprs) == 1 {
 		probeNdv := getExprNdv(probeExprs[0], builder)
-		if probeNdv == 0 || node.Stats.HashmapSize/probeNdv >= 0.1 {
+		if probeNdv == -1 || node.Stats.HashmapSize/probeNdv >= 0.1 {
 			return
 		}
 

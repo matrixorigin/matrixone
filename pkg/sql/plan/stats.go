@@ -192,6 +192,7 @@ func getColNdv(col *plan.ColRef, builder *QueryBuilder) float64 {
 // this function is used to calculate the ndv of expressions,
 // like year(l_orderdate), substring(phone_number), and assume col is the first argument
 // if only the ndv of column is needed, please call getColNDV
+// if this function fail, it will return -1
 func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
