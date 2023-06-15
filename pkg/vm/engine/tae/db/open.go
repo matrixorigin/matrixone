@@ -86,6 +86,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		model.WithRuntimeTransferTable(transferTable),
 		model.WithRuntimeFilterIndexCache(indexCache),
 		model.WithRuntimeObjectFS(fs),
+		model.WithRuntimeMemtablePool(model.MakeDefaultMemtablePool("memtable-vector-pool")),
+		model.WithRuntimeTransientPool(model.MakeDefaultTransientPool("trasient-vector-pool")),
 	)
 
 	switch opts.LogStoreT {
