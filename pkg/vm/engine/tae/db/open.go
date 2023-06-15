@@ -109,8 +109,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		opts.Ctx,
 		db.Opts.Catalog,
 		db.Wal,
-		transferTable,
-		indexCache,
+		db.Runtime,
 		dataFactory,
 		opts.MaxMessageSize,
 	)
