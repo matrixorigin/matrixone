@@ -39,6 +39,25 @@ var NilSesID [16]byte
 
 var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 
+func StatementInfoFilter(i *StatementInfo) bool {
+	// Check SqlSourceType
+	switch i.SqlSourceType {
+	case "Internal", "External", "Non_Cloud_User":
+		// Check StatementType
+		switch i.StatementType {
+		case "Insert", "Update", "Delete", "Execute":
+			return true
+		case "Select":
+			// For 'select', also check if Duration is longer than 200 milliseconds
+			if i.Duration > 200*time.Millisecond {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 type StatementInfo struct {
 	StatementID          [16]byte  `json:"statement_id"`
 	TransactionID        [16]byte  `json:"transaction_id"`

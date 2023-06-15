@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -123,20 +122,20 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 	// Initialize aggregator
 	var sessionId [16]byte
 	sessionId[0] = 1
-	aggregator := etl.NewAggregator(
+	aggregator := NewAggregator(
 		7*time.Second,
-		func() etl.Item {
+		func() Item {
 			return &StatementInfo{
 				RequestAt: time.Now(),
 			}
 		},
-		func(existing, new etl.Item) {
+		func(existing, new Item) {
 			e := existing.(*StatementInfo)
 			n := new.(*StatementInfo)
 			e.Duration += n.Duration
 			e.Statement += n.Statement + ";"
 		},
-		func(i etl.Item) bool {
+		func(i Item) bool {
 			statementInfo, ok := i.(*StatementInfo)
 			if !ok {
 				return false
