@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"strings"
 )
 
 // keyPartitionBuilder processes key partition
@@ -59,17 +60,28 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 		if len(primaryKeys) != 0 {
 			partitionType.ColumnList = primaryKeys
 		} else if len(uniqueIndices) != 0 {
-			uniqueKey := uniqueIndices[0]
-			if len(uniqueKey.KeyParts) == 0 {
-				return moerr.NewInvalidInput(ctx, "invalid unique key %s", uniqueKey.Name)
-			}
-			names := make([]*tree.UnresolvedName, len(uniqueKey.KeyParts))
-			for i, keyPart := range uniqueKey.KeyParts {
-				names[i] = keyPart.ColName
-			}
-			partitionType.ColumnList = names
-		}
+			isLastUniqueIndex := false
 
+		label1:
+			for i, _ := range uniqueIndices {
+				isLastUniqueIndex = len(uniqueIndices) == i
+				uniqueKey := uniqueIndices[i]
+				names := make([]*tree.UnresolvedName, len(uniqueKey.KeyParts))
+				for i, keyPart := range uniqueKey.KeyParts {
+					// if the unique key column were not defined as NOT NULL, then the previous statement would fail.
+					// See: https://dev.mysql.com/doc/refman/8.0/en/partitioning-key.html
+					if ok := checkTableColumnsNotNull(tableDef, keyPart.ColName.Parts[0]); !ok {
+						if isLastUniqueIndex {
+							return moerr.NewInvalidInput(ctx, "Field in list of fields for partition function not found in table")
+						} else {
+							continue label1
+						}
+					}
+					names[i] = keyPart.ColName
+				}
+				partitionType.ColumnList = names
+			}
+		}
 		if len(partitionType.ColumnList) == 0 {
 			return moerr.NewInvalidInput(ctx, "Field in list of fields for partition function not found in table")
 		}
@@ -132,4 +144,14 @@ func (kpb *keyPartitionBuilder) buildEvalPartitionExpression(ctx context.Context
 	}
 	partitionDef.PartitionExpression = partitionExpression
 	return nil
+}
+
+// checkTableColumnsNotNull check unique column is `NOT NULL`
+func checkTableColumnsNotNull(tableDef *TableDef, columnName string) bool {
+	for _, coldef := range tableDef.Cols {
+		if strings.EqualFold(coldef.Name, columnName) {
+			return !coldef.Default.NullAbility
+		}
+	}
+	return true
 }
