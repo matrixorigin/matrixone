@@ -281,6 +281,7 @@ jobs:
 
       # start tpch test
       - name: Load TPCH 10G Test Data
+        timeout-minutes: 10
         id: load_tpch_data
         if: ${{ always() && !cancelled() }}
         run: |
@@ -385,6 +386,7 @@ jobs:
      
      # start tpcc test
       - name: Load TPCC 10 Warehouse Data
+        timeout-minutes: 10
         id: load_tpcc_data
         if: ${{ always() && !cancelled() }}
         run: |
