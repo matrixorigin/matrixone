@@ -6,29 +6,9 @@ import (
 	"time"
 )
 
-var ErrFilteredOut = errors.New("item filtered out")
-
 func TestAggregator(t *testing.T) {
 	var sessionId [16]byte
 	sessionId[0] = 1
-
-	// Local version of statementInfoFilterFunc for testing
-	statementInfoFilterFunc := func(i Item) bool {
-		s, ok := i.(*StatementInfo)
-		if !ok {
-			return false
-		}
-		if s.StatementType != "Select" && s.StatementType != "Insert" && s.StatementType != "Update" && s.StatementType != "Execute" {
-			return false
-		}
-		if s.Duration < 200*time.Millisecond && s.StatementType == "Select" {
-			return false
-		}
-		if s.SqlSourceType != "Internal" && s.SqlSourceType != "External" && s.SqlSourceType != "Non_Cloud_User" {
-			return false
-		}
-		return true
-	}
 
 	aggregator := NewAggregator(
 		7*time.Second,
@@ -40,13 +20,14 @@ func TestAggregator(t *testing.T) {
 			n := new.(*StatementInfo)
 			e.Duration += n.Duration
 		},
-		statementInfoFilterFunc,
+		StatementInfoFilter,
 	)
 
 	// Insert StatementInfo instances into the aggregator
 	_, err := aggregator.AddItem(&StatementInfo{
-		StatementType: "Type1",
-		Duration:      time.Duration(5 * time.Second),
+		StatementType: "Select",
+		Duration:      time.Duration(500 * time.Millisecond), // make it longer than 200ms to pass filter
+		SqlSourceType: "Internal",
 	})
 
 	if !errors.Is(err, ErrFilteredOut) {

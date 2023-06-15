@@ -27,9 +27,12 @@ func NewAggregator(windowSize time.Duration, newItemFunc func() Item, updateFunc
 	}
 }
 
+var ErrFilteredOut = errors.New("item filtered out")
+
 func (a *Aggregator) AddItem(i Item) (Item, error) {
 	if !a.FilterFunc(i) {
-		return i, errors.New("item does not pass the filter")
+		return i, ErrFilteredOut
+
 	}
 
 	group, exists := a.Grouped[i.Key(a.WindowSize)]

@@ -39,22 +39,31 @@ var NilSesID [16]byte
 
 var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 
-func StatementInfoFilter(i *StatementInfo) bool {
+func StatementInfoFilter(i Item) bool {
+	// Attempt to perform a type assertion to *StatementInfo
+	statementInfo, ok := i.(*StatementInfo)
+
+	if !ok {
+		// The item couldn't be cast to *StatementInfo
+		return false
+	}
+
 	// Check SqlSourceType
-	switch i.SqlSourceType {
+	switch statementInfo.SqlSourceType {
 	case "Internal", "External", "Non_Cloud_User":
 		// Check StatementType
-		switch i.StatementType {
+		switch statementInfo.StatementType {
 		case "Insert", "Update", "Delete", "Execute":
 			return true
 		case "Select":
 			// For 'select', also check if Duration is longer than 200 milliseconds
-			if i.Duration > 200*time.Millisecond {
+			if statementInfo.Duration < 200*time.Millisecond {
 				return true
 			}
 		}
 	}
 
+	// If no conditions matched, return false
 	return false
 }
 
