@@ -51,7 +51,7 @@ func shouldAggPushDown(agg, join, leftChild, rightChild *plan.Node, builder *Que
 	if !ok {
 		return false
 	}
-	ndv := getColNdv(colGroupBy.Col, join.NodeId, builder)
+	ndv := getColNdv(colGroupBy.Col, builder)
 	if ndv < 0 || ndv > join.Stats.Outcnt {
 		return false
 	}
