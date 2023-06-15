@@ -202,7 +202,7 @@ func (blk *baseBlock) LoadPersistedColumnData(ctx context.Context, schema *catal
 	location := blk.meta.GetMetaLoc()
 	return LoadPersistedColumnData(
 		ctx,
-		blk.rt.Fs,
+		blk.rt,
 		blk.meta.AsCommonID(),
 		def,
 		location)

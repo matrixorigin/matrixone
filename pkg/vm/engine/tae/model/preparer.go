@@ -19,8 +19,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func PreparePhyAddrData(id *objectio.Blockid, startRow, length uint32) (col containers.Vector, err error) {
-	col = containers.MakeVector(objectio.RowidType)
+func PreparePhyAddrData(
+	id *objectio.Blockid, startRow, length uint32, pool *containers.VectorPool,
+) (col containers.Vector, err error) {
+	col = pool.GetVector(&objectio.RowidType)
 	vec := col.GetDownstreamVector()
 	m := col.GetAllocator()
 	if err = objectio.ConstructRowidColumnTo(

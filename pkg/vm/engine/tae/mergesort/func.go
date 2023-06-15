@@ -117,7 +117,7 @@ func Shuffle(
 	col containers.Vector, idx []int32, pool *containers.VectorPool,
 ) containers.Vector {
 	var err error
-	ret := containers.MakeVector(*col.GetType())
+	ret := pool.GetVector(col.GetType())
 	if err = ret.PreExtend(len(idx)); err != nil {
 		panic(err)
 	}

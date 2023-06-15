@@ -30,15 +30,20 @@ import (
 
 func LoadPersistedColumnData(
 	ctx context.Context,
-	fs *objectio.ObjectFS,
+	rt *model.Runtime,
 	id *common.ID,
 	def *catalog.ColDef,
 	location objectio.Location,
 ) (vec containers.Vector, err error) {
 	if def.IsPhyAddr() {
-		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows())
+		return model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
 	}
-	bat, err := blockio.LoadColumns(ctx, []uint16{uint16(def.SeqNum)}, []types.Type{def.Type}, fs.Service, location, nil)
+	bat, err := blockio.LoadColumns(
+		ctx, []uint16{uint16(def.SeqNum)},
+		[]types.Type{def.Type},
+		rt.Fs.Service,
+		location,
+		nil)
 	if err != nil {
 		return
 	}
