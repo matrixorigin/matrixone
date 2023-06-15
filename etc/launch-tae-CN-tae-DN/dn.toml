@@ -2,7 +2,7 @@ service-type = "DN"
 data-dir = "./mo-data"
 
 [log]
-level = "debug"
+level = "info"
 format = "console"
 max-size = 512
 
@@ -12,7 +12,7 @@ service-addresses = [
 ]
 
 [metacache]
-memory-capacity = "2048MB"
+memory-capacity = "512MB"
 
 [[fileservice]]
 name = "LOCAL"

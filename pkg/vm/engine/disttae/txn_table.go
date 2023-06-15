@@ -16,8 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"os"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1323,13 +1321,6 @@ func (tbl *txnTable) NewReader(
 		}
 		return rds, nil
 	}
-
-	for i, blk := range ranges {
-		blkInfo := catalog.DecodeBlockInfo(blk)
-		logutil.Infof("NewReader : tableName : %s, blk%d: [%s%v]",
-			tbl.tableName, i, blkInfo.BlockID.String(), blkInfo.CanRemote)
-	}
-	os.Exit(-1)
 	return tbl.newBlockReader(ctx, num, expr, ranges)
 }
 
