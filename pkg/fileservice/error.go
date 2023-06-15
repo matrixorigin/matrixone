@@ -42,5 +42,8 @@ func isRetryableError(err error) bool {
 	if strings.Contains(str, "connection timed out") {
 		return true
 	}
+	if strings.Contains(str, "dial tcp: lookup") {
+		return true
+	}
 	return false
 }
