@@ -60,27 +60,11 @@ func (kpb *keyPartitionBuilder) build(ctx context.Context, partitionBinder *Part
 		if len(primaryKeys) != 0 {
 			partitionType.ColumnList = primaryKeys
 		} else if len(uniqueIndices) != 0 {
-			isLastUniqueIndex := false
-
-		label1:
-			for i, _ := range uniqueIndices {
-				isLastUniqueIndex = len(uniqueIndices) == i
-				uniqueKey := uniqueIndices[i]
-				names := make([]*tree.UnresolvedName, len(uniqueKey.KeyParts))
-				for i, keyPart := range uniqueKey.KeyParts {
-					// if the unique key column were not defined as NOT NULL, then the previous statement would fail.
-					// See: https://dev.mysql.com/doc/refman/8.0/en/partitioning-key.html
-					if ok := checkTableColumnsNotNull(tableDef, keyPart.ColName.Parts[0]); !ok {
-						if isLastUniqueIndex {
-							return moerr.NewInvalidInput(ctx, "Field in list of fields for partition function not found in table")
-						} else {
-							continue label1
-						}
-					}
-					names[i] = keyPart.ColName
-				}
-				partitionType.ColumnList = names
+			uniqueKeyNames, err := chooseAvailableUniqueKey(ctx, tableDef, uniqueIndices)
+			if err != nil {
+				return err
 			}
+			partitionType.ColumnList = uniqueKeyNames
 		}
 		if len(partitionType.ColumnList) == 0 {
 			return moerr.NewInvalidInput(ctx, "Field in list of fields for partition function not found in table")
@@ -154,4 +138,29 @@ func checkTableColumnsNotNull(tableDef *TableDef, columnName string) bool {
 		}
 	}
 	return true
+}
+
+// chooseAvailableUniqueKey Select an available unique index as the partitioning key
+func chooseAvailableUniqueKey(ctx context.Context, tableDef *TableDef, uniqueIndexs []*tree.UniqueIndex) ([]*tree.UnresolvedName, error) {
+	isLastUniqueIndex := false
+label1:
+	for i, _ := range uniqueIndexs {
+		isLastUniqueIndex = len(uniqueIndexs) == i
+		uniqueKey := uniqueIndexs[i]
+		uniKeyNames := make([]*tree.UnresolvedName, len(uniqueKey.KeyParts))
+		for i, keyPart := range uniqueKey.KeyParts {
+			// if the unique key column were not defined as NOT NULL, then the previous statement would fail.
+			// See: https://dev.mysql.com/doc/refman/8.0/en/partitioning-key.html
+			if ok := checkTableColumnsNotNull(tableDef, keyPart.ColName.Parts[0]); !ok {
+				if isLastUniqueIndex {
+					return nil, moerr.NewInvalidInput(ctx, "Field in list of fields for partition function not found in table")
+				} else {
+					continue label1
+				}
+			}
+			uniKeyNames[i] = keyPart.ColName
+		}
+		return uniKeyNames, nil
+	}
+	return nil, nil
 }
