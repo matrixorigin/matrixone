@@ -83,6 +83,7 @@ func (w *CSVWriter) WriteRow(row *table.Row) error {
 }
 
 func (w *CSVWriter) WriteStrings(record []string) error {
+	w.initBuffer()
 	defer w.formatter.Flush()
 	err := w.formatter.Write(record)
 	if err != nil {
