@@ -40,8 +40,8 @@ func getBuffer() *bytes.Buffer {
 
 func putBuffer(buf *bytes.Buffer) {
 	if buf != nil {
-		bufPool.Put(buf)
 		buf.Reset()
+		bufPool.Put(buf)
 	}
 }
 
@@ -73,8 +73,8 @@ func (w *CSVWriter) initBuffer() {
 }
 func (w *CSVWriter) releaseBuffer() {
 	if w.buf != nil {
-		putBuffer(w.buf)
 		w.formatter = nil
+		putBuffer(w.buf)
 	}
 }
 
