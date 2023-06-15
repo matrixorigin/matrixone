@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -264,7 +265,7 @@ func (client *pushClient) firstTimeConnectToLogTailServer(
 	return err
 }
 
-func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine) {
+func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e *Engine, mp *mpool.MPool) {
 	connectMsg := make(chan error)
 
 	// we should always make sure that we have received connection message from `connectMsg` channel if we want to do reconnect.
@@ -365,23 +366,31 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 				<-connectMsg
 			}
 
-			logutil.Debugf("[log-tail-push-client] clean finished, start to reconnect to dn log tail service")
+			logutil.Infof("[log-tail-push-client] clean finished, start to reconnect to dn log tail service")
 			for {
 				dnLogTailServerBackend := e.getDNServices()[0].LogTailServiceAddress
 				if err := client.init(dnLogTailServerBackend, client.timestampWaiter); err != nil {
-					logutil.Error("[log-tail-push-client] rebuild the cn log tail client failed.")
+					logutil.Errorf("[log-tail-push-client] rebuild the cn log tail client failed, reason: %s", err)
 					time.Sleep(retryReconnect)
 					continue
 				}
 
-				// once we reconnect succeed, should clean partition here.
-				e.cleanMemoryTable()
+				// set all the running transaction to be aborted.
+				e.abortAllRunningTxn()
+
+				// clean memory table.
+				err := e.init(ctx, mp)
+				if err != nil {
+					logutil.Errorf("[log-tail-push-client] rebuild memory-table failed, err : '%s'.", err)
+					time.Sleep(retryReconnect)
+					continue
+				}
 
 				hasReceivedConnectionMsg = false
 
 				go func() {
-					err := client.firstTimeConnectToLogTailServer(ctx)
-					connectMsg <- err
+					er := client.firstTimeConnectToLogTailServer(ctx)
+					connectMsg <- er
 				}()
 				break
 			}
@@ -685,7 +694,7 @@ func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTail
 }
 
 func (e *Engine) InitLogTailPushModel(
-	ctx context.Context,
+	ctx context.Context, mp *mpool.MPool,
 	timestampWaiter client.TimestampWaiter) error {
 
 	// try to init log tail client. if failed, retry.
@@ -698,7 +707,7 @@ func (e *Engine) InitLogTailPushModel(
 		break
 	}
 
-	e.pClient.receiveTableLogTailContinuously(ctx, e)
+	e.pClient.receiveTableLogTailContinuously(ctx, e, mp)
 	e.pClient.unusedTableGCTicker(ctx)
 	return nil
 }

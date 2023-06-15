@@ -76,6 +76,7 @@ func (s *service) initDistributedTAE(
 	logutil.Info("CN node running on push model.")
 	err = cnEngine.InitLogTailPushModel(
 		ctx,
+		mp,
 		s.timestampWaiter)
 	if err != nil {
 		return err

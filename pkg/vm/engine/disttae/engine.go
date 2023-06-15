@@ -535,10 +535,12 @@ func (e *Engine) getDNServices() []DNStore {
 	return values
 }
 
-func (e *Engine) cleanMemoryTable() {
+func (e *Engine) abortAllRunningTxn() {
 	e.Lock()
 	defer e.Unlock()
-	e.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+
+	// abort all running txn here.
+	return
 }
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
