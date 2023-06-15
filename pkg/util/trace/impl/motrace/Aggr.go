@@ -41,9 +41,9 @@ func (a *Aggregator) AddItem(i Item) (Item, error) {
 	if !exists {
 		group = a.NewItemFunc(i, a.ctx)
 		a.Grouped[i.Key(a.WindowSize)] = group
+	} else {
+		a.UpdateFunc(group, i)
 	}
-
-	a.UpdateFunc(group, i)
 	return nil, nil
 }
 
