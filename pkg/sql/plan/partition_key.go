@@ -142,25 +142,25 @@ func checkTableColumnsNotNull(tableDef *TableDef, columnName string) bool {
 
 // chooseAvailableUniqueKey Select an available unique index as the partitioning key
 func chooseAvailableUniqueKey(ctx context.Context, tableDef *TableDef, uniqueIndexs []*tree.UniqueIndex) ([]*tree.UnresolvedName, error) {
-	isLastUniqueIndex := false
-label1:
-	for i, _ := range uniqueIndexs {
-		isLastUniqueIndex = len(uniqueIndexs) == i
-		uniqueKey := uniqueIndexs[i]
-		uniKeyNames := make([]*tree.UnresolvedName, len(uniqueKey.KeyParts))
-		for i, keyPart := range uniqueKey.KeyParts {
+	isNotNullCheckErr := false
+	for _, uniqueIndex := range uniqueIndexs {
+		uniKeyNames := make([]*tree.UnresolvedName, len(uniqueIndex.KeyParts))
+		isOK := true
+		for i, keyPart := range uniqueIndex.KeyParts {
 			// if the unique key column were not defined as NOT NULL, then the previous statement would fail.
 			// See: https://dev.mysql.com/doc/refman/8.0/en/partitioning-key.html
 			if ok := checkTableColumnsNotNull(tableDef, keyPart.ColName.Parts[0]); !ok {
-				if isLastUniqueIndex {
-					return nil, moerr.NewInvalidInput(ctx, "Field in list of fields for partition function not found in table")
-				} else {
-					continue label1
-				}
+				isNotNullCheckErr = true
+				isOK = false
 			}
 			uniKeyNames[i] = keyPart.ColName
 		}
-		return uniKeyNames, nil
+		if isOK {
+			return uniKeyNames, nil
+		}
+	}
+	if isNotNullCheckErr {
+		return nil, moerr.NewInvalidInput(ctx, "Field in list of fields for partition function not found in table")
 	}
 	return nil, nil
 }
