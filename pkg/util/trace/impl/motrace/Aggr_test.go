@@ -81,7 +81,7 @@ func TestAggregator(t *testing.T) {
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 		})
 
-		// different source type
+		// different session id
 		_, err = aggregator.AddItem(&StatementInfo{
 			Account:       "MO",
 			User:          "moroot",
@@ -90,11 +90,48 @@ func TestAggregator(t *testing.T) {
 			SqlSourceType: "Internal",
 			SessionID:     sessionId2,
 			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
-			RequestAt:     fixedTime.Add(2 * time.Second),
+			RequestAt:     fixedTime,
 			Duration:      10 * time.Millisecond,
 			TransactionID: _1TxnID,
 			StatementID:   _1TxnID,
 			Status:        StatementStatusSuccess,
+			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error when adding item: %v", err)
+		}
+
+		// same as the second session id with 5 seconds later
+		_, err = aggregator.AddItem(&StatementInfo{
+			Account:       "MO",
+			User:          "moroot",
+			Database:      "system",
+			StatementType: "Select",
+			SqlSourceType: "Internal",
+			SessionID:     sessionId2,
+			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
+			RequestAt:     fixedTime.Add(6 * time.Second),
+			Duration:      10 * time.Millisecond,
+			TransactionID: _1TxnID,
+			StatementID:   _1TxnID,
+			Status:        StatementStatusSuccess,
+			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+		})
+
+		// Error status
+		_, err = aggregator.AddItem(&StatementInfo{
+			Account:       "MO",
+			User:          "moroot",
+			Database:      "system",
+			StatementType: "Select",
+			SqlSourceType: "Internal",
+			SessionID:     sessionId2,
+			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
+			RequestAt:     fixedTime.Add(6 * time.Second),
+			Duration:      10 * time.Millisecond,
+			TransactionID: _1TxnID,
+			StatementID:   _1TxnID,
+			Status:        StatementStatusFailed,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 		})
 		if err != nil {
@@ -106,10 +143,10 @@ func TestAggregator(t *testing.T) {
 	results = aggregator.GetResults()
 
 	// Test expected behavior
-	if len(results) != 2 {
+	if len(results) != 4 {
 		t.Errorf("Expected 0 aggregated statements, got %d", len(results))
 	}
 	assert.Equal(t, 50*time.Millisecond, results[0].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[1].(*StatementInfo).Duration)
-
+	assert.Equal(t, 50*time.Millisecond, results[2].(*StatementInfo).Duration)
 }
