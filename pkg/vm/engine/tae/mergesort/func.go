@@ -61,7 +61,9 @@ func Merge[T any](
 	src *[]uint32,
 	lessFunc LessFunc[T],
 	fromLayout,
-	toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
+	toLayout []uint32,
+	pool *containers.VectorPool,
+) (ret []containers.Vector, mapping []uint32) {
 	ret = make([]containers.Vector, len(toLayout))
 	mapping = make([]uint32, len(*src))
 
@@ -72,7 +74,7 @@ func Merge[T any](
 	}
 
 	for i := range toLayout {
-		ret[i] = containers.MakeVector(*col[0].GetType())
+		ret[i] = pool.GetVector(col[0].GetType())
 	}
 
 	nBlk := len(col)
@@ -130,13 +132,15 @@ func Shuffle(
 	return ret
 }
 
-func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []containers.Vector) {
+func Multiplex(
+	col []containers.Vector, src []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
+) (ret []containers.Vector) {
 	ret = make([]containers.Vector, len(toLayout))
 	cursors := make([]int, len(fromLayout))
 
 	k := 0
 	for i := 0; i < len(toLayout); i++ {
-		ret[i] = containers.MakeVector(*col[0].GetType())
+		ret[i] = pool.GetVector(col[0].GetType())
 		ret[i].PreExtend(int(toLayout[i]))
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
@@ -152,17 +156,21 @@ func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uin
 	return
 }
 
-func ShuffleColumn(column []containers.Vector, sortedIdx []uint32, fromLayout, toLayout []uint32) (ret []containers.Vector) {
-	ret = Multiplex(column, sortedIdx, fromLayout, toLayout)
+func ShuffleColumn(
+	column []containers.Vector, sortedIdx []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
+) (ret []containers.Vector) {
+	ret = Multiplex(column, sortedIdx, fromLayout, toLayout, pool)
 	return
 }
 
-func Reshape(column []containers.Vector, fromLayout, toLayout []uint32) (ret []containers.Vector) {
+func Reshape(
+	column []containers.Vector, fromLayout, toLayout []uint32, pool *containers.VectorPool,
+) (ret []containers.Vector) {
 	ret = make([]containers.Vector, len(toLayout))
 	fromIdx := 0
 	fromOffset := 0
 	for i := 0; i < len(toLayout); i++ {
-		ret[i] = containers.MakeVector(*column[0].GetType())
+		ret[i] = pool.GetVector(column[0].GetType())
 		toOffset := 0
 		for toOffset < int(toLayout[i]) {
 			fromLeft := fromLayout[fromIdx] - uint32(fromOffset)

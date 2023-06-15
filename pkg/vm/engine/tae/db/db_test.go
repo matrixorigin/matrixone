@@ -2664,7 +2664,7 @@ func TestMergeblocks2(t *testing.T) {
 			it.Next()
 		}
 		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
-		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Scheduler)
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Runtime, tae.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -2747,7 +2747,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 			it.Next()
 		}
 		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
-		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Scheduler)
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Runtime, tae.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -5055,7 +5055,7 @@ func TestMergeBlocks3(t *testing.T) {
 			metas = append(metas, meta)
 		}
 		segsToMerge := []*catalog.SegmentEntry{seg1}
-		task, err := jobs.NewMergeBlocksTask(nil, mergetxn, metas, segsToMerge, nil, tae.Scheduler)
+		task, err := jobs.NewMergeBlocksTask(nil, mergetxn, metas, segsToMerge, nil, tae.Runtime, tae.Scheduler)
 		require.NoError(t, err)
 		require.NoError(t, task.OnExec(context.Background()))
 
