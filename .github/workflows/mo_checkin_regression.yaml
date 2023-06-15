@@ -318,7 +318,7 @@ jobs:
           sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' mo.yml
           
           echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 | tee report/load-oltp-insert.log
+          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-insert.log
           sleep 10
           
           echo ''
@@ -337,7 +337,7 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-load
           mkdir -p report
           echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 | tee report/load-oltp-delete.log
+          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-delete.log
           sleep 10
           
           echo ''
@@ -356,7 +356,7 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-load
           mkdir -p report
           echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 | tee report/load-oltp-update.log
+          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-update.log
           sleep 10
           
           echo ''
@@ -375,7 +375,7 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-load
           mkdir -p report
           echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 | tee report/load-oltp-select.log
+          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-select.log
           sleep 10
           
           echo ''
