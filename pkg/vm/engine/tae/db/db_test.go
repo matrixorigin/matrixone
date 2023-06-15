@@ -2579,7 +2579,7 @@ func TestSegDelLogtail(t *testing.T) {
 		ckpEntries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 		require.Equal(t, 1, len(ckpEntries))
 		entry := ckpEntries[0]
-		ins, del, cnins, segdel, err := entry.GetByTableID(context.Background(), tae.Fs, tid)
+		ins, del, cnins, segdel, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 		require.NoError(t, err)
 		require.Equal(t, uint32(6), ins.Vecs[0].Len)
 		require.Equal(t, uint32(6), del.Vecs[0].Len)
@@ -4479,7 +4479,7 @@ func TestBlockRead(t *testing.T) {
 		colTyps = append(colTyps, col.Type)
 	}
 	t.Log("read columns: ", columns)
-	fs := tae.DB.Fs.Service
+	fs := tae.DB.Runtime.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	infos := make([][]*pkgcatalog.BlockInfo, 0)
@@ -4727,7 +4727,7 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Fs, tid)
+			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			if ins != nil {
@@ -4742,7 +4742,7 @@ func TestReadCheckpoint(t *testing.T) {
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Fs, tid)
+			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			if ins != nil {
@@ -5270,7 +5270,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	// write only one segment
 	for i := 0; i < 1; i++ {
 		objName1 := objectio.NewSegmentid().ToString() + "-0"
-		writer, err := blockio.NewBlockWriter(tae.Fs.Service, objName1)
+		writer, err := blockio.NewBlockWriter(tae.Runtime.Fs.Service, objName1)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for _, bat := range bats[i*25 : (i+1)*25] {
@@ -5429,7 +5429,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
 	defer manager.Stop()
 
@@ -5461,7 +5461,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -5483,7 +5483,7 @@ func TestGCDropDB(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
 	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -5518,7 +5518,7 @@ func TestGCDropDB(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -5541,7 +5541,7 @@ func TestGCDropTable(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
 	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -5591,7 +5591,7 @@ func TestGCDropTable(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -6981,7 +6981,7 @@ func TestCommitS3Blocks(t *testing.T) {
 	blkMetas := make([]objectio.Location, 0)
 	for _, bat := range datas {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-		writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, name, 0, nil)
+		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for i := 0; i < 50; i++ {
@@ -7062,7 +7062,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	createRelation(t, tae.DB, "db", schema, true)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
 	_, err = writer.WriteBatch(containers.ToCNBatch(data))
@@ -7172,7 +7172,7 @@ func TestDeduplication(t *testing.T) {
 	})
 
 	blk1Name := objectio.BuildObjectName(segmentIDs[1], 0)
-	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
 	assert.NoError(t, err)
 	writer.SetPrimaryKey(3)
 	writer.WriteBatch(containers.ToCNBatch(bats[0]))
@@ -7199,8 +7199,8 @@ func TestDeduplication(t *testing.T) {
 	tbl, err := db.TxnGetTableEntryByName(schema.Name, txn)
 	assert.NoError(t, err)
 	dataFactory := tables.NewDataFactory(
-		tae.Fs,
-		tae.IndexCache,
+		tae.Runtime.Fs,
+		tae.Runtime.Cache.FilterIndex,
 		tae.Scheduler,
 		tae.Dir)
 	seg, err := tbl.CreateSegment(

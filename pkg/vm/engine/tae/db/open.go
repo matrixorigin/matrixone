@@ -67,22 +67,26 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 
 	opts = opts.FillDefaults(dirname)
 
-	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
-
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {
 		// TODO:fileservice needs to be passed in as a parameter
 		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
 	}
-	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 
 	db = &DB{
-		Dir:        dirname,
-		Opts:       opts,
-		IndexCache: indexCache,
-		Fs:         fs,
-		Closed:     new(atomic.Value),
+		Dir:    dirname,
+		Opts:   opts,
+		Closed: new(atomic.Value),
 	}
+	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
+	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
+	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
+
+	db.Runtime = model.NewRuntime(
+		model.WithRuntimeTransferTable(transferTable),
+		model.WithRuntimeFilterIndexCache(indexCache),
+		model.WithRuntimeObjectFS(fs),
+	)
 
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
@@ -92,21 +96,22 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(
-		db.Fs, indexCache, db.Scheduler, db.Dir)
+		fs, indexCache, db.Scheduler, db.Dir,
+	)
 	if db.Opts.Catalog, err = catalog.OpenCatalog(db.Scheduler, dataFactory); err != nil {
 		return
 	}
 	db.Catalog = db.Opts.Catalog
 	// Init and start txn manager
-	db.TransferTable = model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	txnStoreFactory := txnimpl.TxnStoreFactory(
 		opts.Ctx,
 		db.Opts.Catalog,
 		db.Wal,
-		db.TransferTable,
+		transferTable,
 		indexCache,
 		dataFactory,
-		opts.MaxMessageSize)
+		opts.MaxMessageSize,
+	)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewManager(
@@ -118,7 +123,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		opts.Ctx,
-		db.Fs,
+		fs,
 		db.Catalog,
 		db.Scheduler,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
@@ -161,7 +166,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		scanner)
 	db.BGScanner.Start()
 	// TODO: WithGCInterval requires configuration parameters
-	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, db.Fs, db.BGCheckpointRunner, db.Catalog)
+	db.DiskCleaner = gc2.NewDiskCleaner(opts.Ctx, fs, db.BGCheckpointRunner, db.Catalog)
 	db.DiskCleaner.Start()
 	db.DiskCleaner.AddChecker(
 		func(item any) bool {
@@ -176,7 +181,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 			"clean-transfer-table",
 			opts.CheckpointCfg.FlushInterval,
 			func(_ context.Context) (err error) {
-				db.TransferTable.RunTTL(time.Now())
+				transferTable.RunTTL(time.Now())
 				return
 			}),
 
