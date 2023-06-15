@@ -759,8 +759,6 @@ func (tbl *txnTable) rangesOnePart(
 	errCtx := errutil.ContextWithNoReport(ctx, true)
 
 	hasDeletes := len(dirtyBlks) > 0
-	dirties := make([][]byte, 0, len(dirtyBlks))
-	cleans := make([][]byte, 0, len(blocks))
 	for _, blk := range blocks {
 		// if expr is monotonic, we need evaluating expr for each block
 		if auxIdCnt > 0 {
@@ -815,20 +813,16 @@ func (tbl *txnTable) rangesOnePart(
 
 		if hasDeletes {
 			// collect deletes for blocks in partitionState.blocks.
-			if _, ok := dirtyBlks[blk.BlockID]; ok {
-				dirties = append(dirties, catalog.EncodeBlockInfo(blk))
-			} else {
+			if _, ok := dirtyBlks[blk.BlockID]; !ok {
 				blk.CanRemote = true
-				cleans = append(cleans, catalog.EncodeBlockInfo(blk))
 			}
+			*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 			continue
 		}
 		// store the block in ranges
-		cleans = append(cleans, catalog.EncodeBlockInfo(blk))
+		blk.CanRemote = true
+		*ranges = append(*ranges, catalog.EncodeBlockInfo(blk))
 	}
-	//notice that dirties being put before cleans.
-	*ranges = append(*ranges, dirties...)
-	*ranges = append(*ranges, cleans...)
 	return
 }
 
@@ -1293,13 +1287,13 @@ func (tbl *txnTable) NewReader(
 		mrds := make([]mergeReader, num)
 		ranges = ranges[1:]
 
-		dirtyBlks := make([]catalog.BlockInfo, 0)
-		cleanBlks := make([][]byte, 0)
-		for i, blk := range ranges {
+		var dirtyBlks []catalog.BlockInfo
+		var cleanBlks [][]byte
+		for _, blk := range ranges {
 			blkInfo := catalog.DecodeBlockInfo(blk)
 			if blkInfo.CanRemote {
-				cleanBlks = ranges[i+1:]
-				break
+				cleanBlks = append(cleanBlks, blk)
+				continue
 			}
 			dirtyBlks = append(dirtyBlks, *blkInfo)
 		}

@@ -2484,11 +2484,12 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		return nodes, nil
 	}
 	// add dirty blocks in current CN.
-	for i, blk := range ranges {
+	newRanges := make([][]byte, 0, len(ranges))
+	for _, blk := range ranges {
 		blkInfo := catalog.DecodeBlockInfo(blk)
 		if blkInfo.CanRemote {
-			ranges = ranges[i+1:]
-			break
+			newRanges = append(newRanges, blk)
+			continue
 		}
 		nodes[0].Data = append(nodes[0].Data, blk)
 	}
@@ -2508,12 +2509,12 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
 	if n.Stats.Shuffle && n.Stats.ShuffleType == plan.ShuffleType_Range {
-		err := shuffleBlocksByRange(c, ranges, n, nodes)
+		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		shuffleBlocksByHash(c, ranges, nodes)
+		shuffleBlocksByHash(c, newRanges, nodes)
 	}
 
 	minWorkLoad := math.MaxInt32
@@ -2566,6 +2567,7 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	return nil
 }
 
+// FIXME:: how to parallel scope in current CN, if return only one node?
 func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
 	//add current CN
