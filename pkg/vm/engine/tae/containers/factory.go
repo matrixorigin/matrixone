@@ -22,6 +22,19 @@ func MakeVector(typ types.Type, opts ...Options) (vec Vector) {
 	return NewVector(typ, opts...)
 }
 
+func BuildBatchWithPool(attrs []string, colTypes []types.Type, pool *VectorPool) *Batch {
+	bat := &Batch{
+		Attrs:   make([]string, 0, len(attrs)),
+		Nameidx: make(map[string]int, len(attrs)),
+		Vecs:    make([]Vector, 0, len(attrs)),
+	}
+	for i, attr := range attrs {
+		vec := pool.GetVector(&colTypes[i])
+		bat.AddVector(attr, vec)
+	}
+	return bat
+}
+
 func BuildBatch(attrs []string, colTypes []types.Type, opts Options) *Batch {
 	bat := &Batch{
 		Attrs:   make([]string, 0, len(attrs)),

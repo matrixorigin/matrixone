@@ -547,14 +547,10 @@ func (vec *vectorWrapper) Equals(o Vector) bool {
 
 func (vec *vectorWrapper) tryReuse(t *types.Type) bool {
 	if vec.inUse.CompareAndSwap(false, true) {
-		vec.wrapped.Reset(*t)
+		vec.wrapped.ResetWithNewType(t)
 		return true
 	}
 	return false
-}
-
-func (vec *vectorWrapper) isFromPool() bool {
-	return vec.put != nil
 }
 
 func (vec *vectorWrapper) isIdle() bool {

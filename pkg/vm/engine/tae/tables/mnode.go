@@ -35,6 +35,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
+var MemtableVectorPool *containers.VectorPool
+
+func init() {
+	MemtableVectorPool = containers.NewVectorPool("memtable-vector-pool", 512)
+}
+
 var _ NodeT = (*memoryNode)(nil)
 
 type memoryNode struct {
@@ -58,7 +64,9 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 	impl.writeSchema = schema
 	opts := containers.Options{}
 	opts.Allocator = common.MutMemAllocator
-	impl.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
+	impl.data = containers.BuildBatchWithPool(
+		schema.AllNames(), schema.AllTypes(), MemtableVectorPool,
+	)
 	impl.initPKIndex(schema)
 	impl.OnZeroCB = impl.close
 	return impl
