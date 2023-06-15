@@ -737,3 +737,17 @@ func TestVectorPool2(t *testing.T) {
 	vec.Close()
 	assert.Equal(t, 0, pool.Allocated())
 }
+
+func TestVectorPool3(t *testing.T) {
+	pool := NewVectorPool(t.Name(), 10)
+	typ := types.T_int32.ToType()
+	vec1 := NewVector(typ)
+	vec1.Append(int32(1), false)
+	vec1.Append(int32(2), false)
+	vec1.Append(int32(3), false)
+
+	vec2 := vec1.CloneWindowWithPool(0, 3, pool)
+	t.Log(vec2.PPString(0))
+	vec1.Close()
+	vec2.Close()
+}

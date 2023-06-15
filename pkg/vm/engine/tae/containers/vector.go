@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -42,6 +43,9 @@ type vectorWrapper struct {
 	// only used when put is not nil
 	// inUse is the flag that indicates whether the vectorWrapper is in use.
 	inUse atomic.Bool
+
+	// it is used to call Close in an idempotent way
+	closed atomic.Bool
 }
 
 func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
@@ -251,6 +255,9 @@ func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls
 }
 
 func (vec *vectorWrapper) Close() {
+	if !vec.closed.CompareAndSwap(false, true) {
+		return
+	}
 	// if this wrapper is get from a pool, we should put it back
 	if vec.put != nil {
 		vec.put(vec)
@@ -474,6 +481,7 @@ func (vec *vectorWrapper) PPString(num int) string {
 		_, _ = w.WriteString("...")
 	}
 	_, _ = w.WriteString(")]")
+	_, _ = w.WriteString(fmt.Sprintf(")][%v]", vec.put != nil))
 	return w.String()
 }
 
@@ -556,6 +564,7 @@ func (vec *vectorWrapper) Equals(o Vector) bool {
 
 func (vec *vectorWrapper) tryReuse(t *types.Type) bool {
 	if vec.inUse.CompareAndSwap(false, true) {
+		vec.closed.Store(false)
 		vec.wrapped.ResetWithNewType(t)
 		return true
 	}
@@ -574,6 +583,7 @@ func (vec *vectorWrapper) toIdle(maxAlloc int) {
 		vec.wrapped = newVec
 	}
 	if !vec.inUse.CompareAndSwap(true, false) {
+		logutil.Error(vec.PPString(3))
 		panic("vectorWrapper is not in use")
 	}
 }

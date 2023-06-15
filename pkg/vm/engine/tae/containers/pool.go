@@ -114,9 +114,6 @@ func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 		for i := 0; i < 4; i++ {
 			idx := fastrand() % uint32(len(p.fixSizedPool))
 			vec := p.fixSizedPool[idx]
-			// if !vec.GetType().IsFixedLen() {
-			// 	panic("logic error: vector type should be fix sized")
-			// }
 			if vec.tryReuse(t) {
 				return vec
 			}
