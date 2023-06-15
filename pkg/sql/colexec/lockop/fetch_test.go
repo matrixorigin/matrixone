@@ -15,6 +15,7 @@
 package lockop
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -931,4 +932,17 @@ func runFetchRowsTestWithAppendFunc[T any](
 	assert.Equal(t, lock.Granularity_Range, g)
 	assert.Equal(t, 2, len(rows))
 	assertFN(expectLockTableValues, rows)
+}
+
+func TestDecimal128(t *testing.T) {
+	packer := types.NewPacker(mpool.MustNew("test"))
+	decimal128Fn := func(v types.Decimal128) []byte {
+		packer.Reset()
+		packer.EncodeDecimal128(v)
+		return packer.Bytes()
+	}
+	max128, _, _ := types.Parse128("99999999999999999999999999999999999999")
+	minDecimal128 := decimal128Fn(max128.Minus())
+	maxDecimal128 := decimal128Fn(max128)
+	assert.True(t, bytes.Compare(minDecimal128, maxDecimal128) < 0)
 }
