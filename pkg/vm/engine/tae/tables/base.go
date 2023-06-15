@@ -618,7 +618,7 @@ func (blk *baseBlock) BuildCompactionTaskFactory() (
 		return
 	}
 
-	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
+	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.rt, blk.scheduler)
 	taskType = tasks.DataCompactionTask
 	scopes = append(scopes, *blk.meta.AsCommonID())
 	return

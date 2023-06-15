@@ -21,7 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func SortBlockColumns(cols []containers.Vector, pk int) ([]int32, error) {
+func SortBlockColumns(
+	cols []containers.Vector, pk int, pool *containers.VectorPool,
+) ([]int32, error) {
 	sortedIdx := make([]int32, cols[pk].Length())
 
 	switch cols[pk].GetType().Oid {
@@ -78,7 +80,7 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]int32, error) {
 		if i == pk {
 			continue
 		}
-		cols[i] = Shuffle(cols[i], sortedIdx)
+		cols[i] = Shuffle(cols[i], sortedIdx, pool)
 	}
 	return sortedIdx, nil
 }

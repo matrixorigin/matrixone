@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/mocks"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -255,11 +256,11 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	taeBats[3] = taeBats[3].CloneWindow(0, 10)
 
 	//sort by primary key
-	_, err = mergesort.SortBlockColumns(taeBats[0].Vecs, 1)
+	_, err = mergesort.SortBlockColumns(taeBats[0].Vecs, 1, mocks.GetTestVectorPool())
 	assert.Nil(t, err)
-	_, err = mergesort.SortBlockColumns(taeBats[1].Vecs, 1)
+	_, err = mergesort.SortBlockColumns(taeBats[1].Vecs, 1, mocks.GetTestVectorPool())
 	assert.Nil(t, err)
-	_, err = mergesort.SortBlockColumns(taeBats[2].Vecs, 1)
+	_, err = mergesort.SortBlockColumns(taeBats[2].Vecs, 1, mocks.GetTestVectorPool())
 	assert.Nil(t, err)
 
 	moBats := make([]*batch.Batch, 4)
