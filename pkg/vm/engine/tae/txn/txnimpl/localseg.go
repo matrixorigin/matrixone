@@ -166,7 +166,7 @@ func (seg *localSegment) prepareApplyANode(node *anode) error {
 		seg.tableHandle = tableData.GetHandle()
 	}
 	appended := uint32(0)
-	vec := containers.MakeVector(objectio.RowidType)
+	vec := seg.table.store.rt.VectorPool.Transient.GetVector(&objectio.RowidType)
 	for appended < node.Rows() {
 		appender, err := seg.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {

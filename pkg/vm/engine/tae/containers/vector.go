@@ -315,9 +315,20 @@ func (vec *vectorWrapper) CloneWindow(offset, length int, allocator ...*mpool.MP
 	}
 
 	cloned := NewVector(*vec.GetType(), opts)
+	vec.cloneWindowTo(offset, length, cloned)
+	return cloned
+}
+
+func (vec *vectorWrapper) CloneWindowWithPool(offset, length int, pool *VectorPool) Vector {
+	cloned := pool.GetVector(vec.GetType())
+	vec.cloneWindowTo(offset, length, cloned)
+	return cloned
+}
+
+func (vec *vectorWrapper) cloneWindowTo(offset, length int, cloned *vectorWrapper) {
 	if vec.wrapped.IsConstNull() {
 		cloned.wrapped = vector.NewConstNull(*vec.GetType(), length, vec.GetAllocator())
-		return cloned
+		return
 	}
 
 	if vec.wrapped.IsConst() {
@@ -329,8 +340,6 @@ func (vec *vectorWrapper) CloneWindow(offset, length int, allocator ...*mpool.MP
 	if err != nil {
 		panic(err)
 	}
-
-	return cloned
 }
 
 func (vec *vectorWrapper) ExtendWithOffset(src Vector, srcOff, srcLen int) {
