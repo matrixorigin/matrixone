@@ -21,11 +21,9 @@ jobs:
        version: ${{ steps.prep.outputs.version }}
        commit_id: ${{ steps.prep.outputs.commit_id }}
     steps:
-      - name: Checkout
+      - name: Checkout Matrixorigin/Matrixone
         uses: actions/checkout@v3
         with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
           path: ./matrixone
 
       - name: Prepare And Build
@@ -61,11 +59,9 @@ jobs:
     outputs:
       mo_svc_ip: ${{ steps.get_mo_addr.outputs.mo_svc_ip }}
     steps:
-      - name: Checkout
+      - name: Checkout Matrixorigin/Matrixone
         uses: actions/checkout@v3
         with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
           path: ./matrixone
           
       - name: Prepare AWS Tools
@@ -553,14 +549,6 @@ jobs:
     runs-on: arm64-runner
     needs: [docker_image_build,setup_mo_test_env,test]
     steps:
-
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          repository: matrixorigin/matrixone
-          ref: ${{ env.branch }}
-          path: ./matrixone
-
       - name: Prepare AWS Tools
         run: |
           sudo apt-get update && sudo apt-get install awscli -y 
@@ -582,32 +570,27 @@ jobs:
            EOF
       - name: Prepare Kubeconfig
         run: |
-          # set docker login info
-          DOCKER_REGISTRY_SERVER=docker.io
-          DOCKER_USER=${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKER_PASSWORD=${{ secrets.DOCKERHUB_TOKEN }}
           aws eks --region us-west-2 update-kubeconfig --name eks-ci --kubeconfig eks-ci
           export KUBECONFIG=$(pwd)/eks-ci
-          if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then export KUBECONFIG=$(pwd)/eks-ci; kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }} ;kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret generic aws-secret --from-literal=AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESSKEY_ID }} --from-literal=AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRETACCESS_KEY }};kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} create secret docker-registry dockerhub --docker-server=$DOCKER_REGISTRY_SERVER --docker-username=$DOCKER_USER --docker-password=$DOCKER_PASSWORD;fi 
+          if [ "$(kubectl get namespaces| grep mo-checkin-regression-${{ github.event.pull_request.number }} |wc -l)" -eq 0 ];then kubectl create namespace mo-checkin-regression-${{ github.event.pull_request.number }};fi 
 
       - name: Check MO Status and Clean ENV
         if: ${{ always() && !cancelled() }}
         run: |
-          cd $GITHUB_WORKSPACE/matrixone
-          sed -i 's/nsformocheckin/mo-checkin-regression-${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
-          sed -i 's/s3pathformocheckin/mo-checkin-regression\/${{ github.event.pull_request.number }}/g' $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
 
-          #delete matrixone cluster
           cd $GITHUB_WORKSPACE
           export KUBECONFIG=$(pwd)/eks-ci
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod
-          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} delete -f $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression.yaml
+          kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get matrixonecluster
+          
+          #delete matrixone cluster
+          kubectl get matrixonecluster -n mo-checkin-regression-${{ github.event.pull_request.number }} | awk 'NR>1{system("kubectl delete matrixonecluster/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
           sleep 60
+          
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod
 
-
-          # move result to s3://mo-checkin-regression/result/ only test fail
-          #if [ '${{ needs.test.result }}'x == 'failure'x ]; then aws s3 rm s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; aws s3 mv s3://mo-checkin-regression/${{ github.event.pull_request.number }}/etl s3://mo-checkin-regression/result/${{ github.event.pull_request.number }}/etl --recursive > /dev/null 2>&1; fi
+          #delete bucket
           kubectl get bucket -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep bucket | awk '{system("kubectl delete bucket/"$1" -n mo-checkin-regression-${{ github.event.pull_request.number }}")}'
 
+          #delete namespace
           kubectl delete namespace mo-checkin-regression-${{ github.event.pull_request.number }}
