@@ -66,8 +66,9 @@ func newABlock(
 }
 
 func (blk *ablock) OnApplyAppend(n txnif.AppendNode) (err error) {
-	blk.meta.GetSegment().GetTable().AddRows(uint64(n.GetMaxRow() -
-		n.GetStartRow()))
+	blk.meta.GetSegment().GetTable().AddRows(
+		uint64(n.GetMaxRow() - n.GetStartRow()),
+	)
 	return
 }
 
@@ -155,16 +156,12 @@ func (blk *ablock) resolveColumnDatas(
 	defer node.Unref()
 
 	if !node.IsPersisted() {
-		return blk.resolveInMemoryColumnDatas(
-			node.MustMNode(),
-			txn,
-			readSchema,
-			colIdxes,
-			skipDeletes)
+		return node.MustMNode().resolveInMemoryColumnDatas(
+			txn, readSchema, colIdxes, skipDeletes,
+		)
 	} else {
 		return blk.ResolvePersistedColumnDatas(
 			ctx,
-			node.MustPNode(),
 			txn,
 			readSchema,
 			colIdxes,
@@ -173,13 +170,28 @@ func (blk *ablock) resolveColumnDatas(
 	}
 }
 
-func (blk *ablock) DataCommittedBefore(ts types.TS) bool {
+// check if all rows are committed before the specified ts
+// here we assume that the ts is greater equal than the block's
+// create ts and less than the block's delete ts
+// it is a coarse-grained check
+func (blk *ablock) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
+	// if the block is not frozen, always return false
 	if !blk.IsAppendFrozen() {
 		return false
 	}
-	blk.RLock()
-	defer blk.RUnlock()
-	return blk.mvcc.LastAnodeCommittedBeforeLocked(ts)
+
+	node := blk.PinNode()
+	defer node.Unref()
+
+	// if the block is in memory, check with the in-memory node
+	// it is a fine-grained check if the block is in memory
+	if !node.IsPersisted() {
+		return node.MustMNode().allRowsCommittedBefore(ts)
+	}
+
+	// always return false for if the block is persisted
+	// it is a coarse-grained check
+	return false
 }
 
 func (blk *ablock) resolveColumnData(
@@ -192,12 +204,9 @@ func (blk *ablock) resolveColumnData(
 	defer node.Unref()
 
 	if !node.IsPersisted() {
-		return blk.resolveInMemoryColumnData(
-			node.MustMNode(),
-			txn,
-			readSchema,
-			col,
-			skipDeletes)
+		return node.MustMNode().resolveInMemoryColumnData(
+			txn, readSchema, col, skipDeletes,
+		)
 	} else {
 		return blk.ResolvePersistedColumnData(
 			ctx,
@@ -209,96 +218,6 @@ func (blk *ablock) resolveColumnData(
 	}
 }
 
-// Note: With PinNode Context
-func (blk *ablock) resolveInMemoryColumnDatas(
-	mnode *memoryNode,
-	txn txnif.TxnReader,
-	readSchema *catalog.Schema,
-	colIdxes []int,
-	skipDeletes bool) (view *model.BlockView, err error) {
-	blk.RLock()
-	defer blk.RUnlock()
-	maxRow, visible, deSels, err := blk.mvcc.GetVisibleRowLocked(txn)
-	if !visible || err != nil {
-		// blk.RUnlock()
-		return
-	}
-	data, err := mnode.GetDataWindow(readSchema, 0, maxRow)
-	if err != nil {
-		return
-	}
-	view = model.NewBlockView()
-	for _, colIdx := range colIdxes {
-		view.SetData(colIdx, data.Vecs[colIdx])
-	}
-	if skipDeletes {
-		// blk.RUnlock()
-		return
-	}
-
-	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
-	// blk.RUnlock()
-	if err != nil {
-		return
-	}
-	if !deSels.IsEmpty() {
-		if view.DeleteMask != nil {
-			view.DeleteMask.Or(deSels)
-		} else {
-			view.DeleteMask = deSels
-		}
-	}
-	return
-}
-
-// Note: With PinNode Context
-func (blk *ablock) resolveInMemoryColumnData(
-	mnode *memoryNode,
-	txn txnif.TxnReader,
-	readSchema *catalog.Schema,
-	col int,
-	skipDeletes bool) (view *model.ColumnView, err error) {
-	blk.RLock()
-	defer blk.RUnlock()
-	maxRow, visible, deSels, err := blk.mvcc.GetVisibleRowLocked(txn)
-	if !visible || err != nil {
-		// blk.RUnlock()
-		return
-	}
-
-	view = model.NewColumnView(col)
-	var data containers.Vector
-	data, err = mnode.GetColumnDataWindow(
-		readSchema,
-		0,
-		maxRow,
-		col)
-	if err != nil {
-		// blk.RUnlock()
-		return
-	}
-	view.SetData(data)
-	if skipDeletes {
-		// blk.RUnlock()
-		return
-	}
-
-	err = blk.FillInMemoryDeletesLocked(txn, view.BaseView, blk.RWMutex)
-	// blk.RUnlock()
-	if err != nil {
-		return
-	}
-	if deSels != nil && !deSels.IsEmpty() {
-		if view.DeleteMask != nil {
-			view.DeleteMask.Or(deSels)
-		} else {
-			view.DeleteMask = deSels
-		}
-	}
-
-	return
-}
-
 func (blk *ablock) GetValue(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
@@ -308,48 +227,12 @@ func (blk *ablock) GetValue(
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	if !node.IsPersisted() {
-		return blk.getInMemoryValue(node.MustMNode(), txn, schema, row, col)
+		return node.MustMNode().getInMemoryValue(txn, schema, row, col)
 	} else {
 		return blk.getPersistedValue(
-			ctx,
-			node.MustPNode(),
-			txn,
-			schema,
-			row,
-			col,
-			true)
+			ctx, txn, schema, row, col, true,
+		)
 	}
-}
-
-// With PinNode Context
-func (blk *ablock) getInMemoryValue(
-	mnode *memoryNode,
-	txn txnif.TxnReader,
-	readSchema *catalog.Schema,
-	row, col int) (v any, isNull bool, err error) {
-	blk.RLock()
-	deleted, err := blk.mvcc.IsDeletedLocked(uint32(row), txn, blk.RWMutex)
-	blk.RUnlock()
-	if err != nil {
-		return
-	}
-	if deleted {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-	view, err := blk.resolveInMemoryColumnData(mnode, txn, readSchema, col, true)
-	if err != nil {
-		return
-	}
-	defer view.Close()
-	v, isNull = view.GetValue(row)
-	//switch val := v.(type) {
-	//case []byte:
-	//	myVal := make([]byte, len(val))
-	//	copy(myVal, val)
-	//	v = myVal
-	//}
-	return
 }
 
 // GetByFilter will read pk column, which seqnum will not change, no need to pass the read schema.

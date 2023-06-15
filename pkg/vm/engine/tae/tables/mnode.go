@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
@@ -72,6 +73,7 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 }
 
 func (node *memoryNode) close() {
+	mvcc := node.block.mvcc
 	logutil.Debugf("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
 	node.data.Close()
 	node.data = nil
@@ -80,6 +82,7 @@ func (node *memoryNode) close() {
 		node.pkIndex = nil
 	}
 	node.block = nil
+	mvcc.ReleaseAppends()
 }
 
 func (node *memoryNode) IsPersisted() bool { return false }
@@ -398,4 +401,119 @@ func (node *memoryNode) CollectAppendInRange(
 	}
 
 	return
+}
+
+// Note: With PinNode Context
+func (node *memoryNode) resolveInMemoryColumnDatas(
+	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
+	colIdxes []int,
+	skipDeletes bool,
+) (view *model.BlockView, err error) {
+	node.block.RLock()
+	defer node.block.RUnlock()
+	maxRow, visible, deSels, err := node.block.mvcc.GetVisibleRowLocked(txn)
+	if !visible || err != nil {
+		// blk.RUnlock()
+		return
+	}
+	data, err := node.GetDataWindow(readSchema, 0, maxRow)
+	if err != nil {
+		return
+	}
+	view = model.NewBlockView()
+	for _, colIdx := range colIdxes {
+		view.SetData(colIdx, data.Vecs[colIdx])
+	}
+	if skipDeletes {
+		return
+	}
+
+	err = node.block.FillInMemoryDeletesLocked(txn, view.BaseView, node.block.RWMutex)
+	if err != nil {
+		return
+	}
+	if !deSels.IsEmpty() {
+		if view.DeleteMask != nil {
+			view.DeleteMask.Or(deSels)
+		} else {
+			view.DeleteMask = deSels
+		}
+	}
+	return
+}
+
+// Note: With PinNode Context
+func (node *memoryNode) resolveInMemoryColumnData(
+	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
+	col int,
+	skipDeletes bool,
+) (view *model.ColumnView, err error) {
+	node.block.RLock()
+	defer node.block.RUnlock()
+	maxRow, visible, deSels, err := node.block.mvcc.GetVisibleRowLocked(txn)
+	if !visible || err != nil {
+		return
+	}
+
+	view = model.NewColumnView(col)
+	var data containers.Vector
+	if data, err = node.GetColumnDataWindow(
+		readSchema,
+		0,
+		maxRow,
+		col,
+	); err != nil {
+		return
+	}
+	view.SetData(data)
+	if skipDeletes {
+		return
+	}
+
+	err = node.block.FillInMemoryDeletesLocked(txn, view.BaseView, node.block.RWMutex)
+	if err != nil {
+		return
+	}
+	if deSels != nil && !deSels.IsEmpty() {
+		if view.DeleteMask != nil {
+			view.DeleteMask.Or(deSels)
+		} else {
+			view.DeleteMask = deSels
+		}
+	}
+
+	return
+}
+
+// With PinNode Context
+func (node *memoryNode) getInMemoryValue(
+	txn txnif.TxnReader,
+	readSchema *catalog.Schema,
+	row, col int,
+) (v any, isNull bool, err error) {
+	node.block.RLock()
+	deleted, err := node.block.mvcc.IsDeletedLocked(uint32(row), txn, node.block.RWMutex)
+	node.block.RUnlock()
+	if err != nil {
+		return
+	}
+	if deleted {
+		err = moerr.NewNotFoundNoCtx()
+		return
+	}
+	view, err := node.resolveInMemoryColumnData(txn, readSchema, col, true)
+	if err != nil {
+		return
+	}
+	defer view.Close()
+	v, isNull = view.GetValue(row)
+	return
+}
+
+func (node *memoryNode) allRowsCommittedBefore(ts types.TS) bool {
+	node.block.RLock()
+	defer node.block.RUnlock()
+	return node.block.mvcc.AllAppendsCommittedBefore(ts)
 }

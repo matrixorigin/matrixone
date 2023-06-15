@@ -515,8 +515,9 @@ func fetchDecimal64Rows(
 		return parker.Bytes()
 	}
 	if lockTabel {
-		min := fn(0)
-		max := fn(math.MaxUint64)
+		maxDecimal64 := types.Decimal64(999999999999999999)
+		min := fn(maxDecimal64.Minus())
+		max := fn(maxDecimal64)
 		return [][]byte{min, max},
 			lock.Granularity_Range
 	}
@@ -543,8 +544,9 @@ func fetchDecimal128Rows(
 		return parker.Bytes()
 	}
 	if lockTabel {
-		min := fn(types.Decimal128{})
-		max := fn(types.Decimal128{B0_63: math.MaxUint64, B64_127: math.MaxUint64})
+		maxDecimal128, _, _ := types.Parse128("99999999999999999999999999999999999999")
+		min := fn(maxDecimal128.Minus())
+		max := fn(maxDecimal128)
 		return [][]byte{min, max},
 			lock.Granularity_Range
 	}

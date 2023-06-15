@@ -1018,7 +1018,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 			it.Next()
 			continue
 		}
-		if dedupAfterSnapshotTS && blkData.DataCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
+		if dedupAfterSnapshotTS && blkData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
 			it.Next()
 			continue
 		}
@@ -1093,10 +1093,16 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				it.Next()
 				continue
 			}
-			if dedupAfterSnapshotTS && blkData.DataCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
+
+			// if it is in the incremental deduplication scenario
+			// coarse check whether all rows in this block are committed before the snapshot timestamp
+			// if true, skip this block's deduplication
+			if dedupAfterSnapshotTS &&
+				blkData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
 				it.Next()
 				continue
 			}
+
 			var rowmask *roaring.Bitmap
 			if len(tbl.deleteNodes) > 0 {
 				fp := blk.AsCommonID()
