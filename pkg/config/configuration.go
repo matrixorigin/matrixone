@@ -592,8 +592,8 @@ type ObservabilityParameters struct {
 	// LongSpanTime default: 500 ms. Only record span, which duration >= LongSpanTime
 	LongSpanTime toml.Duration `toml:"longSpanTime"`
 
-	// IgnoreRunningStmt
-	IgnoreRunningStmt bool `toml:"ignoreRunningStmt"`
+	// SkipRunningStmt default: false. Skip status:Running entry while collect statement_info
+	SkipRunningStmt bool `toml:"skipRunningStmt"`
 
 	// If disabled, the logs will be written to files stored in s3
 	DisableSqlWriter bool `toml:"disableSqlWriter"`
