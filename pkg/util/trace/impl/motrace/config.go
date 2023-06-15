@@ -68,6 +68,9 @@ type tracerProviderConfig struct {
 	// disableSqlWriter
 	disableSqlWriter bool // set by WithSQLWriterDisable
 
+	// ignoreRunningStmt
+	ignoreRunningStmt bool // set by WithIgnoreRunningStmt
+
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
 	needInit bool // WithInitAction
@@ -171,6 +174,12 @@ func WithLongSpanTime(d time.Duration) tracerProviderOption {
 func WithSpanDisable(disable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.disableSpan = disable
+	}
+}
+
+func WithIgnoreRunningStmt(ignore bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.ignoreRunningStmt = ignore
 	}
 }
 

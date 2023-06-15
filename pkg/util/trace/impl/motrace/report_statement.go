@@ -264,6 +264,9 @@ func (s *StatementInfo) IsZeroTxnID() bool {
 }
 
 func (s *StatementInfo) Report(ctx context.Context) {
+	if s.Status == StatementStatusRunning && GetTracerProvider().ignoreRunningStmt {
+		return
+	}
 	s.reported = true
 	ReportStatement(ctx, s)
 }
