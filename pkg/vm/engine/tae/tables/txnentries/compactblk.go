@@ -84,19 +84,30 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
 	_ = entry.scheduler.DeleteTransferPage(entry.from.Fingerprint())
 	var fs fileservice.FileService
-	var toName string
+	var fromName, toName string
 
 	fromBlockEntry := entry.from.GetMeta().(*catalog.BlockEntry)
 	fs = fromBlockEntry.GetBlockData().GetFs().Service
 
+	// do not delete nonappendable `from` block file because it can be compacted again if it has deletes
+	if entry.from.IsAppendableBlock() {
+		seg := fromBlockEntry.ID.Segment()
+		num, _ := fromBlockEntry.ID.Offsets()
+		fromName = objectio.BuildObjectName(seg, num).String()
+	}
+
+	// it is totally safe to delete the brand new `to` block file
 	if entry.to != nil {
 		toBlockEntry := entry.to.GetMeta().(*catalog.BlockEntry)
-		toName = toBlockEntry.ID.ObjectString()
+		seg := toBlockEntry.ID.Segment()
+		num, _ := toBlockEntry.ID.Offsets()
+		toName = objectio.BuildObjectName(seg, num).String()
 	}
 
 	entry.scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, fromBlockEntry.AsCommonID(), func() error {
-		// do not delete `from` block file because it can be written again if it has deletes
-		// while it is totally safe to delete the brand new `to` block file
+		if fromName != "" {
+			_ = fs.Delete(context.TODO(), fromName)
+		}
 		if toName != "" {
 			_ = fs.Delete(context.TODO(), toName)
 		}
