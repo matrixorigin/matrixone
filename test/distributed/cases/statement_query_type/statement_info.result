@@ -1,0 +1,408 @@
+drop database if exists test;
+create database test;
+use test;
+create table ddl01(col1 int,col2 char primary key);
+insert into ddl01 values(1,'m');
+insert into ddl01 values(2,'f');
+insert into ddl01 values(3,'a');
+create view view01 as select * from ddl01;
+alter table ddl01 add column col3 double;
+select * from ddl01;
+col1    col2    col3
+1    m    null
+2    f    null
+3    a    null
+alter table ddl01 drop column col1;
+select * from ddl01;
+col2    col3
+m    null
+f    null
+a    null
+drop view view01;
+select sleep(10);
+sleep(10)
+0
+truncate table ddl01;
+drop table ddl01;
+select statement from statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+SQL parser error: table "statement_info" does not exist
+drop table if exists dql01;
+create table dql01(col1 decimal(38,20),col2 binary not null,col3 varchar(20));
+insert into dql01 values(12.2421132124,'2','database');
+insert into dql01 values(0,'*','database');
+insert into dql01 values(-23142.3214,'0','数据库');
+insert into dql01 values(-23999999.23432132143254323,'A','matrixone');
+insert into dql01 values(329342.32420,'&',null);
+insert into dql01 values(3289342.34242,'.','matrixone');
+insert into dql01 values(32783.4,4,null);
+select * from dql01;
+col1    col2    col3
+12.24211321240000000000    2    database
+0E-20    *    database
+-23142.32140000000000000000    0    数据库
+-23999999.23432132143254323000    A    matrixone
+329342.32420000000000000000    &    null
+3289342.34242000000000000000    .    matrixone
+32783.40000000000000000000    4    null
+select * from dql01 where col1 > 0;
+col1    col2    col3
+12.24211321240000000000    2    database
+329342.32420000000000000000    &    null
+3289342.34242000000000000000    .    matrixone
+32783.40000000000000000000    4    null
+select sum(col1),col3 from dql01 group by col3;
+sum(col1)    col3
+12.24211321240000000000    database
+-23142.32140000000000000000    数据库
+-20710656.89190132143254323000    matrixone
+362125.72420000000000000000    null
+select avg(col1) as avg from dql01 group by col3 order by avg desc;
+avg
+181062.86210000000000000000
+6.12105660620000000000
+-23142.32140000000000000000
+-10355328.44595066071627161500
+select count(*) from dql01 group by col3;
+count(*)
+2
+1
+2
+2
+select sleep(10);
+sleep(10)
+0
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+[unknown result because it is related to issue#10043]
+drop table dql01;
+drop table if exists dql02;
+create table dql02(col1 int,col2 varchar);
+create view test_view as select * from dql02;
+show create table dql02;
+Table    Create Table
+dql02    CREATE TABLE `dql02` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+show create view test_view;
+View    Create View
+test_view    create view test_view as select * from dql02;
+show triggers;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+show procedure status;
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
+show config;
+1
+show events;
+1
+show plugins;
+1
+show profiles;
+1
+show privileges;
+1
+show processlist;
+Id    User    Host    db    Command    Time    State    Info
+show tables;
+Tables_in_test
+dql02
+test_view
+show collation;
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like '%';
+Collation    Charset    Id    Compiled    Sortlen
+utf8mb4_bin    utf8mb4    46    Yes    1
+show index from dql02;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+column_0    column_1
+3    3
+2    2
+1    1
+with cte1 as (select 1),cte2 as (select 2) select * from cte1 join cte2;
+1    2
+1    2
+select sleep(10);
+sleep(10)
+0
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+[unknown result because it is related to issue#10043]
+drop table dql02;
+[unknown result because it is related to issue#10043]
+drop table if exists statement_info03;
+[unknown result because it is related to issue#10043]
+create table statement_info03(col1 varchar(20),col2 double);
+[unknown result because it is related to issue#10043]
+insert into statement_info03 values('testcase',123456.122);
+[unknown result because it is related to issue#10043]
+insert into statement_info03 values('casetest',4865132.0);
+[unknown result because it is related to issue#10043]
+insert into statement_info03 values('hcdwkjqq38923',-1002903.324);
+[unknown result because it is related to issue#10043]
+insert into statement_info03 values('management',0392324);
+[unknown result because it is related to issue#10043]
+insert into statement_info03 values(null,null);
+[unknown result because it is related to issue#10043]
+select * from statement_info03;
+[unknown result because it is related to issue#10043]
+delete from statement_info03 where col1 = 'testcase';
+[unknown result because it is related to issue#10043]
+delete from statement_info03 where col2 = null;
+[unknown result because it is related to issue#10043]
+select * from statement_info03;
+[unknown result because it is related to issue#10043]
+select group_concat(col1,col2) from statement_info03;
+[unknown result because it is related to issue#10043]
+update statement_info03 set col1 = null where col1 != null;
+[unknown result because it is related to issue#10043]
+select sleep(10);
+[unknown result because it is related to issue#10043]
+select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+[unknown result because it is related to issue#10043]
+drop table statement_info03;
+[unknown result because it is related to issue#10043]
+drop account if exists test_account;
+[unknown result because it is related to issue#10043]
+create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+[unknown result because it is related to issue#10043]
+create role test_role;
+[unknown result because it is related to issue#10043]
+create user user_name identified by 'password';
+[unknown result because it is related to issue#10043]
+create database if not exists db1;
+[unknown result because it is related to issue#10043]
+grant create table,drop table on database *.* to test_role;
+[unknown result because it is related to issue#10043]
+revoke test_role from user_name;
+[unknown result because it is related to issue#10043]
+drop user user_name;
+[unknown result because it is related to issue#10043]
+drop role test_role;
+[unknown result because it is related to issue#10043]
+drop account test_account;
+[unknown result because it is related to issue#10043]
+select sleep(10);
+[unknown result because it is related to issue#10043]
+select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+[unknown result because it is related to issue#10043]
+begin;
+[unknown result because it is related to issue#10043]
+commit;
+[unknown result because it is related to issue#10043]
+start transaction;
+[unknown result because it is related to issue#10043]
+rollback;
+[unknown result because it is related to issue#10043]
+select sleep(10);
+[unknown result because it is related to issue#10043]
+select statement from system.statement_info where query_type = 'TCL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+[unknown result because it is related to issue#10043]
+drop table if exists multispace01;
+[unknown result because it is related to issue#10043]
+create    table multispace01(col1 int);
+[unknown result because it is related to issue#10043]
+insert into    multispace01 values(1);
+[unknown result because it is related to issue#10043]
+insert into multispace01 values (10);
+[unknown result because it is related to issue#10043]
+select sleep(10);
+[unknown result because it is related to issue#10043]
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+[unknown result because it is related to issue#10043]
+select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
+statement
+insert into dql01 values(32783.4,4,null)
+insert into dql01 values(3289342.34242,'.','matrixone')
+insert into dql01 values(329342.32420,'&',null)
+insert into dql01 values(-23999999.23432132143254323,'A','matrixone')
+insert into dql01 values(-23142.3214,'0','数据库')
+drop table multispace01;
+no such table test.multispace01
+Drop table if exists case01;
+cReate table case01(col1 text default 'matrixone');
+inSERT into case01 valueS('Database test');
+insert into case01 values('uppERCASE and uppercase');
+insert into case01 Values(NulL);
+insert INTO case01 values('**&&*nUll');
+insert into case01 values();
+drop table cASE01;
+select * FROM caseE01 where col1 is null;
+SQL parser error: table "casee01" does not exist
+create account Account_user01 admin_name = 'Account_test01' identified by '111' open comment 'tenant_test';
+creatE role role_Role;
+internal error: the role role_role exists
+create user User_test identified by '123456';
+create DATABASE iF noT exists db1;
+grant create table,drop table on database *.* to test_role;
+internal error: there is no role test_role
+drop database db1;
+drop user user_test;
+drop account account_user01;
+select sleep(10);
+sleep(10)
+0
+select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+statement
+create view test_view as select * from dql02
+create table dql02(col1 int,col2 varchar)
+drop table if exists dql02
+drop table dql01
+create table dql01(col1 decimal(38,20),col2 binary not null,col3 varchar(20))
+select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+statement
+insert into dql01 values(32783.4,4,null)
+insert into dql01 values(3289342.34242,'.','matrixone')
+insert into dql01 values(329342.32420,'&',null)
+insert into dql01 values(-23999999.23432132143254323,'A','matrixone')
+insert into dql01 values(-23142.3214,'0','数据库')
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+[unknown result because it is related to issue#10043]
+select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+statement
+create account if not exists `bvt_query_type` ADMIN_NAME 'admin' IDENTIFIED BY '******'
+drop account account_user01
+drop user user_test
+grant create table,drop table on database *.* to test_role
+create user User_test identified by '******'
+drop table if exists line01;
+create table line01(col int, col2 decimal);
+insert into line01 values(1,100000);
+insert into line01 values(2,93232432);
+drop table line01;
+select sleep(10);
+sleep(10)
+0
+select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+statement
+drop table line01
+create table line01(col int, col2 decimal)
+drop table if exists line01
+drop database db1
+create DATABASE iF noT exists db1
+aaa;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 3 near "aaa;";
+selct sleep(10);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 5 near "selct sleep(10);";
+prepare s1 from select * from test_table where col1=?;
+SQL parser error: table "test_table" does not exist
+select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+statement
+show index from dql02
+show collation like '%'
+show collation
+show tables
+show processlist
+create table 123(col1 int);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " 123(col1 int);";
+select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+create table test_table(col1 int);
+prepare s1 from select * from test_table where col1=?;
+set @a=2;
+execute s1 using @a;
+col1
+deallocate prepare s1;
+select sleep(10);
+sleep(10)
+0
+select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+statement
+deallocate prepare s1
+execute s1 using @a
+set @a=2
+prepare s1 from select * from test_table where col1=?
+create table 123(col1 int)
+create account if not exists `bvt_query_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+drop database if exists newAccount;
+create database newAccount;
+use newAccount;
+create table dl01(col1 int,col2 binary(20));
+truncate table dl01;
+drop table dl01;
+create table dml01(col1 float, col2 double);
+insert into dml01 values(12.234214,138219432432);
+insert into dml01 values(3281043242,-3232142.32421421);
+delete from dml01 where col1 = 12.234214;
+update dml01 set col1 = null where col2 = -3232142.32421421;
+select * from dml01 where col1 = 12.234214;
+col1    col2
+select count(*) from dml01 where col2 = -3232142.32421421;
+count(*)
+1
+select * from dml01 order by col1 desc;
+col1    col2
+null    -3232142.32421421
+begin;
+commit;
+start transaction;
+rollback;
+drop table if exists multispace02;
+create    table multispace02(col1 int);
+insert into    multispace02 values(1);
+insert into multispace02 values (10);
+drop table multispace02;
+Drop table if exists case02;
+cReate table case02(col1 text default 'matrixone');
+inSERT into case02 valueS('Database test');
+insert into CASE02 values('uppERCASE and uppercase');
+insert into case02 Values(NulL);
+insert INTO case02 values('**&&*nUll');
+insert into case02 values();
+select * FROM caSE02 where col1 is null;
+col1
+null
+drop table case02;
+drop table if exists line02;
+create table line02(col int,col2 decimal);
+insert into line02 values(1,100000);
+insert into line02 values(2,93232432);
+drop table line02;
+aaa;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 3 near "aaa;";
+SElct sleep(10);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 5 near "SElct sleep(10);";
+prepare s2 from select * from test_table where col1=?;
+SQL parser error: table "test_table" does not exist
+select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+create table test_table(col1 int);
+prepare s1 from select * from test_table where col1=?;
+set @a=2;
+execute s1 using @a;
+col1
+deallocate prepare s1;
+drop database newAccount;
+select sleep(20);
+sleep(20)
+0
+select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+statement
+drop database newAccount
+create table test_table(col1 int)
+drop table line02
+create table line02(col int,col2 decimal)
+drop table if exists line02
+select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+statement
+insert into line02 values(2,93232432)
+insert into line02 values(1,100000)
+insert into case02 values()
+insert INTO case02 values('**&&*nUll')
+insert into case02 Values(NulL)
+select statement from system.statement_info where query_type = 'TCL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+statement
+rollback
+start transaction
+commit
+begin
+rollback
+select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+statement
+deallocate prepare s1
+execute s1 using @a
+set @a=2
+prepare s1 from select * from test_table where col1=?
+prepare s2 from select * from test_table where col1=?
+select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
+[unknown result because it is related to issue#10043]
+select statement from system.statement_info where sql_source_type != 'internal_sql' order by response_at desc limit 5;
+[unknown result because it is related to issue#10043]
