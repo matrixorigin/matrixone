@@ -553,6 +553,10 @@ func (vec *vectorWrapper) tryReuse(t *types.Type) bool {
 	return false
 }
 
+func (vec *vectorWrapper) isFromPool() bool {
+	return vec.put != nil
+}
+
 func (vec *vectorWrapper) isIdle() bool {
 	return !vec.inUse.Load()
 }

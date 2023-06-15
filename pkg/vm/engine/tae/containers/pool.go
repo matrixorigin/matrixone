@@ -8,6 +8,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+// fix sized / (varlen + fix sized)
+const fixedSizeRatio = 0.6
+
 var _vectorPoolAlloactor *mpool.MPool
 
 func init() {
@@ -30,11 +33,10 @@ func _putVectorPool(vec *vectorWrapper) {
 }
 
 func NewVectorPool(name string, cnt int) *VectorPool {
-	// fix sized / (varlen + fix sized)
-	ratio := 0.6
-	cnt1 := int(float64(cnt) * ratio)
+	cnt1 := int(float64(cnt) * fixedSizeRatio)
 	cnt2 := cnt - cnt1
 	p := &VectorPool{
+		name:         name,
 		fixSizedPool: make([]*vectorWrapper, 0, cnt1),
 		varlenPool:   make([]*vectorWrapper, 0, cnt2),
 	}

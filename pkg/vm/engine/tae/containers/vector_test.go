@@ -676,15 +676,23 @@ func TestForeachSelectBitmap(t *testing.T) {
 }
 
 func TestVectorPool(t *testing.T) {
-	pool := NewVectorPool(t.Name(), 10)
-	assert.Equal(t, 10, len(pool.fixSizedPool)+len(pool.varlenPool))
+	cnt := 10
+	pool := NewVectorPool(t.Name(), cnt)
+	assert.Equal(t, cnt, len(pool.fixSizedPool)+len(pool.varlenPool))
 
 	allTypes := []types.Type{
 		types.T_bool.ToType(),
 		types.T_int32.ToType(),
 		types.T_uint8.ToType(),
 		types.T_float32.ToType(),
+		types.T_datetime.ToType(),
+		types.T_date.ToType(),
+		types.T_decimal64.ToType(),
 		types.T_char.ToType(),
+		types.T_char.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_json.ToType(),
 	}
 	vecs := make([]*vectorWrapper, 0, len(allTypes))
 	for _, typ := range allTypes {
@@ -700,6 +708,16 @@ func TestVectorPool(t *testing.T) {
 	}
 
 	allocated := pool.Allocated()
+
+	if fixedSizeRatio >= 0.6 && fixedSizeRatio < 0.7 {
+		t.Log(pool.String())
+		usedCnt, _ := pool.FixedSizeUsed()
+		assert.GreaterOrEqual(t, 6, usedCnt)
+		usedCnt, _ = pool.VarlenUsed()
+		assert.GreaterOrEqual(t, 4, usedCnt)
+		usedCnt, _ = pool.Used()
+		assert.GreaterOrEqual(t, 10, usedCnt)
+	}
 
 	for _, vec := range vecs {
 		vec.Close()
