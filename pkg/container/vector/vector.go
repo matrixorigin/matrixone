@@ -99,6 +99,12 @@ func (v *Vector) Capacity() int {
 	return v.capacity
 }
 
+// Allocated returns the total allocated memory size of the vector.
+// it can be used to estimate the memory usage of the vector.
+func (v *Vector) Allocated() int {
+	return cap(v.data) + cap(v.area)
+}
+
 func (v *Vector) SetLength(n int) {
 	v.length = n
 }

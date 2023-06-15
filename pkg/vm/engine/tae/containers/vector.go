@@ -263,7 +263,7 @@ func (vec *vectorWrapper) Allocated() int {
 	if vec.downstreamVector.NeedDup() {
 		return 0
 	}
-	return vec.downstreamVector.Size()
+	return vec.downstreamVector.Allocated()
 }
 
 // When a new Append() is happening on a SharedMemory vectorWrapper, we allocate the data[] from the mpool.
