@@ -83,6 +83,10 @@ func StatementInfoFilter(i Item) bool {
 		return false
 	}
 
+	if statementInfo.Status == StatementStatusRunning {
+		return false
+	}
+
 	// Check SqlSourceType
 	switch statementInfo.SqlSourceType {
 	case "internal_sql", "external_sql", "non_cloud_user":
