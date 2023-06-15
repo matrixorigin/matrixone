@@ -366,7 +366,18 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) ([]byte, []byte) {
 		//}
 	}
 	if len(s.statsJsonByte) == 0 {
-		s.statsJsonByte = []byte("{}")
+		s.statsJsonByte = []byte("[]")
+	} else {
+		// Convert statsJsonByte to four key values array
+		var err error
+		statsValues, err := getStatsValues(s.statsJsonByte)
+		if err != nil {
+			return nil, nil
+		}
+
+		// Convert statsValues to string and then to byte array
+		statsValuesStr := fmt.Sprintf("%v", statsValues)
+		s.statsJsonByte = []byte(statsValuesStr)
 	}
 endL:
 	return s.jsonByte, s.statsJsonByte

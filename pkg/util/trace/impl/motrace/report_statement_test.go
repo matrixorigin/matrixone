@@ -236,9 +236,9 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				f:    tt.args.SerializeExecPlan,
 			}
 			s.SetSerializableExecPlan(p)
-			got, _ := s.ExecPlan2Json(ctx)
+			got, stats := s.ExecPlan2Json(ctx)
 			assert.Equalf(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
-
+			assert.Equalf(t, []byte("[]"), stats, "stats")
 			mapper := new(map[string]any)
 			err := json.Unmarshal([]byte(got), mapper)
 			require.Nil(t, err, "jons.Unmarshal failed")
