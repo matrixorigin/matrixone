@@ -17,6 +17,7 @@ package motrace
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -284,6 +285,63 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(stmtTypeCol, table.StringField(s.StatementType))
 	row.SetColumnVal(queryTypeCol, table.StringField(s.QueryType))
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
+}
+
+func getStatsValues(jsonData []byte) ([]int, error) {
+	type Statistic struct {
+		Name  string `json:"name"`
+		Value int    `json:"value"`
+		Unit  string `json:"unit"`
+	}
+
+	type Statistics struct {
+		Time    []Statistic `json:"Time"`
+		Memory  []Statistic `json:"Memory"`
+		IO      []Statistic `json:"IO"`
+		Network []Statistic `json:"Network"`
+	}
+
+	type StatJson struct {
+		Statistics Statistics `json:"statistics"`
+		TotalStats Statistic  `json:"totalStats"`
+	}
+
+	var stats StatJson
+	err := json.Unmarshal(jsonData, &stats)
+	if err != nil {
+		return nil, err
+	}
+
+	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount int
+
+	for _, stat := range stats.Statistics.Time {
+		if stat.Name == "Time Consumed" {
+			timeConsumed = stat.Value
+			break
+		}
+	}
+
+	for _, stat := range stats.Statistics.Memory {
+		if stat.Name == "Memory Size" {
+			memorySize = stat.Value
+			break
+		}
+	}
+
+	for _, stat := range stats.Statistics.IO {
+		if stat.Name == "S3 IO Input Count" {
+			s3IOInputCount = stat.Value
+		} else if stat.Name == "S3 IO Output Count" {
+			s3IOOutputCount = stat.Value
+		}
+	}
+	statsValues := make([]int, 4)
+	statsValues[0] = timeConsumed
+	statsValues[1] = memorySize
+	statsValues[2] = s3IOInputCount
+	statsValues[3] = s3IOOutputCount
+
+	return statsValues, nil
 }
 
 // ExecPlan2Json return ExecPlan Serialized json-str

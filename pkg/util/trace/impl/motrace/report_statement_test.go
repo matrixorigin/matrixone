@@ -264,3 +264,37 @@ func (p *dummySerializableExecPlan) Marshal(ctx context.Context) ([]byte, []byte
 	return p.f(ctx, p.plan, p.uuid)
 }
 func (p *dummySerializableExecPlan) Free() {}
+
+func TestGetStatsValues(t *testing.T) {
+	jsonData := []byte(`{
+		"statistics":{
+			"Time":[{"name":"Time Consumed","value":95834,"unit":"ns"},{"name":"Wait Time","value":442250,"unit":"ns"}],
+			"Memory":[{"name":"Memory Size","value":69,"unit":"byte"}],
+			"Throughput":[{"name":"Input Rows","value":2,"unit":"count"},{"name":"Output Rows","value":2,"unit":"count"},{"name":"Input Size","value":136,"unit":"byte"},{"name":"Output Size","value":136,"unit":"byte"}],
+			"IO":[{"name":"Disk IO","value":0,"unit":"byte"},{"name":"S3 IO Byte","value":68,"unit":"byte"},{"name":"S3 IO Input Count","value":0,"unit":"count"},{"name":"S3 IO Output Count","value":0,"unit":"count"}],
+			"Network":[{"name":"Network","value":0,"unit":"byte"}]
+		},
+		"totalStats":{"name":"Time spent","value":95834,"unit":"ns"}
+	}`)
+
+	res, err := getStatsValues(jsonData)
+	if err != nil {
+		t.Fatalf("Error getting stats values: %v", err)
+	}
+
+	if res[0] != 95834 {
+		t.Errorf("Expected timeConsumed to be 95834, got %d", res[0])
+	}
+
+	if res[1] != 69 {
+		t.Errorf("Expected memorySize to be 69, got %d", res[1])
+	}
+
+	if res[2] != 0 {
+		t.Errorf("Expected s3IOInputCount to be 0, got %d", res[2])
+	}
+
+	if res[3] != 0 {
+		t.Errorf("Expected s3IOOutputCount to be 0, got %d", res[3])
+	}
+}
