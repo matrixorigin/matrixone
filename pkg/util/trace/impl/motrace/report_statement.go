@@ -43,6 +43,17 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 	if s, ok := i.(*StatementInfo); ok {
 		// process the execplan
 		s.ExecPlan2Json(ctx)
+		// remove the plan
+		s.jsonByte = nil
+
+		// remove the TransacionID
+		s.TransactionID = NilTxnID
+		s.StatementTag = ""
+		s.StatementFingerprint = ""
+		s.Error = nil
+		s.RowsRead = 0
+		s.BytesScan = 0
+		s.ResultCount = 0
 		return s
 	}
 	return nil
@@ -50,8 +61,13 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 func StatementInfoUpdate(existing, new Item) {
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
+	// update the stats
 	e.Duration += n.Duration
-	e.Statement += n.Statement + " "
+	e.Statement += n.Statement + "; "
+	// reponseAt is the last response time
+	e.ResponseAt = n.ResponseAt
+	// update the stats still json here
+	// e.statsJsonByte
 }
 
 func StatementInfoFilter(i Item) bool {
