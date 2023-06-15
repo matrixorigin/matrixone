@@ -674,3 +674,37 @@ func TestForeachSelectBitmap(t *testing.T) {
 		return
 	}, nil)
 }
+
+func TestVectorPool(t *testing.T) {
+	pool := NewVectorPool(t.Name(), 10)
+	assert.Equal(t, 10, len(pool.fixSizedPool)+len(pool.varlenPool))
+
+	allTypes := []types.Type{
+		types.T_bool.ToType(),
+		types.T_int32.ToType(),
+		types.T_uint8.ToType(),
+		types.T_float32.ToType(),
+		types.T_char.ToType(),
+	}
+	vecs := make([]*vectorWrapper, 0, len(allTypes))
+	for _, typ := range allTypes {
+		vec := pool.GetVector(&typ)
+		assert.Equal(t, *vec.GetType(), typ)
+		vecs = append(vecs, vec)
+	}
+
+	assert.Equal(t, 0, pool.Allocated())
+
+	for _, vec := range vecs {
+		vec.PreExtend(100)
+	}
+
+	allocated := pool.Allocated()
+
+	for _, vec := range vecs {
+		vec.Close()
+	}
+
+	t.Log(pool.String())
+	assert.Equal(t, allocated, pool.Allocated())
+}

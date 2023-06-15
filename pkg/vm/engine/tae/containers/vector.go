@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,6 +39,9 @@ type vectorWrapper struct {
 	// put is the function that puts the vectorWrapper into the vector pool.
 	// if it is nil, no vector pool is used.
 	put func(*vectorWrapper)
+	// only used when put is not nil
+	// inUse is the flag that indicates whether the vectorWrapper is in use.
+	inUse atomic.Bool
 }
 
 func NewVector(typ types.Type, opts ...Options) *vectorWrapper {
@@ -537,4 +541,24 @@ func (vec *vectorWrapper) Equals(o Vector) bool {
 		}
 	}
 	return true
+}
+
+// ============== Private functions ===================
+
+func (vec *vectorWrapper) tryReuse(t *types.Type) bool {
+	if vec.inUse.CompareAndSwap(false, true) {
+		vec.wrapped.Reset(*t)
+		return true
+	}
+	return false
+}
+
+func (vec *vectorWrapper) isIdle() bool {
+	return !vec.inUse.Load()
+}
+
+func (vec *vectorWrapper) toIdle() {
+	if !vec.inUse.CompareAndSwap(true, false) {
+		panic("vectorWrapper is not in use")
+	}
 }
