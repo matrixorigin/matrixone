@@ -104,7 +104,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	rfTag := builder.genNewTag()
 
 	if len(probeExprs) == 1 {
-		probeNdv := getExprNdv(probeExprs[0], statsMap.NdvMap, node.Children[0], builder)
+		probeNdv := getExprNdv(probeExprs[0], statsMap.NdvMap, builder)
 		if probeNdv == 0 || node.Stats.HashmapSize/probeNdv >= 0.1 {
 			return
 		}
