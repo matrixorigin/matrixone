@@ -57,7 +57,7 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 	schema := block.meta.GetSchema()
 	impl.writeSchema = schema
 	impl.data = containers.BuildBatchWithPool(
-		schema.AllNames(), schema.AllTypes(), block.rt.VectorPool.Memtable,
+		schema.AllNames(), schema.AllTypes(), 0, block.rt.VectorPool.Memtable,
 	)
 	impl.initPKIndex(schema)
 	impl.OnZeroCB = impl.close
