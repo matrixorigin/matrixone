@@ -330,6 +330,22 @@ func (client *txnClient) pushTransaction(txn txn.TxnMeta) {
 	}
 }
 
+func AbortRunningTxn(txnCli interface{}) {
+	cli, ok := txnCli.(*txnClient)
+	if ok {
+		cli.abortAllRunningTxn()
+	}
+}
+
+func (client *txnClient) abortAllRunningTxn() {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	for i := 0; i < len(client.mu.txns); i++ {
+		client.mu.txns[i].Status = txn.TxnStatus_Aborted
+	}
+}
+
 func (client *txnClient) startLeakChecker() {
 	if client.leakChecker != nil {
 		client.leakChecker.start()

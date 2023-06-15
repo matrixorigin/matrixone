@@ -540,7 +540,7 @@ func (e *Engine) abortAllRunningTxn() {
 	defer e.Unlock()
 
 	// abort all running txn here.
-	return
+	client.AbortRunningTxn(e.cli)
 }
 
 func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
