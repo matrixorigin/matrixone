@@ -709,7 +709,7 @@ func TestVectorPool(t *testing.T) {
 
 	allocated := pool.Allocated()
 
-	if fixedSizeRatio >= 0.6 && fixedSizeRatio < 0.7 {
+	if pool.ratio >= 0.6 && pool.ratio < 0.7 {
 		t.Log(pool.String())
 		usedCnt, _ := pool.FixedSizeUsed()
 		assert.GreaterOrEqual(t, 6, usedCnt)
@@ -725,4 +725,15 @@ func TestVectorPool(t *testing.T) {
 
 	t.Log(pool.String())
 	assert.Equal(t, allocated, pool.Allocated())
+}
+
+func TestVectorPool2(t *testing.T) {
+	pool := NewVectorPool(t.Name(), 10, WithAllocationLimit(1024))
+	typ := types.T_int32.ToType()
+	vec := pool.GetVector(&typ)
+	vec.PreExtend(300)
+	t.Log(pool.String())
+	assert.Less(t, 1024, pool.Allocated())
+	vec.Close()
+	assert.Equal(t, 0, pool.Allocated())
 }

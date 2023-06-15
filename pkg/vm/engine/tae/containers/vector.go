@@ -557,7 +557,13 @@ func (vec *vectorWrapper) isIdle() bool {
 	return !vec.inUse.Load()
 }
 
-func (vec *vectorWrapper) toIdle() {
+func (vec *vectorWrapper) toIdle(maxAlloc int) {
+	// if the vector is too large, reallocate it
+	if vec.wrapped.Allocated() > maxAlloc {
+		newVec := vector.NewVec(*vec.wrapped.GetType())
+		vec.wrapped.Free(vec.mpool)
+		vec.wrapped = newVec
+	}
 	if !vec.inUse.CompareAndSwap(true, false) {
 		panic("vectorWrapper is not in use")
 	}

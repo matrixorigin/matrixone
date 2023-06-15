@@ -8,8 +8,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// fix sized / (varlen + fix sized)
-const fixedSizeRatio = 0.6
+const (
+	// fix sized / (varlen + fix sized)
+	defaultFixedSizeRatio = 0.6
+
+	// default max alloaction size for a vector
+	defaultAllocLimit = 1024 * 1024 * 2 // 2MB
+)
 
 var _vectorPoolAlloactor *mpool.MPool
 
@@ -22,31 +27,61 @@ func init() {
 	}
 }
 
+type VectorPoolOption func(*VectorPool)
+
+func WithAllocationLimit(maxv int) VectorPoolOption {
+	return func(p *VectorPool) {
+		p.maxAlloc = maxv
+	}
+}
+
+func WithFixedSizeRatio(ratio float64) VectorPoolOption {
+	return func(p *VectorPool) {
+		p.ratio = ratio
+	}
+}
+
 type VectorPool struct {
 	name         string
+	maxAlloc     int
+	ratio        float64
 	fixSizedPool []*vectorWrapper
 	varlenPool   []*vectorWrapper
 }
 
-func _putVectorPool(vec *vectorWrapper) {
-	vec.toIdle()
+func _putVectorPoolFactory(p *VectorPool) func(vec *vectorWrapper) {
+	return func(vec *vectorWrapper) {
+		vec.toIdle(p.maxAlloc)
+	}
 }
 
-func NewVectorPool(name string, cnt int) *VectorPool {
-	cnt1 := int(float64(cnt) * fixedSizeRatio)
-	cnt2 := cnt - cnt1
+func NewVectorPool(name string, cnt int, opts ...VectorPoolOption) *VectorPool {
 	p := &VectorPool{
-		name:         name,
-		fixSizedPool: make([]*vectorWrapper, 0, cnt1),
-		varlenPool:   make([]*vectorWrapper, 0, cnt2),
+		name:  name,
+		ratio: -1,
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	if p.maxAlloc <= 0 {
+		p.maxAlloc = defaultAllocLimit
+	}
+	if p.ratio < 0 {
+		p.ratio = defaultFixedSizeRatio
+	}
+
+	cnt1 := int(float64(cnt) * p.ratio)
+	cnt2 := cnt - cnt1
+	p.fixSizedPool = make([]*vectorWrapper, 0, cnt1)
+	p.varlenPool = make([]*vectorWrapper, 0, cnt2)
+
 	for i := 0; i < cnt1; i++ {
 		t := types.T_int64.ToType()
-		p.fixSizedPool = append(p.fixSizedPool, newVectorElement(&t))
+		p.fixSizedPool = append(p.fixSizedPool, newVectorElement(p, &t))
 	}
 	for i := 0; i < cnt2; i++ {
 		t := types.T_varchar.ToType()
-		p.varlenPool = append(p.varlenPool, newVectorElement(&t))
+		p.varlenPool = append(p.varlenPool, newVectorElement(p, &t))
 	}
 	return p
 }
@@ -156,12 +191,12 @@ func (p *VectorPool) Used() (int, int) {
 	return cnt, size
 }
 
-func newVectorElement(t *types.Type) *vectorWrapper {
+func newVectorElement(pool *VectorPool, t *types.Type) *vectorWrapper {
 	opts := Options{
 		Allocator: _vectorPoolAlloactor,
 	}
 	vec := NewVector(*t, opts)
-	vec.put = _putVectorPool
+	vec.put = _putVectorPoolFactory(pool)
 	return vec
 }
 
