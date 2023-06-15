@@ -378,9 +378,9 @@ func (blk *txnSysBlock) GetColumnDataByName(ctx context.Context, attr string) (v
 	return blk.GetColumnDataById(ctx, colIdx)
 }
 
-func (blk *txnSysBlock) GetColumnDataByNames(attrs []string) (view *model.BlockView, err error) {
+func (blk *txnSysBlock) GetColumnDataByNames(ctx context.Context, attrs []string) (view *model.BlockView, err error) {
 	if !blk.isSysTable() {
-		return blk.txnBlock.GetColumnDataByNames(attrs)
+		return blk.txnBlock.GetColumnDataByNames(ctx, attrs)
 	}
 	view = model.NewBlockView()
 	ts := blk.Txn.GetStartTS()

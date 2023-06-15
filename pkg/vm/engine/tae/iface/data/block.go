@@ -18,6 +18,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -74,7 +76,7 @@ type Block interface {
 
 	Rows() int
 	GetColumnDataById(ctx context.Context, txn txnif.AsyncTxn, readSchema any /*avoid import cycle*/, colIdx int) (*model.ColumnView, error)
-	GetColumnDataByIds(txn txnif.AsyncTxn, readSchema any, colIdxes []int) (*model.BlockView, error)
+	GetColumnDataByIds(ctx context.Context, txn txnif.AsyncTxn, readSchema any, colIdxes []int) (*model.BlockView, error)
 	Prefetch(idxes []uint16) error
 	GetMeta() any
 
@@ -87,7 +89,16 @@ type Block interface {
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
 
-	DataCommittedBefore(ts types.TS) bool
+	// check if all rows are committed before ts
+	// NOTE: here we assume that the block is visible to the ts
+	// if the block is an appendable block:
+	// 1. if the block is not frozen, return false
+	// 2. if the block is frozen and in-memory, check with the max ts committed
+	// 3. if the block is persisted, return false
+	// if the block is not an appendable block:
+	// only check with the created ts
+	CoarseCheckAllRowsCommittedBefore(ts types.TS) bool
+
 	BatchDedup(ctx context.Context,
 		txn txnif.AsyncTxn,
 		pks containers.Vector,
@@ -101,13 +112,13 @@ type Block interface {
 
 	GetByFilter(ctx context.Context, txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, row, col int) (any, bool, error)
-	Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *roaring.Bitmap) error
+	Foreach(ctx context.Context, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error
 	PPString(level common.PPLevel, depth int, prefix string) string
 
 	Init() error
 	TryUpgrade() error
 	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.BatchWithVersion, error)
-	CollectDeleteInRange(start, end types.TS, withAborted bool) (*containers.Batch, error)
+	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool) (*containers.Batch, error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
 	// GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 	GetFs() *objectio.ObjectFS

@@ -1103,6 +1103,18 @@ func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 	return m.recorder
 }
 
+// DeleteTable mocks base method.
+func (m *MockWorkspace) DeleteTable(ctx context.Context, dbID uint64, tableName string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "DeleteTable", ctx, dbID, tableName)
+}
+
+// DeleteTable indicates an expected call of DeleteTable.
+func (mr *MockWorkspaceMockRecorder) DeleteTable(ctx, dbID, tableName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteTable", reflect.TypeOf((*MockWorkspace)(nil).DeleteTable), ctx, dbID, tableName)
+}
+
 // IncrStatemenetID mocks base method.
 func (m *MockWorkspace) IncrStatemenetID(ctx context.Context) error {
 	m.ctrl.T.Helper()
