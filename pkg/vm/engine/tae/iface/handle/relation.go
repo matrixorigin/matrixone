@@ -45,15 +45,15 @@ type Relation interface {
 
 	RangeDelete(id *common.ID, start, end uint32, dt DeleteType) error
 	Update(id *common.ID, row uint32, col uint16, v any, isNull bool) error
-	GetByFilter(filter *Filter) (id *common.ID, offset uint32, err error)
+	GetByFilter(ctx context.Context, filter *Filter) (id *common.ID, offset uint32, err error)
 	GetValue(id *common.ID, row uint32, col uint16) (any, bool, error)
-	GetValueByFilter(filter *Filter, col int) (any, bool, error)
-	UpdateByFilter(filter *Filter, col uint16, v any, isNull bool) error
-	DeleteByFilter(filter *Filter) error
+	GetValueByFilter(ctx context.Context, filter *Filter, col int) (any, bool, error)
+	UpdateByFilter(ctx context.Context, filter *Filter, col uint16, v any, isNull bool) error
+	DeleteByFilter(ctx context.Context, filter *Filter) error
 
 	BatchDedup(col containers.Vector) error
 	Append(ctx context.Context, data *containers.Batch) error
-	AddBlksWithMetaLoc(metaLcos []objectio.Location) error
+	AddBlksWithMetaLoc(ctx context.Context, metaLcos []objectio.Location) error
 
 	GetMeta() any
 	CreateSegment(bool) (Segment, error)

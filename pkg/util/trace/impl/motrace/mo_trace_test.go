@@ -24,8 +24,12 @@ package motrace
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/prashantv/gostub"
+	"go.uber.org/zap"
 	"runtime"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -50,7 +54,7 @@ func TestMOTracer_Start(t *testing.T) {
 	type args struct {
 		ctx  context.Context
 		name string
-		opts []trace.SpanOption
+		opts []trace.SpanStartOption
 	}
 	rootCtx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextWithIDs(_1TraceID, _1SpanID))
 	stmCtx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextWithID(_1TraceID, trace.SpanKindStatement))
@@ -76,7 +80,7 @@ func TestMOTracer_Start(t *testing.T) {
 		{
 			name:             "normal",
 			fields:           fields{Enable: true},
-			args:             args{ctx: rootCtx, name: "normal", opts: []trace.SpanOption{}},
+			args:             args{ctx: rootCtx, name: "normal", opts: []trace.SpanStartOption{}},
 			wantNewRoot:      false,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: _1SpanID,
@@ -85,7 +89,7 @@ func TestMOTracer_Start(t *testing.T) {
 		{
 			name:             "newRoot",
 			fields:           fields{Enable: true},
-			args:             args{ctx: rootCtx, name: "newRoot", opts: []trace.SpanOption{trace.WithNewRoot(true)}},
+			args:             args{ctx: rootCtx, name: "newRoot", opts: []trace.SpanStartOption{trace.WithNewRoot(true)}},
 			wantNewRoot:      true,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: _1SpanID,
@@ -94,7 +98,7 @@ func TestMOTracer_Start(t *testing.T) {
 		{
 			name:             "statement",
 			fields:           fields{Enable: true},
-			args:             args{ctx: stmCtx, name: "newStmt", opts: []trace.SpanOption{}},
+			args:             args{ctx: stmCtx, name: "newStmt", opts: []trace.SpanStartOption{}},
 			wantNewRoot:      false,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: trace.NilSpanID,
@@ -103,7 +107,7 @@ func TestMOTracer_Start(t *testing.T) {
 		{
 			name:             "empty",
 			fields:           fields{Enable: true},
-			args:             args{ctx: context.Background(), name: "backgroundCtx", opts: []trace.SpanOption{}},
+			args:             args{ctx: context.Background(), name: "backgroundCtx", opts: []trace.SpanStartOption{}},
 			wantNewRoot:      true,
 			wantTraceId:      trace.NilTraceID,
 			wantParentSpanId: _1SpanID,
@@ -112,7 +116,7 @@ func TestMOTracer_Start(t *testing.T) {
 		{
 			name:             "remote",
 			fields:           fields{Enable: true},
-			args:             args{ctx: remoteCtx, name: "remoteCtx", opts: []trace.SpanOption{}},
+			args:             args{ctx: remoteCtx, name: "remoteCtx", opts: []trace.SpanStartOption{}},
 			wantNewRoot:      false,
 			wantTraceId:      _1TraceID,
 			wantParentSpanId: trace.NilSpanID,
@@ -199,4 +203,67 @@ func TestSpanContext_MarshalTo(t *testing.T) {
 			require.Equal(t, tt.fields.SpanID, newC.SpanID)
 		})
 	}
+}
+
+func TestMOSpan_End(t *testing.T) {
+
+	s := gostub.Stub(&freeMOSpan, func(span *MOSpan) {})
+	defer s.Reset()
+
+	ctx := context.TODO()
+	p := newMOTracerProvider(WithLongSpanTime(time.Hour), EnableTracer(true))
+	tracer := &MOTracer{
+		TracerConfig: trace.TracerConfig{Name: "test"},
+		provider:     p,
+	}
+
+	var WG sync.WaitGroup
+
+	// short time span
+	var shortTimeSpan trace.Span
+	WG.Add(1)
+	go func() {
+		_, shortTimeSpan = tracer.Start(ctx, "shortTimeSpan")
+		defer WG.Done()
+		defer shortTimeSpan.End()
+	}()
+	WG.Wait()
+	require.Equal(t, false, shortTimeSpan.(*MOSpan).needRecord)
+	require.Equal(t, 0, len(shortTimeSpan.(*MOSpan).ExtraFields))
+
+	// span with LongTimeThreshold
+	// and set ExtraFields
+	var longTimeSpan trace.Span
+	WG.Add(1)
+	extraFields := []zap.Field{zap.String("str", "field"), zap.Int64("int", 0)}
+	go func() {
+		_, longTimeSpan = tracer.Start(ctx, "longTimeSpan", trace.WithLongTimeThreshold(time.Millisecond))
+		defer WG.Done()
+		defer longTimeSpan.End()
+
+		longTimeSpan.AddExtraFields(extraFields...)
+
+		time.Sleep(10 * time.Millisecond)
+	}()
+	WG.Wait()
+	require.Equal(t, true, longTimeSpan.(*MOSpan).needRecord)
+	require.Equal(t, 2, len(longTimeSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, extraFields, longTimeSpan.(*MOSpan).ExtraFields)
+
+	// span with deadline context
+	deadlineCtx, cancel := context.WithTimeout(ctx, time.Millisecond)
+	defer cancel()
+	var deadlineSpan trace.Span
+	WG.Add(1)
+	go func() {
+		_, deadlineSpan = tracer.Start(deadlineCtx, "deadlineCtx")
+		defer WG.Done()
+		defer deadlineSpan.End()
+
+		time.Sleep(10 * time.Millisecond)
+	}()
+	WG.Wait()
+	require.Equal(t, true, deadlineSpan.(*MOSpan).needRecord)
+	require.Equal(t, 1, len(deadlineSpan.(*MOSpan).ExtraFields))
+	require.Equal(t, []zap.Field{zap.Error(context.DeadlineExceeded)}, deadlineSpan.(*MOSpan).ExtraFields)
 }

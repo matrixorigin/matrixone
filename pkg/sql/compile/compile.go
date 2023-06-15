@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math"
 	"net"
 	"runtime"
@@ -40,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -1234,6 +1234,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
+	var pkey *plan.PrimaryKeyDef
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -1294,6 +1295,13 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 					Seqnum:    uint32(attr.Attr.Seqnum),
 				})
 				i++
+			} else if c, ok := def.(*engine.ConstraintDef); ok {
+				for _, ct := range c.Cts {
+					switch k := ct.(type) {
+					case *engine.PrimaryKeyDef:
+						pkey = k.Pkey
+					}
+				}
 			}
 		}
 		tblDef = &plan.TableDef{
@@ -1302,6 +1310,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 			Version:       n.TableDef.Version,
 			Name:          n.TableDef.Name,
 			TableType:     n.TableDef.GetTableType(),
+			Pkey:          pkey,
 		}
 	}
 
@@ -1328,7 +1337,8 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) *Scop
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 
 	// Register runtime filters
-	if len(n.RuntimeFilterProbeList) > 0 {
+	// XXX currently we only enable runtime filter on single CN
+	if len(c.cnList) == 1 && len(n.RuntimeFilterProbeList) > 0 {
 		receivers := make([]*colexec.RuntimeFilterChan, len(n.RuntimeFilterProbeList))
 		if c.runtimeFilterReceiverMap == nil {
 			c.runtimeFilterReceiverMap = make(map[int32]chan *pipeline.RuntimeFilter)
@@ -2052,7 +2062,6 @@ func (c *Compile) newScopeListForRightJoin(childrenCount int, leftScopes []*Scop
 			ss = append(ss, tmp)
 		}
 	*/
-
 	// Force right join to execute on one CN due to right join issue
 	// Will fix in future
 	maxCpuNum := 1

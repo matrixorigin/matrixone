@@ -105,10 +105,16 @@ func TestPrev(t *testing.T) {
 
 			k1 := []byte("k1")
 			k2 := []byte("k2")
+			k3 := []byte("k3")
 			s.Add(k1, Lock{})
 			s.Add(k2, Lock{})
+			s.Add(k3, Lock{})
 
-			v, _, ok := s.Prev(k2)
+			v, _, ok := s.Prev(k3)
+			assert.True(t, ok)
+			assert.Equal(t, k2, v)
+
+			v, _, ok = s.Prev(k2)
 			assert.True(t, ok)
 			assert.Equal(t, k1, v)
 

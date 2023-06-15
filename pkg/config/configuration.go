@@ -163,8 +163,8 @@ var (
 	//defaultCleanKillQueueInterval default: 60 minutes
 	defaultCleanKillQueueInterval = 60
 
-	// defaultLongSpanTime default: 1 s
-	defaultLongSpanTime = time.Second
+	// defaultLongSpanTime default: 10 s
+	defaultLongSpanTime = 10 * time.Second
 )
 
 // FrontendParameters of the frontend
@@ -302,7 +302,7 @@ type FrontendParameters struct {
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames string `toml:"lowerCaseTableNames"`
+	LowerCaseTableNames int64 `toml:"lowerCaseTableNames"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -440,8 +440,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.AutoIncrCacheSize = 3000000
 	}
 
-	if fp.LowerCaseTableNames == "" {
-		fp.LowerCaseTableNames = "1"
+	if fp.LowerCaseTableNames == 0 {
+		fp.LowerCaseTableNames = 1
 	}
 
 	if fp.PrintDebugInterval == 0 {
@@ -589,7 +589,7 @@ type ObservabilityParameters struct {
 	// DisableSpan default: false. Disable span collection
 	DisableSpan bool `toml:"disableSpan"`
 
-	// LongSpanTime default: 500 ms. Only record span, which duration > LongSpanTime
+	// LongSpanTime default: 500 ms. Only record span, which duration >= LongSpanTime
 	LongSpanTime toml.Duration `toml:"longSpanTime"`
 
 	// If disabled, the logs will be written to files stored in s3

@@ -234,7 +234,7 @@ func (b *tableRespBuilder) collect() (api.SyncLogTailResp, func(), error) {
 			logutil.Info("[Logtail] not found", zap.Any("t_id", b.tid))
 			return api.SyncLogTailResp{}, nil, nil
 		}
-		builder = NewTableLogtailRespBuilder(b.ckpLoc, b.reader.from, b.reader.to, tableEntry)
+		builder = NewTableLogtailRespBuilder(b.ctx, b.ckpLoc, b.reader.from, b.reader.to, tableEntry)
 	} else {
 		builder = NewCatalogLogtailRespBuilder(b.ctx, b.scope, b.ckpLoc, b.reader.from, b.reader.to)
 	}

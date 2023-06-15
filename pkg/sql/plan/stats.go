@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -164,44 +166,44 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 	return totalNDV > s.TableCnt*highNDVcolumnThreshHold
 }
 
-func getColNdv(col *plan.ColRef, nodeID int32, builder *QueryBuilder) float64 {
-	if nodeID < 0 || builder == nil {
+func getColNdv(col *plan.ColRef, builder *QueryBuilder) float64 {
+	if builder == nil {
 		return -1
 	}
 	sc := builder.compCtx.GetStatsCache()
 	if sc == nil {
 		return -1
 	}
-
-	ctx := builder.ctxByNode[nodeID]
-	if ctx == nil {
+	tableDef, ok := builder.tag2Table[col.RelPos]
+	if !ok {
 		return -1
 	}
-
-	if binding, ok := ctx.bindingByTag[col.RelPos]; ok {
-		s := sc.GetStatsInfoMap(binding.tableID)
-		return s.NdvMap[binding.cols[col.ColPos]]
-	} else {
-		return -1
-	}
+	s := sc.GetStatsInfoMap(tableDef.TblId)
+	return s.NdvMap[tableDef.Cols[col.ColPos].Name]
 }
 
-func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, nodeID int32, builder *QueryBuilder) float64 {
+// this function is used to calculate the ndv of expressions,
+// like year(l_orderdate), substring(phone_number)
+// if only the ndv of column is needed, please call getColNDV
+func getExprNdv(expr *plan.Expr, ndvMap map[string]float64, builder *QueryBuilder) float64 {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		funcName := exprImpl.F.Func.ObjName
 		switch funcName {
 		case "year":
-			return getExprNdv(exprImpl.F.Args[0], ndvMap, nodeID, builder) / 365
+			return getExprNdv(exprImpl.F.Args[0], ndvMap, builder) / 365
+		case "substring":
+			// no good way to calc ndv for substring
+			return math.Min(getExprNdv(exprImpl.F.Args[0], ndvMap, builder), 100)
 		default:
-			//assume col is on the left side
-			return getExprNdv(exprImpl.F.Args[0], ndvMap, nodeID, builder)
+			//assume col is the first argument
+			return getExprNdv(exprImpl.F.Args[0], ndvMap, builder)
 		}
 	case *plan.Expr_Col:
 		if ndvMap != nil {
 			return ndvMap[exprImpl.Col.Name]
 		}
-		return getColNdv(exprImpl.Col, nodeID, builder)
+		return getColNdv(exprImpl.Col, builder)
 	}
 	return -1
 }
@@ -213,7 +215,7 @@ func estimateEqualitySelectivity(expr *plan.Expr, ndvMap map[string]float64) flo
 	if !ret {
 		return 0.01
 	}
-	ndv := getExprNdv(expr, ndvMap, 0, nil)
+	ndv := getExprNdv(expr, ndvMap, nil)
 	if ndv > 0 {
 		return 1 / ndv
 	}
@@ -306,7 +308,7 @@ func estimateExprSelectivity(expr *plan.Expr, s *StatsInfoMap) float64 {
 			return 0.2
 		case "in":
 			// use ndv map,do not need nodeID
-			ndv := getExprNdv(expr, s.NdvMap, -1, nil)
+			ndv := getExprNdv(expr, s.NdvMap, nil)
 			if ndv > 10 {
 				return 10 / ndv
 			}
@@ -371,7 +373,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 			return math.Min(expr.Selectivity*10, 0.5)
 		}
 	}
-	if getExprNdv(expr, ndvMap, -1, nil) < blockNDVThreshHold {
+	if getExprNdv(expr, ndvMap, nil) < blockNDVThreshHold {
 		return 1
 	}
 	// do not know selectivity for this expr, default 0.5
@@ -452,11 +454,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 
 		case plan.Node_LEFT:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-				outcnt += leftStats.Outcnt
-			}
+			outcnt := leftStats.Outcnt
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
@@ -465,11 +463,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 
 		case plan.Node_RIGHT:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-				outcnt += rightStats.Outcnt
-			}
+			outcnt := rightStats.Outcnt
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
@@ -478,11 +472,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 
 		case plan.Node_OUTER:
-			outcnt := leftStats.Outcnt * rightStats.Outcnt / ndv
-			if !isCrossJoin {
-				outcnt *= selectivity
-				outcnt += leftStats.Outcnt + rightStats.Outcnt
-			}
+			outcnt := leftStats.Outcnt + rightStats.Outcnt
 			node.Stats = &plan.Stats{
 				Outcnt:      outcnt,
 				Cost:        leftStats.Cost + rightStats.Cost,
@@ -519,7 +509,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			incnt := childStats.Outcnt
 			outcnt := 1.0
 			for _, groupby := range node.GroupBy {
-				ndv := getExprNdv(groupby, nil, node.NodeId, builder)
+				ndv := getExprNdv(groupby, nil, builder)
 				if ndv > 1 {
 					groupby.Ndv = ndv
 					outcnt *= ndv
@@ -618,6 +608,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	case plan.Node_TABLE_SCAN:
 		//calc for scan is heavy. use leafNode to judge if scan need to recalculate
 		if node.ObjRef != nil && leafNode {
+			if len(node.BindingTags) > 0 {
+				builder.tag2Table[node.BindingTags[0]] = node.TableDef
+			}
 			node.Stats = calcScanStats(node, builder)
 		}
 
@@ -796,4 +789,19 @@ func IsTpQuery(qry *plan.Query) bool {
 		}
 	}
 	return true
+}
+
+func PrintStats(qry *plan.Query) string {
+	buf := bytes.NewBuffer(make([]byte, 0, 1024*64))
+	buf.WriteString("Print Stats: \n")
+	for _, node := range qry.GetNodes() {
+		stats := node.Stats
+		buf.WriteString(fmt.Sprintf("Node ID: %v, Node Type %v, ", node.NodeId, node.NodeType))
+		if stats == nil {
+			buf.WriteString("Stats: nil\n")
+		} else {
+			buf.WriteString(fmt.Sprintf("blocknum %v, outcnt %v \n", node.Stats.BlockNum, node.Stats.Outcnt))
+		}
+	}
+	return buf.String()
 }

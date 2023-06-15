@@ -73,48 +73,157 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		rightTags[tag] = nil
 	}
 
-	var probeExpr, buildExpr *plan.Expr
+	var probeExprs, buildExprs []*plan.Expr
 
 	for _, expr := range node.OnList {
 		if equi, leftFirst := isEquiCond(expr, leftTags, rightTags); equi {
-			// TODO: build runtime filter on multiple columns, especially composite primary key
-			if probeExpr != nil {
-				return
-			}
-
 			args := expr.GetF().Args
 			if leftFirst {
-				if CheckExprIsMonotonic(builder.GetContext(), args[0]) {
-					probeNdv := getExprNdv(args[0], statsMap.NdvMap, node.Children[0], builder)
-					if probeNdv > 0 && node.Stats.HashmapSize/probeNdv < 0.1*probeNdv/leftChild.Stats.TableCnt {
-						probeExpr, buildExpr = args[0], args[1]
-					}
+				if !CheckExprIsMonotonic(builder.GetContext(), args[0]) {
+					return
 				}
+
+				probeExprs = append(probeExprs, args[0])
+				buildExprs = append(buildExprs, args[1])
 			} else {
-				if CheckExprIsMonotonic(builder.GetContext(), args[1]) {
-					probeNdv := getExprNdv(args[1], statsMap.NdvMap, node.Children[0], builder)
-					if probeNdv > 0 && node.Stats.HashmapSize/probeNdv < 0.1*probeNdv/leftChild.Stats.TableCnt {
-						probeExpr, buildExpr = args[1], args[0]
-					}
+				if !CheckExprIsMonotonic(builder.GetContext(), args[1]) {
+					return
 				}
+
+				probeExprs = append(probeExprs, args[1])
+				buildExprs = append(buildExprs, args[0])
 			}
 		}
 	}
 
 	// No equi condition found
-	if probeExpr == nil {
+	if probeExprs == nil {
 		return
 	}
 
-	tag := builder.genNewTag()
+	rfTag := builder.genNewTag()
 
-	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
-		Tag:  tag,
-		Expr: DeepCopyExpr(buildExpr),
-	})
+	if len(probeExprs) == 1 {
+		probeNdv := getExprNdv(probeExprs[0], statsMap.NdvMap, builder)
+		if probeNdv == 0 || node.Stats.HashmapSize/probeNdv >= 0.1 {
+			return
+		}
+
+		if node.Stats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
+			switch col := probeExprs[0].Expr.(type) {
+			case (*plan.Expr_Col):
+				ctx := builder.ctxByNode[leftChild.NodeId]
+				if ctx == nil {
+					return
+				}
+				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
+					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
+					colName := tableDef.Cols[col.Col.ColPos].Name
+					if GetSortOrder(tableDef, colName) != 0 {
+						return
+					}
+				}
+
+			default:
+				return
+			}
+		}
+
+		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{
+			Tag:  rfTag,
+			Expr: DeepCopyExpr(probeExprs[0]),
+		})
+
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
+			Tag: rfTag,
+			Expr: &plan.Expr{
+				Typ: DeepCopyType(buildExprs[0].Typ),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: 0,
+					},
+				},
+			},
+		})
+
+		return
+	}
+
+	tableDef := leftChild.TableDef
+
+	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) < len(probeExprs) {
+		return
+	}
+
+	name2Pos := make(map[string]int)
+	for i, name := range tableDef.Pkey.Names {
+		name2Pos[name] = i
+	}
+
+	col2Probe := make([]int, len(tableDef.Pkey.Names))
+	for i := range col2Probe {
+		col2Probe[i] = -1
+	}
+
+	for i, expr := range probeExprs {
+		switch col := expr.Expr.(type) {
+		case (*plan.Expr_Col):
+			if pos, ok := name2Pos[col.Col.Name]; ok {
+				col2Probe[pos] = i
+			}
+
+		default:
+			return
+		}
+	}
+
+	cnt := 0
+	for ; cnt < len(col2Probe); cnt++ {
+		if col2Probe[cnt] == -1 {
+			break
+		}
+	}
+
+	if cnt != len(probeExprs) {
+		return
+	}
+
+	pkIdx, ok := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+	if !ok {
+		return
+	}
 
 	leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{
-		Tag:  tag,
-		Expr: DeepCopyExpr(probeExpr),
+		Tag: rfTag,
+		Expr: &plan.Expr{
+			Typ: DeepCopyType(tableDef.Cols[pkIdx].Typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: leftChild.BindingTags[0],
+					ColPos: pkIdx,
+				},
+			},
+		},
+	})
+
+	buildArgs := make([]*plan.Expr, len(probeExprs))
+	for i := range probeExprs {
+		pos := col2Probe[i]
+		buildArgs[i] = &plan.Expr{
+			Typ: DeepCopyType(buildExprs[pos].Typ),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(pos),
+				},
+			},
+		}
+	}
+
+	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
+	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
+		Tag:  rfTag,
+		Expr: buildExpr,
 	})
 }

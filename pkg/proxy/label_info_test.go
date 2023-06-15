@@ -71,7 +71,12 @@ func (c *mockHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.Clust
 	return c.value, c.err
 }
 func (c *mockHAKeeperClient) GetClusterState(ctx context.Context) (logpb.CheckerState, error) {
-	return logpb.CheckerState{}, nil
+	return logpb.CheckerState{
+		TaskTableUser: logpb.TaskTableUser{
+			Username: "u1",
+			Password: "p1",
+		},
+	}, nil
 }
 
 func TestLabelInfoReserved(t *testing.T) {

@@ -26,11 +26,11 @@ import (
 	"sync/atomic"
 )
 
-func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span) {
+func Start(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span) {
 	return DefaultTracer().Start(ctx, spanName, opts...)
 }
 
-func Debug(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span) {
+func Debug(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span) {
 	return DefaultTracer().Debug(ctx, spanName, opts...)
 }
 

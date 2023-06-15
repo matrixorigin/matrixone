@@ -341,7 +341,7 @@ func TestOverflow(t *testing.T) {
 		func(
 			ctx context.Context,
 			cc *columnCache) {
-			require.NoError(t, cc.updateTo(ctx, 0, 1, math.MaxUint64))
+			require.NoError(t, cc.updateTo(ctx, 0, 1, math.MaxUint64, nil))
 			require.True(t, cc.overflow)
 
 			require.NoError(t,
@@ -427,6 +427,23 @@ func TestMergeAllocate(t *testing.T) {
 	)
 }
 
+func TestIssue9840(t *testing.T) {
+	fillValues := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
+	fillRows := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	input := newTestVector[uint64](8, types.New(types.T_uint64, 0, 0), nil, nil)
+	// index 0 is manual, others is null, but index 1 has a invalid value
+	vector.SetFixedAt[uint64](input, 0, 1)
+	vector.SetFixedAt[uint64](input, 1, 5)
+	input.GetNulls().Del(0)
+	testColumnCacheInsert[uint64](
+		t,
+		8,
+		8,
+		input,
+		newTestVector(8, types.New(types.T_uint64, 0, 0), fillValues, fillRows),
+	)
+}
+
 func testColumnCacheInsert[T constraints.Integer](
 	t *testing.T,
 	rows int,
@@ -440,7 +457,7 @@ func testColumnCacheInsert[T constraints.Integer](
 		func(
 			ctx context.Context,
 			c *columnCache) {
-			lastInsertValue, err := c.insertAutoValues(ctx, 0, input, rows)
+			lastInsertValue, err := c.insertAutoValues(ctx, 0, input, rows, nil)
 			require.NoError(t, err)
 			assert.Equal(t, expecLastInsertValue, lastInsertValue)
 			assert.Equal(t,
@@ -507,8 +524,9 @@ func runColumnCacheTestsWithInitOffset(
 			a.(*allocator).store.Create(
 				ctx,
 				0,
-				[]AutoColumn{col})
-			cc, err := newColumnCache(ctx, 0, col, Config{CountPerAllocate: capacity}, a)
+				[]AutoColumn{col},
+				nil)
+			cc, err := newColumnCache(ctx, 0, col, Config{CountPerAllocate: capacity}, a, nil)
 			require.NoError(t, err)
 			fn(ctx, cc)
 		},

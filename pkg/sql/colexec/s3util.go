@@ -550,8 +550,10 @@ func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, e
 func sortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, m *mpool.MPool) error {
 	// Not-Null Check
 	if nulls.Any(bat.Vecs[sortIndex].GetNulls()) {
-		// return moerr.NewConstraintViolation(proc.Ctx, fmt.Sprintf("Column '%s' cannot be null", n.InsertCtx.TableDef.Cols[i].GetName()))
-		return moerr.NewConstraintViolation(proc.Ctx, "Primary key can not be null")
+		//logutil.Info(common.PrintMoBatch(bat, bat.Length()))
+		return moerr.NewConstraintViolation(proc.Ctx,
+			"sort key can not be null, sortIndex = %d, sortCol = %s",
+			sortIndex, bat.Attrs[sortIndex])
 	}
 	var strCol []string
 	sels := make([]int64, len(bat.Zs))

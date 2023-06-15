@@ -15,6 +15,8 @@
 package txnimpl
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -152,37 +154,12 @@ func (n *anode) GetSpace() uint32 {
 	return MaxNodeRows - n.rows
 }
 
-func (n *anode) RowsWithoutDeletes() uint32 {
-	deletes := uint32(0)
-	if n.data != nil && n.data.Deletes != nil {
-		deletes = uint32(n.data.DeleteCnt())
+func (n *anode) Compact() {
+	if n.data == nil {
+		return
 	}
-	return uint32(n.data.Length()) - deletes
-}
-
-func (n *anode) LengthWithDeletes(appended, toAppend uint32) uint32 {
-	if !n.data.HasDelete() {
-		return toAppend
-	}
-	appendedOffset := n.OffsetWithDeletes(appended)
-	toAppendOffset := n.OffsetWithDeletes(toAppend + appended)
-	// logutil.Infof("appened:%d, toAppend:%d, off1=%d, off2=%d", appended, toAppend, appendedOffset, toAppendOffset)
-	return toAppendOffset - appendedOffset
-}
-
-func (n *anode) OffsetWithDeletes(count uint32) uint32 {
-	if !n.data.HasDelete() {
-		return count
-	}
-	offset := count
-	for offset < n.rows {
-		deletes := n.data.Deletes.Rank(offset)
-		if offset == count+uint32(deletes) {
-			break
-		}
-		offset = count + uint32(deletes)
-	}
-	return offset
+	n.data.Compact()
+	n.rows = uint32(n.data.Length())
 }
 
 func (n *anode) GetValue(col int, row uint32) (any, bool, error) {
@@ -203,15 +180,15 @@ func (n *anode) PrintDeletes() string {
 	if !n.data.HasDelete() {
 		return "NoDeletes"
 	}
-	return n.data.Deletes.String()
+	return nulls.String(n.data.Deletes)
 }
 
 func (n *anode) WindowColumn(start, end uint32, pos int) (vec containers.Vector, err error) {
 	data := n.data
-	deletes := data.WindowDeletes(int(start), int(end-start))
+	deletes := data.WindowDeletes(int(start), int(end-start), false)
 	if deletes != nil {
 		vec = data.Vecs[pos].CloneWindow(int(start), int(end-start))
-		vec.Compact(deletes)
+		vec.CompactByBitmap(deletes)
 	} else {
 		vec = data.Vecs[pos].Window(int(start), int(end-start))
 	}
@@ -237,7 +214,7 @@ func (n *anode) GetColumnDataByIds(
 	return
 }
 
-func (n *anode) GetColumnDataById(colIdx int) (view *model.ColumnView, err error) {
+func (n *anode) GetColumnDataById(ctx context.Context, colIdx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(colIdx)
 	err = n.FillColumnView(view)
 	return

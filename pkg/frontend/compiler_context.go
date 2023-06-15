@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -203,7 +202,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if err != nil {
 		tmpTable, e := tcc.getTmpRelation(txnCtx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
-			logutil.Errorf("get table %v error %v", tableName, err)
+			logErrorf(ses.GetDebugString(), "get table %v error %v", tableName, err)
 			return nil, nil, err
 		} else {
 			table = tmpTable
@@ -220,7 +219,7 @@ func (tcc *TxnCompilerContext) getTmpRelation(_ context.Context, tableName strin
 	}
 	db, err := e.Database(txnCtx, defines.TEMPORARY_DBNAME, txn)
 	if err != nil {
-		logutil.Errorf("get temp database error %v", err)
+		logErrorf(tcc.GetSession().GetDebugString(), "get temp database error %v", err)
 		return nil, err
 	}
 	table, err := db.Relation(txnCtx, tableName)

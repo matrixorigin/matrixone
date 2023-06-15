@@ -32,8 +32,10 @@ import (
 func TestCheckpoint1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 	schema := catalog.MockSchema(13, 12)
 	schema.BlockMaxRows = 1000
@@ -46,7 +48,7 @@ func TestCheckpoint1(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
 		txn, _ := db.StartTxn(nil)
@@ -56,7 +58,7 @@ func TestCheckpoint1(t *testing.T) {
 		blk := it.GetBlock()
 		err := blk.RangeDelete(3, 3, handle.DT_Normal)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 
 	blockCnt := 0
@@ -80,6 +82,8 @@ func TestCheckpoint1(t *testing.T) {
 func TestCheckpoint2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
 	opts.CacheCfg.IndexCapacity = 1000000
@@ -87,7 +91,7 @@ func TestCheckpoint2(t *testing.T) {
 	// opts.CheckpointCfg.ScannerInterval = 10
 	// opts.CheckpointCfg.ExecutionLevels = 2
 	// opts.CheckpointCfg.ExecutionInterval = 1
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	defer tae.Close()
 	schema1 := catalog.MockSchema(4, 2)
 	schema1.BlockMaxRows = 10
@@ -111,7 +115,7 @@ func TestCheckpoint2(t *testing.T) {
 		meta2 = rel2.GetMeta().(*catalog.TableEntry)
 		t.Log(meta1.String())
 		t.Log(meta2.String())
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	for i, data := range bats[0:8] {
 		var name string
@@ -147,7 +151,7 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, err)
 		err = task.WaitDone()
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 
 	// testutils.WaitExpect(1000, func() bool {
@@ -170,7 +174,9 @@ func TestCheckpoint2(t *testing.T) {
 func TestSchedule1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	schema := catalog.MockSchema(13, 12)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
@@ -182,7 +188,7 @@ func TestSchedule1(t *testing.T) {
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(context.Background(), bat)
 		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	compactBlocks(t, 0, db, "db", schema, false)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))

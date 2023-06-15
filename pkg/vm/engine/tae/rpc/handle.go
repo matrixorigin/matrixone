@@ -78,11 +78,11 @@ func (h *Handle) GetDB() *db.DB {
 	return h.db
 }
 
-func NewTAEHandle(path string, opt *options.Options) *Handle {
+func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handle {
 	if path == "" {
 		path = "./store"
 	}
-	tae, err := openTAE(path, opt)
+	tae, err := openTAE(ctx, path, opt)
 	if err != nil {
 		panic(err)
 	}
@@ -106,6 +106,12 @@ func (h *Handle) HandleCommit(
 			string(meta.GetID()))
 	})
 	defer func() {
+		if ok {
+			//delete the txn's context.
+			h.mu.Lock()
+			delete(h.mu.txnCtxs, string(meta.GetID()))
+			h.mu.Unlock()
+		}
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
 				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
@@ -165,7 +171,7 @@ func (h *Handle) HandleCommit(
 			//Need to roll back the txn.
 			if err != nil {
 				txn, _ = h.db.GetTxnByID(meta.GetID())
-				txn.Rollback()
+				txn.Rollback(ctx)
 				return
 			}
 		}
@@ -178,13 +184,8 @@ func (h *Handle) HandleCommit(
 	if txn.Is2PC() {
 		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	}
-	err = txn.Commit()
+	err = txn.Commit(ctx)
 	cts = txn.GetCommitTS().ToTimestamp()
-
-	//delete the txn's context.
-	h.mu.Lock()
-	delete(h.mu.txnCtxs, string(meta.GetID()))
-	h.mu.Unlock()
 	return
 }
 
@@ -204,7 +205,7 @@ func (h *Handle) HandleRollback(
 	if err != nil {
 		return err
 	}
-	err = txn.Rollback()
+	err = txn.Rollback(ctx)
 	return
 }
 
@@ -279,7 +280,7 @@ func (h *Handle) HandlePrepare(
 			//need to rollback the txn
 			if err != nil {
 				txn, _ = h.db.GetTxnByID(meta.GetID())
-				txn.Rollback()
+				txn.Rollback(ctx)
 				return
 			}
 		}
@@ -294,7 +295,7 @@ func (h *Handle) HandlePrepare(
 	}
 	txn.SetParticipants(participants)
 	var ts types.TS
-	ts, err = txn.Prepare()
+	ts, err = txn.Prepare(ctx)
 	pts = ts.ToTimestamp()
 	//delete the txn's context.
 	h.mu.Lock()
@@ -395,7 +396,7 @@ func (h *Handle) HandleInspectDN(
 		out:    b,
 		resp:   resp,
 	}
-	RunInspect(inspectCtx)
+	RunInspect(ctx, inspectCtx)
 	resp.Message = b.String()
 	return nil, nil
 }
@@ -862,7 +863,7 @@ func (h *Handle) HandleWrite(
 				locations = append(locations, location)
 			}
 
-			err = tb.AddBlksWithMetaLoc(locations)
+			err = tb.AddBlksWithMetaLoc(ctx, locations)
 			return
 		}
 		//check the input batch passed by cn is valid.
@@ -888,6 +889,7 @@ func (h *Handle) HandleWrite(
 		err = AppendDataToTable(ctx, tb, req.Batch)
 		return
 	}
+
 	//handle delete
 	if req.FileName != "" {
 		//wait for loading deleted row-id done.
@@ -956,7 +958,7 @@ func (h *Handle) HandleAlterTable(
 	return tbl.AlterTable(ctx, req)
 }
 
-func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
+func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *db.DB, err error) {
 
 	if targetDir != "" {
 		mask := syscall.Umask(0)
@@ -966,7 +968,7 @@ func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 			return nil, err
 		}
 		syscall.Umask(mask)
-		tae, err = db.Open(targetDir+"/tae", opt)
+		tae, err = db.Open(ctx, targetDir+"/tae", opt)
 		if err != nil {
 			logutil.Warnf("Open tae failed. error:%v", err)
 			return nil, err
@@ -974,7 +976,7 @@ func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 		return tae, nil
 	}
 
-	tae, err = db.Open(targetDir, opt)
+	tae, err = db.Open(ctx, targetDir, opt)
 	if err != nil {
 		logutil.Warnf("Open tae failed. error:%v", err)
 		return nil, err
