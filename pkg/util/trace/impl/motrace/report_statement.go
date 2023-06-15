@@ -20,6 +20,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -71,7 +74,14 @@ func StatementInfoUpdate(existing, new Item) {
 	e.ResponseAt = n.ResponseAt
 	// TODO: update the stats still json here
 	n.ExecPlan2Json(context.Background())
-	// e.statsJsonByte
+	//[1 80335 1800 0 0]
+	//[1 147960 1800 0 0]
+	err := mergeStats(e, n)
+
+	if err != nil {
+		// handle error
+		log.Printf("Failed to merge stats: %v", err)
+	}
 }
 
 func StatementInfoFilter(i Item) bool {
@@ -348,6 +358,42 @@ func getStatsValues(jsonData []byte) ([]int, error) {
 	statsValues[4] = s3IOOutputCount
 
 	return statsValues, nil
+}
+
+func mergeStats(e, n *StatementInfo) error {
+	// Convert statsJsonByte back to string and trim the square brackets
+	eStatsStr := strings.Trim(string(e.statsJsonByte), "[]")
+	nStatsStr := strings.Trim(string(n.statsJsonByte), "[]")
+
+	// Split the strings by comma to get the individual elements
+	eStatsElements := strings.Split(eStatsStr, ",")
+	nStatsElements := strings.Split(nStatsStr, ",")
+
+	// Ensure both arrays have the same length
+	if len(eStatsElements) != len(nStatsElements) {
+		return errors.New("arrays are of different lengths")
+	}
+
+	// Parse the strings to integers and add the values together
+	for i := 1; i < len(eStatsElements); i++ {
+		eVal, err := strconv.Atoi(strings.TrimSpace(eStatsElements[i]))
+		if err != nil {
+			return err
+		}
+
+		nVal, err := strconv.Atoi(strings.TrimSpace(nStatsElements[i]))
+		if err != nil {
+			return err
+		}
+
+		// Store the sum back in eStatsElements
+		eStatsElements[i] = strconv.Itoa(eVal + nVal)
+	}
+
+	// Join eStatsElements with commas and convert back to byte slice
+	e.statsJsonByte = []byte("[" + strings.Join(eStatsElements, ", ") + "]")
+
+	return nil
 }
 
 // ExecPlan2Json return ExecPlan Serialized json-str

@@ -302,3 +302,35 @@ func TestGetStatsValues(t *testing.T) {
 		t.Errorf("Expected s3IOOutputCount to be 0, got %d", res[4])
 	}
 }
+
+func TestMergeStats(t *testing.T) {
+	e := &StatementInfo{
+		statsJsonByte: []byte("[1, 80335, 1800, 1, 0]"),
+	}
+
+	n := &StatementInfo{
+		statsJsonByte: []byte("[1, 147960, 1800, 0, 0]"),
+	}
+
+	err := mergeStats(e, n)
+	if err != nil {
+		t.Fatalf("mergeStats failed: %v", err)
+	}
+
+	if string(e.statsJsonByte) != "[1, 228295, 3600, 1, 0]" {
+		t.Errorf("Expected '[1, 228295, 3600, 0, 0]', got '%s'", string(e.statsJsonByte))
+	}
+
+	n = &StatementInfo{
+		statsJsonByte: []byte("[1, 1, 1, 0, 0]"),
+	}
+
+	err = mergeStats(e, n)
+	if err != nil {
+		t.Fatalf("mergeStats failed: %v", err)
+	}
+
+	if string(e.statsJsonByte) != "[1, 228296, 3601, 1, 0]" {
+		t.Errorf("Expected '[1, 228296, 3601, 0, 0]', got '%s'", string(e.statsJsonByte))
+	}
+}
