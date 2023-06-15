@@ -264,7 +264,6 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 
 func (blk *baseBlock) ResolvePersistedColumnDatas(
 	ctx context.Context,
-	pnode *persistedNode,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxs []int,
@@ -406,7 +405,6 @@ func (blk *baseBlock) PersistedBatchDedup(
 
 func (blk *baseBlock) getPersistedValue(
 	ctx context.Context,
-	pnode *persistedNode,
 	txn txnif.TxnReader,
 	schema *catalog.Schema,
 	row, col int,
