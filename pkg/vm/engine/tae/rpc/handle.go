@@ -346,6 +346,7 @@ func (h *Handle) HandleStartRecovery(
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
+	h.GCManager.Stop()
 	return h.db.Close()
 }
 
