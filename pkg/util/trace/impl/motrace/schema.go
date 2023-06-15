@@ -62,7 +62,7 @@ var (
 	execPlanCol  = table.TextDefaultColumn("exec_plan", `{}`, "statement execution plan")
 	rowsReadCol  = table.Int64Column("rows_read", "rows read total")
 	bytesScanCol = table.Int64Column("bytes_scan", "bytes scan total")
-	statsCol     = table.TextDefaultColumn("stats", `{}`, "global stats info in exec_plan")
+	statsCol     = table.TextDefaultColumn("stats", `[]`, "global stats info in exec_plan")
 	stmtTypeCol  = table.StringColumn("statement_type", "statement type, val in [Insert, Delete, Update, Drop Table, Drop User, ...]")
 	queryTypeCol = table.StringColumn("query_type", "query type, val in [DQL, DDL, DML, DCL, TCL]")
 	sqlTypeCol   = table.TextColumn("sql_source_type", "sql statement source type")

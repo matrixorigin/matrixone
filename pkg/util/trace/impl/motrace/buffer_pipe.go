@@ -34,6 +34,8 @@ import (
 
 const defaultClock = 15 * time.Second
 
+const aggrWindow = 5 * time.Second
+
 var errorFormatter atomic.Value
 var logStackFormatter atomic.Value
 
@@ -123,28 +125,11 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 	var sessionId [16]byte
 	sessionId[0] = 1
 	aggregator := NewAggregator(
-		7*time.Second,
-		func() Item {
-			return &StatementInfo{
-				RequestAt: time.Now(),
-			}
-		},
-		func(existing, new Item) {
-			e := existing.(*StatementInfo)
-			n := new.(*StatementInfo)
-			e.Duration += n.Duration
-			e.Statement += n.Statement + ";"
-		},
-		func(i Item) bool {
-			statementInfo, ok := i.(*StatementInfo)
-			if !ok {
-				return false
-			}
-			if statementInfo.Duration > 200*time.Millisecond {
-				return false
-			}
-			return ok
-		},
+		ctx,
+		aggrWindow,
+		StatementInfoNew,
+		StatementInfoUpdate,
+		StatementInfoFilter,
 	)
 
 	ts := time.Now()

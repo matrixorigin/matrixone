@@ -39,6 +39,21 @@ var NilSesID [16]byte
 
 var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 
+func StatementInfoNew(i Item, ctx context.Context) Item {
+	if s, ok := i.(*StatementInfo); ok {
+		// process the execplan
+		s.ExecPlan2Json(ctx)
+		return s
+	}
+	return nil
+}
+func StatementInfoUpdate(existing, new Item) {
+	e := existing.(*StatementInfo)
+	n := new.(*StatementInfo)
+	e.Duration += n.Duration
+	e.Statement += n.Statement + " "
+}
+
 func StatementInfoFilter(i Item) bool {
 	// Attempt to perform a type assertion to *StatementInfo
 	statementInfo, ok := i.(*StatementInfo)
