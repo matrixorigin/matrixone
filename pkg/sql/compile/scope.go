@@ -275,7 +275,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 			return err
 		}
 		s.NodeInfo.Data = nil
-
+	//FIXME:: s.NodeInfo.Rel == nil, partition table?
 	default:
 		var err error
 		var db engine.Database
