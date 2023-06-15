@@ -282,19 +282,23 @@ func TestGetStatsValues(t *testing.T) {
 		t.Fatalf("Error getting stats values: %v", err)
 	}
 
-	if res[0] != 95834 {
-		t.Errorf("Expected timeConsumed to be 95834, got %d", res[0])
+	assert.Equal(t, 5, len(res), "Expected 5 stats values")
+
+	assert.Equal(t, 1, res[0], "version should be 1")
+
+	if res[1] != 95834 {
+		t.Errorf("Expected timeConsumed to be 95834, got %d", res[1])
 	}
 
-	if res[1] != 69 {
-		t.Errorf("Expected memorySize to be 69, got %d", res[1])
-	}
-
-	if res[2] != 0 {
-		t.Errorf("Expected s3IOInputCount to be 0, got %d", res[2])
+	if res[2] != 69 {
+		t.Errorf("Expected memorySize to be 69, got %d", res[2])
 	}
 
 	if res[3] != 0 {
-		t.Errorf("Expected s3IOOutputCount to be 0, got %d", res[3])
+		t.Errorf("Expected s3IOInputCount to be 0, got %d", res[3])
+	}
+
+	if res[4] != 0 {
+		t.Errorf("Expected s3IOOutputCount to be 0, got %d", res[4])
 	}
 }

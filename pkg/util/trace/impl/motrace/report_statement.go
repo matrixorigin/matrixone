@@ -335,11 +335,13 @@ func getStatsValues(jsonData []byte) ([]int, error) {
 			s3IOOutputCount = stat.Value
 		}
 	}
-	statsValues := make([]int, 4)
-	statsValues[0] = timeConsumed
-	statsValues[1] = memorySize
-	statsValues[2] = s3IOInputCount
-	statsValues[3] = s3IOOutputCount
+	statsValues := make([]int, 5)
+	statsValues[0] = 1 // this is the version number
+
+	statsValues[1] = timeConsumed
+	statsValues[2] = memorySize
+	statsValues[3] = s3IOInputCount
+	statsValues[4] = s3IOOutputCount
 
 	return statsValues, nil
 }
