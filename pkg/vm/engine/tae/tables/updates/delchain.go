@@ -19,9 +19,9 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -46,6 +46,7 @@ type DeleteChain struct {
 	mvcc  *MVCCHandle
 	links map[uint32]*common.GenericSortedDList[*DeleteNode]
 	cnt   atomic.Uint32
+	mask  *nulls.Bitmap
 }
 
 func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
@@ -57,6 +58,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		MVCCChain: txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
 		links:     make(map[uint32]*common.GenericSortedDList[*DeleteNode]),
 		mvcc:      mvcc,
+		mask:      &nulls.Bitmap{},
 	}
 	return chain
 }
@@ -96,16 +98,24 @@ func (chain *DeleteChain) IsDeleted(row uint32, txn txnif.TxnReader, rwlocker *s
 }
 
 func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (err error) {
-	chain.LoopChain(
-		func(n *DeleteNode) bool {
-			overlap := n.HasOverlapLocked(start, end)
-			if overlap {
-				err = txnif.ErrTxnWWConflict
-				return false
-			}
-			return true
-		})
+	if chain.hasOverLap(uint64(start), uint64(end)) {
+		err = txnif.ErrTxnWWConflict
+	}
 	return
+}
+
+func (chain *DeleteChain) hasOverLap(start, end uint64) bool {
+	if chain.mask == nil || chain.mask.IsEmpty() {
+		return false
+	}
+	var yes bool
+	for i := start; i < end+1; i++ {
+		if chain.mask.Contains(i) {
+			yes = true
+			break
+		}
+	}
+	return yes
 }
 
 func (chain *DeleteChain) UpdateLocked(node *DeleteNode) {
@@ -114,6 +124,27 @@ func (chain *DeleteChain) UpdateLocked(node *DeleteNode) {
 
 func (chain *DeleteChain) RemoveNodeLocked(node txnif.DeleteNode) {
 	chain.MVCC.Delete(node.(*DeleteNode).GenericDLNode)
+	chain.deleteInMaskByNode(node)
+}
+
+func (chain *DeleteChain) deleteInMaskByNode(node txnif.DeleteNode) {
+	it := node.GetRowMaskRefLocked().Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		chain.mask.Del(uint64(row))
+	}
+}
+
+func (chain *DeleteChain) insertInMaskByNode(node txnif.DeleteNode) {
+	it := node.GetRowMaskRefLocked().Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		chain.mask.Add(uint64(row))
+	}
+}
+
+func (chain *DeleteChain) insertInMaskByRange(start, end uint32) {
+	chain.mask.AddRange(uint64(start), uint64(end+1))
 }
 
 func (chain *DeleteChain) DepthLocked() int { return chain.MVCC.Depth() }
@@ -153,6 +184,7 @@ func (chain *DeleteChain) OnReplayNode(deleteNode *DeleteNode) {
 	}
 	deleteNode.AttachTo(chain)
 	chain.AddDeleteCnt(uint32(deleteNode.mask.GetCardinality()))
+	chain.insertInMaskByNode(deleteNode)
 	chain.mvcc.IncChangeNodeCnt()
 }
 
@@ -189,18 +221,17 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 // CollectDeletesInRange collects [startTs, endTs)
 func (chain *DeleteChain) CollectDeletesInRange(
 	startTs, endTs types.TS,
-	rwlocker *sync.RWMutex) (mask *roaring.Bitmap, err error) {
-	var merged *DeleteNode
+	rwlocker *sync.RWMutex) (mask *nulls.Bitmap, err error) {
 	chain.LoopChain(func(n *DeleteNode) bool {
 		// Merged node is a loop breaker
 		if n.IsMerged() {
 			if n.GetCommitTSLocked().Greater(endTs) {
 				return true
 			}
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
+			if mask == nil {
+				mask = nulls.NewWithSize(int(n.mask.Maximum()))
 			}
-			merged.MergeLocked(n)
+			mergeDelete(mask, n)
 			return false
 		}
 		needWait, txnToWait := n.NeedWaitCommitting(endTs)
@@ -210,17 +241,13 @@ func (chain *DeleteChain) CollectDeletesInRange(
 			rwlocker.RLock()
 		}
 		if n.IsVisibleByTS(endTs) && !n.IsVisibleByTS(startTs) {
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
+			if mask == nil {
+				mask = nulls.NewWithSize(int(n.mask.Maximum()))
 			}
-			merged.MergeLocked(n)
+			mergeDelete(mask, n)
 		}
 		return true
 	})
-	if merged == nil {
-		return
-	}
-	mask = merged.mask
 	return
 }
 
@@ -246,34 +273,33 @@ func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (f
 	return
 }
 
+func mergeDelete(mask *nulls.Bitmap, node *DeleteNode) {
+	if node == nil || node.mask == nil {
+		return
+	}
+	it := node.mask.Iterator()
+	for it.HasNext() {
+		mask.Add(uint64(it.Next()))
+	}
+}
+
 func (chain *DeleteChain) CollectDeletesLocked(
 	txn txnif.TxnReader,
-	rwlocker *sync.RWMutex) (txnif.DeleteNode, error) {
-	var merged *DeleteNode
-	var err error
+	rwlocker *sync.RWMutex) (merged *nulls.Bitmap, err error) {
+	merged = chain.mask.Clone()
 	chain.LoopChain(func(n *DeleteNode) bool {
-		// Merged node is a loop breaker
-		if n.IsMerged() {
-			if n.GetCommitTSLocked().Greater(txn.GetStartTS()) {
-				return true
-			}
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
-			}
-			merged.MergeLocked(n)
-			return false
-		}
 		needWait, txnToWait := n.NeedWaitCommitting(txn.GetStartTS())
 		if needWait {
 			rwlocker.RUnlock()
 			txnToWait.GetTxnState(true)
 			rwlocker.RLock()
 		}
-		if n.IsVisible(txn) {
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
+		if !n.IsVisible(txn) {
+			it := n.GetDeleteMaskLocked().Iterator()
+			for it.HasNext() {
+				row := it.Next()
+				merged.Del(uint64(row))
 			}
-			merged.MergeLocked(n)
 		}
 		return true
 	})

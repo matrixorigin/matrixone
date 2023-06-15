@@ -21,6 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -180,7 +181,8 @@ func TestVector3(t *testing.T) {
 func TestVector5(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
-	sels := roaring.BitmapOf(2, 6)
+	sels := nulls.NewWithSize(1)
+	sels.Add(uint64(2), uint64(6))
 	for _, vecType := range vecTypes {
 		vec := MockVector(vecType, 10, false, nil)
 		rows := make([]int, 0)
@@ -221,7 +223,8 @@ func TestVector5(t *testing.T) {
 func TestVector6(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
-	sels := roaring.BitmapOf(2, 6)
+	sels := nulls.NewWithSize(1)
+	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {
 		vec := MockVector(vecType, 10, false, nil)
 		if nullable {
@@ -648,7 +651,8 @@ func overLoadFactory[T any](t *testing.T, rows *roaring.Bitmap, vec Vector) func
 func TestForeachSelectBitmap(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes(17)
-	sels := roaring.BitmapOf(2, 6)
+	sels := nulls.NewWithSize(1)
+	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {
 		vec := MockVector(vecType, 10, false, nil)
 		rows := roaring.New()

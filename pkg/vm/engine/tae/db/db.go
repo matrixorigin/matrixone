@@ -119,7 +119,7 @@ func (db *DB) StartTxnWithLatestTS(info []byte) (txnif.AsyncTxn, error) {
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
-	return txn.Commit()
+	return txn.Commit(context.Background())
 }
 
 func (db *DB) GetTxnByID(id []byte) (txn txnif.AsyncTxn, err error) {
@@ -138,7 +138,7 @@ func (db *DB) GetOrCreateTxnWithMeta(
 }
 
 func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
-	return txn.Rollback()
+	return txn.Rollback(context.Background())
 }
 
 func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {

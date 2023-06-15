@@ -226,6 +226,7 @@ var (
 			endTimeCol,
 			durationCol,
 			resourceCol,
+			extraCol,
 		},
 		Condition: &table.ViewSingleCondition{Column: rawItemCol, Table: spanInfoTbl},
 	}

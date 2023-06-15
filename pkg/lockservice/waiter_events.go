@@ -117,7 +117,9 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case c := <-mw.eventC:
+			c.txn.Lock()
 			c.doLock()
+			c.txn.Unlock()
 		}
 	}
 }

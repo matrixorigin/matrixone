@@ -22,7 +22,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -119,10 +119,10 @@ func (vec *vectorWrapper) IsNull(i int) bool {
 	if inner.IsConst() {
 		return false
 	}
-	return cnNulls.Contains(inner.GetNulls(), uint64(i))
+	return nulls.Contains(inner.GetNulls(), uint64(i))
 }
 
-func (vec *vectorWrapper) NullMask() *cnNulls.Nulls {
+func (vec *vectorWrapper) NullMask() *nulls.Nulls {
 	return vec.downstreamVector.GetNulls()
 }
 
@@ -237,11 +237,11 @@ func (vec *vectorWrapper) TryConvertConst() Vector {
 	return vec
 }
 
-func (vec *vectorWrapper) Foreach(op ItOp, sels *roaring.Bitmap) error {
+func (vec *vectorWrapper) Foreach(op ItOp, sels *nulls.Bitmap) error {
 	return vec.ForeachWindow(0, vec.downstreamVector.Length(), op, sels)
 }
 
-func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+func (vec *vectorWrapper) ForeachWindow(offset, length int, op ItOp, sels *nulls.Bitmap) (err error) {
 	return ForeachVectorWindow(vec, offset, length, nil, op, sels)
 }
 
@@ -353,6 +353,21 @@ func (vec *vectorWrapper) extendWithOffset(src *cnVector.Vector, srcOff, srcLen 
 	}
 	err = vec.downstreamVector.Union(src, sels, vec.mpool)
 	return
+}
+
+func (vec *vectorWrapper) CompactByBitmap(mask *nulls.Bitmap) {
+	if mask.IsEmpty() {
+		return
+	}
+	vec.tryCoW()
+
+	dels := vec.mpool.GetSels()
+	mask.Foreach(func(i uint64) bool {
+		dels = append(dels, int64(i))
+		return true
+	})
+	vec.downstreamVector.Shrink(dels, true)
+	vec.mpool.PutSels(dels)
 }
 
 func (vec *vectorWrapper) Compact(deletes *roaring.Bitmap) {

@@ -330,7 +330,7 @@ func (ss *Session) FilterLogtail(tails ...wrapLogtail) []logtail.TableLogtail {
 		if state, ok := ss.tables[t.id]; ok && state == TableSubscribed {
 			qualified = append(qualified, t.tail)
 		} else {
-			ss.logger.Info("table not subscribed, filter out",
+			ss.logger.Debug("table not subscribed, filter out",
 				zap.String("id", string(t.id)),
 				zap.String("checkpoint", t.tail.CkpLocation),
 			)

@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -74,6 +75,8 @@ func TestParseDNConfig(t *testing.T) {
 }
 
 func TestFileServiceFactory(t *testing.T) {
+	ctx := context.Background()
+
 	c := &Config{}
 	c.FileServices = append(c.FileServices, fileservice.Config{
 		Name:    "a",
@@ -92,7 +95,7 @@ func TestFileServiceFactory(t *testing.T) {
 		Backend: "DISK-ETL",
 	})
 
-	fs, err := c.createFileService("A", globalCounterSet, 0, "")
+	fs, err := c.createFileService(ctx, "A", globalCounterSet, 0, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
 }

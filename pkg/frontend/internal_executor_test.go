@@ -43,7 +43,7 @@ type miniExec struct {
 	sess *Session
 }
 
-func (e *miniExec) doComQuery(context.Context, string) error {
+func (e *miniExec) doComQuery(context.Context, *UserInput) error {
 	_ = e.sess.GetMysqlProtocol()
 	return nil
 }
