@@ -11,6 +11,7 @@ import (
 )
 
 func TestAggregator(t *testing.T) {
+
 	var sessionId [16]byte
 	sessionId[0] = 1
 	var sessionId2 [16]byte
@@ -28,7 +29,7 @@ func TestAggregator(t *testing.T) {
 	_, err := aggregator.AddItem(&StatementInfo{
 		StatementType: "Select",
 		Duration:      time.Duration(500 * time.Millisecond), // make it longer than 200ms to pass filter
-		SqlSourceType: "Internal",
+		SqlSourceType: "internal_sql",
 	})
 
 	if !errors.Is(err, ErrFilteredOut) {
@@ -46,7 +47,7 @@ func TestAggregator(t *testing.T) {
 
 	_, err = aggregator.AddItem(&StatementInfo{
 		StatementType: "Insert",
-		SqlSourceType: "Cloud_User",
+		SqlSourceType: "cloud_user",
 		Duration:      time.Duration(10 * time.Second),
 	})
 
@@ -70,7 +71,7 @@ func TestAggregator(t *testing.T) {
 			User:          "moroot",
 			Database:      "system",
 			StatementType: "Select",
-			SqlSourceType: "External",
+			SqlSourceType: "external_sql",
 			SessionID:     sessionId,
 			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
 			RequestAt:     fixedTime,
@@ -87,7 +88,7 @@ func TestAggregator(t *testing.T) {
 			User:          "moroot",
 			Database:      "system",
 			StatementType: "Select",
-			SqlSourceType: "Internal",
+			SqlSourceType: "internal_sql",
 			SessionID:     sessionId2,
 			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
 			RequestAt:     fixedTime,
@@ -107,7 +108,7 @@ func TestAggregator(t *testing.T) {
 			User:          "moroot",
 			Database:      "system",
 			StatementType: "Select",
-			SqlSourceType: "Internal",
+			SqlSourceType: "internal_sql",
 			SessionID:     sessionId2,
 			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
 			RequestAt:     fixedTime.Add(6 * time.Second),
@@ -124,7 +125,7 @@ func TestAggregator(t *testing.T) {
 			User:          "moroot",
 			Database:      "system",
 			StatementType: "Select",
-			SqlSourceType: "Internal",
+			SqlSourceType: "external_sql",
 			SessionID:     sessionId2,
 			Statement:     "SELECT 11", // make it longer than 200ms to pass filter
 			RequestAt:     fixedTime.Add(6 * time.Second),
@@ -149,4 +150,6 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, 50*time.Millisecond, results[0].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[1].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[2].(*StatementInfo).Duration)
+	assert.Equal(t, 50*time.Millisecond, results[3].(*StatementInfo).Duration)
+
 }

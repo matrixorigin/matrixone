@@ -45,6 +45,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.ExecPlan2Json(ctx)
 		// remove the plan
 		s.jsonByte = nil
+		s.ExecPlan = nil
 
 		// remove the TransacionID
 		s.TransactionID = NilTxnID
@@ -59,6 +60,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 	return nil
 }
 func StatementInfoUpdate(existing, new Item) {
+
 	e := existing.(*StatementInfo)
 	n := new.(*StatementInfo)
 	// update the stats
@@ -66,7 +68,8 @@ func StatementInfoUpdate(existing, new Item) {
 	e.Statement += n.Statement + "; "
 	// reponseAt is the last response time
 	e.ResponseAt = n.ResponseAt
-	// update the stats still json here
+	// TODO: update the stats still json here
+	n.ExecPlan2Json(context.Background())
 	// e.statsJsonByte
 }
 
@@ -81,7 +84,7 @@ func StatementInfoFilter(i Item) bool {
 
 	// Check SqlSourceType
 	switch statementInfo.SqlSourceType {
-	case "Internal", "External", "Non_Cloud_User":
+	case "internal_sql", "external_sql", "non_cloud_user":
 		// Check StatementType
 		switch statementInfo.StatementType {
 		case "Insert", "Update", "Delete", "Execute":
