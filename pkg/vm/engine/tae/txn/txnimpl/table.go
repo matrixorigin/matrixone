@@ -636,7 +636,7 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
-					tbl.store.dataFactory.Fs.Service,
+					tbl.store.dataFactory.GetRuntime().Fs.Service,
 					loc,
 					nil,
 				)
@@ -951,7 +951,7 @@ func (tbl *txnTable) quickSkipThisBlock(
 	keysZM index.ZM,
 	meta *catalog.BlockEntry,
 ) (ok bool, err error) {
-	zm, err := meta.GetPKZoneMap(ctx, tbl.store.dataFactory.Fs.Service)
+	zm, err := meta.GetPKZoneMap(ctx, tbl.store.dataFactory.GetRuntime().Fs.Service)
 	if err != nil {
 		return
 	}
@@ -976,7 +976,7 @@ func (tbl *txnTable) tryGetCurrentObjectBF(
 		ctx,
 		currLocation,
 		tbl.store.indexCache,
-		tbl.store.dataFactory.Fs.Service,
+		tbl.store.dataFactory.GetRuntime().Fs.Service,
 		false,
 	)
 	return
@@ -1118,7 +1118,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
-					tbl.store.dataFactory.Fs.Service,
+					tbl.store.dataFactory.GetRuntime().Fs.Service,
 					loc,
 					nil,
 				)

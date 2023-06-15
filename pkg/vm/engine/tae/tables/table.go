@@ -21,15 +21,15 @@ import (
 )
 
 type dataTable struct {
-	meta       *catalog.TableEntry
-	aBlk       *ablock
-	indexCache model.LRUCache
+	meta *catalog.TableEntry
+	aBlk *ablock
+	rt   *model.Runtime
 }
 
-func newTable(meta *catalog.TableEntry, indexCache model.LRUCache) *dataTable {
+func newTable(meta *catalog.TableEntry, rt *model.Runtime) *dataTable {
 	return &dataTable{
-		meta:       meta,
-		indexCache: indexCache,
+		meta: meta,
+		rt:   rt,
 	}
 }
 

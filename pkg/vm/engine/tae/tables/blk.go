@@ -40,12 +40,11 @@ type block struct {
 
 func newBlock(
 	meta *catalog.BlockEntry,
-	fs *objectio.ObjectFS,
-	indexCache model.LRUCache,
+	rt *model.Runtime,
 	scheduler tasks.TaskScheduler,
 ) *block {
 	blk := &block{}
-	blk.baseBlock = newBaseBlock(blk, meta, indexCache, fs, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, rt, scheduler)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	pnode := newPersistedNode(blk.baseBlock)
 	node := NewNode(pnode)

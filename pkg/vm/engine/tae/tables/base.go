@@ -49,13 +49,12 @@ type BlockT[T common.IRef] interface {
 type baseBlock struct {
 	common.RefHelper
 	*sync.RWMutex
-	indexCache model.LRUCache
-	fs         *objectio.ObjectFS
-	scheduler  tasks.TaskScheduler
-	meta       *catalog.BlockEntry
-	mvcc       *updates.MVCCHandle
-	ttl        time.Time
-	impl       data.Block
+	rt        *model.Runtime
+	scheduler tasks.TaskScheduler
+	meta      *catalog.BlockEntry
+	mvcc      *updates.MVCCHandle
+	ttl       time.Time
+	impl      data.Block
 
 	node atomic.Pointer[Node]
 }
@@ -63,16 +62,14 @@ type baseBlock struct {
 func newBaseBlock(
 	impl data.Block,
 	meta *catalog.BlockEntry,
-	indexCache model.LRUCache,
-	fs *objectio.ObjectFS,
+	rt *model.Runtime,
 	scheduler tasks.TaskScheduler) *baseBlock {
 	blk := &baseBlock{
-		impl:       impl,
-		indexCache: indexCache,
-		fs:         fs,
-		scheduler:  scheduler,
-		meta:       meta,
-		ttl:        time.Now(),
+		impl:      impl,
+		rt:        rt,
+		scheduler: scheduler,
+		meta:      meta,
+		ttl:       time.Now(),
 	}
 	blk.mvcc = updates.NewMVCCHandle(meta)
 	blk.RWMutex = blk.mvcc.RWMutex
@@ -134,7 +131,7 @@ func (blk *baseBlock) TryUpgrade() (err error) {
 }
 
 func (blk *baseBlock) GetMeta() any              { return blk.meta }
-func (blk *baseBlock) GetFs() *objectio.ObjectFS { return blk.fs }
+func (blk *baseBlock) GetFs() *objectio.ObjectFS { return blk.rt.Fs }
 func (blk *baseBlock) GetID() *common.ID         { return blk.meta.AsCommonID() }
 
 func (blk *baseBlock) FillInMemoryDeletesLocked(
@@ -166,7 +163,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
-		blk.fs.Service,
+		blk.rt.Fs.Service,
 		location,
 		nil,
 	)
@@ -205,7 +202,7 @@ func (blk *baseBlock) LoadPersistedColumnData(ctx context.Context, schema *catal
 	location := blk.meta.GetMetaLoc()
 	return LoadPersistedColumnData(
 		ctx,
-		blk.fs,
+		blk.rt.Fs,
 		blk.meta.AsCommonID(),
 		def,
 		location)
@@ -220,7 +217,7 @@ func (blk *baseBlock) LoadPersistedDeletes(ctx context.Context) (bat *containers
 	return LoadPersistedDeletes(
 		ctx,
 		pkName,
-		blk.fs,
+		blk.rt.Fs,
 		location)
 }
 
@@ -258,7 +255,7 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 		return nil
 	} else {
 		key := blk.meta.GetMetaLoc()
-		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.fs.Service, key)
+		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.rt.Fs.Service, key)
 	}
 }
 
@@ -386,8 +383,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		ctx,
 		blk.meta,
 		bf,
-		blk.indexCache,
-		blk.fs.Service,
+		blk.rt,
 	)
 	if err != nil {
 		return

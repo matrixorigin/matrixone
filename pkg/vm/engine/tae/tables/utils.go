@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
@@ -89,15 +88,14 @@ func MakeImmuIndex(
 	ctx context.Context,
 	meta *catalog.BlockEntry,
 	bf objectio.BloomFilter,
-	cache model.LRUCache,
-	fs fileservice.FileService,
+	rt *model.Runtime,
 ) (idx indexwrapper.ImmutIndex, err error) {
-	pkZM, err := meta.GetPKZoneMap(ctx, fs)
+	pkZM, err := meta.GetPKZoneMap(ctx, rt.Fs.Service)
 	if err != nil {
 		return
 	}
 	idx = indexwrapper.NewImmutIndex(
-		*pkZM, bf, meta.GetMetaLoc(), cache, fs,
+		*pkZM, bf, meta.GetMetaLoc(), rt,
 	)
 	return
 }

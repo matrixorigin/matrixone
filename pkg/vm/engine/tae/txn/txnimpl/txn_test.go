@@ -426,7 +426,8 @@ func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Ca
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)
-	factory := tables.NewDataFactory(fs, indexCache, nil, dir)
+	rt := model.NewRuntime(model.WithRuntimeObjectFS(fs), model.WithRuntimeFilterIndexCache(indexCache))
+	factory := tables.NewDataFactory(rt, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, nil, indexCache, factory, 0),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start(context.Background())

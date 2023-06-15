@@ -143,7 +143,7 @@ func (n *baseNode) LoadPersistedColumnData(ctx context.Context, colIdx int) (vec
 	def := n.table.GetLocalSchema().ColDefs[colIdx]
 	return tables.LoadPersistedColumnData(
 		ctx,
-		n.table.store.dataFactory.Fs,
+		n.table.store.dataFactory.GetRuntime().Fs,
 		nil,
 		def,
 		location)

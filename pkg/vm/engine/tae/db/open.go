@@ -96,7 +96,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(
-		fs, indexCache, db.Scheduler, db.Dir,
+		db.Runtime, db.Scheduler, db.Dir,
 	)
 	if db.Opts.Catalog, err = catalog.OpenCatalog(db.Scheduler, dataFactory); err != nil {
 		return

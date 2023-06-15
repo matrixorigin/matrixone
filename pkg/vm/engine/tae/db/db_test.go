@@ -7199,8 +7199,7 @@ func TestDeduplication(t *testing.T) {
 	tbl, err := db.TxnGetTableEntryByName(schema.Name, txn)
 	assert.NoError(t, err)
 	dataFactory := tables.NewDataFactory(
-		tae.Runtime.Fs,
-		tae.Runtime.Cache.FilterIndex,
+		tae.Runtime,
 		tae.Scheduler,
 		tae.Dir)
 	seg, err := tbl.CreateSegment(

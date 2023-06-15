@@ -29,19 +29,18 @@ import (
 
 type dataSegment struct {
 	common.ClosedState
-	meta       *catalog.SegmentEntry
-	scheduler  tasks.TaskScheduler
-	indexCache model.LRUCache
+	meta      *catalog.SegmentEntry
+	scheduler tasks.TaskScheduler
+	rt        *model.Runtime
 }
 
 func newSegment(
-	meta *catalog.SegmentEntry,
-	indexCache model.LRUCache,
-	dir string) *dataSegment {
+	meta *catalog.SegmentEntry, dir string, rt *model.Runtime,
+) *dataSegment {
 	seg := &dataSegment{
-		meta:       meta,
-		indexCache: indexCache,
-		scheduler:  meta.GetScheduler(),
+		meta:      meta,
+		scheduler: meta.GetScheduler(),
+		rt:        rt,
 	}
 	return seg
 }
@@ -56,17 +55,7 @@ func (segment *dataSegment) Destroy() (err error) {
 func (segment *dataSegment) GetID() uint64 { panic("not support") }
 
 func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector) (err error) {
-	// TODO: segment level index
 	return moerr.GetOkExpectedPossibleDup()
-	// blkIt := segment.meta.MakeBlockIt(false)
-	// for blkIt.Valid() {
-	// 	block := blkIt.Get().GetPayload().(*catalog.BlockEntry)
-	// 	if err = block.GetBlockData().BatchDedup(txn, pks); err != nil {
-	// 		return
-	// 	}
-	// 	blkIt.Next()
-	// }
-	// return nil
 }
 
 func (segment *dataSegment) MutationInfo() string { return "" }
