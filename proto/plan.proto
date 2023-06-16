@@ -708,6 +708,7 @@ message LockTarget {
   bool lock_table 				= 6;
 	bool is_partition_table = 7;
 	repeated uint64 partition_table_ids = 8;
+	bool                block   = 9;
 }
 
 message PreInsertUkCtx {
