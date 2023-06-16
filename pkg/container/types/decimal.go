@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -47,6 +48,22 @@ var Pow10 = [20]uint64{
 }
 
 var FloatHigh = float64(1<<63) * 2
+
+var Decimal64Zero = Decimal64(0)
+var Decimal64Max = Decimal64(999999999999999999)
+var Decimal64Min = Decimal64Max.Minus()
+
+var Decimal128Zero = Decimal128{0, 0}
+var Decimal128Max, _, _ = ParseDecimal128FromString("99999999999999999999999999999999999999")
+var Decimal128Min = Decimal128Max.Minus()
+
+var Decimal64ZeroBytes = Decimal64Zero.Encode()
+var Decimal64MaxBytes = Decimal64Max.Encode()
+var Decimal64MinBytes = Decimal64Min.Encode()
+
+var Decimal128ZeroBytes = Decimal128Zero.Encode()
+var Decimal128MaxBytes = Decimal128Max.Encode()
+var Decimal128MinBytes = Decimal128Min.Encode()
 
 func (x Decimal64) Sign() bool {
 	return x>>63 == 1
@@ -1362,7 +1379,7 @@ func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err err
 	return
 }
 
-func Parse64(x string) (y Decimal64, scale int32, err error) {
+func ParseDecimal64FromString(x string) (y Decimal64, scale int32, err error) {
 	y = Decimal64(0)
 	z := Decimal64(0)
 	scale = -1
@@ -1494,7 +1511,7 @@ func ParseDecimal64(x string, width, scale int32) (y Decimal64, err error) {
 		width = 18
 	}
 	n := int32(0)
-	y, n, err = Parse64(x)
+	y, n, err = ParseDecimal64FromString(x)
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal64: %s(%d,%d)", x, width, scale)
 		return
@@ -1539,7 +1556,7 @@ func ParseDecimal64FromByte(x string, width, scale int32) (y Decimal64, err erro
 	return
 }
 
-func Parse128(x string) (y Decimal128, scale int32, err error) {
+func ParseDecimal128FromString(x string) (y Decimal128, scale int32, err error) {
 	var z Decimal128
 	width := 0
 	t := false
@@ -1671,7 +1688,7 @@ func ParseDecimal128(x string, width, scale int32) (y Decimal128, err error) {
 		width = 38
 	}
 	n := int32(0)
-	y, n, err = Parse128(x)
+	y, n, err = ParseDecimal128FromString(x)
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtx("Can't convert string To Decimal128: %s(%d,%d)", x, width, scale)
 		return
@@ -1955,4 +1972,50 @@ func (x *Decimal128) Unmarshal(data []byte) error {
 	x.B0_63 = binary.BigEndian.Uint64(data[0:])
 	x.B64_127 = binary.BigEndian.Uint64(data[8:])
 	return nil
+}
+
+func (x Decimal64) Encode() []byte {
+	b := *(*[8]byte)(unsafe.Pointer(&x))
+	b[7] ^= 0x80
+	ret := make([]byte, 8)
+	for i := 7; i >= 0; i-- {
+		ret = append(ret, b[i])
+	}
+	return ret
+}
+
+func (x Decimal64) Decode(v []byte) Decimal64 {
+	b := make([]byte, 8)
+	copy(b, v[:])
+	b[0] ^= 0x80
+	for i := 0; i < 4; i++ {
+		b[i] ^= b[7-i]
+		b[7-i] ^= b[i]
+		b[i] ^= b[7-i]
+	}
+	ret := *(*Decimal64)(unsafe.Pointer(&b[0]))
+	return ret
+}
+
+func (x Decimal128) Encode() []byte {
+	b := *(*[16]byte)(unsafe.Pointer(&x))
+	b[15] ^= 0x80
+	ret := make([]byte, 16)
+	for i := 15; i >= 0; i-- {
+		ret = append(ret, b[i])
+	}
+	return ret
+}
+
+func (x Decimal128) Decode(v []byte) Decimal128 {
+	b := make([]byte, 16)
+	copy(b, v[:])
+	b[0] ^= 0x80
+	for i := 0; i < 8; i++ {
+		b[i] ^= b[15-i]
+		b[15-i] ^= b[i]
+		b[i] ^= b[15-i]
+	}
+	ret := *(*Decimal128)(unsafe.Pointer(&b[0]))
+	return ret
 }

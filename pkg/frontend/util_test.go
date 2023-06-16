@@ -18,15 +18,16 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
+	"sort"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
-	"math"
-	"sort"
-	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -463,9 +464,9 @@ func TestGetSimpleExprValue(t *testing.T) {
 			want    interface{}
 		}
 
-		dec1, _, _ := types.Parse64("1.0")
-		dec2, _, _ := types.Parse64("-1.0")
-		dec3, _, _ := types.Parse64("-1.2345670")
+		dec1, _, _ := types.ParseDecimal64FromString("1.0")
+		dec2, _, _ := types.ParseDecimal64FromString("-1.0")
+		dec3, _, _ := types.ParseDecimal64FromString("-1.2345670")
 
 		kases := []args{
 			{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{
@@ -518,16 +519,16 @@ func TestGetExprValue(t *testing.T) {
 			want    interface{}
 		}
 
-		dec1280, _, err := types.Parse128("-9223372036854775808")
+		dec1280, _, err := types.ParseDecimal128FromString("-9223372036854775808")
 		assert.NoError(t, err)
 
-		dec1281, _, err := types.Parse128("99999999999999999999999999999999999999")
+		dec1281, _, err := types.ParseDecimal128FromString("99999999999999999999999999999999999999")
 		assert.NoError(t, err)
 
-		dec1282, _, err := types.Parse128("-99999999999999999999999999999999999999")
+		dec1282, _, err := types.ParseDecimal128FromString("-99999999999999999999999999999999999999")
 		assert.NoError(t, err)
 
-		dec1283, _, err := types.Parse128("9223372036854775807")
+		dec1283, _, err := types.ParseDecimal128FromString("9223372036854775807")
 		assert.NoError(t, err)
 
 		kases := []args{
@@ -691,9 +692,9 @@ func TestGetExprValue(t *testing.T) {
 			want    interface{}
 		}
 
-		dec1, _, _ := types.Parse64("1.0")
-		dec2, _, _ := types.Parse64("-1.0")
-		dec3, _, _ := types.Parse64("-1.2345670")
+		dec1, _, _ := types.ParseDecimal64FromString("1.0")
+		dec2, _, _ := types.ParseDecimal64FromString("-1.0")
+		dec3, _, _ := types.ParseDecimal64FromString("-1.2345670")
 
 		kases := []args{
 			{"set @@x=1.0", false, plan.MakePlan2Decimal64ExprWithType(dec1, &plan.Type{

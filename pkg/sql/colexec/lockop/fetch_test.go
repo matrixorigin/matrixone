@@ -650,7 +650,7 @@ func TestFetchDecimal64RowsWithFilter(t *testing.T) {
 }
 
 func TestFetchDecimal128Rows(t *testing.T) {
-	max, _, _ := types.Parse128("99999999999999999999999999999999999999")
+	max, _, _ := types.ParseDecimal128FromString("99999999999999999999999999999999999999")
 	min := max.Minus()
 	values := []types.Decimal128{{B0_63: 1, B64_127: 1}, {B0_63: 0, B64_127: 0}}
 	expectRangeValues := []types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: 1, B64_127: 1}}
@@ -672,7 +672,7 @@ func TestFetchDecimal128Rows(t *testing.T) {
 }
 
 func TestFetchDecimal128RowsWithFilter(t *testing.T) {
-	max, _, _ := types.Parse128("99999999999999999999999999999999999999")
+	max, _, _ := types.ParseDecimal128FromString("99999999999999999999999999999999999999")
 	min := max.Minus()
 	values := []types.Decimal128{{B0_63: 1, B64_127: 1}, {B0_63: 0, B64_127: 0}, {B0_63: 2, B64_127: 2}}
 	expectRangeValues := []types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: 1, B64_127: 1}}
@@ -949,7 +949,7 @@ func TestDecimal128(t *testing.T) {
 		packer.EncodeDecimal128(v)
 		return packer.Bytes()
 	}
-	max128, _, _ := types.Parse128("99999999999999999999999999999999999999")
+	max128, _, _ := types.ParseDecimal128FromString("99999999999999999999999999999999999999")
 	minDecimal128 := decimal128Fn(max128.Minus())
 	maxDecimal128 := decimal128Fn(max128)
 	assert.True(t, bytes.Compare(minDecimal128, maxDecimal128) < 0)

@@ -544,7 +544,7 @@ func fetchDecimal128Rows(
 		return parker.Bytes()
 	}
 	if lockTabel {
-		maxDecimal128, _, _ := types.Parse128("99999999999999999999999999999999999999")
+		maxDecimal128, _, _ := types.ParseDecimal128FromString("99999999999999999999999999999999999999")
 		min := fn(maxDecimal128.Minus())
 		max := fn(maxDecimal128)
 		return [][]byte{min, max},

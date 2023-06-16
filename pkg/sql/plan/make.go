@@ -16,8 +16,9 @@ package plan
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"unicode/utf8"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -61,7 +62,7 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 }
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
-	_, scale, err := types.Parse128(v)
+	_, scale, err := types.ParseDecimal128FromString(v)
 	if err != nil {
 		return nil, err
 	}

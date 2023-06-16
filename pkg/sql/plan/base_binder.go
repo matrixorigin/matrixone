@@ -1521,7 +1521,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			}
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(astExpr.String()), typ)
 		}
-		d128, scale, err := types.Parse128(astExpr.String())
+		d128, scale, err := types.ParseDecimal128FromString(astExpr.String())
 		if err != nil {
 			return nil, err
 		}

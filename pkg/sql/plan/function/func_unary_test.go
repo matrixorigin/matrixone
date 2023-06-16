@@ -17,12 +17,13 @@ package function
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/stretchr/testify/assert"
 	"math"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -730,7 +731,7 @@ func TestSpace(t *testing.T) {
 func initToTimeCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2022-01-01", 6)
 	d2, _ := types.ParseDatetime("2022-01-01 16:22:44", 6)
-	//d3, scale, _ := types.Parse128("20221212112233.4444")
+	//d3, scale, _ := types.ParseDecimal128FromString("20221212112233.4444")
 	//d3, _ = d3.Scale(3 - scale)
 	return []tcTemp{
 		{
@@ -1895,10 +1896,10 @@ func TestReverse(t *testing.T) {
 // Oct
 
 func initOctUint8TestCase() []tcTemp {
-	e1, _, _ := types.Parse128("14")
-	e2, _, _ := types.Parse128("143")
-	e3, _, _ := types.Parse128("144")
-	e4, _, _ := types.Parse128("377")
+	e1, _, _ := types.ParseDecimal128FromString("14")
+	e2, _, _ := types.ParseDecimal128FromString("143")
+	e3, _, _ := types.ParseDecimal128FromString("144")
+	e4, _, _ := types.ParseDecimal128FromString("377")
 
 	return []tcTemp{
 		{
@@ -1927,13 +1928,13 @@ func TestOctUint8(t *testing.T) {
 }
 
 func initOctUint16TestCase() []tcTemp {
-	e1, _, _ := types.Parse128("14")
-	e2, _, _ := types.Parse128("143")
-	e3, _, _ := types.Parse128("144")
-	e4, _, _ := types.Parse128("377")
-	e5, _, _ := types.Parse128("2000")
-	e6, _, _ := types.Parse128("23420")
-	e7, _, _ := types.Parse128("177777")
+	e1, _, _ := types.ParseDecimal128FromString("14")
+	e2, _, _ := types.ParseDecimal128FromString("143")
+	e3, _, _ := types.ParseDecimal128FromString("144")
+	e4, _, _ := types.ParseDecimal128FromString("377")
+	e5, _, _ := types.ParseDecimal128FromString("2000")
+	e6, _, _ := types.ParseDecimal128FromString("23420")
+	e7, _, _ := types.ParseDecimal128FromString("177777")
 
 	return []tcTemp{
 		{
@@ -1962,14 +1963,14 @@ func TestOctUint16(t *testing.T) {
 }
 
 func initOctUint32TestCase() []tcTemp {
-	e1, _, _ := types.Parse128("14")
-	e2, _, _ := types.Parse128("143")
-	e3, _, _ := types.Parse128("144")
-	e4, _, _ := types.Parse128("377")
-	e5, _, _ := types.Parse128("2000")
-	e6, _, _ := types.Parse128("23420")
-	e7, _, _ := types.Parse128("177777")
-	e8, _, _ := types.Parse128("37777777777")
+	e1, _, _ := types.ParseDecimal128FromString("14")
+	e2, _, _ := types.ParseDecimal128FromString("143")
+	e3, _, _ := types.ParseDecimal128FromString("144")
+	e4, _, _ := types.ParseDecimal128FromString("377")
+	e5, _, _ := types.ParseDecimal128FromString("2000")
+	e6, _, _ := types.ParseDecimal128FromString("23420")
+	e7, _, _ := types.ParseDecimal128FromString("177777")
+	e8, _, _ := types.ParseDecimal128FromString("37777777777")
 
 	return []tcTemp{
 		{
@@ -1998,15 +1999,15 @@ func TestOctUint32(t *testing.T) {
 }
 
 func initOctUint64TestCase() []tcTemp {
-	e1, _, _ := types.Parse128("14")
-	e2, _, _ := types.Parse128("143")
-	e3, _, _ := types.Parse128("144")
-	e4, _, _ := types.Parse128("377")
-	e5, _, _ := types.Parse128("2000")
-	e6, _, _ := types.Parse128("23420")
-	e7, _, _ := types.Parse128("177777")
-	e8, _, _ := types.Parse128("37777777777")
-	e9, _, _ := types.Parse128("1777777777777777777777")
+	e1, _, _ := types.ParseDecimal128FromString("14")
+	e2, _, _ := types.ParseDecimal128FromString("143")
+	e3, _, _ := types.ParseDecimal128FromString("144")
+	e4, _, _ := types.ParseDecimal128FromString("377")
+	e5, _, _ := types.ParseDecimal128FromString("2000")
+	e6, _, _ := types.ParseDecimal128FromString("23420")
+	e7, _, _ := types.ParseDecimal128FromString("177777")
+	e8, _, _ := types.ParseDecimal128FromString("37777777777")
+	e9, _, _ := types.ParseDecimal128FromString("1777777777777777777777")
 
 	return []tcTemp{
 		{
@@ -2035,9 +2036,9 @@ func TestOctUint64(t *testing.T) {
 }
 
 func initOctInt8TestCase() []tcTemp {
-	e1, _, _ := types.Parse128("1777777777777777777600")
-	e2, _, _ := types.Parse128("1777777777777777777777")
-	e3, _, _ := types.Parse128("177")
+	e1, _, _ := types.ParseDecimal128FromString("1777777777777777777600")
+	e2, _, _ := types.ParseDecimal128FromString("1777777777777777777777")
+	e3, _, _ := types.ParseDecimal128FromString("177")
 
 	return []tcTemp{
 		{
@@ -2066,7 +2067,7 @@ func TestOctInt8(t *testing.T) {
 }
 
 func initOctInt16TestCase() []tcTemp {
-	e1, _, _ := types.Parse128("1777777777777777700000")
+	e1, _, _ := types.ParseDecimal128FromString("1777777777777777700000")
 
 	return []tcTemp{
 		{
@@ -2095,7 +2096,7 @@ func TestOctInt16(t *testing.T) {
 }
 
 func initOctInt32TestCase() []tcTemp {
-	e1, _, _ := types.Parse128("1777777777760000000000")
+	e1, _, _ := types.ParseDecimal128FromString("1777777777760000000000")
 
 	return []tcTemp{
 		{
@@ -2124,7 +2125,7 @@ func TestOctInt32(t *testing.T) {
 }
 
 func initOctInt64TestCase() []tcTemp {
-	e1, _, _ := types.Parse128("1000000000000000000000")
+	e1, _, _ := types.ParseDecimal128FromString("1000000000000000000000")
 
 	return []tcTemp{
 		{

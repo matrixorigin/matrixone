@@ -335,7 +335,7 @@ var (
 
 	MakeScalarDecimal128ByFloat64 = func(v float64, length int, typ types.Type) *vector.Vector {
 		val := fmt.Sprintf("%f", v)
-		_, scale, err := types.Parse128(val)
+		_, scale, err := types.ParseDecimal128FromString(val)
 		typ.Scale = scale
 		if err != nil {
 			panic(err)
