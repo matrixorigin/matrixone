@@ -15,6 +15,7 @@
 package lockop
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -605,6 +606,8 @@ func TestFetchTimestampRowsWithFilter(t *testing.T) {
 }
 
 func TestFetchDecimal64Rows(t *testing.T) {
+	max := types.Decimal64(999999999999999999)
+	min := max.Minus()
 	values := []types.Decimal64{1, 0}
 	expectRangeValues := []types.Decimal64{0, 1}
 	runFetchRowsTest(
@@ -615,7 +618,7 @@ func TestFetchDecimal64Rows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[]types.Decimal64{0, math.MaxUint64},
+		[]types.Decimal64{min, max},
 		func(packer *types.Packer, v types.Decimal64) {
 			packer.EncodeDecimal64(v)
 		},
@@ -625,6 +628,8 @@ func TestFetchDecimal64Rows(t *testing.T) {
 }
 
 func TestFetchDecimal64RowsWithFilter(t *testing.T) {
+	max := types.Decimal64(999999999999999999)
+	min := max.Minus()
 	values := []types.Decimal64{1, 0, 2}
 	expectRangeValues := []types.Decimal64{0, 1}
 	runFetchRowsTest(
@@ -635,7 +640,7 @@ func TestFetchDecimal64RowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]types.Decimal64{0, math.MaxUint64},
+		[]types.Decimal64{min, max},
 		func(packer *types.Packer, v types.Decimal64) {
 			packer.EncodeDecimal64(v)
 		},
@@ -645,6 +650,8 @@ func TestFetchDecimal64RowsWithFilter(t *testing.T) {
 }
 
 func TestFetchDecimal128Rows(t *testing.T) {
+	max, _, _ := types.Parse128("99999999999999999999999999999999999999")
+	min := max.Minus()
 	values := []types.Decimal128{{B0_63: 1, B64_127: 1}, {B0_63: 0, B64_127: 0}}
 	expectRangeValues := []types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: 1, B64_127: 1}}
 	runFetchRowsTest(
@@ -655,7 +662,7 @@ func TestFetchDecimal128Rows(t *testing.T) {
 		lock.Granularity_Row,
 		values,
 		expectRangeValues,
-		[]types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: math.MaxUint64, B64_127: math.MaxUint64}},
+		[]types.Decimal128{min, max},
 		func(packer *types.Packer, v types.Decimal128) {
 			packer.EncodeDecimal128(v)
 		},
@@ -665,6 +672,8 @@ func TestFetchDecimal128Rows(t *testing.T) {
 }
 
 func TestFetchDecimal128RowsWithFilter(t *testing.T) {
+	max, _, _ := types.Parse128("99999999999999999999999999999999999999")
+	min := max.Minus()
 	values := []types.Decimal128{{B0_63: 1, B64_127: 1}, {B0_63: 0, B64_127: 0}, {B0_63: 2, B64_127: 2}}
 	expectRangeValues := []types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: 1, B64_127: 1}}
 	runFetchRowsTest(
@@ -675,7 +684,7 @@ func TestFetchDecimal128RowsWithFilter(t *testing.T) {
 		lock.Granularity_Row,
 		values[:2],
 		expectRangeValues,
-		[]types.Decimal128{{B0_63: 0, B64_127: 0}, {B0_63: math.MaxUint64, B64_127: math.MaxUint64}},
+		[]types.Decimal128{min, max},
 		func(packer *types.Packer, v types.Decimal128) {
 			packer.EncodeDecimal128(v)
 		},
@@ -931,4 +940,17 @@ func runFetchRowsTestWithAppendFunc[T any](
 	assert.Equal(t, lock.Granularity_Range, g)
 	assert.Equal(t, 2, len(rows))
 	assertFN(expectLockTableValues, rows)
+}
+
+func TestDecimal128(t *testing.T) {
+	packer := types.NewPacker(mpool.MustNew("test"))
+	decimal128Fn := func(v types.Decimal128) []byte {
+		packer.Reset()
+		packer.EncodeDecimal128(v)
+		return packer.Bytes()
+	}
+	max128, _, _ := types.Parse128("99999999999999999999999999999999999999")
+	minDecimal128 := decimal128Fn(max128.Minus())
+	maxDecimal128 := decimal128Fn(max128)
+	assert.True(t, bytes.Compare(minDecimal128, maxDecimal128) < 0)
 }
