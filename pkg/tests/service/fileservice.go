@@ -15,6 +15,7 @@
 package service
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -41,7 +42,7 @@ type fileServices struct {
 }
 
 // newFileServices constructs an instance of fileServices.
-func (c *testCluster) buildFileServices() *fileServices {
+func (c *testCluster) buildFileServices(ctx context.Context) *fileServices {
 	dnServiceNum := c.opt.initial.dnServiceNum
 	cnServiceNum := c.opt.initial.cnServiceNum
 
@@ -52,7 +53,7 @@ func (c *testCluster) buildFileServices() *fileServices {
 	}
 	if c.opt.keepData {
 		factory = func(dir string, name string) fileservice.FileService {
-			fs, err := fileservice.NewLocalFS(name, filepath.Join(dir, name), fileservice.CacheConfig{}, nil)
+			fs, err := fileservice.NewLocalFS(ctx, name, filepath.Join(dir, name), fileservice.CacheConfig{}, nil)
 			require.NoError(c.t, err)
 			return fs
 		}

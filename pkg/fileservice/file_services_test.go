@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,8 +25,9 @@ import (
 func TestFileServices(t *testing.T) {
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func(name string) FileService {
+			ctx := context.Background()
 			dir := t.TempDir()
-			fs, err := NewLocalFS(name, dir, DisabledCacheConfig, nil)
+			fs, err := NewLocalFS(ctx, name, dir, DisabledCacheConfig, nil)
 			assert.Nil(t, err)
 			fs2, err := NewFileServices(name, fs)
 			assert.Nil(t, err)
