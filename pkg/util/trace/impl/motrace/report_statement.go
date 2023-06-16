@@ -375,7 +375,7 @@ func mergeStats(e, n *StatementInfo) error {
 
 	// Ensure both arrays have the same length
 	if len(eStatsElements) != len(nStatsElements) {
-		return errors.New("arrays are of different lengths")
+		return moerr.NewInternalError(context.Background(), "statsJsonByte length mismatch")
 	}
 
 	// Parse the strings to integers and add the values together
