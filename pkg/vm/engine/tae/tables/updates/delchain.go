@@ -44,7 +44,7 @@ type DeleteChain struct {
 	*sync.RWMutex
 	*txnbase.MVCCChain[*DeleteNode]
 	mvcc      *MVCCHandle
-	links     map[uint32]*common.GenericSortedDList[*DeleteNode]
+	links     map[uint32]*DeleteNode
 	cnt       atomic.Uint32
 	mask      *nulls.Bitmap
 	persisted *nulls.Bitmap
@@ -57,7 +57,7 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 	chain := &DeleteChain{
 		RWMutex:   rwlocker,
 		MVCCChain: txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
-		links:     make(map[uint32]*common.GenericSortedDList[*DeleteNode]),
+		links:     make(map[uint32]*DeleteNode),
 		mvcc:      mvcc,
 		mask:      &nulls.Bitmap{},
 	}
@@ -160,25 +160,19 @@ func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.De
 	return node
 }
 func (chain *DeleteChain) InsertInDeleteView(row uint32, deleteNode *DeleteNode) {
-	var link *common.GenericSortedDList[*DeleteNode]
-	if link = chain.links[row]; link == nil {
-		link = common.NewGenericSortedDList((*DeleteNode).Less)
-		n := link.Insert(deleteNode)
-		deleteNode.viewNodes[row] = n
-		chain.links[row] = link
-		return
+	if chain.links[row] != nil {
+		panic(fmt.Sprintf("row %d already in delete view", row))
 	}
-	link.Insert(deleteNode)
+	chain.links[row] = deleteNode
 }
 func (chain *DeleteChain) DeleteInDeleteView(deleteNode *DeleteNode) {
 	it := deleteNode.mask.Iterator()
 	for it.HasNext() {
 		row := it.Next()
-		link := chain.links[row]
-		link.Delete(deleteNode.viewNodes[row])
-		if link.Depth() == 0 {
-			delete(chain.links, row)
+		if chain.links[row] != deleteNode {
+			panic(fmt.Sprintf("row %d not in delete view", row))
 		}
+		delete(chain.links, row)
 	}
 }
 
@@ -336,13 +330,5 @@ func (chain *DeleteChain) CollectDeletesLocked(
 }
 
 func (chain *DeleteChain) GetDeleteNodeByRow(row uint32) (n *DeleteNode) {
-	link := chain.links[row]
-	if link == nil {
-		return
-	}
-	link.Loop(func(vn *common.GenericDLNode[*DeleteNode]) bool {
-		n = vn.GetPayload()
-		return n.Aborted
-	}, false)
-	return
+	return chain.links[row]
 }
