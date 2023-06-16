@@ -2376,6 +2376,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	logutil.Debugf("cn generateNodes, tbl %d ranges is %d", tblId, expectedLen)
 
 	// If ranges == 0, dont know what type of table is this
+	//FIXME:: if len(ranges) == 0 indicates that it's a temporary table?
 	if len(ranges) == 0 && n.TableDef.TableType != catalog.SystemOrdinaryRel {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i, node := range c.cnList {
@@ -2482,6 +2483,17 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 		nodes[0].Data = append(nodes[0].Data, ranges...)
 		return nodes, nil
 	}
+	// add dirty blocks in current CN.
+	newRanges := make([][]byte, 0, len(ranges))
+	for _, blk := range ranges {
+		blkInfo := catalog.DecodeBlockInfo(blk)
+		if blkInfo.CanRemote {
+			newRanges = append(newRanges, blk)
+			continue
+		}
+		nodes[0].Data = append(nodes[0].Data, blk)
+	}
+
 	//add the rest of CNs in list
 	for i := range c.cnList {
 		if c.cnList[i].Addr != c.addr {
@@ -2497,12 +2509,12 @@ func shuffleBlocksToMultiCN(c *Compile, ranges [][]byte, rel engine.Relation, n 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Addr < nodes[j].Addr })
 
 	if n.Stats.Shuffle && n.Stats.ShuffleType == plan.ShuffleType_Range {
-		err := shuffleBlocksByRange(c, ranges, n, nodes)
+		err := shuffleBlocksByRange(c, newRanges, n, nodes)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		shuffleBlocksByHash(c, ranges, nodes)
+		shuffleBlocksByHash(c, newRanges, nodes)
 	}
 
 	minWorkLoad := math.MaxInt32
@@ -2555,6 +2567,7 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	return nil
 }
 
+// FIXME:: how to parallel scope in current CN, if return only one node?
 func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
 	//add current CN

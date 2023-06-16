@@ -1065,20 +1065,20 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		s3Options...,
 	)
 
-	// head bucket to validate
-	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
-		Bucket: ptrTo(bucket),
-	})
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
-	}
-
 	fs := &S3FS{
 		name:        name,
 		s3Client:    client,
 		bucket:      bucket,
 		keyPrefix:   prefix,
 		asyncUpdate: true,
+	}
+
+	// head bucket to validate
+	_, err = fs.s3HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: ptrTo(bucket),
+	})
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
 	}
 
 	return fs, nil
@@ -1095,6 +1095,17 @@ func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, o
 		"s3 list objects",
 		func() (*s3.ListObjectsOutput, error) {
 			return s.s3Client.ListObjects(ctx, params, optFns...)
+		},
+		maxRetryAttemps,
+		isRetryableError,
+	)
+}
+
+func (s *S3FS) s3HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	return doWithRetry(
+		"s3 head bucket",
+		func() (*s3.HeadBucketOutput, error) {
+			return s.s3Client.HeadBucket(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
 		isRetryableError,
