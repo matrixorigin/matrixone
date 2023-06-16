@@ -53,6 +53,7 @@ type DiskCache struct {
 }
 
 func NewDiskCache(
+	ctx context.Context,
 	path string,
 	capacity int64,
 	evictInterval time.Duration,
@@ -82,7 +83,7 @@ func NewDiskCache(
 		perfCounterSets: perfCounterSets,
 	}
 	ret.settingContent.m = make(map[string]chan struct{})
-	ret.triggerEvict(context.TODO(), 0)
+	ret.triggerEvict(ctx, 0)
 	return ret, nil
 }
 

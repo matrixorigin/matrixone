@@ -21,7 +21,10 @@
 
 package trace
 
-import "context"
+import (
+	"context"
+	"go.uber.org/zap"
+)
 
 type TracerProvider interface {
 	Tracer(instrumentationName string, opts ...TracerOption) Tracer
@@ -29,9 +32,9 @@ type TracerProvider interface {
 
 type Tracer interface {
 	// Start creates a span and a context.Context containing the newly-created span.
-	Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span)
+	Start(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span)
 	// Debug creates a span only with DebugMode
-	Debug(ctx context.Context, spanName string, opts ...SpanOption) (context.Context, Span)
+	Debug(ctx context.Context, spanName string, opts ...SpanStartOption) (context.Context, Span)
 	// IsEnable return true, means do record
 	IsEnable() bool
 }
@@ -42,6 +45,9 @@ type Span interface {
 	// is called. Therefore, updates to the Span are not allowed after this
 	// method has been called.
 	End(options ...SpanEndOption)
+
+	// AddExtraFields inject more details for span.
+	AddExtraFields(fields ...zap.Field)
 
 	// SpanContext returns the SpanContext of the Span. The returned SpanContext
 	// is usable even after the End method has been called for the Span.

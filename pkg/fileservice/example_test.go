@@ -23,8 +23,11 @@ import (
 )
 
 func TestCacheExample(t *testing.T) {
+	ctx := context.Background()
+
 	dir := t.TempDir()
 	fs, err := NewLocalFS(
+		ctx,
 		"rc",
 		dir,
 		CacheConfig{
@@ -33,8 +36,6 @@ func TestCacheExample(t *testing.T) {
 		nil,
 	)
 	assert.Nil(t, err)
-
-	ctx := context.Background()
 
 	// write
 	err = fs.Write(ctx, IOVector{

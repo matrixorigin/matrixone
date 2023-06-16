@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -284,10 +285,6 @@ func (t *tunnel) Close() error {
 		if t.ctxCancel != nil {
 			t.ctxCancel()
 		}
-		select {
-		case t.errC <- moerr.NewInternalErrorNoCtx("tunnel closed"):
-		default:
-		}
 		// Close the event channels.
 		close(t.reqC)
 		close(t.respC)
@@ -396,6 +393,9 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 			// The preRecv is cut off by set the connection deadline to a pastime.
 			return true, nil
 		} else if re != nil {
+			if errors.Is(re, io.EOF) {
+				return false, re
+			}
 			return false, moerr.NewInternalErrorNoCtx("preRecv message: %s, name %s", re.Error(), p.name)
 		}
 		p.mu.lastCmdTime = time.Now()

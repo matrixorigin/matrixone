@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -39,33 +39,34 @@ type compactBlockEntry struct {
 	from      handle.Block
 	to        handle.Block
 	scheduler tasks.TaskScheduler
-	deletes   *roaring.Bitmap
+	deletes   *nulls.Bitmap
 }
 
 func NewCompactBlockEntry(
 	txn txnif.AsyncTxn,
 	from, to handle.Block,
 	scheduler tasks.TaskScheduler,
-	sortIdx []uint32,
-	deletes *roaring.Bitmap) *compactBlockEntry {
+	sortIdx []int32,
+	deletes *nulls.Bitmap,
+) *compactBlockEntry {
 
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
 	if to != nil {
 		toId := to.Fingerprint()
 		offsetMapping := compute.GetOffsetMapBeforeApplyDeletes(deletes)
-		if deletes != nil && !deletes.IsEmpty() {
+		if !deletes.IsEmpty() {
 			delCnt := deletes.GetCardinality()
 			for i, idx := range sortIdx {
 				if int(idx) < len(offsetMapping) {
-					sortIdx[i] = offsetMapping[idx]
+					sortIdx[i] = int32(offsetMapping[idx])
 				} else {
-					sortIdx[i] = idx + uint32(delCnt)
+					sortIdx[i] = idx + int32(delCnt)
 				}
 			}
 		}
 		for i, idx := range sortIdx {
 			rowid := objectio.NewRowid(&toId.BlockID, uint32(i))
-			page.Train(idx, *rowid)
+			page.Train(uint32(idx), *rowid)
 		}
 		_ = scheduler.AddTransferPage(page)
 	}
@@ -110,6 +111,7 @@ func (entry *compactBlockEntry) ApplyRollback() (err error) {
 }
 func (entry *compactBlockEntry) ApplyCommit() (err error) {
 	_ = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().TryUpgrade()
+	entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().GCInMemeoryDeletesByTS(entry.txn.GetCommitTS())
 	return
 }
 

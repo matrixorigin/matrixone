@@ -49,10 +49,7 @@ func TestCreate(t *testing.T) {
 			assert.Equal(t, 1, len(s.mu.creates[string(op.Txn().ID)]))
 			assert.Equal(t, 2, len(s.mu.tables[0].columns()))
 			s.mu.Unlock()
-
-			s.store.(*memStore).Lock()
-			assert.Equal(t, 2, len(s.store.(*memStore).caches[0]))
-			s.store.(*memStore).Unlock()
+			checkStoreCachesUncommitted(t, s.store.(*memStore), op, 2)
 
 			require.NoError(t, op.Commit(ctx))
 			s.mu.Lock()
@@ -60,10 +57,7 @@ func TestCreate(t *testing.T) {
 			assert.Equal(t, 0, len(s.mu.creates))
 			assert.Equal(t, 0, len(s.mu.deletes))
 			s.mu.Unlock()
-
-			s.store.(*memStore).Lock()
-			assert.Equal(t, 2, len(s.store.(*memStore).caches[0]))
-			s.store.(*memStore).Unlock()
+			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 		})
 }
 
@@ -112,23 +106,20 @@ func TestCreateWithTxnAborted(t *testing.T) {
 			assert.Equal(t, 1, len(s.mu.creates[string(op.Txn().ID)]))
 			assert.Equal(t, 2, len(s.mu.tables[0].columns()))
 			s.mu.Unlock()
-
-			s.store.(*memStore).Lock()
-			assert.Equal(t, 2, len(s.store.(*memStore).caches[0]))
-			s.store.(*memStore).Unlock()
+			checkStoreCachesUncommitted(t, s.store.(*memStore), op, 2)
 
 			require.NoError(t, op.Rollback(ctx))
 			s.mu.Lock()
 			assert.Equal(t, 0, len(s.mu.creates))
 			assert.Equal(t, 0, len(s.mu.deletes))
 			s.mu.Unlock()
-
-			waitStoreCachesCount(t, ctx, s.store.(*memStore), 0)
+			checkStoreCachesCommitted(t, s.store.(*memStore), 0)
 			assert.Equal(t, 0, len(s.mu.tables))
 		})
 }
 
 func TestDelete(t *testing.T) {
+	lazyDeleteInterval = time.Millisecond * 10
 	runServiceTests(
 		t,
 		2,
@@ -142,17 +133,18 @@ func TestDelete(t *testing.T) {
 			def := newTestTableDef(2)
 			require.NoError(t, s.Create(ctx, 0, def, op))
 			require.NoError(t, op.Commit(ctx))
-			waitStoreCachesCount(t, ctx, s.store.(*memStore), 2)
+			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 
 			s2 := ss[1]
 			op2 := ops[1]
 			require.NoError(t, s.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
-			waitStoreCachesCount(t, ctx, s2.store.(*memStore), 0)
+			waitStoreCachesCommitted(t, s2.store.(*memStore), 0)
 		})
 }
 
 func TestDeleteWithTxnAborted(t *testing.T) {
+	lazyDeleteInterval = time.Millisecond * 10
 	runServiceTests(
 		t,
 		2,
@@ -166,17 +158,17 @@ func TestDeleteWithTxnAborted(t *testing.T) {
 			def := newTestTableDef(2)
 			require.NoError(t, s.Create(ctx, 0, def, op))
 			require.NoError(t, op.Commit(ctx))
-
-			waitStoreCachesCount(t, ctx, s.store.(*memStore), 2)
+			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 
 			op2 := ops[1]
 			require.NoError(t, s.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Rollback(ctx))
-			assert.Equal(t, 0, len(s.deleteC))
+			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 		})
 }
 
 func TestDeleteOnOtherService(t *testing.T) {
+	lazyDeleteInterval = time.Millisecond * 10
 	runServiceTests(
 		t,
 		2,
@@ -190,13 +182,13 @@ func TestDeleteOnOtherService(t *testing.T) {
 			def := newTestTableDef(2)
 			require.NoError(t, s.Create(ctx, 0, def, op))
 			require.NoError(t, op.Commit(ctx))
-			waitStoreCachesCount(t, ctx, s.store.(*memStore), 2)
+			checkStoreCachesCommitted(t, s.store.(*memStore), 2)
 
 			s2 := ss[1]
 			op2 := ops[1]
 			require.NoError(t, s2.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
-			waitStoreCachesCount(t, ctx, s2.store.(*memStore), 0)
+			waitStoreCachesCommitted(t, s2.store.(*memStore), 0)
 		})
 }
 
@@ -244,22 +236,36 @@ func newTestTableDef(autoCols int) []AutoColumn {
 	return cols
 }
 
-func waitStoreCachesCount(
+func waitStoreCachesCommitted(
 	t *testing.T,
-	ctx context.Context,
 	store *memStore,
 	n int) {
 	for {
-		select {
-		case <-ctx.Done():
-			t.Fail()
-		default:
-			store.Lock()
-			if len(store.caches[0]) == n {
-				store.Unlock()
-				return
-			}
+		store.Lock()
+		if len(store.caches[0]) == n {
 			store.Unlock()
+			return
 		}
+		store.Unlock()
+		time.Sleep(time.Millisecond * 10)
 	}
+}
+
+func checkStoreCachesCommitted(
+	t *testing.T,
+	store *memStore,
+	n int) {
+	store.Lock()
+	defer store.Unlock()
+	require.Equal(t, n, len(store.caches[0]))
+}
+
+func checkStoreCachesUncommitted(
+	t *testing.T,
+	store *memStore,
+	txnOp client.TxnOperator,
+	n int) {
+	store.Lock()
+	defer store.Unlock()
+	require.Equal(t, n, len(store.uncommitted[string(txnOp.Txn().ID)][0]))
 }

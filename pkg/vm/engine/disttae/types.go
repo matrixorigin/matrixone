@@ -271,6 +271,14 @@ func (txn *Transaction) resetSnapshot() error {
 	return nil
 }
 
+// DeleteTable implements the client.Workspace interface.
+func (txn *Transaction) DeleteTable(ctx context.Context, dbID uint64, tableName string) {
+	k := genTableKey(ctx, tableName, dbID)
+	if _, ok := txn.tableMap.Load(k); ok {
+		txn.tableMap.Delete(k)
+	}
+}
+
 // Entry represents a delete/insert
 type Entry struct {
 	typ          int
@@ -331,12 +339,12 @@ type txnTable struct {
 	dnList    []int
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
-	defs           []engine.TableDef
-	tableDef       *plan.TableDef
-	seqnums        []uint16
-	typs           []types.Type
-	_partState     *logtailreplay.PartitionState
-	modifiedBlocks []ModifyBlockMeta
+	defs       []engine.TableDef
+	tableDef   *plan.TableDef
+	seqnums    []uint16
+	typs       []types.Type
+	_partState *logtailreplay.PartitionState
+	dirtyBlks  []catalog.BlockInfo
 
 	// blockInfos stores all the block infos for this table of this transaction
 	// it is only generated when the table is not created by this transaction
@@ -443,8 +451,9 @@ type blockReader struct {
 type blockMergeReader struct {
 	withFilterMixin
 
-	table *txnTable
-	blks  []ModifyBlockMeta
+	table  *txnTable
+	blks   []catalog.BlockInfo
+	buffer []int64
 }
 
 type mergeReader struct {
@@ -454,10 +463,10 @@ type mergeReader struct {
 type emptyReader struct {
 }
 
-type ModifyBlockMeta struct {
-	meta    catalog.BlockInfo
-	deletes []int64
-}
+//type ModifyBlockMeta struct {
+//	meta    catalog.BlockInfo
+//	deletes []int64
+//}
 
 type pkRange struct {
 	isRange bool

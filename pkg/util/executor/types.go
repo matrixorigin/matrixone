@@ -29,23 +29,24 @@ import (
 type SQLExecutor interface {
 	// Exec exec a sql in a exists txn.
 	Exec(ctx context.Context, sql string, opts Options) (Result, error)
-	// ExecTxn executor sqls in a txn. execFunc can use TxnExecutor to exec multiple sqls
+	// ExecTxn executor sql in a txn. execFunc can use TxnExecutor to exec multiple sql
 	// in a transaction.
 	ExecTxn(ctx context.Context, execFunc func(TxnExecutor) error, opts Options) error
 }
 
-// TxnExecutor exec all sqls in a transaction.
+// TxnExecutor exec all sql in a transaction.
 type TxnExecutor interface {
 	Exec(sql string) (Result, error)
 }
 
 // Options execute options.
 type Options struct {
-	txnOp          client.TxnOperator
-	database       string
-	accoundID      uint32
-	minCommittedTS timestamp.Timestamp
-	innerTxn       bool
+	txnOp                   client.TxnOperator
+	database                string
+	accountID               uint32
+	minCommittedTS          timestamp.Timestamp
+	innerTxn                bool
+	waitCommittedLogApplied bool
 }
 
 // Result exec sql result

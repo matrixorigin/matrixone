@@ -202,6 +202,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 	}
 	if isWinOrder {
 		vec.SetNulls(nil)
+		// w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	}
 	ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 	if vec != nil {
@@ -280,7 +281,7 @@ func (ctr *container) buildInterval(rowIdx, vecIdx int, frame *plan.FrameClause,
 
 func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int) {
 	if frame.Start.Type == plan.FrameBound_CURRENT_ROW {
-		return rowIdx, rowIdx + 1
+		start = rowIdx
 	}
 
 	// FrameBound_PRECEDING
@@ -474,6 +475,14 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 	if err := bat.Shuffle(sels, proc.Mp()); err != nil {
 		panic(err)
 	}
+
+	// shuffle agg vector
+	if ctr.aggVecs[idx].vec != nil && ctr.aggVecs[idx].executor.IfResultMemoryReuse() {
+		if err := ctr.aggVecs[idx].vec.Shuffle(sels, proc.Mp()); err != nil {
+			panic(err)
+		}
+	}
+
 	return false, nil
 }
 

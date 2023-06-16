@@ -49,10 +49,11 @@ func TestCalculateStorageUsage(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// initialize cluster
 	opt := service.DefaultOptions()
-	c, err := service.NewCluster(t, opt.WithLogLevel(zap.ErrorLevel))
+	c, err := service.NewCluster(ctx, t, opt.WithLogLevel(zap.ErrorLevel))
 	require.NoError(t, err)
 	// close the cluster
 	defer func(c service.Cluster) {

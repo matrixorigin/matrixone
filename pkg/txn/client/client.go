@@ -163,7 +163,7 @@ func (client *txnClient) New(
 	ctx context.Context,
 	minTS timestamp.Timestamp,
 	options ...TxnOption) (TxnOperator, error) {
-	ts, err := client.determineTxnSnapshot(ctx, minTS)
+	epoch, ts, err := client.determineTxnSnapshot(ctx, minTS)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +184,7 @@ func (client *txnClient) New(
 		txnMeta,
 		options...)
 	op.timestampWaiter = client.timestampWaiter
+	op.mu.epoch = epoch
 	op.AppendEventCallback(ClosedEvent,
 		client.updateLastCommitTS,
 		client.popTransaction)
@@ -240,7 +241,7 @@ func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
 // timestamp for all things is ts+1.
 func (client *txnClient) determineTxnSnapshot(
 	ctx context.Context,
-	minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
+	minTS timestamp.Timestamp) (uint64, timestamp.Timestamp, error) {
 	// always use the current ts as txn's snapshot ts is enableSacrificingFreshness
 	if !client.enableSacrificingFreshness {
 		// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
@@ -253,17 +254,17 @@ func (client *txnClient) determineTxnSnapshot(
 	}
 
 	if client.timestampWaiter == nil {
-		return minTS, nil
+		return 0, minTS, nil
 	}
 
-	ts, err := client.timestampWaiter.GetTimestamp(ctx, minTS)
+	epoch, ts, err := client.timestampWaiter.GetTimestamp(ctx, minTS)
 	if err != nil {
-		return ts, err
+		return 0, ts, err
 	}
 	util.LogTxnSnapshotTimestamp(
 		minTS,
 		ts)
-	return ts, nil
+	return epoch, ts, nil
 }
 
 func (client *txnClient) adjustTimestamp(ts timestamp.Timestamp) timestamp.Timestamp {
@@ -284,7 +285,7 @@ func (client *txnClient) SetLatestCommitTS(ts timestamp.Timestamp) {
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()
-		_, err := client.timestampWaiter.GetTimestamp(ctx, ts)
+		_, _, err := client.timestampWaiter.GetTimestamp(ctx, ts)
 		if err != nil {
 			util.GetLogger().Fatal("wait latest commit ts failed", zap.Error(err))
 		}

@@ -16,10 +16,11 @@ package txnimpl
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -90,6 +91,8 @@ func newStore(
 		wg:            sync.WaitGroup{},
 	}
 }
+
+func (store *txnStore) GetContext() context.Context { return store.ctx }
 
 func (store *txnStore) IsReadonly() bool {
 	return store.writeOps.Load() == 0
@@ -181,6 +184,7 @@ func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *contai
 }
 
 func (store *txnStore) AddBlksWithMetaLoc(
+	ctx context.Context,
 	dbId, tid uint64,
 	metaLoc []objectio.Location,
 ) error {
@@ -189,10 +193,12 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(tid, metaLoc)
+	return db.AddBlksWithMetaLoc(ctx, tid, metaLoc)
 }
 
-func (store *txnStore) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) (err error) {
+func (store *txnStore) RangeDelete(
+	id *common.ID, start, end uint32, dt handle.DeleteType,
+) (err error) {
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
@@ -201,6 +207,7 @@ func (store *txnStore) RangeDelete(id *common.ID, start, end uint32, dt handle.D
 }
 
 func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
+	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
@@ -212,6 +219,7 @@ func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (
 }
 
 func (store *txnStore) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
+	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
@@ -222,7 +230,7 @@ func (store *txnStore) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location)
 	return db.UpdateDeltaLoc(id, deltaLoc)
 }
 
-func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
+func (store *txnStore) GetByFilter(ctx context.Context, dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return
@@ -231,7 +239,7 @@ func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id 
 	// 	err = txnbase.ErrNotFound
 	// 	return
 	// }
-	return db.GetByFilter(tid, filter)
+	return db.GetByFilter(ctx, tid, filter)
 }
 
 func (store *txnStore) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, isNull bool, err error) {
@@ -360,7 +368,7 @@ func (store *txnStore) ObserveTxn(
 	visitMetadata func(block any),
 	visitSegment func(seg any),
 	visitAppend func(bat any),
-	visitDelete func(vnode txnif.DeleteNode)) {
+	visitDelete func(ctx context.Context, vnode txnif.DeleteNode)) {
 	for _, db := range store.dbs {
 		if db.createEntry != nil || db.dropEntry != nil {
 			visitDatabase(db.entry)
@@ -381,7 +389,7 @@ func (store *txnStore) ObserveTxn(
 				case *catalog.BlockEntry:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
-					visitDelete(txnEntry)
+					visitDelete(store.ctx, txnEntry)
 				case *catalog.TableEntry:
 					if tbl.createEntry != nil || tbl.dropEntry != nil {
 						continue
@@ -598,13 +606,13 @@ func (store *txnStore) ApplyRollback() (err error) {
 	return
 }
 
-func (store *txnStore) WaitPrepared() (err error) {
+func (store *txnStore) WaitPrepared(ctx context.Context) (err error) {
 	for _, db := range store.dbs {
 		if err = db.WaitPrepared(); err != nil {
 			return
 		}
 	}
-	trace.WithRegion(context.Background(), "Wait for WAL to be flushed", func() {
+	trace.WithRegion(ctx, "Wait for WAL to be flushed", func() {
 		for _, e := range store.logs {
 			if err = e.WaitDone(); err != nil {
 				break
@@ -626,7 +634,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 	return
 }
 
-func (store *txnStore) PrePrepare() (err error) {
+func (store *txnStore) Freeze() (err error) {
 	for _, db := range store.dbs {
 		if db.NeedRollback() {
 			if err = db.PrepareRollback(); err != nil {
@@ -634,7 +642,16 @@ func (store *txnStore) PrePrepare() (err error) {
 			}
 			delete(store.dbs, db.entry.GetID())
 		}
-		if err = db.PrePrepare(); err != nil {
+		if err = db.Freeze(); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
+	for _, db := range store.dbs {
+		if err = db.PrePrepare(ctx); err != nil {
 			return
 		}
 	}
