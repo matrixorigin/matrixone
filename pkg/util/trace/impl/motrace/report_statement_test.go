@@ -277,20 +277,21 @@ func TestGetStatsValues(t *testing.T) {
 		"totalStats":{"name":"Time spent","value":95834,"unit":"ns"}
 	}`)
 
-	res, err := getStatsValues(jsonData)
+	res, err := getStatsValues(jsonData, 2)
 	if err != nil {
 		t.Fatalf("Error getting stats values: %v", err)
 	}
 
 	assert.Equal(t, 5, len(res), "Expected 5 stats values")
 
-	assert.Equal(t, 1, res[0], "version should be 1")
+	assert.Equal(t, uint64(1), res[0], "version should be 1")
 
 	if res[1] != 95834 {
 		t.Errorf("Expected timeConsumed to be 95834, got %d", res[1])
 	}
 
-	if res[2] != 69 {
+	// multiple of 2, duration
+	if res[2] != 138 {
 		t.Errorf("Expected memorySize to be 69, got %d", res[2])
 	}
 

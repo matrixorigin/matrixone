@@ -305,7 +305,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
 }
 
-func getStatsValues(jsonData []byte) ([]int, error) {
+func getStatsValues(jsonData []byte, duration uint64) ([]uint64, error) {
 	type Statistic struct {
 		Name  string `json:"name"`
 		Value int    `json:"value"`
@@ -330,34 +330,34 @@ func getStatsValues(jsonData []byte) ([]int, error) {
 		return nil, err
 	}
 
-	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount int
+	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount uint64
 
 	for _, stat := range stats.Statistics.Time {
 		if stat.Name == "Time Consumed" {
-			timeConsumed = stat.Value
+			timeConsumed = uint64(stat.Value)
 			break
 		}
 	}
 
 	for _, stat := range stats.Statistics.Memory {
 		if stat.Name == "Memory Size" {
-			memorySize = stat.Value
+			memorySize = uint64(stat.Value)
 			break
 		}
 	}
 
 	for _, stat := range stats.Statistics.IO {
 		if stat.Name == "S3 IO Input Count" {
-			s3IOInputCount = stat.Value
+			s3IOInputCount = uint64(stat.Value)
 		} else if stat.Name == "S3 IO Output Count" {
-			s3IOOutputCount = stat.Value
+			s3IOOutputCount = uint64(stat.Value)
 		}
 	}
-	statsValues := make([]int, 5)
+	statsValues := make([]uint64, 5)
 	statsValues[0] = 1 // this is the version number
 
 	statsValues[1] = timeConsumed
-	statsValues[2] = memorySize
+	statsValues[2] = memorySize * duration
 	statsValues[3] = s3IOInputCount
 	statsValues[4] = s3IOOutputCount
 
@@ -426,7 +426,7 @@ func (s *StatementInfo) ExecPlan2Json(ctx context.Context) ([]byte, []byte) {
 	} else {
 		// Convert statsJsonByte to four key values array
 		var err error
-		statsValues, err := getStatsValues(s.statsJsonByte)
+		statsValues, err := getStatsValues(s.statsJsonByte, uint64(s.Duration))
 		if err != nil {
 			return nil, nil
 		}
