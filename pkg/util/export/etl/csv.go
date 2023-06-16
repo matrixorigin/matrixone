@@ -28,23 +28,54 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
-const initedSize = mpool.MB
+const initedSize = 4 * mpool.MB
+
+var bufPool = sync.Pool{New: func() any {
+	return bytes.NewBuffer(make([]byte, 0, initedSize))
+}}
+
+func getBuffer() *bytes.Buffer {
+	return bufPool.Get().(*bytes.Buffer)
+}
+
+func putBuffer(buf *bytes.Buffer) {
+	if buf != nil {
+		buf.Reset()
+		bufPool.Put(buf)
+	}
+}
 
 var _ table.RowWriter = (*CSVWriter)(nil)
 
 type CSVWriter struct {
 	ctx    context.Context
-	buf    *bytes.Buffer
 	writer io.StringWriter
+
+	buf       *bytes.Buffer
+	formatter *csv.Writer
 }
 
 func NewCSVWriter(ctx context.Context, writer io.StringWriter) *CSVWriter {
 	w := &CSVWriter{
-		ctx:    ctx,
-		buf:    bytes.NewBuffer(make([]byte, 0, initedSize)),
-		writer: writer,
+		ctx:       ctx,
+		writer:    writer,
+		buf:       nil,
+		formatter: nil,
 	}
 	return w
+}
+
+func (w *CSVWriter) initBuffer() {
+	if w.buf == nil {
+		w.buf = getBuffer()
+		w.formatter = csv.NewWriter(w.buf)
+	}
+}
+func (w *CSVWriter) releaseBuffer() {
+	if w.buf != nil {
+		w.formatter = nil
+		putBuffer(w.buf)
+	}
 }
 
 func (w *CSVWriter) WriteRow(row *table.Row) error {
@@ -52,12 +83,12 @@ func (w *CSVWriter) WriteRow(row *table.Row) error {
 }
 
 func (w *CSVWriter) WriteStrings(record []string) error {
-	writer := csv.NewWriter(w.buf)
-	err := writer.Write(record)
+	w.initBuffer()
+	defer w.formatter.Flush()
+	err := w.formatter.Write(record)
 	if err != nil {
 		return moerr.ConvertGoError(w.ctx, err)
 	}
-	writer.Flush()
 	return nil
 }
 
@@ -66,7 +97,8 @@ func (w *CSVWriter) GetContent() string {
 }
 
 func (w *CSVWriter) FlushAndClose() (int, error) {
-	if len(w.buf.String()) == 0 {
+	defer w.releaseBuffer()
+	if w.buf == nil || w.buf.Len() == 0 {
 		return 0, nil
 	}
 	n, err := w.writer.WriteString(util.UnsafeBytesToString(w.buf.Bytes()))
