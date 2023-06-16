@@ -161,7 +161,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	done := make(chan error)
+	done := make(chan error, 1)
 	go bulkInsert(ctx, done, dbConn, records, tbl, MaxInsertLen)
 
 	select {
