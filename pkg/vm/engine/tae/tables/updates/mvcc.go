@@ -33,14 +33,12 @@ import (
 
 type MVCCHandle struct {
 	*sync.RWMutex
-	deletes atomic.Pointer[DeleteChain]
-	// deletes         *DeleteChain
+	deletes         *DeleteChain
 	meta            *catalog.BlockEntry
 	appends         *txnbase.MVCCSlice[*AppendNode]
 	changes         atomic.Uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
 	appendListener  func(txnif.AppendNode) error
-	persistedTS     types.TS
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -49,7 +47,7 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 		meta:    meta,
 		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
 	}
-	node.deletes.Store(NewDeleteChain(nil, node))
+	node.deletes = NewDeleteChain(nil, node)
 	if meta == nil {
 		return node
 	}
@@ -65,8 +63,8 @@ func (n *MVCCHandle) GetEntry() *catalog.BlockEntry { return n.meta }
 
 func (n *MVCCHandle) StringLocked() string {
 	s := ""
-	if n.deletes.Load().DepthLocked() > 0 {
-		s = fmt.Sprintf("%s%s", s, n.deletes.Load().StringLocked())
+	if n.deletes.DepthLocked() > 0 {
+		s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
 	}
 	s = fmt.Sprintf("%s\n%s", s, n.appends.StringLocked())
 	return s
@@ -75,23 +73,6 @@ func (n *MVCCHandle) StringLocked() string {
 // ==========================================================
 // *************** All deletes related APIs *****************
 // ==========================================================
-
-func (n *MVCCHandle) GetDeletesPersistedTS() types.TS {
-	return n.persistedTS
-}
-
-func (n *MVCCHandle) UpgradeDeleteChainByTS(flushed types.TS) {
-	n.Lock()
-	if n.persistedTS.Equal(flushed) {
-		n.Unlock()
-		return
-	}
-	newDeletes := n.deletes.Load().shrinkDeleteChainByTS(flushed)
-
-	n.deletes.Store(newDeletes)
-	n.persistedTS = flushed
-	n.Unlock()
-}
 
 func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, types.TS) error) {
 	n.deletesListener = l
@@ -110,41 +91,43 @@ func (n *MVCCHandle) GetChangeNodeCnt() uint32 {
 }
 
 func (n *MVCCHandle) GetDeleteCnt() uint32 {
-	return n.deletes.Load().GetDeleteCnt()
+	return n.deletes.GetDeleteCnt()
 }
 
 // it checks whether there is any delete in the range [start, end)
 // ts is not used for now
 func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts types.TS) error {
-	return n.deletes.Load().PrepareRangeDelete(start, end, ts)
+	return n.deletes.PrepareRangeDelete(start, end, ts)
 }
 
 func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
-	return n.deletes.Load().AddNodeLocked(txn, deleteType)
+	return n.deletes.AddNodeLocked(txn, deleteType)
 }
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
-	n.deletes.Load().OnReplayNode(deleteNode.(*DeleteNode))
+	n.deletes.OnReplayNode(deleteNode.(*DeleteNode))
 }
 
 func (n *MVCCHandle) GetDeleteChain() *DeleteChain {
-	return n.deletes.Load()
+	return n.deletes
 }
 
 func (n *MVCCHandle) IsDeletedLocked(
 	row uint32, txn txnif.TxnReader, rwlocker *sync.RWMutex,
 ) (bool, error) {
-	return n.deletes.Load().IsDeleted(row, txn, rwlocker)
+	return n.deletes.IsDeleted(row, txn, rwlocker)
 }
 
 // it collects all deletes in the range [start, end)
-func (n *MVCCHandle) CollectDeleteLocked(
+func (n *MVCCHandle) CollectDelete(
 	start, end types.TS,
 ) (
 	rowIDVec, commitTSVec, abortVec containers.Vector,
 	aborts, deletes *nulls.Bitmap,
 ) {
-	if n.deletes.Load().IsEmpty() {
+	n.RLock()
+	defer n.RUnlock()
+	if n.deletes.IsEmpty() {
 		return
 	}
 	if !n.ExistDeleteInRange(start, end) {
@@ -157,7 +140,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 	aborts = &nulls.Bitmap{}
 	id := n.meta.ID
 
-	n.deletes.Load().LoopChain(
+	n.deletes.LoopChain(
 		func(node *DeleteNode) bool {
 			needWait, txn := node.NeedWaitCommitting(end.Next())
 			if needWait {
@@ -194,7 +177,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 // ExistDeleteInRange check if there is any delete in the range [start, end]
 // it loops the delete chain and check if there is any delete node in the range
 func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
-	n.deletes.Load().LoopChain(
+	n.deletes.LoopChain(
 		func(node *DeleteNode) bool {
 			needWait, txn := node.NeedWaitCommitting(end.Next())
 			if needWait {
@@ -213,7 +196,7 @@ func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
 }
 
 func (n *MVCCHandle) GetDeleteNodeByRow(row uint32) (an *DeleteNode) {
-	return n.deletes.Load().GetDeleteNodeByRow(row)
+	return n.deletes.GetDeleteNodeByRow(row)
 }
 
 // ==========================================================
@@ -300,7 +283,7 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 	if an == nil {
 		return 0
 	}
-	return an.maxRow - n.deletes.Load().cnt.Load()
+	return an.maxRow - n.deletes.cnt.Load()
 }
 
 // it is used to get the visible max row for a txn
