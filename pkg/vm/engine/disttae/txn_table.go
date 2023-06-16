@@ -881,21 +881,22 @@ func (tbl *txnTable) getTableDef() *plan.TableDef {
 			Name2ColIndex: name2index,
 		}
 		tbl.tableDef.Version = tbl.version
-	}
-	// add Constraint
-	if len(tbl.constraint) != 0 {
-		c := new(engine.ConstraintDef)
-		err := c.UnmarshalBinary(tbl.constraint)
-		if err != nil {
-			return nil
-		}
-		for _, ct := range c.Cts {
-			switch k := ct.(type) {
-			case *engine.PrimaryKeyDef:
-				tbl.tableDef.Pkey = k.Pkey
+		// add Constraint
+		if len(tbl.constraint) != 0 {
+			c := new(engine.ConstraintDef)
+			err := c.UnmarshalBinary(tbl.constraint)
+			if err != nil {
+				return nil
+			}
+			for _, ct := range c.Cts {
+				switch k := ct.(type) {
+				case *engine.PrimaryKeyDef:
+					tbl.tableDef.Pkey = k.Pkey
+				}
 			}
 		}
 	}
+
 	return tbl.tableDef
 }
 

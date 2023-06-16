@@ -75,30 +75,7 @@ col1    col2    col3
 select * from `%!%p7%!%p_table_04`;
 col1    col2    col3
 create table p_table_05(col1 int,col2 char(25),col3 decimal(4,2),unique key k2(col2))partition by key()partitions 6;
-insert into p_table_05 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',62.9),(6,'io',88.92);
-Duplicate entry 'mod' for key '__mo_index_idx_col'
-insert into p_table_05 values (1,'mod',78.9),(2,'proto',0.34),(3,'rep',6.5),(4,'test',9.0),(5,'',62.9),(6,'io',88.92);
-select * from `%!%p0%!%p_table_05`;
-col1    col2    col3
-1    mod    78.90
-3    rep    6.50
-select * from `%!%p5%!%p_table_05`;
-col1    col2    col3
-5        62.90
-6    io    88.92
-select * from `%!%p4%!%p_table_05`;
-col1    col2    col3
-select * from `%!%p3%!%p_table_05`;
-col1    col2    col3
-2    proto    0.34
-4    test    9.00
-select * from `%!%p1%!%p_table_05`;
-col1    col2    col3
-select * from `%!%p2%!%p_table_05`;
-col1    col2    col3
-show create table p_table_05;
-Table    Create Table
-p_table_05    CREATE TABLE `p_table_05` (\n`col1` INT DEFAULT NULL,\n`col2` CHAR(25) DEFAULT NULL,\n`col3` DECIMAL(4,2) DEFAULT NULL,\nUNIQUE KEY `k2` (`col2`)\n) partition by key algorithm = 2 (col2) partitions 6
+invalid input: Field in list of fields for partition function not found in table
 create table p_table_06(col1 int,col2 char(25),col3 decimal(6,3),unique key k2(col1,col2))partition by key(col2)partitions 4;
 insert into p_table_06 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
 select * from `%!%p0%!%p_table_06`;
@@ -1156,31 +1133,31 @@ invalid input: partition key is not part of unique key
 create table p_hash_table_03(col1 bigint ,col2 date default '1970-01-01',col3 varchar(30))partition by hash(year(col3)) partitions 8;
 
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(col3) partitions 2;
-SQL syntax error: type DECIMAL64 not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 blob)partition by hash(col3) partitions 2;
-SQL syntax error: type BLOB not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30))partition by hash(col2) partitions 2;
-SQL syntax error: type VARCHAR not allowed in partition clause
+Field 'col2' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 json)partition by hash(col3) partitions 2;
-SQL syntax error: type JSON not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 Binary)partition by hash(col3) partitions 2;
-SQL syntax error: type BINARY not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 varbinary(25))partition by hash(col3) partitions 2;
-SQL syntax error: type VARBINARY not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 date)partition by hash(col3) partitions 2;
-SQL syntax error: type DATE not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 datetime)partition by hash(col3) partitions 2;
-SQL syntax error: type DATETIME not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 timestamp)partition by hash(col3) partitions 2;
-SQL syntax error: type TIMESTAMP not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 varchar(25))partition by hash(col3) partitions 2;
-SQL syntax error: type VARCHAR not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 char(25))partition by hash(col3) partitions 2;
-SQL syntax error: type CHAR not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_06(col1 tinyint,col2 varchar(30),col3 bool)partition by hash(col3) partitions 2;
-SQL syntax error: type BOOL not allowed in partition clause
+Field 'col3' is of a not allowed type for this type of partitioning
 create table p_hash_table_08(col1 tinyint,col2 varchar(30),col3 decimal(6,3))partition by hash(col1*100/3)partitions 2;
-invalid input: operator / is not allowed in the partition expression
+This partition function is not allowed
 create table p_hash_table_09(col1 bigint auto_increment,col2 varchar(30),col3 date default '1970-01-01',col4 int,unique key k1(col1,col2))partition by hash(col1) partitions 4;
 start transaction ;
 insert into p_hash_table_09 values (-120,'78',NULL,90),(84,'334','2021-01-01',34),(20,'55','2021-01-01',72),(-120,'45',NULL,99),(84,'3','2022-11-01',34),(200,'55','2021-08-11',72);
