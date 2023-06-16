@@ -4242,7 +4242,7 @@ func TestCollectDelete(t *testing.T) {
 	assert.Equal(t, 5, view.DeleteMask.GetCardinality())
 
 	blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
 	assert.NoError(t, err)
 	writer.SetPrimaryKey(3)
 	writer.WriteBatch(containers.ToCNBatch(batch))
@@ -7332,7 +7332,7 @@ func TestGCInMemeoryDeletesByTS(t *testing.T) {
 				}
 
 				blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), uint16(i))
-				writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+				writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
 				assert.NoError(t, err)
 				writer.SetPrimaryKey(3)
 				writer.WriteBatch(containers.ToCNBatch(batch))
