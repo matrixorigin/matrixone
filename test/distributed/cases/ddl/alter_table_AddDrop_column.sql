@@ -17,11 +17,18 @@ create table add01 (
 insert into add01 values(1,'数据库','shujuku','abcd',1);
 insert into add01 values(2,'database','云原生','tb',2);
 select * from add01;
-alter table add01 add column col2_3 varchar(20) not null after col2;
+alter table add01 add column col2_3 varchar(20) after col2;
 alter table add01 add column col7 varchar(30) not null after col5;
 alter table add01 add column col8 int not null;
 alter table add01 add column col9 int not null first;
+show create table add01;
 insert into add01 values(1,3,'nihao','hei','hu','jj',2,'varchar',1);
+
+-- @bvt:issue#8740
+insert into add01 values(2,3,'nihao',null,'hu','jj',2,'varchar',1);
+insert into add01 values(3,4,'nihao','hi','hu','jj',2,'varchar',null);
+-- @bvt:issue
+
 show create table add01;
 select * from add01;
 drop table add01;
@@ -92,6 +99,38 @@ insert into drop01 values(2);
 alter table drop01 drop column col1;
 drop table drop01;
 
+-- add/drop columns multi times
+drop table if exists drop02;
+create table drop02(col1 int);
+insert into drop02 values(1);
+insert into drop02 values(2);
+alter table drop02 add column col2 decimal(20,10);
+alter table drop02 add column col3 char;
+alter table drop02 add column col4 int unsigned;
+select * from drop02;
+alter table drop02 drop column col2;
+alter table drop02 drop column col3;
+alter table drop02 drop column col4;
+alter table drop02 drop column col1;
+drop table drop02;
+
+-- alter table after truncate table
+drop table if exists truncate01;
+create table truncate01(col1 int,col2 decimal);
+insert into truncate01 values(1,8934245);
+insert into truncate01 values(2,-1924);
+insert into truncate01 values(3,18294234);
+truncate truncate01;
+show create table truncate01;
+select * from truncate01;
+alter table truncate01 add column col3 int unsigned after col1 ;
+alter table truncate01 add column colF binary first;
+show create table truncate01;
+alter table truncate01 drop column col3;
+alter table truncate01 drop column col1;
+show create table truncate01;
+drop table truncate01;
+
 -- drop column: primary key
 drop table if exists T1;
 create table t1(id int PRIMARY KEY,name VARCHAR(255),age int);
@@ -125,7 +164,6 @@ create table index03(col1 int,col2 binary(10),col3 text,unique key(col2));
 alter table index03 drop column col2;
 show create table index03;
 drop table index03;
-
 
 -- cluster by
 drop table if exists cluster01;
@@ -186,6 +224,40 @@ alter table tp5 drop column col1;
 alter table tp5 add column col4 int;
 drop table tp5;
 
+-- permission
+drop role if exists role_r1;
+drop user if exists role_u1;
+create role role_r1;
+create user role_u1 identified by '111' default role role_r1;
+drop table if exists test01(col1 int);
+insert into test01 values(1);
+insert into test01 values(2);
+grant create database on account * to role_r1;
+grant show databases on account * to role_r1;
+grant connect on account * to role_r1;
+grant select on table * to role_r1;
+grant show tables on database * to role_r1;
+
+-- @session:id=2&user=sys:role_u1:role_r1&password=111
+use test;
+alter table test01 add column col0 int first;
+-- @session
+grant alter table on database * to role_r1;
+
+-- @session:id=2&user=sys:role_u1:role_r1&password=111
+use test;
+alter table test01 add column col0 int first;
+alter table test01 add column col3 int unsigned after col1;
+show create table test01;
+alter table test01 drop column col3;
+alter table test01 drop column col1;
+-- @session
+create table t(a int);
+drop table test01;
+drop role role_r1;
+drop user role_u1;
+
+
 -- rename table
 -- update and delete
 drop table if exists update01;
@@ -210,14 +282,18 @@ drop table update01;
 
 -- alter table rename
 drop table if exists rename01;
+drop table if exists rename02;
 create table rename01(a int,b int);
 insert into rename01 values(1,1);
 alter table rename01 rename to rename02;
 select * from rename01;
 select * from rename02;
 insert into rename02 values(2,2);
+select * from rename02;
 update rename02 set a = 10 where a = 1;
+select * from rename02;
 delete from rename02 where a = 10;
+select * from rename02;
 create view view01 as select * from rename02;
 truncate table rename02;
 drop table rename02;
@@ -257,6 +333,11 @@ create table rename06(col1 int);
 insert into rename06 values(1),(2);
 alter table rename06 rename to '';
 drop table rename06;
+
+-- rename internal table name: have no priviledge
+alter table system.statement_info rename to statement_info01;
+alter table mo_catalog.mo_account rename to mo_account01;
+alter table mysql.procs_priv rename to `procs_priv01`;
 
 -- check if special characters work and duplicates are detected.
 drop table if exists `t+1`;
@@ -304,6 +385,28 @@ alter table test02 comment = "comment_2", comment = "comment_3";
 show create table test02;
 drop table test02;
 
+-- alter table add comment ''
+drop table if exists test03;
+create table test03(a int);
+alter table test03 comment = '';
+show create table test03;
+alter table test03 comment = "comment_2", comment = "comment_3";
+show create table test03;
+drop table test03;
+
+-- alter table add comment like Chinese, number，long characters
+drop table if exists test04;
+create table test04(a int);
+alter table test04 comment = '数据库Database！';
+show create table test04;
+alter table test04 comment = "3721  98479824309284093254324532";
+show create table test04;
+alter table test04 comment = "#$%^&*(%$R%TYGHJHUWHDIU^&W%^&WWsUIHFW&W数据库*&()()()__";
+show create table test04;
+alter table test04 comment = "47382749823409243f4oir32434",comment = "f73hjkrew473982u4f32g54jjUIHFW&W数据库*&()()()__";
+show create table test04;
+drop table test04;
+
 -- alter table and rename
 drop table if exists t1;
 create table t1 (i int unsigned not null auto_increment primary key);
@@ -315,5 +418,36 @@ show create table t1;
 alter table t1 comment = 'this is a comment';
 show create table t1;
 drop table t1;
+
+-- permission
+drop role if exists role_r1;
+drop user if exists role_u1;
+create role role_r1;
+create user role_u1 identified by '111' default role role_r1;
+drop table if exists rename01;
+create table rename01(col1 int);
+insert into rename01 values(1);
+insert into rename01 values(2);
+grant create database on account * to role_r1;
+grant show databases on account * to role_r1;
+grant connect on account * to role_r1;
+grant select on table * to role_r1;
+grant show tables on database * to role_r1;
+
+-- @session:id=2&user=sys:role_u1:role_r1&password=111
+use test;
+alter table rename01 rename to newRename;
+-- @session
+grant alter table on database * to role_r1;
+
+-- @session:id=2&user=sys:role_u1:role_r1&password=111
+use test;
+alter table rename01 rename to newRename;
+alter table newRename rename to `newRename`;
+show create table newRename;
+-- @session
+drop table newRename;
+drop role role_r1;
+drop user role_u1;
 
 drop database test;
