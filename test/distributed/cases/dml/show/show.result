@@ -56,6 +56,9 @@ drop database db11111111111;
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne
+select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
+privilege_name    obj_type    privilege_level
+values    table    *.*
 show grants;
 Grants for dump@localhost
 GRANT create account ON account  `dump`@`localhost`
