@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"runtime"
 	"strings"
 	"sync"
@@ -136,7 +137,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.Database %s", name)
 	txn := e.getTransaction(op)
-	if txn == nil {
+	if txn == nil || txn.meta.GetStatus() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
 	if v, ok := txn.databaseMap.Load(genDatabaseKey(ctx, name)); ok {
@@ -533,6 +534,21 @@ func (e *Engine) getDNServices() []DNStore {
 			return true
 		})
 	return values
+}
+
+func (e *Engine) setPushClientStatus(ready bool) {
+	e.Lock()
+	defer e.Unlock()
+
+	e.pClient.receivedLogTailTime.ready.Store(false)
+	if e.pClient.subscriber != nil {
+		if ready {
+			e.pClient.subscriber.setReady()
+		} else {
+			e.pClient.subscriber.setNotReady()
+		}
+	}
+	client.NoticeCnStatus(e.cli, ready)
 }
 
 func (e *Engine) abortAllRunningTxn() {

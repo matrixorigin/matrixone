@@ -82,10 +82,6 @@ const (
 //	 6. receiveTableLogTailContinuously   : start (1 + parallelNums) routine to receive log tail from service.
 //	-----------------------------------------------------------------------------------------------------
 type pushClient struct {
-	// epoch whenever the connection between push client and dn is reset, the epoch is incremented and  all transactions
-	// generated on the old epoch need to be aborted
-	epoch atomic.Uint64
-
 	// Responsible for sending subscription / unsubscription requests to the service
 	// and receiving the log tail from service.
 	subscriber *logTailSubscriber
@@ -104,11 +100,6 @@ func (client *pushClient) init(
 	serviceAddr string,
 	timestampWaiter client.TimestampWaiter) error {
 	client.timestampWaiter = timestampWaiter
-
-	// init means that the connection between push client and dn is reset, than we will clear memory table.
-	// any all transactions generated on the old epoch need to be aborted
-	client.epoch.Add(1)
-	client.timestampWaiter.UpdateEpoch(client.epoch.Load())
 
 	client.receivedLogTailTime.initLogTailTimestamp(timestampWaiter)
 	client.subscribed.initTableSubscribeRecord()
@@ -350,8 +341,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 						time.Sleep(time.Millisecond * 2)
 					}
 
-					client.receivedLogTailTime.ready.Store(true)
-					client.subscriber.setReady()
+					e.setPushClientStatus(true)
 					logutil.Infof("[log-tail-push-client] connect to dn log tail service succeed.")
 					continue
 				}
@@ -365,6 +355,7 @@ func (client *pushClient) receiveTableLogTailContinuously(ctx context.Context, e
 			if !hasReceivedConnectionMsg {
 				<-connectMsg
 			}
+			e.setPushClientStatus(false)
 
 			logutil.Infof("[log-tail-push-client] clean finished, start to reconnect to dn log tail service")
 			for {

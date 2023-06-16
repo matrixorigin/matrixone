@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -73,7 +72,6 @@ func (s *service) initDistributedTAE(
 
 	// set up log tail client to subscribe table and receive table log.
 	cnEngine := pu.StorageEngine.(*disttae.Engine)
-	logutil.Info("CN node running on push model.")
 	err = cnEngine.InitLogTailPushModel(
 		ctx,
 		mp,

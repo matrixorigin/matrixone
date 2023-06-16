@@ -165,14 +165,9 @@ func SetupRuntimeTxnOptions(
 // latest commit ts received from the current DN push as the start ts of the transaction,
 // which eliminates this physical wait.
 type TimestampWaiter interface {
-	// Epoch returns the epoch of current cn apply dn's logtail. Epoch will changed when
-	// cn and dn's logtail connection is broken, and UpdateEpoch will be called.
-	Epoch() uint64
-	// UpdateEpoch update the epoch of current cn apply dn's logtail.
-	UpdateEpoch(epoch uint64)
 	// GetTimestamp get the latest commit ts as snapshot ts of the new txn. It will keep
 	// blocking if latest commit timestamp received from DN is less than the given value.
-	GetTimestamp(context.Context, timestamp.Timestamp) (uint64, timestamp.Timestamp, error)
+	GetTimestamp(context.Context, timestamp.Timestamp) (timestamp.Timestamp, error)
 	// NotifyLatestCommitTS notify the latest timestamp that received from DN. A applied logtail
 	// commit ts is corresponds to an epoch. Whenever the connection of logtail of cn and dn is
 	// reset, the epoch will be reset and all the ts of the old epoch should be invalidated.
