@@ -59,6 +59,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 		s.RowsRead = 0
 		s.BytesScan = 0
 		s.ResultCount = 0
+		s.AggrCount = 1
 		return s
 	}
 	return nil
@@ -70,6 +71,7 @@ func StatementInfoUpdate(existing, new Item) {
 	// update the stats
 	e.Duration += n.Duration
 	e.Statement += n.Statement + "; "
+	e.AggrCount += 1
 	// reponseAt is the last response time
 	e.ResponseAt = n.ResponseAt
 	// TODO: update the stats still json here
@@ -144,6 +146,7 @@ type StatementInfo struct {
 	// RowsRead, BytesScan generated from ExecPlan
 	RowsRead  int64 `json:"rows_read"`  // see ExecPlan2Json
 	BytesScan int64 `json:"bytes_scan"` // see ExecPlan2Json
+	AggrCount int64 `json:"aggr_count"` // see EndStatement
 
 	ResultCount int64 `json:"result_count"` // see EndStatement
 
@@ -298,6 +301,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(bytesScanCol, table.Int64Field(s.BytesScan))
 	row.SetColumnVal(stmtTypeCol, table.StringField(s.StatementType))
 	row.SetColumnVal(queryTypeCol, table.StringField(s.QueryType))
+	row.SetColumnVal(aggrCntCol, table.Int64Field(s.AggrCount))
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
 }
 

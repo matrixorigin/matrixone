@@ -152,4 +152,6 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, 50*time.Millisecond, results[2].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[3].(*StatementInfo).Duration)
 
+	assert.Equal(t, int64(5), results[0].(*StatementInfo).AggrCount)
+
 }
