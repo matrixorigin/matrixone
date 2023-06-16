@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"math"
 	"strings"
 	"time"
@@ -494,4 +495,27 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 		writes = append(writes, entry)
 	}
 	return writes
+}
+
+// getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
+// Before it gets the cached table, it checks whether the table is deleted by another
+// transaction by go through the delete tables slice, and advance its cachedIndex.
+func (txn *Transaction) getCachedTable(
+	ctx context.Context, k tableKey, snapshotTS timestamp.Timestamp,
+) *txnTable {
+	if txn.meta.IsRCIsolation() {
+		oldIdx := txn.tableCache.cachedIndex
+		newIdx := txn.engine.catalog.GetDeletedTableIndex()
+		if oldIdx < newIdx {
+			deleteTables := txn.engine.catalog.GetDeletedTables(oldIdx, snapshotTS)
+			for _, item := range deleteTables {
+				txn.tableCache.tableMap.Delete(genTableKey(ctx, item.Name, item.DatabaseId))
+				txn.tableCache.cachedIndex++
+			}
+		}
+	}
+	if v, ok := txn.tableCache.tableMap.Load(k); ok {
+		return v.(*txnTable)
+	}
+	return nil
 }

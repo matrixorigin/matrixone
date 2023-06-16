@@ -348,13 +348,18 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	id := objectio.NewSegmentid()
 	bytes := types.EncodeUuid(id)
 	txn := &Transaction{
-		op:              op,
-		proc:            proc,
-		engine:          e,
-		meta:            op.TxnRef(),
-		idGen:           e.idGen,
-		dnStores:        e.getDNServices(),
-		tableMap:        new(sync.Map),
+		op:       op,
+		proc:     proc,
+		engine:   e,
+		meta:     op.TxnRef(),
+		idGen:    e.idGen,
+		dnStores: e.getDNServices(),
+		tableCache: struct {
+			cachedIndex int
+			tableMap    *sync.Map
+		}{
+			tableMap: new(sync.Map),
+		},
 		databaseMap:     new(sync.Map),
 		createMap:       new(sync.Map),
 		deletedTableMap: new(sync.Map),
@@ -375,6 +380,9 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
+	if txn.meta.IsRCIsolation() {
+		txn.tableCache.cachedIndex = e.catalog.GetDeletedTableIndex()
+	}
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)
@@ -390,7 +398,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
-	txn.IncrStatemenetID(ctx)
+	txn.IncrStatementID(ctx)
 	defer e.delTransaction(txn)
 	if txn.readOnly.Load() {
 		return nil
@@ -515,7 +523,8 @@ func (e *Engine) delTransaction(txn *Transaction) {
 		}
 		txn.proc.PutBatch(txn.writes[i].bat)
 	}
-	txn.tableMap = nil
+	txn.tableCache.cachedIndex = -1
+	txn.tableCache.tableMap = nil
 	txn.createMap = nil
 	txn.databaseMap = nil
 	txn.deletedTableMap = nil
