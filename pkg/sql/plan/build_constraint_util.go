@@ -897,6 +897,7 @@ func buildValueScan(
 					return err
 				}
 				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
+					Pos:    -1,
 					RowPos: int32(j),
 					Expr:   defExpr,
 				})
@@ -936,7 +937,16 @@ func buildValueScan(
 				if err != nil {
 					return err
 				}
+				if nv, ok := r[i].(*tree.ParamExpr); ok {
+					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
+						RowPos: int32(j),
+						Pos:    int32(nv.Offset),
+						Expr:   defExpr,
+					})
+					continue
+				}
 				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
+					Pos:    -1,
 					RowPos: int32(j),
 					Expr:   defExpr,
 				})
