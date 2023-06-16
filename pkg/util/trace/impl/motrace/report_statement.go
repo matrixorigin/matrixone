@@ -70,7 +70,7 @@ func StatementInfoUpdate(existing, new Item) {
 	n := new.(*StatementInfo)
 	// update the stats
 	e.Duration += n.Duration
-	e.Statement += n.Statement + "; "
+	e.Statement = e.Statement + "; " + n.Statement
 	e.AggrCount += 1
 	// reponseAt is the last response time
 	e.ResponseAt = n.ResponseAt
@@ -483,6 +483,7 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64) {
 		// do report
 		s.end = true
 		s.ResultCount = sentRows
+		s.AggrCount = 0
 		s.ResponseAt = time.Now()
 		s.Duration = s.ResponseAt.Sub(s.RequestAt)
 		s.Status = StatementStatusSuccess

@@ -193,6 +193,7 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 			}
 			writeValues(item)
 		}
+		aggregator.Close()
 	}
 
 	reqs := make(table.ExportRequests, 0, len(writerMap))

@@ -32,6 +32,13 @@ func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc fu
 
 var ErrFilteredOut = errors.New("item filtered out")
 
+func (a *Aggregator) Close() {
+	// clean up the Grouped map
+	a.Grouped = make(map[interface{}]Item)
+	// release resources related to the context if necessary
+	a.ctx = nil
+}
+
 func (a *Aggregator) AddItem(i Item) (Item, error) {
 	if !a.FilterFunc(i) {
 		return i, ErrFilteredOut

@@ -29,6 +29,17 @@ func TestAggregator(t *testing.T) {
 
 	// Insert StatementInfo instances into the aggregator
 	_, err := aggregator.AddItem(&StatementInfo{
+		StatementType: "Grant",
+		Duration:      time.Duration(500 * time.Millisecond), // make it longer than 200ms to pass filter
+		SqlSourceType: "internal_sql",
+	})
+
+	if !errors.Is(err, ErrFilteredOut) {
+		t.Fatalf("Expected error ErrFilteredOut, got: %v", err)
+	}
+
+	// Insert StatementInfo instances into the aggregator
+	_, err = aggregator.AddItem(&StatementInfo{
 		StatementType: "Select",
 		Duration:      time.Duration(500 * time.Millisecond), // make it longer than 200ms to pass filter
 		SqlSourceType: "internal_sql",
@@ -154,6 +165,31 @@ func TestAggregator(t *testing.T) {
 	assert.Equal(t, 50*time.Millisecond, results[2].(*StatementInfo).Duration)
 	assert.Equal(t, 50*time.Millisecond, results[3].(*StatementInfo).Duration)
 
-	assert.Equal(t, int64(5), results[0].(*StatementInfo).AggrCount)
+	aggregator.Close()
+	// Update
+	for i := 0; i < 5; i++ {
+
+		_, err = aggregator.AddItem(&StatementInfo{
+			Account:       "MO",
+			User:          "moroot",
+			Database:      "system",
+			StatementType: "Update",
+			SqlSourceType: "external_sql",
+			SessionID:     sessionId2,
+			Statement:     "Update 11", // make it longer than 200ms to pass filter
+			RequestAt:     fixedTime.Add(6 * time.Second),
+			Duration:      10 * time.Millisecond,
+			TransactionID: _1TxnID,
+			StatementID:   _1TxnID,
+			Status:        StatementStatusFailed,
+			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
+		})
+		if err != nil {
+			t.Fatalf("Unexpected error when adding item: %v", err)
+		}
+	}
+	results = aggregator.GetResults()
+
+	assert.Equal(t, "Update 11; Update 11; Update 11; Update 11; Update 11", results[0].(*StatementInfo).Statement)
 
 }
