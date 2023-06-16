@@ -82,7 +82,7 @@ func MakeDefaultMemtablePool(name string) *containers.VectorPool {
 		panic(err)
 	}
 	if memStats.Total > mpool.GB*20 {
-		limit = mpool.MB * 3
+		limit = mpool.MB * 2
 		memtableCapacity = 256
 	} else if memStats.Total > mpool.GB*10 {
 		limit = mpool.MB * 2
@@ -91,8 +91,8 @@ func MakeDefaultMemtablePool(name string) *containers.VectorPool {
 		limit = mpool.MB * 2
 		memtableCapacity = 64
 	} else {
-		limit = mpool.MB * 2
-		memtableCapacity = 32
+		limit = mpool.MB * 1
+		memtableCapacity = 64
 	}
 
 	return containers.NewVectorPool(
@@ -112,17 +112,17 @@ func MakeDefaultTransientPool(name string) *containers.VectorPool {
 		panic(err)
 	}
 	if memStats.Total > mpool.GB*20 {
-		limit = mpool.MB * 3
-		trasientCapacity = 128
+		limit = mpool.MB * 2
+		trasientCapacity = 512
 	} else if memStats.Total > mpool.GB*10 {
 		limit = mpool.MB * 2
-		trasientCapacity = 64
+		trasientCapacity = 256
 	} else if memStats.Total > mpool.GB*5 {
-		limit = mpool.MB * 2
-		trasientCapacity = 32
+		limit = mpool.MB
+		trasientCapacity = 256
 	} else {
-		limit = mpool.MB * 2
-		trasientCapacity = 16
+		limit = mpool.KB * 256
+		trasientCapacity = 512
 	}
 
 	return containers.NewVectorPool(
