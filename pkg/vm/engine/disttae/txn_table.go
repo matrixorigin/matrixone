@@ -812,7 +812,6 @@ func (tbl *txnTable) rangesOnePart(
 		}
 
 		if hasDeletes {
-			// collect deletes for blocks in partitionState.blocks.
 			if _, ok := dirtyBlks[blk.BlockID]; !ok {
 				blk.CanRemote = true
 			}

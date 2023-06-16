@@ -301,10 +301,24 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				return err
 			}
 		}
-		if mainRds, err := rel.NewReader(ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
-			return err
-		} else {
-			rds = append(rds, mainRds...)
+
+		s.NodeInfo.Data = s.NodeInfo.Data[1:]
+		var dirtyRanges [][]byte
+		var cleanRanges [][]byte
+		for _, blk := range s.NodeInfo.Data {
+			blkInfo := catalog.DecodeBlockInfo(blk)
+			if blkInfo.CanRemote {
+				cleanRanges = append(cleanRanges, blk)
+				continue
+			}
+			dirtyRanges = append(dirtyRanges, blk)
+		}
+		if len(cleanRanges) > 0 {
+			if mainRds, err := rel.NewReader(ctx, mcpu, s.DataSource.Expr, cleanRanges); err != nil {
+				return err
+			} else {
+				rds = append(rds, mainRds...)
+			}
 		}
 
 		// get readers of partitioned tables

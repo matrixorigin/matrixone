@@ -469,6 +469,7 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 	if len(ranges) < num || len(ranges) == 1 {
 		for i := range ranges {
 			blk := catalog.DecodeBlockInfo(ranges[i])
+			//FIXME::why set it to false?
 			blk.EntryState = false
 			rds[i] = newBlockReader(
 				ctx, tblDef, ts, []*catalog.BlockInfo{blk}, expr, e.fs,

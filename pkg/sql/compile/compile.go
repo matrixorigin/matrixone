@@ -2567,7 +2567,6 @@ func shuffleBlocksByRange(c *Compile, ranges [][]byte, n *plan.Node, nodes engin
 	return nil
 }
 
-// FIXME:: how to parallel scope in current CN, if return only one node?
 func putBlocksInCurrentCN(c *Compile, ranges [][]byte, rel engine.Relation, n *plan.Node) engine.Nodes {
 	var nodes engine.Nodes
 	//add current CN
