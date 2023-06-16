@@ -57,6 +57,7 @@ type TxnReader interface {
 	GetCtx() []byte
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
+	GetContext() context.Context
 
 	GetPrepareTS() types.TS
 	GetParticipants() []uint64
@@ -236,6 +237,7 @@ type TxnStore interface {
 	WaitPrepared(ctx context.Context) error
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
+	GetContext() context.Context
 
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 

@@ -600,7 +600,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
+		changes, err := dataBlock.CollectChangesInRange(context.Background(), txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
 		assert.Equal(t, 2, changes.DeleteMask.GetCardinality())
 
@@ -3470,7 +3470,9 @@ func TestReadEqualTS(t *testing.T) {
 	defer tae.Close()
 
 	txn, err := tae.StartTxn(nil)
+	tae.Catalog.Lock()
 	tae.Catalog.CreateDBEntryByTS("db", txn.GetStartTS())
+	tae.Catalog.Unlock()
 	assert.Nil(t, err)
 	_, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
@@ -4186,38 +4188,93 @@ func TestCollectDelete(t *testing.T) {
 	p3 := txn3.GetPrepareTS()
 	t.Logf("p3= %v", p3.ToString())
 
-	_, rel = tae.getRelation()
+	txn, rel := tae.getRelation()
 	blkit = rel.MakeBlockIt()
-	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
+	blkhandle := blkit.GetBlock()
+	blkdata := blkhandle.GetMeta().(*catalog.BlockEntry).GetBlockData()
 
 	batch, err := blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p1, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 1, vec.Length())
 	}
+	view, err := blkdata.CollectChangesInRange(context.Background(), types.TS{}, p1)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 1, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p2, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 4, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), types.TS{}, p2)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 4, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p2, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 3, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p2)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 3, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 5, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p3)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 5, view.DeleteMask.GetCardinality())
+
+	blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+	assert.NoError(t, err)
+	writer.SetPrimaryKey(3)
+	writer.WriteBatch(containers.ToCNBatch(batch))
+	blocks, _, err := writer.Sync(context.TODO())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(blocks))
+
+	deltaLoc := blockio.EncodeLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(batch.Length()),
+		blocks[0].GetID(),
+	)
+
+	err = blkhandle.UpdateDeltaLoc(deltaLoc)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	blkdata.GCInMemeoryDeletesByTS(p3)
+
+	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true)
+	assert.NoError(t, err)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
+		assert.Equal(t, 5, vec.Length())
+	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p3)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 5, view.DeleteMask.GetCardinality())
+
 }
 
 func TestAppendnode(t *testing.T) {
@@ -7233,4 +7290,95 @@ func TestDeduplication(t *testing.T) {
 	}
 	tae.checkRowsByScan(rows, false)
 	t.Logf(tae.Catalog.SimplePPString(3))
+}
+
+func TestGCInMemeoryDeletesByTS(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 100
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = uint32(rows)
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	tae.createRelAndAppend(bat, true)
+
+	txn, rel := tae.getRelation()
+	blkit := rel.MakeBlockIt()
+	blkHandle := blkit.GetBlock()
+	blkMeta := blkHandle.GetMeta().(*catalog.BlockEntry)
+	blkID := blkMeta.AsCommonID()
+	blkData := blkMeta.GetBlockData()
+	assert.NoError(t, txn.Commit(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		i := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				ts := tae.TxnMgr.StatMaxCommitTS()
+				batch, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true)
+				assert.NoError(t, err)
+				if batch == nil {
+					continue
+				}
+
+				blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), uint16(i))
+				writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+				assert.NoError(t, err)
+				writer.SetPrimaryKey(3)
+				writer.WriteBatch(containers.ToCNBatch(batch))
+				blocks, _, err := writer.Sync(context.TODO())
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(blocks))
+
+				deltaLoc := blockio.EncodeLocation(
+					writer.GetName(),
+					blocks[0].GetExtent(),
+					uint32(batch.Length()),
+					blocks[0].GetID(),
+				)
+
+				txn, rel := tae.getRelation()
+				blkit := rel.MakeBlockIt()
+				blkHandle := blkit.GetBlock()
+				err = blkHandle.UpdateDeltaLoc(deltaLoc)
+				assert.NoError(t, err)
+				assert.NoError(t, txn.Commit(context.Background()))
+
+				blkData.GCInMemeoryDeletesByTS(ts)
+			}
+			i++
+		}
+	}()
+
+	for offset := 0; offset < rows; offset++ {
+		txn, rel := tae.getRelation()
+		assert.NoError(t, rel.RangeDelete(blkID, uint32(offset), uint32(offset), handle.DT_Normal))
+		assert.NoError(t, txn.Commit(context.Background()))
+		ts := txn.GetCommitTS()
+
+		batch, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true)
+		assert.NoError(t, err)
+		t.Logf(logtail.BatchToString("", batch, false))
+		for i, vec := range batch.Vecs {
+			t.Logf(batch.Attrs[i])
+			assert.Equal(t, offset+1, vec.Length())
+		}
+		view, err := blkData.CollectChangesInRange(context.Background(), types.TS{}, ts)
+		assert.NoError(t, err)
+		t.Logf(view.DeleteMask.String())
+		assert.Equal(t, offset+1, view.DeleteMask.GetCardinality())
+	}
+	cancel()
+	wg.Wait()
+
 }

@@ -75,7 +75,7 @@ func TestDeleteNodeCmd(t *testing.T) {
 	node := NewDeleteNode(nil, handle.DT_Normal)
 	node.mask = roaring.NewBitmap()
 	node.mask.Add(35)
-	node.chain = controller.deletes
+	node.chain.Store(controller.deletes.Load())
 	cmd, err := node.MakeCommand(1)
 	assert.Nil(t, err)
 
