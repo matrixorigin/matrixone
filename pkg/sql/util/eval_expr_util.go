@@ -192,18 +192,10 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 			}
 		}
 		v := []byte(s)
-		if typ.Oid == types.T_binary && typ.Scale == -1 {
-			if typ.Width == -1 {
-				// do nothing
-			} else if int32(len(v)) > typ.Width {
-				// truncating
-				v = v[:typ.Width]
-			} else if len(v) < int(typ.Width) {
-				// right-padding.
-				add0 := int(typ.Width) - len(v)
-				for ; add0 != 0; add0-- {
-					v = append(v, 0)
-				}
+		if typ.Oid == types.T_binary && len(v) < int(typ.Width) {
+			add0 := int(typ.Width) - len(v)
+			for ; add0 != 0; add0-- {
+				v = append(v, 0)
 			}
 		}
 		return v, nil
