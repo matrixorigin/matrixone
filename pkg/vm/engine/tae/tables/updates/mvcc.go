@@ -33,12 +33,14 @@ import (
 
 type MVCCHandle struct {
 	*sync.RWMutex
-	deletes         *DeleteChain
+	deletes atomic.Pointer[DeleteChain]
+	// deletes         *DeleteChain
 	meta            *catalog.BlockEntry
 	appends         *txnbase.MVCCSlice[*AppendNode]
 	changes         atomic.Uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
 	appendListener  func(txnif.AppendNode) error
+	persistedTS     types.TS
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -47,19 +49,48 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 		meta:    meta,
 		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
 	}
-	node.deletes = NewDeleteChain(nil, node)
+	node.deletes.Store(NewDeleteChain(nil, node))
 	if meta == nil {
 		return node
 	}
 	return node
 }
 
-func (n *MVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {
-	n.appendListener = l
+// ==========================================================
+// *************** All common related APIs *****************
+// ==========================================================
+
+func (n *MVCCHandle) GetID() *common.ID             { return n.meta.AsCommonID() }
+func (n *MVCCHandle) GetEntry() *catalog.BlockEntry { return n.meta }
+
+func (n *MVCCHandle) StringLocked() string {
+	s := ""
+	if n.deletes.Load().DepthLocked() > 0 {
+		s = fmt.Sprintf("%s%s", s, n.deletes.Load().StringLocked())
+	}
+	s = fmt.Sprintf("%s\n%s", s, n.appends.StringLocked())
+	return s
 }
 
-func (n *MVCCHandle) GetAppendListener() func(txnif.AppendNode) error {
-	return n.appendListener
+// ==========================================================
+// *************** All deletes related APIs *****************
+// ==========================================================
+
+func (n *MVCCHandle) GetDeletesPersistedTS() types.TS {
+	return n.persistedTS
+}
+
+func (n *MVCCHandle) UpgradeDeleteChainByTS(flushed types.TS) {
+	n.Lock()
+	if n.persistedTS.Equal(flushed) {
+		n.Unlock()
+		return
+	}
+	newDeletes := n.deletes.Load().shrinkDeleteChainByTS(flushed)
+
+	n.deletes.Store(newDeletes)
+	n.persistedTS = flushed
+	n.Unlock()
 }
 
 func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, types.TS) error) {
@@ -68,12 +99,6 @@ func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, types.TS) 
 
 func (n *MVCCHandle) GetDeletesListener() func(uint64, common.RowGen, types.TS) error {
 	return n.deletesListener
-}
-
-func (n *MVCCHandle) HasActiveAppendNode() bool {
-	n.RLock()
-	defer n.RUnlock()
-	return !n.appends.IsCommitted()
 }
 
 func (n *MVCCHandle) IncChangeNodeCnt() {
@@ -85,105 +110,204 @@ func (n *MVCCHandle) GetChangeNodeCnt() uint32 {
 }
 
 func (n *MVCCHandle) GetDeleteCnt() uint32 {
-	return n.deletes.GetDeleteCnt()
+	return n.deletes.Load().GetDeleteCnt()
 }
 
-func (n *MVCCHandle) GetID() *common.ID             { return n.meta.AsCommonID() }
-func (n *MVCCHandle) GetEntry() *catalog.BlockEntry { return n.meta }
-
-func (n *MVCCHandle) StringLocked() string {
-	s := ""
-	if n.deletes.DepthLocked() > 0 {
-		s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
-	}
-	s = fmt.Sprintf("%s\n%s", s, n.appends.StringLocked())
-	return s
-}
-
+// it checks whether there is any delete in the range [start, end)
+// ts is not used for now
 func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts types.TS) error {
-	return n.deletes.PrepareRangeDelete(start, end, ts)
+	return n.deletes.Load().PrepareRangeDelete(start, end, ts)
 }
 
 func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
-	return n.deletes.AddNodeLocked(txn, deleteType)
+	return n.deletes.Load().AddNodeLocked(txn, deleteType)
 }
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
-	n.deletes.OnReplayNode(deleteNode.(*DeleteNode))
+	n.deletes.Load().OnReplayNode(deleteNode.(*DeleteNode))
 }
 
 func (n *MVCCHandle) GetDeleteChain() *DeleteChain {
-	return n.deletes
-}
-func (n *MVCCHandle) OnReplayAppendNode(an *AppendNode) {
-	an.mvcc = n
-	n.appends.InsertNode(an)
-}
-func (n *MVCCHandle) AddAppendNodeLocked(
-	txn txnif.AsyncTxn,
-	startRow uint32,
-	maxRow uint32) (an *AppendNode, created bool) {
-	if n.appends.IsEmpty() || !n.appends.GetUpdateNodeLocked().IsSameTxn(txn) {
-		an = NewAppendNode(txn, startRow, maxRow, n)
-		n.appends.InsertNode(an)
-		created = true
-	} else {
-		an = n.appends.GetUpdateNodeLocked()
-		created = false
-		an.SetMaxRow(maxRow)
-	}
-	return
+	return n.deletes.Load()
 }
 
-// Reschedule until all appendnode is committed.
-// Pending appendnode is not visible for compaction txn.
-func (n *MVCCHandle) PrepareCompact() bool {
-	return n.AppendCommitted()
-}
-func (n *MVCCHandle) AppendCommitted() bool {
-	n.RLock()
-	defer n.RUnlock()
-	return n.appends.IsCommitted()
-}
-func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
-	n.appends.DeleteNode(node)
+func (n *MVCCHandle) IsDeletedLocked(
+	row uint32, txn txnif.TxnReader, rwlocker *sync.RWMutex,
+) (bool, error) {
+	return n.deletes.Load().IsDeleted(row, txn, rwlocker)
 }
 
-func (n *MVCCHandle) IsVisibleLocked(row uint32, txn txnif.TxnReader) (bool, error) {
-	an := n.GetAppendNodeByRow(row)
-	return an.IsVisible(txn), nil
-}
-
-func (n *MVCCHandle) IsDeletedLocked(row uint32, txn txnif.TxnReader, rwlocker *sync.RWMutex) (bool, error) {
-	return n.deletes.IsDeleted(row, txn, rwlocker)
-}
-
-//	  1         2        3       4      5       6
-//	[----] [---------] [----][------][-----] [-----]
-//
-// -----------+------------------+---------------------->
-//
-//	start               end
-func (n *MVCCHandle) CollectUncommittedANodesPreparedBefore(
-	ts types.TS,
-	fn func(*AppendNode)) (anyWaitable bool) {
-	if n.appends.IsEmpty() {
+// it collects all deletes in the range [start, end)
+func (n *MVCCHandle) CollectDeleteLocked(
+	start, end types.TS,
+) (
+	rowIDVec, commitTSVec, abortVec containers.Vector,
+	aborts, deletes *nulls.Bitmap,
+) {
+	if n.deletes.Load().IsEmpty() {
 		return
 	}
-	n.appends.ForEach(func(an *AppendNode) bool {
-		needWait, txn := an.NeedWaitCommitting(ts)
-		if txn == nil {
-			return false
-		}
-		if needWait {
-			fn(an)
-			anyWaitable = true
-		}
-		return true
-	}, false)
+	if !n.ExistDeleteInRange(start, end) {
+		return
+	}
+
+	rowIDVec = containers.MakeVector(types.T_Rowid.ToType())
+	commitTSVec = containers.MakeVector(types.T_TS.ToType())
+	abortVec = containers.MakeVector(types.T_bool.ToType())
+	aborts = &nulls.Bitmap{}
+	id := n.meta.ID
+
+	n.deletes.Load().LoopChain(
+		func(node *DeleteNode) bool {
+			needWait, txn := node.NeedWaitCommitting(end.Next())
+			if needWait {
+				n.RUnlock()
+				txn.GetTxnState(true)
+				n.RLock()
+			}
+			in, before := node.PreparedIn(start, end)
+			if in {
+				it := node.mask.Iterator()
+				if node.IsAborted() {
+					it := node.mask.Iterator()
+					for it.HasNext() {
+						row := it.Next()
+						nulls.Add(aborts, uint64(row))
+					}
+				}
+				for it.HasNext() {
+					row := it.Next()
+					if deletes == nil {
+						deletes = nulls.NewWithSize(int(row))
+					}
+					deletes.Add(uint64(row))
+					rowIDVec.Append(*objectio.NewRowid(&id, row), false)
+					commitTSVec.Append(node.GetEnd(), false)
+					abortVec.Append(node.IsAborted(), false)
+				}
+			}
+			return !before
+		})
 	return
 }
 
+// ExistDeleteInRange check if there is any delete in the range [start, end]
+// it loops the delete chain and check if there is any delete node in the range
+func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
+	n.deletes.Load().LoopChain(
+		func(node *DeleteNode) bool {
+			needWait, txn := node.NeedWaitCommitting(end.Next())
+			if needWait {
+				n.RUnlock()
+				txn.GetTxnState(true)
+				n.RLock()
+			}
+			in, before := node.PreparedIn(start, end)
+			if in {
+				exist = true
+				return false
+			}
+			return !before
+		})
+	return
+}
+
+func (n *MVCCHandle) GetDeleteNodeByRow(row uint32) (an *DeleteNode) {
+	return n.deletes.Load().GetDeleteNodeByRow(row)
+}
+
+// ==========================================================
+// *************** All appends related APIs *****************
+// ==========================================================
+
+// NOTE: after this call all appends related APIs should not be called
+// ReleaseAppends release all append nodes.
+// it is only called when the appendable block is persisted and the
+// memory node is released
+func (n *MVCCHandle) ReleaseAppends() {
+	n.Lock()
+	defer n.Unlock()
+	n.appends = nil
+}
+
+// only for internal usage
+// given a row, it returns the append node which contains the row
+func (n *MVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
+	_, an = n.appends.SearchNodeByCompareFn(func(node *AppendNode) int {
+		if node.maxRow <= row {
+			return -1
+		}
+		if node.startRow > row {
+			return 1
+		}
+		return 0
+	})
+	return
+}
+
+// it collects all append nodes in the range [start, end]
+// minRow: is the min row
+// maxRow: is the max row
+// commitTSVec: is the commit ts vector
+// abortVec: is the abort vector
+// aborts: is the aborted bitmap
+func (n *MVCCHandle) CollectAppendLocked(
+	start, end types.TS,
+) (
+	minRow, maxRow uint32,
+	commitTSVec, abortVec containers.Vector,
+	aborts *nulls.Bitmap,
+) {
+	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
+	if node != nil && node.GetPrepare().Less(start) {
+		startOffset++
+	}
+	endOffset, node := n.appends.GetNodeToReadByPrepareTS(end)
+	if node == nil || startOffset > endOffset {
+		return
+	}
+	minRow = n.appends.GetNodeByOffset(startOffset).startRow
+	maxRow = node.maxRow
+
+	aborts = &nulls.Bitmap{}
+	commitTSVec = containers.MakeVector(types.T_TS.ToType())
+	abortVec = containers.MakeVector(types.T_bool.ToType())
+	n.appends.LoopOffsetRange(
+		startOffset,
+		endOffset,
+		func(node *AppendNode) bool {
+			txn := node.GetTxn()
+			if txn != nil {
+				n.RUnlock()
+				txn.GetTxnState(true)
+				n.RLock()
+			}
+			if node.IsAborted() {
+				aborts.AddRange(uint64(node.startRow), uint64(node.maxRow))
+			}
+			for i := 0; i < int(node.maxRow-node.startRow); i++ {
+				commitTSVec.Append(node.GetCommitTS(), false)
+				abortVec.Append(node.IsAborted(), false)
+			}
+			return true
+		})
+	return
+}
+
+// GetTotalRow is only for replay
+func (n *MVCCHandle) GetTotalRow() uint32 {
+	an := n.appends.GetUpdateNodeLocked()
+	if an == nil {
+		return 0
+	}
+	return an.maxRow - n.deletes.Load().cnt.Load()
+}
+
+// it is used to get the visible max row for a txn
+// maxrow: is the max row that the txn can see
+// visible: is true if the txn can see any row
+// holes: is the bitmap of the holes that the txn cannot see
+// holes exists only if any append node was rollbacked
 func (n *MVCCHandle) GetVisibleRowLocked(
 	txn txnif.TxnReader,
 ) (maxrow uint32, visible bool, holes *nulls.Bitmap, err error) {
@@ -242,150 +366,95 @@ func (n *MVCCHandle) GetVisibleRowLocked(
 	return
 }
 
-// GetTotalRow is only for replay
-func (n *MVCCHandle) GetTotalRow() uint32 {
-	an := n.appends.GetUpdateNodeLocked()
-	if an == nil {
-		return 0
-	}
-	return an.maxRow - n.deletes.cnt.Load()
-}
-
-func (n *MVCCHandle) CollectAppendLocked(
-	start, end types.TS) (
-	minRow, maxRow uint32,
-	commitTSVec, abortVec containers.Vector,
-	abortedBitmap *nulls.Bitmap) {
-	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
-	if node != nil && node.GetPrepare().Less(start) {
-		startOffset++
-	}
-	endOffset, node := n.appends.GetNodeToReadByPrepareTS(end)
-	if node == nil || startOffset > endOffset {
+// it collects all append nodes that are prepared before the given ts
+// foreachFn is called for each append node that is prepared before the given ts
+func (n *MVCCHandle) CollectUncommittedANodesPreparedBefore(
+	ts types.TS,
+	foreachFn func(*AppendNode),
+) (anyWaitable bool) {
+	if n.appends.IsEmpty() {
 		return
 	}
-	minRow = n.appends.GetNodeByOffset(startOffset).startRow
-	maxRow = node.maxRow
-
-	abortedBitmap = &nulls.Bitmap{}
-	commitTSVec = containers.MakeVector(types.T_TS.ToType())
-	abortVec = containers.MakeVector(types.T_bool.ToType())
-	n.appends.LoopOffsetRange(
-		startOffset,
-		endOffset,
-		func(node *AppendNode) bool {
-			txn := node.GetTxn()
-			if txn != nil {
-				n.RUnlock()
-				txn.GetTxnState(true)
-				n.RLock()
-			}
-			if node.IsAborted() {
-				abortedBitmap.AddRange(uint64(node.startRow), uint64(node.maxRow))
-			}
-			for i := 0; i < int(node.maxRow-node.startRow); i++ {
-				commitTSVec.Append(node.GetCommitTS(), false)
-				abortVec.Append(node.IsAborted(), false)
-			}
-			return true
-		})
+	n.appends.ForEach(func(an *AppendNode) bool {
+		needWait, txn := an.NeedWaitCommitting(ts)
+		if txn == nil {
+			return false
+		}
+		if needWait {
+			foreachFn(an)
+			anyWaitable = true
+		}
+		return true
+	}, false)
 	return
 }
 
-func (n *MVCCHandle) CollectDelete(
-	start, end types.TS,
-) (rowIDVec, commitTSVec, abortVec containers.Vector, abortedBitmap *nulls.Bitmap, deletes *nulls.Bitmap) {
+func (n *MVCCHandle) OnReplayAppendNode(an *AppendNode) {
+	an.mvcc = n
+	n.appends.InsertNode(an)
+}
+
+// AddAppendNodeLocked add a new appendnode to the list.
+func (n *MVCCHandle) AddAppendNodeLocked(
+	txn txnif.AsyncTxn,
+	startRow uint32,
+	maxRow uint32,
+) (an *AppendNode, created bool) {
+	if n.appends.IsEmpty() || !n.appends.GetUpdateNodeLocked().IsSameTxn(txn) {
+		// if the appends is empty or the last appendnode is not of the same txn,
+		// create a new appendnode and append it to the list.
+		an = NewAppendNode(txn, startRow, maxRow, n)
+		n.appends.InsertNode(an)
+		created = true
+	} else {
+		// if the last appendnode is of the same txn, update the maxrow of the last appendnode.
+		an = n.appends.GetUpdateNodeLocked()
+		created = false
+		an.SetMaxRow(maxRow)
+	}
+	return
+}
+
+// Reschedule until all appendnode is committed.
+// Pending appendnode is not visible for compaction txn.
+func (n *MVCCHandle) PrepareCompact() bool {
+	return n.allAppendsCommitted()
+}
+
+// check if all appendnodes are committed.
+func (n *MVCCHandle) allAppendsCommitted() bool {
 	n.RLock()
 	defer n.RUnlock()
-	if n.deletes.IsEmpty() {
-		return
-	}
-	if !n.ExistDeleteInRange(start, end) {
-		return
-	}
-
-	rowIDVec = containers.MakeVector(types.T_Rowid.ToType())
-	commitTSVec = containers.MakeVector(types.T_TS.ToType())
-	abortVec = containers.MakeVector(types.T_bool.ToType())
-	abortedBitmap = &nulls.Bitmap{}
-	id := n.meta.ID
-
-	n.deletes.LoopChain(
-		func(node *DeleteNode) bool {
-			needWait, txn := node.NeedWaitCommitting(end.Next())
-			if needWait {
-				n.RUnlock()
-				txn.GetTxnState(true)
-				n.RLock()
-			}
-			in, before := node.PreparedIn(start, end)
-			if in {
-				it := node.mask.Iterator()
-				if node.IsAborted() {
-					it := node.mask.Iterator()
-					for it.HasNext() {
-						row := it.Next()
-						nulls.Add(abortedBitmap, uint64(row))
-					}
-				}
-				for it.HasNext() {
-					row := it.Next()
-					if deletes == nil {
-						deletes = nulls.NewWithSize(int(row))
-					}
-					deletes.Add(uint64(row))
-					rowIDVec.Append(*objectio.NewRowid(&id, row), false)
-					commitTSVec.Append(node.GetEnd(), false)
-					abortVec.Append(node.IsAborted(), false)
-				}
-			}
-			return !before
-		})
-	return
+	return n.appends.IsCommitted()
 }
 
-func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
-	n.deletes.LoopChain(
-		func(node *DeleteNode) bool {
-			needWait, txn := node.NeedWaitCommitting(end.Next())
-			if needWait {
-				n.RUnlock()
-				txn.GetTxnState(true)
-				n.RLock()
-			}
-			in, before := node.PreparedIn(start, end)
-			if in {
-				exist = true
-				return false
-			}
-			return !before
-		})
-	return
+// DeleteAppendNodeLocked deletes the appendnode from the append list.
+// it is called when txn of the appendnode is aborted.
+func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
+	n.appends.DeleteNode(node)
 }
 
-func (n *MVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
-	_, an = n.appends.SearchNodeByCompareFn(func(node *AppendNode) int {
-		if node.maxRow <= row {
-			return -1
-		}
-		if node.startRow > row {
-			return 1
-		}
-		return 0
-	})
-	return
-}
-func (n *MVCCHandle) GetDeleteNodeByRow(row uint32) (an *DeleteNode) {
-	return n.deletes.GetDeleteNodeByRow(row)
+func (n *MVCCHandle) SetAppendListener(l func(txnif.AppendNode) error) {
+	n.appendListener = l
 }
 
-func (n *MVCCHandle) LastAnodeCommittedBeforeLocked(ts types.TS) bool {
+func (n *MVCCHandle) GetAppendListener() func(txnif.AppendNode) error {
+	return n.appendListener
+}
+
+// AllAppendsCommittedBefore returns true if all appendnode is committed before ts.
+func (n *MVCCHandle) AllAppendsCommittedBefore(ts types.TS) bool {
+	// get the latest appendnode
 	anode := n.appends.GetUpdateNodeLocked()
 	if anode == nil {
 		return false
 	}
+
+	// if the latest appendnode is not committed, return false
 	if !anode.IsCommitted() {
 		return false
 	}
+
+	// check if the latest appendnode is committed before ts
 	return anode.GetCommitTS().Less(ts)
 }

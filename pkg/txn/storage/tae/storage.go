@@ -68,7 +68,7 @@ func NewTAEStorage(
 		MaxMessageSize:   maxMessageSize,
 	}
 
-	taeHandler := rpc.NewTAEHandle(dataDir, opt)
+	taeHandler := rpc.NewTAEHandle(ctx, dataDir, opt)
 	tae := taeHandler.GetDB()
 	logtailer := logtail.NewLogtailer(ctx, tae.BGCheckpointRunner, tae.LogtailMgr, tae.Catalog)
 	server, err := service.NewLogtailServer(logtailServerAddr, logtailServerCfg, logtailer, rt)

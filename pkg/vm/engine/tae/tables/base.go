@@ -92,6 +92,10 @@ func (blk *baseBlock) PinNode() *Node {
 	return n
 }
 
+func (blk *baseBlock) GCInMemeoryDeletesByTS(ts types.TS) {
+	blk.mvcc.UpgradeDeleteChainByTS(ts)
+}
+
 func (blk *baseBlock) Rows() int {
 	node := blk.PinNode()
 	defer node.Unref()
@@ -104,7 +108,7 @@ func (blk *baseBlock) Rows() int {
 	}
 }
 
-func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
+func (blk *baseBlock) Foreach(ctx context.Context, colIdx int, op func(v any, isNull bool, row int) error, sels *nulls.Bitmap) error {
 	node := blk.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
@@ -112,7 +116,7 @@ func (blk *baseBlock) Foreach(colIdx int, op func(v any, isNull bool, row int) e
 		defer blk.RUnlock()
 		return node.MustMNode().Foreach(colIdx, op, sels)
 	} else {
-		return node.MustPNode().Foreach(blk.meta.GetSchema(), colIdx, op, sels)
+		return node.MustPNode().Foreach(ctx, blk.meta.GetSchema(), colIdx, op, sels)
 	}
 }
 
@@ -228,27 +232,57 @@ func (blk *baseBlock) FillPersistedDeletes(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	view *model.BaseView) (err error) {
+	blk.fillPersistedDeletesInRange(
+		ctx,
+		types.TS{},
+		txn.GetStartTS(),
+		view)
+	return nil
+}
+
+func (blk *baseBlock) fillPersistedDeletesInRange(
+	ctx context.Context,
+	start, end types.TS,
+	view *model.BaseView) (err error) {
+	blk.foreachPersistedDeletesCommittedInRange(
+		ctx,
+		start,
+		end,
+		true,
+		func(i int, deleteBatch *containers.Batch) {
+			rowid := deleteBatch.Vecs[0].Get(i).(types.Rowid)
+			row := rowid.GetRowOffset()
+			if view.DeleteMask == nil {
+				view.DeleteMask = nulls.NewWithSize(int(row) + 1)
+			}
+			view.DeleteMask.Add(uint64(row))
+		})
+	return nil
+}
+
+func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
+	ctx context.Context,
+	start, end types.TS,
+	skipAbort bool,
+	op func(row int, deleteBatch *containers.Batch),
+) (err error) {
 	deletes, err := blk.LoadPersistedDeletes(ctx)
 	if deletes == nil || err != nil {
 		return nil
 	}
 	for i := 0; i < deletes.Length(); i++ {
-		abort := deletes.Vecs[3].Get(i).(bool)
-		if abort {
-			continue
+		if skipAbort {
+			abort := deletes.Vecs[3].Get(i).(bool)
+			if abort {
+				continue
+			}
 		}
 		commitTS := deletes.Vecs[1].Get(i).(types.TS)
-		if commitTS.Greater(txn.GetStartTS()) {
-			continue
+		if commitTS.GreaterEq(start) && commitTS.LessEq(end) {
+			op(i, deletes)
 		}
-		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
-		row := rowid.GetRowOffset()
-		if view.DeleteMask == nil {
-			view.DeleteMask = nulls.NewWithSize(int(row) + 1)
-		}
-		view.DeleteMask.Add(uint64(row))
 	}
-	return nil
+	return
 }
 
 func (blk *baseBlock) Prefetch(idxes []uint16) error {
@@ -264,7 +298,6 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 
 func (blk *baseBlock) ResolvePersistedColumnDatas(
 	ctx context.Context,
-	pnode *persistedNode,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxs []int,
@@ -406,7 +439,6 @@ func (blk *baseBlock) PersistedBatchDedup(
 
 func (blk *baseBlock) getPersistedValue(
 	ctx context.Context,
-	pnode *persistedNode,
 	txn txnif.TxnReader,
 	schema *catalog.Schema,
 	row, col int,
@@ -476,27 +508,65 @@ func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool)
 	return
 }
 
-func (blk *baseBlock) CollectChangesInRange(startTs, endTs types.TS) (view *model.BlockView, err error) {
+func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *model.BlockView, err error) {
 	view = model.NewBlockView()
+	view.DeleteMask, err = blk.inMemoryCollectDeletesInRange(startTs, endTs)
+	blk.fillPersistedDeletesInRange(ctx, startTs, endTs, view.BaseView)
+	return
+}
+
+func (blk *baseBlock) inMemoryCollectDeletesInRange(start, end types.TS) (deletes *nulls.Bitmap, err error) {
 	blk.RLock()
 	defer blk.RUnlock()
 	deleteChain := blk.mvcc.GetDeleteChain()
-	view.DeleteMask, err =
-		deleteChain.CollectDeletesInRange(startTs, endTs, blk.RWMutex)
+	deletes, err =
+		deleteChain.CollectDeletesInRange(start, end, blk.RWMutex)
 	return
 }
 
 func (blk *baseBlock) CollectDeleteInRange(
+	ctx context.Context,
 	start, end types.TS,
 	withAborted bool) (bat *containers.Batch, err error) {
-	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDelete(start, end)
+	bat, persistedTS, err := blk.inMemoryCollectDeleteInRange(
+		ctx,
+		start,
+		end,
+		withAborted)
+	if err != nil {
+		return
+	}
+	if end.Greater(persistedTS) {
+		end = persistedTS
+	}
+	bat, err = blk.persistedCollectDeleteInRange(
+		ctx,
+		bat,
+		start,
+		end,
+		withAborted)
+	return
+}
+
+func (blk *baseBlock) inMemoryCollectDeleteInRange(
+	ctx context.Context,
+	start, end types.TS,
+	withAborted bool) (bat *containers.Batch, persistedTS types.TS, err error) {
+	blk.RLock()
+	persistedTS = blk.mvcc.GetDeletesPersistedTS()
+	if persistedTS.GreaterEq(end) {
+		blk.RUnlock()
+		return
+	}
+	rowID, ts, abort, abortedMap, deletes := blk.mvcc.CollectDeleteLocked(start, end)
+	blk.RUnlock()
 	if rowID == nil {
 		return
 	}
 	pkDef := blk.meta.GetSchema().GetPrimaryKey()
 	pkVec := containers.MakeVector(pkDef.Type)
 	pkIdx := pkDef.Idx
-	blk.Foreach(pkIdx, func(v any, isNull bool, row int) error {
+	blk.Foreach(ctx, pkIdx, func(v any, isNull bool, row int) error {
 		pkVec.Append(v, false)
 		return nil
 	}, deletes)
@@ -512,6 +582,34 @@ func (blk *baseBlock) CollectDeleteInRange(
 		bat.Compact()
 	}
 	return
+}
+
+// collect the row if its committs is in [start,end]
+func (blk *baseBlock) persistedCollectDeleteInRange(
+	ctx context.Context,
+	b *containers.Batch,
+	start, end types.TS,
+	withAborted bool) (bat *containers.Batch, err error) {
+	if b != nil {
+		bat = b
+	}
+	blk.foreachPersistedDeletesCommittedInRange(
+		ctx,
+		start, end,
+		!withAborted,
+		func(row int, deleteBatch *containers.Batch) {
+			if bat == nil {
+				bat = containers.NewBatch()
+				for i, name := range deleteBatch.Attrs {
+					vec := containers.MakeVector(*deleteBatch.Vecs[i].GetType())
+					bat.AddVector(name, vec)
+				}
+			}
+			for _, name := range deleteBatch.Attrs {
+				bat.GetVectorByName(name).Append(deleteBatch.GetVectorByName(name).Get(row), false)
+			}
+		})
+	return bat, nil
 }
 
 func (blk *baseBlock) adjustScore(

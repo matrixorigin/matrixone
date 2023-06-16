@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logutil
+package rpc
 
 import (
 	"testing"
@@ -21,12 +21,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSlow(t *testing.T) {
-	done := Slow(time.Millisecond*10, "slow")
-	time.Sleep(time.Millisecond * 50)
-	require.True(t, done())
+func TestHandleGCCache(t *testing.T) {
+	now := time.Now()
+	expired := now.Add(-MAX_TXN_COMMIT_LATENCY).Add(-time.Second)
 
-	// done before timeout
-	done = Slow(time.Millisecond*500, "slow")
-	require.False(t, done())
+	handle := Handle{}
+	handle.mu.txnCtxs = map[string]*txnContext{
+		"now": {
+			deadline: now,
+		},
+		"expired": {
+			deadline: expired,
+		},
+	}
+	handle.GCCache(now)
+
+	require.Equal(t, 1, len(handle.mu.txnCtxs))
+	require.Nil(t, handle.mu.txnCtxs["expired"])
+	require.NotNil(t, handle.mu.txnCtxs["now"])
 }

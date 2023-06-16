@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -149,73 +150,106 @@ func TestColumnExpressionExecutor(t *testing.T) {
 }
 
 func TestFunctionExpressionExecutor(t *testing.T) {
-	proc := testutil.NewProcess()
+	{
+		proc := testutil.NewProcess()
 
-	bat := testutil.NewBatchWithVectors(
-		[]*vector.Vector{
-			testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
-		}, make([]int64, 2))
+		bat := testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
+			}, make([]int64, 2))
 
-	currStart := proc.Mp().CurrNB()
-	fExprExecutor := &FunctionExpressionExecutor{}
-	err := fExprExecutor.Init(proc.Mp(), 2, types.T_int64.ToType(),
-		func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-			v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
-			v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])
-			rs := vector.MustFunctionResult[int64](result)
-			for i := 0; i < length; i++ {
-				v11, null11 := v1.GetValue(uint64(i))
-				v22, null22 := v2.GetValue(uint64(i))
-				if null11 || null22 {
-					err := rs.Append(0, true)
-					if err != nil {
-						return err
-					}
-				} else {
-					err := rs.Append(v11+v22, false)
-					if err != nil {
-						return err
+		currStart := proc.Mp().CurrNB()
+		fExprExecutor := &FunctionExpressionExecutor{}
+		err := fExprExecutor.Init(proc.Mp(), 2, types.T_int64.ToType(),
+			func(params []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+				v1 := vector.GenerateFunctionFixedTypeParameter[int64](params[0])
+				v2 := vector.GenerateFunctionFixedTypeParameter[int64](params[1])
+				rs := vector.MustFunctionResult[int64](result)
+				for i := 0; i < length; i++ {
+					v11, null11 := v1.GetValue(uint64(i))
+					v22, null22 := v2.GetValue(uint64(i))
+					if null11 || null22 {
+						err := rs.Append(0, true)
+						if err != nil {
+							return err
+						}
+					} else {
+						err := rs.Append(v11+v22, false)
+						if err != nil {
+							return err
+						}
 					}
 				}
-			}
-			return nil
-		})
-	require.NoError(t, err)
+				return nil
+			})
+		require.NoError(t, err)
 
-	col1 := &plan.Expr{
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: 0,
-				ColPos: 0,
+		col1 := &plan.Expr{
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: 0,
+				},
 			},
-		},
-		Typ: &plan.Type{
-			Id:          int32(types.T_int64),
-			NotNullable: true,
-		},
-	}
-	col2 := makePlan2Int64ConstExprWithType(100)
-	executor1, err := NewExpressionExecutor(proc, col1)
-	require.NoError(t, err)
-	executor2, err := NewExpressionExecutor(proc, col2)
-	require.NoError(t, err)
-	fExprExecutor.SetParameter(0, executor1)
-	fExprExecutor.SetParameter(1, executor2)
+			Typ: &plan.Type{
+				Id:          int32(types.T_int64),
+				NotNullable: true,
+			},
+		}
+		col2 := makePlan2Int64ConstExprWithType(100)
+		executor1, err := NewExpressionExecutor(proc, col1)
+		require.NoError(t, err)
+		executor2, err := NewExpressionExecutor(proc, col2)
+		require.NoError(t, err)
+		fExprExecutor.SetParameter(0, executor1)
+		fExprExecutor.SetParameter(1, executor2)
 
-	vec, err := fExprExecutor.Eval(proc, []*batch.Batch{bat})
-	require.NoError(t, err)
-	curr3 := proc.Mp().CurrNB()
-	{
-		require.Equal(t, 2, vec.Length())
-		require.Equal(t, types.T_int64.ToType(), *vec.GetType())
-		require.Equal(t, int64(101), vector.MustFixedCol[int64](vec)[0]) // 1+100
-		require.Equal(t, int64(102), vector.MustFixedCol[int64](vec)[1]) // 2+100
+		vec, err := fExprExecutor.Eval(proc, []*batch.Batch{bat})
+		require.NoError(t, err)
+		curr3 := proc.Mp().CurrNB()
+		{
+			require.Equal(t, 2, vec.Length())
+			require.Equal(t, types.T_int64.ToType(), *vec.GetType())
+			require.Equal(t, int64(101), vector.MustFixedCol[int64](vec)[0]) // 1+100
+			require.Equal(t, int64(102), vector.MustFixedCol[int64](vec)[1]) // 2+100
+		}
+		_, err = fExprExecutor.Eval(proc, []*batch.Batch{bat})
+		require.NoError(t, err)
+		require.Equal(t, curr3, proc.Mp().CurrNB())
+		fExprExecutor.Free()
+		require.Equal(t, currStart, proc.Mp().CurrNB())
 	}
-	_, err = fExprExecutor.Eval(proc, []*batch.Batch{bat})
-	require.NoError(t, err)
-	require.Equal(t, curr3, proc.Mp().CurrNB())
-	fExprExecutor.Free()
-	require.Equal(t, currStart, proc.Mp().CurrNB())
+
+	// test memory leak if constant fold happens
+	{
+		proc := testutil.NewProcess()
+
+		col1 := makePlan2BoolConstExprWithType(true)
+		col2 := makePlan2BoolConstExprWithType(true)
+
+		fExpr := &plan.Expr{
+			Typ: &plan.Type{
+				Id:          int32(types.T_bool),
+				NotNullable: true,
+			},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{
+						ObjName: function.AndFunctionName,
+						Obj:     function.AndFunctionEncodedID,
+					},
+					Args: []*plan.Expr{col1, col2},
+				},
+			},
+		}
+		currNb := proc.Mp().CurrNB()
+		executor, err := NewExpressionExecutor(proc, fExpr)
+		require.NoError(t, err)
+		_, ok := executor.(*FixedVectorExpressionExecutor)
+		require.Equal(t, true, ok)
+		executor.Free()
+		require.Equal(t, currNb, proc.Mp().CurrNB())
+	}
 }
 
 // some util code copied from package `plan`.
@@ -234,6 +268,25 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
 		Isnull: false,
 		Value: &plan.Const_I64Val{
 			I64Val: v,
+		},
+	}}
+}
+
+func makePlan2BoolConstExprWithType(b bool) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2BoolConstExpr(b),
+		Typ: &plan.Type{
+			Id:          int32(types.T_bool),
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2BoolConstExpr(b bool) *plan.Expr_C {
+	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Bval{
+			Bval: b,
 		},
 	}}
 }
