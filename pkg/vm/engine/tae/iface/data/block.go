@@ -16,8 +16,9 @@ package data
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -83,12 +84,21 @@ type Block interface {
 	RangeDelete(txn txnif.AsyncTxn, start, end uint32, dt handle.DeleteType) (txnif.DeleteNode, error)
 
 	GetTotalChanges() int
-	CollectChangesInRange(startTs, endTs types.TS) (*model.BlockView, error)
+	CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (*model.BlockView, error)
 
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
 
-	DataCommittedBefore(ts types.TS) bool
+	// check if all rows are committed before ts
+	// NOTE: here we assume that the block is visible to the ts
+	// if the block is an appendable block:
+	// 1. if the block is not frozen, return false
+	// 2. if the block is frozen and in-memory, check with the max ts committed
+	// 3. if the block is persisted, return false
+	// if the block is not an appendable block:
+	// only check with the created ts
+	CoarseCheckAllRowsCommittedBefore(ts types.TS) bool
+
 	BatchDedup(ctx context.Context,
 		txn txnif.AsyncTxn,
 		pks containers.Vector,
@@ -107,6 +117,7 @@ type Block interface {
 
 	Init() error
 	TryUpgrade() error
+	GCInMemeoryDeletesByTS(types.TS)
 	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool) (*containers.Batch, error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)

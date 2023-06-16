@@ -15,6 +15,7 @@
 package txn
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -32,12 +33,13 @@ func TestMoCtlGetSnapshot(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// A Txn read and write will success.
 	for name, options := range testOptionsSet {
 		t.Run(name, func(t *testing.T) {
-			c, err := NewCluster(t,
+			c, err := NewCluster(ctx, t,
 				getBasicClusterOptions(options...))
 			require.NoError(t, err)
 			defer c.Stop()
@@ -58,12 +60,13 @@ func TestMoCtlUseSnapshot(t *testing.T) {
 		t.Skip("skipping in short mode.")
 		return
 	}
+	ctx := context.Background()
 
 	// this case will start a mo cluster with 1 CNService, 1 DNService and 3 LogService.
 	// A Txn read and write will success.
 	for name, options := range testOptionsSet {
 		t.Run(name, func(t *testing.T) {
-			c, err := NewCluster(t,
+			c, err := NewCluster(ctx, t,
 				getBasicClusterOptions(options...))
 			require.NoError(t, err)
 			defer c.Stop()

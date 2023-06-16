@@ -129,10 +129,10 @@ func NewPersistedTxn(
 		ApplyCommitFn:     applyCommitFn,
 	}
 }
-func (txn *Txn) GetLsn() uint64 { return txn.LSN }
-func (txn *Txn) IsReplay() bool { return txn.isReplay }
-
-func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
+func (txn *Txn) GetLsn() uint64              { return txn.LSN }
+func (txn *Txn) IsReplay() bool              { return txn.isReplay }
+func (txn *Txn) GetContext() context.Context { return txn.Store.GetContext() }
+func (txn *Txn) MockIncWriteCnt() int        { return txn.Store.IncreateWriteCnt() }
 
 func (txn *Txn) SetError(err error) { txn.Err = err }
 func (txn *Txn) GetError() error    { return txn.Err }
@@ -371,6 +371,10 @@ func (txn *Txn) ApplyRollback() (err error) {
 
 func (txn *Txn) PrePrepare(ctx context.Context) error {
 	return txn.Store.PrePrepare(ctx)
+}
+
+func (txn *Txn) Freeze() error {
+	return txn.Store.Freeze()
 }
 
 func (txn *Txn) PrepareRollback() (err error) {

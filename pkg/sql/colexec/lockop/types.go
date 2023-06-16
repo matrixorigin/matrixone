@@ -38,7 +38,7 @@ type FetchLockRowsFunc func(
 	// used to filter rows
 	filter RowsFilter,
 	// used by filter rows func
-	filterCols []int) ([][]byte, lock.Granularity)
+	filterCols []int32) ([][]byte, lock.Granularity)
 
 // LockOptions lock operation options
 type LockOptions struct {
@@ -48,7 +48,7 @@ type LockOptions struct {
 	parker          *types.Packer
 	fetchFunc       FetchLockRowsFunc
 	filter          RowsFilter
-	filterCols      []int
+	filterCols      []int32
 }
 
 // Argument lock op argument.

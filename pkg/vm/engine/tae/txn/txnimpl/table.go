@@ -129,9 +129,9 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) 
 	return tbl, nil
 }
 
-func (tbl *txnTable) PrePreareTransfer() (err error) {
+func (tbl *txnTable) PrePreareTransfer(phase string) (err error) {
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	return tbl.TransferDeletes(ts)
+	return tbl.TransferDeletes(ts, phase)
 }
 
 func (tbl *txnTable) TransferDeleteIntent(
@@ -169,7 +169,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 	return
 }
 
-func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
+func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 	if tbl.store.transferTable == nil {
 		return
 	}
@@ -198,7 +198,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS) (err error) {
 		// nil: transferred successfully
 		// ErrTxnRWConflict: the target block was also be compacted
 		// ErrTxnWWConflict: w-w error
-		if _, err = tbl.TransferDelete(&id, node); err != nil {
+		if _, err = tbl.TransferDeleteNode(&id, node, phase); err != nil {
 			return
 		}
 	}
@@ -222,7 +222,7 @@ func (tbl *txnTable) recurTransferDelete(
 			id.BlockID,
 			row,
 			depth)
-		logutil.Warnf("[ts=%s]TransferDelete: %v",
+		logutil.Warnf("[ts=%s]TransferDeleteNode: %v",
 			tbl.store.txn.GetStartTS().ToString(),
 			msg)
 		return err
@@ -261,13 +261,34 @@ func (tbl *txnTable) recurTransferDelete(
 	return nil
 }
 
-func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferred bool, err error) {
+func (tbl *txnTable) TransferDeleteNode(
+	id *common.ID, node *deleteNode, phase string,
+) (transferred bool, err error) {
+	rows := node.DeletedRows()
+	if transferred, err = tbl.TransferDeleteRows(id, rows, phase); err != nil {
+		return
+	}
+
+	// rollback transferred delete node. should not fail
+	if err = node.PrepareRollback(); err != nil {
+		panic(err)
+	}
+	if err = node.ApplyRollback(); err != nil {
+		panic(err)
+	}
+
+	tbl.commitTransferDeleteNode(id, node)
+	return
+}
+
+func (tbl *txnTable) TransferDeleteRows(id *common.ID, rows []uint32, phase string) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
 			common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
 			common.OperationField("transfer-deletes"),
-			common.OperandField(id.BlockString()))
+			common.OperandField(id.BlockString()),
+			common.AnyField("phase", phase))
 	})
 	defer func() {
 		common.DoIfInfoEnabled(func() {
@@ -275,6 +296,7 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 				common.AnyField("txn-start-ts", tbl.store.txn.GetStartTS().ToString()),
 				common.OperationField("transfer-deletes"),
 				common.OperandField(id.BlockString()),
+				common.AnyField("phase", phase),
 				common.ErrorField(err))
 		})
 		for _, m := range memo {
@@ -291,8 +313,7 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 	}
 	memo[id.BlockID] = pinned
 
-	rows := node.DeletedRows()
-	// logutil.Infof("TransferDelete deletenode %s", node.DeleteNode.(*updates.DeleteNode).GeneralVerboseString())
+	// logutil.Infof("TransferDeleteNode deletenode %s", node.DeleteNode.(*updates.DeleteNode).GeneralVerboseString())
 	page := pinned.Item()
 	depth := 0
 	for _, row := range rows {
@@ -301,16 +322,6 @@ func (tbl *txnTable) TransferDelete(id *common.ID, node *deleteNode) (transferre
 		}
 	}
 
-	// rollback transferred delete node. should not fail
-	if err = node.PrepareRollback(); err != nil {
-		panic(err)
-	}
-	if err = node.ApplyRollback(); err != nil {
-		panic(err)
-	}
-
-	tbl.commitTransferDeleteNode(id, node)
-	transferred = true
 	return
 }
 
@@ -727,6 +738,7 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32, dt handle.Del
 		}
 		return
 	}
+
 	blk, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID, id.SegmentID(),
@@ -1006,7 +1018,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 			it.Next()
 			continue
 		}
-		if dedupAfterSnapshotTS && blkData.DataCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
+		if dedupAfterSnapshotTS && blkData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
 			it.Next()
 			continue
 		}
@@ -1081,10 +1093,16 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 				it.Next()
 				continue
 			}
-			if dedupAfterSnapshotTS && blkData.DataCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
+
+			// if it is in the incremental deduplication scenario
+			// coarse check whether all rows in this block are committed before the snapshot timestamp
+			// if true, skip this block's deduplication
+			if dedupAfterSnapshotTS &&
+				blkData.CoarseCheckAllRowsCommittedBefore(tbl.store.txn.GetSnapshotTS()) {
 				it.Next()
 				continue
 			}
+
 			var rowmask *roaring.Bitmap
 			if len(tbl.deleteNodes) > 0 {
 				fp := blk.AsCommonID()

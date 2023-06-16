@@ -67,7 +67,9 @@ import (
 func TestAppend(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := newTestEngine(t, nil)
+	ctx := context.Background()
+
+	tae := newTestEngine(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(14, 3)
 	schema.BlockMaxRows = options.DefaultBlockMaxRows
@@ -96,8 +98,10 @@ func TestAppend(t *testing.T) {
 func TestAppend2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
@@ -155,8 +159,10 @@ func TestAppend2(t *testing.T) {
 func TestAppend3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchema(2, 0)
 	schema.BlockMaxRows = 10
@@ -180,8 +186,10 @@ func TestAppend3(t *testing.T) {
 func TestAppend4(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	defer tae.Close()
 	schema1 := catalog.MockSchemaAll(18, 14)
 	schema2 := catalog.MockSchemaAll(18, 15)
@@ -313,8 +321,10 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 func TestCRUD(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	defer tae.Close()
 	createDB(t, tae, defaultTestDB)
 	withTestAllPKType(t, tae, testCRUD)
@@ -323,7 +333,9 @@ func TestCRUD(t *testing.T) {
 func TestTableHandle(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	schema := catalog.MockSchema(2, 0)
@@ -347,7 +359,9 @@ func TestTableHandle(t *testing.T) {
 func TestCreateBlock(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 
 	txn, _ := db.StartTxn(nil)
@@ -375,7 +389,9 @@ func TestCreateBlock(t *testing.T) {
 func TestNonAppendableBlock(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 1)
 	schema.BlockMaxRows = 10
@@ -453,7 +469,9 @@ func TestNonAppendableBlock(t *testing.T) {
 func TestCreateSegment(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
 	txn, _ := tae.StartTxn(nil)
@@ -485,8 +503,10 @@ func TestCreateSegment(t *testing.T) {
 func TestCompactBlock1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
@@ -580,7 +600,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
+		changes, err := dataBlock.CollectChangesInRange(context.Background(), txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
 		assert.Equal(t, 2, changes.DeleteMask.GetCardinality())
 
@@ -599,8 +619,10 @@ func TestCompactBlock1(t *testing.T) {
 func TestAddBlksWithMetaLoc(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 
 	worker := ops.NewOpWorker(context.Background(), "xx")
@@ -757,11 +779,12 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 }
 
 func TestCompactMemAlter(t *testing.T) {
-
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 
 	worker := ops.NewOpWorker(context.Background(), "xx")
@@ -820,8 +843,10 @@ func TestCompactMemAlter(t *testing.T) {
 func TestCompactBlock2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 
 	worker := ops.NewOpWorker(context.Background(), "xx")
@@ -1075,8 +1100,10 @@ func TestCompactBlock2(t *testing.T) {
 func TestAutoCompactABlk1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 1000
@@ -1109,10 +1136,12 @@ func TestAutoCompactABlk1(t *testing.T) {
 func TestAutoCompactABlk2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
 	opts = config.WithQuickScanAndCKPOpts(opts)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 
 	schema1 := catalog.MockSchemaAll(13, 2)
@@ -1181,7 +1210,9 @@ func TestAutoCompactABlk2(t *testing.T) {
 func TestCompactABlk(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 1000
@@ -1219,7 +1250,9 @@ func TestCompactABlk(t *testing.T) {
 func TestRollback1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 	schema := catalog.MockSchema(2, 0)
 
@@ -1286,7 +1319,9 @@ func TestRollback1(t *testing.T) {
 func TestMVCC1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 40
@@ -1359,7 +1394,9 @@ func TestMVCC1(t *testing.T) {
 func TestMVCC2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	db := initDB(t, nil)
+	ctx := context.Background()
+
+	db := initDB(ctx, t, nil)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 100
@@ -1411,9 +1448,11 @@ func TestMVCC2(t *testing.T) {
 func TestUnload1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 
 	schema := catalog.MockSchemaAll(13, 2)
@@ -1454,9 +1493,11 @@ func TestUnload1(t *testing.T) {
 func TestUnload2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
-	db := initDB(t, opts)
+	db := initDB(ctx, t, opts)
 	defer db.Close()
 
 	schema1 := catalog.MockSchemaAll(13, 2)
@@ -1522,7 +1563,9 @@ func TestUnload2(t *testing.T) {
 func TestDelete1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(3, 2)
@@ -1609,7 +1652,9 @@ func TestDelete1(t *testing.T) {
 func TestLogIndex1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 0)
 	schema.BlockMaxRows = 10
@@ -1663,7 +1708,9 @@ func TestLogIndex1(t *testing.T) {
 func TestCrossDBTxn(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 
 	txn, _ := tae.StartTxn(nil)
@@ -1724,7 +1771,9 @@ func TestCrossDBTxn(t *testing.T) {
 func TestSystemDB1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
@@ -1867,7 +1916,9 @@ func TestSystemDB1(t *testing.T) {
 func TestSystemDB2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 
 	txn, _ := tae.StartTxn(nil)
@@ -1905,7 +1956,8 @@ func TestSystemDB2(t *testing.T) {
 func TestSystemDB3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	txn, _ := tae.StartTxn(nil)
 	schema := catalog.MockSchemaAll(13, 12)
@@ -1925,7 +1977,8 @@ func TestSystemDB3(t *testing.T) {
 func TestScan1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 2)
@@ -1944,7 +1997,9 @@ func TestScan1(t *testing.T) {
 func TestDedup(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 2)
@@ -1967,7 +2022,9 @@ func TestDedup(t *testing.T) {
 func TestScan2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 10
@@ -2010,7 +2067,9 @@ func TestScan2(t *testing.T) {
 func TestADA(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 1000
@@ -2113,7 +2172,9 @@ func TestADA(t *testing.T) {
 func TestUpdateByFilter(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 3)
 	bat := catalog.MockBatch(schema, 100)
@@ -2151,7 +2212,9 @@ func TestUpdateByFilter(t *testing.T) {
 func TestGetByFilter(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	bat := catalog.MockBatch(schema, 10)
@@ -2199,7 +2262,9 @@ func TestGetByFilter(t *testing.T) {
 func TestChaos1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100000
@@ -2282,7 +2347,9 @@ func TestChaos1(t *testing.T) {
 func TestSnapshotIsolation1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
@@ -2339,8 +2406,10 @@ func TestSnapshotIsolation1(t *testing.T) {
 func TestSnapshotIsolation2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := initDB(t, opts)
+	tae := initDB(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
@@ -2380,7 +2449,9 @@ func TestSnapshotIsolation2(t *testing.T) {
 func TestMergeBlocks(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	tae := initDB(t, nil)
+	ctx := context.Background()
+
+	tae := initDB(ctx, t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, -1)
 	schema.BlockMaxRows = 10
@@ -2438,8 +2509,10 @@ func TestMergeBlocks(t *testing.T) {
 func TestSegDelLogtail(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, -1)
 	schema.BlockMaxRows = 10
@@ -2517,7 +2590,7 @@ func TestSegDelLogtail(t *testing.T) {
 	}
 	check()
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -2540,8 +2613,10 @@ func TestSegDelLogtail(t *testing.T) {
 func TestMergeblocks2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 3
@@ -2633,8 +2708,10 @@ func TestMergeblocks2(t *testing.T) {
 func TestMergeEmptyBlocks(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 3
@@ -2689,8 +2766,10 @@ func TestMergeEmptyBlocks(t *testing.T) {
 func TestDelete2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 11)
 	schema.BlockMaxRows = 10
@@ -2713,8 +2792,10 @@ func TestDelete2(t *testing.T) {
 func TestNull1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 9)
 	schema.BlockMaxRows = 10
@@ -2737,7 +2818,7 @@ func TestNull1(t *testing.T) {
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 	txn, rel = tae.getRelation()
 	blk = getOneBlock(rel)
 	view, err = blk.GetColumnDataById(context.Background(), 3)
@@ -2780,7 +2861,7 @@ func TestNull1(t *testing.T) {
 	assert.True(t, uv_isNull)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:2]), false)
 	_, uv_isNull, err = rel.GetValueByFilter(context.Background(), filter_4, 3)
@@ -2816,7 +2897,7 @@ func TestNull1(t *testing.T) {
 	assert.True(t, uv0_2_isNull)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	_, uv0_1_isNull, err = rel.GetValueByFilter(context.Background(), filter0_1, 12)
@@ -2831,8 +2912,10 @@ func TestNull1(t *testing.T) {
 func TestTruncate(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 15)
 	schema.BlockMaxRows = 10
@@ -2879,8 +2962,10 @@ func TestTruncate(t *testing.T) {
 func TestGetColumnData(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 13)
 	schema.BlockMaxRows = 10
@@ -2938,8 +3023,10 @@ func TestGetColumnData(t *testing.T) {
 func TestCompactBlk1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
@@ -3011,7 +3098,7 @@ func TestCompactBlk1(t *testing.T) {
 	checkAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 
-	tae.restart()
+	tae.restart(ctx)
 	_, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
@@ -3020,8 +3107,10 @@ func TestCompactBlk1(t *testing.T) {
 func TestCompactBlk2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
@@ -3108,15 +3197,17 @@ func TestCompactBlk2(t *testing.T) {
 	_, _, err = rel.GetByFilter(context.Background(), filter)
 	assert.NotNil(t, err)
 
-	tae.restart()
+	tae.restart(ctx)
 	assert.Equal(t, int64(2), rel.Rows())
 }
 
 func TestCompactblk3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
@@ -3168,8 +3259,10 @@ func TestCompactblk3(t *testing.T) {
 func TestImmutableIndexInAblk(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
@@ -3225,8 +3318,10 @@ func TestImmutableIndexInAblk(t *testing.T) {
 func TestDelete3(t *testing.T) {
 	// t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
@@ -3272,8 +3367,10 @@ func TestDelete3(t *testing.T) {
 
 func TestDropCreated1(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	txn, err := tae.StartTxn(nil)
@@ -3287,13 +3384,15 @@ func TestDropCreated1(t *testing.T) {
 	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
 	assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
 
-	tae.restart()
+	tae.restart(ctx)
 }
 
 func TestDropCreated2(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	schema := catalog.MockSchemaAll(1, -1)
 	defer tae.Close()
 
@@ -3310,13 +3409,15 @@ func TestDropCreated2(t *testing.T) {
 	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
 	assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
 
-	tae.restart()
+	tae.restart(ctx)
 }
 
 func TestDropCreated3(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	txn, err := tae.StartTxn(nil)
@@ -3330,13 +3431,15 @@ func TestDropCreated3(t *testing.T) {
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
 	assert.Nil(t, err)
 
-	tae.restart()
+	tae.restart(ctx)
 }
 
 func TestDropCreated4(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	schema := catalog.MockSchemaAll(1, -1)
 	defer tae.Close()
 
@@ -3353,19 +3456,23 @@ func TestDropCreated4(t *testing.T) {
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now())
 	assert.Nil(t, err)
 
-	tae.restart()
+	tae.restart(ctx)
 }
 
 // records create at 1 and commit
 // read by ts 1, err should be nil
 func TestReadEqualTS(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	txn, err := tae.StartTxn(nil)
+	tae.Catalog.Lock()
 	tae.Catalog.CreateDBEntryByTS("db", txn.GetStartTS())
+	tae.Catalog.Unlock()
 	assert.Nil(t, err)
 	_, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
@@ -3373,6 +3480,8 @@ func TestReadEqualTS(t *testing.T) {
 
 func TestTruncateZonemap(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	type Mod struct {
 		offset int
 		v      byte
@@ -3389,7 +3498,7 @@ func TestTruncateZonemap(t *testing.T) {
 	}
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 12) // set varchar PK
@@ -3428,7 +3537,7 @@ func TestTruncateZonemap(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	// restart without compact
-	tae.restart()
+	tae.restart(ctx)
 	txn, rel = tae.getRelation()
 	checkMinMax(rel, 1, 8)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -3436,7 +3545,7 @@ func TestTruncateZonemap(t *testing.T) {
 	// restart with compact
 	tae.compactBlocks(false)
 	tae.mergeBlocks(false)
-	tae.restart()
+	tae.restart(ctx)
 	txn, rel = tae.getRelation()
 	checkMinMax(rel, 0, 9)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -3447,7 +3556,7 @@ func TestTruncateZonemap(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	tae.compactBlocks(false)
 	tae.mergeBlocks(false)
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	_, row, err := rel.GetByFilter(context.Background(), handle.NewEQFilter(mockBytes(0xff, 35)))
@@ -3465,9 +3574,11 @@ func mustStartTxn(t *testing.T, tae *testEngine, tenantID uint32) txnif.AsyncTxn
 
 func TestMultiTenantDBOps(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	var err error
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	txn11 := mustStartTxn(t, tae, 1)
@@ -3494,7 +3605,7 @@ func TestMultiTenantDBOps(t *testing.T) {
 	assert.NoError(t, txn23.Commit(context.Background()))
 
 	txn22.Commit(context.Background())
-	tae.restart()
+	tae.restart(ctx)
 
 	txn24 := mustStartTxn(t, tae, 2)
 	// [mo_catalog, db, db2]
@@ -3525,9 +3636,11 @@ func TestMultiTenantDBOps(t *testing.T) {
 
 func TestMultiTenantMoCatalogOps(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	var err error
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	s := catalog.MockSchemaAll(1, 0)
@@ -3574,7 +3687,7 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	tae.compactBlocks(false)
 	tae.mergeBlocks(false)
 
-	tae.restart()
+	tae.restart(ctx)
 
 	reservedColumnsCnt := len(catalog.SystemDBSchema.ColDefs) +
 		len(catalog.SystemColumnSchema.ColDefs) +
@@ -3644,8 +3757,10 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 // txn2 update delete
 func TestUpdateAttr(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	schema := catalog.MockSchemaAll(1, -1)
 	defer tae.Close()
 
@@ -3678,7 +3793,7 @@ func TestUpdateAttr(t *testing.T) {
 
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	t.Log(tae.Catalog.SimplePPString(3))
 }
@@ -3700,9 +3815,11 @@ func tots(ts types.TS) *timestamp.Timestamp {
 
 func TestLogtailBasic(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
 	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	logMgr := tae.LogtailMgr
 	defer tae.Close()
 
@@ -3820,8 +3937,6 @@ func TestLogtailBasic(t *testing.T) {
 		}
 	}
 
-	ctx := context.Background()
-
 	// get db catalog change
 	resp, close, err := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
@@ -3931,8 +4046,10 @@ func TestLogtailBasic(t *testing.T) {
 // txn3: append, shouldn't get rw
 func TestGetLastAppender(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 10
@@ -3947,7 +4064,7 @@ func TestGetLastAppender(t *testing.T) {
 	tae.compactBlocks(false)
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel := tae.getRelation()
 	rel.Append(context.Background(), bats[1])
@@ -3962,8 +4079,10 @@ func TestGetLastAppender(t *testing.T) {
 // TODO 1. in2pc committs!=preparets; 2. abort
 func TestCollectInsert(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 20
@@ -4035,8 +4154,10 @@ func TestCollectInsert(t *testing.T) {
 // collect [0,p1] [0,p2] [p1+1,p2] [p1+1,p3]
 func TestCollectDelete(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 20
@@ -4067,44 +4188,101 @@ func TestCollectDelete(t *testing.T) {
 	p3 := txn3.GetPrepareTS()
 	t.Logf("p3= %v", p3.ToString())
 
-	_, rel = tae.getRelation()
+	txn, rel := tae.getRelation()
 	blkit = rel.MakeBlockIt()
-	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
+	blkhandle := blkit.GetBlock()
+	blkdata := blkhandle.GetMeta().(*catalog.BlockEntry).GetBlockData()
 
 	batch, err := blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p1, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 1, vec.Length())
 	}
+	view, err := blkdata.CollectChangesInRange(context.Background(), types.TS{}, p1)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 1, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p2, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 4, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), types.TS{}, p2)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 4, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p2, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 3, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p2)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 3, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 5, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p3)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 5, view.DeleteMask.GetCardinality())
+
+	blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+	assert.NoError(t, err)
+	writer.SetPrimaryKey(3)
+	writer.WriteBatch(containers.ToCNBatch(batch))
+	blocks, _, err := writer.Sync(context.TODO())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(blocks))
+
+	deltaLoc := blockio.EncodeLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(batch.Length()),
+		blocks[0].GetID(),
+	)
+
+	err = blkhandle.UpdateDeltaLoc(deltaLoc)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	blkdata.GCInMemeoryDeletesByTS(p3)
+
+	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true)
+	assert.NoError(t, err)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
+		assert.Equal(t, 5, vec.Length())
+	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p3)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 5, view.DeleteMask.GetCardinality())
+
 }
 
 func TestAppendnode(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 10000
@@ -4139,14 +4317,16 @@ func TestAppendnode(t *testing.T) {
 	wg.Wait()
 	tae.checkRowsByScan(appendCnt, true)
 
-	tae.restart()
+	tae.restart(ctx)
 	tae.checkRowsByScan(appendCnt, true)
 }
 
 func TestTxnIdempotent(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(1, 0)
@@ -4177,8 +4357,10 @@ func TestTxnIdempotent(t *testing.T) {
 // expect that there are some dirty tables at first and then zero dirty table found
 func TestWatchDirty(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	logMgr := tae.LogtailMgr
 
@@ -4239,8 +4421,10 @@ func TestWatchDirty(t *testing.T) {
 
 func TestDirtyWatchRace(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(2, -1)
@@ -4293,8 +4477,10 @@ func TestDirtyWatchRace(t *testing.T) {
 
 func TestBlockRead(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	tsAlloc := types.NewTsAlloctor(opts.Clock)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2, 1)
@@ -4407,8 +4593,10 @@ func TestBlockRead(t *testing.T) {
 func TestCompactDeltaBlk(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 6
@@ -4484,7 +4672,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 	checkAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
 
-	tae.restart()
+	tae.restart(ctx)
 	_, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, 3, true)
 	assert.Equal(t, int64(3), rel.Rows())
@@ -4492,8 +4680,10 @@ func TestCompactDeltaBlk(t *testing.T) {
 
 func TestFlushTable(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	tae.BGCheckpointRunner.DebugUpdateOptions(
@@ -4534,8 +4724,10 @@ func TestFlushTable(t *testing.T) {
 
 func TestReadCheckpoint(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(3, 1)
@@ -4603,7 +4795,7 @@ func TestReadCheckpoint(t *testing.T) {
 			}
 		}
 	}
-	tae.restart()
+	tae.restart(ctx)
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
@@ -4623,8 +4815,10 @@ func TestReadCheckpoint(t *testing.T) {
 func TestDelete4(t *testing.T) {
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.NewEmptySchema("xx")
 	schema.AppendPKCol("name", types.T_varchar.ToType(), 0)
@@ -4717,7 +4911,7 @@ func TestDelete4(t *testing.T) {
 		getValueFn()
 		scanFn()
 
-		tae.restart()
+		tae.restart(ctx)
 
 		getValueFn()
 		scanFn()
@@ -4732,8 +4926,10 @@ func TestDelete4(t *testing.T) {
 
 // append, delete, apppend, get start ts, compact, get active row
 func TestGetActiveRow(t *testing.T) {
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(3, 1)
@@ -4774,8 +4970,10 @@ func TestGetActiveRow(t *testing.T) {
 	assert.NoError(t, err)
 }
 func TestTransfer(t *testing.T) {
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 100
@@ -4814,8 +5012,10 @@ func TestTransfer(t *testing.T) {
 }
 
 func TestTransfer2(t *testing.T) {
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 10
@@ -4851,8 +5051,10 @@ func TestTransfer2(t *testing.T) {
 }
 
 func TestMergeBlocks3(t *testing.T) {
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 10
@@ -4947,8 +5149,10 @@ func TestMergeBlocks3(t *testing.T) {
 
 func TestCompactEmptyBlock(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 3
@@ -4978,7 +5182,7 @@ func TestCompactEmptyBlock(t *testing.T) {
 	assert.Equal(t, 2, blkCnt)
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae.restart()
+	tae.restart(ctx)
 
 	blkCnt = 0
 	_, rel = tae.getRelation()
@@ -4991,8 +5195,10 @@ func TestCompactEmptyBlock(t *testing.T) {
 
 func TestTransfer3(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 100
@@ -5026,9 +5232,11 @@ func TestTransfer3(t *testing.T) {
 func TestUpdate(t *testing.T) {
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts2(nil, 5)
 	// opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(5, 3)
@@ -5099,11 +5307,13 @@ func TestUpdate(t *testing.T) {
 func TestAlwaysUpdate(t *testing.T) {
 	t.Skip("This is a long test, run it manully to observe catalog")
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts2(nil, 100)
 	opts.GCCfg.ScanGCInterval = 3600 * time.Second
 	opts.CatalogCfg.GCInterval = 3600 * time.Second
 	// opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(5, 3)
@@ -5199,10 +5409,12 @@ func TestAlwaysUpdate(t *testing.T) {
 
 func TestInsertPerf(t *testing.T) {
 	t.Skip(any("for debug"))
+	ctx := context.Background()
+
 	opts := new(options.Options)
 	options.WithCheckpointScanInterval(time.Second * 10)(opts)
 	options.WithFlushInterval(time.Second * 10)(opts)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 1000
@@ -5269,8 +5481,10 @@ func TestAppendBat(t *testing.T) {
 
 func TestGCWithCheckpoint(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	manager := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
@@ -5321,8 +5535,10 @@ func TestGCWithCheckpoint(t *testing.T) {
 
 func TestGCDropDB(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	manager := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
@@ -5372,13 +5588,15 @@ func TestGCDropDB(t *testing.T) {
 	tables1 := manager.GetInputs()
 	tables2 := manager2.GetInputs()
 	assert.True(t, tables1.Compare(tables2))
-	tae.restart()
+	tae.restart(ctx)
 }
 
 func TestGCDropTable(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	manager := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
@@ -5443,13 +5661,15 @@ func TestGCDropTable(t *testing.T) {
 	tables1 := manager.GetInputs()
 	tables2 := manager2.GetInputs()
 	assert.True(t, tables1.Compare(tables2))
-	tae.restart()
+	tae.restart(ctx)
 }
 
 func TestAlterRenameTbl(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(2, -1)
@@ -5596,7 +5816,7 @@ func TestAlterRenameTbl(t *testing.T) {
 
 		t.Log(5, db.GetMeta().(*catalog.DBEntry).PrettyNameIndex())
 	}
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
@@ -5607,8 +5827,10 @@ func TestAlterRenameTbl(t *testing.T) {
 
 func TestAlterTableBasic(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(2, -1)
@@ -5644,7 +5866,6 @@ func TestAlterTableBasic(t *testing.T) {
 		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
 	}
 
-	ctx := context.Background()
 	resp, close, _ := logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
 		CnWant: tots(types.MaxTs()),
@@ -5666,7 +5887,7 @@ func TestAlterTableBasic(t *testing.T) {
 
 	close()
 
-	tae.restart()
+	tae.restart(ctx)
 
 	resp, close, _ = logtail.HandleSyncLogTailReq(ctx, new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(types.BuildTS(0, 0)),
@@ -5711,8 +5932,10 @@ func TestAlterTableBasic(t *testing.T) {
 func TestAlterColumnAndFreeze(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 5)
 	schema.BlockMaxRows = 10
@@ -5770,7 +5993,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	// GetValueByFilter() is combination of GetByFilter and GetValue
 	// GetValueByPhyAddrKey is GetValue
 
-	tae.restart()
+	tae.restart(ctx)
 
 	txn, rel = tae.getRelation()
 	schema1 := rel.Schema().(*catalog.Schema)
@@ -5857,10 +6080,12 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 func TestGlobalCheckpoint1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCheckpointGlobalMinCount(1)(opts)
 	options.WithGlobalVersionInterval(time.Millisecond * 10)(opts)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 10
@@ -5871,7 +6096,7 @@ func TestGlobalCheckpoint1(t *testing.T) {
 	tae.createRelAndAppend(bat, true)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	tae.restart()
+	tae.restart(ctx)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	tae.checkRowsByScan(400, true)
 
@@ -5879,18 +6104,20 @@ func TestGlobalCheckpoint1(t *testing.T) {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 
-	tae.restart()
+	tae.restart(ctx)
 	tae.checkRowsByScan(400, true)
 }
 
 func TestAppendAndGC(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	db := tae.DB
 	db.DiskCleaner.SetMinMergeCountForTest(2)
@@ -5943,7 +6170,7 @@ func TestAppendAndGC(t *testing.T) {
 		return db.DiskCleaner.GetMinMerged() != nil
 	})
 	assert.NotNil(t, minMerged)
-	tae.restart()
+	tae.restart(ctx)
 	db = tae.DB
 	db.DiskCleaner.SetMinMergeCountForTest(2)
 	testutils.WaitExpect(5000, func() bool {
@@ -5961,10 +6188,12 @@ func TestAppendAndGC(t *testing.T) {
 func TestGlobalCheckpoint2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCheckpointGlobalMinCount(1)(opts)
 	options.WithDisableGCCatalog()(opts)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	defer tae.Close()
@@ -6015,7 +6244,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	assert.True(t, tableExisted)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.restart()
+	tae.restart(ctx)
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	tableExisted = false
@@ -6034,11 +6263,13 @@ func TestGlobalCheckpoint3(t *testing.T) {
 	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCheckpointGlobalMinCount(1)(opts)
 	options.WithGlobalVersionInterval(time.Nanosecond * 1)(opts)
 	options.WithDisableGCCatalog()(opts)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 10
@@ -6073,7 +6304,7 @@ func TestGlobalCheckpoint3(t *testing.T) {
 	assert.NoError(t, tae.Catalog.RecurLoop(p))
 	assert.True(t, tableExisted)
 
-	tae.restart()
+	tae.restart(ctx)
 
 	tableExisted = false
 	assert.NoError(t, tae.Catalog.RecurLoop(p))
@@ -6084,8 +6315,10 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
@@ -6118,7 +6351,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	tae.createRelAndAppend(bat, true)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.restart()
+	tae.restart(ctx)
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t.Log(tae.Catalog.SimplePPString(3))
@@ -6139,7 +6372,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	tae.createRelAndAppend(bat, false)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.restart()
+	tae.restart(ctx)
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t.Log(tae.Catalog.SimplePPString(3))
@@ -6148,8 +6381,10 @@ func TestGlobalCheckpoint4(t *testing.T) {
 func TestGlobalCheckpoint5(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
@@ -6187,7 +6422,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	tae.checkRowsByScan(40, true)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.restart()
+	tae.restart(ctx)
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	t.Log(tae.Catalog.SimplePPString(3))
@@ -6209,8 +6444,10 @@ func TestGlobalCheckpoint6(t *testing.T) {
 	t.Skip("This case crashes occasionally, is being fixed, skip it for now")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
@@ -6243,7 +6480,7 @@ func TestGlobalCheckpoint6(t *testing.T) {
 		rows := (i + 2) * batchsize
 		tae.checkRowsByScan(rows, true)
 		t.Log(tae.Catalog.SimplePPString(3))
-		tae.restart()
+		tae.restart(ctx)
 		tae.BGCheckpointRunner.DisableCheckpoint()
 		tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 		t.Log(tae.Catalog.SimplePPString(3))
@@ -6254,8 +6491,10 @@ func TestGlobalCheckpoint6(t *testing.T) {
 func TestGCCheckpoint1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(18, 2)
@@ -6312,8 +6551,10 @@ func TestGCCheckpoint1(t *testing.T) {
 
 func TestGCCatalog1(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	txn1, _ := tae.StartTxn(nil)
@@ -6509,9 +6750,11 @@ func TestGCCatalog1(t *testing.T) {
 
 func TestGCCatalog2(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchema(3, 2)
 	schema.BlockMaxRows = 10
@@ -6544,9 +6787,11 @@ func TestGCCatalog2(t *testing.T) {
 }
 func TestGCCatalog3(t *testing.T) {
 	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchema(3, 2)
 	schema.BlockMaxRows = 10
@@ -6591,8 +6836,10 @@ func TestForceCheckpoint(t *testing.T) {
 		err := fault.RemoveFaultPoint(context.Background(), "tae: flush timeout")
 		assert.NoError(t, err)
 	}()
+	ctx := context.Background()
+
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(18, 2)
@@ -6610,7 +6857,8 @@ func TestForceCheckpoint(t *testing.T) {
 }
 
 func TestLogailAppend(t *testing.T) {
-	tae := newTestEngine(t, nil)
+	ctx := context.Background()
+	tae := newTestEngine(ctx, t, nil)
 	defer tae.Close()
 	tae.DB.LogtailMgr.RegisterCallback(logtail.MockCallback)
 	schema := catalog.MockSchemaAll(13, 2)
@@ -6636,8 +6884,9 @@ func TestLogailAppend(t *testing.T) {
 }
 
 func TestSnapshotLag1(t *testing.T) {
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(14, 3)
@@ -6670,8 +6919,9 @@ func TestSnapshotLag1(t *testing.T) {
 }
 
 func TestMarshalPartioned(t *testing.T) {
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(14, 3)
@@ -6690,7 +6940,7 @@ func TestMarshalPartioned(t *testing.T) {
 	partioned := rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
-	tae.restart()
+	tae.restart(ctx)
 
 	_, rel = tae.getRelation()
 	partioned = rel.Schema().(*catalog.Schema).Partitioned
@@ -6703,7 +6953,7 @@ func TestMarshalPartioned(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 
-	tae.restart()
+	tae.restart(ctx)
 
 	_, rel = tae.getRelation()
 	partioned = rel.Schema().(*catalog.Schema).Partitioned
@@ -6711,8 +6961,9 @@ func TestMarshalPartioned(t *testing.T) {
 }
 
 func TestDedup2(t *testing.T) {
+	ctx := context.Background()
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(14, 3)
@@ -6739,8 +6990,9 @@ func TestDedup2(t *testing.T) {
 }
 
 func TestCompactLargeTable(t *testing.T) {
+	ctx := context.Background()
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(600, 3)
@@ -6753,7 +7005,7 @@ func TestCompactLargeTable(t *testing.T) {
 
 	tae.createRelAndAppend(data, true)
 
-	tae.restart()
+	tae.restart(ctx)
 
 	tae.checkRowsByScan(10, true)
 
@@ -6761,14 +7013,15 @@ func TestCompactLargeTable(t *testing.T) {
 		return tae.Wal.GetPenddingCnt() == 0
 	})
 
-	tae.restart()
+	tae.restart(ctx)
 
 	tae.checkRowsByScan(10, true)
 }
 
 func TestCommitS3Blocks(t *testing.T) {
+	ctx := context.Background()
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(60, 3)
@@ -6823,8 +7076,10 @@ func TestCommitS3Blocks(t *testing.T) {
 func TestDedupSnapshot1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 3)
@@ -6850,8 +7105,10 @@ func TestDedupSnapshot1(t *testing.T) {
 func TestDedupSnapshot2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 3)
@@ -6893,8 +7150,10 @@ func TestDedupSnapshot2(t *testing.T) {
 func TestDedupSnapshot3(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
 	opts := config.WithQuickScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13, 3)
@@ -6947,8 +7206,9 @@ func TestDedupSnapshot3(t *testing.T) {
 }
 
 func TestDeduplication(t *testing.T) {
+	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
+	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(60, 3)
@@ -7031,4 +7291,95 @@ func TestDeduplication(t *testing.T) {
 	}
 	tae.checkRowsByScan(rows, false)
 	t.Logf(tae.Catalog.SimplePPString(3))
+}
+
+func TestGCInMemeoryDeletesByTS(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 100
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = uint32(rows)
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	tae.createRelAndAppend(bat, true)
+
+	txn, rel := tae.getRelation()
+	blkit := rel.MakeBlockIt()
+	blkHandle := blkit.GetBlock()
+	blkMeta := blkHandle.GetMeta().(*catalog.BlockEntry)
+	blkID := blkMeta.AsCommonID()
+	blkData := blkMeta.GetBlockData()
+	assert.NoError(t, txn.Commit(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		i := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				ts := tae.TxnMgr.StatMaxCommitTS()
+				batch, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true)
+				assert.NoError(t, err)
+				if batch == nil {
+					continue
+				}
+
+				blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), uint16(i))
+				writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+				assert.NoError(t, err)
+				writer.SetPrimaryKey(3)
+				writer.WriteBatch(containers.ToCNBatch(batch))
+				blocks, _, err := writer.Sync(context.TODO())
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(blocks))
+
+				deltaLoc := blockio.EncodeLocation(
+					writer.GetName(),
+					blocks[0].GetExtent(),
+					uint32(batch.Length()),
+					blocks[0].GetID(),
+				)
+
+				txn, rel := tae.getRelation()
+				blkit := rel.MakeBlockIt()
+				blkHandle := blkit.GetBlock()
+				err = blkHandle.UpdateDeltaLoc(deltaLoc)
+				assert.NoError(t, err)
+				assert.NoError(t, txn.Commit(context.Background()))
+
+				blkData.GCInMemeoryDeletesByTS(ts)
+			}
+			i++
+		}
+	}()
+
+	for offset := 0; offset < rows; offset++ {
+		txn, rel := tae.getRelation()
+		assert.NoError(t, rel.RangeDelete(blkID, uint32(offset), uint32(offset), handle.DT_Normal))
+		assert.NoError(t, txn.Commit(context.Background()))
+		ts := txn.GetCommitTS()
+
+		batch, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true)
+		assert.NoError(t, err)
+		t.Logf(logtail.BatchToString("", batch, false))
+		for i, vec := range batch.Vecs {
+			t.Logf(batch.Attrs[i])
+			assert.Equal(t, offset+1, vec.Length())
+		}
+		view, err := blkData.CollectChangesInRange(context.Background(), types.TS{}, ts)
+		assert.NoError(t, err)
+		t.Logf(view.DeleteMask.String())
+		assert.Equal(t, offset+1, view.DeleteMask.GetCardinality())
+	}
+	cancel()
+	wg.Wait()
+
 }

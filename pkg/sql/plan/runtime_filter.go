@@ -61,7 +61,6 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	if statsCache == nil {
 		return
 	}
-	statsMap := statsCache.GetStatsInfoMap(leftChild.TableDef.TblId)
 
 	leftTags := make(map[int32]any)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
@@ -104,8 +103,8 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	rfTag := builder.genNewTag()
 
 	if len(probeExprs) == 1 {
-		probeNdv := getExprNdv(probeExprs[0], statsMap.NdvMap, node.Children[0], builder)
-		if probeNdv == 0 || node.Stats.HashmapSize/probeNdv >= 0.1 {
+		probeNdv := getExprNdv(probeExprs[0], builder)
+		if probeNdv == -1 || node.Stats.HashmapSize/probeNdv >= 0.1 {
 			return
 		}
 
