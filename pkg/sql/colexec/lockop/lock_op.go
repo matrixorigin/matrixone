@@ -522,6 +522,9 @@ func (arg *Argument) AddLockTargetWithPartition(
 func (arg *Argument) Free(
 	proc *process.Process,
 	pipelineFailed bool) {
+	if arg.rt == nil {
+		return
+	}
 	if arg.rt.parker != nil {
 		arg.rt.parker.FreeMem()
 	}
