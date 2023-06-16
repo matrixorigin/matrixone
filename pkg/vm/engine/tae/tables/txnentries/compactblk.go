@@ -125,6 +125,7 @@ func (entry *compactBlockEntry) ApplyRollback() (err error) {
 }
 func (entry *compactBlockEntry) ApplyCommit() (err error) {
 	_ = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().TryUpgrade()
+	entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().GCInMemeoryDeletesByTS(entry.txn.GetCommitTS())
 	return
 }
 
