@@ -97,6 +97,9 @@ drop table statement_info03;
 
 -- dcl test
 drop account if exists test_account;
+drop role if exists test_role;
+drop user if exists user_name;
+drop database if exists db1;
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 create role test_role;
 create user user_name identified by 'password';
@@ -106,6 +109,7 @@ revoke test_role from user_name;
 drop user user_name;
 drop role test_role;
 drop account test_account;
+drop database db1;
 select sleep(10);
 
 select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql' order by response_at desc limit 5;
@@ -145,16 +149,21 @@ insert into case01 values('uppERCASE and uppercase');
 insert into case01 Values(NulL);
 insert INTO case01 values('**&&*nUll');
 insert into case01 values();
-drop table cASE01;
 select * FROM caseE01 where col1 is null;
+drop table cASE01;
+drop account if exists Account_user01;
+drop role if exists role_Role;
+drop user if exists User_test;
+drop database if exists db1;
 create account Account_user01 admin_name = 'Account_test01' identified by '111' open comment 'tenant_test';
 creatE role role_Role;
 create user User_test identified by '123456';
 create DATABASE iF noT exists db1;
-grant create table,drop table on database *.* to test_role;
+grant create table,drop table on database *.* to role_Role;
 drop database db1;
 drop user user_test;
 drop account account_user01;
+drop role role_Role;
 select sleep(10);
 select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
@@ -193,7 +202,7 @@ execute s1 using @a;
 deallocate prepare s1;
 select sleep(10);
 select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
-
+drop table test_table;
 
 
 -- create a new tenant and connect to the database and test the same
@@ -219,6 +228,7 @@ update dml01 set col1 = null where col2 = -3232142.32421421;
 select * from dml01 where col1 = 12.234214;
 select count(*) from dml01 where col2 = -3232142.32421421;
 select * from dml01 order by col1 desc;
+drop table dml01;
 
 
 -- tcl
@@ -269,6 +279,7 @@ prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
 deallocate prepare s1;
+drop table test_table;
 
 drop database newAccount;
 -- @session
