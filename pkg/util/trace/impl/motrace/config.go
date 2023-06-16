@@ -71,6 +71,7 @@ type tracerProviderConfig struct {
 	// stmt aggregation
 	disableStmtAggregation bool          // set by WithStmtAggregationDisable
 	aggregationWindow      time.Duration // WithAggregationWindow
+	selectAggrThreshold    time.Duration // WithSelectThreshold
 
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
@@ -193,6 +194,12 @@ func WithAggregatorDisable(disable bool) tracerProviderOption {
 func WithAggregatorWindow(window time.Duration) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.aggregationWindow = window
+	}
+}
+
+func WithSelectThreshold(window time.Duration) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.selectAggrThreshold = window
 	}
 }
 

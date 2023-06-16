@@ -108,7 +108,7 @@ func StatementInfoFilter(i Item) bool {
 			return true
 		case "Select":
 			// For 'select', also check if Duration is longer than 200 milliseconds
-			if statementInfo.Duration < 200*time.Millisecond {
+			if statementInfo.Duration < GetTracerProvider().selectAggrThreshold {
 				return true
 			}
 		}

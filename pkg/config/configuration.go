@@ -167,6 +167,8 @@ var (
 	defaultLongSpanTime = 10 * time.Second
 
 	defaultAggregationWindow = 5 * time.Second
+
+	defaultSelectThreshold = 500 * time.Millisecond
 )
 
 // FrontendParameters of the frontend
@@ -603,6 +605,9 @@ type ObservabilityParameters struct {
 	// Seconds to aggregate the statements
 	AggregationWindow toml.Duration `toml:"aggregationWindow"`
 
+	// Seconds to aggregate the statements
+	SelectAggrThreshold toml.Duration `toml:"aggregationWindow"`
+
 	OBCollectorConfig
 }
 
@@ -669,6 +674,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.AggregationWindow.Duration <= 0 {
 		op.AggregationWindow.Duration = defaultAggregationWindow
+	}
+
+	if op.SelectAggrThreshold.Duration <= 0 {
+		op.SelectAggrThreshold.Duration = defaultSelectThreshold
 	}
 }
 
