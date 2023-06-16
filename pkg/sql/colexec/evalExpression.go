@@ -295,8 +295,7 @@ func (expr *FunctionExpressionExecutor) Init(
 	expr.parameterResults = make([]*vector.Vector, parameterNum)
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
 
-	v := proc.GetVector(retType)
-	expr.resultVector = vector.NewFunctionResultWrapper(v, m)
+	expr.resultVector = vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, retType, m)
 	return err
 }
 
@@ -970,8 +969,7 @@ func GetExprZoneMap(
 				fn := overload.GetExecuteMethod()
 				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 
-				v := proc.GetVector(typ)
-				result := vector.NewFunctionResultWrapper(v, proc.Mp())
+				result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, typ, proc.Mp())
 				if err = result.PreExtendAndReset(2); err != nil {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]

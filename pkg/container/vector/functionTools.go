@@ -353,6 +353,9 @@ type FunctionResult[T types.FixedSizeT] struct {
 	vec *Vector
 	mp  *mpool.MPool
 
+	getVectorMethod func(typ types.Type) *Vector
+	putVectorMethod func(vec *Vector)
+
 	isVarlena bool
 	cols      []T
 	length    uint64
@@ -365,11 +368,18 @@ func MustFunctionResult[T types.FixedSizeT](wrapper FunctionResultWrapper) *Func
 	panic("wrong type for FunctionResultWrapper")
 }
 
-func newResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResult[T] {
+func newResultFunc[T types.FixedSizeT](
+	v *Vector,
+	getVectorMethod func(typ types.Type) *Vector,
+	putVectorMethod func(vec *Vector),
+	mp *mpool.MPool) *FunctionResult[T] {
+
 	f := &FunctionResult[T]{
-		typ: *v.GetType(),
-		vec: v,
-		mp:  mp,
+		typ:             *v.GetType(),
+		vec:             v,
+		mp:              mp,
+		getVectorMethod: getVectorMethod,
+		putVectorMethod: putVectorMethod,
 	}
 
 	var tempT T
@@ -382,7 +392,7 @@ func newResultFunc[T types.FixedSizeT](v *Vector, mp *mpool.MPool) *FunctionResu
 
 func (fr *FunctionResult[T]) PreExtendAndReset(size int) error {
 	if fr.vec == nil {
-		fr.vec = NewVec(fr.typ)
+		fr.vec = fr.getVectorMethod(fr.typ)
 	}
 
 	if fr.isVarlena {
@@ -491,60 +501,64 @@ func (fr *FunctionResult[T]) Free() {
 	}
 }
 
-func NewFunctionResultWrapper(v *Vector, mp *mpool.MPool) FunctionResultWrapper {
-	typ := v.GetType()
+func NewFunctionResultWrapper(
+	getVectorMethod func(typ types.Type) *Vector,
+	putVectorMethod func(vec *Vector),
+	typ types.Type,
+	mp *mpool.MPool) FunctionResultWrapper {
+	v := getVectorMethod(typ)
 
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
 		// IF STRING type.
-		return newResultFunc[types.Varlena](v, mp)
+		return newResultFunc[types.Varlena](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_json:
-		return newResultFunc[types.Varlena](v, mp)
+		return newResultFunc[types.Varlena](v, getVectorMethod, putVectorMethod, mp)
 	}
 
 	switch typ.Oid {
 	case types.T_bool:
-		return newResultFunc[bool](v, mp)
+		return newResultFunc[bool](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_int8:
-		return newResultFunc[int8](v, mp)
+		return newResultFunc[int8](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_int16:
-		return newResultFunc[int16](v, mp)
+		return newResultFunc[int16](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_int32:
-		return newResultFunc[int32](v, mp)
+		return newResultFunc[int32](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_int64:
-		return newResultFunc[int64](v, mp)
+		return newResultFunc[int64](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_uint8:
-		return newResultFunc[uint8](v, mp)
+		return newResultFunc[uint8](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_uint16:
-		return newResultFunc[uint16](v, mp)
+		return newResultFunc[uint16](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_uint32:
-		return newResultFunc[uint32](v, mp)
+		return newResultFunc[uint32](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_uint64:
-		return newResultFunc[uint64](v, mp)
+		return newResultFunc[uint64](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_float32:
-		return newResultFunc[float32](v, mp)
+		return newResultFunc[float32](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_float64:
-		return newResultFunc[float64](v, mp)
+		return newResultFunc[float64](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_date:
-		return newResultFunc[types.Date](v, mp)
+		return newResultFunc[types.Date](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_datetime:
-		return newResultFunc[types.Datetime](v, mp)
+		return newResultFunc[types.Datetime](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_time:
-		return newResultFunc[types.Time](v, mp)
+		return newResultFunc[types.Time](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_timestamp:
-		return newResultFunc[types.Timestamp](v, mp)
+		return newResultFunc[types.Timestamp](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_decimal64:
-		return newResultFunc[types.Decimal64](v, mp)
+		return newResultFunc[types.Decimal64](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_decimal128:
-		return newResultFunc[types.Decimal128](v, mp)
+		return newResultFunc[types.Decimal128](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_TS:
-		return newResultFunc[types.TS](v, mp)
+		return newResultFunc[types.TS](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_Rowid:
-		return newResultFunc[types.Rowid](v, mp)
+		return newResultFunc[types.Rowid](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_Blockid:
-		return newResultFunc[types.Blockid](v, mp)
+		return newResultFunc[types.Blockid](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_uuid:
-		return newResultFunc[types.Uuid](v, mp)
+		return newResultFunc[types.Uuid](v, getVectorMethod, putVectorMethod, mp)
 	}
 	panic(fmt.Sprintf("unexpected type %s for function result", typ))
 }
