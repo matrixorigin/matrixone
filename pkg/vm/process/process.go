@@ -237,8 +237,9 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 		if bat.Vecs[i] != nil {
 			if !bat.Vecs[i].IsConst() && !bat.Vecs[i].NeedDup() {
 				vec := bat.Vecs[i]
-				bat.ReplaceVector(vec, nil)
-				proc.vp.putVector(vec)
+				if proc.vp.putVector(vec) {
+					bat.ReplaceVector(vec, nil)
+				}
 			} else {
 				bat.Vecs[i].Free(proc.Mp())
 			}
@@ -262,7 +263,9 @@ func (proc *Process) FreeVectors() {
 }
 
 func (proc *Process) PutVector(vec *vector.Vector) {
-	proc.vp.putVector(vec)
+	if !proc.vp.putVector(vec) {
+		vec.Free(proc.Mp())
+	}
 }
 
 func (proc *Process) GetVector(typ types.Type) *vector.Vector {
@@ -284,11 +287,15 @@ func (vp *vectorPool) freeVectors(mp *mpool.MPool) {
 	}
 }
 
-func (vp *vectorPool) putVector(vec *vector.Vector) {
+func (vp *vectorPool) putVector(vec *vector.Vector) bool {
 	vp.Lock()
 	defer vp.Unlock()
 	key := uint8(vec.GetType().Oid)
+	if len(vp.vecs[key]) < VectorLimit {
+		return false
+	}
 	vp.vecs[key] = append(vp.vecs[key], vec)
+	return true
 }
 
 func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {

@@ -36,6 +36,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+const (
+	VectorLimit = 32
+)
+
 // Analyze analyzes information for operator
 type Analyze interface {
 	Stop()

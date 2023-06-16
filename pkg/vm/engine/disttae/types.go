@@ -66,7 +66,7 @@ const (
 )
 
 const (
-	INSERT_MERGE_THRESHOLD = 1024
+	WorkspaceThreshold uint64 = 1 * mpool.MB
 )
 
 var (
@@ -119,9 +119,6 @@ type Transaction struct {
 	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
-	tableWrites   struct {
-		tableEntries map[uint64][]tableEntry
-	}
 
 	dnStores []DNStore
 	proc     *process.Process

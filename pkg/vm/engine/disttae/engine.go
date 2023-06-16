@@ -373,7 +373,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		blockId_dn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
 		batchSelectList:                 make(map[*batch.Batch][]int64),
 	}
-	txn.tableWrites.tableEntries = make(map[uint64][]tableEntry)
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)

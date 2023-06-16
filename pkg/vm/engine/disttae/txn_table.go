@@ -1222,7 +1222,6 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 		// we use 2 now.
 		return tbl.compaction()
 	}
-	tbl.db.txn.newTableWriteEntry(tbl.tableId)
 	// remoteDelete
 	if name != catalog.Row_ID {
 		return tbl.EnhanceDelete(bat, name)

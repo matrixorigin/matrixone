@@ -24,13 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (txn *Transaction) getBlockInfos(
@@ -117,9 +114,6 @@ func (txn *Transaction) WriteBatch(
 		dnStore:      dnStore,
 		truncate:     truncate,
 	}
-	if e.typ == INSERT && databaseId != catalog.MO_CATALOG_ID && !truncate {
-		txn.addTableWrite(tableId, e.bat, len(txn.writes))
-	}
 	txn.writes = append(txn.writes, e)
 	return nil
 }
@@ -129,30 +123,9 @@ func (txn *Transaction) dumpBatch(force bool, offset int) error {
 
 	txn.Lock()
 	defer txn.Unlock()
-	var S3SizeThreshold = colexec.TagS3Size
-	if txn.proc != nil && txn.proc.Ctx != nil {
-		isMoLogger, ok := txn.proc.Ctx.Value(defines.IsMoLogger{}).(bool)
-		if ok && isMoLogger {
-			S3SizeThreshold = colexec.TagS3SizeForMOLogger
-		}
-	}
-	if (!force && txn.workspaceSize < colexec.WriteS3Threshold) ||
-		(force && txn.workspaceSize < S3SizeThreshold) {
+	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
-	for i := offset; i < len(txn.writes); i++ {
-		if txn.writes[i].bat == nil {
-			continue
-		}
-		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			size += uint64(txn.writes[i].bat.Size())
-		}
-	}
-	if !((!force && size > colexec.WriteS3Threshold) ||
-		(force && size >= S3SizeThreshold)) {
-		return nil
-	}
-
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
 		// TODO: after shrink, we should update workspace size
@@ -162,6 +135,7 @@ func (txn *Transaction) dumpBatch(force bool, offset int) error {
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
 			key := [2]string{txn.writes[i].databaseName, txn.writes[i].tableName}
 			bat := txn.writes[i].bat
+			size += uint64(bat.Size())
 			// skip rowid
 			bat.Attrs = bat.Attrs[1:]
 			bat.Vecs = bat.Vecs[1:]
@@ -205,8 +179,19 @@ func (txn *Transaction) dumpBatch(force bool, offset int) error {
 			txn.proc.PutBatch(bat)
 		}
 	}
-	txn.workspaceSize -= size
-
+	if offset == 0 {
+		txn.workspaceSize = 0
+		writes := txn.writes[:0]
+		for i, write := range txn.writes {
+			if write.bat != nil {
+				writes = append(writes, txn.writes[i])
+			}
+		}
+		txn.writes = writes
+		txn.statements[txn.statementID-1] = len(txn.writes)
+	} else {
+		txn.workspaceSize -= size
+	}
 	return nil
 }
 
@@ -439,7 +424,7 @@ func (txn *Transaction) mergeTxnWorkspace() error {
 			}
 		}
 	}
-	return txn.mergeTableWrites(txn.proc)
+	return nil
 }
 
 func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
@@ -455,85 +440,4 @@ func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes
 		writes = append(writes, entry)
 	}
 	return writes
-}
-
-func (txn *Transaction) addTableWrite(id uint64, bat *batch.Batch, offset int) {
-	if _, ok := txn.tableWrites.tableEntries[id]; !ok {
-		txn.tableWrites.tableEntries[id] = []tableEntry{
-			{
-				entries: []*batch.Batch{bat},
-				offsets: []int{offset},
-				rows:    bat.Length(),
-			},
-		}
-		return
-	}
-	tes := txn.tableWrites.tableEntries[id]
-	te := tes[len(tes)-1]
-	te.rows += bat.Length()
-	te.entries = append(te.entries, bat)
-	te.offsets = append(te.offsets, offset)
-	tes[len(tes)-1] = te
-}
-
-func (txn *Transaction) newTableWriteEntry(id uint64) {
-	txn.Lock()
-	defer txn.Unlock()
-	txn.tableWrites.tableEntries[id] = append(txn.tableWrites.tableEntries[id], tableEntry{})
-}
-
-func (txn *Transaction) mergeTableWrites(proc *process.Process) error {
-	var end int
-
-	if txn.statementID > 0 {
-		end = txn.statements[txn.statementID-1]
-	}
-	for k, tes := range txn.tableWrites.tableEntries {
-		for i, te := range tes {
-			if len(te.entries) <= 1 {
-				continue
-			}
-			if te.rows < INSERT_MERGE_THRESHOLD || te.rows/len(te.entries) > INSERT_MERGE_THRESHOLD {
-				continue
-			}
-			var bat *batch.Batch
-			for i := range te.entries {
-				if bat == nil {
-					bat = te.entries[i]
-					continue
-				}
-				if bat.Length() > int(options.DefaultBlockMaxRows) {
-					bat = te.entries[i]
-					continue
-				}
-				if te.offsets[i] >= end {
-					break
-				}
-				if txn.writes[te.offsets[i]].bat != nil {
-					for j, vec := range bat.Vecs {
-						if err := vector.GetUnionAllFunction(*vec.GetType(), proc.Mp())(vec, te.entries[i].Vecs[j]); err != nil {
-							return err
-						}
-					}
-					bat.Zs = append(bat.Zs, te.entries[i].Zs...)
-					proc.PutBatch(te.entries[i])
-					txn.writes[te.offsets[i]].bat = nil
-				}
-				te.entries[i] = nil
-			}
-			offsets := te.offsets[:0]
-			entries := te.entries[:0]
-			for i := range te.entries {
-				if te.entries[i] != nil {
-					offsets = append(offsets, te.offsets[i])
-					entries = append(entries, te.entries[i])
-				}
-			}
-			te.offsets = offsets
-			te.entries = entries
-			tes[i] = te
-		}
-		txn.tableWrites.tableEntries[k] = tes[len(tes)-1:]
-	}
-	return nil
 }
