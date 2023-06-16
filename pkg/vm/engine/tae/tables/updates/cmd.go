@@ -99,7 +99,7 @@ func NewDeleteCmd(id uint32, del *DeleteNode) *UpdateCmd {
 	impl := &UpdateCmd{
 		delete:  del,
 		cmdType: IOET_WALTxnCommand_DeleteNode,
-		dest:    del.chain.Load().mvcc.meta.AsCommonID(),
+		dest:    del.chain.mvcc.meta.AsCommonID(),
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl

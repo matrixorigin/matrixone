@@ -84,7 +84,7 @@ type Block interface {
 	RangeDelete(txn txnif.AsyncTxn, start, end uint32, dt handle.DeleteType) (txnif.DeleteNode, error)
 
 	GetTotalChanges() int
-	CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (*model.BlockView, error)
+	CollectChangesInRange(startTs, endTs types.TS) (*model.BlockView, error)
 
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) bool
@@ -117,7 +117,6 @@ type Block interface {
 
 	Init() error
 	TryUpgrade() error
-	GCInMemeoryDeletesByTS(types.TS)
 	CollectAppendInRange(start, end types.TS, withAborted bool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool) (*containers.Batch, error)
 	// GetAppendNodeByRow(row uint32) (an txnif.AppendNode)

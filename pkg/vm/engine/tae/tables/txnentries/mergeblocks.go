@@ -205,7 +205,6 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 
 	dataBlock := dropped.GetBlockData()
 	if view, err = dataBlock.CollectChangesInRange(
-		entry.txn.GetContext(),
 		entry.txn.GetStartTS(),
 		entry.txn.GetCommitTS()); err != nil || view == nil {
 		return

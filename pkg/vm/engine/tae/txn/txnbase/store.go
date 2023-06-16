@@ -45,7 +45,6 @@ func (store *NoopTxnStore) AddBlksWithMetaLoc(
 ) error {
 	return nil
 }
-func (store *NoopTxnStore) GetContext() context.Context          { return nil }
 func (store *NoopTxnStore) PrepareRollback() error               { return nil }
 func (store *NoopTxnStore) PrePrepare(ctx context.Context) error { return nil }
 func (store *NoopTxnStore) PrepareCommit() error                 { return nil }
