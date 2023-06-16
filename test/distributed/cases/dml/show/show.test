@@ -49,9 +49,11 @@ show variables where value = 'MatrixOne';
 -- @case
 -- @desc:test for show grants
 -- @label:bvt
+-- @bvt:issue#10103
 select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
 show grants;
 show grants for 'root'@'localhost';
+-- @bvt:issue
 show grants for 'test'@'localhost';
 create role role1;
 grant all on table *.* to role1;
