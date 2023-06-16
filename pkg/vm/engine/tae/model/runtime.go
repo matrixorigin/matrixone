@@ -126,17 +126,17 @@ func MakeDefaultTransientPool(name string) *containers.VectorPool {
 		panic(err)
 	}
 	if memStats.Total > mpool.GB*20 {
-		limit = mpool.MB * 2
+		limit = mpool.MB
 		trasientCapacity = 512
 	} else if memStats.Total > mpool.GB*10 {
-		limit = mpool.MB * 2
-		trasientCapacity = 256
+		limit = mpool.MB * 512
+		trasientCapacity = 512
 	} else if memStats.Total > mpool.GB*5 {
-		limit = mpool.MB
-		trasientCapacity = 256
-	} else {
 		limit = mpool.KB * 256
 		trasientCapacity = 512
+	} else {
+		limit = mpool.KB * 256
+		trasientCapacity = 256
 	}
 
 	return containers.NewVectorPool(
