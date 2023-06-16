@@ -56,6 +56,7 @@ func newABlock(
 		node.Ref()
 		blk.node.Store(node)
 		blk.FreezeAppend()
+		blk.mvcc.UpgradeDeleteChainByTS(blk.meta.GetDeltaPersistedTS())
 	} else {
 		mnode := newMemoryNode(blk.baseBlock)
 		node := NewNode(mnode)

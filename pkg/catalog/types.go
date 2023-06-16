@@ -317,9 +317,6 @@ type BlockInfo struct {
 	DeltaLoc   ObjectLocation
 	CommitTs   types.TS
 	SegmentID  types.Uuid
-	//this block can be distributed to remote nodes.
-	//TODO:: putting it here is a bad idea.
-	CanRemote bool
 }
 
 func (b *BlockInfo) MetaLocation() objectio.Location {

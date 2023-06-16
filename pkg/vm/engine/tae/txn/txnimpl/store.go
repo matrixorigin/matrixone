@@ -92,6 +92,8 @@ func newStore(
 	}
 }
 
+func (store *txnStore) GetContext() context.Context { return store.ctx }
+
 func (store *txnStore) IsReadonly() bool {
 	return store.writeOps.Load() == 0
 }
@@ -205,6 +207,7 @@ func (store *txnStore) RangeDelete(
 }
 
 func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
+	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
@@ -216,6 +219,7 @@ func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (
 }
 
 func (store *txnStore) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
+	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
