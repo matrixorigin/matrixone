@@ -125,19 +125,23 @@ func (p *VectorPool) String() string {
 
 func (p *VectorPool) GetVector(t *types.Type) *vectorWrapper {
 	if t.IsFixedLen() {
-		for i := 0; i < 4; i++ {
-			idx := fastrand() % uint32(len(p.fixSizedPool))
-			vec := p.fixSizedPool[idx]
-			if vec.tryReuse(t) {
-				return vec
+		if len(p.fixSizedPool) > 0 {
+			for i := 0; i < 4; i++ {
+				idx := fastrand() % uint32(len(p.fixSizedPool))
+				vec := p.fixSizedPool[idx]
+				if vec.tryReuse(t) {
+					return vec
+				}
 			}
 		}
 	} else {
-		for i := 0; i < 4; i++ {
-			idx := fastrand() % uint32(len(p.varlenPool))
-			vec := p.varlenPool[idx]
-			if vec.tryReuse(t) {
-				return vec
+		if len(p.varlenPool) > 0 {
+			for i := 0; i < 4; i++ {
+				idx := fastrand() % uint32(len(p.varlenPool))
+				vec := p.varlenPool[idx]
+				if vec.tryReuse(t) {
+					return vec
+				}
 			}
 		}
 	}

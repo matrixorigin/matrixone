@@ -116,6 +116,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewManager(
+		db.Runtime,
 		int(db.Opts.LogtailCfg.PageSize),
 		db.TxnMgr.Now,
 	)

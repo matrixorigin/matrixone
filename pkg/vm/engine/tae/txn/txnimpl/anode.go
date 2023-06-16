@@ -110,6 +110,14 @@ func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err er
 			capacity,
 			n.table.store.rt.VectorPool.Transient,
 		)
+
+		// n.data = containers.BuildBatch(
+		// 	schema.AllNames(),
+		// 	schema.AllTypes(),
+		// 	containers.Options{
+		// 		Capacity: capacity,
+		// 	},
+		// )
 	}
 
 	from := uint32(n.data.Length())
