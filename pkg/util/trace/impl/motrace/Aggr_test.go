@@ -16,6 +16,8 @@ func TestAggregator(t *testing.T) {
 	sessionId[0] = 1
 	var sessionId2 [16]byte
 	sessionId2[0] = 2
+	const aggrWindow = 5 * time.Second
+
 	ctx := context.Background()
 	aggregator := NewAggregator(
 		ctx,

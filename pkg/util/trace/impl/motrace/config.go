@@ -68,6 +68,10 @@ type tracerProviderConfig struct {
 	// disableSqlWriter
 	disableSqlWriter bool // set by WithSQLWriterDisable
 
+	// stmt aggregation
+	disableStmtAggregation bool          // set by WithStmtAggregationDisable
+	aggregationWindow      time.Duration // WithAggregationWindow
+
 	sqlExecutor func() ie.InternalExecutor // WithSQLExecutor
 	// needInit control table schema create
 	needInit bool // WithInitAction
@@ -177,6 +181,18 @@ func WithSpanDisable(disable bool) tracerProviderOption {
 func WithSQLWriterDisable(disable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.disableSqlWriter = disable
+	}
+}
+
+func WithAggregatorDisable(disable bool) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.disableStmtAggregation = disable
+	}
+}
+
+func WithAggregatorWindow(window time.Duration) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.aggregationWindow = window
 	}
 }
 

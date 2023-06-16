@@ -165,6 +165,8 @@ var (
 
 	// defaultLongSpanTime default: 10 s
 	defaultLongSpanTime = 10 * time.Second
+
+	defaultAggregationWindow = 5 * time.Second
 )
 
 // FrontendParameters of the frontend
@@ -595,6 +597,12 @@ type ObservabilityParameters struct {
 	// If disabled, the logs will be written to files stored in s3
 	DisableSqlWriter bool `toml:"disableSqlWriter"`
 
+	// If disabled, the statements will not be aggregated
+	DisableStmtAggregation bool `toml:"disableStmtAggregation"`
+
+	// Seconds to aggregate the statements
+	AggregationWindow toml.Duration `toml:"aggregationWindow"`
+
 	OBCollectorConfig
 }
 
@@ -657,6 +665,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.LongSpanTime.Duration <= 0 {
 		op.LongSpanTime.Duration = defaultLongSpanTime
+	}
+
+	if op.AggregationWindow.Duration <= 0 {
+		op.AggregationWindow.Duration = defaultAggregationWindow
 	}
 }
 

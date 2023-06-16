@@ -60,6 +60,8 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithLongSpanTime(SV.LongSpanTime.Duration),
 		WithSpanDisable(SV.DisableSpan),
 		WithSQLWriterDisable(SV.DisableSqlWriter),
+		WithAggregatorDisable(SV.DisableStmtAggregation),
+		WithAggregatorWindow(SV.AggregationWindow.Duration),
 		DebugMode(SV.EnableTraceDebug),
 		WithBufferSizeThreshold(SV.BufferSize),
 	)

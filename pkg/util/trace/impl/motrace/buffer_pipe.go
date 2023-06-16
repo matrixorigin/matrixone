@@ -34,8 +34,6 @@ import (
 
 const defaultClock = 15 * time.Second
 
-const aggrWindow = 5 * time.Second
-
 var errorFormatter atomic.Value
 var logStackFormatter atomic.Value
 
@@ -122,15 +120,16 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 	}
 
 	// Initialize aggregator
-	var sessionId [16]byte
-	sessionId[0] = 1
-	aggregator := NewAggregator(
-		ctx,
-		aggrWindow,
-		StatementInfoNew,
-		StatementInfoUpdate,
-		StatementInfoFilter,
-	)
+	var aggregator *Aggregator
+	if !GetTracerProvider().disableStmtAggregation {
+		aggregator = NewAggregator(
+			ctx,
+			GetTracerProvider().aggregationWindow,
+			StatementInfoNew,
+			StatementInfoUpdate,
+			StatementInfoFilter,
+		)
+	}
 
 	ts := time.Now()
 	writerMap := make(map[string]table.RowWriter, 2)
@@ -159,7 +158,11 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 		// Check if the item is a StatementInfo
 		if statementInfo, ok := i.(*StatementInfo); ok {
 			// If so, add it to the aggregator
-			_, err := aggregator.AddItem(statementInfo)
+			var err error
+			if !GetTracerProvider().disableStmtAggregation {
+				_, err = aggregator.AddItem(statementInfo)
+
+			}
 			if err != nil {
 				item, ok := i.(table.RowField)
 				if !ok {
@@ -178,16 +181,18 @@ func genETLData(ctx context.Context, in []IBuffer2SqlItem, buf *bytes.Buffer, fa
 	}
 
 	// Get the aggregated results
-	groupedResults := aggregator.GetResults()
+	if aggregator != nil {
+		groupedResults := aggregator.GetResults()
 
-	for _, i := range groupedResults {
+		for _, i := range groupedResults {
 
-		// If not, process as before
-		item, ok := i.(table.RowField)
-		if !ok {
-			panic("not MalCsv, dont support output CSV")
+			// If not, process as before
+			item, ok := i.(table.RowField)
+			if !ok {
+				panic("not MalCsv, dont support output CSV")
+			}
+			writeValues(item)
 		}
-		writeValues(item)
 	}
 
 	reqs := make(table.ExportRequests, 0, len(writerMap))
