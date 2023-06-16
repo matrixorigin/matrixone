@@ -144,6 +144,14 @@ func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 	return e
 }
 
+// assume that deletes are only flushed when compaction
+func (entry *BlockEntry) GetDeltaPersistedTS() types.TS {
+	if !entry.GetDeltaLoc().IsEmpty() {
+		return entry.GetDeleteAt()
+	}
+	return types.TS{}
+}
+
 func (entry *BlockEntry) Less(b *BlockEntry) int {
 	return entry.ID.Compare(b.ID)
 }
