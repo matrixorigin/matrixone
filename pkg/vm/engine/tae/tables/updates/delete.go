@@ -17,6 +17,7 @@ package updates
 import (
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -43,12 +44,11 @@ func (node *DeleteNode) Less(b *DeleteNode) int {
 type DeleteNode struct {
 	*common.GenericDLNode[*DeleteNode]
 	*txnbase.TxnMVCCNode
-	chain     *DeleteChain
-	mask      *roaring.Bitmap
-	nt        NodeType
-	id        *common.ID
-	dt        handle.DeleteType
-	viewNodes map[uint32]*common.GenericDLNode[*DeleteNode]
+	chain atomic.Pointer[DeleteChain]
+	mask  *roaring.Bitmap
+	nt    NodeType
+	id    *common.ID
+	dt    handle.DeleteType
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
@@ -56,7 +56,6 @@ func NewMergedNode(commitTs types.TS) *DeleteNode {
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(commitTs),
 		mask:        roaring.New(),
 		nt:          NT_Merge,
-		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
 	}
 	return n
 }
@@ -65,7 +64,6 @@ func NewEmptyDeleteNode() *DeleteNode {
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
-		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
 		id:          &common.ID{},
 	}
 	return n
@@ -76,7 +74,6 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 		mask:        roaring.New(),
 		nt:          NT_Normal,
 		dt:          dt,
-		viewNodes:   make(map[uint32]*common.GenericDLNode[*DeleteNode]),
 	}
 	if n.dt == handle.DT_MergeCompact {
 		_, err := n.TxnMVCCNode.PrepareCommit()
@@ -94,7 +91,7 @@ func (node *DeleteNode) IsNil() bool            { return node == nil }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
-func (node *DeleteNode) GetMeta() *catalog.BlockEntry { return node.chain.mvcc.meta }
+func (node *DeleteNode) GetMeta() *catalog.BlockEntry { return node.chain.Load().mvcc.meta }
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }
@@ -105,11 +102,11 @@ func (node *DeleteNode) SetDeletes(mask *roaring.Bitmap) {
 
 func (node *DeleteNode) IsMerged() bool { return node.nt == NT_Merge }
 func (node *DeleteNode) AttachTo(chain *DeleteChain) {
-	node.chain = chain
+	node.chain.Store(chain)
 	node.GenericDLNode = chain.Insert(node)
 }
 
-func (node *DeleteNode) GetChain() txnif.DeleteChain          { return node.chain }
+func (node *DeleteNode) GetChain() txnif.DeleteChain          { return node.chain.Load() }
 func (node *DeleteNode) GetDeleteMaskLocked() *roaring.Bitmap { return node.mask }
 
 func (node *DeleteNode) HasOverlapLocked(start, end uint32) bool {
@@ -146,9 +143,9 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 	// 	start,
 	// 	end)
 	node.mask.AddRange(uint64(start), uint64(end+1))
-	node.chain.insertInMaskByRange(start, end)
+	node.chain.Load().insertInMaskByRange(start, end)
 	for i := start; i < end+1; i++ {
-		node.chain.InsertInDeleteView(i, node)
+		node.chain.Load().InsertInDeleteView(i, node)
 	}
 }
 func (node *DeleteNode) DeletedRows() (rows []uint32) {
@@ -161,31 +158,31 @@ func (node *DeleteNode) DeletedRows() (rows []uint32) {
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
 func (node *DeleteNode) PrepareCommit() (err error) {
-	node.chain.mvcc.Lock()
-	defer node.chain.mvcc.Unlock()
+	node.chain.Load().mvcc.Lock()
+	defer node.chain.Load().mvcc.Unlock()
 	_, err = node.TxnMVCCNode.PrepareCommit()
 	if err != nil {
 		return
 	}
-	node.chain.UpdateLocked(node)
+	node.chain.Load().UpdateLocked(node)
 	return
 }
 
 func (node *DeleteNode) ApplyCommit() (err error) {
-	node.chain.mvcc.Lock()
-	defer node.chain.mvcc.Unlock()
+	node.chain.Load().mvcc.Lock()
+	defer node.chain.Load().mvcc.Unlock()
 	_, err = node.TxnMVCCNode.ApplyCommit()
 	if err != nil {
 		return
 	}
-	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
-	node.chain.mvcc.IncChangeNodeCnt()
+	node.chain.Load().AddDeleteCnt(uint32(node.mask.GetCardinality()))
+	node.chain.Load().mvcc.IncChangeNodeCnt()
 	return node.OnApply()
 }
 
 func (node *DeleteNode) ApplyRollback() (err error) {
-	node.chain.mvcc.Lock()
-	defer node.chain.mvcc.Unlock()
+	node.chain.Load().mvcc.Lock()
+	defer node.chain.Load().mvcc.Unlock()
 	_, err = node.TxnMVCCNode.ApplyRollback()
 	return
 }
@@ -216,7 +213,7 @@ func (node *DeleteNode) StringLocked() string {
 }
 
 func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
-	cn, err := w.Write(common.EncodeID(node.chain.mvcc.GetID()))
+	cn, err := w.Write(common.EncodeID(node.chain.Load().mvcc.GetID()))
 	if err != nil {
 		return
 	}
@@ -270,22 +267,22 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return
 }
 func (node *DeleteNode) GetPrefix() []byte {
-	return node.chain.mvcc.meta.MakeKey()
+	return node.chain.Load().mvcc.meta.MakeKey()
 }
 func (node *DeleteNode) Set1PC()     { node.TxnMVCCNode.Set1PC() }
 func (node *DeleteNode) Is1PC() bool { return node.TxnMVCCNode.Is1PC() }
 func (node *DeleteNode) PrepareRollback() (err error) {
-	node.chain.mvcc.Lock()
-	defer node.chain.mvcc.Unlock()
-	node.chain.RemoveNodeLocked(node)
-	node.chain.DeleteInDeleteView(node)
+	node.chain.Load().mvcc.Lock()
+	defer node.chain.Load().mvcc.Unlock()
+	node.chain.Load().RemoveNodeLocked(node)
+	node.chain.Load().DeleteInDeleteView(node)
 	node.TxnMVCCNode.PrepareRollback()
 	return
 }
 
 func (node *DeleteNode) OnApply() (err error) {
 	if node.dt == handle.DT_Normal {
-		listener := node.chain.mvcc.GetDeletesListener()
+		listener := node.chain.Load().mvcc.GetDeletesListener()
 		if listener == nil {
 			return
 		}
