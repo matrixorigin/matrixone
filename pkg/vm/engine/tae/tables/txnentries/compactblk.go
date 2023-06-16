@@ -105,11 +105,14 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	}
 
 	entry.scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, fromBlockEntry.AsCommonID(), func() error {
+		// TODO: variable as timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+		defer cancel()
 		if fromName != "" {
-			_ = fs.Delete(context.TODO(), fromName)
+			_ = fs.Delete(ctx, fromName)
 		}
 		if toName != "" {
-			_ = fs.Delete(context.TODO(), toName)
+			_ = fs.Delete(ctx, toName)
 		}
 		// logutil.Infof("rollback unfinished compact file %q and %q", fromName, toName)
 		return nil
