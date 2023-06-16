@@ -145,7 +145,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 		executor := &FunctionExpressionExecutor{}
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		if err = executor.Init(proc.Mp(), len(t.F.Args), typ, overload.GetExecuteMethod()); err != nil {
+		if err = executor.Init(proc, len(t.F.Args), typ, overload.GetExecuteMethod()); err != nil {
 			return nil, err
 		}
 
@@ -280,7 +280,7 @@ type ColumnExpressionExecutor struct {
 }
 
 func (expr *FunctionExpressionExecutor) Init(
-	m *mpool.MPool,
+	proc *process.Process,
 	parameterNum int,
 	retType types.Type,
 	fn func(
@@ -288,12 +288,15 @@ func (expr *FunctionExpressionExecutor) Init(
 		result vector.FunctionResultWrapper,
 		proc *process.Process,
 		length int) error) (err error) {
+	m := proc.Mp()
+
 	expr.m = m
 	expr.evalFn = fn
 	expr.parameterResults = make([]*vector.Vector, parameterNum)
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
-	// pre allocate
-	expr.resultVector = vector.NewFunctionResultWrapper(retType, m)
+
+	v := proc.GetVector(retType)
+	expr.resultVector = vector.NewFunctionResultWrapper(v, m)
 	return err
 }
 
@@ -966,7 +969,9 @@ func GetExprZoneMap(
 
 				fn := overload.GetExecuteMethod()
 				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
-				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+
+				v := proc.GetVector(typ)
+				result := vector.NewFunctionResultWrapper(v, proc.Mp())
 				if err = result.PreExtendAndReset(2); err != nil {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]

@@ -407,7 +407,8 @@ func (fr *FunctionResult[T]) PreExtendAndReset(size int) error {
 	oldLength := fr.vec.Length()
 	fr.vec.Reset(fr.typ)
 	fr.vec.SetLength(size)
-	if len(fr.cols) > 0 && size > oldLength {
+	// if fr.cols == nil, means the vector is first time to be sent to structure `FunctionResult`.
+	if (fr.cols == nil) || (len(fr.cols) > 0 && size > oldLength) {
 		fr.cols = MustFixedCol[T](fr.vec)
 	}
 	return nil
@@ -490,8 +491,8 @@ func (fr *FunctionResult[T]) Free() {
 	}
 }
 
-func NewFunctionResultWrapper(typ types.Type, mp *mpool.MPool) FunctionResultWrapper {
-	v := NewVec(typ)
+func NewFunctionResultWrapper(v *Vector, mp *mpool.MPool) FunctionResultWrapper {
+	typ := v.GetType()
 
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
