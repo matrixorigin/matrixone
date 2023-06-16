@@ -336,7 +336,7 @@ func newBlockMergeReader(
 	ctx context.Context,
 	txnTable *txnTable,
 	ts timestamp.Timestamp,
-	dirtyBlks []catalog.BlockInfo,
+	blks []catalog.BlockInfo,
 	filterExpr *plan.Expr,
 	fs fileservice.FileService,
 ) *blockMergeReader {
@@ -347,8 +347,8 @@ func newBlockMergeReader(
 			ts:       ts,
 			fs:       fs,
 		},
-		dirtyBlks: dirtyBlks,
-		table:     txnTable,
+		blks:  blks,
+		table: txnTable,
 	}
 	r.filterState.expr = filterExpr
 	return r
@@ -357,7 +357,7 @@ func newBlockMergeReader(
 func (r *blockMergeReader) Close() error {
 	r.withFilterMixin.reset()
 	r.table = nil
-	r.dirtyBlks = nil
+	r.blks = nil
 	return nil
 }
 
@@ -369,18 +369,18 @@ func (r *blockMergeReader) Read(
 	vp engine.VectorPool,
 ) (*batch.Batch, error) {
 	// if the block list is empty, return nil
-	if len(r.dirtyBlks) == 0 {
+	if len(r.blks) == 0 {
 		return nil, nil
 	}
 
 	// move to the next block at the end of this call
 	defer func() {
 		r.buffer = r.buffer[:0]
-		r.dirtyBlks = r.dirtyBlks[1:]
+		r.blks = r.blks[1:]
 	}()
 
 	// get the current block to be read
-	info := &r.dirtyBlks[0]
+	info := &r.blks[0]
 
 	// try to update the columns
 	r.tryUpdateColumns(cols)
@@ -417,6 +417,9 @@ func (r *blockMergeReader) Read(
 		if entry.isGeneratedByTruncate() {
 			continue
 		}
+		//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks,
+		// but at the end of this function, only collect deletes which comes from PartitionState.blocks
+		// into modifies.
 		if entry.typ == DELETE && entry.fileName == "" {
 			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for _, v := range vs {
