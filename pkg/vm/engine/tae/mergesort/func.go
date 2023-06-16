@@ -24,22 +24,22 @@ func sort[T any](col containers.Vector, lessFunc LessFunc[T], n int) SortSlice[T
 		for i := 0; i < n; i++ {
 			var item SortElem[T]
 			if col.IsNull(i) {
-				item = SortElem[T]{isNull: true, idx: uint32(i)}
+				item = SortElem[T]{isNull: true, idx: int32(i)}
 			} else {
-				item = SortElem[T]{data: col.Get(i).(T), idx: uint32(i)}
+				item = SortElem[T]{data: col.Get(i).(T), idx: int32(i)}
 			}
 			dataWithIdx.Append(item)
 		}
 	} else {
 		for i := 0; i < n; i++ {
-			dataWithIdx.Append(SortElem[T]{data: col.Get(i).(T), idx: uint32(i)})
+			dataWithIdx.Append(SortElem[T]{data: col.Get(i).(T), idx: int32(i)})
 		}
 	}
 	sortUnstable(dataWithIdx)
 	return dataWithIdx
 }
 
-func Sort[T any](col containers.Vector, lessFunc LessFunc[T], idx []uint32) (ret containers.Vector) {
+func Sort[T any](col containers.Vector, lessFunc LessFunc[T], idx []int32) (ret containers.Vector) {
 	dataWithIdx := sort(col, lessFunc, len(idx))
 
 	// make col sorted
@@ -111,15 +111,19 @@ func Merge[T any](
 	return
 }
 
-func Shuffle(col containers.Vector, idx []uint32) containers.Vector {
+func Shuffle(col containers.Vector, idx []int32) containers.Vector {
+	var err error
 	ret := containers.MakeVector(*col.GetType())
-	for _, j := range idx {
-		if col.IsNull(int(j)) {
-			ret.Append(nil, true)
-		} else {
-			ret.Append(col.Get(int(j)), false)
-		}
+	if err = ret.PreExtend(len(idx)); err != nil {
+		panic(err)
 	}
+	retVec := ret.GetDownstreamVector()
+	srcVec := col.GetDownstreamVector()
+
+	if err = retVec.Union(srcVec, idx, col.GetAllocator()); err != nil {
+		panic(err)
+	}
+
 	col.Close()
 	return ret
 }
@@ -131,6 +135,7 @@ func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uin
 	k := 0
 	for i := 0; i < len(toLayout); i++ {
 		ret[i] = containers.MakeVector(*col[0].GetType())
+		ret[i].PreExtend(int(toLayout[i]))
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
 			ret[i].Append(col[s].Get(cursors[s]), col[s].IsNull(cursors[s]))

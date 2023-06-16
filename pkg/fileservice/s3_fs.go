@@ -67,6 +67,7 @@ type S3FS struct {
 var _ FileService = new(S3FS)
 
 func NewS3FS(
+	ctx context.Context,
 	sharedConfigProfile string,
 	name string,
 	endpoint string,
@@ -91,7 +92,7 @@ func NewS3FS(
 	fs.perfCounterSets = perfCounterSets
 
 	if !noCache {
-		if err := fs.initCaches(cacheConfig); err != nil {
+		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
 	}
@@ -102,6 +103,7 @@ func NewS3FS(
 // NewS3FSOnMinio creates S3FS on minio server
 // this is needed because the URL scheme of minio server does not compatible with AWS'
 func NewS3FSOnMinio(
+	ctx context.Context,
 	sharedConfigProfile string,
 	name string,
 	endpoint string,
@@ -127,7 +129,7 @@ func NewS3FSOnMinio(
 	fs.perfCounterSets = perfCounterSets
 
 	if !noCache {
-		if err := fs.initCaches(cacheConfig); err != nil {
+		if err := fs.initCaches(ctx, cacheConfig); err != nil {
 			return nil, err
 		}
 	}
@@ -135,7 +137,7 @@ func NewS3FSOnMinio(
 	return fs, nil
 }
 
-func (s *S3FS) initCaches(config CacheConfig) error {
+func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.SetDefaults()
 
 	// memory cache
@@ -160,6 +162,7 @@ func (s *S3FS) initCaches(config CacheConfig) error {
 	if config.DiskCapacity > DisableCacheCapacity && config.DiskPath != "" {
 		var err error
 		s.diskCache, err = NewDiskCache(
+			ctx,
 			config.DiskPath,
 			int64(config.DiskCapacity),
 			config.DiskMinEvictInterval.Duration,
@@ -1062,20 +1065,20 @@ func newS3FS(arguments []string) (*S3FS, error) {
 		s3Options...,
 	)
 
-	// head bucket to validate
-	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
-		Bucket: ptrTo(bucket),
-	})
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
-	}
-
 	fs := &S3FS{
 		name:        name,
 		s3Client:    client,
 		bucket:      bucket,
 		keyPrefix:   prefix,
 		asyncUpdate: true,
+	}
+
+	// head bucket to validate
+	_, err = fs.s3HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: ptrTo(bucket),
+	})
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
 	}
 
 	return fs, nil
@@ -1092,6 +1095,17 @@ func (s *S3FS) s3ListObjects(ctx context.Context, params *s3.ListObjectsInput, o
 		"s3 list objects",
 		func() (*s3.ListObjectsOutput, error) {
 			return s.s3Client.ListObjects(ctx, params, optFns...)
+		},
+		maxRetryAttemps,
+		isRetryableError,
+	)
+}
+
+func (s *S3FS) s3HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	return doWithRetry(
+		"s3 head bucket",
+		func() (*s3.HeadBucketOutput, error) {
+			return s.s3Client.HeadBucket(ctx, params, optFns...)
 		},
 		maxRetryAttemps,
 		isRetryableError,

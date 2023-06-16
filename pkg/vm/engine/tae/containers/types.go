@@ -19,7 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	cnNulls "github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	cnVector "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -58,13 +58,14 @@ type Vector interface {
 
 	Update(i int, v any, isNull bool)
 	Compact(*roaring.Bitmap)
+	CompactByBitmap(*nulls.Bitmap)
 
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
 	ExtendVec(o *cnVector.Vector) error
 
-	Foreach(op ItOp, sels *roaring.Bitmap) error
-	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
+	Foreach(op ItOp, sels *nulls.Bitmap) error
+	ForeachWindow(offset, length int, op ItOp, sels *nulls.Bitmap) error
 
 	Length() int
 	Allocated() int
@@ -72,7 +73,7 @@ type Vector interface {
 
 	IsNull(i int) bool
 	HasNull() bool
-	NullMask() *cnNulls.Nulls
+	NullMask() *nulls.Nulls
 	// NullCount will consider ConstNull and Const vector
 	NullCount() int
 
@@ -89,7 +90,7 @@ type Vector interface {
 type Batch struct {
 	Attrs   []string
 	Vecs    []Vector
-	Deletes *roaring.Bitmap
+	Deletes *nulls.Bitmap
 	Nameidx map[string]int
 	// refidx  map[int]int
 }

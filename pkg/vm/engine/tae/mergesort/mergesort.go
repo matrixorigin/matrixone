@@ -21,55 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
-	sortedIdx := make([]uint32, cols[pk].Length())
-
-	// switch cols[pk].GetType().Oid {
-	// case types.T_bool:
-	// 	bools.Sort(cols[pk], sortedIdx)
-	// case types.T_int8:
-	// 	numerics.Sort[int8](cols[pk], sortedIdx)
-	// case types.T_int16:
-	// 	numerics.Sort[int16](cols[pk], sortedIdx)
-	// case types.T_int32:
-	// 	numerics.Sort[int32](cols[pk], sortedIdx)
-	// case types.T_int64:
-	// 	numerics.Sort[int64](cols[pk], sortedIdx)
-	// case types.T_uint8:
-	// 	numerics.Sort[uint8](cols[pk], sortedIdx)
-	// case types.T_uint16:
-	// 	numerics.Sort[uint16](cols[pk], sortedIdx)
-	// case types.T_uint32:
-	// 	numerics.Sort[uint32](cols[pk], sortedIdx)
-	// case types.T_uint64:
-	// 	numerics.Sort[uint64](cols[pk], sortedIdx)
-	// case types.T_float32:
-	// 	numerics.Sort[float32](cols[pk], sortedIdx)
-	// case types.T_float64:
-	// 	numerics.Sort[float64](cols[pk], sortedIdx)
-	// case types.T_date:
-	// 	numerics.Sort[types.Date](cols[pk], sortedIdx)
-	// case types.T_time:
-	// 	numerics.Sort[types.Time](cols[pk], sortedIdx)
-	// case types.T_datetime:
-	// 	numerics.Sort[types.Datetime](cols[pk], sortedIdx)
-	// case types.T_decimal64:
-	// 	decimal64s.Sort(cols[pk], sortedIdx)
-	// case types.T_decimal128:
-	// 	decimal128s.Sort(cols[pk], sortedIdx)
-	// case types.T_timestamp:
-	// 	numerics.Sort[types.Timestamp](cols[pk], sortedIdx)
-	// case types.T_uuid:
-	// 	uuids.Sort(cols[pk], sortedIdx)
-	// case types.T_TS:
-	// 	txnts.Sort(cols[pk], sortedIdx)
-	// case types.T_Rowid:
-	// 	rowid.Sort(cols[pk], sortedIdx)
-	// case types.T_char, types.T_json, types.T_varchar, types.T_blob, types.T_text:
-	// 	varchar.Sort(cols[pk], sortedIdx)
-	// default:
-	// 	panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
-	// }
+func SortBlockColumns(cols []containers.Vector, pk int) ([]int32, error) {
+	sortedIdx := make([]int32, cols[pk].Length())
 
 	switch cols[pk].GetType().Oid {
 	case types.T_bool:

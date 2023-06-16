@@ -39,7 +39,7 @@ type InsertNode interface {
 	IsPersisted() bool
 	PrintDeletes() string
 	GetColumnDataByIds([]int) (*model.BlockView, error)
-	GetColumnDataById(int) (*model.ColumnView, error)
+	GetColumnDataById(context.Context, int) (*model.ColumnView, error)
 	Prefetch(idxes []uint16) error
 	FillBlockView(view *model.BlockView, colIdxes []int) (err error)
 	FillColumnView(*model.ColumnView) error
@@ -50,9 +50,6 @@ type InsertNode interface {
 	GetValue(col int, row uint32) (any, bool, error)
 	MakeCommand(uint32) (txnif.TxnCmd, error)
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
-	RowsWithoutDeletes() uint32
-	LengthWithDeletes(appended, toAppend uint32) uint32
-	OffsetWithDeletes(count uint32) uint32
 	GetAppends() []*appendInfo
 	GetTxn() txnif.AsyncTxn
 	GetPersistedLoc() (objectio.Location, objectio.Location)
@@ -138,14 +135,14 @@ func (n *baseNode) Rows() uint32 {
 	return n.meta.FastGetMetaLoc().Rows()
 }
 
-func (n *baseNode) LoadPersistedColumnData(colIdx int) (vec containers.Vector, err error) {
+func (n *baseNode) LoadPersistedColumnData(ctx context.Context, colIdx int) (vec containers.Vector, err error) {
 	location := n.meta.FastGetMetaLoc()
 	if location.IsEmpty() {
 		panic("cannot load persisted column data from empty location")
 	}
 	def := n.table.GetLocalSchema().ColDefs[colIdx]
 	return tables.LoadPersistedColumnData(
-		context.Background(),
+		ctx,
 		n.table.store.dataFactory.Fs,
 		nil,
 		def,
