@@ -14,7 +14,7 @@ spec:
       size: 100Gi
       storageClassName: gp3
     sharedStorageCache:
-      memoryCacheSize: 1Gi
+      memoryCacheSize: 512Mi
       diskCacheSize: 100Gi
     config: |
       [dn.Txn.Storage]
