@@ -160,6 +160,12 @@ drop table statement_info03;
 [unknown result because it is related to issue#10043]
 drop account if exists test_account;
 [unknown result because it is related to issue#10043]
+drop role if exists test_role;
+[unknown result because it is related to issue#10043]
+drop user if exists user_name;
+[unknown result because it is related to issue#10043]
+drop database if exists db1;
+[unknown result because it is related to issue#10043]
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 [unknown result because it is related to issue#10043]
 create role test_role;
@@ -177,6 +183,8 @@ drop user user_name;
 drop role test_role;
 [unknown result because it is related to issue#10043]
 drop account test_account;
+[unknown result because it is related to issue#10043]
+drop database db1;
 [unknown result because it is related to issue#10043]
 select sleep(10);
 [unknown result because it is related to issue#10043]
@@ -222,44 +230,47 @@ insert into case01 values('uppERCASE and uppercase');
 insert into case01 Values(NulL);
 insert INTO case01 values('**&&*nUll');
 insert into case01 values();
-drop table cASE01;
 select * FROM caseE01 where col1 is null;
 SQL parser error: table "casee01" does not exist
+drop table cASE01;
+drop account if exists Account_user01;
+drop role if exists role_Role;
+drop user if exists User_test;
+drop database if exists db1;
 create account Account_user01 admin_name = 'Account_test01' identified by '111' open comment 'tenant_test';
 creatE role role_Role;
-internal error: the role role_role exists
 create user User_test identified by '123456';
 create DATABASE iF noT exists db1;
-grant create table,drop table on database *.* to test_role;
-internal error: there is no role test_role
+grant create table,drop table on database *.* to role_Role;
 drop database db1;
 drop user user_test;
 drop account account_user01;
+drop role role_Role;
 select sleep(10);
 sleep(10)
 0
 select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 statement
-create view test_view as select * from dql02
-create table dql02(col1 int,col2 varchar)
-drop table if exists dql02
-drop table dql01
-create table dql01(col1 decimal(38,20),col2 binary not null,col3 varchar(20))
+drop database db1
+create DATABASE iF noT exists db1
+drop database if exists db1
+drop table cASE01
+cReate table case01(col1 text default 'matrixone')
 select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 statement
-insert into dql01 values(32783.4,4,null)
-insert into dql01 values(3289342.34242,'.','matrixone')
-insert into dql01 values(329342.32420,'&',null)
-insert into dql01 values(-23999999.23432132143254323,'A','matrixone')
-insert into dql01 values(-23142.3214,'0','数据库')
+insert into case01 values()
+insert INTO case01 values('**&&*nUll')
+insert into case01 Values(NulL)
+insert into case01 values('uppERCASE and uppercase')
+inSERT into case01 valueS('Database test')
 select statement from system.statement_info where query_type = 'DQL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 [unknown result because it is related to issue#10043]
 select statement from system.statement_info where query_type = 'DCL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 statement
-create account if not exists `bvt_query_type` ADMIN_NAME 'admin' IDENTIFIED BY '******'
+drop role role_Role
 drop account account_user01
 drop user user_test
-grant create table,drop table on database *.* to test_role
+grant create table,drop table on database *.* to role_Role
 create user User_test identified by '******'
 drop table if exists line01;
 create table line01(col int, col2 decimal);
@@ -305,11 +316,12 @@ sleep(10)
 0
 select statement from system.statement_info where query_type = 'Other' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 statement
-deallocate prepare s1
-execute s1 using @a
-set @a=2
-prepare s1 from select * from test_table where col1=?
-create table 123(col1 int)
+show index from dql02
+show collation like '%'
+show collation
+show tables
+show processlist
+drop table test_table;
 create account if not exists `bvt_query_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 drop database if exists newAccount;
 create database newAccount;
@@ -330,6 +342,7 @@ count(*)
 select * from dml01 order by col1 desc;
 col1    col2
 null    -3232142.32421421
+drop table dml01;
 begin;
 commit;
 start transaction;
@@ -370,6 +383,7 @@ set @a=2;
 execute s1 using @a;
 col1
 deallocate prepare s1;
+drop table test_table;
 drop database newAccount;
 select sleep(20);
 sleep(20)
@@ -377,10 +391,10 @@ sleep(20)
 select statement from system.statement_info where query_type = 'DDL' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 statement
 drop database newAccount
+drop table test_table
 create table test_table(col1 int)
 drop table line02
 create table line02(col int,col2 decimal)
-drop table if exists line02
 select statement from system.statement_info where query_type = 'DML' and sql_source_type != 'internal_sql'  order by response_at desc limit 5;
 statement
 insert into line02 values(2,93232432)
