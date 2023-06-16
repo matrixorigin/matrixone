@@ -4242,7 +4242,12 @@ func shortenValueString(valueStr string) string {
 	return valueStr
 }
 
-var FormatCastError = formatCastError
+func FormatCastErrorForInsertValue(ctx context.Context, originStr string, typ types.Type, extraInfo string) error {
+	valueStr := strings.TrimRight(strings.TrimLeft(originStr, "["), "]")
+	shortenValueStr := shortenValueString(valueStr)
+	errStr := fmt.Sprintf("Can't cast '%s' to %v type.", shortenValueStr, typ)
+	return moerr.NewInternalError(ctx, errStr+" "+extraInfo)
+}
 
 func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, extraInfo string) error {
 	var errStr string

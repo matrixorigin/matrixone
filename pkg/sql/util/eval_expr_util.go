@@ -183,15 +183,30 @@ func setInsertValueBool(proc *process.Process, numVal *tree.NumVal, vec *vector.
 func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vector.Vector) (canInsert bool, err error) {
 	canInsert = true
 
-	checkStrLen := func(s string) error {
+	checkStrLen := func(s string) ([]byte, error) {
 		typ := vec.GetType()
 		destLen := int(typ.Width)
-		if typ.Oid != types.T_text && destLen != 0 {
+		if typ.Oid != types.T_text && typ.Oid != types.T_binary && destLen != 0 {
 			if utf8.RuneCountInString(s) > destLen {
-				return function.FormatCastError(proc.Ctx, vec, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
+				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 		}
-		return nil
+		v := []byte(s)
+		if typ.Oid == types.T_binary && typ.Scale == -1 {
+			if typ.Width == -1 {
+				// do nothing
+			} else if int32(len(v)) > typ.Width {
+				// truncating
+				v = v[:typ.Width]
+			} else if len(v) < int(typ.Width) {
+				// right-padding.
+				add0 := int(typ.Width) - len(v)
+				for ; add0 != 0; add0-- {
+					v = append(v, 0)
+				}
+			}
+		}
+		return v, nil
 	}
 
 	switch numVal.ValType {
@@ -199,34 +214,27 @@ func setInsertValueString(proc *process.Process, numVal *tree.NumVal, vec *vecto
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
 
 	case tree.P_bool:
-		val := constant.BoolVal(numVal.Value)
 		var s string
-		if val {
-			s = "true"
+		if constant.BoolVal(numVal.Value) {
+			s = "1"
 		} else {
-			s = "false"
+			s = "0"
 		}
-		err = checkStrLen(s)
+		var val []byte
+		val, err = checkStrLen(s)
 		if err != nil {
 			return
 		}
-		err = vector.AppendBytes(vec, []byte(s), false, proc.Mp())
+		err = vector.AppendBytes(vec, val, false, proc.Mp())
 
 	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64, tree.P_hexnum:
 		s := numVal.OrigString()
-		err = checkStrLen(s)
+		var val []byte
+		val, err = checkStrLen(s)
 		if err != nil {
 			return
 		}
-		err = vector.AppendBytes(vec, []byte(s), false, proc.Mp())
-
-	// case tree.P_float64:
-	// 	originStr := numVal.OrigString()
-	// 	err = vector.AppendBytes(vec, []byte(originStr), false, proc.Mp())
-
-	// case tree.P_hexnum:
-	// 	originStr := numVal.OrigString()
-	// 	err = vector.AppendBytes(vec, []byte(originStr), false, proc.Mp())
+		err = vector.AppendBytes(vec, val, false, proc.Mp())
 
 	case tree.P_ScoreBinary:
 		canInsert = false
