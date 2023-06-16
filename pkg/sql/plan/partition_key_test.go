@@ -75,6 +75,16 @@ func TestKeyPartition(t *testing.T) {
 		)
 			PARTITION BY KEY()
 			PARTITIONS 4;`,
+
+		`CREATE TABLE t8 (
+			col1 INT,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			UNIQUE KEY (col1, col3)
+		)
+		PARTITION BY KEY(col1)
+		PARTITIONS 4;`,
 	}
 
 	mock := NewMockOptimizer(false)
@@ -140,6 +150,7 @@ func TestKeyPartitionError(t *testing.T) {
 		)
 			PARTITION BY KEY()
 			PARTITIONS 4;`,
+
 		`CREATE TABLE t1 (
 		col1 INT NOT NULL,
 		col2 DATE NOT NULL,
@@ -148,6 +159,70 @@ func TestKeyPartitionError(t *testing.T) {
 		PRIMARY KEY (col1, col2)
 		)
 		PARTITION BY KEY(col3)
+		PARTITIONS 4;`,
+
+		`create table p_table_07(
+			col1 int,
+			col2 char(25),
+			col3 decimal(4,2),
+			unique key k2(col1,col2)
+		)partition by key()
+		partitions 8;`,
+
+		`create table p_table_09(
+			col1 int NOT NULL,
+			col2 char(25)  NOT NULL,
+			col3 decimal(4,2) NOT NULL
+		)partition by key()
+		partitions 8;`,
+
+		`create table p_table_01(
+			col1 int,
+			col2 char(25),
+			col3 int NOT NULL,
+			UNIQUE KEY k2(col1,col2),
+			UNIQUE KEY k3(col3)
+			)
+		partition by key()
+		partitions 8;`,
+
+		`create table p_table_02(
+			col1 int NOT NULL,
+			col2 char(25) NOT NULL,
+			col3 int NOT NULL,
+			UNIQUE KEY k2(col1,col2),
+			UNIQUE KEY k3(col3)
+		)
+		partition by key()
+		partitions 8;`,
+
+		`create table p_table_03(
+			col1 int,
+			col2 char(25),
+			col3 decimal(4,2) NOT NULL,
+			UNIQUE KEY k2(col1,col2)
+		)
+		partition by key()
+		partitions 8;`,
+
+		`CREATE TABLE t5 (
+			col1 INT,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			UNIQUE KEY (col1, col3)
+		)
+		PARTITION BY KEY()
+		PARTITIONS 4;`,
+
+		`CREATE TABLE t7 (
+			col1 INT,
+			col2 DATE NOT NULL,
+			col3 INT NOT NULL,
+			col4 INT NOT NULL,
+			UNIQUE KEY (col1, col3)
+		)
+		PARTITION BY KEY()
 		PARTITIONS 4;`,
 	}
 	mock := NewMockOptimizer(false)
