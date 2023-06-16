@@ -3848,6 +3848,11 @@ func jsonToStr(
 	return nil
 }
 
+func OverflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float](ctx context.Context,
+	xs []T1, nsp *nulls.Nulls) error {
+	return overflowForNumericToNumeric[T1, T2](ctx, xs, nsp)
+}
+
 func overflowForNumericToNumeric[T1, T2 constraints.Integer | constraints.Float](ctx context.Context,
 	xs []T1, nsp *nulls.Nulls) error {
 	if len(xs) == 0 {
@@ -4236,6 +4241,8 @@ func shortenValueString(valueStr string) string {
 	}
 	return valueStr
 }
+
+var FormatCastError = formatCastError
 
 func formatCastError(ctx context.Context, vec *vector.Vector, typ types.Type, extraInfo string) error {
 	var errStr string

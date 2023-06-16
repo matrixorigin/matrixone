@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"fmt"
-	"unsafe"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -868,25 +867,12 @@ func buildValueScan(
 	}
 	projectList := make([]*Expr, colCount)
 	bat := batch.NewWithSize(len(updateColumns))
-	strTyp := &plan.Type{
-		Id:          int32(types.T_text),
-		NotNullable: false,
-	}
-	strColTyp := makeTypeByPlan2Type(strTyp)
-	strColTargetTyp := &plan.Expr{
-		Typ: strTyp,
-		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: strTyp,
-			},
-		},
-	}
 
 	for i, colName := range updateColumns {
-		vec := proc.GetVector(types.T_text.ToType())
-		bat.Vecs[i] = vec
 		col := tableDef.Cols[colToIdx[colName]]
 		colTyp := makeTypeByPlan2Type(col.Typ)
+		vec := proc.GetVector(colTyp)
+		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
 			Typ: col.Typ,
 			Expr: &plan.Expr_T{
@@ -901,7 +887,7 @@ func buildValueScan(
 			if err != nil {
 				return err
 			}
-			defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, strColTyp, strColTargetTyp)
+			defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
 			if err != nil {
 				return err
 			}
@@ -919,23 +905,14 @@ func buildValueScan(
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			for j, r := range slt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok {
-					val := nv.OrigString()
-
-					switch nv.ValType {
-					case tree.P_null:
-						if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
-							bat.Clean(proc.Mp())
-							return err
-						}
-					default:
-						if err := vector.AppendBytes(vec, unsafe.Slice(unsafe.StringData(val), len(val)),
-							false, proc.Mp()); err != nil {
-							bat.Clean(proc.Mp())
-							return err
-						}
+					canInsert, err := util.SetInsertValue(proc, nv, vec)
+					if err != nil {
+						bat.Clean(proc.Mp())
+						return err
 					}
-
-					continue
+					if canInsert {
+						continue
+					}
 				}
 
 				if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
@@ -955,7 +932,7 @@ func buildValueScan(
 						return err
 					}
 				}
-				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, strColTyp, strColTargetTyp)
+				defExpr, err = forceCastExpr2(builder.GetContext(), defExpr, colTyp, targetTyp)
 				if err != nil {
 					return err
 				}
@@ -969,10 +946,10 @@ func buildValueScan(
 		valueScanTableDef.Cols[i] = &plan.ColDef{
 			ColId: 0,
 			Name:  colName,
-			Typ:   strTyp,
+			Typ:   col.Typ,
 		}
 		expr := &plan.Expr{
-			Typ: strTyp,
+			Typ: col.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: lastTag,
@@ -980,11 +957,7 @@ func buildValueScan(
 				},
 			},
 		}
-		castExpr, err := forceCastExpr2(builder.GetContext(), expr, colTyp, targetTyp)
-		if err != nil {
-			return err
-		}
-		projectList[i] = castExpr
+		projectList[i] = expr
 	}
 
 	bat.SetZs(len(slt.Rows), proc.Mp())

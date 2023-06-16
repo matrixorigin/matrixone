@@ -424,7 +424,7 @@ a    b
 drop table if exists double_test;
 create table double_test(c1 double(6,1));
 insert into double_test values(-1.7976931348623157E+308);
-Data truncation: data out of range: data type float, value '-1.7976931348623157E+308'
+Data truncation: data out of range: data type float, value '-1.7976931348623157e+308'
 insert into double_test values(1.7976931348623157E+308);
 Data truncation: data out of range: data type float, value '1.7976931348623157e+308'
 insert into double_test values(1000000);
