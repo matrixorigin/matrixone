@@ -562,7 +562,7 @@ func getRowsFilter(
 	partitionTables []uint64) RowsFilter {
 	return func(
 		row int,
-		filterCols []int) bool {
+		filterCols []int32) bool {
 		return partitionTables[filterCols[row]] == tableID
 	}
 }

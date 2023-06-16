@@ -71,7 +71,7 @@ type lockTarget struct {
 }
 
 // RowsFilter used to filter row from primary vector. The row will not lock if filter return false.
-type RowsFilter func(row int, filterCols []int) bool
+type RowsFilter func(row int, filterCols []int32) bool
 
 type state struct {
 	colexec.ReceiverOperator
