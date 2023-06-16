@@ -37,6 +37,7 @@ const MergeLogTypeALL MergeLogType = "*"
 const FilenameSeparator = "_"
 const CsvExtension = ".csv"
 const TaeExtension = ".tae"
+const FSExtension = ".fs"
 
 const ETLParamTypeAll = MergeLogTypeALL
 const ETLParamAccountAll = "*"

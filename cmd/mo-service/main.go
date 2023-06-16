@@ -357,6 +357,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 				motrace.WithNode(UUID, nodeRole),
 				motrace.WithBatchProcessor(collector),
 				motrace.WithFSWriterFactory(writerFactory),
+				motrace.WithFileService(fs),
 				motrace.WithSQLExecutor(nil),
 			); err != nil {
 				panic(err)

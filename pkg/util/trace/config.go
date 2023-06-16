@@ -172,6 +172,9 @@ type SpanConfig struct {
 
 	// LongTimeThreshold set by WithLongTimeThreshold
 	LongTimeThreshold time.Duration `json:"-"`
+	profileGoroutine  bool
+	profileHeap       bool
+	profileCpuSecs    int
 }
 
 func (c *SpanConfig) Reset() {
@@ -179,10 +182,25 @@ func (c *SpanConfig) Reset() {
 	c.NewRoot = false
 	c.Parent = nil
 	c.LongTimeThreshold = 0
+	c.profileGoroutine = false
+	c.profileHeap = false
+	c.profileCpuSecs = 0
 }
 
 func (c *SpanConfig) GetLongTimeThreshold() time.Duration {
 	return c.LongTimeThreshold
+}
+
+func (c *SpanConfig) ProfileGoroutine() bool {
+	return c.profileGoroutine
+}
+
+func (c *SpanConfig) ProfileHeap() bool {
+	return c.profileHeap
+}
+
+func (c *SpanConfig) ProfileCpuSecs() int {
+	return c.profileCpuSecs
 }
 
 // SpanStartOption applies an option to a SpanConfig. These options are applicable
@@ -226,6 +244,24 @@ func WithKind(kind SpanKind) spanOptionFunc {
 func WithLongTimeThreshold(d time.Duration) SpanStartOption {
 	return spanOptionFunc(func(cfg *SpanConfig) {
 		cfg.LongTimeThreshold = d
+	})
+}
+
+func WithProfileGoroutine(prof bool) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileGoroutine = prof
+	})
+}
+
+func WithProfileHeap(prof bool) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileHeap = prof
+	})
+}
+
+func WithProfileCpuSecs(secs int) SpanStartOption {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.profileCpuSecs = secs
 	})
 }
 
