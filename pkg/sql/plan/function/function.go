@@ -166,15 +166,13 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		return nil, err
 	}
 
-	mp := proc.Mp()
 	inputTypes := make([]types.Type, len(inputs))
 	for i := range inputTypes {
 		inputTypes[i] = *inputs[i].GetType()
 	}
-	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
+	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), proc.Mp())
 
 	fold := true
-	evaluateLength := length
 	if !f.CannotFold() && !f.IsRealTimeRelated() {
 		for _, param := range inputs {
 			if !param.IsConst() {
@@ -182,28 +180,21 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 			}
 		}
 		if fold {
-			evaluateLength = 1
+			length = 1
 		}
 	}
 
-	if err = result.PreExtendAndReset(evaluateLength); err != nil {
+	if err = result.PreExtendAndReset(length); err != nil {
 		return nil, err
 	}
 	exec := f.GetExecuteMethod()
-	if err = exec(inputs, result, proc, evaluateLength); err != nil {
+	if err = exec(inputs, result, proc, length); err != nil {
 		return nil, err
 	}
 
 	vec := result.GetResultVector()
 	if fold {
-		// ToConst is a confused method. it just returns a new pointer to the same memory.
-		// so we need to duplicate it.
-		cvec, er := vec.ToConst(0, length, mp).Dup(mp)
-		vec.Free(mp)
-		if er != nil {
-			return nil, er
-		}
-		return cvec, nil
+		return vec.ToConst(0, 1, proc.Mp()), nil
 	}
 	return vec, nil
 }

@@ -177,21 +177,15 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 			err = executor.evalFn(executor.parameterResults, executor.resultVector, proc, 1)
 			if err == nil {
-				mp := proc.Mp()
-
 				result := executor.resultVector.GetResultVector()
 				fixed := &FixedVectorExpressionExecutor{
-					m: mp,
+					m: proc.Mp(),
 				}
 
-				// ToConst just returns a new pointer to the same memory.
-				// so we need to duplicate it.
-				fixed.resultVector, err = result.ToConst(0, 1, mp).Dup(mp)
+				fixed.resultVector = result.ToConst(0, 1, proc.Mp())
+
 				executor.Free()
-				if err != nil {
-					return nil, err
-				}
-				return fixed, nil
+				return fixed, err
 			}
 			executor.Free()
 			return nil, err
