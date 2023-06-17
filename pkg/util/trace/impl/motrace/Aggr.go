@@ -2,8 +2,9 @@ package motrace
 
 import (
 	"context"
-	"errors"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type Item interface {
@@ -30,7 +31,7 @@ func NewAggregator(ctx context.Context, windowSize time.Duration, newItemFunc fu
 	}
 }
 
-var ErrFilteredOut = errors.New("item filtered out")
+var ErrFilteredOut = moerr.NewInternalError(context.Background(), "filtered out")
 
 func (a *Aggregator) Close() {
 	// clean up the Grouped map
