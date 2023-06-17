@@ -168,7 +168,7 @@ var (
 
 	defaultAggregationWindow = 5 * time.Second
 
-	defaultSelectThreshold = 500 * time.Millisecond
+	defaultSelectThreshold = 200 * time.Millisecond
 )
 
 // FrontendParameters of the frontend
