@@ -85,7 +85,6 @@ func (a *allocator) asyncAllocate(
 	txnOp client.TxnOperator,
 	apply func(uint64, uint64, error)) {
 	a.c <- action{
-		ctx:           ctx,
 		txnOp:         txnOp,
 		accountID:     getAccountID(ctx),
 		actionType:    allocType,
@@ -108,7 +107,6 @@ func (a *allocator) updateMinValue(
 		close(c)
 	}
 	a.c <- action{
-		ctx:         ctx,
 		txnOp:       txnOp,
 		accountID:   getAccountID(ctx),
 		actionType:  updateType,
@@ -138,62 +136,48 @@ func (a *allocator) run(ctx context.Context) {
 }
 
 func (a *allocator) doAllocate(act action) {
-	var err error
-	var from, to uint64
-	select {
-	case <-act.ctx.Done():
-		err = act.ctx.Err()
-	default:
-		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
-		ctx, cancel := context.WithTimeout(ctx, time.Second*10)
-		defer cancel()
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+	defer cancel()
 
-		from, to, err = a.store.Allocate(
-			ctx,
-			act.tableID,
-			act.col,
-			act.count,
-			act.txnOp)
-		if a.logger.Enabled(zap.DebugLevel) {
-			a.logger.Debug(
-				"allocate new range",
-				zap.String("key", act.col),
-				zap.Int("count", act.count),
-				zap.Uint64("value", from),
-				zap.Uint64("next", to),
-				zap.Error(err))
-		}
+	from, to, err := a.store.Allocate(
+		ctx,
+		act.tableID,
+		act.col,
+		act.count,
+		act.txnOp)
+	if a.logger.Enabled(zap.DebugLevel) {
+		a.logger.Debug(
+			"allocate new range",
+			zap.String("key", act.col),
+			zap.Int("count", act.count),
+			zap.Uint64("value", from),
+			zap.Uint64("next", to),
+			zap.Error(err))
 	}
 
 	act.applyAllocate(from, to, err)
 }
 
 func (a *allocator) doUpdate(act action) {
-	var err error
-	select {
-	case <-act.ctx.Done():
-		err = act.ctx.Err()
-	default:
-		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
-		ctx, cancel := context.WithTimeout(ctx, time.Second*10)
-		defer cancel()
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, act.accountID)
+	ctx, cancel := context.WithTimeout(ctx, time.Second*10)
+	defer cancel()
 
-		err = a.store.UpdateMinValue(
-			ctx,
-			act.tableID,
-			act.col,
-			act.minValue,
-			act.txnOp)
-		if a.logger.Enabled(zap.DebugLevel) {
-			a.logger.Debug(
-				"update range min value",
-				zap.String("key", act.col),
-				zap.Int("count", act.count),
-				zap.Uint64("min-value", act.minValue),
-				zap.Error(err))
-		}
+	err := a.store.UpdateMinValue(
+		ctx,
+		act.tableID,
+		act.col,
+		act.minValue,
+		act.txnOp)
+	if a.logger.Enabled(zap.DebugLevel) {
+		a.logger.Debug(
+			"update range min value",
+			zap.String("key", act.col),
+			zap.Int("count", act.count),
+			zap.Uint64("min-value", act.minValue),
+			zap.Error(err))
 	}
-
 	act.applyUpdate(err)
 }
 
@@ -208,7 +192,6 @@ var (
 )
 
 type action struct {
-	ctx           context.Context
 	txnOp         client.TxnOperator
 	accountID     uint32
 	actionType    int
