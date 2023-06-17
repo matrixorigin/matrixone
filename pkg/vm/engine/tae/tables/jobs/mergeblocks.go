@@ -405,7 +405,8 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		toAddr,
 		task.deletes,
 		skipBlks,
-		task.scheduler)
+		task.rt,
+	)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return err
 	}

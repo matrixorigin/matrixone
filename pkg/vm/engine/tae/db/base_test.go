@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/mocks"
 
 	checkpoint2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
@@ -544,7 +543,7 @@ func compactBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *
 	_ = txn.Commit(context.Background())
 	for _, meta := range metas {
 		txn, _ := getRelation(t, tenantID, e, dbName, schema.Name)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, mocks.GetTestRunTime(), e.Scheduler)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Runtime, e.Scheduler)
 		if skipConflict && err != nil {
 			_ = txn.Rollback(context.Background())
 			continue

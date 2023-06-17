@@ -277,9 +277,11 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		task.txn,
 		task.compacted,
 		task.created,
-		task.scheduler,
 		task.mapping,
-		task.deletes)
+		task.deletes,
+		task.rt,
+		task.scheduler,
+	)
 
 	if err = task.txn.LogTxnEntry(
 		table.GetDB().ID,

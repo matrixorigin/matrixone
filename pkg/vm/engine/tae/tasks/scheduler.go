@@ -16,12 +16,12 @@ package tasks
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 )
@@ -44,9 +44,6 @@ type TaskScheduler interface {
 	ScheduleMultiScopedFn(ctx *Context, taskType TaskType, scopes []common.ID, fn FuncT) (Task, error)
 	ScheduleFn(ctx *Context, taskType TaskType, fn func() error) (Task, error)
 	ScheduleScopedFn(ctx *Context, taskType TaskType, scope *common.ID, fn func() error) (Task, error)
-
-	AddTransferPage(*model.TransferHashPage) error
-	DeleteTransferPage(id *common.ID) error
 
 	GetCheckpointedLSN() uint64
 	GetPenddingLSNCnt() uint64

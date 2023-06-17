@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type mergeBlocksEntry struct {
@@ -41,8 +40,9 @@ type mergeBlocksEntry struct {
 	mapping     []uint32
 	fromAddr    []uint32
 	toAddr      []uint32
-	scheduler   tasks.TaskScheduler
 	skippedBlks []int
+
+	rt *model.Runtime
 }
 
 func NewMergeBlocksEntry(
@@ -53,7 +53,8 @@ func NewMergeBlocksEntry(
 	mapping, fromAddr, toAddr []uint32,
 	deletes []*nulls.Bitmap,
 	skipBlks []int,
-	scheduler tasks.TaskScheduler) *mergeBlocksEntry {
+	rt *model.Runtime,
+) *mergeBlocksEntry {
 	return &mergeBlocksEntry{
 		txn:         txn,
 		relation:    relation,
@@ -64,9 +65,9 @@ func NewMergeBlocksEntry(
 		mapping:     mapping,
 		fromAddr:    fromAddr,
 		toAddr:      toAddr,
-		scheduler:   scheduler,
 		deletes:     deletes,
 		skippedBlks: skipBlks,
+		rt:          rt,
 	}
 }
 
@@ -201,7 +202,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 		panic("tranfer logic error")
 	}
 
-	_ = entry.scheduler.AddTransferPage(page)
+	_ = entry.rt.TransferTable.AddPage(page)
 
 	dataBlock := dropped.GetBlockData()
 	if view, err = dataBlock.CollectChangesInRange(
@@ -261,7 +262,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 	}
 	if err != nil {
 		for _, id := range ids {
-			_ = entry.scheduler.DeleteTransferPage(id)
+			_ = entry.rt.TransferTable.DeletePage(id)
 		}
 	}
 	return

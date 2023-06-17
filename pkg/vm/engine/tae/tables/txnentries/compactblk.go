@@ -35,19 +35,22 @@ import (
 
 type compactBlockEntry struct {
 	sync.RWMutex
-	txn       txnif.AsyncTxn
-	from      handle.Block
-	to        handle.Block
+	txn     txnif.AsyncTxn
+	from    handle.Block
+	to      handle.Block
+	deletes *nulls.Bitmap
+
+	rt        *model.Runtime
 	scheduler tasks.TaskScheduler
-	deletes   *nulls.Bitmap
 }
 
 func NewCompactBlockEntry(
 	txn txnif.AsyncTxn,
 	from, to handle.Block,
-	scheduler tasks.TaskScheduler,
 	sortIdx []int32,
 	deletes *nulls.Bitmap,
+	rt *model.Runtime,
+	scheduler tasks.TaskScheduler,
 ) *compactBlockEntry {
 
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
@@ -68,21 +71,22 @@ func NewCompactBlockEntry(
 			rowid := objectio.NewRowid(&toId.BlockID, uint32(i))
 			page.Train(uint32(idx), *rowid)
 		}
-		_ = scheduler.AddTransferPage(page)
+		_ = rt.TransferTable.AddPage(page)
 	}
 	return &compactBlockEntry{
 		txn:       txn,
 		from:      from,
 		to:        to,
-		scheduler: scheduler,
 		deletes:   deletes,
+		rt:        rt,
+		scheduler: scheduler,
 	}
 }
 
 func (entry *compactBlockEntry) IsAborted() bool { return false }
 func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
-	_ = entry.scheduler.DeleteTransferPage(entry.from.Fingerprint())
+	_ = entry.rt.TransferTable.DeletePage(entry.from.Fingerprint())
 	var fs fileservice.FileService
 	var fromName, toName string
 

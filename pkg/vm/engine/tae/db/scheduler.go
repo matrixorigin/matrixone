@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -127,11 +126,6 @@ func (s *taskScheduler) GetPenddingLSNCnt() uint64 {
 
 func (s *taskScheduler) GetCheckpointedLSN() uint64 {
 	return s.db.Wal.GetCheckpointed()
-}
-
-func (s *taskScheduler) AddTransferPage(page *model.TransferHashPage) (err error) {
-	s.db.Runtime.TransferTable.AddPage(page)
-	return
 }
 
 func (s *taskScheduler) DeleteTransferPage(id *common.ID) (err error) {
