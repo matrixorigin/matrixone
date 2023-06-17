@@ -31,20 +31,17 @@ type ImmutIndex struct {
 	zm       index.ZM
 	bf       objectio.BloomFilter
 	location objectio.Location
-	rt       *dbutils.Runtime
 }
 
 func NewImmutIndex(
 	zm index.ZM,
 	bf objectio.BloomFilter,
 	location objectio.Location,
-	rt *dbutils.Runtime,
 ) ImmutIndex {
 	return ImmutIndex{
 		zm:       zm,
 		bf:       bf,
 		location: location,
-		rt:       rt,
 	}
 }
 
@@ -52,6 +49,7 @@ func (idx ImmutIndex) BatchDedup(
 	ctx context.Context,
 	keys containers.Vector,
 	keysZM index.ZM,
+	rt *dbutils.Runtime,
 ) (sels *nulls.Bitmap, err error) {
 	var exist bool
 	if keysZM.Valid() {
@@ -76,8 +74,8 @@ func (idx ImmutIndex) BatchDedup(
 		if bf, err = blockio.LoadBF(
 			ctx,
 			idx.location,
-			idx.rt.Cache.FilterIndex,
-			idx.rt.Fs.Service,
+			rt.Cache.FilterIndex,
+			rt.Fs.Service,
 			false,
 		); err != nil {
 			return
@@ -103,7 +101,9 @@ func (idx ImmutIndex) BatchDedup(
 	return
 }
 
-func (idx ImmutIndex) Dedup(ctx context.Context, key any) (err error) {
+func (idx ImmutIndex) Dedup(
+	ctx context.Context, key any, rt *dbutils.Runtime,
+) (err error) {
 	exist := idx.zm.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
 	if !exist {
@@ -117,8 +117,8 @@ func (idx ImmutIndex) Dedup(ctx context.Context, key any) (err error) {
 		if bf, err = blockio.LoadBF(
 			ctx,
 			idx.location,
-			idx.rt.Cache.FilterIndex,
-			idx.rt.Fs.Service,
+			rt.Cache.FilterIndex,
+			rt.Fs.Service,
 			false,
 		); err != nil {
 			return

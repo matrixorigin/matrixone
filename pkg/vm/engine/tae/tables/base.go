@@ -424,6 +424,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		ctx,
 		keys,
 		keysZM,
+		blk.rt,
 	)
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return

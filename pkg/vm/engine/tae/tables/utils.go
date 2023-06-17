@@ -101,7 +101,7 @@ func MakeImmuIndex(
 		return
 	}
 	idx = indexwrapper.NewImmutIndex(
-		*pkZM, bf, meta.GetMetaLoc(), rt,
+		*pkZM, bf, meta.GetMetaLoc(),
 	)
 	return
 }
