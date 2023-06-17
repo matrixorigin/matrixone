@@ -41,23 +41,29 @@ import (
 
 // CompactSegmentTaskFactory merge non-appendable blocks of an appendable-segment
 // into a new non-appendable segment.
-var CompactSegmentTaskFactory = func(mergedBlks []*catalog.BlockEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
+var CompactSegmentTaskFactory = func(
+	mergedBlks []*catalog.BlockEntry, rt *model.Runtime, scheduler tasks.TaskScheduler,
+) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		mergedSegs := make([]*catalog.SegmentEntry, 1)
 		mergedSegs[0] = mergedBlks[0].GetSegment()
-		return NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, scheduler)
+		return NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, rt, scheduler)
 	}
 }
 
-var MergeBlocksIntoSegmentTaskFctory = func(mergedBlks []*catalog.BlockEntry, toSegEntry *catalog.SegmentEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
+var MergeBlocksIntoSegmentTaskFctory = func(
+	mergedBlks []*catalog.BlockEntry, toSegEntry *catalog.SegmentEntry,
+	rt *model.Runtime, scheduler tasks.TaskScheduler,
+) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return NewMergeBlocksTask(ctx, txn, mergedBlks, nil, toSegEntry, scheduler)
+		return NewMergeBlocksTask(ctx, txn, mergedBlks, nil, toSegEntry, rt, scheduler)
 	}
 }
 
 type mergeBlocksTask struct {
 	*tasks.BaseTask
 	txn         txnif.AsyncTxn
+	rt          *model.Runtime
 	toSegEntry  *catalog.SegmentEntry
 	createdSegs []*catalog.SegmentEntry
 	mergedSegs  []*catalog.SegmentEntry
@@ -70,9 +76,14 @@ type mergeBlocksTask struct {
 	deletes     []*nulls.Bitmap
 }
 
-func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry, scheduler tasks.TaskScheduler) (task *mergeBlocksTask, err error) {
+func NewMergeBlocksTask(
+	ctx *tasks.Context, txn txnif.AsyncTxn,
+	mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry,
+	rt *model.Runtime, scheduler tasks.TaskScheduler,
+) (task *mergeBlocksTask, err error) {
 	task = &mergeBlocksTask{
 		txn:         txn,
+		rt:          rt,
 		mergedBlks:  mergedBlks,
 		mergedSegs:  mergedSegs,
 		createdBlks: make([]*catalog.BlockEntry, 0),
@@ -121,9 +132,9 @@ func (task *mergeBlocksTask) mergeColumns(
 	}
 	if sort {
 		if isPrimary {
-			retVecs, mapping = mergesort.MergeSortedColumn(srcVecs, sortedIdx, fromLayout, toLayout)
+			retVecs, mapping = mergesort.MergeSortedColumn(srcVecs, sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
 		} else {
-			retVecs = mergesort.ShuffleColumn(srcVecs, *sortedIdx, fromLayout, toLayout)
+			retVecs = mergesort.ShuffleColumn(srcVecs, *sortedIdx, fromLayout, toLayout, task.rt.VectorPool.Transient)
 		}
 	} else {
 		retVecs, mapping = task.mergeColumnWithOutSort(srcVecs, fromLayout, toLayout)
@@ -134,7 +145,9 @@ func (task *mergeBlocksTask) mergeColumns(
 	return
 }
 
-func (task *mergeBlocksTask) mergeColumnWithOutSort(column []containers.Vector, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
+func (task *mergeBlocksTask) mergeColumnWithOutSort(
+	column []containers.Vector, fromLayout, toLayout []uint32,
+) (ret []containers.Vector, mapping []uint32) {
 	totalLength := uint32(0)
 	for _, i := range toLayout {
 		totalLength += i
@@ -143,7 +156,7 @@ func (task *mergeBlocksTask) mergeColumnWithOutSort(column []containers.Vector, 
 	for i := range mapping {
 		mapping[i] = uint32(i)
 	}
-	ret = mergesort.Reshape(column, fromLayout, toLayout)
+	ret = mergesort.Reshape(column, fromLayout, toLayout, task.rt.VectorPool.Transient)
 	return
 }
 

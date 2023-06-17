@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 )
@@ -75,8 +76,9 @@ func (cb *callback) call(from, to timestamp.Timestamp, closeCB func(), tails ...
 type Manager struct {
 	txnbase.NoopCommitListener
 	table     *TxnTable
+	rt        *model.Runtime
 	truncated types.TS
-	now       func() types.TS // now is from TxnManager
+	nowClock  func() types.TS // nowClock is from TxnManager
 
 	previousSaveTS      types.TS
 	logtailCallback     atomic.Pointer[callback]
@@ -85,13 +87,14 @@ type Manager struct {
 	eventOnce           sync.Once
 }
 
-func NewManager(blockSize int, now func() types.TS) *Manager {
+func NewManager(rt *model.Runtime, blockSize int, nowClock func() types.TS) *Manager {
 	mgr := &Manager{
+		rt: rt,
 		table: NewTxnTable(
 			blockSize,
-			now,
+			nowClock,
 		),
-		now: now,
+		nowClock: nowClock,
 	}
 	mgr.collectLogtailQueue = sm.NewSafeQueue(10000, 100, mgr.onCollectTxnLogtails)
 	mgr.waitCommitQueue = sm.NewSafeQueue(10000, 100, mgr.onWaitTxnCommit)
@@ -107,7 +110,7 @@ type txnWithLogtails struct {
 
 func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 	for _, item := range items {
-		builder := NewTxnLogtailRespBuilder()
+		builder := NewTxnLogtailRespBuilder(mgr.rt)
 		txn := item.(txnif.AsyncTxn)
 		entries, closeCB := builder.CollectLogtail(txn)
 		txn.GetStore().DoneWaitEvent(1)

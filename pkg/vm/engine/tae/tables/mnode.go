@@ -56,9 +56,9 @@ func newMemoryNode(block *baseBlock) *memoryNode {
 	// Get the lastest schema, it will not be modified, so just keep the pointer
 	schema := block.meta.GetSchema()
 	impl.writeSchema = schema
-	opts := containers.Options{}
-	opts.Allocator = common.MutMemAllocator
-	impl.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
+	impl.data = containers.BuildBatchWithPool(
+		schema.AllNames(), schema.AllTypes(), 0, block.rt.VectorPool.Memtable,
+	)
 	impl.initPKIndex(schema)
 	impl.OnZeroCB = impl.close
 	return impl
@@ -142,13 +142,15 @@ func (node *memoryNode) GetColumnDataWindow(
 		return containers.FillConstVector(int(to-from), readSchema.ColDefs[col].Type, nil), nil
 	}
 	data := node.data.Vecs[idx]
-	vec = data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+	vec = data.CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
+	// vec = data.CloneWindow(int(from), int(to-from), common.MutMemAllocator)
 	return
 }
 
 func (node *memoryNode) GetDataWindowOnWriteSchema(
 	from, to uint32) (bat *containers.BatchWithVersion, err error) {
-	inner := node.data.CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+	inner := node.data.CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
+	// inner := node.data.CloneWindow(int(from), int(to-from), common.MutMemAllocator)
 	bat = &containers.BatchWithVersion{
 		Version:    node.writeSchema.Version,
 		NextSeqnum: uint16(node.writeSchema.Extra.NextColSeqnum),
@@ -172,7 +174,7 @@ func (node *memoryNode) GetDataWindow(
 		if !ok {
 			vec = containers.FillConstVector(int(from-to), col.Type, nil)
 		} else {
-			vec = node.data.Vecs[idx].CloneWindow(int(from), int(to-from), common.DefaultAllocator)
+			vec = node.data.Vecs[idx].CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
 		}
 		bat.AddVector(col.Name, vec)
 	}

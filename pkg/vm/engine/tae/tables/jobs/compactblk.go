@@ -39,15 +39,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-var CompactBlockTaskFactory = func(meta *catalog.BlockEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
+var CompactBlockTaskFactory = func(
+	meta *catalog.BlockEntry, rt *model.Runtime, scheduler tasks.TaskScheduler,
+) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return NewCompactBlockTask(ctx, txn, meta, scheduler)
+		return NewCompactBlockTask(ctx, txn, meta, rt, scheduler)
 	}
 }
 
 type compactBlockTask struct {
 	*tasks.BaseTask
 	txn       txnif.AsyncTxn
+	rt        *model.Runtime
 	compacted handle.Block
 	created   handle.Block
 	schema    *catalog.Schema
@@ -62,10 +65,13 @@ func NewCompactBlockTask(
 	ctx *tasks.Context,
 	txn txnif.AsyncTxn,
 	meta *catalog.BlockEntry,
-	scheduler tasks.TaskScheduler) (task *compactBlockTask, err error) {
+	rt *model.Runtime,
+	scheduler tasks.TaskScheduler,
+) (task *compactBlockTask, err error) {
 	task = &compactBlockTask{
 		txn:       txn,
 		meta:      meta,
+		rt:        rt,
 		scheduler: scheduler,
 	}
 	dbId := meta.GetSegment().GetTable().GetDB().ID
@@ -95,7 +101,9 @@ func NewCompactBlockTask(
 
 func (task *compactBlockTask) Scopes() []common.ID { return task.scopes }
 
-func (task *compactBlockTask) PrepareData(ctx context.Context) (preparer *model.PreparedCompactedBlockData, empty bool, err error) {
+func (task *compactBlockTask) PrepareData(ctx context.Context) (
+	preparer *model.PreparedCompactedBlockData, empty bool, err error,
+) {
 	preparer = model.NewPreparedCompactedBlockData()
 	preparer.Columns = containers.NewBatch()
 
@@ -131,7 +139,9 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (preparer *model.
 	if schema.HasSortKey() {
 		idx := schema.GetSingleSortKeyIdx()
 		preparer.SortKey = preparer.Columns.Vecs[idx]
-		if task.mapping, err = mergesort.SortBlockColumns(preparer.Columns.Vecs, idx); err != nil {
+		if task.mapping, err = mergesort.SortBlockColumns(
+			preparer.Columns.Vecs, idx, task.rt.VectorPool.Transient,
+		); err != nil {
 			return preparer, false, err
 		}
 	}

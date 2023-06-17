@@ -67,7 +67,7 @@ func (node *persistedNode) BatchDedup(
 }
 
 func (node *persistedNode) ContainsKey(ctx context.Context, key any) (ok bool, err error) {
-	pkIndex, err := MakeImmuIndex(ctx, node.block.meta, nil, node.block.indexCache, node.block.fs.Service)
+	pkIndex, err := MakeImmuIndex(ctx, node.block.meta, nil, node.block.rt)
 	if err != nil {
 		return
 	}

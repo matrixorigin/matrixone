@@ -12,32 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tables
+package mocks
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
-type dataTable struct {
-	meta *catalog.TableEntry
-	aBlk *ablock
-	rt   *model.Runtime
+var testVectorPool *containers.VectorPool
+var testRunTime *model.Runtime
+
+func init() {
+	testVectorPool = containers.NewVectorPool("for-test", 20)
+	testRunTime = model.NewRuntime(
+		model.WithRuntimeMemtablePool(testVectorPool),
+		model.WithRuntimeTransientPool(testVectorPool),
+	)
 }
 
-func newTable(meta *catalog.TableEntry, rt *model.Runtime) *dataTable {
-	return &dataTable{
-		meta: meta,
-		rt:   rt,
-	}
+func GetTestVectorPool() *containers.VectorPool {
+	return testVectorPool
 }
 
-func (table *dataTable) GetHandle() data.TableHandle {
-	return newHandle(table, table.aBlk)
-}
-
-func (table *dataTable) ApplyHandle(h data.TableHandle) {
-	handle := h.(*tableHandle)
-	table.aBlk = handle.block
+func GetTestRunTime() *model.Runtime {
+	return testRunTime
 }
