@@ -108,6 +108,9 @@ func TestAggregator(t *testing.T) {
 			Status:        StatementStatusSuccess,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 		})
+		if err != nil {
+			t.Fatalf("Unexpected error when adding item: %v", err)
+		}
 
 		// different session id
 		_, err = aggregator.AddItem(&StatementInfo{
@@ -145,6 +148,10 @@ func TestAggregator(t *testing.T) {
 			Status:        StatementStatusSuccess,
 			ExecPlan:      NewDummySerializableExecPlan(map[string]string{"key": "val"}, dummySerializeExecPlan, uuid.UUID(_2TraceID)),
 		})
+
+		if err != nil {
+			t.Fatalf("Unexpected error when adding item: %v", err)
+		}
 
 		// Error status
 		_, err = aggregator.AddItem(&StatementInfo{

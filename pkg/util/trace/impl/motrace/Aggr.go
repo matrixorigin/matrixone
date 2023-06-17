@@ -70,7 +70,7 @@ func (a *Aggregator) AddItem(i Item) (Item, error) {
 }
 
 func (a *Aggregator) GetResults() []Item {
-	var results []Item
+	results := make([]Item, 0, len(a.Grouped))
 	for _, group := range a.Grouped {
 		results = append(results, group)
 	}
