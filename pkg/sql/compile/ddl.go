@@ -180,6 +180,10 @@ func (s *Scope) AlterTable(c *Compile) error {
 		return err
 	}
 
+	if err := lockTable(c.ctx, c.proc, rel); err != nil {
+		return err
+	}
+
 	tblId := rel.GetTableID(c.ctx)
 	removeRefChildTbls := make(map[string]uint64)
 	var addRefChildTbls []uint64

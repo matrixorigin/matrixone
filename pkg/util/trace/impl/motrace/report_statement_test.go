@@ -53,6 +53,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 	type args struct {
 		ctx context.Context
 		err error
+		fun func()
 	}
 
 	tests := []struct {
@@ -60,6 +61,8 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 		fields        fields
 		args          args
 		wantReportCnt int
+		// check after call EndStatement
+		wantReportCntAfterEnd int
 	}{
 		{
 			name: "Report_Export_EndStatement",
@@ -71,7 +74,8 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 				ctx: context.Background(),
 				err: nil,
 			},
-			wantReportCnt: 2,
+			wantReportCnt:         1,
+			wantReportCntAfterEnd: 2,
 		},
 		{
 			name: "Report_EndStatement",
@@ -83,7 +87,8 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 				ctx: context.Background(),
 				err: nil,
 			},
-			wantReportCnt: 1,
+			wantReportCnt:         1,
+			wantReportCntAfterEnd: 1,
 		},
 		{
 			name: "just_EndStatement",
@@ -95,7 +100,25 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 				ctx: context.Background(),
 				err: nil,
 			},
-			wantReportCnt: 1,
+			wantReportCnt:         0,
+			wantReportCntAfterEnd: 1,
+		},
+		{
+			name: "skip_running_stmt",
+			fields: fields{
+				Status:   StatementStatusRunning,
+				doReport: false,
+				doExport: false,
+			},
+			args: args{
+				ctx: context.Background(),
+				err: nil,
+				fun: func() {
+					GetTracerProvider().skipRunningStmt = true
+				},
+			},
+			wantReportCnt:         0,
+			wantReportCntAfterEnd: 1,
 		},
 	}
 
@@ -104,8 +127,8 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 		gotCnt++
 		return nil
 	}
-	s := gostub.Stub(&ReportStatement, dummyReportStmFunc)
-	defer s.Reset()
+	stub := gostub.Stub(&ReportStatement, dummyReportStmFunc)
+	defer stub.Reset()
 
 	dummyExport := func(s *StatementInfo) {
 		s.mux.Lock()
@@ -134,12 +157,16 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 				ResponseAt:           tt.fields.ResponseAt,
 				Duration:             tt.fields.Duration,
 			}
+			if tt.args.fun != nil {
+				tt.args.fun()
+			}
 			if tt.fields.doExport && !tt.fields.doReport {
 				t.Errorf("export(%v) need report(%v) first.", tt.fields.doExport, tt.fields.doReport)
 			}
 			if tt.fields.doReport {
 				s.Report(tt.args.ctx)
 			}
+			require.Equal(t, tt.wantReportCnt, gotCnt)
 			if tt.fields.doExport {
 				dummyExport(s)
 			}
@@ -148,7 +175,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 
 			stmCtx := ContextWithStatement(tt.args.ctx, s)
 			EndStatement(stmCtx, tt.args.err, 0)
-			require.Equal(t, tt.wantReportCnt, gotCnt)
+			require.Equal(t, tt.wantReportCntAfterEnd, gotCnt)
 		})
 	}
 }
