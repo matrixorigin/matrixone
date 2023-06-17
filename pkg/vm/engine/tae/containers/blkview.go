@@ -22,6 +22,8 @@ type BaseView struct {
 	DeleteMask *nulls.Bitmap
 }
 
+// TODO: remove this BlockView later
+// Use Batch instead
 type BlockView struct {
 	*BaseView
 	Columns map[int]*ColumnView

@@ -14,6 +14,8 @@
 
 package containers
 
+// TODO: remove this ColumnView later
+// Use Batch with one vector instead
 type ColumnView struct {
 	*BaseView
 	ColIdx int
