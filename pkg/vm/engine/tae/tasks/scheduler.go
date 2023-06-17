@@ -47,7 +47,6 @@ type TaskScheduler interface {
 
 	GetCheckpointedLSN() uint64
 	GetPenddingLSNCnt() uint64
-	GetGCTS() types.TS
 	GetCheckpointTS() types.TS
 }
 
