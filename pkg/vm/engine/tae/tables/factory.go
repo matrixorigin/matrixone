@@ -16,19 +16,19 @@ package tables
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type DataFactory struct {
 	Scheduler tasks.TaskScheduler
 	dir       string
-	rt        *model.Runtime
+	rt        *dbutils.Runtime
 }
 
 func NewDataFactory(
-	rt *model.Runtime, scheduler tasks.TaskScheduler, dir string,
+	rt *dbutils.Runtime, scheduler tasks.TaskScheduler, dir string,
 ) *DataFactory {
 	return &DataFactory{
 		Scheduler: scheduler,
@@ -37,7 +37,7 @@ func NewDataFactory(
 	}
 }
 
-func (factory *DataFactory) GetRuntime() *model.Runtime {
+func (factory *DataFactory) GetRuntime() *dbutils.Runtime {
 	return factory.rt
 }
 

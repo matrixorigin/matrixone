@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -82,12 +83,12 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
 
-	db.Runtime = model.NewRuntime(
-		model.WithRuntimeTransferTable(transferTable),
-		model.WithRuntimeFilterIndexCache(indexCache),
-		model.WithRuntimeObjectFS(fs),
-		model.WithRuntimeMemtablePool(model.MakeDefaultMemtablePool("memtable-vector-pool")),
-		model.WithRuntimeTransientPool(model.MakeDefaultTransientPool("trasient-vector-pool")),
+	db.Runtime = dbutils.NewRuntime(
+		dbutils.WithRuntimeTransferTable(transferTable),
+		dbutils.WithRuntimeFilterIndexCache(indexCache),
+		dbutils.WithRuntimeObjectFS(fs),
+		dbutils.WithRuntimeMemtablePool(dbutils.MakeDefaultMemtablePool("memtable-vector-pool")),
+		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 	)
 
 	switch opts.LogStoreT {

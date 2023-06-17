@@ -16,17 +16,17 @@ package mocks
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 )
 
 var testVectorPool *containers.VectorPool
-var testRunTime *model.Runtime
+var testRunTime *dbutils.Runtime
 
 func init() {
 	testVectorPool = containers.NewVectorPool("for-test", 20)
-	testRunTime = model.NewRuntime(
-		model.WithRuntimeMemtablePool(testVectorPool),
-		model.WithRuntimeTransientPool(testVectorPool),
+	testRunTime = dbutils.NewRuntime(
+		dbutils.WithRuntimeMemtablePool(testVectorPool),
+		dbutils.WithRuntimeTransientPool(testVectorPool),
 	)
 }
 
@@ -34,6 +34,6 @@ func GetTestVectorPool() *containers.VectorPool {
 	return testVectorPool
 }
 
-func GetTestRunTime() *model.Runtime {
+func GetTestRunTime() *dbutils.Runtime {
 	return testRunTime
 }

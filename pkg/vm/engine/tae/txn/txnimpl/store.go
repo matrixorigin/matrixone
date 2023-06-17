@@ -28,10 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -41,10 +41,8 @@ import (
 type txnStore struct {
 	ctx context.Context
 	txnbase.NoopTxnStore
-	mu sync.RWMutex
-	// transferTable *model.HashPageTable
-	// indexCache    model.LRUCache
-	rt          *model.Runtime
+	mu          sync.RWMutex
+	rt          *dbutils.Runtime
 	dbs         map[uint64]*txnDB
 	driver      wal.Driver
 	txn         txnif.AsyncTxn
@@ -62,7 +60,7 @@ var TxnStoreFactory = func(
 	ctx context.Context,
 	catalog *catalog.Catalog,
 	driver wal.Driver,
-	rt *model.Runtime,
+	rt *dbutils.Runtime,
 	dataFactory *tables.DataFactory,
 	maxMessageSize uint64) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
@@ -74,7 +72,7 @@ func newStore(
 	ctx context.Context,
 	catalog *catalog.Catalog,
 	driver wal.Driver,
-	rt *model.Runtime,
+	rt *dbutils.Runtime,
 	dataFactory *tables.DataFactory,
 	maxMessageSize uint64) *txnStore {
 	return &txnStore{

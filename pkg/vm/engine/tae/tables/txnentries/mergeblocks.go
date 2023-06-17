@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -43,7 +44,7 @@ type mergeBlocksEntry struct {
 	toAddr      []uint32
 	skippedBlks []int
 
-	rt *model.Runtime
+	rt *dbutils.Runtime
 }
 
 func NewMergeBlocksEntry(
@@ -54,7 +55,7 @@ func NewMergeBlocksEntry(
 	mapping, fromAddr, toAddr []uint32,
 	deletes []*nulls.Bitmap,
 	skipBlks []int,
-	rt *model.Runtime,
+	rt *dbutils.Runtime,
 ) *mergeBlocksEntry {
 	return &mergeBlocksEntry{
 		txn:         txn,

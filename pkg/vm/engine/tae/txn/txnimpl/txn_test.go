@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -426,8 +427,8 @@ func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Ca
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)
-	rt := model.NewRuntime(
-		model.WithRuntimeObjectFS(fs), model.WithRuntimeFilterIndexCache(indexCache),
+	rt := dbutils.NewRuntime(
+		dbutils.WithRuntimeObjectFS(fs), dbutils.WithRuntimeFilterIndexCache(indexCache),
 	)
 	factory := tables.NewDataFactory(rt, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, factory, 0),

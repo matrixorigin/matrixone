@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 
@@ -30,7 +31,7 @@ import (
 
 func LoadPersistedColumnData(
 	ctx context.Context,
-	rt *model.Runtime,
+	rt *dbutils.Runtime,
 	id *common.ID,
 	def *catalog.ColDef,
 	location objectio.Location,
@@ -93,7 +94,7 @@ func MakeImmuIndex(
 	ctx context.Context,
 	meta *catalog.BlockEntry,
 	bf objectio.BloomFilter,
-	rt *model.Runtime,
+	rt *dbutils.Runtime,
 ) (idx indexwrapper.ImmutIndex, err error) {
 	pkZM, err := meta.GetPKZoneMap(ctx, rt.Fs.Service)
 	if err != nil {

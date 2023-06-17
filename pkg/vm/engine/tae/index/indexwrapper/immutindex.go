@@ -23,22 +23,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type ImmutIndex struct {
 	zm       index.ZM
 	bf       objectio.BloomFilter
 	location objectio.Location
-	rt       *model.Runtime
+	rt       *dbutils.Runtime
 }
 
 func NewImmutIndex(
 	zm index.ZM,
 	bf objectio.BloomFilter,
 	location objectio.Location,
-	rt *model.Runtime,
+	rt *dbutils.Runtime,
 ) ImmutIndex {
 	return ImmutIndex{
 		zm:       zm,

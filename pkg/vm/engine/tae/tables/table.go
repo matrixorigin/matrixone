@@ -16,17 +16,17 @@ package tables
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type dataTable struct {
 	meta *catalog.TableEntry
 	aBlk *ablock
-	rt   *model.Runtime
+	rt   *dbutils.Runtime
 }
 
-func newTable(meta *catalog.TableEntry, rt *model.Runtime) *dataTable {
+func newTable(meta *catalog.TableEntry, rt *dbutils.Runtime) *dataTable {
 	return &dataTable{
 		meta: meta,
 		rt:   rt,

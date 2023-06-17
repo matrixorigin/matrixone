@@ -29,8 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
@@ -51,7 +51,7 @@ const (
 )
 
 type TxnLogtailRespBuilder struct {
-	rt                        *model.Runtime
+	rt                        *dbutils.Runtime
 	currDBName, currTableName string
 	currDBID, currTableID     uint64
 	txn                       txnif.AsyncTxn
@@ -64,7 +64,7 @@ type TxnLogtailRespBuilder struct {
 	insertBatch  *roaring.Bitmap
 }
 
-func NewTxnLogtailRespBuilder(rt *model.Runtime) *TxnLogtailRespBuilder {
+func NewTxnLogtailRespBuilder(rt *dbutils.Runtime) *TxnLogtailRespBuilder {
 	logtails := make([]logtail.TableLogtail, 0)
 	return &TxnLogtailRespBuilder{
 		rt:           rt,

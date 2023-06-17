@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -40,7 +41,7 @@ import (
 )
 
 var CompactBlockTaskFactory = func(
-	meta *catalog.BlockEntry, rt *model.Runtime, scheduler tasks.TaskScheduler,
+	meta *catalog.BlockEntry, rt *dbutils.Runtime, scheduler tasks.TaskScheduler,
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		return NewCompactBlockTask(ctx, txn, meta, rt, scheduler)
@@ -50,7 +51,7 @@ var CompactBlockTaskFactory = func(
 type compactBlockTask struct {
 	*tasks.BaseTask
 	txn       txnif.AsyncTxn
-	rt        *model.Runtime
+	rt        *dbutils.Runtime
 	compacted handle.Block
 	created   handle.Block
 	schema    *catalog.Schema
@@ -65,7 +66,7 @@ func NewCompactBlockTask(
 	ctx *tasks.Context,
 	txn txnif.AsyncTxn,
 	meta *catalog.BlockEntry,
-	rt *model.Runtime,
+	rt *dbutils.Runtime,
 	scheduler tasks.TaskScheduler,
 ) (task *compactBlockTask, err error) {
 	task = &compactBlockTask{

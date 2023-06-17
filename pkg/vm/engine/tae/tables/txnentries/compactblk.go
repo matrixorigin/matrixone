@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -40,7 +41,7 @@ type compactBlockEntry struct {
 	to      handle.Block
 	deletes *nulls.Bitmap
 
-	rt        *model.Runtime
+	rt        *dbutils.Runtime
 	scheduler tasks.TaskScheduler
 }
 
@@ -49,7 +50,7 @@ func NewCompactBlockEntry(
 	from, to handle.Block,
 	sortIdx []int32,
 	deletes *nulls.Bitmap,
-	rt *model.Runtime,
+	rt *dbutils.Runtime,
 	scheduler tasks.TaskScheduler,
 ) *compactBlockEntry {
 
