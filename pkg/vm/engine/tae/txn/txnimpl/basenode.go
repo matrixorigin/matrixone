@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 )
 
@@ -38,11 +37,11 @@ type InsertNode interface {
 	IsRowDeleted(row uint32) bool
 	IsPersisted() bool
 	PrintDeletes() string
-	GetColumnDataByIds([]int) (*model.BlockView, error)
-	GetColumnDataById(context.Context, int) (*model.ColumnView, error)
+	GetColumnDataByIds([]int) (*containers.BlockView, error)
+	GetColumnDataById(context.Context, int) (*containers.ColumnView, error)
 	Prefetch(idxes []uint16) error
-	FillBlockView(view *model.BlockView, colIdxes []int) (err error)
-	FillColumnView(*model.ColumnView) error
+	FillBlockView(view *containers.BlockView, colIdxes []int) (err error)
+	FillColumnView(*containers.ColumnView) error
 	Window(start, end uint32) (*containers.Batch, error)
 	WindowColumn(start, end uint32, pos int) (containers.Vector, error)
 	GetSpace() uint32

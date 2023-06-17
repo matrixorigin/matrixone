@@ -108,7 +108,7 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 	preparer.Columns = containers.NewBatch()
 
 	schema := task.schema
-	var view *model.ColumnView
+	var view *containers.ColumnView
 	seqnums := make([]uint16, 0, len(schema.ColDefs))
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {

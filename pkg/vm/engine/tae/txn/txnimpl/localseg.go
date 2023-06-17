@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 const (
@@ -494,7 +493,7 @@ func (seg *localSegment) BatchDedup(key containers.Vector) error {
 func (seg *localSegment) GetColumnDataByIds(
 	blk *catalog.BlockEntry,
 	colIdxes []int,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	_, pos := blk.ID.Offsets()
 	n := seg.nodes[int(pos)]
 	return n.GetColumnDataByIds(colIdxes)
@@ -504,7 +503,7 @@ func (seg *localSegment) GetColumnDataById(
 	ctx context.Context,
 	blk *catalog.BlockEntry,
 	colIdx int,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	_, pos := blk.ID.Offsets()
 	n := seg.nodes[int(pos)]
 	return n.GetColumnDataById(ctx, colIdx)

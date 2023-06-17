@@ -22,8 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -213,7 +213,7 @@ func TestHidden2(t *testing.T) {
 	err := rel.Append(context.Background(), bats[0])
 	{
 		blk := getOneBlock(rel)
-		var hidden *model.ColumnView
+		var hidden *containers.ColumnView
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
 			assert.NoError(t, err)
@@ -250,7 +250,7 @@ func TestHidden2(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		blk := getOneBlock(rel)
-		var hidden *model.ColumnView
+		var hidden *containers.ColumnView
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(context.Background(), def.Idx)
 			assert.NoError(t, err)

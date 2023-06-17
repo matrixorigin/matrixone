@@ -83,7 +83,7 @@ func (blk *block) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
@@ -100,7 +100,7 @@ func (blk *block) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnData(
 		ctx,

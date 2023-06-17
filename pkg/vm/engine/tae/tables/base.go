@@ -140,7 +140,7 @@ func (blk *baseBlock) GetID() *common.ID         { return blk.meta.AsCommonID() 
 
 func (blk *baseBlock) FillInMemoryDeletesLocked(
 	txn txnif.TxnReader,
-	view *model.BaseView,
+	view *containers.BaseView,
 	rwlocker *sync.RWMutex) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
 	deletes, err := chain.CollectDeletesLocked(txn, rwlocker)
@@ -228,7 +228,7 @@ func (blk *baseBlock) LoadPersistedDeletes(ctx context.Context) (bat *containers
 func (blk *baseBlock) FillPersistedDeletes(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	view *model.BaseView) (err error) {
+	view *containers.BaseView) (err error) {
 	blk.fillPersistedDeletesInRange(
 		ctx,
 		types.TS{},
@@ -240,7 +240,7 @@ func (blk *baseBlock) FillPersistedDeletes(
 func (blk *baseBlock) fillPersistedDeletesInRange(
 	ctx context.Context,
 	start, end types.TS,
-	view *model.BaseView) (err error) {
+	view *containers.BaseView) (err error) {
 	blk.foreachPersistedDeletesCommittedInRange(
 		ctx,
 		start,
@@ -298,9 +298,9 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxs []int,
-	skipDeletes bool) (view *model.BlockView, err error) {
+	skipDeletes bool) (view *containers.BlockView, err error) {
 
-	view = model.NewBlockView()
+	view = containers.NewBlockView()
 	for _, colIdx := range colIdxs {
 		vec, err := blk.LoadPersistedColumnData(ctx, readSchema, colIdx)
 		if err != nil {
@@ -334,8 +334,8 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdx int,
-	skipDeletes bool) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(colIdx)
+	skipDeletes bool) (view *containers.ColumnView, err error) {
+	view = containers.NewColumnView(colIdx)
 	vec, err := blk.LoadPersistedColumnData(context.Background(), readSchema, colIdx)
 	if err != nil {
 		return
@@ -439,7 +439,7 @@ func (blk *baseBlock) getPersistedValue(
 	schema *catalog.Schema,
 	row, col int,
 	skipMemory bool) (v any, isNull bool, err error) {
-	view := model.NewColumnView(col)
+	view := containers.NewColumnView(col)
 	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
 		return
 	}
@@ -504,8 +504,8 @@ func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool)
 	return
 }
 
-func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *model.BlockView, err error) {
-	view = model.NewBlockView()
+func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *containers.BlockView, err error) {
+	view = containers.NewBlockView()
 	view.DeleteMask, err = blk.inMemoryCollectDeletesInRange(startTs, endTs)
 	blk.fillPersistedDeletesInRange(ctx, startTs, endTs, view.BaseView)
 	return

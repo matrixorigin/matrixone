@@ -124,7 +124,7 @@ func (blk *ablock) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	return blk.resolveColumnDatas(
 		ctx,
 		txn,
@@ -138,7 +138,7 @@ func (blk *ablock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	return blk.resolveColumnData(
 		ctx,
 		txn,
@@ -152,7 +152,7 @@ func (blk *ablock) resolveColumnDatas(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxes []int,
-	skipDeletes bool) (view *model.BlockView, err error) {
+	skipDeletes bool) (view *containers.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 
@@ -200,7 +200,7 @@ func (blk *ablock) resolveColumnData(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	col int,
-	skipDeletes bool) (view *model.ColumnView, err error) {
+	skipDeletes bool) (view *containers.ColumnView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 

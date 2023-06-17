@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -243,7 +242,7 @@ func (c *APP1Client) CheckBound() {
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
 	blockIt := rel.MakeBlockIt()
-	var view *model.ColumnView
+	var view *containers.ColumnView
 	found := false
 	for blockIt.Valid() {
 		blk := blockIt.GetBlock()

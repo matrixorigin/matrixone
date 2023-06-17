@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -166,7 +167,7 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 	page := model.NewTransferHashPage(id, time.Now())
 	var (
 		length uint32
-		view   *model.BlockView
+		view   *containers.BlockView
 	)
 
 	posInFromAddr := fromPos - skippedCnt

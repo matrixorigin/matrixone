@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 var _ NodeT = (*persistedNode)(nil)
@@ -189,7 +188,7 @@ func (node *persistedNode) GetRowByFilter(
 	defer commitTSVec.Close()
 
 	// Load persisted deletes
-	view := model.NewColumnView(0)
+	view := containers.NewColumnView(0)
 	if err = node.block.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
 		return
 	}

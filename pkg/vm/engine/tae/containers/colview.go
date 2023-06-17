@@ -12,16 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model
-
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-)
+package containers
 
 type ColumnView struct {
 	*BaseView
 	ColIdx int
-	data   containers.Vector
+	data   Vector
 }
 
 func NewColumnView(colIdx int) *ColumnView {
@@ -31,17 +27,17 @@ func NewColumnView(colIdx int) *ColumnView {
 	}
 }
 
-func (view *ColumnView) Orphan() containers.Vector {
+func (view *ColumnView) Orphan() Vector {
 	data := view.data
 	view.data = nil
 	return data
 }
 
-func (view *ColumnView) SetData(data containers.Vector) {
+func (view *ColumnView) SetData(data Vector) {
 	view.data = data
 }
 
-func (view *ColumnView) ApplyDeletes() containers.Vector {
+func (view *ColumnView) ApplyDeletes() Vector {
 	if view.DeleteMask.IsEmpty() {
 		return view.data
 	}
@@ -50,7 +46,7 @@ func (view *ColumnView) ApplyDeletes() containers.Vector {
 	return view.data
 }
 
-func (view *ColumnView) GetData() containers.Vector {
+func (view *ColumnView) GetData() Vector {
 	return view.data
 }
 

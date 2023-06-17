@@ -211,7 +211,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 
 	// merge data according to the schema at startTs
 	schema := task.rel.Schema().(*catalog.Schema)
-	var view *model.ColumnView
+	var view *containers.ColumnView
 	sortVecs := make([]containers.Vector, 0)
 	rows := make([]uint32, 0)
 	skipBlks := make([]int, 0)
