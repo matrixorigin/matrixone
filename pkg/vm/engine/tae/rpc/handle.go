@@ -22,36 +22,37 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-
 	"github.com/google/shlex"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-
-	"go.uber.org/zap"
 )
 
-const MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 100
+const (
+	MAX_ALLOWED_TXN_LATENCY = time.Millisecond * 100
+	MAX_TXN_COMMIT_LATENCY  = time.Minute * 2
+)
 
 // TODO::GC the abandoned txn.
 type Handle struct {
@@ -61,6 +62,8 @@ type Handle struct {
 		//map txn id to txnContext.
 		txnCtxs map[string]*txnContext
 	}
+
+	GCManager *gc.Manager
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -68,6 +71,7 @@ var _ rpchandle.Handler = (*Handle)(nil)
 type txnContext struct {
 	//createAt is used to GC the abandoned txn.
 	createAt time.Time
+	deadline time.Time
 	meta     txn.TxnMeta
 	reqs     []any
 	//the table to create by this txn.
@@ -91,7 +95,33 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 		db: tae,
 	}
 	h.mu.txnCtxs = make(map[string]*txnContext)
+
+	// clean h.mu.txnCtxs by interval
+	h.GCManager = gc.NewManager(
+		gc.WithCronJob(
+			"clean-txn-cache",
+			MAX_TXN_COMMIT_LATENCY,
+			func(ctx context.Context) error {
+				return h.GCCache(time.Now())
+			},
+		),
+	)
+	h.GCManager.Start()
+
 	return h
+}
+
+// TODO: vast items within h.mu.txnCtxs would incur performance penality.
+func (h *Handle) GCCache(now time.Time) error {
+	logutil.Infof("GC rpc handle txn cache")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id, txn := range h.mu.txnCtxs {
+		if txn.deadline.Before(now) {
+			delete(h.mu.txnCtxs, id)
+		}
+	}
+	return nil
 }
 
 func (h *Handle) HandleCommit(
@@ -316,6 +346,9 @@ func (h *Handle) HandleStartRecovery(
 
 func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//FIXME::should wait txn request's job done?
+	if h.GCManager != nil {
+		h.GCManager.Stop()
+	}
 	return h.db.Close()
 }
 
@@ -427,7 +460,7 @@ func (h *Handle) prefetchDeleteRowID(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	pref, err := blockio.BuildPrefetchParams(h.db.Fs.Service, loc)
+	pref, err := blockio.BuildPrefetchParams(h.db.Runtime.Fs.Service, loc)
 	if err != nil {
 		return err
 	}
@@ -453,7 +486,7 @@ func (h *Handle) prefetchMetadata(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		err = blockio.PrefetchMeta(h.db.Fs.Service, loc)
+		err = blockio.PrefetchMeta(h.db.Runtime.Fs.Service, loc)
 		if err != nil {
 			return err
 		}
@@ -499,8 +532,10 @@ func (h *Handle) CacheTxnRequest(
 	h.mu.Lock()
 	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
 	if !ok {
+		now := time.Now()
 		txnCtx = &txnContext{
-			createAt: time.Now(),
+			createAt: now,
+			deadline: now.Add(MAX_TXN_COMMIT_LATENCY),
 			meta:     meta,
 			toCreate: make(map[uint64]*catalog2.Schema),
 		}
@@ -909,7 +944,7 @@ func (h *Handle) HandleWrite(
 				ctx,
 				[]uint16{uint16(columnIdx)},
 				nil,
-				h.db.Fs.Service,
+				h.db.Runtime.Fs.Service,
 				location,
 				nil,
 			)

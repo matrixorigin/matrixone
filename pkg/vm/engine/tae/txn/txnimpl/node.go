@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -129,5 +130,5 @@ func (n *pnode) GetColumnDataById(ctx context.Context, idx int) (view *model.Col
 
 func (n *pnode) Prefetch(idxes []uint16) error {
 	key := n.meta.FastGetMetaLoc()
-	return blockio.Prefetch(idxes, []uint16{key.ID()}, n.table.store.dataFactory.Fs.Service, key)
+	return blockio.Prefetch(idxes, []uint16{key.ID()}, n.table.store.dataFactory.GetRuntime().Fs.Service, key)
 }

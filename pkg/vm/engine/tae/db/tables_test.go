@@ -49,7 +49,7 @@ func TestTables1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	rel, _ := database.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
-	dataFactory := tables.NewDataFactory(db.Fs, db.IndexCache, db.Scheduler, db.Dir)
+	dataFactory := tables.NewDataFactory(db.Runtime, db.Scheduler, db.Dir)
 	tableFactory := dataFactory.MakeTableFactory()
 	table := tableFactory(tableMeta)
 	handle := table.GetHandle()
@@ -496,7 +496,7 @@ func TestMergeBlocks1(t *testing.T) {
 			assert.Nil(t, txn.Commit(context.Background()))
 		}
 		start := time.Now()
-		factory := jobs.MergeBlocksIntoSegmentTaskFctory(blks, nil, db.Scheduler)
+		factory := jobs.MergeBlocksIntoSegmentTaskFctory(blks, nil, db.Runtime, db.Scheduler)
 		// err = task.WaitDone()
 		// assert.Nil(t, err)
 		{

@@ -130,12 +130,12 @@ func (s *taskScheduler) GetCheckpointedLSN() uint64 {
 }
 
 func (s *taskScheduler) AddTransferPage(page *model.TransferHashPage) (err error) {
-	s.db.TransferTable.AddPage(page)
+	s.db.Runtime.TransferTable.AddPage(page)
 	return
 }
 
 func (s *taskScheduler) DeleteTransferPage(id *common.ID) (err error) {
-	s.db.TransferTable.DeletePage(id)
+	s.db.Runtime.TransferTable.DeletePage(id)
 	return
 }
 

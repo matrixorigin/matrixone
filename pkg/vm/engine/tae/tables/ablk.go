@@ -43,11 +43,11 @@ type ablock struct {
 
 func newABlock(
 	meta *catalog.BlockEntry,
-	fs *objectio.ObjectFS,
-	indexCache model.LRUCache,
-	scheduler tasks.TaskScheduler) *ablock {
+	rt *model.Runtime,
+	scheduler tasks.TaskScheduler,
+) *ablock {
 	blk := &ablock{}
-	blk.baseBlock = newBaseBlock(blk, meta, indexCache, fs, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, rt, scheduler)
 	blk.mvcc.SetAppendListener(blk.OnApplyAppend)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	if blk.meta.HasDropCommitted() {
@@ -56,6 +56,7 @@ func newABlock(
 		node.Ref()
 		blk.node.Store(node)
 		blk.FreezeAppend()
+		blk.mvcc.UpgradeDeleteChainByTS(blk.meta.GetDeltaPersistedTS())
 	} else {
 		mnode := newMemoryNode(blk.baseBlock)
 		node := NewNode(mnode)

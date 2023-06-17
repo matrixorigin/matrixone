@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -32,23 +31,20 @@ type ImmutIndex struct {
 	zm       index.ZM
 	bf       objectio.BloomFilter
 	location objectio.Location
-	cache    model.LRUCache
-	fs       fileservice.FileService
+	rt       *model.Runtime
 }
 
 func NewImmutIndex(
 	zm index.ZM,
 	bf objectio.BloomFilter,
 	location objectio.Location,
-	cache model.LRUCache,
-	fs fileservice.FileService,
+	rt *model.Runtime,
 ) ImmutIndex {
 	return ImmutIndex{
 		zm:       zm,
 		bf:       bf,
 		location: location,
-		cache:    cache,
-		fs:       fs,
+		rt:       rt,
 	}
 }
 
@@ -80,8 +76,8 @@ func (idx ImmutIndex) BatchDedup(
 		if bf, err = blockio.LoadBF(
 			ctx,
 			idx.location,
-			idx.cache,
-			idx.fs,
+			idx.rt.Cache.FilterIndex,
+			idx.rt.Fs.Service,
 			false,
 		); err != nil {
 			return
@@ -121,8 +117,8 @@ func (idx ImmutIndex) Dedup(ctx context.Context, key any) (err error) {
 		if bf, err = blockio.LoadBF(
 			ctx,
 			idx.location,
-			idx.cache,
-			idx.fs,
+			idx.rt.Cache.FilterIndex,
+			idx.rt.Fs.Service,
 			false,
 		); err != nil {
 			return

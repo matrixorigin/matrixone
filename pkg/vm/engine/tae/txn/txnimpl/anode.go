@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -99,12 +100,24 @@ func (n *anode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
 func (n *anode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.GetLocalSchema()
 	if n.data == nil {
-		opts := containers.Options{}
-		opts.Capacity = data.Length() - int(offset)
-		if opts.Capacity > int(MaxNodeRows) {
-			opts.Capacity = int(MaxNodeRows)
+		capacity := data.Length() - int(offset)
+		if capacity > int(MaxNodeRows) {
+			capacity = int(MaxNodeRows)
 		}
-		n.data = containers.BuildBatch(schema.AllNames(), schema.AllTypes(), opts)
+		n.data = containers.BuildBatchWithPool(
+			schema.AllNames(),
+			schema.AllTypes(),
+			capacity,
+			n.table.store.rt.VectorPool.Transient,
+		)
+
+		// n.data = containers.BuildBatch(
+		// 	schema.AllNames(),
+		// 	schema.AllTypes(),
+		// 	containers.Options{
+		// 		Capacity: capacity,
+		// 	},
+		// )
 	}
 
 	from := uint32(n.data.Length())

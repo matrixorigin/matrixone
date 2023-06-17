@@ -522,7 +522,7 @@ func TestCompactBlock1(t *testing.T) {
 	{
 		txn, rel := getDefaultRelation(t, db, schema.Name)
 		blkMeta := getOneBlockMeta(rel)
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Scheduler)
+		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Runtime, db.Scheduler)
 		assert.Nil(t, err)
 		preparer, _, err := task.PrepareData(context.Background())
 		assert.Nil(t, err)
@@ -553,7 +553,7 @@ func TestCompactBlock1(t *testing.T) {
 		block, err := seg.GetBlock(id.BlockID)
 		assert.Nil(t, err)
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, nil)
+		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Runtime, nil)
 		assert.Nil(t, err)
 		preparer, _, err := task.PrepareData(context.Background())
 		assert.Nil(t, err)
@@ -576,7 +576,7 @@ func TestCompactBlock1(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit(context.Background()))
 		}
-		task, err = jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, nil)
+		task, err = jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Runtime, nil)
 		assert.Nil(t, err)
 		preparer, _, err = task.PrepareData(context.Background())
 		assert.Nil(t, err)
@@ -590,7 +590,7 @@ func TestCompactBlock1(t *testing.T) {
 			blk, err := seg.GetBlock(id.BlockID)
 			assert.Nil(t, err)
 			blkMeta := blk.GetMeta().(*catalog.BlockEntry)
-			task, err = jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, nil)
+			task, err = jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Runtime, nil)
 			assert.Nil(t, err)
 			preparer, _, err := task.PrepareData(context.Background())
 			assert.Nil(t, err)
@@ -600,7 +600,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs.Next())
+		changes, err := dataBlock.CollectChangesInRange(context.Background(), txn.GetStartTS(), maxTs.Next())
 		assert.NoError(t, err)
 		assert.Equal(t, 2, changes.DeleteMask.GetCardinality())
 
@@ -654,9 +654,9 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		blkMeta1 := it.GetBlock().GetMeta().(*catalog.BlockEntry)
 		it.Next()
 		blkMeta2 := it.GetBlock().GetMeta().(*catalog.BlockEntry)
-		task1, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta1, db.Scheduler)
+		task1, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta1, db.Runtime, db.Scheduler)
 		assert.NoError(t, err)
-		task2, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta2, db.Scheduler)
+		task2, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta2, db.Runtime, db.Scheduler)
 		assert.NoError(t, err)
 		worker.SendOp(task1)
 		worker.SendOp(task2)
@@ -809,7 +809,7 @@ func TestCompactMemAlter(t *testing.T) {
 		txn, rel := getDefaultRelation(t, db, schema.Name)
 		blkMeta := getOneBlockMeta(rel)
 		// ablk-0 & nablk-1
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Scheduler)
+		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Runtime, db.Scheduler)
 		assert.NoError(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -863,7 +863,7 @@ func TestCompactBlock2(t *testing.T) {
 		txn, rel := getDefaultRelation(t, db, schema.Name)
 		blkMeta := getOneBlockMeta(rel)
 		// ablk-0 & nablk-1
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Scheduler)
+		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Runtime, db.Scheduler)
 		assert.NoError(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -918,7 +918,7 @@ func TestCompactBlock2(t *testing.T) {
 		require.Equal(t, 18, cnt)
 
 		// new nablk-2 18 rows
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Scheduler)
+		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Runtime, db.Scheduler)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -958,7 +958,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Equal(t, 1, cnt)
 
 		// this compaction create a nablk-3 having same data with the nablk-2
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Scheduler)
+		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Runtime, db.Scheduler)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -1002,7 +1002,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.NoError(t, err)
 
 		// new nablk-4 16 rows
-		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Scheduler)
+		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Runtime, db.Scheduler)
 		assert.NoError(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -1697,7 +1697,7 @@ func TestLogIndex1(t *testing.T) {
 		assert.Nil(t, err)
 		defer view.Close()
 		assert.True(t, view.DeleteMask.Contains(uint64(offset)))
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Scheduler)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Runtime, tae.Scheduler)
 		assert.Nil(t, err)
 		err = task.OnExec(context.Background())
 		assert.Nil(t, err)
@@ -2579,7 +2579,7 @@ func TestSegDelLogtail(t *testing.T) {
 		ckpEntries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 		require.Equal(t, 1, len(ckpEntries))
 		entry := ckpEntries[0]
-		ins, del, cnins, segdel, err := entry.GetByTableID(context.Background(), tae.Fs, tid)
+		ins, del, cnins, segdel, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 		require.NoError(t, err)
 		require.Equal(t, uint32(6), ins.Vecs[0].Len)
 		require.Equal(t, uint32(6), del.Vecs[0].Len)
@@ -2664,7 +2664,7 @@ func TestMergeblocks2(t *testing.T) {
 			it.Next()
 		}
 		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
-		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Scheduler)
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Runtime, tae.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -2747,7 +2747,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 			it.Next()
 		}
 		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
-		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Scheduler)
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, tae.Runtime, tae.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -3074,7 +3074,7 @@ func TestCompactBlk1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime, tae.DB.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -3155,7 +3155,7 @@ func TestCompactBlk2(t *testing.T) {
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	meta := blk.GetMeta().(*catalog.BlockEntry)
-	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime, tae.DB.Scheduler)
 	assert.NoError(t, err)
 	err = task.OnExec(context.Background())
 	assert.NoError(t, err)
@@ -3232,7 +3232,7 @@ func TestCompactblk3(t *testing.T) {
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	meta := blk.GetMeta().(*catalog.BlockEntry)
-	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime, tae.DB.Scheduler)
 	assert.NoError(t, err)
 	err = task.OnExec(context.Background())
 	assert.NoError(t, err)
@@ -3296,7 +3296,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	meta := blk.GetMeta().(*catalog.BlockEntry)
-	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime, tae.DB.Scheduler)
 	assert.NoError(t, err)
 	err = task.OnExec(context.Background())
 	assert.NoError(t, err)
@@ -3470,7 +3470,9 @@ func TestReadEqualTS(t *testing.T) {
 	defer tae.Close()
 
 	txn, err := tae.StartTxn(nil)
+	tae.Catalog.Lock()
 	tae.Catalog.CreateDBEntryByTS("db", txn.GetStartTS())
+	tae.Catalog.Unlock()
 	assert.Nil(t, err)
 	_, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
@@ -4186,38 +4188,93 @@ func TestCollectDelete(t *testing.T) {
 	p3 := txn3.GetPrepareTS()
 	t.Logf("p3= %v", p3.ToString())
 
-	_, rel = tae.getRelation()
+	txn, rel := tae.getRelation()
 	blkit = rel.MakeBlockIt()
-	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
+	blkhandle := blkit.GetBlock()
+	blkdata := blkhandle.GetMeta().(*catalog.BlockEntry).GetBlockData()
 
 	batch, err := blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p1, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 1, vec.Length())
 	}
+	view, err := blkdata.CollectChangesInRange(context.Background(), types.TS{}, p1)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 1, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p2, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 4, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), types.TS{}, p2)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 4, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p2, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 3, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p2)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 3, view.DeleteMask.GetCardinality())
+
 	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true)
 	assert.NoError(t, err)
-	t.Log((batch.Attrs))
-	for _, vec := range batch.Vecs {
-		t.Log(vec)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
 		assert.Equal(t, 5, vec.Length())
 	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p3)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 5, view.DeleteMask.GetCardinality())
+
+	blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
+	assert.NoError(t, err)
+	writer.SetPrimaryKey(3)
+	writer.WriteBatch(containers.ToCNBatch(batch))
+	blocks, _, err := writer.Sync(context.TODO())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(blocks))
+
+	deltaLoc := blockio.EncodeLocation(
+		writer.GetName(),
+		blocks[0].GetExtent(),
+		uint32(batch.Length()),
+		blocks[0].GetID(),
+	)
+
+	err = blkhandle.UpdateDeltaLoc(deltaLoc)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	blkdata.GCInMemeoryDeletesByTS(p3)
+
+	batch, err = blkdata.CollectDeleteInRange(context.Background(), p1.Next(), p3, true)
+	assert.NoError(t, err)
+	t.Logf(logtail.BatchToString("", batch, false))
+	for i, vec := range batch.Vecs {
+		t.Logf(batch.Attrs[i])
+		assert.Equal(t, 5, vec.Length())
+	}
+	view, err = blkdata.CollectChangesInRange(context.Background(), p1.Next(), p3)
+	assert.NoError(t, err)
+	t.Logf(view.DeleteMask.String())
+	assert.Equal(t, 5, view.DeleteMask.GetCardinality())
+
 }
 
 func TestAppendnode(t *testing.T) {
@@ -4479,7 +4536,7 @@ func TestBlockRead(t *testing.T) {
 		colTyps = append(colTyps, col.Type)
 	}
 	t.Log("read columns: ", columns)
-	fs := tae.DB.Fs.Service
+	fs := tae.DB.Runtime.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
 	infos := make([][]*pkgcatalog.BlockInfo, 0)
@@ -4569,7 +4626,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime, tae.DB.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -4599,7 +4656,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
 		assert.False(t, meta.IsAppendable())
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Runtime, tae.DB.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -4727,7 +4784,7 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Fs, tid)
+			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			if ins != nil {
@@ -4742,7 +4799,7 @@ func TestReadCheckpoint(t *testing.T) {
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		for _, tid := range tids {
-			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Fs, tid)
+			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 			assert.NoError(t, err)
 			t.Logf("table %d", tid)
 			if ins != nil {
@@ -4902,7 +4959,7 @@ func TestGetActiveRow(t *testing.T) {
 		txn2, rel2 := tae.getRelation()
 		it := rel2.MakeBlockIt()
 		blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewCompactBlockTask(nil, txn2, blk, tae.Scheduler)
+		task, err := jobs.NewCompactBlockTask(nil, txn2, blk, tae.Runtime, tae.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec(context.Background())
 		assert.NoError(t, err)
@@ -5055,7 +5112,7 @@ func TestMergeBlocks3(t *testing.T) {
 			metas = append(metas, meta)
 		}
 		segsToMerge := []*catalog.SegmentEntry{seg1}
-		task, err := jobs.NewMergeBlocksTask(nil, mergetxn, metas, segsToMerge, nil, tae.Scheduler)
+		task, err := jobs.NewMergeBlocksTask(nil, mergetxn, metas, segsToMerge, nil, tae.Runtime, tae.Scheduler)
 		require.NoError(t, err)
 		require.NoError(t, task.OnExec(context.Background()))
 
@@ -5270,7 +5327,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	// write only one segment
 	for i := 0; i < 1; i++ {
 		objName1 := objectio.NewSegmentid().ToString() + "-0"
-		writer, err := blockio.NewBlockWriter(tae.Fs.Service, objName1)
+		writer, err := blockio.NewBlockWriter(tae.Runtime.Fs.Service, objName1)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for _, bat := range bats[i*25 : (i+1)*25] {
@@ -5429,7 +5486,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
 	defer manager.Stop()
 
@@ -5461,7 +5518,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -5483,7 +5540,7 @@ func TestGCDropDB(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
 	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -5518,7 +5575,7 @@ func TestGCDropDB(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -5541,7 +5598,7 @@ func TestGCDropTable(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := newTestEngine(ctx, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager.Start()
 	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -5591,7 +5648,7 @@ func TestGCDropTable(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -6981,7 +7038,7 @@ func TestCommitS3Blocks(t *testing.T) {
 	blkMetas := make([]objectio.Location, 0)
 	for _, bat := range datas {
 		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-		writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, name, 0, nil)
+		writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
 		assert.Nil(t, err)
 		writer.SetPrimaryKey(3)
 		for i := 0; i < 50; i++ {
@@ -7062,7 +7119,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	createRelation(t, tae.DB, "db", schema, true)
 
 	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, name, 0, nil)
 	assert.Nil(t, err)
 	writer.SetPrimaryKey(3)
 	_, err = writer.WriteBatch(containers.ToCNBatch(data))
@@ -7172,7 +7229,7 @@ func TestDeduplication(t *testing.T) {
 	})
 
 	blk1Name := objectio.BuildObjectName(segmentIDs[1], 0)
-	writer, err := blockio.NewBlockWriterNew(tae.Fs.Service, blk1Name, 0, nil)
+	writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
 	assert.NoError(t, err)
 	writer.SetPrimaryKey(3)
 	writer.WriteBatch(containers.ToCNBatch(bats[0]))
@@ -7199,8 +7256,7 @@ func TestDeduplication(t *testing.T) {
 	tbl, err := db.TxnGetTableEntryByName(schema.Name, txn)
 	assert.NoError(t, err)
 	dataFactory := tables.NewDataFactory(
-		tae.Fs,
-		tae.IndexCache,
+		tae.Runtime,
 		tae.Scheduler,
 		tae.Dir)
 	seg, err := tbl.CreateSegment(
@@ -7234,4 +7290,95 @@ func TestDeduplication(t *testing.T) {
 	}
 	tae.checkRowsByScan(rows, false)
 	t.Logf(tae.Catalog.SimplePPString(3))
+}
+
+func TestGCInMemeoryDeletesByTS(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(ctx, t, opts)
+	defer tae.Close()
+	rows := 100
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = uint32(rows)
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	tae.createRelAndAppend(bat, true)
+
+	txn, rel := tae.getRelation()
+	blkit := rel.MakeBlockIt()
+	blkHandle := blkit.GetBlock()
+	blkMeta := blkHandle.GetMeta().(*catalog.BlockEntry)
+	blkID := blkMeta.AsCommonID()
+	blkData := blkMeta.GetBlockData()
+	assert.NoError(t, txn.Commit(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		i := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				ts := tae.TxnMgr.StatMaxCommitTS()
+				batch, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true)
+				assert.NoError(t, err)
+				if batch == nil {
+					continue
+				}
+
+				blk1Name := objectio.BuildObjectName(objectio.NewSegmentid(), uint16(i))
+				writer, err := blockio.NewBlockWriterNew(tae.Runtime.Fs.Service, blk1Name, 0, nil)
+				assert.NoError(t, err)
+				writer.SetPrimaryKey(3)
+				writer.WriteBatch(containers.ToCNBatch(batch))
+				blocks, _, err := writer.Sync(context.TODO())
+				assert.NoError(t, err)
+				assert.Equal(t, 1, len(blocks))
+
+				deltaLoc := blockio.EncodeLocation(
+					writer.GetName(),
+					blocks[0].GetExtent(),
+					uint32(batch.Length()),
+					blocks[0].GetID(),
+				)
+
+				txn, rel := tae.getRelation()
+				blkit := rel.MakeBlockIt()
+				blkHandle := blkit.GetBlock()
+				err = blkHandle.UpdateDeltaLoc(deltaLoc)
+				assert.NoError(t, err)
+				assert.NoError(t, txn.Commit(context.Background()))
+
+				blkData.GCInMemeoryDeletesByTS(ts)
+			}
+			i++
+		}
+	}()
+
+	for offset := 0; offset < rows; offset++ {
+		txn, rel := tae.getRelation()
+		assert.NoError(t, rel.RangeDelete(blkID, uint32(offset), uint32(offset), handle.DT_Normal))
+		assert.NoError(t, txn.Commit(context.Background()))
+		ts := txn.GetCommitTS()
+
+		batch, err := blkData.CollectDeleteInRange(context.Background(), types.TS{}, ts, true)
+		assert.NoError(t, err)
+		t.Logf(logtail.BatchToString("", batch, false))
+		for i, vec := range batch.Vecs {
+			t.Logf(batch.Attrs[i])
+			assert.Equal(t, offset+1, vec.Length())
+		}
+		view, err := blkData.CollectChangesInRange(context.Background(), types.TS{}, ts)
+		assert.NoError(t, err)
+		t.Logf(view.DeleteMask.String())
+		assert.Equal(t, offset+1, view.DeleteMask.GetCardinality())
+	}
+	cancel()
+	wg.Wait()
+
 }

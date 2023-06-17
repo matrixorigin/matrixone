@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -53,10 +51,7 @@ type DB struct {
 
 	Catalog *catalog.Catalog
 
-	IndexCache model.LRUCache
-
-	TxnMgr        *txnbase.TxnManager
-	TransferTable *model.HashPageTable
+	TxnMgr *txnbase.TxnManager
 
 	LogtailMgr *logtail.Manager
 	Wal        wal.Driver
@@ -71,7 +66,11 @@ type DB struct {
 	DiskCleaner *gc2.DiskCleaner
 	Pipeline    *blockio.IoPipeline
 
-	Fs *objectio.ObjectFS
+	// Fs *objectio.ObjectFS
+	// TransferTable *model.HashPageTable
+	// IndexCache model.LRUCache
+
+	Runtime *model.Runtime
 
 	DBLocker io.Closer
 
@@ -167,6 +166,6 @@ func (db *DB) Close() error {
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
 	db.DiskCleaner.Stop()
-	db.TransferTable.Close()
+	db.Runtime.TransferTable.Close()
 	return db.DBLocker.Close()
 }
