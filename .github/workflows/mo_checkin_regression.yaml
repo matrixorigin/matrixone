@@ -290,7 +290,7 @@ jobs:
           ./load.sh -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpch_10 -r -m -g | tee report/mo-load-data-tpch.log
 
       - name: Start TPCH 10G Test
-        if: ${{ always() && !cancelled() && steps.load_tpch_data.result == 'success'  }}
+        if: ${{ always() && !cancelled() && jobs.load_tpch_data.result == 'success'  }}
         timeout-minutes: 15
         run: |
           set -uo pipefail
@@ -395,7 +395,7 @@ jobs:
           ./load.sh -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/00_from_s3/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
 
       - name: Start TPCC 10 Warehouses 10 terminals Test
-        if: ${{ always() && !cancelled() && steps.load_tpcc_data.result == 'success' }}
+        if: ${{ always() && !cancelled() && jobs.load_tpcc_data.result == 'success' }}
         timeout-minutes: 10
         run: |
           set -uo pipefail
@@ -416,7 +416,7 @@ jobs:
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-10.log
           
       - name: Start TPCC 10 Warehouses 50 terminals Test
-        if: ${{ always() && !cancelled() && steps.load_tpcc_data.result == 'success' }}
+        if: ${{ always() && !cancelled() && jobs.load_tpcc_data.result == 'success' }}
         timeout-minutes: 15
         run: |
           set -uo pipefail
@@ -437,7 +437,7 @@ jobs:
           ./runVerify.sh props_10.mo | tee report/tpcc-verify-10-50.log
 
       - name: Start TPCC 10 Warehouses 100 terminals Test
-        if: ${{ always() && !cancelled() && steps.load_tpcc_data.result == 'success' }}
+        if: ${{ always() && !cancelled() && jobs.load_tpcc_data.result == 'success' }}
         timeout-minutes: 15
         run: |
           set -uo pipefail
