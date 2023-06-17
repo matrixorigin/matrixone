@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -59,6 +60,12 @@ func WithRuntimeScheduler(s tasks.TaskScheduler) RuntimeOption {
 	}
 }
 
+func WithRuntimeOptions(opts *options.Options) RuntimeOption {
+	return func(r *Runtime) {
+		r.Options = opts
+	}
+}
+
 type Runtime struct {
 	VectorPool struct {
 		Memtable  *containers.VectorPool
@@ -73,6 +80,8 @@ type Runtime struct {
 
 	TransferTable *model.HashPageTable
 	Scheduler     tasks.TaskScheduler
+
+	Options *options.Options
 }
 
 func NewRuntime(opts ...RuntimeOption) *Runtime {

@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
@@ -61,7 +60,6 @@ type DB struct {
 	BGCheckpointRunner checkpoint.Runner
 
 	DiskCleaner *gc2.DiskCleaner
-	Pipeline    *blockio.IoPipeline
 
 	Runtime *dbutils.Runtime
 

@@ -97,6 +97,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		dbutils.WithRuntimeMemtablePool(dbutils.MakeDefaultMemtablePool("memtable-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 		dbutils.WithRuntimeScheduler(scheduler),
+		dbutils.WithRuntimeOptions(db.Opts),
 	)
 
 	dataFactory := tables.NewDataFactory(
