@@ -77,7 +77,7 @@ type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) 
 
 type TxnManager struct {
 	sync.RWMutex
-	common.ClosedState
+	sm.ClosedState
 	PreparingSM     sm.StateMachine
 	FlushQueue      sm.Queue
 	IDMap           map[string]txnif.AsyncTxn
@@ -564,6 +564,6 @@ func (mgr *TxnManager) Stop() {
 	mgr.wg.Wait()
 	mgr.PreparingSM.Stop()
 	mgr.FlushQueue.Stop()
-	mgr.OnException(common.ErrClose)
+	mgr.OnException(sm.ErrClose)
 	logutil.Info("[Stop]", TxnMgrField(mgr))
 }

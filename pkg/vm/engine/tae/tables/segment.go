@@ -28,7 +28,6 @@ import (
 )
 
 type dataSegment struct {
-	common.ClosedState
 	meta *catalog.SegmentEntry
 	rt   *dbutils.Runtime
 }
@@ -44,9 +43,6 @@ func newSegment(
 }
 
 func (segment *dataSegment) Destroy() (err error) {
-	if !segment.TryClose() {
-		return
-	}
 	return
 }
 
