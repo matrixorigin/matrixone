@@ -312,19 +312,6 @@ commit    TCL    external_sql
 begin    TCL    external_sql
 create database statement_query_type    DDL    external_sql
 SET character_set_results = utf8    Other    external_sql
-select sleep(15)    DQL    external_sql
-select sleep(15)    DQL    external_sql
-select sleep(1)    DQL    external_sql
-use system    Other    external_sql
-rollback    TCL    external_sql
-deallocate prepare s1    Other    external_sql
-set @a=2    Other    external_sql
-prepare s1 from select * from test_table where col1=?    Other    external_sql
-drop database db2    DDL    external_sql
-drop table table_2    DDL    external_sql
-drop view view_2    DDL    external_sql
-drop index index_table_2 on table_2    DDL    external_sql
-create index index_table_2 on table_2(col1)    DDL    external_sql
 /* cloud_user */ use statement_query_type;
 /* cloud_user */ begin;
 /* cloud_user */ commit;
