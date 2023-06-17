@@ -35,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -55,8 +54,6 @@ type DB struct {
 
 	LogtailMgr *logtail.Manager
 	Wal        wal.Driver
-
-	Scheduler tasks.TaskScheduler
 
 	GCManager *gc.Manager
 
@@ -156,7 +153,7 @@ func (db *DB) Close() error {
 	db.GCManager.Stop()
 	db.BGScanner.Stop()
 	db.BGCheckpointRunner.Stop()
-	db.Scheduler.Stop()
+	db.Runtime.Scheduler.Stop()
 	db.TxnMgr.Stop()
 	db.LogtailMgr.Stop()
 	db.Wal.Close()

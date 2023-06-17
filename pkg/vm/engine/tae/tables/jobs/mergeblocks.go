@@ -42,21 +42,21 @@ import (
 // CompactSegmentTaskFactory merge non-appendable blocks of an appendable-segment
 // into a new non-appendable segment.
 var CompactSegmentTaskFactory = func(
-	mergedBlks []*catalog.BlockEntry, rt *dbutils.Runtime, scheduler tasks.TaskScheduler,
+	mergedBlks []*catalog.BlockEntry, rt *dbutils.Runtime,
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		mergedSegs := make([]*catalog.SegmentEntry, 1)
 		mergedSegs[0] = mergedBlks[0].GetSegment()
-		return NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, rt, scheduler)
+		return NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, rt)
 	}
 }
 
 var MergeBlocksIntoSegmentTaskFctory = func(
 	mergedBlks []*catalog.BlockEntry, toSegEntry *catalog.SegmentEntry,
-	rt *dbutils.Runtime, scheduler tasks.TaskScheduler,
+	rt *dbutils.Runtime,
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return NewMergeBlocksTask(ctx, txn, mergedBlks, nil, toSegEntry, rt, scheduler)
+		return NewMergeBlocksTask(ctx, txn, mergedBlks, nil, toSegEntry, rt)
 	}
 }
 
@@ -71,7 +71,6 @@ type mergeBlocksTask struct {
 	createdBlks []*catalog.BlockEntry
 	compacted   []handle.Block
 	rel         handle.Relation
-	scheduler   tasks.TaskScheduler
 	scopes      []common.ID
 	deletes     []*nulls.Bitmap
 }
@@ -79,7 +78,7 @@ type mergeBlocksTask struct {
 func NewMergeBlocksTask(
 	ctx *tasks.Context, txn txnif.AsyncTxn,
 	mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry,
-	rt *dbutils.Runtime, scheduler tasks.TaskScheduler,
+	rt *dbutils.Runtime,
 ) (task *mergeBlocksTask, err error) {
 	task = &mergeBlocksTask{
 		txn:         txn,
@@ -88,7 +87,6 @@ func NewMergeBlocksTask(
 		mergedSegs:  mergedSegs,
 		createdBlks: make([]*catalog.BlockEntry, 0),
 		compacted:   make([]handle.Block, 0),
-		scheduler:   scheduler,
 		toSegEntry:  toSegEntry,
 	}
 	dbId := mergedBlks[0].GetSegment().GetTable().GetDB().ID

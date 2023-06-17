@@ -83,25 +83,26 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
 
-	db.Runtime = dbutils.NewRuntime(
-		dbutils.WithRuntimeTransferTable(transferTable),
-		dbutils.WithRuntimeFilterIndexCache(indexCache),
-		dbutils.WithRuntimeObjectFS(fs),
-		dbutils.WithRuntimeMemtablePool(dbutils.MakeDefaultMemtablePool("memtable-vector-pool")),
-		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
-	)
-
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
 		db.Wal = wal.NewDriverWithBatchStore(opts.Ctx, dirname, WALDir, nil)
 	case options.LogstoreLogservice:
 		db.Wal = wal.NewDriverWithLogservice(opts.Ctx, opts.Lc)
 	}
-	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
-	dataFactory := tables.NewDataFactory(
-		db.Runtime, db.Scheduler, db.Dir,
+	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	db.Runtime = dbutils.NewRuntime(
+		dbutils.WithRuntimeTransferTable(transferTable),
+		dbutils.WithRuntimeFilterIndexCache(indexCache),
+		dbutils.WithRuntimeObjectFS(fs),
+		dbutils.WithRuntimeMemtablePool(dbutils.MakeDefaultMemtablePool("memtable-vector-pool")),
+		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
+		dbutils.WithRuntimeScheduler(scheduler),
 	)
-	if db.Opts.Catalog, err = catalog.OpenCatalog(db.Scheduler, dataFactory); err != nil {
+
+	dataFactory := tables.NewDataFactory(
+		db.Runtime, db.Dir,
+	)
+	if db.Opts.Catalog, err = catalog.OpenCatalog(dataFactory); err != nil {
 		return
 	}
 	db.Catalog = db.Opts.Catalog
@@ -126,9 +127,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		opts.Ctx,
-		fs,
+		db.Runtime,
 		db.Catalog,
-		db.Scheduler,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 		db.Wal,
 		checkpoint.WithFlushInterval(opts.CheckpointCfg.FlushInterval),

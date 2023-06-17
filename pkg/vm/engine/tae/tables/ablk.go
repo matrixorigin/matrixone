@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type ablock struct {
@@ -44,10 +43,9 @@ type ablock struct {
 func newABlock(
 	meta *catalog.BlockEntry,
 	rt *dbutils.Runtime,
-	scheduler tasks.TaskScheduler,
 ) *ablock {
 	blk := &ablock{}
-	blk.baseBlock = newBaseBlock(blk, meta, rt, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, rt)
 	blk.mvcc.SetAppendListener(blk.OnApplyAppend)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	if blk.meta.HasDropCommitted() {

@@ -49,12 +49,11 @@ type BlockT[T common.IRef] interface {
 type baseBlock struct {
 	common.RefHelper
 	*sync.RWMutex
-	rt        *dbutils.Runtime
-	scheduler tasks.TaskScheduler
-	meta      *catalog.BlockEntry
-	mvcc      *updates.MVCCHandle
-	ttl       time.Time
-	impl      data.Block
+	rt   *dbutils.Runtime
+	meta *catalog.BlockEntry
+	mvcc *updates.MVCCHandle
+	ttl  time.Time
+	impl data.Block
 
 	node atomic.Pointer[Node]
 }
@@ -63,13 +62,12 @@ func newBaseBlock(
 	impl data.Block,
 	meta *catalog.BlockEntry,
 	rt *dbutils.Runtime,
-	scheduler tasks.TaskScheduler) *baseBlock {
+) *baseBlock {
 	blk := &baseBlock{
-		impl:      impl,
-		rt:        rt,
-		scheduler: scheduler,
-		meta:      meta,
-		ttl:       time.Now(),
+		impl: impl,
+		rt:   rt,
+		meta: meta,
+		ttl:  time.Now(),
 	}
 	blk.mvcc = updates.NewMVCCHandle(meta)
 	blk.RWMutex = blk.mvcc.RWMutex
@@ -717,7 +715,7 @@ func (blk *baseBlock) BuildCompactionTaskFactory() (
 		return
 	}
 
-	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.rt, blk.scheduler)
+	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.rt)
 	taskType = tasks.DataCompactionTask
 	scopes = append(scopes, *blk.meta.AsCommonID())
 	return

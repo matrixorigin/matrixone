@@ -421,7 +421,7 @@ func TestTxnManager1(t *testing.T) {
 }
 
 func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
-	c := catalog.MockCatalog(nil)
+	c := catalog.MockCatalog()
 	driver := wal.NewDriverWithBatchStore(context.Background(), dir, "store", nil)
 	indexCache := model.NewSimpleLRU(int64(common.G))
 	serviceDir := path.Join(dir, "data")
@@ -430,7 +430,7 @@ func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Ca
 	rt := dbutils.NewRuntime(
 		dbutils.WithRuntimeObjectFS(fs), dbutils.WithRuntimeFilterIndexCache(indexCache),
 	)
-	factory := tables.NewDataFactory(rt, nil, dir)
+	factory := tables.NewDataFactory(rt, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, factory, 0),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start(context.Background())

@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -64,8 +63,6 @@ type Catalog struct {
 	*IDAlloctor
 	*sync.RWMutex
 
-	scheduler tasks.TaskScheduler
-
 	entries   map[uint64]*common.GenericDLNode[*DBEntry]
 	nameNodes map[string]*nodeList[*DBEntry]
 	link      *common.GenericSortedDList[*DBEntry]
@@ -83,14 +80,13 @@ func genDBFullName(tenantID uint32, name string) string {
 	return fmt.Sprintf("%d-%s", tenantID, name)
 }
 
-func MockCatalog(scheduler tasks.TaskScheduler) *Catalog {
+func MockCatalog() *Catalog {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		scheduler:  scheduler,
 	}
 	catalog.InitSystemDB()
 	return catalog
@@ -103,18 +99,16 @@ func NewEmptyCatalog() *Catalog {
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		scheduler:  nil,
 	}
 }
 
-func OpenCatalog(scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
+func OpenCatalog(dataFactory DataFactory) (*Catalog, error) {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),
 		entries:    make(map[uint64]*common.GenericDLNode[*DBEntry]),
 		nameNodes:  make(map[string]*nodeList[*DBEntry]),
 		link:       common.NewGenericSortedDList((*DBEntry).Less),
-		scheduler:  scheduler,
 	}
 	catalog.InitSystemDB()
 	return catalog, nil
@@ -905,7 +899,6 @@ func (catalog *Catalog) GetItemNodeByIDLocked(id uint64) *common.GenericDLNode[*
 	return catalog.entries[id]
 }
 
-func (catalog *Catalog) GetScheduler() tasks.TaskScheduler { return catalog.scheduler }
 func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	catalog.RLock()
 	defer catalog.RUnlock()

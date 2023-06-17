@@ -207,7 +207,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Scheduler.GetPenddingLSNCnt() == 0
+		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
-	assert.Equal(t, tae.BGCheckpointRunner.MaxLSN(), tae.Scheduler.GetCheckpointedLSN())
+	assert.Equal(t, tae.BGCheckpointRunner.MaxLSN(), tae.Runtime.Scheduler.GetCheckpointedLSN())
 }

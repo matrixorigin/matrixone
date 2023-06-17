@@ -41,10 +41,10 @@ import (
 )
 
 var CompactBlockTaskFactory = func(
-	meta *catalog.BlockEntry, rt *dbutils.Runtime, scheduler tasks.TaskScheduler,
+	meta *catalog.BlockEntry, rt *dbutils.Runtime,
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return NewCompactBlockTask(ctx, txn, meta, rt, scheduler)
+		return NewCompactBlockTask(ctx, txn, meta, rt)
 	}
 }
 
@@ -56,7 +56,6 @@ type compactBlockTask struct {
 	created   handle.Block
 	schema    *catalog.Schema
 	meta      *catalog.BlockEntry
-	scheduler tasks.TaskScheduler
 	scopes    []common.ID
 	mapping   []int32
 	deletes   *nulls.Bitmap
@@ -67,13 +66,11 @@ func NewCompactBlockTask(
 	txn txnif.AsyncTxn,
 	meta *catalog.BlockEntry,
 	rt *dbutils.Runtime,
-	scheduler tasks.TaskScheduler,
 ) (task *compactBlockTask, err error) {
 	task = &compactBlockTask{
-		txn:       txn,
-		meta:      meta,
-		rt:        rt,
-		scheduler: scheduler,
+		txn:  txn,
+		meta: meta,
+		rt:   rt,
 	}
 	dbId := meta.GetSegment().GetTable().GetDB().ID
 	database, err := txn.UnsafeGetDatabase(dbId)
@@ -239,7 +236,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			data,
 			deletes,
 		)
-		if err = task.scheduler.Schedule(ablockTask); err != nil {
+		if err = task.rt.Scheduler.Schedule(ablockTask); err != nil {
 			return
 		}
 		if err = ablockTask.WaitDone(); err != nil {
@@ -281,7 +278,6 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		task.mapping,
 		task.deletes,
 		task.rt,
-		task.scheduler,
 	)
 
 	if err = task.txn.LogTxnEntry(
@@ -330,7 +326,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		newMeta,
 		preparer.Columns,
 		deletes)
-	if err = task.scheduler.Schedule(ioTask); err != nil {
+	if err = task.rt.Scheduler.Schedule(ioTask); err != nil {
 		return
 	}
 	if err = ioTask.WaitDone(); err != nil {

@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type block struct {
@@ -41,10 +40,9 @@ type block struct {
 func newBlock(
 	meta *catalog.BlockEntry,
 	rt *dbutils.Runtime,
-	scheduler tasks.TaskScheduler,
 ) *block {
 	blk := &block{}
-	blk.baseBlock = newBaseBlock(blk, meta, rt, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, rt)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	pnode := newPersistedNode(blk.baseBlock)
 	node := NewNode(pnode)

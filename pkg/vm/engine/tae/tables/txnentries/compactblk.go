@@ -41,8 +41,7 @@ type compactBlockEntry struct {
 	to      handle.Block
 	deletes *nulls.Bitmap
 
-	rt        *dbutils.Runtime
-	scheduler tasks.TaskScheduler
+	rt *dbutils.Runtime
 }
 
 func NewCompactBlockEntry(
@@ -51,7 +50,6 @@ func NewCompactBlockEntry(
 	sortIdx []int32,
 	deletes *nulls.Bitmap,
 	rt *dbutils.Runtime,
-	scheduler tasks.TaskScheduler,
 ) *compactBlockEntry {
 
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
@@ -75,12 +73,11 @@ func NewCompactBlockEntry(
 		_ = rt.TransferTable.AddPage(page)
 	}
 	return &compactBlockEntry{
-		txn:       txn,
-		from:      from,
-		to:        to,
-		deletes:   deletes,
-		rt:        rt,
-		scheduler: scheduler,
+		txn:     txn,
+		from:    from,
+		to:      to,
+		deletes: deletes,
+		rt:      rt,
 	}
 }
 
@@ -109,7 +106,7 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 		toName = objectio.BuildObjectName(seg, num).String()
 	}
 
-	entry.scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, fromBlockEntry.AsCommonID(), func() error {
+	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, fromBlockEntry.AsCommonID(), func() error {
 		// TODO: variable as timeout
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 		defer cancel()

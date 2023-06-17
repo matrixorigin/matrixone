@@ -29,18 +29,16 @@ import (
 
 type dataSegment struct {
 	common.ClosedState
-	meta      *catalog.SegmentEntry
-	scheduler tasks.TaskScheduler
-	rt        *dbutils.Runtime
+	meta *catalog.SegmentEntry
+	rt   *dbutils.Runtime
 }
 
 func newSegment(
 	meta *catalog.SegmentEntry, dir string, rt *dbutils.Runtime,
 ) *dataSegment {
 	seg := &dataSegment{
-		meta:      meta,
-		scheduler: meta.GetScheduler(),
-		rt:        rt,
+		meta: meta,
+		rt:   rt,
 	}
 	return seg
 }
@@ -82,7 +80,7 @@ func (segment *dataSegment) BuildCompactionTaskFactory() (factory tasks.TxnTaskF
 		for _, blk := range blks {
 			scopes = append(scopes, *blk.AsCommonID())
 		}
-		factory = jobs.CompactSegmentTaskFactory(blks, segment.rt, segment.scheduler)
+		factory = jobs.CompactSegmentTaskFactory(blks, segment.rt)
 		taskType = tasks.DataCompactionTask
 		return
 	}

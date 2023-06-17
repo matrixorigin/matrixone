@@ -258,7 +258,7 @@ func (e *testEngine) incrementalCheckpoint(
 		assert.NoError(e.t, err)
 		assert.NoError(e.t, entry.WaitDone())
 		testutils.WaitExpect(1000, func() bool {
-			return e.Scheduler.GetPenddingLSNCnt() == 0
+			return e.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 		})
 	}
 	return nil
@@ -542,7 +542,7 @@ func compactBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *
 	_ = txn.Commit(context.Background())
 	for _, meta := range metas {
 		txn, _ := getRelation(t, tenantID, e, dbName, schema.Name)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Runtime, e.Scheduler)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Runtime)
 		if skipConflict && err != nil {
 			_ = txn.Rollback(context.Background())
 			continue
@@ -599,7 +599,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 			it.Next()
 		}
 		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
-		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Runtime, e.Scheduler)
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Runtime)
 		if skipConflict && err != nil {
 			_ = txn.Rollback(context.Background())
 			continue

@@ -53,6 +53,12 @@ func WithRuntimeTransferTable(tt *model.HashPageTable) RuntimeOption {
 	}
 }
 
+func WithRuntimeScheduler(s tasks.TaskScheduler) RuntimeOption {
+	return func(r *Runtime) {
+		r.Scheduler = s
+	}
+}
+
 type Runtime struct {
 	VectorPool struct {
 		Memtable  *containers.VectorPool
@@ -66,7 +72,7 @@ type Runtime struct {
 	Fs *objectio.ObjectFS
 
 	TransferTable *model.HashPageTable
-	Scheduler     tasks.Scheduler
+	Scheduler     tasks.TaskScheduler
 }
 
 func NewRuntime(opts ...RuntimeOption) *Runtime {
