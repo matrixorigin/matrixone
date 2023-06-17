@@ -134,7 +134,6 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 }
 
 func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
-	// maxTs := db.Catalog.GetCheckpointed().MaxTS
 	replayer := newReplayer(dataFactory, db, maxTs)
 	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
@@ -157,7 +156,7 @@ func (db *DB) Close() error {
 	db.TxnMgr.Stop()
 	db.LogtailMgr.Stop()
 	db.Wal.Close()
-	db.Opts.Catalog.Close()
+	db.Catalog.Close()
 	db.DiskCleaner.Stop()
 	db.Runtime.TransferTable.Close()
 	return db.DBLocker.Close()

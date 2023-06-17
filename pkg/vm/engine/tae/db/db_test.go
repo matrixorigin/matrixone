@@ -140,7 +140,7 @@ func TestAppend2(t *testing.T) {
 		checkAllColRowsByScan(t, rel, int(totalRows), false)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	now := time.Now()
 	testutils.WaitExpect(10000, func() bool {
@@ -381,9 +381,9 @@ func TestCreateBlock(t *testing.T) {
 	blk2Meta := blk2.GetMeta().(*catalog.BlockEntry)
 	assert.False(t, blk2Meta.IsAppendable())
 
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	assert.Nil(t, txn.Commit(context.Background()))
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestNonAppendableBlock(t *testing.T) {
@@ -494,10 +494,10 @@ func TestCreateSegment(t *testing.T) {
 		segCnt++
 		return nil
 	}
-	err = tae.Opts.Catalog.RecurLoop(processor)
+	err = tae.Catalog.RecurLoop(processor)
 	assert.Nil(t, err)
 	assert.Equal(t, 2+3, segCnt)
-	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestCompactBlock1(t *testing.T) {
@@ -514,7 +514,7 @@ func TestCompactBlock1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
 	defer bat.Close()
 	createRelationAndAppend(t, 0, db, "db", schema, bat, true)
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
@@ -874,7 +874,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	{
-		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+		t.Log(db.Catalog.SimplePPString(common.PPL1))
 		txn, rel := getDefaultRelation(t, db, schema.Name)
 		t.Log(rel.SimplePPString(common.PPL1))
 		seg, err := rel.GetSegment(newBlockFp.SegmentID())
@@ -929,7 +929,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	{
-		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+		t.Log(db.Catalog.SimplePPString(common.PPL1))
 		txn, rel := getDefaultRelation(t, db, schema.Name)
 		seg, err := rel.GetSegment(newBlockFp.SegmentID())
 		assert.Nil(t, err)
@@ -982,7 +982,7 @@ func TestCompactBlock2(t *testing.T) {
 	{
 		txn, rel := getDefaultRelation(t, db, schema.Name)
 		t.Log(rel.SimplePPString(common.PPL1))
-		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+		t.Log(db.Catalog.SimplePPString(common.PPL1))
 		seg, err := rel.GetSegment(newBlockFp.SegmentID())
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
@@ -1096,7 +1096,7 @@ func TestCompactBlock2(t *testing.T) {
 		require.Equal(t, 3, cnt)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestAutoCompactABlk1(t *testing.T) {
@@ -1315,7 +1315,7 @@ func TestRollback1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, blkCnt, 0)
 
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestMVCC1(t *testing.T) {
@@ -1648,7 +1648,7 @@ func TestDelete1(t *testing.T) {
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 		_ = txn.Rollback(context.Background())
 	}
-	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestLogIndex1(t *testing.T) {

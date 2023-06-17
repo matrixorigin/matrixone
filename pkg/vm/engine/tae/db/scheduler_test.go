@@ -70,7 +70,7 @@ func TestCheckpoint1(t *testing.T) {
 		}
 		processor := new(catalog.LoopProcessor)
 		processor.BlockFn = blockFn
-		err := db.Opts.Catalog.RecurLoop(processor)
+		err := db.Catalog.RecurLoop(processor)
 		assert.NoError(t, err)
 		return blockCnt == 2+3
 	}
@@ -191,6 +191,6 @@ func TestSchedule1(t *testing.T) {
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	compactBlocks(t, 0, db, "db", schema, false)
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	db.Close()
 }

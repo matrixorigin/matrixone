@@ -102,20 +102,19 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
-	if db.Opts.Catalog, err = catalog.OpenCatalog(); err != nil {
+	if db.Catalog, err = catalog.OpenCatalog(); err != nil {
 		return
 	}
-	db.Catalog = db.Opts.Catalog
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(
 		opts.Ctx,
-		db.Opts.Catalog,
+		db.Catalog,
 		db.Wal,
 		db.Runtime,
 		dataFactory,
 		opts.MaxMessageSize,
 	)
-	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
+	txnFactory := txnimpl.TxnFactory(db.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewManager(
 		db.Runtime,

@@ -138,5 +138,5 @@ func main() {
 			panic(err)
 		}
 	}
-	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
+	logutil.Info(tae.Catalog.SimplePPString(common.PPL1))
 }

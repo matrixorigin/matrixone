@@ -94,10 +94,10 @@ func TestTables1(t *testing.T) {
 	_, _, toAppend, err = appender.PrepareAppend(rows-2*toAppend, nil)
 	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	err = txn.Rollback(context.Background())
 	assert.Nil(t, err)
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestTxn1(t *testing.T) {
@@ -185,7 +185,7 @@ func TestTxn1(t *testing.T) {
 		assert.Equal(t, expectSegCnt, segCnt)
 		assert.Equal(t, expectBlkCnt, blkCnt)
 	}
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestTxn2(t *testing.T) {
@@ -211,7 +211,7 @@ func TestTxn2(t *testing.T) {
 	go run()
 	go run()
 	wg.Wait()
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestTxn4(t *testing.T) {
@@ -313,7 +313,7 @@ func TestTxn5(t *testing.T) {
 		t.Log(txn2.String())
 		t.Log(txn.String())
 	}
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestTxn6(t *testing.T) {
@@ -507,7 +507,7 @@ func TestMergeBlocks1(t *testing.T) {
 		}
 		assert.Nil(t, txn.Commit(context.Background()))
 		t.Logf("MergeSort takes: %s", time.Since(start))
-		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+		t.Log(db.Catalog.SimplePPString(common.PPL1))
 	}
 	{
 		txn, _ := db.StartTxn(nil)

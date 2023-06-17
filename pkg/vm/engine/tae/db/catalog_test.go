@@ -46,7 +46,7 @@ func TestCatalog1(t *testing.T) {
 	blk, err := seg.CreateBlock(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	txn, rel = getDefaultRelation(t, db, schema.Name)
 	sseg, err := rel.GetSegment(seg.GetID())
@@ -55,12 +55,12 @@ func TestCatalog1(t *testing.T) {
 	err = sseg.SoftDeleteBlock(blk.Fingerprint().BlockID)
 	assert.Nil(t, err)
 
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	blk2, err := sseg.CreateBlock(false)
 	assert.Nil(t, err)
 	assert.NotNil(t, blk2)
 	assert.Nil(t, txn.Commit(context.Background()))
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	{
 		_, rel = getDefaultRelation(t, db, schema.Name)

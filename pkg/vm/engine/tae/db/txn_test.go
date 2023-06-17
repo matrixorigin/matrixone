@@ -488,7 +488,7 @@ func TestApp1(t *testing.T) {
 	db := initDB(ctx, t, option)
 	defer db.Close()
 	mgr := db.TxnMgr
-	c := db.Opts.Catalog
+	c := db.Catalog
 
 	app1 := NewApp1(mgr, "app1")
 	app1.Init(1)
@@ -544,7 +544,7 @@ func TestWarehouse(t *testing.T) {
 	err := MockWarehouses("test", 20, txn)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	{
 		txn, _ = db.StartTxn(nil)
