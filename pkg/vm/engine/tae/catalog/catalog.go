@@ -102,7 +102,7 @@ func NewEmptyCatalog() *Catalog {
 	}
 }
 
-func OpenCatalog(dataFactory DataFactory) (*Catalog, error) {
+func OpenCatalog() (*Catalog, error) {
 	catalog := &Catalog{
 		RWMutex:    new(sync.RWMutex),
 		IDAlloctor: NewIDAllocator(),

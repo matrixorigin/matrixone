@@ -102,7 +102,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
-	if db.Opts.Catalog, err = catalog.OpenCatalog(dataFactory); err != nil {
+	if db.Opts.Catalog, err = catalog.OpenCatalog(); err != nil {
 		return
 	}
 	db.Catalog = db.Opts.Catalog

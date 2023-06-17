@@ -34,10 +34,6 @@ func NewDataFactory(
 	}
 }
 
-func (factory *DataFactory) GetRuntime() *dbutils.Runtime {
-	return factory.rt
-}
-
 func (factory *DataFactory) MakeTableFactory() catalog.TableDataFactory {
 	return func(meta *catalog.TableEntry) data.Table {
 		return newTable(meta, factory.rt)
