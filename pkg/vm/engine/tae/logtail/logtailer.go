@@ -77,7 +77,7 @@ func NewLogtailer(
 // from Now and use the timestamp to collect logtail, in that case, all txn prepared
 // before it are visible.
 func (l *LogtailerImpl) Now() (timestamp.Timestamp, timestamp.Timestamp) {
-	ts := l.mgr.now() // now in logtail manager is the same with the one in TxnManager
+	ts := l.mgr.nowClock() // now in logtail manager is the same with the one in TxnManager
 
 	return ts.ToTimestamp(), timestamp.Timestamp{}
 }
