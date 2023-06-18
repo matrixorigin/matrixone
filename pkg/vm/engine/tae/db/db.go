@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,10 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -56,21 +54,14 @@ type DB struct {
 	LogtailMgr *logtail.Manager
 	Wal        wal.Driver
 
-	Scheduler tasks.TaskScheduler
-
 	GCManager *gc.Manager
 
 	BGScanner          wb.IHeartbeater
 	BGCheckpointRunner checkpoint.Runner
 
 	DiskCleaner *gc2.DiskCleaner
-	Pipeline    *blockio.IoPipeline
 
-	// Fs *objectio.ObjectFS
-	// TransferTable *model.HashPageTable
-	// IndexCache model.LRUCache
-
-	Runtime *model.Runtime
+	Runtime *dbutils.Runtime
 
 	DBLocker io.Closer
 
@@ -141,7 +132,6 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 }
 
 func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS) {
-	// maxTs := db.Catalog.GetCheckpointed().MaxTS
 	replayer := newReplayer(dataFactory, db, maxTs)
 	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
@@ -160,11 +150,11 @@ func (db *DB) Close() error {
 	db.GCManager.Stop()
 	db.BGScanner.Stop()
 	db.BGCheckpointRunner.Stop()
-	db.Scheduler.Stop()
+	db.Runtime.Scheduler.Stop()
 	db.TxnMgr.Stop()
 	db.LogtailMgr.Stop()
 	db.Wal.Close()
-	db.Opts.Catalog.Close()
+	db.Catalog.Close()
 	db.DiskCleaner.Stop()
 	db.Runtime.TransferTable.Close()
 	return db.DBLocker.Close()

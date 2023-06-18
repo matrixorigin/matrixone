@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 // pnode corresponds to an un-appendable standalone-uncommitted block
@@ -70,13 +69,13 @@ func (n *pnode) GetSpace() uint32 {
 }
 
 func (n *pnode) FillBlockView(
-	view *model.BlockView,
+	view *containers.BlockView,
 	colIdxes []int) (err error) {
 	//TODO::
 	panic("not implemented yet ")
 }
 
-func (n *pnode) FillColumnView(*model.ColumnView) error {
+func (n *pnode) FillColumnView(*containers.ColumnView) error {
 	//TODO::
 	panic("not implemented yet ")
 }
@@ -113,13 +112,13 @@ func (n *pnode) MakeCommand(_ uint32) (txnif.TxnCmd, error) {
 	return nil, nil
 }
 
-func (n *pnode) GetColumnDataByIds([]int) (*model.BlockView, error) {
+func (n *pnode) GetColumnDataByIds([]int) (*containers.BlockView, error) {
 	//TODO::
 	panic("not implemented yet ")
 }
 
-func (n *pnode) GetColumnDataById(ctx context.Context, idx int) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(idx)
+func (n *pnode) GetColumnDataById(ctx context.Context, idx int) (view *containers.ColumnView, err error) {
+	view = containers.NewColumnView(idx)
 	vec, err := n.LoadPersistedColumnData(ctx, idx)
 	if err != nil {
 		return
@@ -130,5 +129,5 @@ func (n *pnode) GetColumnDataById(ctx context.Context, idx int) (view *model.Col
 
 func (n *pnode) Prefetch(idxes []uint16) error {
 	key := n.meta.FastGetMetaLoc()
-	return blockio.Prefetch(idxes, []uint16{key.ID()}, n.table.store.dataFactory.GetRuntime().Fs.Service, key)
+	return blockio.Prefetch(idxes, []uint16{key.ID()}, n.table.store.rt.Fs.Service, key)
 }

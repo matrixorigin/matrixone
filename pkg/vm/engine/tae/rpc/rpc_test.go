@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/mocks"
@@ -442,7 +441,7 @@ func TestHandle_HandlePreCommitWriteS3(t *testing.T) {
 	_ = it.Close()
 	assert.Equal(t, taeBat.Length(), rows)
 
-	var physicals []*model.BlockView
+	var physicals []*containers.BlockView
 	it = tbH.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -40,22 +41,21 @@ import (
 )
 
 var CompactBlockTaskFactory = func(
-	meta *catalog.BlockEntry, rt *model.Runtime, scheduler tasks.TaskScheduler,
+	meta *catalog.BlockEntry, rt *dbutils.Runtime,
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return NewCompactBlockTask(ctx, txn, meta, rt, scheduler)
+		return NewCompactBlockTask(ctx, txn, meta, rt)
 	}
 }
 
 type compactBlockTask struct {
 	*tasks.BaseTask
 	txn       txnif.AsyncTxn
-	rt        *model.Runtime
+	rt        *dbutils.Runtime
 	compacted handle.Block
 	created   handle.Block
 	schema    *catalog.Schema
 	meta      *catalog.BlockEntry
-	scheduler tasks.TaskScheduler
 	scopes    []common.ID
 	mapping   []int32
 	deletes   *nulls.Bitmap
@@ -65,14 +65,12 @@ func NewCompactBlockTask(
 	ctx *tasks.Context,
 	txn txnif.AsyncTxn,
 	meta *catalog.BlockEntry,
-	rt *model.Runtime,
-	scheduler tasks.TaskScheduler,
+	rt *dbutils.Runtime,
 ) (task *compactBlockTask, err error) {
 	task = &compactBlockTask{
-		txn:       txn,
-		meta:      meta,
-		rt:        rt,
-		scheduler: scheduler,
+		txn:  txn,
+		meta: meta,
+		rt:   rt,
 	}
 	dbId := meta.GetSegment().GetTable().GetDB().ID
 	database, err := txn.UnsafeGetDatabase(dbId)
@@ -108,7 +106,7 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 	preparer.Columns = containers.NewBatch()
 
 	schema := task.schema
-	var view *model.ColumnView
+	var view *containers.ColumnView
 	seqnums := make([]uint16, 0, len(schema.ColDefs))
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
@@ -238,7 +236,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			data,
 			deletes,
 		)
-		if err = task.scheduler.Schedule(ablockTask); err != nil {
+		if err = task.rt.Scheduler.Schedule(ablockTask); err != nil {
 			return
 		}
 		if err = ablockTask.WaitDone(); err != nil {
@@ -277,9 +275,10 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		task.txn,
 		task.compacted,
 		task.created,
-		task.scheduler,
 		task.mapping,
-		task.deletes)
+		task.deletes,
+		task.rt,
+	)
 
 	if err = task.txn.LogTxnEntry(
 		table.GetDB().ID,
@@ -327,7 +326,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 		newMeta,
 		preparer.Columns,
 		deletes)
-	if err = task.scheduler.Schedule(ioTask); err != nil {
+	if err = task.rt.Scheduler.Schedule(ioTask); err != nil {
 		return
 	}
 	if err = ioTask.WaitDone(); err != nil {

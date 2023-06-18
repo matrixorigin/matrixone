@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 var _ NodeT = (*persistedNode)(nil)
@@ -71,7 +70,7 @@ func (node *persistedNode) ContainsKey(ctx context.Context, key any) (ok bool, e
 	if err != nil {
 		return
 	}
-	if err = pkIndex.Dedup(ctx, key); err == nil {
+	if err = pkIndex.Dedup(ctx, key, node.block.rt); err == nil {
 		return
 	}
 	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
@@ -189,7 +188,7 @@ func (node *persistedNode) GetRowByFilter(
 	defer commitTSVec.Close()
 
 	// Load persisted deletes
-	view := model.NewColumnView(0)
+	view := containers.NewColumnView(0)
 	if err = node.block.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
 		return
 	}

@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
@@ -42,7 +41,6 @@ type memoryNode struct {
 	block       *baseBlock
 	writeSchema *catalog.Schema
 	data        *containers.Batch
-	prefix      []byte
 
 	//index for primary key : Art tree + ZoneMap.
 	pkIndex *indexwrapper.MutIndex
@@ -51,7 +49,6 @@ type memoryNode struct {
 func newMemoryNode(block *baseBlock) *memoryNode {
 	impl := new(memoryNode)
 	impl.block = block
-	impl.prefix = block.meta.MakeKey()
 
 	// Get the lastest schema, it will not be modified, so just keep the pointer
 	schema := block.meta.GetSchema()
@@ -411,7 +408,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	readSchema *catalog.Schema,
 	colIdxes []int,
 	skipDeletes bool,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	node.block.RLock()
 	defer node.block.RUnlock()
 	maxRow, visible, deSels, err := node.block.mvcc.GetVisibleRowLocked(txn)
@@ -423,7 +420,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	if err != nil {
 		return
 	}
-	view = model.NewBlockView()
+	view = containers.NewBlockView()
 	for _, colIdx := range colIdxes {
 		view.SetData(colIdx, data.Vecs[colIdx])
 	}
@@ -451,7 +448,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 	readSchema *catalog.Schema,
 	col int,
 	skipDeletes bool,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	node.block.RLock()
 	defer node.block.RUnlock()
 	maxRow, visible, deSels, err := node.block.mvcc.GetVisibleRowLocked(txn)
@@ -459,7 +456,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 		return
 	}
 
-	view = model.NewColumnView(col)
+	view = containers.NewColumnView(col)
 	var data containers.Vector
 	if data, err = node.GetColumnDataWindow(
 		readSchema,

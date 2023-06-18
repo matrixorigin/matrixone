@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -82,38 +83,39 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)
 	indexCache := model.NewSimpleLRU(int64(opts.CacheCfg.IndexCapacity))
 
-	db.Runtime = model.NewRuntime(
-		model.WithRuntimeTransferTable(transferTable),
-		model.WithRuntimeFilterIndexCache(indexCache),
-		model.WithRuntimeObjectFS(fs),
-		model.WithRuntimeMemtablePool(model.MakeDefaultMemtablePool("memtable-vector-pool")),
-		model.WithRuntimeTransientPool(model.MakeDefaultTransientPool("trasient-vector-pool")),
-	)
-
 	switch opts.LogStoreT {
 	case options.LogstoreBatchStore:
 		db.Wal = wal.NewDriverWithBatchStore(opts.Ctx, dirname, WALDir, nil)
 	case options.LogstoreLogservice:
 		db.Wal = wal.NewDriverWithLogservice(opts.Ctx, opts.Lc)
 	}
-	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
-	dataFactory := tables.NewDataFactory(
-		db.Runtime, db.Scheduler, db.Dir,
+	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	db.Runtime = dbutils.NewRuntime(
+		dbutils.WithRuntimeTransferTable(transferTable),
+		dbutils.WithRuntimeFilterIndexCache(indexCache),
+		dbutils.WithRuntimeObjectFS(fs),
+		dbutils.WithRuntimeMemtablePool(dbutils.MakeDefaultMemtablePool("memtable-vector-pool")),
+		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
+		dbutils.WithRuntimeScheduler(scheduler),
+		dbutils.WithRuntimeOptions(db.Opts),
 	)
-	if db.Opts.Catalog, err = catalog.OpenCatalog(db.Scheduler, dataFactory); err != nil {
+
+	dataFactory := tables.NewDataFactory(
+		db.Runtime, db.Dir,
+	)
+	if db.Catalog, err = catalog.OpenCatalog(); err != nil {
 		return
 	}
-	db.Catalog = db.Opts.Catalog
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(
 		opts.Ctx,
-		db.Opts.Catalog,
+		db.Catalog,
 		db.Wal,
 		db.Runtime,
 		dataFactory,
 		opts.MaxMessageSize,
 	)
-	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
+	txnFactory := txnimpl.TxnFactory(db.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
 	db.LogtailMgr = logtail.NewManager(
 		db.Runtime,
@@ -125,9 +127,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	db.LogtailMgr.Start()
 	db.BGCheckpointRunner = checkpoint.NewRunner(
 		opts.Ctx,
-		fs,
+		db.Runtime,
 		db.Catalog,
-		db.Scheduler,
 		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
 		db.Wal,
 		checkpoint.WithFlushInterval(opts.CheckpointCfg.FlushInterval),

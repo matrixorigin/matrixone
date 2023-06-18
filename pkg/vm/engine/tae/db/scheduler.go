@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -112,11 +111,6 @@ func (s *taskScheduler) ScheduleMultiScopedFn(
 	return
 }
 
-// TODO: implement later
-func (s *taskScheduler) GetGCTS() (ts types.TS) {
-	return
-}
-
 func (s *taskScheduler) GetCheckpointTS() types.TS {
 	return s.db.TxnMgr.StatMaxCommitTS()
 }
@@ -127,16 +121,6 @@ func (s *taskScheduler) GetPenddingLSNCnt() uint64 {
 
 func (s *taskScheduler) GetCheckpointedLSN() uint64 {
 	return s.db.Wal.GetCheckpointed()
-}
-
-func (s *taskScheduler) AddTransferPage(page *model.TransferHashPage) (err error) {
-	s.db.Runtime.TransferTable.AddPage(page)
-	return
-}
-
-func (s *taskScheduler) DeleteTransferPage(id *common.ID) (err error) {
-	s.db.Runtime.TransferTable.DeletePage(id)
-	return
 }
 
 func (s *taskScheduler) ScheduleFn(ctx *tasks.Context, taskType tasks.TaskType, fn func() error) (task tasks.Task, err error) {

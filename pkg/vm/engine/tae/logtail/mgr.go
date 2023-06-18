@@ -27,9 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 )
@@ -76,7 +76,7 @@ func (cb *callback) call(from, to timestamp.Timestamp, closeCB func(), tails ...
 type Manager struct {
 	txnbase.NoopCommitListener
 	table     *TxnTable
-	rt        *model.Runtime
+	rt        *dbutils.Runtime
 	truncated types.TS
 	nowClock  func() types.TS // nowClock is from TxnManager
 
@@ -87,7 +87,7 @@ type Manager struct {
 	eventOnce           sync.Once
 }
 
-func NewManager(rt *model.Runtime, blockSize int, nowClock func() types.TS) *Manager {
+func NewManager(rt *dbutils.Runtime, blockSize int, nowClock func() types.TS) *Manager {
 	mgr := &Manager{
 		rt: rt,
 		table: NewTxnTable(

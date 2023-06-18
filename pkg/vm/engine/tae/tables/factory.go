@@ -16,29 +16,22 @@ package tables
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type DataFactory struct {
-	Scheduler tasks.TaskScheduler
-	dir       string
-	rt        *model.Runtime
+	dir string
+	rt  *dbutils.Runtime
 }
 
 func NewDataFactory(
-	rt *model.Runtime, scheduler tasks.TaskScheduler, dir string,
+	rt *dbutils.Runtime, dir string,
 ) *DataFactory {
 	return &DataFactory{
-		Scheduler: scheduler,
-		dir:       dir,
-		rt:        rt,
+		dir: dir,
+		rt:  rt,
 	}
-}
-
-func (factory *DataFactory) GetRuntime() *model.Runtime {
-	return factory.rt
 }
 
 func (factory *DataFactory) MakeTableFactory() catalog.TableDataFactory {
@@ -56,9 +49,9 @@ func (factory *DataFactory) MakeSegmentFactory() catalog.SegmentDataFactory {
 func (factory *DataFactory) MakeBlockFactory() catalog.BlockDataFactory {
 	return func(meta *catalog.BlockEntry) data.Block {
 		if meta.IsAppendable() {
-			return newABlock(meta, factory.rt, factory.Scheduler)
+			return newABlock(meta, factory.rt)
 		} else {
-			return newBlock(meta, factory.rt, factory.Scheduler)
+			return newBlock(meta, factory.rt)
 		}
 	}
 }

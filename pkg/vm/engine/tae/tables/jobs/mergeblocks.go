@@ -30,10 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap/zapcore"
@@ -42,28 +42,28 @@ import (
 // CompactSegmentTaskFactory merge non-appendable blocks of an appendable-segment
 // into a new non-appendable segment.
 var CompactSegmentTaskFactory = func(
-	mergedBlks []*catalog.BlockEntry, rt *model.Runtime, scheduler tasks.TaskScheduler,
+	mergedBlks []*catalog.BlockEntry, rt *dbutils.Runtime,
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		mergedSegs := make([]*catalog.SegmentEntry, 1)
 		mergedSegs[0] = mergedBlks[0].GetSegment()
-		return NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, rt, scheduler)
+		return NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, rt)
 	}
 }
 
 var MergeBlocksIntoSegmentTaskFctory = func(
 	mergedBlks []*catalog.BlockEntry, toSegEntry *catalog.SegmentEntry,
-	rt *model.Runtime, scheduler tasks.TaskScheduler,
+	rt *dbutils.Runtime,
 ) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return NewMergeBlocksTask(ctx, txn, mergedBlks, nil, toSegEntry, rt, scheduler)
+		return NewMergeBlocksTask(ctx, txn, mergedBlks, nil, toSegEntry, rt)
 	}
 }
 
 type mergeBlocksTask struct {
 	*tasks.BaseTask
 	txn         txnif.AsyncTxn
-	rt          *model.Runtime
+	rt          *dbutils.Runtime
 	toSegEntry  *catalog.SegmentEntry
 	createdSegs []*catalog.SegmentEntry
 	mergedSegs  []*catalog.SegmentEntry
@@ -71,7 +71,6 @@ type mergeBlocksTask struct {
 	createdBlks []*catalog.BlockEntry
 	compacted   []handle.Block
 	rel         handle.Relation
-	scheduler   tasks.TaskScheduler
 	scopes      []common.ID
 	deletes     []*nulls.Bitmap
 }
@@ -79,7 +78,7 @@ type mergeBlocksTask struct {
 func NewMergeBlocksTask(
 	ctx *tasks.Context, txn txnif.AsyncTxn,
 	mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry,
-	rt *model.Runtime, scheduler tasks.TaskScheduler,
+	rt *dbutils.Runtime,
 ) (task *mergeBlocksTask, err error) {
 	task = &mergeBlocksTask{
 		txn:         txn,
@@ -88,7 +87,6 @@ func NewMergeBlocksTask(
 		mergedSegs:  mergedSegs,
 		createdBlks: make([]*catalog.BlockEntry, 0),
 		compacted:   make([]handle.Block, 0),
-		scheduler:   scheduler,
 		toSegEntry:  toSegEntry,
 	}
 	dbId := mergedBlks[0].GetSegment().GetTable().GetDB().ID
@@ -211,7 +209,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 
 	// merge data according to the schema at startTs
 	schema := task.rel.Schema().(*catalog.Schema)
-	var view *model.ColumnView
+	var view *containers.ColumnView
 	sortVecs := make([]containers.Vector, 0)
 	rows := make([]uint32, 0)
 	skipBlks := make([]int, 0)
@@ -405,7 +403,8 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		toAddr,
 		task.deletes,
 		skipBlks,
-		task.scheduler)
+		task.rt,
+	)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return err
 	}

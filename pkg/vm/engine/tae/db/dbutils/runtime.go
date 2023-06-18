@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package model
+package dbutils
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type RuntimeOption func(*Runtime)
@@ -35,7 +36,7 @@ func WithRuntimeTransientPool(vp *containers.VectorPool) RuntimeOption {
 	}
 }
 
-func WithRuntimeFilterIndexCache(c LRUCache) RuntimeOption {
+func WithRuntimeFilterIndexCache(c model.LRUCache) RuntimeOption {
 	return func(r *Runtime) {
 		r.Cache.FilterIndex = c
 	}
@@ -47,9 +48,21 @@ func WithRuntimeObjectFS(fs *objectio.ObjectFS) RuntimeOption {
 	}
 }
 
-func WithRuntimeTransferTable(tt *HashPageTable) RuntimeOption {
+func WithRuntimeTransferTable(tt *model.HashPageTable) RuntimeOption {
 	return func(r *Runtime) {
 		r.TransferTable = tt
+	}
+}
+
+func WithRuntimeScheduler(s tasks.TaskScheduler) RuntimeOption {
+	return func(r *Runtime) {
+		r.Scheduler = s
+	}
+}
+
+func WithRuntimeOptions(opts *options.Options) RuntimeOption {
+	return func(r *Runtime) {
+		r.Options = opts
 	}
 }
 
@@ -60,12 +73,15 @@ type Runtime struct {
 	}
 
 	Cache struct {
-		FilterIndex LRUCache
+		FilterIndex model.LRUCache
 	}
 
 	Fs *objectio.ObjectFS
 
-	TransferTable *HashPageTable
+	TransferTable *model.HashPageTable
+	Scheduler     tasks.TaskScheduler
+
+	Options *options.Options
 }
 
 func NewRuntime(opts ...RuntimeOption) *Runtime {
@@ -84,64 +100,4 @@ func (r *Runtime) fillDefaults() {
 	if r.VectorPool.Transient == nil {
 		r.VectorPool.Transient = MakeDefaultTransientPool("trasient-vector-pool")
 	}
-}
-
-func MakeDefaultMemtablePool(name string) *containers.VectorPool {
-	var (
-		limit            int
-		memtableCapacity int
-	)
-	memStats, err := mem.VirtualMemory()
-	if err != nil {
-		panic(err)
-	}
-	if memStats.Total > mpool.GB*20 {
-		limit = mpool.MB * 2
-		memtableCapacity = 256
-	} else if memStats.Total > mpool.GB*10 {
-		limit = mpool.MB * 2
-		memtableCapacity = 128
-	} else if memStats.Total > mpool.GB*5 {
-		limit = mpool.MB * 2
-		memtableCapacity = 64
-	} else {
-		limit = mpool.MB * 1
-		memtableCapacity = 64
-	}
-
-	return containers.NewVectorPool(
-		name,
-		memtableCapacity,
-		containers.WithAllocationLimit(limit),
-	)
-}
-
-func MakeDefaultTransientPool(name string) *containers.VectorPool {
-	var (
-		limit            int
-		trasientCapacity int
-	)
-	memStats, err := mem.VirtualMemory()
-	if err != nil {
-		panic(err)
-	}
-	if memStats.Total > mpool.GB*20 {
-		limit = mpool.MB
-		trasientCapacity = 512
-	} else if memStats.Total > mpool.GB*10 {
-		limit = mpool.MB * 512
-		trasientCapacity = 512
-	} else if memStats.Total > mpool.GB*5 {
-		limit = mpool.KB * 256
-		trasientCapacity = 512
-	} else {
-		limit = mpool.KB * 256
-		trasientCapacity = 256
-	}
-
-	return containers.NewVectorPool(
-		name,
-		trasientCapacity,
-		containers.WithAllocationLimit(limit),
-	)
 }

@@ -25,9 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -77,9 +79,9 @@ const (
 //	defer testutils.AfterTest(t)()
 //	testutils.EnsureNoLeak(t)
 //	dir := testutils.InitTestEnv(ModuleName, t)
-//	tbl := makeTable(t, dir, 2, 1, common.K*6)
+//	tbl := makeTable(t, dir, 2, 1, mpool.KB*6)
 //	defer tbl.store.driver.Close()
-//	bat := catalog.MockBatch(tbl.GetSchema(), int(common.K))
+//	bat := catalog.MockBatch(tbl.GetSchema(), int(mpool.KB))
 //	defer bat.Close()
 //	p, _ := ants.NewPool(5)
 //	defer p.Release()
@@ -100,11 +102,11 @@ const (
 //				nodes[i] = n
 //				h := tbl.store.nodesMgr.Pin(n.storage.mnode)
 //				var err error
-//				if err = n.storage.mnode.Expand(common.K*1, func() error {
+//				if err = n.storage.mnode.Expand(mpool.KB*1, func() error {
 //					_, err := n.Append(context.Background(), bat, 0)
 //					return err
 //				}); err != nil {
-//					err = n.storage.mnode.Expand(common.K*1, func() error {
+//					err = n.storage.mnode.Expand(mpool.KB*1, func() error {
 //						_, err := n.Append(context.Background(), bat, 0)
 //						return err
 //					})
@@ -154,7 +156,7 @@ func TestTable(t *testing.T) {
 		db, err := txn.CreateDatabase("db", "", "")
 		assert.Nil(t, err)
 		rel, _ := db.CreateRelation(schema)
-		bat := catalog.MockBatch(schema, int(common.K)*100)
+		bat := catalog.MockBatch(schema, int(mpool.KB)*100)
 		defer bat.Close()
 		bats := bat.Split(100)
 		for _, data := range bats {
@@ -420,16 +422,16 @@ func TestTxnManager1(t *testing.T) {
 }
 
 func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
-	c := catalog.MockCatalog(nil)
+	c := catalog.MockCatalog()
 	driver := wal.NewDriverWithBatchStore(context.Background(), dir, "store", nil)
-	indexCache := model.NewSimpleLRU(int64(common.G))
+	indexCache := model.NewSimpleLRU(int64(mpool.GB))
 	serviceDir := path.Join(dir, "data")
 	service := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	fs := objectio.NewObjectFS(service, serviceDir)
-	rt := model.NewRuntime(
-		model.WithRuntimeObjectFS(fs), model.WithRuntimeFilterIndexCache(indexCache),
+	rt := dbutils.NewRuntime(
+		dbutils.WithRuntimeObjectFS(fs), dbutils.WithRuntimeFilterIndexCache(indexCache),
 	)
-	factory := tables.NewDataFactory(rt, nil, dir)
+	factory := tables.NewDataFactory(rt, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt, factory, 0),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start(context.Background())
