@@ -185,25 +185,25 @@ var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec
 
 var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, []byte, Statistic) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult), []byte{}, Statistic{}
+		return []byte(dummyNoExecPlanJsonResult), []byte("[]"), Statistic{}
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), []byte{}, Statistic{}
+		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error())), []byte("[]"), Statistic{}
 	}
-	return json, []byte{}, Statistic{RowsRead: 1, BytesScan: 1}
+	return json, []byte("[]"), Statistic{RowsRead: 1, BytesScan: 1}
 }
 
 var dummySerializeExecPlan2 = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, []byte, Statistic) {
 	if plan == nil {
-		return []byte(dummyNoExecPlanJsonResult2), []byte{}, Statistic{}
+		return []byte(dummyNoExecPlanJsonResult2), []byte("[]"), Statistic{}
 	}
 	json, err := json.Marshal(plan)
 	if err != nil {
-		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), []byte{}, Statistic{}
+		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error())), []byte("[]"), Statistic{}
 	}
 	val := fmt.Sprintf(`{"func":"dummy2","result":%s}`, json)
-	return []byte(val), []byte{}, Statistic{}
+	return []byte(val), []byte("[]"), Statistic{}
 }
 
 func TestStatementInfo_ExecPlan2Json(t *testing.T) {
@@ -263,7 +263,8 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 				f:    tt.args.SerializeExecPlan,
 			}
 			s.SetSerializableExecPlan(p)
-			got, stats := s.ExecPlan2Json(ctx)
+			got := s.ExecPlan2Json(ctx)
+			stats := s.ExecPlan2Stats(ctx)
 			assert.Equalf(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
 			assert.Equalf(t, []byte("[]"), stats, "stats")
 			mapper := new(map[string]any)
@@ -287,48 +288,15 @@ func NewDummySerializableExecPlan(plan any, f SerializeExecPlanFunc, uuid2 uuid.
 	}
 }
 
-func (p *dummySerializableExecPlan) Marshal(ctx context.Context) ([]byte, []byte, Statistic) {
-	return p.f(ctx, p.plan, p.uuid)
+func (p *dummySerializableExecPlan) Marshal(ctx context.Context) []byte {
+	res, _, _ := p.f(ctx, p.plan, p.uuid)
+	return res
 }
 func (p *dummySerializableExecPlan) Free() {}
 
-func TestGetStatsValues(t *testing.T) {
-	jsonData := []byte(`{
-		"statistics":{
-			"Time":[{"name":"Time Consumed","value":95834,"unit":"ns"},{"name":"Wait Time","value":442250,"unit":"ns"}],
-			"Memory":[{"name":"Memory Size","value":69,"unit":"byte"}],
-			"Throughput":[{"name":"Input Rows","value":2,"unit":"count"},{"name":"Output Rows","value":2,"unit":"count"},{"name":"Input Size","value":136,"unit":"byte"},{"name":"Output Size","value":136,"unit":"byte"}],
-			"IO":[{"name":"Disk IO","value":0,"unit":"byte"},{"name":"S3 IO Byte","value":68,"unit":"byte"},{"name":"S3 IO Input Count","value":0,"unit":"count"},{"name":"S3 IO Output Count","value":0,"unit":"count"}],
-			"Network":[{"name":"Network","value":0,"unit":"byte"}]
-		},
-		"totalStats":{"name":"Time spent","value":95834,"unit":"ns"}
-	}`)
-
-	res, err := getStatsValues(jsonData, 2)
-	if err != nil {
-		t.Fatalf("Error getting stats values: %v", err)
-	}
-
-	assert.Equal(t, 5, len(res), "Expected 5 stats values")
-
-	assert.Equal(t, uint64(1), res[0], "version should be 1")
-
-	if res[1] != 95834 {
-		t.Errorf("Expected timeConsumed to be 95834, got %d", res[1])
-	}
-
-	// multiple of 2, duration
-	if res[2] != 138 {
-		t.Errorf("Expected memorySize to be 69, got %d", res[2])
-	}
-
-	if res[3] != 0 {
-		t.Errorf("Expected s3IOInputCount to be 0, got %d", res[3])
-	}
-
-	if res[4] != 0 {
-		t.Errorf("Expected s3IOOutputCount to be 0, got %d", res[4])
-	}
+func (p *dummySerializableExecPlan) Stats(ctx context.Context) ([]byte, Statistic) {
+	_, statByte, stats := p.f(ctx, p.plan, p.uuid)
+	return statByte, stats
 }
 
 func TestMergeStats(t *testing.T) {

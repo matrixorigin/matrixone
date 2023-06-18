@@ -17,7 +17,6 @@ package motrace
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -46,7 +45,7 @@ var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 func StatementInfoNew(i Item, ctx context.Context) Item {
 	if s, ok := i.(*StatementInfo); ok {
 		// process the execplan
-		s.ExecPlan2Json(ctx)
+		s.ExecPlan2Stats(ctx)
 		// remove the plan
 		s.jsonByte = nil
 		s.ExecPlan = nil
@@ -74,10 +73,7 @@ func StatementInfoUpdate(existing, new Item) {
 	e.AggrCount += 1
 	// reponseAt is the last response time
 	e.ResponseAt = n.ResponseAt
-	// TODO: update the stats still json here
-	n.ExecPlan2Json(context.Background())
-	//[1 80335 1800 0 0]
-	//[1 147960 1800 0 0]
+	n.ExecPlan2Stats(context.Background())
 	err := mergeStats(e, n)
 
 	if err != nil {
@@ -288,7 +284,8 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(errCodeCol, table.StringField(fmt.Sprintf("%d", errCode)))
 		row.SetColumnVal(errorCol, table.StringField(fmt.Sprintf("%s", s.Error)))
 	}
-	execPlan, stats := s.ExecPlan2Json(ctx)
+	execPlan := s.ExecPlan2Json(ctx)
+	stats := s.ExecPlan2Stats(ctx)
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
 		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
@@ -303,65 +300,6 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.SetColumnVal(queryTypeCol, table.StringField(s.QueryType))
 	row.SetColumnVal(aggrCntCol, table.Int64Field(s.AggrCount))
 	row.SetColumnVal(resultCntCol, table.Int64Field(s.ResultCount))
-}
-
-func getStatsValues(jsonData []byte, duration uint64) ([]uint64, error) {
-	type Statistic struct {
-		Name  string `json:"name"`
-		Value int    `json:"value"`
-		Unit  string `json:"unit"`
-	}
-
-	type Statistics struct {
-		Time    []Statistic `json:"Time"`
-		Memory  []Statistic `json:"Memory"`
-		IO      []Statistic `json:"IO"`
-		Network []Statistic `json:"Network"`
-	}
-
-	type StatJson struct {
-		Statistics Statistics `json:"statistics"`
-		TotalStats Statistic  `json:"totalStats"`
-	}
-
-	var stats StatJson
-	err := json.Unmarshal(jsonData, &stats)
-	if err != nil {
-		return nil, err
-	}
-
-	var timeConsumed, memorySize, s3IOInputCount, s3IOOutputCount uint64
-
-	for _, stat := range stats.Statistics.Time {
-		if stat.Name == "Time Consumed" {
-			timeConsumed = uint64(stat.Value)
-			break
-		}
-	}
-
-	for _, stat := range stats.Statistics.Memory {
-		if stat.Name == "Memory Size" {
-			memorySize = uint64(stat.Value)
-			break
-		}
-	}
-
-	for _, stat := range stats.Statistics.IO {
-		if stat.Name == "S3 IO Input Count" {
-			s3IOInputCount = uint64(stat.Value)
-		} else if stat.Name == "S3 IO Output Count" {
-			s3IOOutputCount = uint64(stat.Value)
-		}
-	}
-	statsValues := make([]uint64, 5)
-	statsValues[0] = 1 // this is the version number
-
-	statsValues[1] = timeConsumed
-	statsValues[2] = memorySize * duration
-	statsValues[3] = s3IOInputCount
-	statsValues[4] = s3IOOutputCount
-
-	return statsValues, nil
 }
 
 func mergeStats(e, n *StatementInfo) error {
@@ -400,43 +338,42 @@ func mergeStats(e, n *StatementInfo) error {
 	return nil
 }
 
-// ExecPlan2Json return ExecPlan Serialized json-str
-// and set RowsRead, BytesScan from ExecPlan
-//
+// ExecPlan2Json return ExecPlan Serialized json-str //
 // please used in s.mux.Lock()
-func (s *StatementInfo) ExecPlan2Json(ctx context.Context) ([]byte, []byte) {
-	var stats Statistic
-
+func (s *StatementInfo) ExecPlan2Json(ctx context.Context) []byte {
 	if s.jsonByte != nil {
 		goto endL
 	} else if s.ExecPlan == nil {
 		uuidStr := uuid.UUID(s.StatementID).String()
-		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)),
-			[]byte(`{"code":200,"message":"NO ExecPlan"}`)
+		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr))
 	} else {
-		s.jsonByte, s.statsJsonByte, stats = s.ExecPlan.Marshal(ctx)
-		s.RowsRead, s.BytesScan = stats.RowsRead, stats.BytesScan
+		s.jsonByte = s.ExecPlan.Marshal(ctx)
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 		//	// get nil ExecPlan json-str
 		//	jsonByte, _, _ = s.SerializeExecPlan(ctx, nil, uuid.UUID(s.StatementID))
 		//}
 	}
-	if len(s.statsJsonByte) == 0 {
-		s.statsJsonByte = []byte("[]")
-	} else {
-		// Convert statsJsonByte to four key values array
-		var err error
-		statsValues, err := getStatsValues(s.statsJsonByte, uint64(s.Duration))
-		if err != nil {
-			return nil, nil
-		}
+endL:
+	return s.jsonByte
+}
 
-		// Convert statsValues to string and then to byte array
-		statsValuesStr := fmt.Sprintf("%v", statsValues)
-		s.statsJsonByte = []byte(statsValuesStr)
+// ExecPlan2Stats return Stats Serialized int array str
+// and set RowsRead, BytesScan from ExecPlan
+func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
+	var stats Statistic
+
+	if s.statsJsonByte != nil {
+		goto endL
+	} else if s.ExecPlan == nil {
+		return []byte("[]")
+	} else {
+		s.statsJsonByte, stats = s.ExecPlan.Stats(ctx)
+		s.RowsRead = stats.RowsRead
+		s.BytesScan = stats.BytesScan
+
 	}
 endL:
-	return s.jsonByte, s.statsJsonByte
+	return s.statsJsonByte
 }
 
 func GetLongQueryTime() time.Duration {
@@ -446,8 +383,9 @@ func GetLongQueryTime() time.Duration {
 type SerializeExecPlanFunc func(ctx context.Context, plan any, uuid2 uuid.UUID) (jsonByte []byte, statsJson []byte, stats Statistic)
 
 type SerializableExecPlan interface {
-	Marshal(context.Context) ([]byte, []byte, Statistic)
+	Marshal(context.Context) []byte
 	Free()
+	Stats(ctx context.Context) ([]byte, Statistic)
 }
 
 func (s *StatementInfo) SetSerializableExecPlan(execPlan SerializableExecPlan) {
