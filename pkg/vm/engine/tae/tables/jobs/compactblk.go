@@ -107,8 +107,8 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 
 	schema := task.schema
 	seqnums := make([]uint16, 0, len(schema.ColDefs))
-	names := make([]string, 0)
-	idxs := make([]int, 0)
+	names := make([]string, 0, len(schema.ColDefs))
+	idxs := make([]int, 0, len(schema.ColDefs))
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
