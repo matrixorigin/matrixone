@@ -91,7 +91,7 @@ func LoadPersistedColumnDatas(
 	}
 	for i, vec := range bat.Vecs {
 		idx := i
-		if idx >= phyAddIdx {
+		if idx >= phyAddIdx && phyAddIdx > -1 {
 			idx++
 		}
 		vectors[idx] = containers.ToDNVector(vec)

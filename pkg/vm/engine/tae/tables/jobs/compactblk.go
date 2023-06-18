@@ -106,15 +106,14 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 	preparer.Columns = containers.NewBatch()
 
 	schema := task.schema
-	seqnums := make([]uint16, 0, len(schema.ColDefs))
-	names := make([]string, 0, len(schema.ColDefs))
-	idxs := make([]int, 0, len(schema.ColDefs))
+	colLen := len(schema.ColDefs)
+	seqnums := make([]uint16, 0, colLen)
+	idxs := make([]int, 0, colLen)
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
 		}
 		idxs = append(idxs, int(def.SeqNum))
-		names = append(names, def.Name)
 		seqnums = append(seqnums, def.SeqNum)
 	}
 	if len(idxs) > 0 {
@@ -123,22 +122,23 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 		if err != nil {
 			return
 		}
-		i := 0
-		for _, view := range views.Columns {
-			if view == nil {
+		task.deletes = views.DeleteMask
+		views.ApplyDeletes()
+		for i := 0; i < colLen; i++ {
+			if schema.ColDefs[i].IsPhyAddr() {
+				continue
+			}
+			if views.Columns[i] == nil {
 				preparer.Close()
 				return nil, true, nil
 			}
-			task.deletes = view.DeleteMask
-			view.ApplyDeletes()
-			vec := view.Orphan()
+			vec := views.Columns[i].Orphan()
 			if vec.Length() == 0 {
 				empty = true
 				vec.Close()
 				return
 			}
-			preparer.Columns.AddVector(names[i], vec)
-			i++
+			preparer.Columns.AddVector(schema.ColDefs[i].Name, vec)
 		}
 	}
 	preparer.SchemaVersion = schema.Version
