@@ -164,11 +164,21 @@ func (task *compactBlockTask) Name() string {
 func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	logutil.Info("[Start]", common.OperationField(task.Name()),
 		common.OperandField(task.meta.Repr()))
+	phaseNumber := 0
+	defer func() {
+		if err != nil {
+			logutil.Error("[DoneWithErr]", common.OperationField(task.Name()),
+				common.AnyField("error", err),
+				common.AnyField("phase", phaseNumber),
+			)
+		}
+	}()
 	now := time.Now()
 	seg := task.compacted.GetSegment()
 	defer seg.Close()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
+	phaseNumber = 1
 	preparer, empty, err := task.PrepareData(ctx)
 	if err != nil {
 		return
@@ -177,11 +187,13 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		return
 	}
 	defer preparer.Close()
+	phaseNumber = 2
 	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
 	}
 	oldBlkData := oldBMeta.GetBlockData()
 	var deletes *containers.Batch
+	phaseNumber = 3
 	if !oldBMeta.IsAppendable() {
 		deletes, err = oldBlkData.CollectDeleteInRange(ctx, types.TS{}, task.txn.GetStartTS(), true)
 		if err != nil {
@@ -191,7 +203,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			defer deletes.Close()
 		}
 	}
-
+	phaseNumber = 4
 	if !empty {
 		createOnSeg := seg
 		curSeg := seg.GetMeta().(*catalog.SegmentEntry)
@@ -222,6 +234,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 
 	table := task.meta.GetSegment().GetTable()
 	// write ablock
+	phaseNumber = 5
 	if oldBMeta.IsAppendable() {
 		var data *containers.Batch
 		dataVer, errr := oldBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS(), true)
@@ -281,6 +294,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			task.mapping[i] = int32(i)
 		}
 	}
+	phaseNumber = 6
 	txnEntry := txnentries.NewCompactBlockEntry(
 		task.txn,
 		task.compacted,

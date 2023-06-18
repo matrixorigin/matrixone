@@ -191,6 +191,15 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	logutil.Info("[Start] Mergeblocks", common.OperationField(task.Name()),
 		common.OperandField(task))
+	phaseNumber := 0
+	defer func() {
+		if err != nil {
+			logutil.Error("[DoneWithErr] Mergeblocks", common.OperationField(task.Name()),
+				common.AnyField("error", err),
+				common.AnyField("phase", phaseNumber),
+			)
+		}
+	}()
 	now := time.Now()
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
@@ -227,7 +236,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		sortColDef = schema.PhyAddrKey
 	}
 	logutil.Infof("Mergeblocks on sort column %s\n", sortColDef.Name)
-
+	phaseNumber = 1
 	idxes := make([]uint16, 0, len(schema.ColDefs)-1)
 	seqnums := make([]uint16, 0, len(schema.ColDefs)-1)
 	for _, def := range schema.ColDefs {
@@ -298,6 +307,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	// Flush sort key it correlates to only one column
 	batchs := make([]*containers.Batch, 0)
 	blockHandles := make([]handle.Block, 0)
+	phaseNumber = 2
 	for i, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += vec.Length()
@@ -316,6 +326,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
 
+	phaseNumber = 3
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
@@ -346,6 +357,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 
+	phaseNumber = 4
 	name := objectio.BuildObjectName(&task.toSegEntry.ID, 0)
 	writer, err := blockio.NewBlockWriterNew(task.mergedBlks[0].GetBlockData().GetFs().Service, name, schema.Version, seqnums)
 	if err != nil {
@@ -365,6 +377,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	phaseNumber = 5
 	var metaLoc objectio.Location
 	for i, block := range blocks {
 		metaLoc = blockio.EncodeLocation(name, block.GetExtent(), uint32(batchs[i].Length()), block.GetID())
@@ -378,6 +391,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 
+	phaseNumber = 6
 	for _, compacted := range task.compacted {
 		seg := compacted.GetSegment()
 		if err = seg.SoftDeleteBlock(compacted.ID()); err != nil {
@@ -390,6 +404,7 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 
+	phaseNumber = 7
 	table := task.toSegEntry.GetTable()
 	txnEntry := txnentries.NewMergeBlocksEntry(
 		task.txn,
