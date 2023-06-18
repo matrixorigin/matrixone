@@ -51,6 +51,53 @@ func LoadPersistedColumnData(
 	return containers.ToDNVector(bat.Vecs[0]), nil
 }
 
+func LoadPersistedColumnDatas(
+	ctx context.Context,
+	schema *catalog.Schema,
+	rt *dbutils.Runtime,
+	id *common.ID,
+	colIdxs []int,
+	location objectio.Location,
+) ([]containers.Vector, error) {
+	cols := make([]uint16, 0)
+	typs := make([]types.Type, 0)
+	vectors := make([]containers.Vector, len(colIdxs))
+	phyAddIdx := -1
+	for i, colIdx := range colIdxs {
+		def := schema.ColDefs[colIdx]
+		if def.IsPhyAddr() {
+			vec, err := model.PreparePhyAddrData(&id.BlockID, 0, location.Rows(), rt.VectorPool.Transient)
+			if err != nil {
+				return nil, err
+			}
+			phyAddIdx = i
+			vectors[phyAddIdx] = vec
+		}
+		cols = append(cols, def.SeqNum)
+		typs = append(typs, def.Type)
+	}
+	if len(cols) == 0 {
+		return vectors, nil
+	}
+	bat, err := blockio.LoadColumns(
+		ctx, cols,
+		typs,
+		rt.Fs.Service,
+		location,
+		nil)
+	if err != nil {
+		return nil, err
+	}
+	for i, vec := range bat.Vecs {
+		idx := i
+		if idx >= phyAddIdx {
+			idx++
+		}
+		vectors[idx] = containers.ToDNVector(vec)
+	}
+	return vectors, nil
+}
+
 func ReadPersistedBlockRow(location objectio.Location) int {
 	return int(location.Rows())
 }

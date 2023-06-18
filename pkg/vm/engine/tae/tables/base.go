@@ -210,6 +210,18 @@ func (blk *baseBlock) LoadPersistedColumnData(ctx context.Context, schema *catal
 		location)
 }
 
+func (blk *baseBlock) LoadPersistedColumnDatas(ctx context.Context, schema *catalog.Schema, colIdxs []int) (
+	vec []containers.Vector, err error) {
+	location := blk.meta.GetMetaLoc()
+	return LoadPersistedColumnDatas(
+		ctx,
+		schema,
+		blk.rt,
+		blk.meta.AsCommonID(),
+		colIdxs,
+		location)
+}
+
 func (blk *baseBlock) LoadPersistedDeletes(ctx context.Context) (bat *containers.Batch, err error) {
 	location := blk.meta.GetDeltaLoc()
 	if location.IsEmpty() {
@@ -299,12 +311,12 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	skipDeletes bool) (view *containers.BlockView, err error) {
 
 	view = containers.NewBlockView()
-	for _, colIdx := range colIdxs {
-		vec, err := blk.LoadPersistedColumnData(ctx, readSchema, colIdx)
-		if err != nil {
-			return nil, err
-		}
-		view.SetData(colIdx, vec)
+	vecs, err := blk.LoadPersistedColumnDatas(ctx, readSchema, colIdxs)
+	if err != nil {
+		return nil, err
+	}
+	for i, vec := range vecs {
+		view.SetData(colIdxs[i], vec)
 	}
 
 	if skipDeletes {
