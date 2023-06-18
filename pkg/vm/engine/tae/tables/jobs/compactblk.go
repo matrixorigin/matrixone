@@ -113,7 +113,7 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 		if def.IsPhyAddr() {
 			continue
 		}
-		idxs = append(idxs, int(def.SeqNum))
+		idxs = append(idxs, def.Idx)
 		seqnums = append(seqnums, def.SeqNum)
 	}
 	if len(idxs) > 0 {
