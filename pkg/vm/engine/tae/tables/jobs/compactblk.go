@@ -106,30 +106,40 @@ func (task *compactBlockTask) PrepareData(ctx context.Context) (
 	preparer.Columns = containers.NewBatch()
 
 	schema := task.schema
-	var view *containers.ColumnView
 	seqnums := make([]uint16, 0, len(schema.ColDefs))
+	names := make([]string, 0)
+	idxs := make([]int, 0)
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
 		}
-		view, err = task.compacted.GetColumnDataById(ctx, def.Idx)
+		idxs = append(idxs, int(def.SeqNum))
+		names = append(names, def.Name)
+		seqnums = append(seqnums, def.SeqNum)
+	}
+	if len(idxs) > 0 {
+		var views *containers.BlockView
+		views, err = task.compacted.GetColumnDataByIds(ctx, idxs)
 		if err != nil {
 			return
 		}
-		if view == nil {
-			preparer.Close()
-			return nil, true, nil
+		i := 0
+		for _, view := range views.Columns {
+			if view == nil {
+				preparer.Close()
+				return nil, true, nil
+			}
+			task.deletes = view.DeleteMask
+			view.ApplyDeletes()
+			vec := view.Orphan()
+			if vec.Length() == 0 {
+				empty = true
+				vec.Close()
+				return
+			}
+			preparer.Columns.AddVector(names[i], vec)
+			i++
 		}
-		task.deletes = view.DeleteMask
-		view.ApplyDeletes()
-		vec := view.Orphan()
-		if vec.Length() == 0 {
-			empty = true
-			vec.Close()
-			return
-		}
-		preparer.Columns.AddVector(def.Name, vec)
-		seqnums = append(seqnums, def.SeqNum)
 	}
 	preparer.SchemaVersion = schema.Version
 	preparer.Seqnums = seqnums

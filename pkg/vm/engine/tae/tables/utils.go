@@ -72,6 +72,7 @@ func LoadPersistedColumnDatas(
 			}
 			phyAddIdx = i
 			vectors[phyAddIdx] = vec
+			continue
 		}
 		cols = append(cols, def.SeqNum)
 		typs = append(typs, def.Type)
