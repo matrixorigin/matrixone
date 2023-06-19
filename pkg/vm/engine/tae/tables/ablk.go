@@ -27,13 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type ablock struct {
@@ -43,11 +42,10 @@ type ablock struct {
 
 func newABlock(
 	meta *catalog.BlockEntry,
-	fs *objectio.ObjectFS,
-	indexCache model.LRUCache,
-	scheduler tasks.TaskScheduler) *ablock {
+	rt *dbutils.Runtime,
+) *ablock {
 	blk := &ablock{}
-	blk.baseBlock = newBaseBlock(blk, meta, indexCache, fs, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, rt)
 	blk.mvcc.SetAppendListener(blk.OnApplyAppend)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	if blk.meta.HasDropCommitted() {
@@ -56,6 +54,7 @@ func newABlock(
 		node.Ref()
 		blk.node.Store(node)
 		blk.FreezeAppend()
+		blk.mvcc.UpgradeDeleteChainByTS(blk.meta.GetDeltaPersistedTS())
 	} else {
 		mnode := newMemoryNode(blk.baseBlock)
 		node := NewNode(mnode)
@@ -123,7 +122,7 @@ func (blk *ablock) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	return blk.resolveColumnDatas(
 		ctx,
 		txn,
@@ -137,7 +136,7 @@ func (blk *ablock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	return blk.resolveColumnData(
 		ctx,
 		txn,
@@ -151,7 +150,7 @@ func (blk *ablock) resolveColumnDatas(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxes []int,
-	skipDeletes bool) (view *model.BlockView, err error) {
+	skipDeletes bool) (view *containers.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 
@@ -199,7 +198,7 @@ func (blk *ablock) resolveColumnData(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	col int,
-	skipDeletes bool) (view *model.ColumnView, err error) {
+	skipDeletes bool) (view *containers.ColumnView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 
