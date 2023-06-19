@@ -102,25 +102,25 @@ func (node *BinaryExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *BinaryExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *BinaryExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
 
-	n = newNode.(*BinaryExpr)
-	node, ok := n.Left.Accept(v)
+	node = newNode.(*BinaryExpr)
+	tmpNode, ok := node.Left.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Left = node
+	node.Left = tmpNode
 
-	node, ok = n.Right.Accept(v)
+	tmpNode, ok = node.Right.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Right = node
-	return v.Exit(n)
+	node.Right = tmpNode
+	return v.Exit(node)
 }
 
 func NewBinaryExpr(op BinaryOp, left Expr, right Expr) *BinaryExpr {
@@ -391,26 +391,26 @@ func (node *AndExpr) Format(ctx *FmtCtx) {
 	ctx.PrintExpr(node, node.Right, false)
 }
 
-func (n *AndExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *AndExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
 
-	n = newNode.(*AndExpr)
-	node, ok := n.Left.Accept(v)
+	node = newNode.(*AndExpr)
+	tmpNode, ok := node.Left.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Left = node
+	node.Left = tmpNode
 
-	node, ok = n.Right.Accept(v)
+	tmpNode, ok = node.Right.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Right = node
+	node.Right = tmpNode
 
-	return v.Exit(n)
+	return v.Exit(node)
 }
 
 func NewAndExpr(l, r Expr) *AndExpr {
@@ -513,19 +513,19 @@ func (node *NotExpr) Format(ctx *FmtCtx) {
 	ctx.PrintExpr(node, node.Expr, true)
 }
 
-func (n *NotExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *NotExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
 
-	n = newNode.(*NotExpr)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*NotExpr)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func NewNotExpr(e Expr) *NotExpr {
@@ -546,18 +546,18 @@ func (node *IsNullExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *IsNullExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *IsNullExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*IsNullExpr)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*IsNullExpr)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func NewIsNullExpr(e Expr) *IsNullExpr {
@@ -578,18 +578,18 @@ func (node *IsNotNullExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *IsNotNullExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *IsNotNullExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*IsNotNullExpr)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*IsNotNullExpr)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func NewIsNotNullExpr(e Expr) *IsNotNullExpr {
@@ -610,18 +610,18 @@ func (node *IsUnknownExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *IsUnknownExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *IsUnknownExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*IsUnknownExpr)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*IsUnknownExpr)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func NewIsUnknownExpr(e Expr) *IsUnknownExpr {
@@ -706,18 +706,18 @@ func (node *IsNotTrueExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *IsNotTrueExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *IsNotTrueExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*IsNotTrueExpr)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*IsNotTrueExpr)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func NewIsNotTrueExpr(e Expr) *IsNotTrueExpr {
@@ -738,18 +738,18 @@ func (node *IsFalseExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *IsFalseExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *IsFalseExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*IsFalseExpr)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*IsFalseExpr)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func NewIsFalseExpr(e Expr) *IsFalseExpr {
@@ -1127,18 +1127,18 @@ func (node *CastExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *CastExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *CastExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*CastExpr)
-	node, ok := n.Expr.Accept(v)
+	node = newNode.(*CastExpr)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
-	return v.Exit(n)
+	node.Expr = tmpNode
+	return v.Exit(node)
 }
 
 func NewCastExpr(e Expr, t ResolvableTypeReference) *CastExpr {
@@ -1163,20 +1163,20 @@ func (node *Tuple) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *Tuple) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *Tuple) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*Tuple)
-	for i, val := range n.Exprs {
-		node, ok := val.Accept(v)
+	node = newNode.(*Tuple)
+	for i, val := range node.Exprs {
+		tmpNode, ok := val.Accept(v)
 		if !ok {
-			return n, false
+			return node, false
 		}
-		n.Exprs[i] = node
+		node.Exprs[i] = tmpNode
 	}
-	return v.Exit(n)
+	return v.Exit(node)
 }
 
 func NewTuple(e Exprs) *Tuple {
@@ -1203,32 +1203,32 @@ func (node *RangeCond) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *RangeCond) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *RangeCond) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
 
-	n = newNode.(*RangeCond)
-	node, ok := n.Left.Accept(v)
+	node = newNode.(*RangeCond)
+	tmpNode, ok := node.Left.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Left = node
+	node.Left = tmpNode
 
-	node, ok = n.From.Accept(v)
+	tmpNode, ok = node.From.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.From = node
+	node.From = tmpNode
 
-	node, ok = n.To.Accept(v)
+	tmpNode, ok = node.To.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.To = node
+	node.To = tmpNode
 
-	return v.Exit(n)
+	return v.Exit(node)
 }
 
 func NewRangeCond(n bool, l, f, t Expr) *RangeCond {
@@ -1269,40 +1269,40 @@ func (node *CaseExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker interface
-func (n *CaseExpr) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *CaseExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	n = newNode.(*CaseExpr)
+	node = newNode.(*CaseExpr)
 
-	node, ok := n.Expr.Accept(v)
+	tmpNode, ok := node.Expr.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Expr = node
+	node.Expr = tmpNode
 
-	for _, when := range n.Whens {
-		node, ok = when.Cond.Accept(v)
+	for _, when := range node.Whens {
+		tmpNode, ok = when.Cond.Accept(v)
 		if !ok {
-			return n, false
+			return node, false
 		}
-		when.Cond = node
+		when.Cond = tmpNode
 
-		node, ok = when.Val.Accept(v)
+		tmpNode, ok = when.Val.Accept(v)
 		if !ok {
-			return n, false
+			return node, false
 		}
-		when.Val = node
+		when.Val = tmpNode
 	}
 
-	node, ok = n.Else.Accept(v)
+	tmpNode, ok = node.Else.Accept(v)
 	if !ok {
-		return n, false
+		return node, false
 	}
-	n.Else = node
+	node.Else = tmpNode
 
-	return v.Exit(n)
+	return v.Exit(node)
 }
 
 func NewCaseExpr(e Expr, w []*When, el Expr) *CaseExpr {
@@ -1410,7 +1410,7 @@ func (node *IntervalExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker Accept interface.
-func (n *IntervalExpr) Accept(v Visitor) (Expr, bool) {
+func (node *IntervalExpr) Accept(v Visitor) (Expr, bool) {
 	// TODO:
 	panic("unimplement interval expr Accept")
 }
@@ -1462,12 +1462,12 @@ type UpdateVal struct {
 func (node *UpdateVal) Format(ctx *FmtCtx) {}
 
 // Accept implements NodeChecker interface
-func (n *UpdateVal) Accept(v Visitor) (Expr, bool) {
-	newNode, skipChildren := v.Enter(n)
+func (node *UpdateVal) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	return v.Exit(n)
+	return v.Exit(node)
 }
 
 type TypeExpr interface {
@@ -1503,7 +1503,7 @@ func (node *VarExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker Accept interface.
-func (n *VarExpr) Accept(v Visitor) (Expr, bool) {
+func (node *VarExpr) Accept(v Visitor) (Expr, bool) {
 	panic("unimplement VarExpr Accept")
 }
 
@@ -1527,7 +1527,7 @@ func (node *ParamExpr) Format(ctx *FmtCtx) {
 }
 
 // Accept implements NodeChecker Accept interface.
-func (n *ParamExpr) Accept(v Visitor) (Expr, bool) {
+func (node *ParamExpr) Accept(v Visitor) (Expr, bool) {
 	panic("unimplement ParamExpr Accept")
 }
 
