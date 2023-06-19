@@ -7491,6 +7491,7 @@ func TestReplayDeletes(t *testing.T) {
 	tbl, err = db.GetTableEntryByID(blkEntry.AsCommonID().TableID)
 	assert.NoError(t, err)
 	seg, err = tbl.GetSegmentByID(blkEntry.AsCommonID().SegmentID())
+	assert.NoError(t, err)
 	segString2 := seg.Repr()
 	assert.Equal(t, segString1, segString2)
 }
