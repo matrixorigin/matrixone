@@ -14,9 +14,36 @@
 
 package sm
 
+import (
+	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
+var (
+	ErrClose = moerr.NewInternalErrorNoCtx("closed")
+)
+
 type OnFinCB = func()
 type EnqueueOp = func(any) any
 type OnItemsCB = func(...any)
+
+type Closable interface {
+	IsClosed() bool
+	TryClose() bool
+}
+
+type ClosedState struct {
+	closed atomic.Int32
+}
+
+func (c *ClosedState) IsClosed() bool {
+	return c.closed.Load() == int32(1)
+}
+
+func (c *ClosedState) TryClose() bool {
+	return c.closed.CompareAndSwap(0, 1)
+}
 
 type Queue interface {
 	Start()

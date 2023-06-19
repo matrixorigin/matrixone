@@ -18,16 +18,15 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 )
 
 const (
-	DefaultIndexCacheSize = 256 * common.M
+	DefaultIndexCacheSize = 256 * mpool.MB
 
 	DefaultBlockMaxRows     = uint32(8192)
 	DefaultBlocksPerSegment = uint16(256)
@@ -70,7 +69,6 @@ type Options struct {
 	GCCfg         *GCCfg
 	LogtailCfg    *LogtailCfg
 	CatalogCfg    *CatalogCfg
-	Catalog       *catalog.Catalog
 
 	TransferTableTTL time.Duration
 

@@ -180,9 +180,3 @@ func (b *Blockid) Segment() *Segmentid {
 func (b *Blockid) Sequence() uint16 {
 	return DecodeUint16(b[ObjectBytesSize:BlockidSize])
 }
-
-func (b *Blockid) ObjectString() string {
-	uuid := (*uuid.UUID)(b[:UuidSize])
-	filen, _ := b.Offsets()
-	return fmt.Sprintf("%s-%d", uuid.String(), filen)
-}

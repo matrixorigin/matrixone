@@ -19,8 +19,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
@@ -47,7 +47,7 @@ func main() {
 		}
 		e1.SetType(entry.IOET_WALEntry_Uncommitted)
 		e1.SetInfo(uncommitInfo)
-		n := make([]byte, common.K*100)
+		n := make([]byte, mpool.KB*100)
 		copy(n, buf)
 		err := e1.UnmarshalFromNode(n, true)
 		if err != nil {
@@ -64,7 +64,7 @@ func main() {
 		e2 := entry.GetBase()
 		e2.SetType(entry.IOET_WALEntry_Txn)
 		e2.SetInfo(txnInfo)
-		n = make([]byte, common.K*100)
+		n = make([]byte, mpool.KB*100)
 		copy(n, buf)
 		err = e2.UnmarshalFromNode(n, true)
 		if err != nil {
