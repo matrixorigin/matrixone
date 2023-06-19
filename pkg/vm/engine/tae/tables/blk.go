@@ -27,11 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type block struct {
@@ -40,12 +39,10 @@ type block struct {
 
 func newBlock(
 	meta *catalog.BlockEntry,
-	fs *objectio.ObjectFS,
-	indexCache model.LRUCache,
-	scheduler tasks.TaskScheduler,
+	rt *dbutils.Runtime,
 ) *block {
 	blk := &block{}
-	blk.baseBlock = newBaseBlock(blk, meta, indexCache, fs, scheduler)
+	blk.baseBlock = newBaseBlock(blk, meta, rt)
 	blk.mvcc.SetDeletesListener(blk.OnApplyDelete)
 	pnode := newPersistedNode(blk.baseBlock)
 	node := NewNode(pnode)
@@ -84,7 +81,7 @@ func (blk *block) GetColumnDataByIds(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	colIdxes []int,
-) (view *model.BlockView, err error) {
+) (view *containers.BlockView, err error) {
 	node := blk.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
@@ -101,7 +98,7 @@ func (blk *block) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	readSchema any,
 	col int,
-) (view *model.ColumnView, err error) {
+) (view *containers.ColumnView, err error) {
 	schema := readSchema.(*catalog.Schema)
 	return blk.ResolvePersistedColumnData(
 		ctx,

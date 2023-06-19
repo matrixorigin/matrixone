@@ -1020,18 +1020,31 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
+		block := n.LockTargets[0].Block
+		if block {
+			ss = []*Scope{c.newMergeScope(ss)}
+		}
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
-			lockOpArg, err := constructLockOp(n, c.proc)
+			lockOpArg, err := constructLockOp(n, ss[i].Proc)
 			if err != nil {
 				return nil, err
 			}
-			ss[i].appendInstruction(vm.Instruction{
-				Op:      vm.LockOp,
-				Idx:     c.anal.curr,
-				IsFirst: currentFirstFlag,
-				Arg:     lockOpArg,
-			})
+			if block {
+				ss[i].Instructions[len(ss[i].Instructions)-1] = vm.Instruction{
+					Op:      vm.LockOp,
+					Idx:     c.anal.curr,
+					IsFirst: currentFirstFlag,
+					Arg:     lockOpArg,
+				}
+			} else {
+				ss[i].appendInstruction(vm.Instruction{
+					Op:      vm.LockOp,
+					Idx:     c.anal.curr,
+					IsFirst: currentFirstFlag,
+					Arg:     lockOpArg,
+				})
+			}
 		}
 		c.setAnalyzeCurrent(ss, curr)
 		return ss, nil

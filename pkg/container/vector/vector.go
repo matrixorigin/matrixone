@@ -87,6 +87,23 @@ func (v *Vector) ResetArea() {
 	v.area = v.area[:0]
 }
 
+// TODO: It is semantically same as Reset, need to merge them later.
+func (v *Vector) ResetWithNewType(t *types.Type) {
+	oldTyp := v.typ
+	v.typ = *t
+	v.class = FLAT
+	if v.area != nil {
+		v.area = v.area[:0]
+	}
+	v.nsp = nulls.Nulls{}
+	v.length = 0
+	v.capacity = cap(v.data) / v.typ.TypeSize()
+	v.sorted = false
+	if oldTyp.Oid != t.Oid {
+		v.setupColFromData()
+	}
+}
+
 func (v *Vector) UnsafeGetRawData() []byte {
 	length := 1
 	if !v.IsConst() {
@@ -101,6 +118,12 @@ func (v *Vector) Length() int {
 
 func (v *Vector) Capacity() int {
 	return v.capacity
+}
+
+// Allocated returns the total allocated memory size of the vector.
+// it can be used to estimate the memory usage of the vector.
+func (v *Vector) Allocated() int {
+	return cap(v.data) + cap(v.area)
 }
 
 func (v *Vector) SetLength(n int) {

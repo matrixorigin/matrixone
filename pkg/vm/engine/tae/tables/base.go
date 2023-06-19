@@ -30,11 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -49,13 +49,11 @@ type BlockT[T common.IRef] interface {
 type baseBlock struct {
 	common.RefHelper
 	*sync.RWMutex
-	indexCache model.LRUCache
-	fs         *objectio.ObjectFS
-	scheduler  tasks.TaskScheduler
-	meta       *catalog.BlockEntry
-	mvcc       *updates.MVCCHandle
-	ttl        time.Time
-	impl       data.Block
+	rt   *dbutils.Runtime
+	meta *catalog.BlockEntry
+	mvcc *updates.MVCCHandle
+	ttl  time.Time
+	impl data.Block
 
 	node atomic.Pointer[Node]
 }
@@ -63,16 +61,13 @@ type baseBlock struct {
 func newBaseBlock(
 	impl data.Block,
 	meta *catalog.BlockEntry,
-	indexCache model.LRUCache,
-	fs *objectio.ObjectFS,
-	scheduler tasks.TaskScheduler) *baseBlock {
+	rt *dbutils.Runtime,
+) *baseBlock {
 	blk := &baseBlock{
-		impl:       impl,
-		indexCache: indexCache,
-		fs:         fs,
-		scheduler:  scheduler,
-		meta:       meta,
-		ttl:        time.Now(),
+		impl: impl,
+		rt:   rt,
+		meta: meta,
+		ttl:  time.Now(),
 	}
 	blk.mvcc = updates.NewMVCCHandle(meta)
 	blk.RWMutex = blk.mvcc.RWMutex
@@ -138,12 +133,12 @@ func (blk *baseBlock) TryUpgrade() (err error) {
 }
 
 func (blk *baseBlock) GetMeta() any              { return blk.meta }
-func (blk *baseBlock) GetFs() *objectio.ObjectFS { return blk.fs }
+func (blk *baseBlock) GetFs() *objectio.ObjectFS { return blk.rt.Fs }
 func (blk *baseBlock) GetID() *common.ID         { return blk.meta.AsCommonID() }
 
 func (blk *baseBlock) FillInMemoryDeletesLocked(
 	txn txnif.TxnReader,
-	view *model.BaseView,
+	view *containers.BaseView,
 	rwlocker *sync.RWMutex) (err error) {
 	chain := blk.mvcc.GetDeleteChain()
 	deletes, err := chain.CollectDeletesLocked(txn, rwlocker)
@@ -170,7 +165,7 @@ func (blk *baseBlock) LoadPersistedCommitTS() (vec containers.Vector, err error)
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
-		blk.fs.Service,
+		blk.rt.Fs.Service,
 		location,
 		nil,
 	)
@@ -209,7 +204,7 @@ func (blk *baseBlock) LoadPersistedColumnData(ctx context.Context, schema *catal
 	location := blk.meta.GetMetaLoc()
 	return LoadPersistedColumnData(
 		ctx,
-		blk.fs,
+		blk.rt,
 		blk.meta.AsCommonID(),
 		def,
 		location)
@@ -224,14 +219,14 @@ func (blk *baseBlock) LoadPersistedDeletes(ctx context.Context) (bat *containers
 	return LoadPersistedDeletes(
 		ctx,
 		pkName,
-		blk.fs,
+		blk.rt.Fs,
 		location)
 }
 
 func (blk *baseBlock) FillPersistedDeletes(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	view *model.BaseView) (err error) {
+	view *containers.BaseView) (err error) {
 	blk.fillPersistedDeletesInRange(
 		ctx,
 		types.TS{},
@@ -243,7 +238,7 @@ func (blk *baseBlock) FillPersistedDeletes(
 func (blk *baseBlock) fillPersistedDeletesInRange(
 	ctx context.Context,
 	start, end types.TS,
-	view *model.BaseView) (err error) {
+	view *containers.BaseView) (err error) {
 	blk.foreachPersistedDeletesCommittedInRange(
 		ctx,
 		start,
@@ -292,7 +287,7 @@ func (blk *baseBlock) Prefetch(idxes []uint16) error {
 		return nil
 	} else {
 		key := blk.meta.GetMetaLoc()
-		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.fs.Service, key)
+		return blockio.Prefetch(idxes, []uint16{key.ID()}, blk.rt.Fs.Service, key)
 	}
 }
 
@@ -301,9 +296,9 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxs []int,
-	skipDeletes bool) (view *model.BlockView, err error) {
+	skipDeletes bool) (view *containers.BlockView, err error) {
 
-	view = model.NewBlockView()
+	view = containers.NewBlockView()
 	for _, colIdx := range colIdxs {
 		vec, err := blk.LoadPersistedColumnData(ctx, readSchema, colIdx)
 		if err != nil {
@@ -337,8 +332,8 @@ func (blk *baseBlock) ResolvePersistedColumnData(
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdx int,
-	skipDeletes bool) (view *model.ColumnView, err error) {
-	view = model.NewColumnView(colIdx)
+	skipDeletes bool) (view *containers.ColumnView, err error) {
+	view = containers.NewColumnView(colIdx)
 	vec, err := blk.LoadPersistedColumnData(context.Background(), readSchema, colIdx)
 	if err != nil {
 		return
@@ -420,8 +415,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		ctx,
 		blk.meta,
 		bf,
-		blk.indexCache,
-		blk.fs.Service,
+		blk.rt,
 	)
 	if err != nil {
 		return
@@ -430,6 +424,7 @@ func (blk *baseBlock) PersistedBatchDedup(
 		ctx,
 		keys,
 		keysZM,
+		blk.rt,
 	)
 	if err == nil || !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
 		return
@@ -443,7 +438,7 @@ func (blk *baseBlock) getPersistedValue(
 	schema *catalog.Schema,
 	row, col int,
 	skipMemory bool) (v any, isNull bool, err error) {
-	view := model.NewColumnView(col)
+	view := containers.NewColumnView(col)
 	if err = blk.FillPersistedDeletes(ctx, txn, view.BaseView); err != nil {
 		return
 	}
@@ -508,8 +503,8 @@ func (blk *baseBlock) HasDeleteIntentsPreparedIn(from, to types.TS) (found bool)
 	return
 }
 
-func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *model.BlockView, err error) {
-	view = model.NewBlockView()
+func (blk *baseBlock) CollectChangesInRange(ctx context.Context, startTs, endTs types.TS) (view *containers.BlockView, err error) {
+	view = containers.NewBlockView()
 	view.DeleteMask, err = blk.inMemoryCollectDeletesInRange(startTs, endTs)
 	blk.fillPersistedDeletesInRange(ctx, startTs, endTs, view.BaseView)
 	return
@@ -721,7 +716,7 @@ func (blk *baseBlock) BuildCompactionTaskFactory() (
 		return
 	}
 
-	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
+	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.rt)
 	taskType = tasks.DataCompactionTask
 	scopes = append(scopes, *blk.meta.AsCommonID())
 	return

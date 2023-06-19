@@ -56,6 +56,9 @@ drop database db11111111111;
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne
+select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
+privilege_name    obj_type    privilege_level
+values    table    *.*
 show grants;
 Grants for dump@localhost
 GRANT create account ON account  `dump`@`localhost`
@@ -90,7 +93,7 @@ GRANT reference ON table *.* `dump`@`localhost`
 GRANT index ON table *.* `dump`@`localhost`
 GRANT table all ON table *.* `dump`@`localhost`
 GRANT table ownership ON table *.* `dump`@`localhost`
-GRANT values ON table t `dump`@`localhost`
+GRANT values ON table *.* `dump`@`localhost`
 GRANT connect ON account  `dump`@`localhost`
 show grants for 'root'@'localhost';
 Grants for root@localhost
@@ -126,7 +129,7 @@ GRANT reference ON table *.* `root`@`localhost`
 GRANT index ON table *.* `root`@`localhost`
 GRANT table all ON table *.* `root`@`localhost`
 GRANT table ownership ON table *.* `root`@`localhost`
-GRANT values ON table t `root`@`localhost`
+GRANT values ON table *.* `root`@`localhost`
 GRANT connect ON account  `root`@`localhost`
 show grants for 'test'@'localhost';
 Grants for test@localhost
