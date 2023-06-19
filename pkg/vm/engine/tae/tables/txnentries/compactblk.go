@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -35,19 +36,20 @@ import (
 
 type compactBlockEntry struct {
 	sync.RWMutex
-	txn       txnif.AsyncTxn
-	from      handle.Block
-	to        handle.Block
-	scheduler tasks.TaskScheduler
-	deletes   *nulls.Bitmap
+	txn     txnif.AsyncTxn
+	from    handle.Block
+	to      handle.Block
+	deletes *nulls.Bitmap
+
+	rt *dbutils.Runtime
 }
 
 func NewCompactBlockEntry(
 	txn txnif.AsyncTxn,
 	from, to handle.Block,
-	scheduler tasks.TaskScheduler,
 	sortIdx []int32,
 	deletes *nulls.Bitmap,
+	rt *dbutils.Runtime,
 ) *compactBlockEntry {
 
 	page := model.NewTransferHashPage(from.Fingerprint(), time.Now())
@@ -68,21 +70,21 @@ func NewCompactBlockEntry(
 			rowid := objectio.NewRowid(&toId.BlockID, uint32(i))
 			page.Train(uint32(idx), *rowid)
 		}
-		_ = scheduler.AddTransferPage(page)
+		_ = rt.TransferTable.AddPage(page)
 	}
 	return &compactBlockEntry{
-		txn:       txn,
-		from:      from,
-		to:        to,
-		scheduler: scheduler,
-		deletes:   deletes,
+		txn:     txn,
+		from:    from,
+		to:      to,
+		deletes: deletes,
+		rt:      rt,
 	}
 }
 
 func (entry *compactBlockEntry) IsAborted() bool { return false }
 func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
-	_ = entry.scheduler.DeleteTransferPage(entry.from.Fingerprint())
+	_ = entry.rt.TransferTable.DeletePage(entry.from.Fingerprint())
 	var fs fileservice.FileService
 	var fromName, toName string
 
@@ -104,7 +106,7 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 		toName = objectio.BuildObjectName(seg, num).String()
 	}
 
-	entry.scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, fromBlockEntry.AsCommonID(), func() error {
+	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, fromBlockEntry.AsCommonID(), func() error {
 		// TODO: variable as timeout
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 		defer cancel()
@@ -125,6 +127,9 @@ func (entry *compactBlockEntry) ApplyRollback() (err error) {
 }
 func (entry *compactBlockEntry) ApplyCommit() (err error) {
 	_ = entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().TryUpgrade()
+	if !entry.from.IsAppendableBlock() {
+		return
+	}
 	entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData().GCInMemeoryDeletesByTS(entry.txn.GetCommitTS())
 	return
 }

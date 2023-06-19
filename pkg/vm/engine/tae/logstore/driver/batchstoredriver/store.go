@@ -42,7 +42,7 @@ type StoreCfg struct {
 
 type baseStore struct {
 	syncBase
-	common.ClosedState
+	sm.ClosedState
 	dir, name       string
 	flushWg         sync.WaitGroup
 	flushWgMu       *sync.RWMutex
@@ -232,7 +232,7 @@ func (bs *baseStore) Truncate(lsn uint64) (err error) {
 	bs.checkpointing.Store(lsn)
 	bs.ckpmu.Unlock()
 	_, err = bs.truncateQueue.Enqueue(lsn)
-	if err != nil && err != common.ErrClose {
+	if err != nil && err != sm.ErrClose {
 		panic(err)
 	}
 	return nil
@@ -243,13 +243,13 @@ func (bs *baseStore) Append(e *entry.Entry) error {
 	// 	e.StartTime()
 	// }
 	if bs.IsClosed() {
-		return common.ErrClose
+		return sm.ErrClose
 	}
 	bs.flushWgMu.Lock()
 	bs.flushWg.Add(1)
 	if bs.IsClosed() {
 		bs.flushWg.Done()
-		return common.ErrClose
+		return sm.ErrClose
 	}
 	bs.flushWgMu.Unlock()
 	bs.mu.Lock()
