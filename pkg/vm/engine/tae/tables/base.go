@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -244,14 +245,16 @@ func (blk *baseBlock) fillPersistedDeletesInRange(
 		start,
 		end,
 		true,
-		func(i int, deleteBatch *containers.Batch) {
-			rowid := deleteBatch.Vecs[0].Get(i).(types.Rowid)
+		func(i int, rowIdVec *vector.Vector) {
+			rowid := vector.GetFixedAt[types.Rowid](rowIdVec, i)
 			row := rowid.GetRowOffset()
 			if view.DeleteMask == nil {
 				view.DeleteMask = nulls.NewWithSize(int(row) + 1)
 			}
 			view.DeleteMask.Add(uint64(row))
-		})
+		},
+		nil,
+	)
 	return nil
 }
 
@@ -259,23 +262,30 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	ctx context.Context,
 	start, end types.TS,
 	skipAbort bool,
-	op func(row int, deleteBatch *containers.Batch),
+	loopOp func(int, *vector.Vector),
+	postOp func(*containers.Batch),
 ) (err error) {
 	deletes, err := blk.LoadPersistedDeletes(ctx)
 	if deletes == nil || err != nil {
-		return nil
+		return
 	}
+	abortVec := deletes.Vecs[3].GetDownstreamVector()
+	commitTsVec := deletes.Vecs[1].GetDownstreamVector()
+	rowIdVec := deletes.Vecs[0].GetDownstreamVector()
 	for i := 0; i < deletes.Length(); i++ {
 		if skipAbort {
-			abort := deletes.Vecs[3].Get(i).(bool)
+			abort := vector.GetFixedAt[bool](abortVec, i)
 			if abort {
 				continue
 			}
 		}
-		commitTS := deletes.Vecs[1].Get(i).(types.TS)
+		commitTS := vector.GetFixedAt[types.TS](commitTsVec, i)
 		if commitTS.GreaterEq(start) && commitTS.LessEq(end) {
-			op(i, deletes)
+			loopOp(i, rowIdVec)
 		}
+	}
+	if postOp != nil {
+		postOp(deletes)
 	}
 	return
 }
@@ -299,12 +309,12 @@ func (blk *baseBlock) ResolvePersistedColumnDatas(
 	skipDeletes bool) (view *containers.BlockView, err error) {
 
 	view = containers.NewBlockView()
-	for _, colIdx := range colIdxs {
-		vec, err := blk.LoadPersistedColumnData(ctx, readSchema, colIdx)
-		if err != nil {
-			return nil, err
-		}
-		view.SetData(colIdx, vec)
+	vecs, err := LoadPersistedColumnDatas(ctx, readSchema, blk.rt, blk.meta.AsCommonID(), colIdxs, blk.meta.GetMetaLoc())
+	if err != nil {
+		return nil, err
+	}
+	for i, vec := range vecs {
+		view.SetData(colIdxs[i], vec)
 	}
 
 	if skipDeletes {
@@ -584,26 +594,48 @@ func (blk *baseBlock) persistedCollectDeleteInRange(
 	ctx context.Context,
 	b *containers.Batch,
 	start, end types.TS,
-	withAborted bool) (bat *containers.Batch, err error) {
+	withAborted bool,
+) (bat *containers.Batch, err error) {
 	if b != nil {
 		bat = b
 	}
+	t := types.T_int32.ToType()
+	sels := blk.rt.VectorPool.Transient.GetVector(&t)
+	defer sels.Close()
+	selsVec := sels.GetDownstreamVector()
+	mp := sels.GetAllocator()
 	blk.foreachPersistedDeletesCommittedInRange(
 		ctx,
 		start, end,
 		!withAborted,
-		func(row int, deleteBatch *containers.Batch) {
+		func(row int, rowIdVec *vector.Vector) {
+			_ = vector.AppendFixed[int32](selsVec, int32(row), false, mp)
+		},
+		func(delBat *containers.Batch) {
+			if sels.Length() == 0 {
+				return
+			}
 			if bat == nil {
-				bat = containers.NewBatch()
-				for i, name := range deleteBatch.Attrs {
-					vec := containers.MakeVector(*deleteBatch.Vecs[i].GetType())
-					bat.AddVector(name, vec)
+				bat = containers.NewBatchWithCapacity(len(delBat.Attrs))
+				for i, name := range delBat.Attrs {
+					bat.AddVector(
+						name,
+						blk.rt.VectorPool.Transient.GetVector(delBat.Vecs[i].GetType()),
+					)
 				}
 			}
-			for _, name := range deleteBatch.Attrs {
-				bat.GetVectorByName(name).Append(deleteBatch.GetVectorByName(name).Get(row), false)
+			for _, name := range delBat.Attrs {
+				retVec := bat.GetVectorByName(name)
+				srcVec := delBat.GetVectorByName(name)
+				retVec.PreExtend(sels.Length())
+				retVec.GetDownstreamVector().Union(
+					srcVec.GetDownstreamVector(),
+					vector.MustFixedCol[int32](sels.GetDownstreamVector()),
+					retVec.GetAllocator(),
+				)
 			}
-		})
+		},
+	)
 	return bat, nil
 }
 

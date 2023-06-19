@@ -181,7 +181,7 @@ func Call(idx int, proc *process.Process, arg any, _ bool, _ bool) (bool, error)
 
 // Collect all partition subtables' s3writers  metaLoc information and output it
 func collectAndOutput(proc *process.Process, s3Writers []*colexec.S3Writer) (err error) {
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_MetaLoc}
+	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo}
 	res := batch.NewWithSize(len(attrs))
 	res.SetAttributes(attrs)
 	res.Vecs[0] = proc.GetVector(types.T_int16.ToType())
