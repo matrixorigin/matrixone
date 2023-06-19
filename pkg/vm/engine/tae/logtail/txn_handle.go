@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -50,6 +51,7 @@ const (
 )
 
 type TxnLogtailRespBuilder struct {
+	rt                        *dbutils.Runtime
 	currDBName, currTableName string
 	currDBID, currTableID     uint64
 	txn                       txnif.AsyncTxn
@@ -62,9 +64,10 @@ type TxnLogtailRespBuilder struct {
 	insertBatch  *roaring.Bitmap
 }
 
-func NewTxnLogtailRespBuilder() *TxnLogtailRespBuilder {
+func NewTxnLogtailRespBuilder(rt *dbutils.Runtime) *TxnLogtailRespBuilder {
 	logtails := make([]logtail.TableLogtail, 0)
 	return &TxnLogtailRespBuilder{
+		rt:           rt,
 		batches:      make([]*containers.Batch, batchTotalNum),
 		logtails:     &logtails,
 		batchToClose: make([]*containers.Batch, 0),
@@ -146,8 +149,13 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 	// sort by seqnums
 	sort.Sort(src)
 	mybat := containers.NewBatchWithCapacity(int(src.NextSeqnum) + 2)
-	mybat.AddVector(catalog.AttrRowID, src.GetVectorByName(catalog.AttrRowID).CloneWindow(0, src.Length()))
-	commitVec := containers.MakeVector(types.T_TS.ToType())
+	mybat.AddVector(
+		catalog.AttrRowID,
+		src.GetVectorByName(catalog.AttrRowID).CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Transient),
+	)
+	tsType := types.T_TS.ToType()
+	commitVec := b.rt.VectorPool.Transient.GetVector(&tsType)
+	commitVec.PreExtend(src.Length())
 	for i := 0; i < src.Length(); i++ {
 		commitVec.Append(b.txn.GetPrepareTS(), false)
 	}
@@ -160,7 +168,8 @@ func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
 		for len(mybat.Vecs) < 2+int(seqnum) {
 			mybat.AppendPlaceholder()
 		}
-		mybat.AddVector(src.Attrs[i], src.Vecs[i])
+		vec := src.Vecs[i].CloneWindowWithPool(0, src.Length(), b.rt.VectorPool.Transient)
+		mybat.AddVector(src.Attrs[i], vec)
 	}
 
 	if b.batches[dataInsBatch] == nil {
